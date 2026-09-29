@@ -1,7 +1,7 @@
 import { test, expect } from './fixtures/auth'
 
 /**
- * Mk1-native retest: sample details > Actions > Retest.
+ * Mk1-native retest overlay v2: sample details > Actions > Retest.
  *
  * Runs against a devbox stack with IS and WordPress mounted (see e2e/README.md).
  * Precondition: E2E_RETEST_SAMPLE_ID names a published sample that IS can map to
@@ -21,6 +21,9 @@ type RetestCreated = {
   payment_url?: string | null
 }
 
+const price = (text: string | null) =>
+  Number(text?.match(/\$([\d.]+)/)?.[1] ?? NaN)
+
 async function openRetestDialog(page: import('@playwright/test').Page) {
   await page.goto(`/#senaite/sample-details?id=${SAMPLE_ID}`)
   await expect(
@@ -30,7 +33,7 @@ async function openRetestDialog(page: import('@playwright/test').Page) {
   await page.getByRole('button', { name: 'Actions', exact: true }).click()
   await page.getByTestId('retest-menu').click()
 
-  const dialog = page.getByRole('dialog', { name: /Retest/ })
+  const dialog = page.getByRole('dialog', { name: /Re-test|Add services/ })
   await expect(dialog).toBeVisible({ timeout: 10_000 })
   return dialog
 }
@@ -44,81 +47,52 @@ test.describe('Mk1-native retest dialog', () => {
     'Set E2E_RETEST_SAMPLE_ID to a published sample IS can map to a WP order'
   )
 
-  test('shows the customer block with live WordPress prices', async ({
-    authedPage: page,
-  }) => {
-    const dialog = await openRetestDialog(page)
-
-    // Customer / order block comes from WP retest-context via IS.
-    await expect(dialog.getByText(/^Order \d+/)).toBeVisible({
-      timeout: 15_000,
-    })
-    await expect(dialog.getByText(/\S+@\S+\.\S+/)).toBeVisible()
-    await expect(dialog.getByText(/Customer .*unavailable/)).toHaveCount(0)
-
-    // Every original profile starts as Carry: nothing to do, no fee section, Create disabled.
-    const carry = dialog.getByRole('button', { name: 'Carry', exact: true })
-    expect(await carry.count()).toBeGreaterThan(0)
-    for (const b of await carry.all())
-      await expect(b).toHaveAttribute('aria-pressed', 'true')
-    await expect(dialog.getByRole('radiogroup', { name: 'Fee' })).toHaveCount(0)
-    await expect(dialog.getByText(/^Delta: \$0\.00$/)).toBeVisible()
-    await expect(dialog.getByRole('button', { name: 'Create' })).toBeDisabled()
-
-    // Setting one profile to Retest reveals the fee radio with the live retest price.
-    await dialog
-      .getByRole('button', { name: 'Retest', exact: true })
-      .first()
-      .click()
-    const paid = dialog.getByRole('radio', { name: /^Paid \(\$[\d.]+\)$/ })
-    await expect(paid).toBeChecked()
-    const fee = (await dialog
-      .getByText(/^Paid \(\$[\d.]+\)$/)
-      .textContent())!.match(/\$([\d.]+)/)![1]
-    await expect(dialog.getByText(`Delta: $${fee}`)).toBeVisible()
-  })
-
-  test('HPLC retest plus an add-on prices the delta and creates the WP order', async ({
+  test('Re-test tab: customer block, fee on first Re-test, total = fee, creates the WP order', async ({
     authedPage: page,
   }) => {
     // Retest options wait on IS -> WP for prices, and Create goes Mk1 -> IS -> WP.
     test.setTimeout(120_000)
     const dialog = await openRetestDialog(page)
-    await expect(dialog.getByText(/^Order \d+/)).toBeVisible({
-      timeout: 15_000,
-    })
-
-    // Retest the first profile row (HPLC on the stack fixture) and add the first priced add-on.
-    await dialog
-      .getByRole('button', { name: 'Retest', exact: true })
-      .first()
-      .click()
-    const addon = dialog
-      .getByRole('checkbox', { name: /\(\$[\d.]+ · \d+ vials\)/ })
-      .first()
-    await addon.check()
-
-    // Fee and add-on prices are rendered in their labels; the Delta must be their sum.
-    const price = (text: string | null) =>
-      Number(text?.match(/\$([\d.]+)/)?.[1] ?? NaN)
-    const fee = price(
-      await dialog.getByText(/^Paid \(\$[\d.]+\)$/).textContent()
-    )
-    const addonPrice = price(
-      await dialog
-        .getByText(/\(\$[\d.]+ · \d+ vials\)/)
-        .first()
-        .textContent()
-    )
-    expect(fee).toBeGreaterThan(0)
-    expect(addonPrice).toBeGreaterThan(0)
     await expect(
-      dialog.getByText(`Delta: $${(fee + addonPrice).toFixed(2)}`)
+      dialog.getByRole('heading', { name: `Re-test ${SAMPLE_ID}` })
     ).toBeVisible()
 
+    // Customer / order block comes from WP retest-context via IS.
+    const block = dialog.getByTestId('retest-context-block')
+    await expect(block.getByText(/^Order \d+/)).toBeVisible({
+      timeout: 15_000,
+    })
+    await expect(block.getByText(/\S+@\S+\.\S+/)).toBeVisible()
+    await expect(dialog.getByText(/Customer .*unavailable/)).toHaveCount(0)
+
+    // Nothing re-tested yet: no fee radio, Create disabled with its reason.
+    await expect(
+      dialog.getByRole('radiogroup', { name: 'Retest fee' })
+    ).toHaveCount(0)
+    await expect(dialog.getByTestId('retest-disabled-reason')).toHaveText(
+      'Tick at least one Re-test'
+    )
+    const create = dialog.getByRole('button', { name: 'Create retest order' })
+    await expect(create).toBeDisabled()
+
+    // Tick Re-test on the first profile row (HPLC on the stack fixture).
     await dialog
-      .getByRole('textbox', { name: 'Reason' })
-      .fill('e2e: HPLC rerun + add-on')
+      .getByRole('checkbox', { name: /^Re-test / })
+      .first()
+      .click()
+    const charged = dialog.getByRole('radio', { name: /^Charged \$[\d.]+$/ })
+    await expect(charged).toBeChecked()
+    const fee = price(
+      await dialog.getByText(/^Charged \$[\d.]+$/).textContent()
+    )
+    expect(fee).toBeGreaterThan(0)
+    await expect(dialog.getByTestId('retest-summary-total')).toHaveText(
+      `Total$${fee.toFixed(2)}`
+    )
+
+    await dialog
+      .getByRole('textbox', { name: 'Reason (required)' })
+      .fill('e2e: HPLC rerun')
 
     const created = page.waitForResponse(
       r =>
@@ -126,13 +100,37 @@ test.describe('Mk1-native retest dialog', () => {
         r.request().method() === 'POST',
       { timeout: 60_000 }
     )
-    await dialog.getByRole('button', { name: 'Create' }).click()
+    await create.click()
     const response = await created
     expect(response.status(), await response.text()).toBe(200)
     const body = (await response.json()) as RetestCreated
     expect(body.order_number).toMatch(/\d+/)
+    // Idempotent replay: a re-run returns the same order, possibly completed.
     expect(['pending', 'completed']).toContain(body.status)
 
     await expect(dialog).toBeHidden({ timeout: 10_000 })
+  })
+
+  test('Add services tab: fixed title, catalog add-ons, no fee radio', async ({
+    authedPage: page,
+  }) => {
+    const dialog = await openRetestDialog(page)
+    await expect(
+      dialog.getByTestId('retest-context-block').getByText(/^Order \d+/)
+    ).toBeVisible({ timeout: 15_000 })
+
+    await dialog.getByRole('tab', { name: 'Add services' }).click()
+    await expect(
+      dialog.getByRole('heading', { name: `Add services to ${SAMPLE_ID}` })
+    ).toBeVisible()
+    await expect(
+      dialog.getByRole('radiogroup', { name: 'Retest fee' })
+    ).toHaveCount(0)
+    await expect(dialog.getByTestId('retest-disabled-reason')).toHaveText(
+      'Tick at least one service'
+    )
+    await expect(
+      dialog.getByRole('button', { name: 'Create add-on order' })
+    ).toBeDisabled()
   })
 })

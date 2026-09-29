@@ -7134,8 +7134,8 @@ export async function getSampleRetestInfo(sampleId: string): Promise<SampleRetes
 
 export const HPLC_PROFILE_KEYS = ['hplcpurity_identity', 'hplc-purity-identity'] as const
 
-export interface RetestOptionProfile { key: string; name: string; carry_eligible: boolean; state: string | null }
-export interface RetestOptionAddon { key: string; name: string; wp_type: string | null; price: number | null; vials: number | null }
+export interface RetestOptionProfile { key: string; name: string; carry_eligible: boolean; state: string | null; verified_at: string | null; state_label: string }
+export interface RetestOptionAddon { key: string; name: string; wp_type: string | null; price: number | null; vials: number | null; sellable: boolean }
 export interface RetestContextOrderLine { key: string; label: string; price: number }
 export interface RetestContextOrder {
   number: string
@@ -7174,6 +7174,7 @@ export interface RetestOptions {
 export interface RetestRequestBody {
   retest: string[]
   carry: string[]
+  drop?: string[]
   add: { profiles: string[]; variance_points: number; additional_vials: number } | null
   auto_checkin: boolean
   fee: 'paid' | 'free'
