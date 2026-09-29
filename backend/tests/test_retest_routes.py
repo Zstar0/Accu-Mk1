@@ -99,6 +99,19 @@ def test_options_lists_profiles_eligibility_addons_and_prices(client, db_session
     assert pending["order_number"] == "WP-7501" and pending["payment_url"].endswith("/501")
 
 
+def test_options_prices_addons_keyed_by_native_key(client, db_session):
+    """Theme 2.57.1+ keys add-on prices by the native LIMS key, not the old short type."""
+    _seed(db_session)
+    ctx = dict(CONTEXT, addons={"endotoxin-usp85-lal": {"price": 200.0, "vials": 1}})
+    resp = MagicMock(status_code=200)
+    resp.json.return_value = ctx
+    with (patch.dict(os.environ, {"INTEGRATION_SERVICE_URL": "http://is", "ACCU_MK1_API_KEY": "k"}),
+          patch("lims_analyses.retest_routes.requests.get", return_value=resp)):
+        r = client.get("/api/samples/P-2799/retest-options")
+    [endo] = r.json()["addons"]
+    assert endo["key"] == "endotoxin-usp85-lal" and endo["price"] == 200.0
+
+
 def test_options_pending_orders_defaults_to_empty_list_when_absent(client, db_session):
     _seed(db_session)
     resp = MagicMock(status_code=200)

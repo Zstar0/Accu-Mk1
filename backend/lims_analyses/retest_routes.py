@@ -115,7 +115,9 @@ def retest_options(sample_id: str, db: Session = Depends(get_db), _user=Depends(
         if prof.key in have:
             continue
         wp_type = WP_ADDON_TYPE_BY_PROFILE.get(prof.key)
-        priced = price_map.get(wp_type) if wp_type else None
+        # WordPress keys add-on prices by its ADDON_TYPES key, which has been the
+        # native LIMS key since theme 2.57.1; older themes used the short type.
+        priced = price_map.get(prof.key) or (price_map.get(wp_type) if wp_type else None)
         addons.append({
             "key": prof.key, "name": prof.name, "wp_type": wp_type,
             "price": (priced or {}).get("price"),

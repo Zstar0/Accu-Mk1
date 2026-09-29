@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+## v1.29.1 - 2026-09-28
+
+### Fixed
+- **Retest overlay showed "price unavailable" for endotoxin and PCR add-ons.** WordPress keys add-on prices by its add-on type key, which became the native LIMS key in theme 2.57.1; the overlay still looked prices up by the old short type. The lookup now tries the native key first (heavy metals was unaffected because its key never changed).
+
 ## v1.29.0 - 2026-09-28
 
 ### Mk1-native retest
