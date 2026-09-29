@@ -959,6 +959,7 @@ async def get_sample_retest_info(
             result["source_order_id"] = _wp_order_int(src.client_order_number) if src else None
             result["retest"] = rider.get("retest") or []
             result["carry"] = rider.get("carry") or []
+            result["drop"] = rider.get("drop") or []
             result["add"] = (rider.get("add") or {}).get("profiles") or []
         for f in forward:
             fr = (f.catalog_snapshot or {}).get("retest") or {}
@@ -969,6 +970,7 @@ async def get_sample_retest_info(
                 "status": f.status,
                 "retest": fr.get("retest") or [],
                 "carry": fr.get("carry") or [],
+                "drop": fr.get("drop") or [],
                 "add": (fr.get("add") or {}).get("profiles") or [],
             })
 
@@ -1190,6 +1192,8 @@ def retest_activity_label(event: str, d: dict) -> Optional[str]:
             parts.append("Retesting " + ", ".join(d["retest"]))
         if d.get("carry"):
             parts.append("carrying " + ", ".join(d["carry"]))
+        if d.get("drop"):
+            parts.append("dropping " + ", ".join(d["drop"]))
         if d.get("add"):
             parts.append("adding " + ", ".join(d["add"]))
         if d.get("variance_points"):
@@ -1207,6 +1211,8 @@ def retest_activity_label(event: str, d: dict) -> Optional[str]:
         tail = []
         if d.get("carry"):
             tail.append("carried: " + ", ".join(d["carry"]))
+        if d.get("drop"):
+            tail.append("dropped: " + ", ".join(d["drop"]))
         if d.get("add"):
             tail.append("added: " + ", ".join(d["add"]))
         return head + ("; " + "; ".join(tail) if tail else "")

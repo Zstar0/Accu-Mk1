@@ -56,7 +56,7 @@ def test_mk1_lineage_wins_and_merges_legacy_is_entries(client, db_session):
         LimsSample(sample_id="P-3017", external_lims_system="mk1", status="sample_received",
                    is_retest=True, retest_of_sample_id="P-2799", client_order_number="WP-7920",
                    catalog_snapshot={"profiles": [], "retest": {
-                       "retest": ["hplcpurity_identity"], "carry": ["heavy_metals"],
+                       "retest": ["hplcpurity_identity"], "carry": ["heavy_metals"], "drop": ["endotoxin-usp85-lal"],
                        "add": {"profiles": [], "variance_points": 0, "additional_vials": 0},
                        "requested_at": "2026-09-24T15:00:00Z"}}),
     ])
@@ -73,13 +73,14 @@ def test_mk1_lineage_wins_and_merges_legacy_is_entries(client, db_session):
         assert body["source"] == "mk1" and body["this_order_id"] == 7920
         assert body["retest_created_at"] == "2026-09-24T15:00:00Z"
         assert body["retest"] == ["hplcpurity_identity"] and body["carry"] == ["heavy_metals"] and body["add"] == []
+        assert body["drop"] == ["endotoxin-usp85-lal"]
 
         r = client.get("/samples/P-2799/retest-info")
         body = r.json()
         assert body["is_retest"] is False and body["source"] == "mk1"
         fwd, old = body["retested_as"]
         assert fwd["sample_id"] == "P-3017" and fwd["status"] == "sample_received"
-        assert fwd["retest"] == ["hplcpurity_identity"] and fwd["carry"] == ["heavy_metals"]
+        assert fwd["retest"] == ["hplcpurity_identity"] and fwd["carry"] == ["heavy_metals"] and fwd["drop"] == ["endotoxin-usp85-lal"]
         assert old == {"sample_id": "P-2900", "order_id": 7001, "created_at": "2026-08-01T12:00:00"}
     assert is_db.call_count == 2
 
