@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+## v1.30.0 - 2026-09-29
+
+### Retest overlay v2 (#263)
+- **Two jobs, two tabs.** Actions > Retest now opens on **Re-test** (every profile row with Re-test and Carry results boxes; a row with neither is dropped from the new sample and the "New sample:" line says so) or **Add services** (every catalog service the sample lacks, priced from WordPress, unsellable ones marked "not sold post-order"; add-ons are always billed). Fixed titles per tab; Create reads "Create retest order" or "Create add-on order" and shows why it is disabled.
+- **Itemised summary** replaces the Delta: retest fee (Charged / Waived, Re-test tab only), each add-on, variance at points minus one like the shop, extra vials under More options, and a Total.
+- **Orders tab** lists every retest and add-on order for the sample with kind, date, total, status, the minted sample or a Copy link / Open for unpaid ones; an amber line above the tabs names unpaid orders. The order card shows only ordered lines with shop labels. Overlay widened to 760 px (the previous width class never applied).
+- Backend: the retest spec gains `drop[]` (profiles omitted from re-test and carry are dropped, recorded, and named in a warning event, no longer a 400); `retest-options` lists add-ons from the whole active catalog with `sellable`, legacy alias profiles excluded, and profiles carry `verified_at` / `state_label`; `retest-info` and activity labels carry the drop list.
+- Requires WordPress theme 2.59.0 (ordered-only context lines, `retest_orders`, Sterility USP-71 and Fentanyl as post-order add-ons).
+
 ## v1.29.1 - 2026-09-28
 
 ### Fixed
