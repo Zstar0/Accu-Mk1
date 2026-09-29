@@ -31,8 +31,8 @@ describe('sample timestamps render on the lab clock', () => {
   })
 
   it('null and invalid input keep their fallback', () => {
-    // Existing placeholder glyph, escaped to keep this file dash-free.
-    expect(formatDate(null)).toBe('—')
-    expect(formatDate('not a date')).toBe('—')
+    // Existing placeholder glyph (U+2014), spelled by code point.
+    expect(formatDate(null)).toBe(String.fromCharCode(0x2014))
+    expect(formatDate('not a date')).toBe(String.fromCharCode(0x2014))
   })
 })
