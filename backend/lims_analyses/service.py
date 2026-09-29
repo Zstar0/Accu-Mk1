@@ -2457,6 +2457,29 @@ def parent_retest(
                 f"{active.review_state!r}"
             ),
         )
+    # P-3016 (2026-09-23): a parent row promoted from a PARENT-HOSTED source
+    # (results typed straight onto the 'ordered' placeholder, no vial for the
+    # role) must not cascade — the retest would mint a canonical 'unassigned'
+    # parent-hosted row the AnalysisTable hides (tier_of: vial tier) and the
+    # workflow engine counts, with no UI path to ever clear it.
+    from models import LimsAnalysisPromotion
+    parent_hosted_sources = db.execute(
+        select(LimsAnalysis.id)
+        .join(LimsAnalysisPromotion,
+              LimsAnalysisPromotion.source_analysis_id == LimsAnalysis.id)
+        .where(LimsAnalysisPromotion.parent_analysis_id == active.id,
+               LimsAnalysis.lims_sub_sample_pk.is_(None))
+    ).scalars().all()
+    if parent_hosted_sources:
+        raise InvalidTransitionError(
+            active.review_state,
+            "retest",
+            message=(
+                f"{keyword!r} was promoted from a parent-hosted row "
+                f"(ids {sorted(parent_hosted_sources)}), not a vial; add a vial "
+                "for this role and enter the result there instead of retesting"
+            ),
+        )
     # Native retest (round-2 ruling): a CARRIED row's result belongs to the
     # original sample; re-running it means a new retest with the service in
     # the retest set, never a cascade into the original's vials.

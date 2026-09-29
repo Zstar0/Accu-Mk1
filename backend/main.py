@@ -12700,10 +12700,16 @@ async def replace_analyte(
     # ── 3. write the slot's peptide (canonical source of truth) ───────────────
     _slot_req = SenaiteFieldUpdateRequest(fields={f"Analyte{slot}Peptide": new_id_svc.title})
     _slot_req._skip_slot_guards = True  # the orchestrator owns the cascade
+    # `db=db` like Clear below: the route now resolves native-born rows by
+    # sample_id up front, so it needs a real session (the mirror block's
+    # try/except used to swallow the `Depends` sentinel silently). Step 7
+    # re-derives the registry analytes afterwards, so the mirror's slot
+    # write here is superseded, not doubled.
     field_result = await update_senaite_sample_fields(
         uid=body.senaite_uid,
         req=_slot_req,
         current_user=_current_user,
+        db=db,
     )
     if not getattr(field_result, "success", False):
         raise HTTPException(
@@ -18746,6 +18752,131 @@ def _senaite_field_label(key: str) -> str:
     return re.sub(r"(?<=[a-z0-9])(?=[A-Z])|(?<=[A-Z])(?=[A-Z][a-z])", " ", key)
 
 
+# SENAITE-shaped date fields the native edit path stores directly
+# (the mirror helper leaves dates to the 5-minute SENAITE refresh, which a
+# native-born row never gets).
+_NATIVE_DATE_COLUMNS = {"DateSampled": "date_sampled"}
+
+
+def _resolve_native_parent_row(db: Session, uid: str):
+    """The registry row for a native-born parent addressed by sample_id —
+    the page substitutes sample_id for the SENAITE uid it does not have.
+    A real SENAITE uid never matches a sample_id, and a SENAITE-born row
+    found by sample_id is NOT native, so both return None and the legacy
+    path keeps forwarding to SENAITE unchanged."""
+    row = db.execute(
+        select(LimsSample).where(LimsSample.sample_id == uid.strip().upper())
+    ).scalar_one_or_none()
+    if row is None or row.external_lims_system != "mk1":
+        return None
+    return row
+
+
+def _update_native_sample_fields(
+    db: Session, row: LimsSample, fields: dict, current_user
+) -> "SenaiteFieldUpdateResponse":
+    """Inline field edit on a native-born parent: Mk1 IS the record, so the
+    write goes to `lims_samples` through the same mirror logic the SENAITE
+    path uses (`_apply_senaite_fields_to_row`) and is logged as
+    `sample_field_updated` with `senaite='native'`. Fails closed on anything
+    the mirror cannot store — a silently dropped edit is worse than a 400."""
+    from models import LimsSubSampleEvent
+    from sub_samples.service import (
+        _ANALYTE_KEY_RE, _COA_META_FIELDS, _FIELD_MIRROR_SCALARS,
+        _apply_senaite_fields_to_row, _parse_senaite_date,
+    )
+
+    fields = dict(fields)
+    remark = fields.pop("Remarks", None)
+
+    if any(isinstance(k, str) and _ANALYTE_PEPTIDE_FIELD_RE.match(k) for k in fields):
+        raise HTTPException(
+            409,
+            "Analyte peptides on a native-born sample are changed with "
+            "Relabel / Replace on the Analytes card, not the inline editor.",
+        )
+    unsupported = [
+        k for k in fields
+        if not (
+            k in _FIELD_MIRROR_SCALARS
+            or k in _COA_META_FIELDS
+            or k in _NATIVE_DATE_COLUMNS
+            or (isinstance(k, str) and _ANALYTE_KEY_RE.match(k))
+        )
+    ]
+    if unsupported:
+        raise HTTPException(
+            400,
+            "Not editable on a native-born sample: " + ", ".join(map(str, unsupported)),
+        )
+
+    dates: dict[str, object] = {}
+    for key, column in _NATIVE_DATE_COLUMNS.items():
+        if key not in fields:
+            continue
+        raw = fields.pop(key)
+        parsed = _parse_senaite_date(raw) if raw not in (None, "") else None
+        if raw not in (None, "") and parsed is None:
+            raise HTTPException(
+                400, f"{_senaite_field_label(key)}: unrecognised date {raw!r}"
+            )
+        dates[key] = (column, parsed)
+
+    previous = {
+        k: getattr(row, col)
+        for k, col in _FIELD_MIRROR_SCALARS.items() if k in fields
+    }
+    for key, (column, _parsed) in dates.items():
+        old = getattr(row, column)
+        previous[key] = old.isoformat() if old else None
+
+    updated: list[str] = []
+    try:
+        if remark is not None and str(remark).strip():
+            db.add(LimsSampleRemark(
+                lims_sample_pk=row.id,
+                content=str(remark).strip(),
+                author_user_id=getattr(current_user, "id", None),
+            ))
+            updated.append("Remarks")
+        if fields:
+            _apply_senaite_fields_to_row(db, row, fields)
+        for key, (column, parsed) in dates.items():
+            setattr(row, column, parsed)
+        for k, v in list(fields.items()) + [(k, str(p) if p else None) for k, (_c, p) in dates.items()]:
+            db.add(LimsSubSampleEvent(
+                lims_sample_pk=row.id,
+                event="sample_field_updated",
+                details={
+                    "field": k,
+                    "label": _senaite_field_label(k),
+                    "from": previous.get(k),
+                    "to": str(v) if v not in (None, "") else None,
+                    "senaite": "native",
+                },
+                user_id=getattr(current_user, "id", None),
+            ))
+            updated.append(k)
+        db.commit()
+    except Exception as save_err:  # noqa: BLE001
+        try:
+            db.rollback()
+        except Exception:  # noqa: BLE001
+            pass
+        logger.warning(
+            "registry.native_field_update_failed sample_id=%s err=%s",
+            row.sample_id, save_err,
+        )
+        return SenaiteFieldUpdateResponse(
+            success=False, message=f"Mk1 save failed: {save_err}"
+        )
+    return SenaiteFieldUpdateResponse(
+        success=True,
+        message=f"Updated {len(updated)} field(s)",
+        updated_fields=updated,
+    )
+
+
 def _record_parent_event(db: Session, sample_id: str, event: str,
                          details: dict, user_id, *, commit: bool = False) -> bool:
     """Append one parent-hosted `lims_sub_sample_events` row (Task 7's
@@ -18835,15 +18966,28 @@ async def update_senaite_sample_fields(
     `updateSenaiteSampleFields(uid, { Remarks })`) still forwarded Remarks to
     SENAITE, where nothing reads it post-flip. Any remaining fields still
     forward to SENAITE unchanged.
-    """
-    if SENAITE_URL is None:
-        return SenaiteFieldUpdateResponse(
-            success=False, message="SENAITE not configured"
-        )
 
+    Native-born parents (`external_lims_system == 'mk1'`) have no SENAITE AR
+    and no uid; the page sends the sample_id in the uid slot
+    (`parent-identity.ts::fieldEditKey`) and the edit lands on the registry
+    row via `_update_native_sample_fields` (P-5178, 2026-09-28: every inline
+    edit on a native sample 404'd because the uid was empty).
+    """
     if not req.fields:
         return SenaiteFieldUpdateResponse(
             success=False, message="No fields provided"
+        )
+
+    # Resolved before the SENAITE_URL gate: a native edit needs no SENAITE.
+    native_row = _resolve_native_parent_row(db, uid)
+    if native_row is not None:
+        return _update_native_sample_fields(
+            db, native_row, req.fields, current_user
+        )
+
+    if SENAITE_URL is None:
+        return SenaiteFieldUpdateResponse(
+            success=False, message="SENAITE not configured"
         )
 
     # --- Remarks intercept: native write, never forwarded to SENAITE ---
