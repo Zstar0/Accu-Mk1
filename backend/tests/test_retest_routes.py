@@ -70,6 +70,9 @@ CONTEXT = {
     "retest_fee": {"price": 85.0},
     "addons": {"endotoxin": {"price": 200.0, "vials": 1}},
     "variance": {"point_price": 76.5},
+    "pending_retest_orders": [{"order_id": 501, "order_number": "WP-7501", "status": "pending",
+                               "total": 85.0, "currency": "USD", "created_at": "2026-09-27T10:00:00Z",
+                               "payment_url": "https://accumarklabs.com/checkout/order-pay/501"}],
 }
 
 
@@ -92,6 +95,19 @@ def test_options_lists_profiles_eligibility_addons_and_prices(client, db_session
     assert body["prices_available"] is True
     assert body["context"]["order"]["customer_email"] == "jane@example.com"
     assert body["context"]["retest_fee"]["price"] == 85.0
+    [pending] = body["context"]["pending_orders"]
+    assert pending["order_number"] == "WP-7501" and pending["payment_url"].endswith("/501")
+
+
+def test_options_pending_orders_defaults_to_empty_list_when_absent(client, db_session):
+    _seed(db_session)
+    resp = MagicMock(status_code=200)
+    resp.json.return_value = {k: v for k, v in CONTEXT.items() if k != "pending_retest_orders"}
+    with patch.dict(os.environ, {"INTEGRATION_SERVICE_URL": "http://is", "ACCU_MK1_API_KEY": "k"}), \
+            patch("lims_analyses.retest_routes.requests.get", return_value=resp):
+        r = client.get("/api/samples/P-2799/retest-options")
+    assert r.status_code == 200, r.text
+    assert r.json()["context"]["pending_orders"] == []
 
 
 @pytest.mark.parametrize("hplc_key", ["hplcpurity_identity", "hplc-purity-identity"])

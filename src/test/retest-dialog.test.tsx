@@ -76,6 +76,7 @@ const OPTIONS = {
       lines: [{ key: 'hplc', label: 'HPLC Purity + Identity', price: 85 }],
     },
     retest_fee: { price: 85 },
+    pending_orders: [],
   },
 }
 
@@ -269,6 +270,51 @@ describe('RetestDialog', () => {
     ).toBeInTheDocument()
   })
 
+  it('renders pending retest orders from context and copies the payment link', async () => {
+    const writeText = vi.fn().mockResolvedValue(undefined)
+    Object.assign(navigator, { clipboard: { writeText } })
+    vi.mocked(getRetestOptions).mockResolvedValue({
+      ...OPTIONS,
+      context: {
+        ...OPTIONS.context,
+        pending_orders: [
+          {
+            order_id: 501,
+            order_number: 'WP-7501',
+            status: 'pending',
+            total: 85,
+            currency: 'USD',
+            created_at: '2026-09-27T10:00:00Z',
+            payment_url: 'https://accumarklabs.com/checkout/order-pay/501',
+          },
+        ],
+      },
+    })
+    renderDialog()
+    const row = await screen.findByTestId('pending-retest-order-501')
+    expect(within(row).getByText(/Order WP-7501/)).toBeInTheDocument()
+    expect(within(row).getByText(/\$85\.00/)).toBeInTheDocument()
+    expect(within(row).getByText(/awaiting payment/)).toBeInTheDocument()
+    fireEvent.click(within(row).getByText('Copy link'))
+    await waitFor(() =>
+      expect(writeText).toHaveBeenCalledWith(
+        'https://accumarklabs.com/checkout/order-pay/501'
+      )
+    )
+    const link = within(row).getByText('Open') as HTMLAnchorElement
+    expect(link.getAttribute('href')).toBe(
+      'https://accumarklabs.com/checkout/order-pay/501'
+    )
+    expect(link.getAttribute('target')).toBe('_blank')
+    expect(link.getAttribute('rel')).toBe('noreferrer')
+  })
+
+  it('does not render a pending orders section when context.pending_orders is empty', async () => {
+    renderDialog()
+    await screen.findByTestId('retest-context-block')
+    expect(screen.queryByText(/Pending retest orders/)).not.toBeInTheDocument()
+  })
+
   it('shows the fee amount on the Paid label and adds it to Delta only when Paid is selected', async () => {
     renderDialog()
     await screen.findByTestId('retest-context-block')
@@ -285,7 +331,7 @@ describe('RetestDialog', () => {
     // e.g. the sample is not yet on a WP order.
     vi.mocked(getRetestOptions).mockResolvedValue({
       ...OPTIONS,
-      context: { order: null, retest_fee: { price: 85 } },
+      context: { order: null, retest_fee: { price: 85 }, pending_orders: [] },
     })
     renderDialog()
     const block = await screen.findByTestId('retest-context-block')

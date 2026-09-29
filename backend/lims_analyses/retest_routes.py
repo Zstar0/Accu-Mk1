@@ -45,6 +45,11 @@ def _is_base_and_key() -> tuple[str, str]:
     return base, key
 
 
+def _list_or_empty(v):
+    """WP sends a list; anything else (missing, null, a stray dict) must not reach the dialog."""
+    return v if isinstance(v, list) else []
+
+
 def _fetch_retest_context(sample_id: str) -> dict | None:
     """IS resolves the sample's WP order, retest fee, add-on prices and the
     variance point price. None when unreachable, or 404 (sample is in no
@@ -123,7 +128,8 @@ def retest_options(sample_id: str, db: Session = Depends(get_db), _user=Depends(
         "variance": {"point_price": ((context or {}).get("variance") or {}).get("point_price"),
                      "allowed": bool(HPLC_PROFILE_KEYS & set(have))},
         "prices_available": context is not None,
-        "context": {"order": context.get("order"), "retest_fee": context.get("retest_fee")}
+        "context": {"order": context.get("order"), "retest_fee": context.get("retest_fee"),
+                    "pending_orders": _list_or_empty(context.get("pending_retest_orders"))}
                    if context is not None else None,
     }
 

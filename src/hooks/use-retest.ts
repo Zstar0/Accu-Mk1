@@ -23,15 +23,26 @@ export function useCreateRetest(
   return useMutation({
     mutationFn: (body: RetestRequestBody) => createRetest(sampleId, body),
     onSuccess: r => {
+      const paymentUrl = r.payment_url
       toast.success(
         `Retest order ${r.order_number ?? ''} created`
           .replace('  ', ' ')
           .trim(),
-        {
-          description: r.payment_url
-            ? 'Waiting for payment; the sample is created when the order completes.'
-            : 'The sample is created when the order completes.',
-        }
+        paymentUrl
+          ? {
+              duration: 15000,
+              description:
+                'Waiting for payment. The link is also in this dialog under Pending retest orders.',
+              action: {
+                label: 'Copy link',
+                onClick: () => {
+                  void navigator.clipboard?.writeText(paymentUrl)
+                },
+              },
+            }
+          : {
+              description: 'The sample is created when the order completes.',
+            }
       )
       queryClient.invalidateQueries({
         queryKey: ['ordered-products', sampleId],
