@@ -72,6 +72,7 @@ def test_mk1_lineage_wins_and_merges_legacy_is_entries(client, db_session):
         assert body["is_retest"] is True and body["source_sample_id"] == "P-2799"
         assert body["source"] == "mk1" and body["this_order_id"] == 7920
         assert body["retest_created_at"] == "2026-09-24T15:00:00Z"
+        assert body["retest"] == ["hplcpurity_identity"] and body["carry"] == ["heavy_metals"] and body["add"] == []
 
         r = client.get("/samples/P-2799/retest-info")
         body = r.json()

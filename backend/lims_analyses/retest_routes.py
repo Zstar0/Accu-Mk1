@@ -45,19 +45,23 @@ def _is_base_and_key() -> tuple[str, str]:
     return base, key
 
 
-def _fetch_addon_prices() -> dict | None:
-    """IS proxies WP's add-on product prices. None when unreachable: the
-    overlay still renders, with prices blank."""
+def _fetch_retest_context(sample_id: str) -> dict | None:
+    """IS resolves the sample's WP order, retest fee, add-on prices and the
+    variance point price. None when unreachable, or 404 (sample is in no
+    WP order): the overlay still renders, with prices and the order block
+    blank."""
     base, key = _is_base_and_key()
     if not base or not key:
         return None
     try:
-        resp = requests.get(f"{base}/api/service/addon-prices", headers={"X-API-Key": key}, timeout=10)
+        resp = requests.get(f"{base}/api/service/retest-context",
+                           params={"sample_id": sample_id},
+                           headers={"X-API-Key": key}, timeout=10)
         if resp.status_code != 200:
             return None
         return resp.json()
     except Exception as e:  # noqa: BLE001
-        logger.warning("retest_options.prices_unavailable err=%s", e)
+        logger.warning("retest_options.context_unavailable sample_id=%s err=%s", sample_id, e)
         return None
 
 
@@ -97,8 +101,8 @@ def retest_options(sample_id: str, db: Session = Depends(get_db), _user=Depends(
             "carry_eligible": key in eligible,
             "state": _best_state(db, sample, svc_ids),
         })
-    prices = _fetch_addon_prices()
-    price_map = (prices or {}).get("addons") or {}
+    context = _fetch_retest_context(sample.sample_id)
+    price_map = (context or {}).get("addons") or {}
     addons = []
     for prof in db.execute(select(AnalysisProfile).where(
             AnalysisProfile.is_addon.is_(True), AnalysisProfile.active.is_(True)
@@ -116,9 +120,11 @@ def retest_options(sample_id: str, db: Session = Depends(get_db), _user=Depends(
         "sample_id": sample.sample_id, "status": sample.status,
         "order_number": sample.client_order_number,
         "profiles": out_profiles, "addons": addons,
-        "variance": {"point_price": ((prices or {}).get("variance") or {}).get("point_price"),
+        "variance": {"point_price": ((context or {}).get("variance") or {}).get("point_price"),
                      "allowed": bool(HPLC_PROFILE_KEYS & set(have))},
-        "prices_available": prices is not None,
+        "prices_available": context is not None,
+        "context": {"order": context.get("order"), "retest_fee": context.get("retest_fee")}
+                   if context is not None else None,
     }
 
 

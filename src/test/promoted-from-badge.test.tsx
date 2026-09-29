@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { render } from '@testing-library/react'
+import { render, screen } from '@testing-library/react'
 import { PromotedFromBadge } from '@/components/senaite/PromotedFromBadge'
 import type { ParentPromotionInfo } from '@/lib/api'
 
@@ -76,5 +76,26 @@ describe('PromotedFromBadge', () => {
     }
     const { getByText } = render(<PromotedFromBadge promotion={promotion} />)
     expect(getByText(/from sub-sample/)).toBeTruthy()
+  })
+
+  const base = { keyword: 'ARSENIC-PPM', parent_analysis_id: 1, promoted_at: '2026-09-26T03:13:56', promoted_by_email: 'josh@x' }
+
+  it('renders the classic "from" link for a chosen promotion', () => {
+    render(<PromotedFromBadge promotion={{ ...base, sources: [{ sample_id: 'P-1-S01', contribution_kind: 'chosen' }] }} />)
+    expect(screen.getByText(/^from/)).toBeInTheDocument()
+    expect(screen.getByRole('link', { name: 'P-1-S01' })).toHaveAttribute('href', '/#senaite/sample-details?id=P-1-S01')
+    expect(screen.queryByText(/carried/i)).not.toBeInTheDocument()
+  })
+
+  it('renders "Carried from <vial>" for a carried promotion, linking the original vial', () => {
+    render(<PromotedFromBadge promotion={{ ...base, sources: [{ sample_id: 'P-9001-S02', contribution_kind: 'carried', parent_sample_id: 'P-9001' }] }} />)
+    expect(screen.getByText(/carried from/i)).toBeInTheDocument()
+    expect(screen.getByRole('link', { name: 'P-9001-S02' })).toHaveAttribute('href', '/#senaite/sample-details?id=P-9001-S02')
+    expect(screen.getByLabelText(/carried from original/i)).toHaveAttribute('title', expect.stringMatching(/Carried from P-9001/))
+  })
+
+  it('falls back to the parent sample when the carried source has no vial', () => {
+    render(<PromotedFromBadge promotion={{ ...base, sources: [{ sample_id: null, contribution_kind: 'carried', parent_sample_id: 'P-9001' }] }} />)
+    expect(screen.getByRole('link', { name: 'P-9001' })).toHaveAttribute('href', '/#senaite/sample-details?id=P-9001')
   })
 })

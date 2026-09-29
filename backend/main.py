@@ -957,6 +957,9 @@ async def get_sample_retest_info(
             src = db.execute(select(LimsSample).where(
                 LimsSample.sample_id == row.retest_of_sample_id)).scalar_one_or_none()
             result["source_order_id"] = _wp_order_int(src.client_order_number) if src else None
+            result["retest"] = rider.get("retest") or []
+            result["carry"] = rider.get("carry") or []
+            result["add"] = (rider.get("add") or {}).get("profiles") or []
         for f in forward:
             fr = (f.catalog_snapshot or {}).get("retest") or {}
             result["retested_as"].append({

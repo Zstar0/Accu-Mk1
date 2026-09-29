@@ -195,11 +195,12 @@ import { ReplaceAnalyteDialog } from '@/components/senaite/ReplaceAnalyteDialog'
 import { RelabelNativeSlotDialog } from '@/components/senaite/RelabelNativeSlotDialog'
 import { ClearAnalyteDialog } from '@/components/senaite/ClearAnalyteDialog'
 import { CancelSampleDialog } from './CancelSampleDialog'
+import { RetestDialog } from './RetestDialog'
 import {
   SchedulePublishDialog,
   ScheduledPublishBadge,
 } from '@/components/senaite/SchedulePublishDialog'
-import type { ScheduledPublishState } from '@/lib/api'
+import type { ScheduledPublishState, SampleRetestInfo } from '@/lib/api'
 import { fmtWhen } from '@/lib/scheduled-publish'
 import { isHplcAnalyteService } from '@/lib/hplc-analyte-services'
 import { needsMk1AnalysesSwap } from '@/lib/mk1-analyses-swap'
@@ -3540,12 +3541,14 @@ export function NativeParentAnalysesCard({
   promotions,
   vialAssignmentByKeyword,
   onParentDataStale,
+  retestInfo,
 }: {
   sampleId: string | null | undefined
   isParentPage: boolean
   promotions: PromotionIndex
   vialAssignmentByKeyword?: Map<string, VialAssignment>
   onParentDataStale?: () => void
+  retestInfo?: SampleRetestInfo | null
 }) {
   const queryClient = useQueryClient()
   const { data: rows } = useQuery({
@@ -3613,6 +3616,7 @@ export function NativeParentAnalysesCard({
         headerContent={header}
         hideProgress
         resultsReadOnly
+        retestInfo={retestInfo}
         verbPolicy="parent-native"
         onParentRetest={a => requestRetest([a])}
         onParentBulkRetest={requestRetest}
@@ -3811,6 +3815,8 @@ export function SampleDetails() {
   } | null>(null)
   // Cancel-sample dialog (customer withdrew) — header action.
   const [cancelOpen, setCancelOpen] = useState(false)
+  // Retest / add-services dialog (parent-only), a header action.
+  const [retestOpen, setRetestOpen] = useState(false)
   // Task 10: promoted-source (vial-side) retest warning — sub-sample pages
   // only. Carries the target row's uid alongside the dialog's own state
   // shape (superset — PromotedSourceRetestDialog only reads its 3 fields).
@@ -4681,16 +4687,14 @@ export function SampleDetails() {
     refreshSchedule()
   }, [refreshSchedule])
 
-  // Fetch retest relationship metadata (drives the retest banner + chain pills)
-  useEffect(() => {
-    if (!sampleId) {
-      setRetestInfo(null)
-      return
-    }
+  // Fetch retest relationship metadata (drives the retest banner + chain
+  // pills). Extracted so RetestDialog's onCreated can re-run it after a
+  // retest is created, without waiting on a sampleId change.
+  const loadRetestInfo = useCallback((id: string) => {
     let cancelled = false
 
     import('@/lib/api')
-      .then(({ getSampleRetestInfo }) => getSampleRetestInfo(sampleId))
+      .then(({ getSampleRetestInfo }) => getSampleRetestInfo(id))
       .then(info => {
         if (!cancelled) setRetestInfo(info)
       })
@@ -4701,7 +4705,15 @@ export function SampleDetails() {
     return () => {
       cancelled = true
     }
-  }, [sampleId])
+  }, [])
+
+  useEffect(() => {
+    if (!sampleId) {
+      setRetestInfo(null)
+      return
+    }
+    return loadRetestInfo(sampleId)
+  }, [sampleId, loadRetestInfo])
 
   if (!sampleId) {
     return (
@@ -5369,23 +5381,48 @@ export function SampleDetails() {
                         <span className="text-violet-700 dark:text-violet-300">
                           ↳ Retested as:
                         </span>{' '}
-                        {retestInfo.retested_as.map((r, i) => (
-                          <span key={r.sample_id}>
-                            {i > 0 && ', '}
-                            <button
-                              type="button"
-                              onClick={() => navigateToSample(r.sample_id)}
-                              className="font-mono font-semibold text-violet-700 dark:text-violet-300 hover:underline underline-offset-2"
-                              title={
-                                r.created_at
-                                  ? `Created ${formatDate(r.created_at)}`
-                                  : undefined
-                              }
-                            >
-                              {r.sample_id}
-                            </button>
-                          </span>
-                        ))}
+                        {retestInfo.retested_as.map((r, i) => {
+                          const status = r.status
+                          // Hand-format: each detail is independent, so the
+                          // tooltip still shows retest/carry/add info even
+                          // when created_at is missing (previously the
+                          // whole title was gated on created_at).
+                          const titleParts: string[] = []
+                          if (r.created_at) {
+                            titleParts.push(`Created ${formatDate(r.created_at)}`)
+                          }
+                          if (r.retest?.length) {
+                            titleParts.push(`retesting ${r.retest.join(', ')}`)
+                          }
+                          if (r.carry?.length) {
+                            titleParts.push(`carrying ${r.carry.join(', ')}`)
+                          }
+                          if (r.add?.length) {
+                            titleParts.push(`added ${r.add.join(', ')}`)
+                          }
+                          const title =
+                            titleParts.length > 0
+                              ? titleParts.join(' · ')
+                              : undefined
+                          return (
+                            <span key={r.sample_id}>
+                              {i > 0 && ', '}
+                              <button
+                                type="button"
+                                onClick={() => navigateToSample(r.sample_id)}
+                                className="font-mono font-semibold text-violet-700 dark:text-violet-300 hover:underline underline-offset-2"
+                                title={title}
+                              >
+                                {r.sample_id}
+                              </button>
+                              {status && (
+                                <span className="text-[10px] text-muted-foreground">
+                                  {` (${status.replace(/_/g, ' ')})`}
+                                </span>
+                              )}
+                            </span>
+                          )
+                        })}
                       </>
                     )}
                 </p>
@@ -5726,6 +5763,16 @@ export function SampleDetails() {
                             {scheduleState?.schedule?.status === 'pending'
                               ? 'Reschedule publish…'
                               : 'Schedule publish…'}
+                          </DropdownMenuItem>
+                        )}
+                        {isParent && (
+                          <DropdownMenuItem
+                            onClick={() => setRetestOpen(true)}
+                            className="cursor-pointer"
+                            data-testid="retest-menu"
+                          >
+                            <RefreshCw className="h-4 w-4 mr-2" />
+                            Retest / add services…
                           </DropdownMenuItem>
                         )}
                         {data.review_state !== 'cancelled' && (
@@ -7278,6 +7325,14 @@ export function SampleDetails() {
         onCancelled={() => refreshSample(data.sample_id)}
       />
       {isParent && (
+        <RetestDialog
+          open={retestOpen}
+          sampleId={data.sample_id}
+          onClose={() => setRetestOpen(false)}
+          onCreated={() => loadRetestInfo(data.sample_id)}
+        />
+      )}
+      {isParent && (
         <SchedulePublishDialog
           open={scheduleOpen}
           onOpenChange={setScheduleOpen}
@@ -7356,6 +7411,7 @@ export function SampleDetails() {
         }}
         onTransitionComplete={() => refreshSample(data.sample_id)}
         vialKind={currentVialKind}
+        retestInfo={retestInfo}
       />
 
       {/* Registry retest seam: destructive confirm for parent-tier retests
@@ -7401,6 +7457,10 @@ export function SampleDetails() {
             promotions={promotions}
             vialAssignmentByKeyword={nativeVialAssignmentByKeyword}
             onParentDataStale={() => refreshSample(data.sample_id)}
+            // Inert here: listNativeParentAnalysesShaped (this card's data
+            // source) doesn't annotate rows with retest info, so chips never
+            // render from this prop. Kept for signature parity / future wiring.
+            retestInfo={retestInfo}
           />
         )}
 
