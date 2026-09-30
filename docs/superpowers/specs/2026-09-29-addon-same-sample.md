@@ -85,6 +85,15 @@ IS: addon-orders forward + lookup, services-updated forwards to Mk1 only for mk1
 mode copy and labels, body shape, Orders tab "same sample"; Playwright: Add services on an in-progress
 sample asserts the same-sample copy and creates the order.
 
+## Rulings added during the build (2026-09-30)
+
+- Variance is not sold on the same-sample route (400 pointing at the Re-test tab); the Add services tab hides it in that mode.
+- Published AND terminal samples (cancelled, rejected) are refused by both the add-on route (400) and the s2s apply (409).
+- IS forwards `added_keys` (false to true against its stored services) and keeps keys owed to Mk1 until a forward succeeds; Mk1 applies only `added_keys` when present.
+- IS drops a sample's retest-context cache entry whenever one of its orders is created or its services change.
+- The add-on offer list excludes profiles whose members already have live parent rows (same predicate as the route).
+- Staff add-on orders (WP metabox, no Mk1 entry) show applied from the WooCommerce status.
+
 ## Not in scope
 
 Editing a pending add-on order; vial shipping for add-ons beyond the existing `additional_vials` count.
