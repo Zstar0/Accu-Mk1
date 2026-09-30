@@ -1216,6 +1216,8 @@ def retest_activity_label(event: str, d: dict) -> Optional[str]:
         if d.get("add"):
             tail.append("added: " + ", ".join(d["add"]))
         return head + ("; " + "; ".join(tail) if tail else "")
+    if event in ("addon_order_requested", "addon_services_applied"):
+        return d.get("label") or event
     if event == "retest_spec_warning":
         detail = ", ".join(d.get("missing") or []) or d.get("message") or ""
         return f"Retest spec warning: {d.get('reason', '?')}" + (f" ({detail})" if detail else "")
@@ -25558,6 +25560,50 @@ def s2s_upsert_lims_sample(
             and row.external_lims_system == "mk1" and row.retest_of_sample_id):
         background_tasks.add_task(_native_auto_checkin_bg, row.sample_id)
     return RegistrySampleSignalResponse(sample_id=row.sample_id, native_id=row.native_id)
+
+
+# Same-sample add-on services (spec 2026-09-29-addon-same-sample). IS calls
+# this after WP applies a paid or waived add-on order to an in-progress sample.
+
+class RegistrySampleServices(BaseModel):
+    services: dict[str, bool]
+    variance_value: Optional[Any] = None
+    event_id: Optional[str] = None
+    order_id: Optional[Any] = None
+
+
+class RegistrySampleServicesResponse(BaseModel):
+    added: list[str]
+    skipped: list[str]
+    ignored: list[str]
+
+
+@app.post("/s2s/lims-samples/{sample_id}/services", response_model=RegistrySampleServicesResponse)
+def s2s_add_lims_sample_services(
+    sample_id: str,
+    req: RegistrySampleServices,
+    db: Session = Depends(get_db),
+    _: None = Depends(require_internal_service_token),
+):
+    """Add every newly-true native profile to the sample. Idempotent: profiles
+    already on the sample are skipped. 409 on a published sample (the retest
+    path should have been used; the WP order stays as the record)."""
+    from lims_analyses.retest_routes import apply_addon_services
+    row = db.execute(select(LimsSample).where(LimsSample.sample_id == sample_id)).scalar_one_or_none()
+    if row is None:
+        raise HTTPException(status_code=404, detail=f"sample {sample_id!r} not known to Mk1")
+    if row.status == "published":
+        logger.warning("addon_services.refused_published sample_id=%s order_id=%s", sample_id, req.order_id)
+        raise HTTPException(status_code=409, detail="sample is published")
+    try:
+        out = apply_addon_services(db, row, services=req.services, order_id=req.order_id,
+                                   variance_value=req.variance_value, event_id=req.event_id)
+        db.commit()
+    except Exception:
+        db.rollback()
+        raise
+    logger.info("addon_services.applied sample_id=%s order_id=%s %s", sample_id, req.order_id, out)
+    return out
 
 
 # ── Registry shipping update (logistics capture Slice A, 2026-08-27) ────

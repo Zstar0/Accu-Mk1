@@ -2,6 +2,7 @@
 
 GET  /api/samples/{id}/retest-options  what the overlay renders
 POST /api/samples/{id}/retest          validate + forward to IS (Task 9)
+POST /api/samples/{id}/addon-order     same-sample add-on (spec 2026-09-29-addon-same-sample)
 """
 from __future__ import annotations
 
@@ -10,10 +11,11 @@ import json
 import logging
 import os
 from datetime import datetime, timezone
+from typing import Literal
 
 import requests
 from fastapi import APIRouter, Depends, HTTPException
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
@@ -159,6 +161,7 @@ def retest_options(sample_id: str, db: Session = Depends(get_db), _user=Depends(
     addons = [row for _, _, row in sorted(candidates, key=lambda c: (not c[2]["sellable"], c[0], c[1]))]
     return {
         "sample_id": sample.sample_id, "status": sample.status,
+        "original_published": sample.status == "published",
         "order_number": sample.client_order_number,
         "profiles": out_profiles, "addons": addons,
         "variance": {"point_price": ((context or {}).get("variance") or {}).get("point_price"),
@@ -179,12 +182,22 @@ def _orders_with_samples(db: Session, sample: LimsSample, orders) -> list[dict]:
     forward = db.execute(select(LimsSample).where(
         LimsSample.retest_of_sample_id == sample.sample_id).order_by(LimsSample.id)).scalars().all()
     by_order = {f.client_order_number: f for f in forward if f.client_order_number}
+    same_sample = {str(a.get("order_id")): a for a in _addon_orders(sample)}
     out = []
     for o in orders:
         hit = by_order.get(f"WP-{o.get('order_id')}")
-        out.append({**o, "sample_id": hit.sample_id if hit else None,
-                    "sample_status": hit.status if hit else None})
+        row = {**o, "sample_id": hit.sample_id if hit else None,
+               "sample_status": hit.status if hit else None}
+        addon = same_sample.get(str(o.get("order_id")))
+        if addon is not None:
+            row.update(same_sample=True, applied=bool(addon.get("applied")))
+        out.append(row)
     return out
+
+
+def _addon_orders(sample: LimsSample) -> list[dict]:
+    return [a for a in _list_or_empty((sample.catalog_snapshot or {}).get("addon_orders"))
+            if isinstance(a, dict)]
 
 
 class RetestRequest(BaseModel):
@@ -241,3 +254,167 @@ def _idempotency_key(sample_id: str, spec) -> str:
     body = {k: v for k, v in spec.as_dict().items() if k != "requested_at"}
     digest = hashlib.sha256(json.dumps(body, sort_keys=True, separators=(",", ":")).encode())
     return f"retest:{sample_id}:{digest.hexdigest()[:16]}"
+
+
+# Same-sample add-on (spec 2026-09-29-addon-same-sample)
+
+class AddonOrderRequest(BaseModel):
+    profiles: list[str] = []
+    variance_points: int = Field(0, ge=0)
+    additional_vials: int = Field(0, ge=0)
+    fee: Literal["paid", "free"] = "paid"
+    reason: str = Field(min_length=1)
+
+
+def _profile_names(db: Session, keys) -> list[str]:
+    by_key = {p.key: p.name for p in db.execute(
+        select(AnalysisProfile).where(AnalysisProfile.key.in_(list(keys)))).scalars()} if keys else {}
+    return [by_key.get(k) or k for k in keys]
+
+
+def _validate_addon_profiles(db: Session, sample: LimsSample, keys: list[str]) -> None:
+    from lims_analyses.manage_native import _is_all_native
+    have = set(snapshot_profile_keys(sample))
+    for key in keys:
+        prof = db.execute(select(AnalysisProfile).where(AnalysisProfile.key == key)).scalar_one_or_none()
+        if prof is None:
+            raise HTTPException(status_code=400, detail=f"unknown profile {key!r}")
+        if not prof.active:
+            raise HTTPException(status_code=400, detail=f"profile {key!r} is inactive")
+        if key in LEGACY_ADDON_EXCLUDE or not _is_all_native(prof):
+            raise HTTPException(status_code=400, detail=f"profile {key!r} is not a native profile")
+        if key in have:
+            raise HTTPException(status_code=400, detail=f"profile {key!r} is already on {sample.sample_id}")
+
+
+@router.post("/{sample_id}/addon-order")
+def create_addon_order(sample_id: str, req: AddonOrderRequest, db: Session = Depends(get_db),  # noqa: B008
+                       user=Depends(get_current_user)):  # noqa: B008
+    """In-progress original: a WP add-on order against the ORIGINAL order; the
+    services land on this same sample once it is paid or waived (IS then calls
+    /s2s/lims-samples/{id}/services). A published original uses the retest route."""
+    sample = db.execute(select(LimsSample).where(LimsSample.sample_id == sample_id)).scalar_one_or_none()
+    if sample is None:
+        raise HTTPException(status_code=404, detail=f"sample {sample_id!r} not known to Mk1")
+    if sample.status == "published":
+        raise HTTPException(status_code=400, detail="sample is published; use the retest route")
+    profiles = list(dict.fromkeys(req.profiles))
+    if not profiles and not req.variance_points:
+        raise HTTPException(status_code=400, detail="nothing selected")
+    _validate_addon_profiles(db, sample, profiles)
+    base, key = _is_base_and_key()
+    if not base or not key:
+        raise HTTPException(status_code=502, detail="Integration Service not configured")
+    body = {**req.model_dump(), "profiles": profiles, "sample_id": sample.sample_id,
+            "requested_by_user_id": getattr(user, "id", None),
+            "requested_at": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")}
+    headers = {"X-API-Key": key, "Idempotency-Key": _addon_idempotency_key(sample.sample_id, body)}
+    try:
+        resp = requests.post(f"{base}/api/service/addon-orders", json=body, headers=headers, timeout=30)
+    except Exception as e:  # noqa: BLE001
+        logger.warning("addon_order.is_unreachable sample_id=%s err=%s", sample.sample_id, e)
+        raise HTTPException(status_code=502, detail="Integration Service unreachable")
+    if resp.status_code < 200 or resp.status_code >= 300:
+        logger.warning("addon_order.is_error sample_id=%s status=%s body=%s",
+                       sample.sample_id, resp.status_code, (resp.text or "")[:500])
+        raise HTTPException(status_code=502, detail=f"Integration Service returned {resp.status_code}")
+    out = resp.json()
+    _record_addon_order(db, sample, out, body, user_id=getattr(user, "id", None))
+    db.commit()
+    return out
+
+
+def _addon_idempotency_key(sample_id: str, body: dict) -> str:
+    rest = {k: v for k, v in body.items() if k != "requested_at"}
+    digest = hashlib.sha256(json.dumps(rest, sort_keys=True, separators=(",", ":")).encode())
+    return f"addon:{sample_id}:{digest.hexdigest()[:16]}"
+
+
+def _record_addon_order(db: Session, sample: LimsSample, out: dict, body: dict, *, user_id) -> None:
+    """The pending add-on order on the original (Orders tab "same sample"),
+    plus its activity line. Replaces an entry with the same order_id."""
+    from lims_analyses.retest_carry import _event
+    out = out if isinstance(out, dict) else {}
+    order_id = out.get("order_id")
+    entry = {"order_id": order_id, "order_number": out.get("order_number"),
+             "status": out.get("status"), "requested_at": body["requested_at"],
+             "profiles": body["profiles"], "fee": body["fee"]}
+    kept = [a for a in _addon_orders(sample) if str(a.get("order_id")) != str(order_id)]
+    sample.catalog_snapshot = {**(sample.catalog_snapshot or {}), "addon_orders": [*kept, entry]}
+    what = [*_profile_names(db, body["profiles"])]
+    if body.get("variance_points"):
+        what.append(f"variance {body['variance_points']} points")
+    fee = "waived" if body["fee"] == "free" else "charged"
+    label = (f"Add-on order {entry['order_number'] or order_id} requested for this sample ({fee}): "
+             f"{', '.join(what)}. Reason: {body['reason']}")
+    _event(db, sample, "addon_order_requested", {**entry, "reason": body["reason"], "label": label},
+           user_id=user_id)
+
+
+def apply_addon_services(db: Session, sample: LimsSample, *, services: dict, order_id,
+                         variance_value=None, event_id=None) -> dict:
+    """IS -> Mk1 after a same-sample add-on order is paid or waived. Adds every
+    newly-true native profile via add_profile_to_parent; profiles already on the
+    sample are skipped (replay-safe); unknown/legacy keys are ignored. Caller
+    commits. The published refusal lives in the route."""
+    from catalog.snapshot import compute_catalog_snapshot
+    from lims_analyses.manage_native import (
+        ProfileAlreadyOnSampleError,
+        _is_all_native,
+        add_profile_to_parent,
+    )
+    from lims_analyses.retest_carry import _event
+    have = set(snapshot_profile_keys(sample))
+    added: list[AnalysisProfile] = []
+    skipped: list[str] = []
+    ignored: list[str] = []
+    for key, on in (services or {}).items():
+        if not on:
+            continue
+        prof = db.execute(select(AnalysisProfile).where(AnalysisProfile.key == key)).scalar_one_or_none()
+        if prof is None or key in LEGACY_ADDON_EXCLUDE or not _is_all_native(prof):
+            ignored.append(key)
+            continue
+        if key in have:
+            skipped.append(key)
+            continue
+        try:
+            add_profile_to_parent(db, parent=sample, profile=prof, user_id=None)
+        except ProfileAlreadyOnSampleError:
+            skipped.append(key)
+            continue
+        added.append(prof)
+    if ignored:
+        logger.info("addon_services.ignored sample_id=%s order_id=%s keys=%s",
+                    sample.sample_id, order_id, ignored)
+
+    if sample.catalog_snapshot is not None:
+        snap = dict(sample.catalog_snapshot)
+        # Only extend a real freeze; a dict without "profiles" is stamped later by order_seed.
+        if added and "profiles" in snap:
+            try:
+                fresh = compute_catalog_snapshot(db, {p.key: True for p in added}, None)["profiles"]
+            except Exception as e:  # noqa: BLE001
+                logger.warning("addon_services.snapshot_failed sample_id=%s err=%s", sample.sample_id, e)
+                fresh = []
+            known = {e.get("key") for e in snap["profiles"] or []}
+            snap["profiles"] = [*(snap["profiles"] or []), *(e for e in fresh if e["key"] not in known)]
+            unfrozen = {p.key for p in added} - {e["key"] for e in fresh}
+            if unfrozen:
+                logger.info("addon_services.not_snapshotted sample_id=%s keys=%s",
+                            sample.sample_id, sorted(unfrozen))
+        if "addon_orders" in snap:
+            snap["addon_orders"] = [{**a, "applied": True} if str(a.get("order_id")) == str(order_id) else a
+                                    for a in _addon_orders(sample)]
+        sample.catalog_snapshot = snap
+
+    if added:
+        entry = next((a for a in _addon_orders(sample) if str(a.get("order_id")) == str(order_id)), {})
+        waived = " (waived)" if entry.get("fee") == "free" else ""
+        label = (f"Services added from WP order {entry.get('order_number') or order_id}: "
+                 f"{', '.join(p.name for p in added)}{waived}")
+        _event(db, sample, "addon_services_applied", {
+            "order_id": order_id, "event_id": event_id, "variance_value": variance_value,
+            "added": [p.key for p in added], "skipped": skipped, "ignored": ignored, "label": label})
+    db.flush()
+    return {"added": [p.key for p in added], "skipped": skipped, "ignored": ignored}
