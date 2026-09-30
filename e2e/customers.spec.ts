@@ -63,8 +63,10 @@ test.describe('Phase 29 — Mk1 Customer-Centric Frontend', () => {
     const customersIdx = subLabels.findIndex(l => l.trim() === 'Customers')
     const coaExplorerIdx = subLabels.findIndex(l => l.trim() === 'COA Explorer')
     expect(orderStatusIdx).toBeGreaterThanOrEqual(0)
-    expect(customersIdx).toBe(orderStatusIdx + 1)
-    expect(coaExplorerIdx).toBe(customersIdx + 1)
+    // Relative order only: entries have been added to this group since
+    // Phase 29, so exact adjacency is no longer the contract.
+    expect(customersIdx).toBeGreaterThan(orderStatusIdx)
+    expect(coaExplorerIdx).toBeGreaterThan(customersIdx)
   })
 
   test('list view renders 6-column table with real WC data', async ({ authedPage: page }) => {
@@ -282,7 +284,7 @@ test.describe('Phase 29 — Mk1 Customer-Centric Frontend', () => {
     await expect(page.getByRole('button', { name: /Back to Customers/i })).toBeVisible({ timeout: 10_000 })
 
     // Type into the dedicated Sample ID input (no field-selector anymore).
-    await page.getByLabel('Sample ID').fill(process.env.E2E_KNOWN_SAMPLE_ID!)
+    await page.getByLabel('Sample ID').last().fill(process.env.E2E_KNOWN_SAMPLE_ID!)
 
     // Wait for the request with the per-axis search param
     await page.waitForRequest(
@@ -339,7 +341,7 @@ test.describe('Phase 29 — Mk1 Customer-Centric Frontend', () => {
     await page.getByRole('button', { name: /Clear search/i }).click()
     // All three inputs cleared; Clear button gone.
     await expect(page.getByLabel('Order #')).toHaveValue('')
-    await expect(page.getByLabel('Sample ID')).toHaveValue('')
+    await expect(page.getByLabel('Sample ID').last()).toHaveValue('')
     await expect(page.getByLabel('Analyte')).toHaveValue('')
     await expect(page.getByRole('button', { name: /Clear search/i })).toHaveCount(0)
   })
@@ -368,7 +370,7 @@ test.describe('Phase 29 — Mk1 Customer-Centric Frontend', () => {
       { timeout: 8_000 }
     )
 
-    await page.getByLabel('Sample ID').fill('P-0001')
+    await page.getByLabel('Sample ID').last().fill('P-0001')
     await page.getByLabel('Analyte').fill('BPC')
 
     const combined = await combinedRequestPromise

@@ -15,6 +15,28 @@ Real-stack browser tests. Drives Chromium against the running dev frontend
    the backend container log; if you've lost it, reset via the running app
    or seed a fresh test user.
 
+## Run against a devbox stack (preferred)
+
+Every stack from `accumark-stack` exposes the Mk1 frontend and backend on its
+port block, and `accumark-stack creds <stack>` prints the seeded admin login.
+Put the values in a file outside the repo and source it:
+
+```bash
+# /c/tmp/<stack>-e2e.env  (never commit this)
+export E2E_EMAIL=stackdev@accumark.local
+export E2E_PASSWORD=<from: ./bin/accumark-stack creds <stack>>
+export E2E_BASE_URL=http://100.73.137.3:<MK1_FRONTEND_PORT>
+export E2E_BACKEND_URL=http://100.73.137.3:<MK1_BACKEND_PORT>
+export E2E_RETEST_SAMPLE_ID=P-9001   # retest.spec.ts: a published sample IS maps to a WP order
+```
+
+```bash
+. /c/tmp/<stack>-e2e.env && npm run test:e2e
+```
+
+The whole suite runs in about 25 s. Specs that need a fixture the stack may not
+have skip with a message naming the env var to set.
+
 ## Run
 
 ```pwsh
@@ -40,7 +62,35 @@ $env:E2E_BASE_URL = 'http://localhost:5512'    # default 3101
 $env:E2E_BACKEND_URL = 'http://localhost:5510' # default 8012
 ```
 
-## Coverage (current — Phase 29)
+## Coverage
+
+`coa-forward.spec.ts` drives Regen & Republish from the COA Manage popover on a
+stack with IS and WordPress mounted, then checks the IS public verdict, the
+WordPress verify page and Mailhog. Needs `E2E_COA_SAMPLE_ID` (a sample with a
+published primary and a published additional COA that COA Builder can render;
+`PB-0069` on stack `coarevoke`), `E2E_IS_URL`, `E2E_WP_URL` (the WordPress
+origin as the browser reaches it, an SSH forward to `localhost:<WP port>` on a
+devbox stack) and `E2E_MAILHOG_URL`. Every run mints two new codes on the sample.
+Screenshots and the API verdicts land in `docs/superpowers/e2e/2026-09-29-coa-forward-default/`.
+
+| Test | Verifies |
+|------|----------|
+| Regen & Republish on the primary | the old code reads Superseded in Mk1 with Forward to current ON; IS answers `superseded` + `forward_enabled` + the new code; the WordPress page announces the supersession and links to the new code; the new code verifies; the COA Reissued email reaches Mailhog; the lab can switch the pointer off (page renders as issued) and back on |
+| Regen on an additional COA | same for the additional-COA publish path: the old code sits under Earlier versions with Forward ON, IS and WordPress agree |
+
+`retest.spec.ts` drives the Mk1-native retest overlay (sample details > Actions
+> Retest) on a stack with IS and WordPress mounted:
+
+| Test | Verifies |
+|------|----------|
+| customer block with live WordPress prices | order number, customer, lines; Carry default; Fee radio appears with the live retest price once a profile is set to Retest |
+| HPLC retest plus add-on creates the WP order | Delta = fee + add-on price; Create returns 200 with a WP order number; idempotent on re-run (same spec, same order) |
+
+Payment is not driven by the spec: it happens in WordPress (on a stack, run
+`payment_complete()` with `php -d memory_limit=1024M` inside the WP container).
+
+`customers.spec.ts` (Phase 29, revived 2026-09-27; two locators updated for the
+sidebar entries and the global Sample ID search field added since):
 
 `customers.spec.ts` exercises the smoke checklist from `29-VALIDATION.md`:
 
