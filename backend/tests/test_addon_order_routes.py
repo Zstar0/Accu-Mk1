@@ -123,22 +123,22 @@ def test_snapshot_rewritten_during_is_call_is_not_overwritten(client, db_session
     """A waived order is applied inside the IS round-trip (WP -> IS -> Mk1 s2s):
     the route must reload the sample and keep the applied flag and profiles."""
     _seed(db_session)
-    from database import SessionLocal
     resp = MagicMock(status_code=200)
     resp.json.return_value = IS_OK
 
     def during_is_call(*_a, **_k):
-        other = SessionLocal()
-        try:
-            o = other.execute(select(LimsSample).where(LimsSample.sample_id == "P-5191")).scalar_one()
-            snap = dict(o.catalog_snapshot or {})
-            snap["profiles"] = [*snap.get("profiles", []), {"key": "sterility-usp71", "name": "Sterility USP 71"}]
-            snap["addon_orders"] = [{"order_id": 8611, "order_number": "8611", "status": "completed",
-                                     "profiles": ["sterility-usp71"], "fee": "free", "applied": True}]
-            o.catalog_snapshot = snap
-            other.commit()
-        finally:
-            other.close()
+        # Rewrite the row underneath the ORM object (what the s2s apply does in
+        # its own transaction): a core UPDATE bypasses the identity map, so the
+        # route's in-memory sample is now stale.
+        from sqlalchemy import update
+        current = db_session.execute(select(LimsSample.catalog_snapshot).where(
+            LimsSample.sample_id == "P-5191")).scalar_one() or {}
+        snap = dict(current)
+        snap["profiles"] = [*snap.get("profiles", []), {"key": "sterility-usp71", "name": "Sterility USP 71"}]
+        snap["addon_orders"] = [{"order_id": 8611, "order_number": "8611", "status": "completed",
+                                 "profiles": ["sterility-usp71"], "fee": "free", "applied": True}]
+        db_session.execute(update(LimsSample).where(LimsSample.sample_id == "P-5191").values(catalog_snapshot=snap))
+        db_session.flush()
         return resp
 
     with (patch.dict(os.environ, {"INTEGRATION_SERVICE_URL": "http://is", "ACCU_MK1_API_KEY": "k"}),
