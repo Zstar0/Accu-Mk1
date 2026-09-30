@@ -416,3 +416,128 @@ test('an editor deletes an edge with the Delete key, reload, it is gone', async 
   await expect(page.locator('.react-flow__edge')).toHaveCount(0)
   record('edge_deleted', true)
 })
+
+interface NodeRow {
+  id: number
+  kind: string
+  parent_id: number | null
+  x: number
+  y: number
+  w: number | null
+  h: number | null
+}
+
+async function boardNodes(request: APIRequestContext): Promise<NodeRow[]> {
+  const detail = await request.get(`${BACKEND_URL}/api/boards/${SLUG}`, {
+    headers: bearer(await token(request)),
+  })
+  expect(detail.ok(), await detail.text()).toBeTruthy()
+  return ((await detail.json()) as { nodes: NodeRow[] }).nodes
+}
+
+/**
+ * Fallback for test 8 if Playwright's `dragTo` ever stops producing HTML5 drag events in
+ * Chromium: run with E2E_SYNTHETIC_DND=1 to dispatch dragstart on the chip and
+ * dragover/drop on the canvas with one shared synthetic DataTransfer. The chip carries
+ * `data-kind`, so the selector does not depend on its accessible name.
+ */
+async function syntheticDrop(
+  page: Page,
+  kind: string,
+  at: { x: number; y: number }
+) {
+  await page.evaluate(
+    ({ kind, at }) => {
+      const dt = new DataTransfer()
+      const chip = document.querySelector(`button[data-kind="${kind}"]`)
+      const target = document.elementFromPoint(at.x, at.y)
+      if (!chip || !target) throw new Error('chip or drop target not found')
+      const opts = { bubbles: true, cancelable: true, dataTransfer: dt }
+      chip.dispatchEvent(new DragEvent('dragstart', opts))
+      const xy = { clientX: at.x, clientY: at.y }
+      target.dispatchEvent(new DragEvent('dragover', { ...opts, ...xy }))
+      target.dispatchEvent(new DragEvent('drop', { ...opts, ...xy }))
+    },
+    { kind, at }
+  )
+}
+
+test('drag a text chip from the drawer into the frame', async ({
+  page,
+  request,
+}) => {
+  const before = new Set((await boardNodes(request)).map(n => n.id))
+  await pinViewport(page)
+  await authenticate(page)
+  await page.goto(`/#boards/board?id=${SLUG}`)
+  const frame = page.locator('.react-flow__node-frame').first()
+  await expect(frame).toBeVisible({ timeout: 30_000 })
+  const chip = page.getByRole('button', { name: 'Text', exact: true })
+  await expect(chip).toBeVisible({ timeout: 10_000 })
+  const target = { x: 200, y: 200 }
+  if (process.env.E2E_SYNTHETIC_DND === '1') {
+    const box = await frame.boundingBox()
+    if (!box) throw new Error('frame has no bounding box')
+    await syntheticDrop(page, 'text', {
+      x: box.x + target.x,
+      y: box.y + target.y,
+    })
+  } else {
+    await chip.dragTo(frame, { targetPosition: target })
+  }
+  await page.waitForTimeout(800)
+
+  const rows = await boardNodes(request)
+  const added = rows.filter(n => n.kind === 'text' && !before.has(n.id))
+  const frameRow = rows.find(n => n.id === frameId)
+  record('drawer_drop', {
+    synthetic: process.env.E2E_SYNTHETIC_DND === '1',
+    added: added.map(n => ({
+      id: n.id,
+      parent_id: n.parent_id,
+      x: n.x,
+      y: n.y,
+    })),
+    frame: frameRow ? { id: frameRow.id, w: frameRow.w, h: frameRow.h } : null,
+  })
+  expect(added).toHaveLength(1)
+  const node = added[0]!
+  expect(node.parent_id).toBe(frameId)
+  // Relative to the frame, and inside its stored size.
+  expect(node.x).toBeGreaterThanOrEqual(0)
+  expect(node.y).toBeGreaterThanOrEqual(0)
+  expect(node.x).toBeLessThan(frameRow?.w ?? 0)
+  expect(node.y).toBeLessThan(frameRow?.h ?? 0)
+  await shot(page, '07-drawer-drop-into-frame.png')
+})
+
+test('click the note chip to place a note at the view centre', async ({
+  page,
+  request,
+}) => {
+  const before = new Set((await boardNodes(request)).map(n => n.id))
+  // Pan far right of every seeded node, so the view centre is empty canvas, not the frame.
+  await page.addInitScript(
+    ({ key, vp }) => window.localStorage.setItem(key, JSON.stringify(vp)),
+    { key: VIEWPORT_KEY, vp: { x: -2000, y: 0, zoom: 1 } }
+  )
+  await authenticate(page)
+  await page.goto(`/#boards/board?id=${SLUG}`)
+  await expect(page.locator('.react-flow')).toBeVisible({ timeout: 30_000 })
+  await page.getByRole('button', { name: 'Note', exact: true }).click()
+  await page.waitForTimeout(800)
+
+  const added = (await boardNodes(request)).filter(
+    n => n.kind === 'note' && !before.has(n.id)
+  )
+  record('drawer_click_place', {
+    added: added.map(n => ({
+      id: n.id,
+      parent_id: n.parent_id,
+      x: n.x,
+      y: n.y,
+    })),
+  })
+  expect(added).toHaveLength(1)
+  expect(added[0]!.parent_id).toBeNull()
+})
