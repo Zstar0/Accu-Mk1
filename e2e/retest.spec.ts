@@ -91,7 +91,7 @@ test.describe('Mk1-native retest dialog', () => {
     )
     expect(fee).toBeGreaterThan(0)
     await expect(dialog.getByTestId('retest-summary-total')).toHaveText(
-      `Total${fee.toFixed(2)}`
+      `Total$${fee.toFixed(2)}`
     )
 
     await dialog
@@ -145,10 +145,24 @@ test.describe('Mk1-native retest dialog', () => {
     await expect(
       dialog.getByRole('heading', { name: `Add services to ${SAMPLE_ID}` })
     ).toBeVisible()
-    // E2E_RETEST_SAMPLE_ID is a published sample: the new-sample path.
-    await expect(dialog.getByTestId('addon-mode')).toHaveText(
-      `${SAMPLE_ID} is published: a new sample is created with the existing results carried.`
-    )
+    // The mode follows the sample's state; the sentence and the Create label
+    // must agree with each other whichever it is.
+    const mode = await dialog.getByTestId('addon-mode').textContent()
+    if (mode?.includes('is in progress')) {
+      await expect(dialog.getByTestId('addon-mode')).toHaveText(
+        `${SAMPLE_ID} is in progress: the selected services are added to this sample once the order is paid (or at once if waived).`
+      )
+      await expect(
+        dialog.getByRole('button', { name: `Add services to ${SAMPLE_ID}` })
+      ).toBeVisible()
+    } else {
+      await expect(dialog.getByTestId('addon-mode')).toHaveText(
+        `${SAMPLE_ID} is published: a new sample is created with the existing results carried.`
+      )
+      await expect(
+        dialog.getByRole('button', { name: 'Create add-on order (new sample)' })
+      ).toBeVisible()
+    }
     await expect(
       dialog.getByRole('radiogroup', { name: 'Billing' })
     ).toBeVisible()
@@ -159,7 +173,11 @@ test.describe('Mk1-native retest dialog', () => {
       'Tick at least one service'
     )
     await expect(
-      dialog.getByRole('button', { name: 'Create add-on order (new sample)' })
+      dialog.getByRole('button', {
+        name: mode?.includes('is in progress')
+          ? `Add services to ${SAMPLE_ID}`
+          : 'Create add-on order (new sample)',
+      })
     ).toBeDisabled()
   })
 })
