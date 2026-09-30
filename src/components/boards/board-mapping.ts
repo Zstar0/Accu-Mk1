@@ -2,6 +2,7 @@ import type { Edge, Node, XYPosition } from '@xyflow/react'
 import type {
   BoardEdge,
   BoardNode,
+  NodeCreate,
   NodePatch,
   PositionItem,
 } from '@/lib/api-boards'
@@ -147,6 +148,79 @@ export function resolveParentOnDrop(
     }
   }
   return { parentId: null, position: node.position }
+}
+
+/** Frame rectangles for the drop hit test, from what xyflow measured (or the stored size). */
+export function toFrameRects(nodes: BoardFlowNode[]): FrameRect[] {
+  return nodes
+    .filter(n => n.type === 'frame')
+    .map(n => ({
+      id: n.id,
+      position: n.position,
+      width: Number(n.measured?.width ?? n.style?.width ?? FRAME_DEFAULT.width),
+      height: Number(
+        n.measured?.height ?? n.style?.height ?? FRAME_DEFAULT.height
+      ),
+    }))
+}
+
+/** Item types the tool drawer offers; also the drag payload under DRAWER_MIME. */
+export const DRAWER_KINDS = [
+  'frame',
+  'text',
+  'note',
+  'link',
+  'person',
+  'document',
+  'sample',
+  'order',
+  'worksheet',
+] as const
+export type DrawerKind = (typeof DRAWER_KINDS)[number]
+export const DRAWER_MIME = 'application/x-board-kind'
+
+export function isDrawerKind(v: string): v is DrawerKind {
+  return (DRAWER_KINDS as readonly string[]).includes(v)
+}
+
+/** What the drawer and the palette create for the kinds that need no further input. */
+export function defaultNodeCreate(kind: 'frame' | 'text' | 'note'): NodeCreate {
+  if (kind === 'frame')
+    return {
+      kind: 'frame',
+      label: 'New frame',
+      w: FRAME_DEFAULT.width,
+      h: FRAME_DEFAULT.height,
+      data: { color: 'slate' },
+    }
+  if (kind === 'text')
+    return { kind: 'text', label: 'Heading', data: { size: 'md' } }
+  return { kind: 'note', label: 'Note', data: { markdown: '' } }
+}
+
+/**
+ * Where a drawer item dropped at `at` (flow coordinates) lands: centred on the drop point,
+ * inside the frame that contains that centre (relative position), else absolute. Frames
+ * never nest.
+ */
+export function dropTargetFor(
+  kind: DrawerKind,
+  at: XYPosition,
+  frames: FrameRect[]
+): { position: XYPosition; parentId: number | null } {
+  const size = kind === 'frame' ? FRAME_DEFAULT : NODE_DEFAULT
+  const r = resolveParentOnDrop(
+    {
+      id: '',
+      position: { x: at.x - size.width / 2, y: at.y - size.height / 2 },
+      ...size,
+    },
+    kind === 'frame' ? [] : frames
+  )
+  return {
+    position: r.position,
+    parentId: r.parentId == null ? null : Number(r.parentId),
+  }
 }
 
 export function toPositionItems(

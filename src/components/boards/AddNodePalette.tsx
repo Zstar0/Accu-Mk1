@@ -12,7 +12,7 @@ import { useEntitySearch } from '@/hooks/use-flags'
 import { useCreateNode } from '@/services/boards'
 import { useDirectoryUsers } from '@/services/groups'
 import type { BoardDetail, NodeCreate } from '@/lib/api-boards'
-import { FRAME_DEFAULT } from './board-mapping'
+import { defaultNodeCreate } from './board-mapping'
 import { isSafeHttpUrl } from './open-external'
 
 type Step = 'kind' | 'person' | 'link' | 'entity'
@@ -29,12 +29,15 @@ export function AddNodePalette({
   onOpenChange,
   dropAt,
   parentId,
+  initial,
 }: {
   board: BoardDetail
   open: boolean
   onOpenChange: (o: boolean) => void
   dropAt: { x: number; y: number }
   parentId: number | null
+  /** Open on this step (the drawer's link, person and entity chips) instead of the kind list. */
+  initial?: { step: 'link' | 'person' | 'entity'; entityType?: string }
 }) {
   const create = useCreateNode(board.slug)
   const [step, setStep] = useState<Step>('kind')
@@ -43,6 +46,15 @@ export function AddNodePalette({
   const [url, setUrl] = useState('')
   const directory = useDirectoryUsers()
   const hits = useEntitySearch(entityType, q)
+  // Each open starts on `initial` (else the kind list), adjusted during render, not in an effect.
+  const [wasOpen, setWasOpen] = useState(false)
+  if (open !== wasOpen) {
+    setWasOpen(open)
+    if (open) {
+      setStep(initial?.step ?? 'kind')
+      if (initial?.entityType) setEntityType(initial.entityType)
+    }
+  }
 
   const submit = (data: NodeCreate) => {
     create.mutate(
@@ -80,37 +92,17 @@ export function AddNodePalette({
                 <CommandEmpty>Nothing matches.</CommandEmpty>
                 <CommandGroup heading="Arrange">
                   <CommandItem
-                    onSelect={() =>
-                      submit({
-                        kind: 'frame',
-                        label: 'New frame',
-                        w: FRAME_DEFAULT.width,
-                        h: FRAME_DEFAULT.height,
-                        data: { color: 'slate' },
-                      })
-                    }
+                    onSelect={() => submit(defaultNodeCreate('frame'))}
                   >
                     Frame
                   </CommandItem>
                   <CommandItem
-                    onSelect={() =>
-                      submit({
-                        kind: 'text',
-                        label: 'Heading',
-                        data: { size: 'md' },
-                      })
-                    }
+                    onSelect={() => submit(defaultNodeCreate('text'))}
                   >
                     Text
                   </CommandItem>
                   <CommandItem
-                    onSelect={() =>
-                      submit({
-                        kind: 'note',
-                        label: 'Note',
-                        data: { markdown: '' },
-                      })
-                    }
+                    onSelect={() => submit(defaultNodeCreate('note'))}
                   >
                     Note
                   </CommandItem>
