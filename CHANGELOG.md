@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+## v1.31.1 - 2026-09-30
+
+### Changed
+- The "When you press Create" block now always says whether an email goes out: a waived order sends WooCommerce's order confirmation at once; a charged retest or new-sample add-on order sends the customer an invoice with the payment link; a charged same-sample add-on order sends nothing until the customer pays (copy the link from the Orders tab).
+
 ## v1.31.0 - 2026-09-29
 
 ### Changed
