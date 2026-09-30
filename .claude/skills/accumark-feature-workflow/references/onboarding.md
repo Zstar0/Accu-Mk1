@@ -33,8 +33,10 @@ claude plugin marketplace add pbakaus/impeccable  && claude plugin install impec
 ```
 
 Optional but used by the team: `context7@claude-plugins-official` (library
-docs), `code-review@claude-plugins-official`, GitNexus (`AGENTS.md` explains
-its `Always Do` rules once installed).
+docs), `code-review@claude-plugins-official`. GitNexus was retired on
+2026-09-28: do not install it, and ignore any "MUST run gitnexus" block a
+repo's `AGENTS.md` or `CLAUDE.md` still carries. Blast radius before editing
+a symbol is a grep of its callers.
 
 What each does for you: superpowers is the process (brainstorming, TDD,
 systematic debugging, verification before completion); ponytail keeps diffs
