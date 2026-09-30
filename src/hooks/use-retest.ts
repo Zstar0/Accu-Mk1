@@ -92,8 +92,8 @@ export function useCreateAddonOrder(
         toast.success(
           `Add-on order ${r.order_number} completed; the services are being added to ${sampleId} now.`
         )
-      // ponytail: a waived order applies asynchronously (WP -> IS -> Mk1), so this
-      // refetch can land before the rows exist; reopening the sample shows them.
+      // A waived order is applied (WP -> IS -> Mk1) before the response returns,
+      // so this refetch already sees the new rows.
       for (const queryKey of [
         [RETEST_OPTIONS_KEY, sampleId],
         ['ordered-products', sampleId],
