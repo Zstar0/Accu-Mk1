@@ -3,6 +3,7 @@ import {
   Background,
   Controls,
   MiniMap,
+  Panel,
   ReactFlow,
   ReactFlowProvider,
   useEdgesState,
@@ -16,28 +17,41 @@ import {
   type XYPosition,
 } from '@xyflow/react'
 import '@xyflow/react/dist/style.css'
-import type { BoardDetail } from '@/lib/api-boards'
+import { Network } from 'lucide-react'
+import { toast } from 'sonner'
+import { Button } from '@/components/ui/button'
+import { ToggleGroup, ToggleGroupItem } from '@/components/ui/toggle-group'
+import type { BoardDetail, EdgeKind } from '@/lib/api-boards'
 import {
   useCreateEdge,
   useCreateNode,
   useDeleteEdge,
+  usePatchEdge,
+  usePatchNode,
   usePatchPositions,
 } from '@/services/boards'
 import { useUIStore } from '@/store/ui-store'
 import { nodeTypes } from './nodes'
 import { BoardToolDrawer } from './BoardToolDrawer'
+import { layoutScope } from './board-layout'
 import {
   DRAWER_MIME,
+  EDGE_KINDS,
+  FRAME_DEFAULT,
+  NODE_DEFAULT,
   defaultNodeCreate,
   dropTargetFor,
+  edgeCreateFor,
   edgeIdsToDelete,
   isDrawerKind,
   parseViewport,
+  resizePatch,
   resolveParentOnDrop,
   toFlowEdges,
   toFlowNodes,
   toFrameRects,
   toPositionItems,
+  undoPositionItems,
   type BoardFlowNode,
   type DrawerKind,
 } from './board-mapping'
@@ -92,7 +106,9 @@ function CanvasInner({
     toFlowEdges(board.edges)
   )
   const patchPositions = usePatchPositions(board.slug)
+  const patchNode = usePatchNode(board.slug)
   const createEdge = useCreateEdge(board.slug)
+  const patchEdge = usePatchEdge(board.slug)
   const deleteEdge = useDeleteEdge(board.slug)
   const createNode = useCreateNode(board.slug)
   const { fitView, screenToFlowPosition } = useReactFlow()
@@ -168,14 +184,98 @@ function CanvasInner({
   const handleConnect = useCallback(
     (c: Connection) => {
       if (!canEdit || !c.source || !c.target || c.source === c.target) return
-      createEdge.mutate({
-        source_id: Number(c.source),
-        target_id: Number(c.target),
-        kind: 'related',
-      })
+      // An org board's lines are reporting lines: drag from the manager to the report.
+      createEdge.mutate(
+        edgeCreateFor(
+          Number(c.source),
+          Number(c.target),
+          board.kind === 'org' ? 'reports_to' : 'related'
+        )
+      )
     },
-    [canEdit, createEdge]
+    [canEdit, createEdge, board.kind]
   )
+
+  // The kind picker acts on the one selected line.
+  const picked = edges.filter(e => e.selected)
+  const pickedEdge = picked.length === 1 ? picked[0] : undefined
+  const pickedKind = pickedEdge?.data?.kind as EdgeKind | undefined
+
+  const retype = (kind: EdgeKind) => {
+    if (!pickedEdge || kind === pickedKind) return
+    const id = Number(pickedEdge.id)
+    if ((kind === 'reports_to') === (pickedKind === 'reports_to'))
+      return patchEdge.mutate({ id, data: { kind } })
+    // Into or out of a reporting line the stored ends swap, which PATCH cannot do:
+    // store the new line, then drop the old one, so the drawn line stays where it is.
+    createEdge.mutate(
+      {
+        ...edgeCreateFor(
+          Number(pickedEdge.source),
+          Number(pickedEdge.target),
+          kind
+        ),
+        label: (pickedEdge.data?.label as string | null | undefined) ?? null,
+      },
+      { onSuccess: () => deleteEdge.mutate(id) }
+    )
+  }
+
+  const selectedFrame =
+    selectedId != null && rows.get(selectedId)?.kind === 'frame'
+      ? String(selectedId)
+      : null
+
+  // Auto-layout (spec 8.3): the selected frame's items, else the top-level items.
+  const runLayout = () => {
+    const { moved, size } = layoutScope(
+      nodes.map(n => {
+        const d = n.type === 'frame' ? FRAME_DEFAULT : NODE_DEFAULT
+        return {
+          id: n.id,
+          parentId: n.parentId,
+          position: n.position,
+          width: Number(n.measured?.width ?? n.style?.width ?? d.width),
+          height: Number(n.measured?.height ?? n.style?.height ?? d.height),
+        }
+      }),
+      edges,
+      selectedFrame
+    )
+    const items = toPositionItems(
+      rows,
+      moved.map(m => ({ ...m, parentId: selectedFrame ?? undefined }))
+    )
+    if (!items.length) {
+      toast.info(
+        'Nothing to arrange. Connect items first: Layout orders connected items top-down.'
+      )
+      return
+    }
+    const frame = selectedFrame ? rows.get(Number(selectedFrame)) : undefined
+    if (frame && size) {
+      const w = frame.w ?? FRAME_DEFAULT.width
+      const h = frame.h ?? FRAME_DEFAULT.height
+      // Grow the frame to hold its items; never shrink it.
+      if (size.width > w || size.height > h)
+        patchNode.mutate(
+          resizePatch(frame, {
+            width: Math.max(w, size.width),
+            height: Math.max(h, size.height),
+          })
+        )
+    }
+    patchPositions.mutate(items, {
+      onSuccess: saved =>
+        toast.success('Layout applied', {
+          action: {
+            label: 'Undo',
+            onClick: () =>
+              patchPositions.mutate(undoPositionItems(rows, saved)),
+          },
+        }),
+    })
+  }
 
   // Edges delete through the API; returning false means xyflow never removes
   // anything locally, and nodes are only ever deleted from the side panel.
@@ -263,6 +363,38 @@ function CanvasInner({
         <Background />
         <MiniMap pannable zoomable />
         <Controls showInteractive={false} />
+        {canEdit && (
+          <Panel position="top-right">
+            <Button
+              size="sm"
+              variant="outline"
+              onClick={runLayout}
+              title="Arrange connected items top-down"
+            >
+              <Network className="mr-1 h-4 w-4" />
+              {selectedFrame ? 'Layout frame' : 'Layout'}
+            </Button>
+          </Panel>
+        )}
+        {canEdit && pickedEdge && (
+          <Panel position="top-center">
+            <ToggleGroup
+              type="single"
+              size="sm"
+              variant="outline"
+              aria-label="Line kind"
+              className="bg-background"
+              value={pickedKind}
+              onValueChange={v => v && retype(v as EdgeKind)}
+            >
+              {EDGE_KINDS.map(k => (
+                <ToggleGroupItem key={k.kind} value={k.kind}>
+                  {k.label}
+                </ToggleGroupItem>
+              ))}
+            </ToggleGroup>
+          </Panel>
+        )}
       </ReactFlow>
       {/* Renders into the wrapper div, beside (not inside) the flow; placeAtCenter needs useReactFlow. */}
       <BoardToolDrawer canEdit={canEdit} onPlace={placeAtCenter} />

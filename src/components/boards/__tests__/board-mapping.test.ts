@@ -2,14 +2,17 @@ import { describe, it, expect } from 'vitest'
 import {
   defaultNodeCreate,
   dropTargetFor,
+  edgeCreateFor,
   edgeIdsToDelete,
   parseViewport,
   resizePatch,
   resolveParentOnDrop,
+  toFlowEdges,
   toFlowNodes,
   toPositionItems,
+  undoPositionItems,
 } from '@/components/boards/board-mapping'
-import type { BoardNode } from '@/lib/api-boards'
+import type { BoardEdge, BoardNode } from '@/lib/api-boards'
 
 const row = (o: Partial<BoardNode>): BoardNode => ({
   id: 1,
@@ -187,5 +190,68 @@ describe('drawer placement', () => {
       position: { x: 120, y: 90 },
       parentId: null,
     })
+  })
+})
+
+describe('reporting lines', () => {
+  const edge = (o: Partial<BoardEdge>): BoardEdge => ({
+    id: 1,
+    board_id: 1,
+    source_id: 10,
+    target_id: 20,
+    kind: 'related',
+    label: null,
+    ...o,
+  })
+
+  it('a reports_to edge is drawn manager to report with the arrow at the manager', () => {
+    const [related, reports] = toFlowEdges([
+      edge({ id: 1 }),
+      edge({ id: 2, kind: 'reports_to' }),
+    ])
+    expect(related).toMatchObject({ source: '10', target: '20' })
+    expect(related?.markerEnd).toBeDefined()
+    expect(related?.markerStart).toBeUndefined()
+    // Stored "10 reports to 20": the line runs from 20 (the manager) down to 10.
+    expect(reports).toMatchObject({
+      source: '20',
+      target: '10',
+      label: 'reports to',
+      data: { kind: 'reports_to' },
+    })
+    expect(reports?.markerStart).toBeDefined()
+    expect(reports?.markerEnd).toBeUndefined()
+  })
+
+  it('edgeCreateFor stores a reporting line as report reports_to manager', () => {
+    // Drawn from 1 (manager) to 2 (report).
+    expect(edgeCreateFor(1, 2, 'reports_to')).toEqual({
+      source_id: 2,
+      target_id: 1,
+      kind: 'reports_to',
+    })
+    expect(edgeCreateFor(1, 2, 'next')).toEqual({
+      source_id: 1,
+      target_id: 2,
+      kind: 'next',
+    })
+    // Round trip: what is stored draws the way it was dragged.
+    const [drawn] = toFlowEdges([
+      edge({ ...edgeCreateFor(1, 2, 'reports_to'), kind: 'reports_to' }),
+    ])
+    expect(drawn).toMatchObject({ source: '1', target: '2' })
+  })
+
+  it('undo items restore the old spot at the new version', () => {
+    const rows = new Map([
+      [2, row({ id: 2, x: 5, y: 6, version: 3 })],
+      [3, row({ id: 3, x: 7, y: 8, version: 1 })],
+    ])
+    expect(
+      undoPositionItems(rows, [
+        row({ id: 2, x: 100, y: 200, version: 4 }),
+        row({ id: 9, x: 1, y: 1, version: 2 }),
+      ])
+    ).toEqual([{ id: 2, x: 5, y: 6, version: 4 }])
   })
 })

@@ -2,6 +2,8 @@ import type { Edge, Node, XYPosition } from '@xyflow/react'
 import type {
   BoardEdge,
   BoardNode,
+  EdgeCreate,
+  EdgeKind,
   NodeCreate,
   NodePatch,
   PositionItem,
@@ -67,16 +69,44 @@ const EDGE_LABEL: Record<BoardEdge['kind'], string | undefined> = {
   next: 'next',
 }
 
+/** Line kinds the canvas picker offers, in display order. */
+export const EDGE_KINDS: { kind: EdgeKind; label: string }[] = [
+  { kind: 'related', label: 'Related' },
+  { kind: 'reports_to', label: 'Reports to' },
+  { kind: 'depends_on', label: 'Depends on' },
+  { kind: 'next', label: 'Next' },
+]
+
+/**
+ * Every line is drawn from its first item to its second. A reporting line is the one
+ * kind stored the other way round ("report reports_to manager"), so it is drawn from
+ * the manager down to the report, with the arrow at the manager.
+ */
 export function toFlowEdges(rows: BoardEdge[]): Edge[] {
-  return rows.map(e => ({
-    id: String(e.id),
-    source: String(e.source_id),
-    target: String(e.target_id),
-    type: 'default',
-    label: e.label ?? EDGE_LABEL[e.kind],
-    markerEnd: { type: 'arrowclosed' as const },
-    data: { kind: e.kind },
-  }))
+  const arrow = { type: 'arrowclosed' as const }
+  return rows.map(e => {
+    const up = e.kind === 'reports_to'
+    return {
+      id: String(e.id),
+      source: String(up ? e.target_id : e.source_id),
+      target: String(up ? e.source_id : e.target_id),
+      type: 'default',
+      label: e.label ?? EDGE_LABEL[e.kind],
+      ...(up ? { markerStart: arrow } : { markerEnd: arrow }),
+      data: { kind: e.kind, label: e.label },
+    }
+  })
+}
+
+/** The edge to store for a line drawn `from` one item `to` another (see toFlowEdges). */
+export function edgeCreateFor(
+  from: number,
+  to: number,
+  kind: EdgeKind
+): EdgeCreate {
+  return kind === 'reports_to'
+    ? { source_id: to, target_id: from, kind }
+    : { source_id: from, target_id: to, kind }
 }
 
 /**
@@ -247,6 +277,17 @@ export function toPositionItems(
     out.push(item)
   }
   return out
+}
+
+/** Undo for a positions batch: each saved node back to where `before` had it, at its new version. */
+export function undoPositionItems(
+  before: Map<number, BoardNode>,
+  saved: BoardNode[]
+): PositionItem[] {
+  return saved.flatMap(n => {
+    const was = before.get(n.id)
+    return was ? [{ id: n.id, x: was.x, y: was.y, version: n.version }] : []
+  })
 }
 
 /** Frames resize from the bottom-right corner only, so the origin never moves: size is all that persists. */
