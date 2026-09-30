@@ -7,3 +7,13 @@ Mounted: Mk1 feat/addon-same-sample (backend merged), accumarklabs feat/addon-sa
 3. Playwright `e2e/retest.spec.ts`: 3 passed on the stack (Re-test create, Add services mode, same-sample waived create).
 
 Traps fixed during the run: the Mk1 addon-order route overwrote the s2s snapshot writes with a stale copy because the waived chain completes inside its own IS call (fixed by reloading the sample); IS forwarded nothing when its stored services already had the key true (fixed by persisting keys owed to Mk1 until a forward succeeds); WordPress saved the idempotency meta only after `payment_complete` (fixed by ordering). Prod order 8611 (the P-5191 attempt) was left as the record and not resubmitted.
+
+## "When you press Create" block (2026-09-30, head 25b48d38)
+
+Stack `retest`, P-9001 in progress, no Create pressed. The Summary card now ends with a "When you press Create" block built from the same state as the request body:
+
+- 02: Re-test tab, HPLC re-test + variance 3 points, Charged: "Creates a WooCommerce retest order for Forrest Parker against order 3134 ($203.00)." / "Once paid: a new sample is created with HPLC Purity + Identity re-tested (variance, 3 points); Heavy Metals, Endotoxin USP85 LAL carried as verified results." / "P-9001 is unchanged and stays linked to the new sample." / "The customer is emailed an invoice with the payment link." (the last two lines sit below the fold in the screenshot; the a11y snapshot recorded all four).
+- 03: Add services, Fentanyl, Charged: "Creates a WooCommerce add-on order for Forrest Parker against order 3134 ($75.00)." / "Once paid: Fentanyl Screening added to P-9001." / "No new sample; P-9001 keeps its current results." / "No payment email is sent; copy the payment link from the Orders tab."
+- 04: same with Billing Waived: "($0.00, waived $75.00)" / "At once: Fentanyl Screening added to P-9001." / "No payment is needed."
+
+Unit: `src/test/retest-dialog.test.tsx` 24 passed (block asserted on the Re-test, published Add services, in-progress charged and waived paths, variance wording and the vial count); tsc clean.
