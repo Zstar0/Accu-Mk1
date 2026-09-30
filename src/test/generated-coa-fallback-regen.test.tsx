@@ -68,10 +68,20 @@ const DRAFT_16_ORPHAN = gen({
   created_at: '2026-09-09T02:00:00Z',
 })
 
-const regenButtons = () =>
-  screen.queryAllByRole('button', { name: /regen & republish/i })
-const regenButton = () =>
-  screen.getByRole('button', { name: /regen & republish/i })
+// The action lives in the row's Manage popover, so open every Manage first.
+// Exact name: the popover's help icon is labelled "About Regen & Republish".
+const openManage = () =>
+  screen
+    .queryAllByRole('button', { name: 'Manage' })
+    .forEach(b => fireEvent.click(b))
+const regenButtons = () => {
+  openManage()
+  return screen.queryAllByRole('button', { name: 'Regen & Republish' })
+}
+const regenButton = () => {
+  openManage()
+  return screen.getByRole('button', { name: 'Regen & Republish' })
+}
 
 describe('GeneratedCOAFallbackList — primary Regen & Republish (mk1 read mode)', () => {
   let confirmSpy: ReturnType<typeof vi.spyOn>
