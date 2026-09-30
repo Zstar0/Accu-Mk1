@@ -505,11 +505,11 @@ test('drag a text chip from the drawer into the frame', async ({
   expect(added).toHaveLength(1)
   const node = added[0]!
   expect(node.parent_id).toBe(frameId)
-  // Relative to the frame, and inside its stored size.
   expect(node.x).toBeGreaterThanOrEqual(0)
   expect(node.y).toBeGreaterThanOrEqual(0)
-  expect(node.x).toBeLessThan(frameRow?.w ?? 0)
-  expect(node.y).toBeLessThan(frameRow?.h ?? 0)
+  // The whole body (text default 180x56) sits inside the frame, not just its origin.
+  expect(node.x + 180).toBeLessThanOrEqual(frameRow?.w ?? 0)
+  expect(node.y + 56).toBeLessThanOrEqual(frameRow?.h ?? 0)
   await shot(page, '07-drawer-drop-into-frame.png')
 })
 
