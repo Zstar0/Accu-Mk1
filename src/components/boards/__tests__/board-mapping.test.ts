@@ -1,5 +1,7 @@
 import { describe, it, expect } from 'vitest'
 import {
+  defaultNodeCreate,
+  dropTargetFor,
   edgeIdsToDelete,
   parseViewport,
   resizePatch,
@@ -124,5 +126,66 @@ describe('board-mapping', () => {
       '{"x":1e999,"y":2,"zoom":1}',
     ])
       expect(parseViewport(bad)).toBeNull()
+  })
+})
+
+describe('drawer placement', () => {
+  it('defaultNodeCreate matches the palette payloads for frame, text and note', () => {
+    expect(defaultNodeCreate('frame')).toEqual({
+      kind: 'frame',
+      label: 'New frame',
+      w: 360,
+      h: 220,
+      data: { color: 'slate' },
+    })
+    expect(defaultNodeCreate('text')).toEqual({
+      kind: 'text',
+      label: 'Heading',
+      data: { size: 'md' },
+    })
+    expect(defaultNodeCreate('note')).toEqual({
+      kind: 'note',
+      label: 'Note',
+      data: { markdown: '' },
+    })
+  })
+
+  const frames = [
+    { id: '5', position: { x: 100, y: 100 }, width: 400, height: 300 },
+  ]
+
+  it('a drop centred inside a frame joins it with a relative position', () => {
+    // The item is centred on the drop point: text is 180x56, so top-left is (210, 172).
+    expect(dropTargetFor('text', { x: 300, y: 200 }, frames)).toEqual({
+      position: { x: 110, y: 72 },
+      parentId: 5,
+    })
+  })
+
+  it('a drop just inside a frame edge is clamped so the whole body sits inside', () => {
+    // Pointer 10px inside the left edge: unclamped relative x would be -80.
+    expect(dropTargetFor('text', { x: 110, y: 200 }, frames)).toEqual({
+      position: { x: 0, y: 72 },
+      parentId: 5,
+    })
+    // Pointer just inside the bottom-right corner: clamped to (w - 180, h - 56).
+    expect(dropTargetFor('text', { x: 495, y: 395 }, frames)).toEqual({
+      position: { x: 400 - 180, y: 300 - 56 },
+      parentId: 5,
+    })
+  })
+
+  it('a drop outside every frame stays absolute with no parent', () => {
+    expect(dropTargetFor('note', { x: 900, y: 900 }, frames)).toEqual({
+      position: { x: 810, y: 872 },
+      parentId: null,
+    })
+  })
+
+  it('a frame never gets a parent, even dropped inside another frame', () => {
+    expect(dropTargetFor('frame', { x: 300, y: 200 }, frames)).toEqual({
+      position: { x: 120, y: 90 },
+      parentId: null,
+    })
   })
 })

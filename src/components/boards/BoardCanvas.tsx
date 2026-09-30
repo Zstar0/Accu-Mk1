@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {
   Background,
   Controls,
@@ -13,26 +13,33 @@ import {
   type Node,
   type NodeChange,
   type Viewport,
+  type XYPosition,
 } from '@xyflow/react'
 import '@xyflow/react/dist/style.css'
 import type { BoardDetail } from '@/lib/api-boards'
 import {
   useCreateEdge,
+  useCreateNode,
   useDeleteEdge,
   usePatchPositions,
 } from '@/services/boards'
 import { useUIStore } from '@/store/ui-store'
 import { nodeTypes } from './nodes'
+import { BoardToolDrawer } from './BoardToolDrawer'
 import {
-  FRAME_DEFAULT,
+  DRAWER_MIME,
+  defaultNodeCreate,
+  dropTargetFor,
   edgeIdsToDelete,
+  isDrawerKind,
   parseViewport,
   resolveParentOnDrop,
   toFlowEdges,
   toFlowNodes,
+  toFrameRects,
   toPositionItems,
   type BoardFlowNode,
-  type FrameRect,
+  type DrawerKind,
 } from './board-mapping'
 
 export interface BoardCanvasProps {
@@ -40,6 +47,14 @@ export interface BoardCanvasProps {
   canEdit: boolean
   selectedId: number | null
   onSelect: (id: number | null) => void
+  /** Link, person and entity kinds need the palette's next step to finish the item. */
+  onRequestAdd?: (req: AddRequest) => void
+}
+
+export interface AddRequest {
+  kind: DrawerKind
+  dropAt: XYPosition
+  parentId: number | null
 }
 
 const VIEWPORT_KEY = (slug: string) => `boards:viewport:${slug}`
@@ -64,6 +79,7 @@ function CanvasInner({
   canEdit,
   selectedId,
   onSelect,
+  onRequestAdd,
 }: BoardCanvasProps) {
   const rows = useMemo(
     () => new Map(board.nodes.map(n => [n.id, n])),
@@ -78,7 +94,9 @@ function CanvasInner({
   const patchPositions = usePatchPositions(board.slug)
   const createEdge = useCreateEdge(board.slug)
   const deleteEdge = useDeleteEdge(board.slug)
-  const { fitView } = useReactFlow()
+  const createNode = useCreateNode(board.slug)
+  const { fitView, screenToFlowPosition } = useReactFlow()
+  const flowRef = useRef<HTMLDivElement>(null)
   // Read once into state (React Compiler: no impure reads during render).
   const [initialViewport] = useState(() =>
     readViewport(board.slug, board.default_viewport)
@@ -122,18 +140,7 @@ function CanvasInner({
   const handleDragStop = useCallback(
     (_: unknown, _node: Node, dragged: Node[]) => {
       if (!canEdit) return
-      const frames: FrameRect[] = nodes
-        .filter(n => n.type === 'frame')
-        .map(n => ({
-          id: n.id,
-          position: n.position,
-          width: Number(
-            n.measured?.width ?? n.style?.width ?? FRAME_DEFAULT.width
-          ),
-          height: Number(
-            n.measured?.height ?? n.style?.height ?? FRAME_DEFAULT.height
-          ),
-        }))
+      const frames = toFrameRects(nodes)
       const moved = dragged.map(n => {
         // Frames never nest: a dragged frame is resolved against no frames.
         const resolved = resolveParentOnDrop(
@@ -180,52 +187,92 @@ function CanvasInner({
     [canEdit, deleteEdge]
   )
 
+  // Drawer placement: frame, text and note are created straight away; the rest need the
+  // palette's next step, so the page opens it at this drop point.
+  const placeAt = (kind: DrawerKind, at: XYPosition) => {
+    if (!canEdit) return
+    const { position, parentId } = dropTargetFor(kind, at, toFrameRects(nodes))
+    if (kind === 'frame' || kind === 'text' || kind === 'note')
+      createNode.mutate({
+        ...defaultNodeCreate(kind),
+        x: position.x,
+        y: position.y,
+        parent_id: parentId,
+      })
+    else onRequestAdd?.({ kind, dropAt: position, parentId })
+  }
+
+  const placeAtCenter = (kind: DrawerKind) => {
+    const r = flowRef.current?.getBoundingClientRect()
+    if (!r) return
+    placeAt(
+      kind,
+      screenToFlowPosition({ x: r.left + r.width / 2, y: r.top + r.height / 2 })
+    )
+  }
+
   return (
-    <ReactFlow
-      nodes={shown}
-      edges={edges}
-      nodeTypes={nodeTypes}
-      onNodesChange={handleNodesChange}
-      onEdgesChange={onEdgesChange}
-      onNodeClick={(_, n) => onSelect(Number(n.id))}
-      // Drag selects first, so xyflow's drag set is only this node (selection stays controlled).
-      selectNodesOnDrag={false}
-      onNodeDragStart={(_, n) => onSelect(Number(n.id))}
-      onNodeDragStop={handleDragStop}
-      onConnect={handleConnect}
-      onPaneClick={() => onSelect(null)}
-      onMoveEnd={(_, vp) => {
-        try {
-          window.localStorage.setItem(
-            VIEWPORT_KEY(board.slug),
-            JSON.stringify(vp)
-          )
-        } catch {
-          /* ignore */
-        }
-      }}
-      nodesDraggable={canEdit}
-      nodesConnectable={canEdit}
-      elementsSelectable
-      edgesFocusable
-      deleteKeyCode={canEdit ? ['Delete', 'Backspace'] : null}
-      onBeforeDelete={handleBeforeDelete}
-      defaultViewport={initialViewport}
-      fitView={!initialViewport}
-      minZoom={0.2}
-      maxZoom={2}
-      proOptions={{ hideAttribution: true }}
-    >
-      <Background />
-      <MiniMap pannable zoomable />
-      <Controls showInteractive={false} />
-    </ReactFlow>
+    <>
+      <ReactFlow
+        ref={flowRef}
+        onDragOver={e => {
+          if (!canEdit || !e.dataTransfer.types.includes(DRAWER_MIME)) return
+          e.preventDefault()
+          e.dataTransfer.dropEffect = 'move'
+        }}
+        onDrop={e => {
+          const kind = e.dataTransfer.getData(DRAWER_MIME)
+          if (!canEdit || !isDrawerKind(kind)) return
+          e.preventDefault()
+          placeAt(kind, screenToFlowPosition({ x: e.clientX, y: e.clientY }))
+        }}
+        nodes={shown}
+        edges={edges}
+        nodeTypes={nodeTypes}
+        onNodesChange={handleNodesChange}
+        onEdgesChange={onEdgesChange}
+        onNodeClick={(_, n) => onSelect(Number(n.id))}
+        // Drag selects first, so xyflow's drag set is only this node (selection stays controlled).
+        selectNodesOnDrag={false}
+        onNodeDragStart={(_, n) => onSelect(Number(n.id))}
+        onNodeDragStop={handleDragStop}
+        onConnect={handleConnect}
+        onPaneClick={() => onSelect(null)}
+        onMoveEnd={(_, vp) => {
+          try {
+            window.localStorage.setItem(
+              VIEWPORT_KEY(board.slug),
+              JSON.stringify(vp)
+            )
+          } catch {
+            /* ignore */
+          }
+        }}
+        nodesDraggable={canEdit}
+        nodesConnectable={canEdit}
+        elementsSelectable
+        edgesFocusable
+        deleteKeyCode={canEdit ? ['Delete', 'Backspace'] : null}
+        onBeforeDelete={handleBeforeDelete}
+        defaultViewport={initialViewport}
+        fitView={!initialViewport}
+        minZoom={0.2}
+        maxZoom={2}
+        proOptions={{ hideAttribution: true }}
+      >
+        <Background />
+        <MiniMap pannable zoomable />
+        <Controls showInteractive={false} />
+      </ReactFlow>
+      {/* Renders into the wrapper div, beside (not inside) the flow; placeAtCenter needs useReactFlow. */}
+      <BoardToolDrawer canEdit={canEdit} onPlace={placeAtCenter} />
+    </>
   )
 }
 
 export default function BoardCanvas(props: BoardCanvasProps) {
   return (
-    <div className="h-full w-full overflow-hidden bg-background">
+    <div className="relative h-full w-full overflow-hidden bg-background">
       <ReactFlowProvider>
         <CanvasInner {...props} />
       </ReactFlowProvider>

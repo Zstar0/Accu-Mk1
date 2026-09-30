@@ -1,4 +1,4 @@
-import { lazy, Suspense, useState } from 'react'
+import { lazy, Suspense, useState, type ComponentProps } from 'react'
 import { ArrowLeft, Loader2, Plus } from 'lucide-react'
 import { toast } from 'sonner'
 import { Badge } from '@/components/ui/badge'
@@ -15,8 +15,17 @@ import { ShareBoardDialog } from './ShareBoardDialog'
 import { BoardSidePanel } from './BoardSidePanel'
 import { AddNodePalette } from './AddNodePalette'
 import { parseViewport } from './board-mapping'
+import type { AddRequest } from './BoardCanvas'
 
 const BoardCanvas = lazy(() => import('./BoardCanvas'))
+
+type PaletteInitial = ComponentProps<typeof AddNodePalette>['initial']
+const HEADER_DROP_AT = { x: 120, y: 120 }
+
+function paletteStepFor(kind: AddRequest['kind']): PaletteInitial {
+  if (kind === 'link' || kind === 'person') return { step: kind }
+  return { step: 'entity', entityType: kind }
+}
 
 /** One board (spec §8.1, §8.3, §8.4, §8.7). The canvas ships in its own chunk. */
 export function BoardPage({ slug }: { slug: string }) {
@@ -27,6 +36,10 @@ export function BoardPage({ slug }: { slug: string }) {
   const [selectedId, setSelectedId] = useState<number | null>(null)
   const [share, setShare] = useState(false)
   const [addOpen, setAddOpen] = useState(false)
+  const [addInitial, setAddInitial] = useState<PaletteInitial>()
+  const [addDropAt, setAddDropAt] = useState(HEADER_DROP_AT)
+  // undefined = the header Add button: parent is whichever frame is selected.
+  const [addParentId, setAddParentId] = useState<number | null>()
 
   if (board.isLoading) {
     return (
@@ -73,7 +86,15 @@ export function BoardPage({ slug }: { slug: string }) {
         <span className="flex-1" />
         <div id="board-toolbar-slot" className="flex items-center gap-2" />
         {canEdit && (
-          <Button size="sm" onClick={() => setAddOpen(true)}>
+          <Button
+            size="sm"
+            onClick={() => {
+              setAddInitial(undefined)
+              setAddDropAt(HEADER_DROP_AT)
+              setAddParentId(undefined)
+              setAddOpen(true)
+            }}
+          >
             <Plus className="mr-1 h-4 w-4" />
             Add
           </Button>
@@ -121,6 +142,12 @@ export function BoardPage({ slug }: { slug: string }) {
               canEdit={canEdit}
               selectedId={selectedId}
               onSelect={setSelectedId}
+              onRequestAdd={req => {
+                setAddInitial(paletteStepFor(req.kind))
+                setAddDropAt(req.dropAt)
+                setAddParentId(req.parentId)
+                setAddOpen(true)
+              }}
             />
           </Suspense>
         </ResizablePanel>
@@ -141,8 +168,9 @@ export function BoardPage({ slug }: { slug: string }) {
           board={b}
           open={addOpen}
           onOpenChange={setAddOpen}
-          dropAt={{ x: 120, y: 120 }}
-          parentId={selectedFrameId}
+          dropAt={addDropAt}
+          parentId={addParentId === undefined ? selectedFrameId : addParentId}
+          initial={addInitial}
         />
       )}
     </div>

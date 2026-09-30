@@ -1,16 +1,16 @@
 {
-  "run": "j3ce",
+  "run": "matk",
   "seed": {
-    "slug": "map-j3ce",
-    "board_name": "Company map (j3ce)",
-    "frame_id": 47,
-    "note_id": 48,
-    "link_id": 49,
-    "person_id": 50,
-    "edge_id": 10,
+    "slug": "map-matk",
+    "board_name": "Company map (matk)",
+    "frame_id": 71,
+    "note_id": 72,
+    "link_id": 73,
+    "person_id": 74,
+    "edge_id": 18,
     "document_entity_id": null,
     "document_code": null,
-    "flag_title": "Plan Q4 campaign (j3ce)"
+    "flag_title": "Plan Q4 campaign (matk)"
   },
   "drag_delta": {
     "expected": {
@@ -23,8 +23,8 @@
     }
   },
   "drag_parent": {
-    "parent_id": 47,
-    "frame_id": 47
+    "parent_id": 71,
+    "frame_id": 71
   },
   "deep_link_path": "flyout_entity_chip",
   "resize_delta": {
@@ -37,5 +37,31 @@
       "dh": 60
     }
   },
-  "edge_deleted": true
+  "edge_deleted": true,
+  "drawer_drop": {
+    "synthetic": false,
+    "added": [
+      {
+        "id": 76,
+        "parent_id": 71,
+        "x": 110,
+        "y": 172
+      }
+    ],
+    "frame": {
+      "id": 71,
+      "w": 540,
+      "h": 340
+    }
+  },
+  "drawer_click_place": {
+    "added": [
+      {
+        "id": 77,
+        "parent_id": null,
+        "x": 2266.7578125,
+        "y": 243.5
+      }
+    ]
+  }
 }

@@ -122,6 +122,21 @@ describe('AddNodePalette', () => {
     )
   })
 
+  it('opens straight on the document search when given an initial entity step', () => {
+    render(
+      <AddNodePalette
+        board={board}
+        open
+        onOpenChange={() => undefined}
+        dropAt={{ x: 0, y: 0 }}
+        parentId={null}
+        initial={{ step: 'entity', entityType: 'document' }}
+      />
+    )
+    expect(screen.getByPlaceholderText('Search document...')).toBeVisible()
+    expect(screen.queryByText('Frame')).toBeNull()
+  })
+
   it('keeps a server hit visible when its label does not fuzzy-match the typed query', async () => {
     h.search = [{ entity_id: 'SOP-0001', label: 'SOP-0001' }]
     const user = userEvent.setup()
