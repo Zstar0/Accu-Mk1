@@ -36,6 +36,9 @@ class PromotionSourceInfo(BaseModel):
     """One contributing vial-tier source in a ParentPromotionInfo."""
     sample_id: Optional[str] = None     # vial label, e.g. P-0143-S01
     contribution_kind: str
+    # The sample the source row lives on. Differs from the promotion's own
+    # parent only for a carried result on a retest (source on the original).
+    parent_sample_id: Optional[str] = None
 
 
 class ParentPromotionInfo(BaseModel):

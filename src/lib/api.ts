@@ -7193,6 +7193,10 @@ export interface RetestForwardLink {
   sample_id: string
   order_id: number | null
   created_at: string | null
+  status?: string | null
+  retest?: string[] | null
+  add?: string[] | null
+  carry?: string[] | null
 }
 
 export interface SampleRetestInfo {
@@ -7206,6 +7210,9 @@ export interface SampleRetestInfo {
   retest_created_at: string | null
   // Samples that are retests of THIS one (chain-forward, may be empty).
   retested_as: RetestForwardLink[]
+  retest?: string[] | null
+  add?: string[] | null
+  carry?: string[] | null
 }
 
 export async function getSampleRetestInfo(sampleId: string): Promise<SampleRetestInfo> {
@@ -7214,6 +7221,89 @@ export async function getSampleRetestInfo(sampleId: string): Promise<SampleRetes
     { headers: getAuthHeaders() }
   )
   if (!response.ok) throw new Error(`Sample retest-info failed: ${response.status}`)
+  return response.json()
+}
+
+export const HPLC_PROFILE_KEYS = ['hplcpurity_identity', 'hplc-purity-identity'] as const
+
+export interface RetestOptionProfile { key: string; name: string; carry_eligible: boolean; state: string | null; verified_at: string | null; state_label: string }
+export interface RetestOptionAddon { key: string; name: string; wp_type: string | null; price: number | null; vials: number | null; sellable: boolean }
+export interface RetestContextOrderLine { key: string; label: string; price: number }
+export interface RetestContextOrder {
+  number: string
+  placed_at: string
+  customer_name: string
+  customer_email: string
+  total: number
+  currency: string
+  status: string
+  lines: RetestContextOrderLine[]
+}
+export interface PendingRetestOrder {
+  order_id: number
+  order_number: string
+  status: string
+  total: number
+  currency: string
+  created_at: string
+  payment_url: string
+}
+/** WP `retest_orders` (newest first), joined to the Mk1 sample minted from each. */
+export interface RetestOrder {
+  order_id: number
+  order_number: string
+  status: string
+  total: number
+  currency: string
+  created_at: string
+  paid_at: string | null
+  payment_url: string | null
+  kind: 'retest' | 'addon'
+  sample_id: string | null
+  sample_status: string | null
+}
+export interface RetestContext {
+  order: RetestContextOrder | null
+  retest_fee: { price: number | null } | null
+  pending_orders: PendingRetestOrder[]
+  orders?: RetestOrder[]
+}
+export interface RetestOptions {
+  sample_id: string
+  status: string | null
+  order_number: string | null
+  profiles: RetestOptionProfile[]
+  addons: RetestOptionAddon[]
+  variance: { point_price: number | null; allowed: boolean }
+  prices_available: boolean
+  context?: RetestContext | null
+}
+export interface RetestRequestBody {
+  retest: string[]
+  carry: string[]
+  drop?: string[]
+  add: { profiles: string[]; variance_points: number; additional_vials: number } | null
+  auto_checkin: boolean
+  fee: 'paid' | 'free'
+  reason: string
+}
+export interface RetestCreated { order_id?: number; order_number?: string; status?: string; payment_url?: string | null }
+
+export function getRetestOptions(sampleId: string): Promise<RetestOptions> {
+  return apiFetch<RetestOptions>(`/api/samples/${encodeURIComponent(sampleId)}/retest-options`)
+}
+
+export async function createRetest(sampleId: string, body: RetestRequestBody): Promise<RetestCreated> {
+  const response = await fetch(`${API_BASE_URL()}/api/samples/${encodeURIComponent(sampleId)}/retest`, {
+    method: 'POST',
+    headers: getBearerHeaders('application/json'),
+    body: JSON.stringify(body),
+  })
+  if (!response.ok) {
+    const err = await response.json().catch(() => null)
+    const detail = err?.detail
+    throw new Error((typeof detail === 'string' ? detail : detail?.message) || `Retest request failed: ${response.status}`)
+  }
   return response.json()
 }
 
@@ -7469,7 +7559,7 @@ export interface ParentPromotionInfo {
   result_value?: string | null
   promoted_at: string
   promoted_by_email?: string | null
-  sources: { sample_id?: string | null; contribution_kind: string }[]
+  sources: { sample_id?: string | null; contribution_kind: string; parent_sample_id?: string | null }[]
 }
 
 /**

@@ -2,6 +2,47 @@
 
 ## Unreleased
 
+## v1.30.1 - 2026-09-29
+
+### Changed
+- **Retest overlay: one Billing choice per order.** The Re-test tab's "Retest fee" radio is replaced by a **Billing** radio (Charged / Waived (whole order free)) shown on both the Re-test and Add services tabs. Waived sends `fee: "free"` from either tab and WordPress zeroes every line (retest fee, variance, add-ons, extra vials), so the order completes at once and the new sample is minted immediately. The summary shows each line as "$0.00 (waived $list)" and the Total as "$0.00 (waived)"; missing prices no longer block Create when Waived. The free-order toast now reads "Order completed; the new sample is being created now."
+
+### Fixed
+- Received and sampled times on Mk1-native samples showed the UTC clock as local time; the registry now marks them UTC and the sample page renders every timestamp in the lab's time zone (America/Los_Angeles).
+
+## v1.30.0 - 2026-09-29
+
+### Retest overlay v2 (#263)
+- **Two jobs, two tabs.** Actions > Retest now opens on **Re-test** (every profile row with Re-test and Carry results boxes; a row with neither is dropped from the new sample and the "New sample:" line says so) or **Add services** (every catalog service the sample lacks, priced from WordPress, unsellable ones marked "not sold post-order"; add-ons are always billed). Fixed titles per tab; Create reads "Create retest order" or "Create add-on order" and shows why it is disabled.
+- **Itemised summary** replaces the Delta: retest fee (Charged / Waived, Re-test tab only), each add-on, variance at points minus one like the shop, extra vials under More options, and a Total.
+- **Orders tab** lists every retest and add-on order for the sample with kind, date, total, status, the minted sample or a Copy link / Open for unpaid ones; an amber line above the tabs names unpaid orders. The order card shows only ordered lines with shop labels. Overlay widened to 760 px (the previous width class never applied).
+- Backend: the retest spec gains `drop[]` (profiles omitted from re-test and carry are dropped, recorded, and named in a warning event, no longer a 400); `retest-options` lists add-ons from the whole active catalog with `sellable`, legacy alias profiles excluded, and profiles carry `verified_at` / `state_label`; `retest-info` and activity labels carry the drop list.
+- Requires WordPress theme 2.59.0 (ordered-only context lines, `retest_orders`, Sterility USP-71 and Fentanyl as post-order add-ons).
+
+## v1.29.1 - 2026-09-28
+
+### Fixed
+- **Retest overlay showed "price unavailable" for endotoxin and PCR add-ons.** WordPress keys add-on prices by its add-on type key, which became the native LIMS key in theme 2.57.1; the overlay still looked prices up by the old short type. The lookup now tries the native key first (heavy metals was unaffected because its key never changed).
+
+## v1.29.0 - 2026-09-28
+
+### Mk1-native retest
+- **Retest from the sample page.** Actions > Retest on any sample opens the retest overlay: choose which of the original profiles to retest and which to carry, add services (endotoxin, sterility PCR, heavy metals, variance points) priced from WordPress, pick Paid or Free and Auto check-in, give a reason. Create makes the WooCommerce retest order through the Integration Service; a paid order waits for payment, a free one completes at once. (#253, #255)
+- **Customer and pricing block.** The overlay shows the original order (number, customer, total, lines) with the live retest fee, add-on prices and variance point price, and lists pending retest orders for the sample with a copyable payment link. The Create toast keeps the link for 15 seconds. (#255, #259)
+- **Carried results, not clones.** When the retest order is paid, the new sample carries the non-retested results as verified parent rows linked to the original vials (`Carried from P-xxxx-Sxx` chips); retested profiles get `Retesting` chips and added services `Added` chips. The original sample and its COA are untouched; parent retest of a carried row is refused with a pointer to a new retest. Activity events record carries and the spec. (#253)
+- **Retest info both ways.** `Retested as` on the original and the RETEST banner on the new sample now come from Mk1 first (spec, order, source), with the Integration Service as fallback. (#253)
+
+### Fixed
+- **Parent retest of a vial-less placeholder stranded a hidden row (P-3016).** The workflow engine now ranks parent lines deterministically per keyword and refuses a parent retest whose source is a parent-hosted row, pointing at adding a vial instead. (#252)
+
+### Testing
+- Playwright end-to-end suite revived against devbox stacks (`e2e/README.md`), with a spec for the retest overlay. (#257)
+
+## v1.28.1 - 2026-09-28
+
+### Fixed
+- **Inline field edits on native-born samples failed with "Not Found" (P-5178).** Every pencil-edit on the sample-details page (Client Lot, Declared Qty, Client Sample ID, Date Sampled, the COA Info fields) posted to the SENAITE field-update route keyed by SENAITE uid; a native-born parent has no uid, so the request returned 404 before any write. The route now resolves a native-born parent by its sample id and writes the Accu-Mk1 registry row directly, logging the change to the activity feed. Fields the row cannot store fail closed, and analyte peptides still go through Relabel or Replace. SENAITE-born samples are unchanged. (#260)
+
 ## v1.28.0 - 2026-09-23
 
 ### Worksheets 2.0: rapid sterility PCR plate builder
