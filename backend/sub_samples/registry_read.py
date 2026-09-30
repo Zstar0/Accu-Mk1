@@ -3,8 +3,21 @@ for the sample-details read-source toggle. Only fields the registry actually
 supplies are emitted (a null column is omitted, so the overlay layer keeps the
 SENAITE value + tags the field 'senaite')."""
 import json
-from typing import Any
+from datetime import datetime, timezone
+from typing import Any, Optional
 from models import LimsSample
+
+
+def _iso_utc(dt: Optional[datetime]) -> Optional[str]:
+    """ISO string that always carries a UTC marker. Naive datetimes are UTC
+    by this codebase's datetime.utcnow() convention, so they get a 'Z'
+    without shifting the value; aware ones are converted to UTC. Without the
+    marker a browser parses the string as ITS local time (7-8h off in CA)."""
+    if dt is None:
+        return None
+    if dt.tzinfo is None:
+        return dt.isoformat() + "Z"
+    return dt.astimezone(timezone.utc).isoformat().replace("+00:00", "Z")
 
 # Every SenaiteLookupResult field this mapper can populate. The overlay's
 # field_sources map is built over exactly this set. review_state is
@@ -38,9 +51,9 @@ def registry_row_to_display(row: LimsSample) -> dict[str, Any]:
     put("tracking_number", row.tracking_number)
     put("tracking_url", row.tracking_url)
     if row.date_received is not None:
-        out["date_received"] = row.date_received.isoformat()
+        out["date_received"] = _iso_utc(row.date_received)
     if row.date_sampled is not None:
-        out["date_sampled"] = row.date_sampled.isoformat()
+        out["date_sampled"] = _iso_utc(row.date_sampled)
 
     if row.declared_total_quantity not in (None, ""):
         try:

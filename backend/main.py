@@ -112,6 +112,7 @@ from sub_samples.lookup_models import (
     SenaiteRemark,
 )
 from lims_analyses.routes import router as lims_analyses_router
+from lims_analyses.retest_routes import router as retest_router
 from families.routes import router as families_router  # Phase 5b
 from boxes.routes import router as boxes_router
 from boxes.service import box_label_code
@@ -608,6 +609,7 @@ file_watcher = FileWatcher()
 # Register sub-samples router
 app.include_router(sub_samples_router)
 app.include_router(lims_analyses_router)
+app.include_router(retest_router)
 app.include_router(families_router)
 app.include_router(boxes_router)
 app.include_router(packaging_photos_router)
@@ -895,9 +897,18 @@ async def get_audit_logs(
     return result.scalars().all()
 
 
+def _wp_order_int(client_order_number: Optional[str]) -> Optional[int]:
+    """'WP-7920' -> 7920; anything else -> None."""
+    if not client_order_number:
+        return None
+    digits = str(client_order_number).rsplit("-", 1)[-1]
+    return int(digits) if digits.isdigit() else None
+
+
 @app.get("/samples/{sample_id}/retest-info")
 async def get_sample_retest_info(
     sample_id: str,
+    db: Session = Depends(get_db),
     _current_user=Depends(get_current_user),
 ):
     """
@@ -908,9 +919,15 @@ async def get_sample_retest_info(
       - source_sample_id, source_order_id, this_order_id, retest_created_at:
           populated when is_retest=True
       - retested_as: list of samples that retest THIS one (chain-forward)
+      - source: "mk1" when Mk1's own lineage columns answered the question,
+          "integration_db" when we fell back to the legacy IS query
 
-    Reads from the integration-service Postgres directly. Cheap — bounded
-    queries against indexed columns + JSONB lateral expansions.
+    Mk1-native retests (Task 4/5) carry lineage on the row itself
+    (retest_of_sample_id, catalog_snapshot["retest"]); checked first.
+    The Integration DB is still queried so legacy WP/SENAITE retests are not
+    lost: with Mk1 lineage present it only adds `retested_as` entries Mk1 did
+    not list and fills is_retest/source_* when Mk1 had none (source stays
+    "mk1"); an IS failure never costs the Mk1 answer.
     """
     from psycopg2.extras import RealDictCursor
 
@@ -922,7 +939,43 @@ async def get_sample_retest_info(
         "this_order_id": None,
         "retest_created_at": None,
         "retested_as": [],
+        "source": "integration_db",
     }
+
+    row = db.execute(select(LimsSample).where(LimsSample.sample_id == sample_id)).scalar_one_or_none()
+    forward = db.execute(select(LimsSample).where(
+        LimsSample.retest_of_sample_id == sample_id).order_by(LimsSample.id)).scalars().all()
+    if row is not None and (row.retest_of_sample_id or forward):
+        result["source"] = "mk1"
+        rider = (row.catalog_snapshot or {}).get("retest") or {}
+        if row.retest_of_sample_id:
+            result["is_retest"] = True
+            result["source_sample_id"] = row.retest_of_sample_id
+            result["retest_created_at"] = rider.get("requested_at") or (
+                row.created_at.isoformat() if row.created_at else None)
+            result["this_order_id"] = _wp_order_int(row.client_order_number)
+            src = db.execute(select(LimsSample).where(
+                LimsSample.sample_id == row.retest_of_sample_id)).scalar_one_or_none()
+            result["source_order_id"] = _wp_order_int(src.client_order_number) if src else None
+            result["retest"] = rider.get("retest") or []
+            result["carry"] = rider.get("carry") or []
+            result["drop"] = rider.get("drop") or []
+            result["add"] = (rider.get("add") or {}).get("profiles") or []
+        for f in forward:
+            fr = (f.catalog_snapshot or {}).get("retest") or {}
+            result["retested_as"].append({
+                "sample_id": f.sample_id,
+                "order_id": _wp_order_int(f.client_order_number),
+                "created_at": fr.get("requested_at") or (f.created_at.isoformat() if f.created_at else None),
+                "status": f.status,
+                "retest": fr.get("retest") or [],
+                "carry": fr.get("carry") or [],
+                "drop": fr.get("drop") or [],
+                "add": (fr.get("add") or {}).get("profiles") or [],
+            })
+
+    legacy = {"is_retest": False, "source_sample_id": None, "source_order_id": None,
+              "this_order_id": None, "retest_created_at": None, "retested_as": []}
 
     try:
         with get_integration_db() as int_conn:
@@ -944,14 +997,14 @@ async def get_sample_retest_info(
                     """,
                     [sample_id],
                 )
-                row = cur.fetchone()
-                if row:
-                    result["is_retest"] = True
-                    result["source_sample_id"] = row["source_sample_id"]
-                    result["source_order_id"] = row["retest_of_order_id"]
-                    result["this_order_id"] = int(row["order_id"]) if row["order_id"] else None
-                    result["retest_created_at"] = (
-                        row["created_at"].isoformat() if row["created_at"] else None
+                is_row = cur.fetchone()
+                if is_row:
+                    legacy["is_retest"] = True
+                    legacy["source_sample_id"] = is_row["source_sample_id"]
+                    legacy["source_order_id"] = is_row["retest_of_order_id"]
+                    legacy["this_order_id"] = int(is_row["order_id"]) if is_row["order_id"] else None
+                    legacy["retest_created_at"] = (
+                        is_row["created_at"].isoformat() if is_row["created_at"] else None
                     )
 
                 # Forward-chain: samples that retest THIS one
@@ -971,7 +1024,7 @@ async def get_sample_retest_info(
                     [sample_id],
                 )
                 for r in cur.fetchall():
-                    result["retested_as"].append({
+                    legacy["retested_as"].append({
                         "sample_id": r["new_sample_id"],
                         "order_id": int(r["order_id"]) if r["order_id"] else None,
                         "created_at": r["created_at"].isoformat() if r["created_at"] else None,
@@ -980,6 +1033,15 @@ async def get_sample_retest_info(
         # Integration DB unavailable — return the empty shell so callers can render gracefully
         pass
 
+    if result["source"] != "mk1":
+        result.update(legacy)
+        return result
+    listed = {e["sample_id"] for e in result["retested_as"]}
+    result["retested_as"] += [e for e in legacy["retested_as"] if e["sample_id"] not in listed]
+    if not result["is_retest"] and legacy["is_retest"]:
+        for k in ("is_retest", "source_sample_id", "source_order_id", "this_order_id",
+                  "retest_created_at"):
+            result[k] = legacy[k]
     return result
 
 
@@ -1117,6 +1179,47 @@ def parent_retest_activity_label(d: dict) -> str:
         return (f"{name} retested AFTER PUBLISH: {kept} on the certificate "
                 f"until the retest is promoted. Re-publish required. ({srcs})")
     return f"{name} retested (parent) \u2014 {srcs}"
+
+
+def retest_activity_label(event: str, d: dict) -> Optional[str]:
+    """Activity feed wording for the native-retest events written by
+    lims_analyses.retest_carry. None for any other event."""
+    if event == "retest_created":
+        mode = "auto check-in" if d.get("auto_checkin") else "due at lab"
+        head = f"Created as retest of {d.get('original', '?')} ({d.get('fee', '?')}, {mode}): {d.get('reason', '')}"
+        parts = []
+        if d.get("retest"):
+            parts.append("Retesting " + ", ".join(d["retest"]))
+        if d.get("carry"):
+            parts.append("carrying " + ", ".join(d["carry"]))
+        if d.get("drop"):
+            parts.append("dropping " + ", ".join(d["drop"]))
+        if d.get("add"):
+            parts.append("adding " + ", ".join(d["add"]))
+        if d.get("variance_points"):
+            parts.append(f"variance {d['variance_points']} points")
+        return head + (". " + "; ".join(parts) if parts else "")
+    if event == "analysis_carried":
+        shown = " ".join(str(x) for x in (d.get("result_value"), d.get("result_unit")) if x)
+        src = d.get("source_vial_id") or d.get("source_sample_id") or "?"
+        label = f"{d.get('title') or d.get('keyword', '?')} {shown} carried from {src}".rstrip()
+        if d.get("verified_at"):
+            label += f", verified {str(d['verified_at'])[:10]}"
+        return label
+    if event == "retested_as":
+        head = f"Retested as {d.get('sample_id', '?')} ({', '.join(d.get('retest') or []) or 'add only'})"
+        tail = []
+        if d.get("carry"):
+            tail.append("carried: " + ", ".join(d["carry"]))
+        if d.get("drop"):
+            tail.append("dropped: " + ", ".join(d["drop"]))
+        if d.get("add"):
+            tail.append("added: " + ", ".join(d["add"]))
+        return head + ("; " + "; ".join(tail) if tail else "")
+    if event == "retest_spec_warning":
+        detail = ", ".join(d.get("missing") or []) or d.get("message") or ""
+        return f"Retest spec warning: {d.get('reason', '?')}" + (f" ({detail})" if detail else "")
+    return None
 
 
 @app.get("/samples/{sample_id}/activity")
@@ -1516,9 +1619,12 @@ async def get_sample_activity(
                 })
 
             # Section A2: lims_analysis_promotions (vial side — source_analysis_id)
+            from lims_analyses.service import own_promotion_clause
             promotions = db.execute(
                 select(LimsAnalysisPromotion).where(
-                    LimsAnalysisPromotion.source_analysis_id.in_(analysis_ids)
+                    LimsAnalysisPromotion.source_analysis_id.in_(analysis_ids),
+                    # A carried link belongs to the retest sample's feed.
+                    own_promotion_clause(),
                 )
             ).scalars().all()
             for p in promotions:
@@ -1656,7 +1762,9 @@ async def get_sample_activity(
                 actor_email = actor.email if actor else None
 
             d = se.details or {}
-            if se.event == "parent_analysis_verified":
+            if (retest_label := retest_activity_label(se.event, d)) is not None:
+                label = retest_label
+            elif se.event == "parent_analysis_verified":
                 label = f"{d.get('keyword', '?')} verified (parent)"
             elif se.event == "parent_analysis_retested":
                 label = parent_retest_activity_label(d)
@@ -12601,10 +12709,16 @@ async def replace_analyte(
     # ── 3. write the slot's peptide (canonical source of truth) ───────────────
     _slot_req = SenaiteFieldUpdateRequest(fields={f"Analyte{slot}Peptide": new_id_svc.title})
     _slot_req._skip_slot_guards = True  # the orchestrator owns the cascade
+    # `db=db` like Clear below: the route now resolves native-born rows by
+    # sample_id up front, so it needs a real session (the mirror block's
+    # try/except used to swallow the `Depends` sentinel silently). Step 7
+    # re-derives the registry analytes afterwards, so the mirror's slot
+    # write here is superseded, not doubled.
     field_result = await update_senaite_sample_fields(
         uid=body.senaite_uid,
         req=_slot_req,
         current_user=_current_user,
+        db=db,
     )
     if not getattr(field_result, "success", False):
         raise HTTPException(
@@ -18120,13 +18234,14 @@ async def list_senaite_samples(
                             )
                         ).scalar_one_or_none()
                         if _sub is not None:
+                            from sub_samples.registry_read import _iso_utc
                             _parent = db.get(LimsSample, _sub.parent_sample_pk)
                             items.append(SenaiteSampleItem(
                                 uid=_sub.external_lims_uid or f"mk1-sub-{_sub.id}",
                                 id=_sub.sample_id,
                                 title=_sub.sample_id,
-                                date_created=_sub.created_at.isoformat() if _sub.created_at else None,
-                                date_received=_sub.received_at.isoformat() if _sub.received_at else None,
+                                date_created=_iso_utc(_sub.created_at),
+                                date_received=_iso_utc(_sub.received_at),
                                 # A vial with received_at was physically checked
                                 # in (mirrors buildNativeSubSampleLookup).
                                 review_state="sample_received" if _sub.received_at
@@ -18647,6 +18762,131 @@ def _senaite_field_label(key: str) -> str:
     return re.sub(r"(?<=[a-z0-9])(?=[A-Z])|(?<=[A-Z])(?=[A-Z][a-z])", " ", key)
 
 
+# SENAITE-shaped date fields the native edit path stores directly
+# (the mirror helper leaves dates to the 5-minute SENAITE refresh, which a
+# native-born row never gets).
+_NATIVE_DATE_COLUMNS = {"DateSampled": "date_sampled"}
+
+
+def _resolve_native_parent_row(db: Session, uid: str):
+    """The registry row for a native-born parent addressed by sample_id —
+    the page substitutes sample_id for the SENAITE uid it does not have.
+    A real SENAITE uid never matches a sample_id, and a SENAITE-born row
+    found by sample_id is NOT native, so both return None and the legacy
+    path keeps forwarding to SENAITE unchanged."""
+    row = db.execute(
+        select(LimsSample).where(LimsSample.sample_id == uid.strip().upper())
+    ).scalar_one_or_none()
+    if row is None or row.external_lims_system != "mk1":
+        return None
+    return row
+
+
+def _update_native_sample_fields(
+    db: Session, row: LimsSample, fields: dict, current_user
+) -> "SenaiteFieldUpdateResponse":
+    """Inline field edit on a native-born parent: Mk1 IS the record, so the
+    write goes to `lims_samples` through the same mirror logic the SENAITE
+    path uses (`_apply_senaite_fields_to_row`) and is logged as
+    `sample_field_updated` with `senaite='native'`. Fails closed on anything
+    the mirror cannot store — a silently dropped edit is worse than a 400."""
+    from models import LimsSubSampleEvent
+    from sub_samples.service import (
+        _ANALYTE_KEY_RE, _COA_META_FIELDS, _FIELD_MIRROR_SCALARS,
+        _apply_senaite_fields_to_row, _parse_senaite_date,
+    )
+
+    fields = dict(fields)
+    remark = fields.pop("Remarks", None)
+
+    if any(isinstance(k, str) and _ANALYTE_PEPTIDE_FIELD_RE.match(k) for k in fields):
+        raise HTTPException(
+            409,
+            "Analyte peptides on a native-born sample are changed with "
+            "Relabel / Replace on the Analytes card, not the inline editor.",
+        )
+    unsupported = [
+        k for k in fields
+        if not (
+            k in _FIELD_MIRROR_SCALARS
+            or k in _COA_META_FIELDS
+            or k in _NATIVE_DATE_COLUMNS
+            or (isinstance(k, str) and _ANALYTE_KEY_RE.match(k))
+        )
+    ]
+    if unsupported:
+        raise HTTPException(
+            400,
+            "Not editable on a native-born sample: " + ", ".join(map(str, unsupported)),
+        )
+
+    dates: dict[str, object] = {}
+    for key, column in _NATIVE_DATE_COLUMNS.items():
+        if key not in fields:
+            continue
+        raw = fields.pop(key)
+        parsed = _parse_senaite_date(raw) if raw not in (None, "") else None
+        if raw not in (None, "") and parsed is None:
+            raise HTTPException(
+                400, f"{_senaite_field_label(key)}: unrecognised date {raw!r}"
+            )
+        dates[key] = (column, parsed)
+
+    previous = {
+        k: getattr(row, col)
+        for k, col in _FIELD_MIRROR_SCALARS.items() if k in fields
+    }
+    for key, (column, _parsed) in dates.items():
+        old = getattr(row, column)
+        previous[key] = old.isoformat() if old else None
+
+    updated: list[str] = []
+    try:
+        if remark is not None and str(remark).strip():
+            db.add(LimsSampleRemark(
+                lims_sample_pk=row.id,
+                content=str(remark).strip(),
+                author_user_id=getattr(current_user, "id", None),
+            ))
+            updated.append("Remarks")
+        if fields:
+            _apply_senaite_fields_to_row(db, row, fields)
+        for key, (column, parsed) in dates.items():
+            setattr(row, column, parsed)
+        for k, v in list(fields.items()) + [(k, str(p) if p else None) for k, (_c, p) in dates.items()]:
+            db.add(LimsSubSampleEvent(
+                lims_sample_pk=row.id,
+                event="sample_field_updated",
+                details={
+                    "field": k,
+                    "label": _senaite_field_label(k),
+                    "from": previous.get(k),
+                    "to": str(v) if v not in (None, "") else None,
+                    "senaite": "native",
+                },
+                user_id=getattr(current_user, "id", None),
+            ))
+            updated.append(k)
+        db.commit()
+    except Exception as save_err:  # noqa: BLE001
+        try:
+            db.rollback()
+        except Exception:  # noqa: BLE001
+            pass
+        logger.warning(
+            "registry.native_field_update_failed sample_id=%s err=%s",
+            row.sample_id, save_err,
+        )
+        return SenaiteFieldUpdateResponse(
+            success=False, message=f"Mk1 save failed: {save_err}"
+        )
+    return SenaiteFieldUpdateResponse(
+        success=True,
+        message=f"Updated {len(updated)} field(s)",
+        updated_fields=updated,
+    )
+
+
 def _record_parent_event(db: Session, sample_id: str, event: str,
                          details: dict, user_id, *, commit: bool = False) -> bool:
     """Append one parent-hosted `lims_sub_sample_events` row (Task 7's
@@ -18736,15 +18976,28 @@ async def update_senaite_sample_fields(
     `updateSenaiteSampleFields(uid, { Remarks })`) still forwarded Remarks to
     SENAITE, where nothing reads it post-flip. Any remaining fields still
     forward to SENAITE unchanged.
-    """
-    if SENAITE_URL is None:
-        return SenaiteFieldUpdateResponse(
-            success=False, message="SENAITE not configured"
-        )
 
+    Native-born parents (`external_lims_system == 'mk1'`) have no SENAITE AR
+    and no uid; the page sends the sample_id in the uid slot
+    (`parent-identity.ts::fieldEditKey`) and the edit lands on the registry
+    row via `_update_native_sample_fields` (P-5178, 2026-09-28: every inline
+    edit on a native sample 404'd because the uid was empty).
+    """
     if not req.fields:
         return SenaiteFieldUpdateResponse(
             success=False, message="No fields provided"
+        )
+
+    # Resolved before the SENAITE_URL gate: a native edit needs no SENAITE.
+    native_row = _resolve_native_parent_row(db, uid)
+    if native_row is not None:
+        return _update_native_sample_fields(
+            db, native_row, req.fields, current_user
+        )
+
+    if SENAITE_URL is None:
+        return SenaiteFieldUpdateResponse(
+            success=False, message="SENAITE not configured"
         )
 
     # --- Remarks intercept: native write, never forwarded to SENAITE ---
@@ -25486,6 +25739,7 @@ def s2s_mirror_lims_sample_fields(
 # (2026-09-08 spec: docs/superpowers/specs/2026-09-08-order-upsert-placeholder-seed-design.md).
 # Module-level import so tests can patch `main.seed_parent_from_services`.
 from lims_analyses.order_seed import seed_parent_from_services  # noqa: E402
+from lims_analyses.retest_carry import apply_retest_spec  # noqa: E402
 
 
 class S2SOrderSampleStamp(BaseModel):
@@ -25496,6 +25750,10 @@ class S2SOrderSampleStamp(BaseModel):
     # the registration signal's callback. Optional for old-IS compatibility.
     services: Optional[dict] = None
     package: Optional[str] = None
+    # Native retest (2026-09-24): when present, the seed goes through
+    # lims_analyses.retest_carry.apply_retest_spec (filtered demand + carried
+    # results + lineage) instead of the plain placeholder seed.
+    retest_spec: Optional[dict] = None
 
 
 class S2SOrderCustomer(BaseModel):
@@ -25595,6 +25853,14 @@ def s2s_upsert_orders(
     # never roll back the order stamps and one bad sample never blocks its
     # siblings (idempotent: re-pushes report 0 created). Stamps without
     # services (old IS) skip this phase entirely.
+    def _seed(sample, s, source):
+        if s.retest_spec:
+            return apply_retest_spec(db, parent=sample, raw_spec=s.retest_spec,
+                                     services=s.services, package=s.package,
+                                     source=source)
+        return seed_parent_from_services(db, parent=sample, services=s.services,
+                                         package=s.package, source=source)
+
     placeholders_created = 0
     for o in req.orders:
         for s in o.samples:
@@ -25604,12 +25870,9 @@ def s2s_upsert_orders(
             if sample is None:
                 continue
             try:
-                stats = seed_parent_from_services(
-                    db, parent=sample, services=s.services, package=s.package,
-                    source="order_upsert",
-                )
+                stats = _seed(sample, s, "order_upsert")
                 db.commit()
-                placeholders_created += stats["created"]
+                placeholders_created += stats.get("created", 0)
             except IntegrityError as race_err:
                 # This seed and the registration-signal seed (own session,
                 # _seed_native_placeholders_at_registration_bg) run concurrently
@@ -25628,16 +25891,14 @@ def s2s_upsert_orders(
                 try:
                     sample = db.query(LimsSample).filter_by(
                         sample_id=s.senaite_sample_id).first()
-                    stats = seed_parent_from_services(
-                        db, parent=sample, services=s.services, package=s.package,
-                        source="order_upsert_retry",
-                    )
+                    stats = _seed(sample, s, "order_upsert_retry")
                     db.commit()
-                    placeholders_created += stats["created"]
+                    placeholders_created += stats.get("created", 0)
                     logger.info(
                         "registry.order_upsert_seed_already_present sample_id=%s "
                         "created=%s existing=%s reason=race_lost_to_registration_seed",
-                        s.senaite_sample_id, stats["created"], stats["existing"])
+                        s.senaite_sample_id, stats.get("created", 0),
+                        stats.get("existing", 0))
                 except Exception as retry_err:  # noqa: BLE001
                     db.rollback()
                     logger.warning(
