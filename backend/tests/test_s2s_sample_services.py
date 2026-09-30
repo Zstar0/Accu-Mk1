@@ -163,6 +163,53 @@ def test_added_keys_empty_adds_nothing(client, db_session, world):
     assert r.status_code == 200 and r.json() == {"added": [], "skipped": [], "ignored": []}
 
 
+def test_parent_order_id_marks_addon_applied_by_profile_set_and_snapshot_gains_kind_profile(
+        client, db_session, world):
+    """Stack E2E P-9001: IS sends the PARENT order id; a non-role profile is
+    not frozen by the registration builder but must still land in the snapshot."""
+    fent_svc = AnalysisService(title="Fentanyl", keyword="FENTANYL", origin="mk1")
+    fent = AnalysisProfile(key="fentanyl", name="Fentanyl Screening", is_addon=False, active=True,
+                           fulfillment_dim="kind", vials_required=0, sort_order=40)
+    db_session.add_all([fent_svc, fent])
+    db_session.flush()
+    fent.analysis_services.append(fent_svc)
+    db_session.commit()
+    p = _parent(db_session)
+    p.catalog_snapshot = {**p.catalog_snapshot, "addon_orders": [
+        *p.catalog_snapshot["addon_orders"],
+        {"order_id": 3281, "order_number": "3281", "status": "completed", "profiles": ["fentanyl"],
+         "fee": "free", "requested_at": "2026-09-29T12:00:00Z"}]}
+    db_session.commit()
+    r = _post(client, _body(order_id=3134, event_id="addon_3281_1727600000", added_keys=["fentanyl"]))
+    assert r.status_code == 200, r.text
+    assert r.json()["added"] == ["fentanyl"], r.json()
+    snap = _parent(db_session).catalog_snapshot
+    entry = next(e for e in snap["profiles"] if e["key"] == "fentanyl")
+    assert entry["name"] == "Fentanyl Screening" and entry["is_addon"] is False
+    assert entry["vials_required"] == 0 and entry["sort_order"] == 40
+    assert entry["profile_id"] == fent.id and entry["service_ids"] == [fent_svc.id]
+    moist_order, fent_order = snap["addon_orders"]
+    assert fent_order["applied"] is True
+    assert not moist_order.get("applied")  # moisture is not on the sample yet
+    [ev] = db_session.execute(select(LimsSubSampleEvent).where(
+        LimsSubSampleEvent.event == "addon_services_applied")).scalars().all()
+    assert ev.details["label"] == "Services added from WP add-on order 3281: Fentanyl Screening (waived)"
+    # retest-options no longer offers it; the add-on route would refuse it anyway
+    from lims_analyses.retest_carry import snapshot_profile_keys
+    assert "fentanyl" in snapshot_profile_keys(_parent(db_session))
+
+
+def test_snapshot_resolver_skips_non_role_addon_entries():
+    from sub_samples.catalog_demand import _resolve_from_snapshot
+    snap = {"profiles": [
+        {"key": "moisture", "profile_id": 1, "fulfillment_role": "kf", "role_sort_order": None,
+         "vials_required": 1, "ride_host_roles": []},
+        {"key": "fentanyl", "profile_id": 2, "fulfillment_role": None, "fulfillment_dim": "kind",
+         "role_sort_order": None, "vials_required": 0, "ride_host_roles": [], "source": "addon_apply"}]}
+    out = _resolve_from_snapshot(snap)
+    assert None not in out and out["kf"].host_profile_ids == [1]
+
+
 def test_published_sample_409(client, db_session, world):
     p = _parent(db_session)
     p.status = "published"
