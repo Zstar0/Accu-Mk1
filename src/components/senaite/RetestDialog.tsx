@@ -299,19 +299,75 @@ export function RetestDialog({
 
   const eligible = profiles.filter(p => p.carry_eligible)
   const ineligible = profiles.filter(p => !p.carry_eligible)
-  const sentenceParts =
-    tab === 'retest'
-      ? [
-          retested.length ? `re-test ${names(retested)}` : '',
-          carried.length ? `carry ${names(carried)}` : '',
-          dropped.length ? `drop ${names(dropped)}` : '',
-        ]
-      : [
-          eligible.length ? `carry ${names(eligible)}` : '',
-          ineligible.length ? `drop ${names(ineligible)}` : '',
-          tickedAddons.length ? `add ${names(tickedAddons)}` : '',
-        ]
-  const newSample = sameSample ? '' : sentenceParts.filter(Boolean).join('; ')
+  // "When you press Create": built from the same state as the request body,
+  // so it cannot say something the request does not do.
+  const outcome: string[] = []
+  if (tab === 'retest' ? anyRetest : tickedAddons.length > 0) {
+    const kind = tab === 'retest' ? 'retest order' : 'add-on order'
+    const orig = options.context?.order
+    const who = orig
+      ? `for ${orig.customer_name} against order ${orig.number}`
+      : 'for the customer against the original order'
+    const money = waived
+      ? total
+        ? `$0.00, waived ${formatMoney(total)}`
+        : '$0.00, waived'
+      : total === null
+        ? 'price unavailable'
+        : excludesExtraVials
+          ? `${formatMoney(total)} plus extra vials`
+          : formatMoney(total)
+    outcome.push(`Creates a WooCommerce ${kind} ${who} (${money}).`)
+    const gate = waived ? 'At once' : 'Once paid'
+    if (tab === 'retest') {
+      outcome.push(
+        `${gate}: a new sample is created with ${names(retested)} re-tested` +
+          (varianceOn ? ` (variance, ${state.variancePoints} points)` : '') +
+          (carried.length
+            ? `; ${names(carried)} carried as verified results`
+            : '') +
+          (dropped.length ? `; ${names(dropped)} dropped` : '') +
+          '.'
+      )
+    } else if (sameSample) {
+      const vials =
+        tickedAddons.reduce((n, a) => n + (a.vials ?? 0), 0) + state.extraVials
+      outcome.push(
+        `${gate}: ${names(tickedAddons)} added to ${sampleId}` +
+          (vials > 0
+            ? `; needs ${vials} more vial${vials === 1 ? '' : 's'} from the customer`
+            : '') +
+          '.'
+      )
+    } else {
+      outcome.push(
+        `${gate}: a new sample is created with ${names(tickedAddons)}` +
+          (eligible.length
+            ? `; ${names(eligible)} carried from ${sampleId}`
+            : '') +
+          (ineligible.length
+            ? `; ${names(ineligible)} dropped (not verified)`
+            : '') +
+          '.'
+      )
+    }
+    outcome.push(
+      sameSample
+        ? `No new sample; ${sampleId} keeps its current results.`
+        : `${sampleId} is unchanged and stays linked to the new sample.` +
+            (state.autoCheckin
+              ? ' The new sample is checked in on creation.'
+              : '')
+    )
+    outcome.push(
+      waived
+        ? 'No payment is needed.'
+        : sameSample
+          ? // The addon-order route leaves the order pending without an invoice email.
+            'No payment email is sent; copy the payment link from the Orders tab.'
+          : 'The customer is emailed an invoice with the payment link.'
+    )
+  }
 
   const submit = () => {
     if (sameSample)
@@ -824,13 +880,20 @@ export function RetestDialog({
                   </>
                 )}
               </div>
+              {outcome.length > 0 && (
+                <div
+                  data-testid="retest-outcome"
+                  className="border-t border-border/40 pt-1.5 mt-1.5 space-y-0.5"
+                >
+                  <div className="font-medium">When you press Create</div>
+                  {outcome.map(line => (
+                    <p key={line} className="text-muted-foreground">
+                      {line}
+                    </p>
+                  ))}
+                </div>
+              )}
             </div>
-
-            {newSample && (
-              <p data-testid="retest-new-sample" className="text-sm">
-                New sample: {newSample}.
-              </p>
-            )}
           </>
         )}
 

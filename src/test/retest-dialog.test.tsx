@@ -243,8 +243,18 @@ describe('RetestDialog overlay v2', () => {
 
     await user.click(retestBox(HPLC))
     await user.click(carryBox(HM))
-    expect(screen.getByTestId('retest-new-sample')).toHaveTextContent(
-      'New sample: re-test HPLC Purity + Identity; drop Heavy Metals, Endotoxin USP85 LAL.'
+    const outcome = screen.getByTestId('retest-outcome')
+    expect(outcome).toHaveTextContent(
+      'Creates a WooCommerce retest order for Jane Doe against order WP-3134 ($85.00).'
+    )
+    expect(outcome).toHaveTextContent(
+      'Once paid: a new sample is created with HPLC Purity + Identity re-tested; Heavy Metals, Endotoxin USP85 LAL dropped.'
+    )
+    expect(outcome).toHaveTextContent(
+      'P-9001 is unchanged and stays linked to the new sample.'
+    )
+    expect(outcome).toHaveTextContent(
+      'The customer is emailed an invoice with the payment link.'
     )
     expect(disabledReason()).toHaveTextContent('Enter a reason')
     await user.type(screen.getByLabelText('Reason (required)'), 'purity re-run')
@@ -288,6 +298,9 @@ describe('RetestDialog overlay v2', () => {
     ).toBeInTheDocument()
     expect(within(summary).getByText('$85.00')).toBeInTheDocument()
     expect(within(summary).getByText('Variance, 3 points')).toBeInTheDocument()
+    expect(screen.getByTestId('retest-outcome')).toHaveTextContent(
+      'Once paid: a new sample is created with HPLC Purity + Identity re-tested (variance, 3 points); Heavy Metals carried as verified results; Endotoxin USP85 LAL dropped.'
+    )
     expect(within(summary).getByText('$153.00')).toBeInTheDocument()
     expect(total()).toHaveTextContent('$238.00')
     expect(screen.getByLabelText('Charged')).toBeChecked()
@@ -434,8 +447,12 @@ describe('RetestDialog overlay v2', () => {
       screen.getByRole('checkbox', { name: 'Rapid Sterility (PCR)' })
     )
     expect(total()).toHaveTextContent('$230.00')
-    expect(screen.getByTestId('retest-new-sample')).toHaveTextContent(
-      'New sample: carry HPLC Purity + Identity, Heavy Metals; drop Endotoxin USP85 LAL; add Rapid Sterility (PCR).'
+    const outcome = screen.getByTestId('retest-outcome')
+    expect(outcome).toHaveTextContent(
+      'Creates a WooCommerce add-on order for Jane Doe against order WP-3134 ($230.00).'
+    )
+    expect(outcome).toHaveTextContent(
+      'Once paid: a new sample is created with Rapid Sterility (PCR); HPLC Purity + Identity, Heavy Metals carried from P-9001; Endotoxin USP85 LAL dropped (not verified).'
     )
 
     expect(
@@ -752,7 +769,17 @@ describe('RetestDialog overlay v2', () => {
     await user.click(
       screen.getByRole('checkbox', { name: 'Rapid Sterility (PCR)' })
     )
-    expect(screen.queryByTestId('retest-new-sample')).not.toBeInTheDocument()
+    const outcome = screen.getByTestId('retest-outcome')
+    expect(outcome).toHaveTextContent(
+      'Once paid: Rapid Sterility (PCR) added to P-9001; needs 1 more vial from the customer.'
+    )
+    expect(outcome).toHaveTextContent(
+      'No new sample; P-9001 keeps its current results.'
+    )
+    expect(outcome).toHaveTextContent(
+      'No payment email is sent; copy the payment link from the Orders tab.'
+    )
+    expect(outcome).not.toHaveTextContent('new sample is created')
     const summary = screen.getByTestId('retest-summary')
     expect(
       within(summary).getByText('Rapid Sterility (PCR)')
@@ -768,6 +795,11 @@ describe('RetestDialog overlay v2', () => {
     await user.clear(screen.getByLabelText('Extra vials to ship'))
     await user.type(screen.getByLabelText('Extra vials to ship'), '1')
     await user.click(screen.getByLabelText('Waived (whole order free)'))
+    expect(outcome).toHaveTextContent('($0.00, waived $230.00)')
+    expect(outcome).toHaveTextContent(
+      'At once: Rapid Sterility (PCR) added to P-9001; needs 2 more vials from the customer.'
+    )
+    expect(outcome).toHaveTextContent('No payment is needed.')
     await user.type(screen.getByLabelText('Reason (required)'), 'add usp71')
     await user.click(
       screen.getByRole('button', { name: 'Add services to P-9001' })
