@@ -387,8 +387,13 @@ function CanvasInner({
               value={pickedKind}
               onValueChange={v => v && retype(v as EdgeKind)}
             >
+              {/* flex-none: the group's items share width equally by default and the labels collide. */}
               {EDGE_KINDS.map(k => (
-                <ToggleGroupItem key={k.kind} value={k.kind}>
+                <ToggleGroupItem
+                  key={k.kind}
+                  value={k.kind}
+                  className="flex-none px-3"
+                >
                   {k.label}
                 </ToggleGroupItem>
               ))}
