@@ -10,6 +10,7 @@ import hashlib
 import json
 import logging
 import os
+import re
 from datetime import datetime, timezone
 from typing import Literal
 
@@ -353,6 +354,20 @@ def _record_addon_order(db: Session, sample: LimsSample, out: dict, body: dict, 
            user_id=user_id)
 
 
+def _minimal_snapshot_entry(prof: AnalysisProfile) -> dict:
+    """Builder-shaped entry from the live row (catalog.snapshot keys plus name,
+    is_addon, sort_order). Tagged so a reader can tell it was not frozen at
+    registration; the snapshot resolver skips entries that are not role demand."""
+    return {
+        "key": prof.key, "profile_id": prof.id, "name": prof.name, "is_addon": prof.is_addon,
+        "sort_order": prof.sort_order, "fulfillment_role": prof.fulfillment_role,
+        "fulfillment_dim": prof.fulfillment_dim, "role_sort_order": None,
+        "vials_required": prof.vials_required, "analytical_vials": prof.analytical_vials,
+        "service_ids": [s.id for s in prof.analysis_services], "ride_host_roles": [],
+        "source": "addon_apply",
+    }
+
+
 def apply_addon_services(db: Session, sample: LimsSample, *, services: dict, order_id,
                          variance_value=None, event_id=None) -> dict:
     """IS -> Mk1 after a same-sample add-on order is paid or waived. Adds every
@@ -399,22 +414,30 @@ def apply_addon_services(db: Session, sample: LimsSample, *, services: dict, ord
             except Exception as e:  # noqa: BLE001
                 logger.warning("addon_services.snapshot_failed sample_id=%s err=%s", sample.sample_id, e)
                 fresh = []
+            fresh_keys = {e["key"] for e in fresh}
+            # The registration builder freezes role-dim demand only; any other
+            # applied profile gets a minimal entry so snapshot_profile_keys sees it.
+            fresh += [_minimal_snapshot_entry(p) for p in added if p.key not in fresh_keys]
             known = {e.get("key") for e in snap["profiles"] or []}
             snap["profiles"] = [*(snap["profiles"] or []), *(e for e in fresh if e["key"] not in known)]
-            unfrozen = {p.key for p in added} - {e["key"] for e in fresh}
-            if unfrozen:
-                logger.info("addon_services.not_snapshotted sample_id=%s keys=%s",
-                            sample.sample_id, sorted(unfrozen))
         if "addon_orders" in snap:
-            snap["addon_orders"] = [{**a, "applied": True} if str(a.get("order_id")) == str(order_id) else a
-                                    for a in _addon_orders(sample)]
+            on_sample = have | set(skipped) | {p.key for p in added}
+            # IS forwards the PARENT order id, so match entries by profile set.
+            snap["addon_orders"] = [
+                {**a, "applied": True}
+                if not a.get("applied") and a.get("profiles") and set(a["profiles"]) <= on_sample else a
+                for a in _addon_orders(sample)]
         sample.catalog_snapshot = snap
 
     if added:
-        entry = next((a for a in _addon_orders(sample) if str(a.get("order_id")) == str(order_id)), {})
+        m = re.match(r"^addon_(\d+)_", str(event_id or ""))
+        addon_no = m.group(1) if m else None
+        wanted = addon_no if addon_no is not None else str(order_id)
+        entry = next((a for a in _addon_orders(sample)
+                      if wanted in (str(a.get("order_number")), str(a.get("order_id")))), {})
         waived = " (waived)" if entry.get("fee") == "free" else ""
-        label = (f"Services added from WP order {entry.get('order_number') or order_id}: "
-                 f"{', '.join(p.name for p in added)}{waived}")
+        where = f"WP add-on order {addon_no}" if addon_no else f"WP order {order_id}"
+        label = f"Services added from {where}: {', '.join(p.name for p in added)}{waived}"
         _event(db, sample, "addon_services_applied", {
             "order_id": order_id, "event_id": event_id, "variance_value": variance_value,
             "added": [p.key for p in added], "skipped": skipped, "ignored": ignored, "label": label})
