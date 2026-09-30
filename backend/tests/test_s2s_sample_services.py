@@ -210,12 +210,13 @@ def test_snapshot_resolver_skips_non_role_addon_entries():
     assert None not in out and out["kf"].host_profile_ids == [1]
 
 
-def test_published_sample_409(client, db_session, world):
+@pytest.mark.parametrize("status", ["published", "cancelled", "rejected"])
+def test_terminal_sample_409(client, db_session, world, status):
     p = _parent(db_session)
-    p.status = "published"
+    p.status = status
     db_session.commit()
     r = _post(client, _body())
-    assert r.status_code == 409
+    assert r.status_code == 409 and r.json()["detail"] == f"sample is {status}"
     assert db_session.execute(select(LimsAnalysis).where(
         LimsAnalysis.analysis_service_id == world["kf"].id)).scalars().first() is None
 

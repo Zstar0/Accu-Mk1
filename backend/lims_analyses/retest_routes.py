@@ -192,8 +192,16 @@ def _orders_with_samples(db: Session, sample: LimsSample, orders) -> list[dict]:
         addon = same_sample.get(str(o.get("order_id")))
         if addon is not None:
             row.update(same_sample=True, applied=bool(addon.get("applied")))
+        elif o.get("same_sample"):
+            # Staff add-on (WP AJAX) with no Mk1 entry: WP applies it on payment.
+            row["applied"] = str(o.get("status") or "").lower() not in _UNPAID_WC_STATUSES
         out.append(row)
     return out
+
+
+_UNPAID_WC_STATUSES = frozenset({"pending", "on-hold", "failed", "cancelled", "checkout-draft"})
+# The add-on order route and the s2s services route refuse these.
+TERMINAL_SAMPLE_STATUSES = frozenset({"published", "cancelled", "rejected"})
 
 
 def _addon_orders(sample: LimsSample) -> list[dict]:
@@ -299,8 +307,8 @@ def create_addon_order(sample_id: str, req: AddonOrderRequest, db: Session = Dep
     sample = db.execute(select(LimsSample).where(LimsSample.sample_id == sample_id)).scalar_one_or_none()
     if sample is None:
         raise HTTPException(status_code=404, detail=f"sample {sample_id!r} not known to Mk1")
-    if sample.status == "published":
-        raise HTTPException(status_code=400, detail="sample is published; use the retest route")
+    if sample.status in TERMINAL_SAMPLE_STATUSES:
+        raise HTTPException(status_code=400, detail=f"sample is {sample.status}; use the retest route")
     profiles = list(dict.fromkeys(req.profiles))
     if req.variance_points > 0:
         raise HTTPException(status_code=400, detail="variance is sold through a retest; use the Re-test tab")
@@ -322,11 +330,25 @@ def create_addon_order(sample_id: str, req: AddonOrderRequest, db: Session = Dep
     if resp.status_code < 200 or resp.status_code >= 300:
         logger.warning("addon_order.is_error sample_id=%s status=%s body=%s",
                        sample.sample_id, resp.status_code, (resp.text or "")[:500])
+        if 400 <= resp.status_code < 500:
+            # WP's already_on_sample / invalid_profile etc. must reach the lab.
+            raise HTTPException(status_code=resp.status_code, detail=_is_error_message(resp))
         raise HTTPException(status_code=502, detail=f"Integration Service returned {resp.status_code}")
     out = resp.json()
     _record_addon_order(db, sample, out, body, user_id=getattr(user, "id", None))
     db.commit()
     return out
+
+
+def _is_error_message(resp) -> str:
+    """IS detail is {code, message} (or a string); fall back to the raw text."""
+    try:
+        detail = resp.json().get("detail")
+    except Exception:  # noqa: BLE001
+        detail = None
+    if isinstance(detail, dict):
+        detail = detail.get("message") or detail.get("code")
+    return str(detail or (resp.text or "")[:500] or f"Integration Service returned {resp.status_code}")
 
 
 def _addon_idempotency_key(sample_id: str, body: dict) -> str:
@@ -358,8 +380,9 @@ def _record_addon_order(db: Session, sample: LimsSample, out: dict, body: dict, 
     fee = "waived" if body["fee"] == "free" else "charged"
     label = (f"Add-on order {entry['order_number'] or order_id} requested for this sample ({fee}): "
              f"{', '.join(what)}. Reason: {body['reason']}")
-    _event(db, sample, "addon_order_requested", {**entry, "reason": body["reason"], "label": label},
-           user_id=user_id)
+    if not previous:  # a replayed create (same order_id) logs once
+        _event(db, sample, "addon_order_requested", {**entry, "reason": body["reason"], "label": label},
+               user_id=user_id)
 
 
 def _minimal_snapshot_entry(prof: AnalysisProfile) -> dict:
