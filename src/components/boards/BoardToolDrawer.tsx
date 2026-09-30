@@ -13,6 +13,12 @@ import {
   User,
   type LucideIcon,
 } from 'lucide-react'
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipProvider,
+  TooltipTrigger,
+} from '@/components/ui/tooltip'
 import { DRAWER_MIME, type DrawerKind } from './board-mapping'
 
 const CHIPS: { kind: DrawerKind; label: string; icon: LucideIcon }[] = [
@@ -28,6 +34,9 @@ const CHIPS: { kind: DrawerKind; label: string; icon: LucideIcon }[] = [
 ]
 
 const COLLAPSED_KEY = 'boards:drawer:collapsed'
+const HINT = 'Drag onto the board, or click to place at the centre'
+const FOCUS =
+  'outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-1'
 
 function readCollapsed(): boolean {
   try {
@@ -59,53 +68,56 @@ export function BoardToolDrawer({
     }
   }
 
-  const chevron = (
-    <button
-      type="button"
-      onClick={toggle}
-      aria-label={collapsed ? 'Show tools' : 'Hide tools'}
-      aria-expanded={!collapsed}
-      className="flex h-8 items-center gap-1 rounded-md px-2 text-xs text-muted-foreground hover:bg-accent hover:text-foreground"
-    >
-      {collapsed ? (
-        <>
-          <ChevronUp className="h-4 w-4" />
-          Tools
-        </>
-      ) : (
-        <ChevronDown className="h-4 w-4" />
-      )}
-    </button>
-  )
-
   return (
-    <div className="absolute bottom-3 left-1/2 z-10 -translate-x-1/2 rounded-lg border bg-background/95 p-1 shadow-sm backdrop-blur">
-      {collapsed ? (
-        chevron
-      ) : (
-        <div className="flex items-center gap-0.5">
-          {CHIPS.map(({ kind, label, icon: Icon }) => (
-            <button
-              key={kind}
-              type="button"
-              draggable
-              data-kind={kind}
-              aria-label={label}
-              title={`${label}: drag onto the board, or click to place`}
-              onDragStart={e => {
-                e.dataTransfer.setData(DRAWER_MIME, kind)
-                e.dataTransfer.effectAllowed = 'move'
-              }}
-              onClick={() => onPlace(kind)}
-              className="flex h-8 w-8 cursor-grab items-center justify-center rounded-md text-muted-foreground hover:bg-accent hover:text-foreground active:cursor-grabbing"
-            >
-              <Icon className="h-4 w-4" />
-            </button>
-          ))}
-          <span className="mx-0.5 h-5 w-px bg-border" />
-          {chevron}
-        </div>
-      )}
-    </div>
+    <TooltipProvider>
+      <div className="absolute bottom-3 left-1/2 z-10 flex -translate-x-1/2 items-center gap-0.5 rounded-lg border bg-background/95 p-1 shadow-sm backdrop-blur">
+        {!collapsed && (
+          <>
+            {CHIPS.map(({ kind, label, icon: Icon }) => (
+              <Tooltip key={kind}>
+                <TooltipTrigger asChild>
+                  <button
+                    type="button"
+                    draggable
+                    data-kind={kind}
+                    aria-label={label}
+                    onDragStart={e => {
+                      e.dataTransfer.setData(DRAWER_MIME, kind)
+                      e.dataTransfer.effectAllowed = 'move'
+                    }}
+                    onClick={() => onPlace(kind)}
+                    className={`${FOCUS} flex h-8 w-8 cursor-grab items-center justify-center rounded-md text-muted-foreground hover:bg-accent hover:text-foreground active:cursor-grabbing`}
+                  >
+                    <Icon className="h-4 w-4" />
+                  </button>
+                </TooltipTrigger>
+                <TooltipContent side="top">
+                  <span className="font-medium">{label}</span>
+                  <span className="block opacity-80">{HINT}</span>
+                </TooltipContent>
+              </Tooltip>
+            ))}
+            <span className="mx-0.5 h-5 w-px bg-border" />
+          </>
+        )}
+        {/* One chevron in a stable slot, so keyboard focus survives the toggle. */}
+        <button
+          type="button"
+          onClick={toggle}
+          aria-label={collapsed ? 'Show tools' : 'Hide tools'}
+          aria-expanded={!collapsed}
+          className={`${FOCUS} flex h-8 items-center gap-1 rounded-md px-2 text-xs text-muted-foreground hover:bg-accent hover:text-foreground`}
+        >
+          {collapsed ? (
+            <>
+              <ChevronUp className="h-4 w-4" />
+              Tools
+            </>
+          ) : (
+            <ChevronDown className="h-4 w-4" />
+          )}
+        </button>
+      </div>
+    </TooltipProvider>
   )
 }

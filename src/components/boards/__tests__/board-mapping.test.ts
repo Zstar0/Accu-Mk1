@@ -162,6 +162,19 @@ describe('drawer placement', () => {
     })
   })
 
+  it('a drop just inside a frame edge is clamped so the whole body sits inside', () => {
+    // Pointer 10px inside the left edge: unclamped relative x would be -80.
+    expect(dropTargetFor('text', { x: 110, y: 200 }, frames)).toEqual({
+      position: { x: 0, y: 72 },
+      parentId: 5,
+    })
+    // Pointer just inside the bottom-right corner: clamped to (w - 180, h - 56).
+    expect(dropTargetFor('text', { x: 495, y: 395 }, frames)).toEqual({
+      position: { x: 400 - 180, y: 300 - 56 },
+      parentId: 5,
+    })
+  })
+
   it('a drop outside every frame stays absolute with no parent', () => {
     expect(dropTargetFor('note', { x: 900, y: 900 }, frames)).toEqual({
       position: { x: 810, y: 872 },

@@ -128,8 +128,13 @@ export function resolveParentOnDrop(
   frames: FrameRect[]
 ): { parentId: string | null; position: XYPosition } {
   if (node.parentId) return { parentId: node.parentId, position: node.position }
-  const cx = node.position.x + (node.width ?? NODE_DEFAULT.width) / 2
-  const cy = node.position.y + (node.height ?? NODE_DEFAULT.height) / 2
+  const w = node.width ?? NODE_DEFAULT.width
+  const h = node.height ?? NODE_DEFAULT.height
+  const cx = node.position.x + w / 2
+  const cy = node.position.y + h / 2
+  // Relative offset clamped so the whole body sits inside the frame, not just the centre.
+  const clamp = (v: number, span: number) =>
+    Math.min(Math.max(v, 0), Math.max(0, span))
   for (const f of frames) {
     if (f.id === node.id) continue
     if (
@@ -141,8 +146,8 @@ export function resolveParentOnDrop(
       return {
         parentId: f.id,
         position: {
-          x: node.position.x - f.position.x,
-          y: node.position.y - f.position.y,
+          x: clamp(node.position.x - f.position.x, f.width - w),
+          y: clamp(node.position.y - f.position.y, f.height - h),
         },
       }
     }

@@ -1,4 +1,5 @@
 import { fireEvent, render, screen } from '@testing-library/react'
+import userEvent from '@testing-library/user-event'
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import { BoardToolDrawer } from '@/components/boards/BoardToolDrawer'
 
@@ -38,6 +39,24 @@ describe('BoardToolDrawer', () => {
       <BoardToolDrawer canEdit={false} onPlace={() => undefined} />
     )
     expect(container).toBeEmptyDOMElement()
+  })
+
+  it('hovering a chip shows its label and the placement hint', async () => {
+    render(<BoardToolDrawer canEdit onPlace={() => undefined} />)
+    await userEvent
+      .setup()
+      .hover(screen.getByRole('button', { name: 'Worksheet' }))
+    const tip = await screen.findByRole('tooltip')
+    expect(tip).toHaveTextContent('Worksheet')
+    expect(tip).toHaveTextContent(/Drag onto the board/)
+  })
+
+  it('the chevron keeps focus across the toggle', () => {
+    render(<BoardToolDrawer canEdit onPlace={() => undefined} />)
+    const chevron = screen.getByRole('button', { name: 'Hide tools' })
+    chevron.focus()
+    fireEvent.click(chevron)
+    expect(screen.getByRole('button', { name: 'Show tools' })).toHaveFocus()
   })
 
   it('a chip drag carries its kind in the dataTransfer', () => {
