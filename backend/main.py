@@ -1216,6 +1216,8 @@ def retest_activity_label(event: str, d: dict) -> Optional[str]:
         if d.get("add"):
             tail.append("added: " + ", ".join(d["add"]))
         return head + ("; " + "; ".join(tail) if tail else "")
+    if event in ("addon_order_requested", "addon_services_applied"):
+        return d.get("label") or event
     if event == "retest_spec_warning":
         detail = ", ".join(d.get("missing") or []) or d.get("message") or ""
         return f"Retest spec warning: {d.get('reason', '?')}" + (f" ({detail})" if detail else "")
@@ -25560,6 +25562,57 @@ def s2s_upsert_lims_sample(
     return RegistrySampleSignalResponse(sample_id=row.sample_id, native_id=row.native_id)
 
 
+# Same-sample add-on services (spec 2026-09-29-addon-same-sample). IS calls
+# this after WP applies a paid or waived add-on order to an in-progress sample.
+
+class RegistrySampleServices(BaseModel):
+    services: dict[str, bool]
+    variance_value: Optional[Any] = None
+    event_id: Optional[str] = None
+    order_id: Optional[Any] = None
+    # Newly-true keys (IS diff). When present, only these are added; absent =
+    # fall back to every true key in `services`.
+    added_keys: Optional[list[str]] = None
+
+
+class RegistrySampleServicesResponse(BaseModel):
+    added: list[str]
+    skipped: list[str]
+    ignored: list[str]
+
+
+@app.post("/s2s/lims-samples/{sample_id}/services", response_model=RegistrySampleServicesResponse)
+def s2s_add_lims_sample_services(
+    sample_id: str,
+    req: RegistrySampleServices,
+    db: Session = Depends(get_db),
+    _: None = Depends(require_internal_service_token),
+):
+    """Add every newly-true native profile to the sample. Idempotent: profiles
+    already on the sample are skipped. 409 on a published sample (the retest
+    path should have been used; the WP order stays as the record)."""
+    from lims_analyses.retest_routes import apply_addon_services
+    row = db.execute(select(LimsSample).where(LimsSample.sample_id == sample_id)).scalar_one_or_none()
+    if row is None:
+        raise HTTPException(status_code=404, detail=f"sample {sample_id!r} not known to Mk1")
+    from lims_analyses.retest_routes import TERMINAL_SAMPLE_STATUSES
+    if row.status in TERMINAL_SAMPLE_STATUSES:
+        logger.warning("addon_services.refused_terminal sample_id=%s status=%s order_id=%s",
+                       sample_id, row.status, req.order_id)
+        raise HTTPException(status_code=409, detail=f"sample is {row.status}")
+    try:
+        services = ({k: True for k in req.added_keys} if req.added_keys is not None
+                    else req.services)
+        out = apply_addon_services(db, row, services=services, order_id=req.order_id,
+                                   variance_value=req.variance_value, event_id=req.event_id)
+        db.commit()
+    except Exception:
+        db.rollback()
+        raise
+    logger.info("addon_services.applied sample_id=%s order_id=%s %s", sample_id, req.order_id, out)
+    return out
+
+
 # ── Registry shipping update (logistics capture Slice A, 2026-08-27) ────
 # Called server-to-server by integration-service when a customer saves
 # carrier/tracking in WordPress. Per-sample received-lock (Handler-ruled):
@@ -26635,6 +26688,8 @@ def reprovision_catalog_snapshot(
     new_snapshot = compute_catalog_snapshot(
         db, raw.get("services") or {}, raw.get("package"),
     )
+    # Keep keys the builder does not produce (addon_orders, retest rider).
+    new_snapshot = {**(parent.catalog_snapshot or {}), **new_snapshot}
 
     user_id = getattr(current_user, "id", None)
     was_null = parent.catalog_snapshot is None

@@ -24,10 +24,13 @@ type RetestCreated = {
 const price = (text: string | null) =>
   Number(text?.match(/\$([\d.]+)/)?.[1] ?? NaN)
 
-async function openRetestDialog(page: import('@playwright/test').Page) {
-  await page.goto(`/#senaite/sample-details?id=${SAMPLE_ID}`)
+async function openRetestDialog(
+  page: import('@playwright/test').Page,
+  sampleId = SAMPLE_ID!
+) {
+  await page.goto(`/#senaite/sample-details?id=${sampleId}`)
   await expect(
-    page.getByRole('heading', { name: SAMPLE_ID!, level: 1 })
+    page.getByRole('heading', { name: sampleId, level: 1 })
   ).toBeVisible({ timeout: 15_000 })
 
   await page.getByRole('button', { name: 'Actions', exact: true }).click()
@@ -88,7 +91,7 @@ test.describe('Mk1-native retest dialog', () => {
     )
     expect(fee).toBeGreaterThan(0)
     await expect(dialog.getByTestId('retest-summary-total')).toHaveText(
-      `Total${fee.toFixed(2)}`
+      `Total$${fee.toFixed(2)}`
     )
 
     await dialog
@@ -142,6 +145,24 @@ test.describe('Mk1-native retest dialog', () => {
     await expect(
       dialog.getByRole('heading', { name: `Add services to ${SAMPLE_ID}` })
     ).toBeVisible()
+    // The mode follows the sample's state; the sentence and the Create label
+    // must agree with each other whichever it is.
+    const mode = await dialog.getByTestId('addon-mode').textContent()
+    if (mode?.includes('is in progress')) {
+      await expect(dialog.getByTestId('addon-mode')).toHaveText(
+        `${SAMPLE_ID} is in progress: the selected services are added to this sample once the order is paid (or at once if waived).`
+      )
+      await expect(
+        dialog.getByRole('button', { name: `Add services to ${SAMPLE_ID}` })
+      ).toBeVisible()
+    } else {
+      await expect(dialog.getByTestId('addon-mode')).toHaveText(
+        `${SAMPLE_ID} is published: a new sample is created with the existing results carried.`
+      )
+      await expect(
+        dialog.getByRole('button', { name: 'Create add-on order (new sample)' })
+      ).toBeVisible()
+    }
     await expect(
       dialog.getByRole('radiogroup', { name: 'Billing' })
     ).toBeVisible()
@@ -152,7 +173,60 @@ test.describe('Mk1-native retest dialog', () => {
       'Tick at least one service'
     )
     await expect(
-      dialog.getByRole('button', { name: 'Create add-on order' })
+      dialog.getByRole('button', {
+        name: mode?.includes('is in progress')
+          ? `Add services to ${SAMPLE_ID}`
+          : 'Create add-on order (new sample)',
+      })
     ).toBeDisabled()
+  })
+})
+
+const ADDON_SAMPLE_ID = process.env.E2E_ADDON_SAMPLE_ID
+
+test.describe('Mk1-native same-sample add-on', () => {
+  test.use({ viewport: { width: 1400, height: 1000 } })
+  test.skip(
+    !ADDON_SAMPLE_ID,
+    'Set E2E_ADDON_SAMPLE_ID to an in-progress sample with a sellable add-on it lacks'
+  )
+
+  test('in progress: Waived add-on is created against the same sample', async ({
+    authedPage: page,
+  }) => {
+    // Create goes Mk1 -> IS -> WP and, when waived, back to Mk1 before it returns.
+    test.setTimeout(120_000)
+    const id = ADDON_SAMPLE_ID!
+    const dialog = await openRetestDialog(page, id)
+    await dialog.getByRole('tab', { name: 'Add services' }).click()
+    await expect(dialog.getByTestId('addon-mode')).toHaveText(
+      `${id} is in progress: the selected services are added to this sample once the order is paid (or at once if waived).`
+    )
+
+    await dialog
+      .locator('[data-testid^="addon-row-"]')
+      .getByRole('checkbox')
+      .and(page.locator(':enabled'))
+      .first()
+      .click()
+    await dialog
+      .getByRole('radio', { name: 'Waived (whole order free)' })
+      .click()
+    await dialog
+      .getByRole('textbox', { name: 'Reason (required)' })
+      .fill('e2e: same-sample add-on')
+
+    const created = page.waitForResponse(
+      r =>
+        r.url().includes(`/api/samples/${id}/addon-order`) &&
+        r.request().method() === 'POST',
+      { timeout: 90_000 }
+    )
+    await dialog.getByRole('button', { name: `Add services to ${id}` }).click()
+    const response = await created
+    expect(response.status(), await response.text()).toBe(200)
+    // Re-runs replay the same order (same body, idempotent), so assert only this.
+    const body = (await response.json()) as RetestCreated
+    expect(body.status).toBe('completed')
   })
 })

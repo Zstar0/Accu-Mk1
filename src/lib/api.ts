@@ -7169,6 +7169,10 @@ export interface RetestOrder {
   kind: 'retest' | 'addon'
   sample_id: string | null
   sample_status: string | null
+  /** Add-on order that adds services to THIS sample (no new sample minted). */
+  same_sample?: boolean
+  /** True once the same-sample add-on's services have reached the sample. */
+  applied?: boolean
 }
 export interface RetestContext {
   order: RetestContextOrder | null
@@ -7185,6 +7189,8 @@ export interface RetestOptions {
   variance: { point_price: number | null; allowed: boolean }
   prices_available: boolean
   context?: RetestContext | null
+  /** False while the original is in progress: Add services then adds to this same sample. Missing = true. */
+  original_published?: boolean
 }
 export interface RetestRequestBody {
   retest: string[]
@@ -7211,6 +7217,30 @@ export async function createRetest(sampleId: string, body: RetestRequestBody): P
     const err = await response.json().catch(() => null)
     const detail = err?.detail
     throw new Error((typeof detail === 'string' ? detail : detail?.message) || `Retest request failed: ${response.status}`)
+  }
+  return response.json()
+}
+
+/** Same-sample add-on (original not yet published): services are added to this sample when paid or waived. */
+export interface AddonOrderBody {
+  profiles: string[]
+  variance_points: number
+  additional_vials: number
+  fee: 'paid' | 'free'
+  reason: string
+}
+export interface AddonOrderCreated { order_id: number; order_number: string; status: 'pending' | 'completed'; payment_url: string | null; total: number }
+
+export async function createAddonOrder(sampleId: string, body: AddonOrderBody): Promise<AddonOrderCreated> {
+  const response = await fetch(`${API_BASE_URL()}/api/samples/${encodeURIComponent(sampleId)}/addon-order`, {
+    method: 'POST',
+    headers: getBearerHeaders('application/json'),
+    body: JSON.stringify(body),
+  })
+  if (!response.ok) {
+    const err = await response.json().catch(() => null)
+    const detail = err?.detail
+    throw new Error((typeof detail === 'string' ? detail : detail?.message) || `Add-on order request failed: ${response.status}`)
   }
   return response.json()
 }

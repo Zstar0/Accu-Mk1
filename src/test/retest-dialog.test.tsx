@@ -13,12 +13,17 @@ import type { RetestOptions, RetestOrder } from '@/lib/api'
 
 vi.mock('@/lib/api', async importOriginal => {
   const actual = await importOriginal<typeof ApiModule>()
-  return { ...actual, getRetestOptions: vi.fn(), createRetest: vi.fn() }
+  return {
+    ...actual,
+    getRetestOptions: vi.fn(),
+    createRetest: vi.fn(),
+    createAddonOrder: vi.fn(),
+  }
 })
 vi.mock('sonner', () => ({ toast: { success: vi.fn(), error: vi.fn() } }))
 
 import { toast } from 'sonner'
-import { createRetest, getRetestOptions } from '@/lib/api'
+import { createAddonOrder, createRetest, getRetestOptions } from '@/lib/api'
 import { RetestDialog } from '@/components/senaite/RetestDialog'
 
 const HPLC = 'hplc-purity-identity'
@@ -163,6 +168,7 @@ const disabledReason = () => screen.queryByTestId('retest-disabled-reason')
 beforeEach(() => {
   vi.mocked(getRetestOptions).mockResolvedValue(OPTIONS)
   vi.mocked(createRetest).mockReset()
+  vi.mocked(createAddonOrder).mockReset()
 })
 
 describe('RetestDialog overlay v2', () => {
@@ -237,8 +243,18 @@ describe('RetestDialog overlay v2', () => {
 
     await user.click(retestBox(HPLC))
     await user.click(carryBox(HM))
-    expect(screen.getByTestId('retest-new-sample')).toHaveTextContent(
-      'New sample: re-test HPLC Purity + Identity; drop Heavy Metals, Endotoxin USP85 LAL.'
+    const outcome = screen.getByTestId('retest-outcome')
+    expect(outcome).toHaveTextContent(
+      'Creates a WooCommerce retest order for Jane Doe against order WP-3134 ($85.00).'
+    )
+    expect(outcome).toHaveTextContent(
+      'Once paid: a new sample is created with HPLC Purity + Identity re-tested; Heavy Metals, Endotoxin USP85 LAL dropped.'
+    )
+    expect(outcome).toHaveTextContent(
+      'P-9001 is unchanged and stays linked to the new sample.'
+    )
+    expect(outcome).toHaveTextContent(
+      'The customer is emailed an invoice with the payment link.'
     )
     expect(disabledReason()).toHaveTextContent('Enter a reason')
     await user.type(screen.getByLabelText('Reason (required)'), 'purity re-run')
@@ -282,6 +298,9 @@ describe('RetestDialog overlay v2', () => {
     ).toBeInTheDocument()
     expect(within(summary).getByText('$85.00')).toBeInTheDocument()
     expect(within(summary).getByText('Variance, 3 points')).toBeInTheDocument()
+    expect(screen.getByTestId('retest-outcome')).toHaveTextContent(
+      'Once paid: a new sample is created with HPLC Purity + Identity re-tested (variance, 3 points); Heavy Metals carried as verified results; Endotoxin USP85 LAL dropped.'
+    )
     expect(within(summary).getByText('$153.00')).toBeInTheDocument()
     expect(total()).toHaveTextContent('$238.00')
     expect(screen.getByLabelText('Charged')).toBeChecked()
@@ -368,7 +387,7 @@ describe('RetestDialog overlay v2', () => {
 
     await user.type(screen.getByLabelText('Reason (required)'), 'goodwill')
     await user.click(
-      screen.getByRole('button', { name: 'Create add-on order' })
+      screen.getByRole('button', { name: 'Create add-on order (new sample)' })
     )
     await waitFor(() =>
       expect(createRetest).toHaveBeenCalledWith(
@@ -403,13 +422,13 @@ describe('RetestDialog overlay v2', () => {
     )
     expect(disabledReason()).not.toBeInTheDocument()
     expect(
-      screen.getByRole('button', { name: 'Create add-on order' })
+      screen.getByRole('button', { name: 'Create add-on order (new sample)' })
     ).toBeEnabled()
 
     await user.click(screen.getByLabelText('Charged'))
     expect(disabledReason()).toHaveTextContent('Pricing unavailable')
     expect(
-      screen.getByRole('button', { name: 'Create add-on order' })
+      screen.getByRole('button', { name: 'Create add-on order (new sample)' })
     ).toBeDisabled()
   })
 
@@ -428,8 +447,12 @@ describe('RetestDialog overlay v2', () => {
       screen.getByRole('checkbox', { name: 'Rapid Sterility (PCR)' })
     )
     expect(total()).toHaveTextContent('$230.00')
-    expect(screen.getByTestId('retest-new-sample')).toHaveTextContent(
-      'New sample: carry HPLC Purity + Identity, Heavy Metals; drop Endotoxin USP85 LAL; add Rapid Sterility (PCR).'
+    const outcome = screen.getByTestId('retest-outcome')
+    expect(outcome).toHaveTextContent(
+      'Creates a WooCommerce add-on order for Jane Doe against order WP-3134 ($230.00).'
+    )
+    expect(outcome).toHaveTextContent(
+      'Once paid: a new sample is created with Rapid Sterility (PCR); HPLC Purity + Identity, Heavy Metals carried from P-9001; Endotoxin USP85 LAL dropped (not verified).'
     )
 
     expect(
@@ -451,7 +474,7 @@ describe('RetestDialog overlay v2', () => {
     )
     await user.type(screen.getByLabelText('Reason (required)'), 'add pcr')
     await user.click(
-      screen.getByRole('button', { name: 'Create add-on order' })
+      screen.getByRole('button', { name: 'Create add-on order (new sample)' })
     )
     await waitFor(() =>
       expect(createRetest).toHaveBeenCalledWith('P-9001', {
@@ -692,5 +715,153 @@ describe('RetestDialog overlay v2', () => {
       await screen.findByRole('heading', { name: 'Re-test P-9001' })
     ).toBeInTheDocument()
     expect(screen.getByLabelText('Reason (required)')).toHaveValue('')
+  })
+
+  it('published original (flag missing or true): new-sample copy and label', async () => {
+    for (const flag of [undefined, true]) {
+      vi.mocked(getRetestOptions).mockResolvedValue({
+        ...OPTIONS,
+        original_published: flag,
+      })
+      const qc = new QueryClient()
+      const { unmount } = render(
+        <QueryClientProvider client={qc}>
+          {dialogTree(true)}
+        </QueryClientProvider>
+      )
+      const user = userEvent.setup()
+      await screen.findByTestId(`retest-row-${HPLC}`)
+      await user.click(screen.getByRole('tab', { name: 'Add services' }))
+      expect(screen.getByTestId('addon-mode')).toHaveTextContent(
+        'P-9001 is published: a new sample is created with the existing results carried.'
+      )
+      expect(
+        screen.getByRole('button', { name: 'Create add-on order (new sample)' })
+      ).toBeInTheDocument()
+      unmount()
+    }
+  })
+
+  it('in-progress original: same-sample copy, label, no New sample line, addon-order body', async () => {
+    vi.mocked(getRetestOptions).mockResolvedValue({
+      ...OPTIONS,
+      status: 'received',
+      original_published: false,
+    })
+    vi.mocked(createAddonOrder).mockResolvedValue({
+      order_id: 8611,
+      order_number: '8611',
+      status: 'pending',
+      payment_url: 'https://pay/8611',
+      total: 230,
+    })
+    const { user, onClose } = renderDialog()
+    await screen.findByTestId(`retest-row-${HPLC}`)
+    await user.click(screen.getByRole('tab', { name: 'Add services' }))
+    expect(screen.getByTestId('addon-mode')).toHaveTextContent(
+      'P-9001 is in progress: the selected services are added to this sample once the order is paid (or at once if waived).'
+    )
+    expect(
+      screen.getByText(
+        'Add-ons are billed at the listed price unless Billing is Waived.'
+      )
+    ).toBeInTheDocument()
+    await user.click(
+      screen.getByRole('checkbox', { name: 'Rapid Sterility (PCR)' })
+    )
+    const outcome = screen.getByTestId('retest-outcome')
+    expect(outcome).toHaveTextContent(
+      'Once paid: Rapid Sterility (PCR) added to P-9001; needs 1 more vial from the customer.'
+    )
+    expect(outcome).toHaveTextContent(
+      'No new sample; P-9001 keeps its current results.'
+    )
+    expect(outcome).toHaveTextContent(
+      'No payment email is sent; copy the payment link from the Orders tab.'
+    )
+    expect(outcome).not.toHaveTextContent('new sample is created')
+    const summary = screen.getByTestId('retest-summary')
+    expect(
+      within(summary).getByText('Rapid Sterility (PCR)')
+    ).toBeInTheDocument()
+    expect(total()).toHaveTextContent('$230.00')
+
+    await user.click(screen.getByRole('button', { name: 'More options' }))
+    expect(
+      screen.queryByLabelText(
+        'Check in on creation (extra vial already on hand)'
+      )
+    ).not.toBeInTheDocument()
+    await user.clear(screen.getByLabelText('Extra vials to ship'))
+    await user.type(screen.getByLabelText('Extra vials to ship'), '1')
+    await user.click(screen.getByLabelText('Waived (whole order free)'))
+    expect(outcome).toHaveTextContent('($0.00, waived $230.00)')
+    expect(outcome).toHaveTextContent(
+      'At once: Rapid Sterility (PCR) added to P-9001; needs 2 more vials from the customer.'
+    )
+    expect(outcome).toHaveTextContent('No payment is needed.')
+    await user.type(screen.getByLabelText('Reason (required)'), 'add usp71')
+    await user.click(
+      screen.getByRole('button', { name: 'Add services to P-9001' })
+    )
+    await waitFor(() =>
+      expect(createAddonOrder).toHaveBeenCalledWith('P-9001', {
+        profiles: ['rapid-sterility-pcr'],
+        variance_points: 0,
+        additional_vials: 1,
+        fee: 'free',
+        reason: 'add usp71',
+      })
+    )
+    expect(createRetest).not.toHaveBeenCalled()
+    await waitFor(() => expect(onClose).toHaveBeenCalled())
+  })
+
+  it('in-progress original: the Re-test tab still creates a retest order', async () => {
+    vi.mocked(getRetestOptions).mockResolvedValue({
+      ...OPTIONS,
+      original_published: false,
+    })
+    vi.mocked(createRetest).mockResolvedValue({ order_number: 'WP-1' })
+    const { user } = renderDialog()
+    await screen.findByTestId(`retest-row-${HPLC}`)
+    await user.click(retestBox(HPLC))
+    await user.type(screen.getByLabelText('Reason (required)'), 'x')
+    await user.click(
+      screen.getByRole('button', { name: 'Create retest order' })
+    )
+    await waitFor(() => expect(createRetest).toHaveBeenCalled())
+    expect(createAddonOrder).not.toHaveBeenCalled()
+  })
+
+  it('Orders tab: same-sample add-on rows read "same sample", then "applied"', async () => {
+    vi.mocked(getRetestOptions).mockResolvedValue({
+      ...OPTIONS,
+      original_published: false,
+      context: {
+        ...CONTEXT,
+        orders: [
+          { ...ORDERS[0], same_sample: true, applied: false },
+          {
+            ...ORDERS[0],
+            order_id: 3279,
+            order_number: '3279',
+            status: 'completed',
+            payment_url: null,
+            same_sample: true,
+            applied: true,
+          },
+        ],
+      },
+    })
+    const { user } = renderDialog()
+    await user.click(await screen.findByRole('tab', { name: 'Orders (1)' }))
+    const waiting = screen.getByTestId('retest-order-3278')
+    expect(within(waiting).getByText('Add-on')).toBeInTheDocument()
+    expect(within(waiting).getByText('same sample')).toBeInTheDocument()
+    expect(within(waiting).queryByText('not yet')).not.toBeInTheDocument()
+    const applied = screen.getByTestId('retest-order-3279')
+    expect(within(applied).getByText('applied')).toBeInTheDocument()
+    expect(within(applied).queryByRole('link')).not.toBeInTheDocument()
   })
 })

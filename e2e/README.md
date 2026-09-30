@@ -28,6 +28,7 @@ export E2E_PASSWORD=<from: ./bin/accumark-stack creds <stack>>
 export E2E_BASE_URL=http://100.73.137.3:<MK1_FRONTEND_PORT>
 export E2E_BACKEND_URL=http://100.73.137.3:<MK1_BACKEND_PORT>
 export E2E_RETEST_SAMPLE_ID=P-9001   # retest.spec.ts: a published sample IS maps to a WP order
+export E2E_ADDON_SAMPLE_ID=<P-id>    # retest.spec.ts: an IN-PROGRESS sample IS maps to a WP order, lacking a sellable add-on
 ```
 
 ```bash
@@ -71,6 +72,12 @@ $env:E2E_BACKEND_URL = 'http://localhost:5510' # default 8012
 |------|----------|
 | customer block with live WordPress prices | order number, customer, lines; Carry default; Fee radio appears with the live retest price once a profile is set to Retest |
 | HPLC retest plus add-on creates the WP order | Delta = fee + add-on price; Create returns 200 with a WP order number; idempotent on re-run (same spec, same order) |
+| Add services on the published sample | the published sentence (new sample, results carried); Create reads "Create add-on order (new sample)" |
+| Same-sample add-on (`E2E_ADDON_SAMPLE_ID`, skipped when unset) | the in-progress sentence; first sellable add-on, Billing Waived, "Add services to <id>" posts `/api/samples/<id>/addon-order` and returns 200 with status `completed`; re-runs replay the same order |
+
+`E2E_ADDON_SAMPLE_ID` must name a sample that is in progress (not published), sits on a
+WooCommerce order IS can resolve, and lacks at least one sellable add-on. The first run adds
+that service to the sample; later runs replay the same order (same body, idempotent).
 
 Payment is not driven by the spec: it happens in WordPress (on a stack, run
 `payment_complete()` with `php -d memory_limit=1024M` inside the WP container).
