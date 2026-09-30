@@ -201,24 +201,31 @@ function CanvasInner({
   const pickedEdge = picked.length === 1 ? picked[0] : undefined
   const pickedKind = pickedEdge?.data?.kind as EdgeKind | undefined
 
+  const edgeBusy =
+    createEdge.isPending || patchEdge.isPending || deleteEdge.isPending
+
+  // mutateAsync throughout: a per-call mutate(vars, { onSuccess }) is dropped as soon as the
+  // same hook mutates again, and the hooks already toast on error.
   const retype = (kind: EdgeKind) => {
-    if (!pickedEdge || kind === pickedKind) return
+    if (!pickedEdge || kind === pickedKind || edgeBusy) return
     const id = Number(pickedEdge.id)
     if ((kind === 'reports_to') === (pickedKind === 'reports_to'))
       return patchEdge.mutate({ id, data: { kind } })
     // Into or out of a reporting line the stored ends swap, which PATCH cannot do:
     // store the new line, then drop the old one, so the drawn line stays where it is.
-    createEdge.mutate(
-      {
+    createEdge
+      .mutateAsync({
         ...edgeCreateFor(
           Number(pickedEdge.source),
           Number(pickedEdge.target),
           kind
         ),
         label: (pickedEdge.data?.label as string | null | undefined) ?? null,
-      },
-      { onSuccess: () => deleteEdge.mutate(id) }
-    )
+      })
+      .then(
+        () => deleteEdge.mutate(id),
+        () => undefined
+      )
   }
 
   const selectedFrame =
@@ -226,8 +233,10 @@ function CanvasInner({
       ? String(selectedId)
       : null
 
-  // Auto-layout (spec 8.3): the selected frame's items, else the top-level items.
+  // Auto-layout (spec 8.3): the selected frame's items, else the top-level items. An org
+  // board arranges by its reporting lines only; any other board uses every line.
   const runLayout = () => {
+    if (patchPositions.isPending) return
     const { moved, size } = layoutScope(
       nodes.map(n => {
         const d = n.type === 'frame' ? FRAME_DEFAULT : NODE_DEFAULT
@@ -239,7 +248,9 @@ function CanvasInner({
           height: Number(n.measured?.height ?? n.style?.height ?? d.height),
         }
       }),
-      edges,
+      board.kind === 'org'
+        ? edges.filter(e => e.data?.kind === 'reports_to')
+        : edges,
       selectedFrame
     )
     const items = toPositionItems(
@@ -253,28 +264,32 @@ function CanvasInner({
       return
     }
     const frame = selectedFrame ? rows.get(Number(selectedFrame)) : undefined
-    if (frame && size) {
-      const w = frame.w ?? FRAME_DEFAULT.width
-      const h = frame.h ?? FRAME_DEFAULT.height
-      // Grow the frame to hold its items; never shrink it.
-      if (size.width > w || size.height > h)
-        patchNode.mutate(
-          resizePatch(frame, {
-            width: Math.max(w, size.width),
-            height: Math.max(h, size.height),
-          })
-        )
-    }
-    patchPositions.mutate(items, {
-      onSuccess: saved =>
-        toast.success('Layout applied', {
-          action: {
-            label: 'Undo',
-            onClick: () =>
-              patchPositions.mutate(undoPositionItems(rows, saved)),
-          },
-        }),
-    })
+    const w = frame?.w ?? FRAME_DEFAULT.width
+    const h = frame?.h ?? FRAME_DEFAULT.height
+    // Grow the frame first (never shrink it) so the items are never stored outside it;
+    // a failed resize skips the move.
+    const grow =
+      frame && size && (size.width > w || size.height > h)
+        ? patchNode.mutateAsync(
+            resizePatch(frame, {
+              width: Math.max(w, size.width),
+              height: Math.max(h, size.height),
+            })
+          )
+        : Promise.resolve()
+    grow
+      .then(() => patchPositions.mutateAsync(items))
+      .then(
+        saved =>
+          toast.success('Layout applied', {
+            action: {
+              label: 'Undo',
+              onClick: () =>
+                patchPositions.mutate(undoPositionItems(rows, saved)),
+            },
+          }),
+        () => undefined
+      )
   }
 
   // Edges delete through the API; returning false means xyflow never removes
@@ -369,6 +384,7 @@ function CanvasInner({
               size="sm"
               variant="outline"
               onClick={runLayout}
+              disabled={patchPositions.isPending}
               title="Arrange connected items top-down"
             >
               <Network className="mr-1 h-4 w-4" />
@@ -384,6 +400,7 @@ function CanvasInner({
               variant="outline"
               aria-label="Line kind"
               className="bg-background"
+              disabled={edgeBusy}
               value={pickedKind}
               onValueChange={v => v && retype(v as EdgeKind)}
             >

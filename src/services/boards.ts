@@ -155,7 +155,8 @@ export function useCreateEdge(slug: string) {
 export function usePatchEdge(slug: string) {
   return useBoardMutation<{ id: number; data: EdgePatch }, unknown>(
     slug,
-    ({ id, data }) => patchEdge(slug, id, data)
+    ({ id, data }) => patchEdge(slug, id, data),
+    { conflict: 'Those items are already connected.' }
   )
 }
 export function useDeleteEdge(slug: string) {
