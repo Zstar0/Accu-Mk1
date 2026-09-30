@@ -640,3 +640,16 @@ and PR. Deploy follows the `accumark-deploy` skill; boards need no env change.
   (drag-end writes once per drop today). Editors delete a selected edge with Delete/Backspace
   through the API; nodes delete only from the side panel. A board-node flag's thread opens the
   board through the flag's server-resolved deep link.
+- Slice 4a (tool drawer, PR #266): new items drop where they are released or at the viewport
+  centre (the fixed drop offset is retired).
+- Slice 4b (org-chart tools, PR #269): the Layout button lays out the selected frame's children
+  or, with no frame selected, the top-level items (a line to an item inside a frame counts as a
+  line to that frame); only connected items move, the block keeps its corner, a frame grows and
+  never shrinks, and the toast offers Undo. An `org` board lays out by its `reports_to` lines
+  only, as 8.3 says; every other board kind uses every line, since those boards have no
+  reporting lines to speak of. `reports_to` stays stored as "source reports to target" but the
+  canvas draws it from the manager down to the report (arrow at the manager) because node
+  handles are source=bottom, target=top; on an `org` board a new connection is a `reports_to`
+  drawn manager to report. Retyping a line into or out of `reports_to` swaps the stored ends,
+  which `PATCH edge` cannot do, so the new edge is created first and the old one deleted. A
+  line-kind picker (related, reports to, depends on, next) shows for exactly one selected line.

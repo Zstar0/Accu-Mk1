@@ -19,6 +19,7 @@ import {
   patchPositions,
   replaceGrants,
   type BoardCreate,
+  type BoardNode,
   type BoardPatch,
   type EdgeCreate,
   type EdgePatch,
@@ -135,7 +136,7 @@ export function usePatchNode(slug: string) {
   )
 }
 export function usePatchPositions(slug: string) {
-  return useBoardMutation<PositionItem[], unknown>(slug, items =>
+  return useBoardMutation<PositionItem[], BoardNode[]>(slug, items =>
     patchPositions(slug, items)
   )
 }
@@ -154,7 +155,8 @@ export function useCreateEdge(slug: string) {
 export function usePatchEdge(slug: string) {
   return useBoardMutation<{ id: number; data: EdgePatch }, unknown>(
     slug,
-    ({ id, data }) => patchEdge(slug, id, data)
+    ({ id, data }) => patchEdge(slug, id, data),
+    { conflict: 'Those items are already connected.' }
   )
 }
 export function useDeleteEdge(slug: string) {

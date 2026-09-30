@@ -1,0 +1,76 @@
+{
+  "run": "67k3",
+  "seed": {
+    "slug": "org-67k3",
+    "boss": 84,
+    "reportA": 85,
+    "reportB": 86
+  },
+  "drawn_edge": [
+    {
+      "id": 25,
+      "board_id": 32,
+      "source_id": 85,
+      "target_id": 84,
+      "kind": "reports_to",
+      "label": null
+    },
+    {
+      "id": 26,
+      "board_id": 32,
+      "source_id": 86,
+      "target_id": 84,
+      "kind": "reports_to",
+      "label": null
+    }
+  ],
+  "layout": {
+    "before": {
+      "84": {
+        "x": 300,
+        "y": 60
+      },
+      "85": {
+        "x": 80,
+        "y": 300
+      },
+      "86": {
+        "x": 420,
+        "y": 220
+      }
+    },
+    "after": {
+      "84": {
+        "x": 244,
+        "y": 60
+      },
+      "85": {
+        "x": 346,
+        "y": 156
+      },
+      "86": {
+        "x": 80,
+        "y": 156
+      }
+    }
+  },
+  "layout_undone": true,
+  "retyped_edges": [
+    {
+      "id": 26,
+      "board_id": 32,
+      "source_id": 86,
+      "target_id": 84,
+      "kind": "reports_to",
+      "label": null
+    },
+    {
+      "id": 27,
+      "board_id": 32,
+      "source_id": 84,
+      "target_id": 85,
+      "kind": "related",
+      "label": null
+    }
+  ]
+}
