@@ -44,7 +44,12 @@ const spec = (
   }) as AnalysisServiceSpecRecord
 
 const line = (over: Partial<SenaiteAnalysis>): SenaiteAnalysis =>
-  ({ uid: 'mk1:9', keyword: 'HPLC-PURITY', title: 'Purity', ...over }) as SenaiteAnalysis
+  ({
+    uid: 'mk1:9',
+    keyword: 'HPLC-PURITY',
+    title: 'Purity',
+    ...over,
+  }) as SenaiteAnalysis
 
 describe('resolveServiceForAnalysis', () => {
   const services = [
@@ -121,26 +126,39 @@ describe('AnalysisServiceTooltip', () => {
   it('shows who produced the result and when it was captured', () => {
     const { getByTestId } = render(
       <AnalysisServiceTooltip
-        analysis={line({ analyst: 'F. Parker', captured: '2026-09-21T16:33:26' })}
+        analysis={line({
+          analyst: 'F. Parker',
+          captured: '2026-09-21T16:33:26',
+        })}
         service={svc({})}
         specs={[]}
       />
     )
     const text = getByTestId('analysis-service-tooltip').textContent ?? ''
     expect(text).toContain('Analyst: F. Parker')
-    expect(text).toMatch(/Captured: Sep 21, 26/)
+    // Native rows send naive UTC; the hover renders it on the lab clock
+    // (16:33Z = 9:33 AM PDT), never the viewer's.
+    expect(text).toMatch(/Captured: Sep 21, 26, 9:33\sAM/)
     // Neither line is printed for a row that has no value yet.
     const empty = render(
-      <AnalysisServiceTooltip analysis={line({})} service={svc({})} specs={[]} />
+      <AnalysisServiceTooltip
+        analysis={line({})}
+        service={svc({})}
+        specs={[]}
+      />
     )
-    expect(empty.getAllByTestId('analysis-service-tooltip').at(-1)?.textContent).not.toContain(
-      'Captured'
-    )
+    expect(
+      empty.getAllByTestId('analysis-service-tooltip').at(-1)?.textContent
+    ).not.toContain('Captured')
   })
 
   it('says so when no spec is filed, and when still loading', () => {
     const none = render(
-      <AnalysisServiceTooltip analysis={line({})} service={svc({})} specs={[]} />
+      <AnalysisServiceTooltip
+        analysis={line({})}
+        service={svc({})}
+        specs={[]}
+      />
     )
     expect(none.container.textContent).toContain('No active spec filed')
     const loading = render(

@@ -8,6 +8,9 @@
 - **Add services now follows the same-sample rule.** While the original sample is in progress (not yet published), the Add services tab says "P-x is in progress: the selected services are added to this sample once the order is paid (or at once if waived).", Create reads "Add services to P-x", and it calls the new `POST /api/samples/{id}/addon-order` with `{profiles, variance_points, additional_vials, fee, reason}`: a WooCommerce add-on order against the original order, applied to the same sample on payment or waiver. No new sample, nothing carried or dropped, no "New sample:" line; the summary lists the add-on lines only and Billing Charged / Waived still applies. Once the original is published the tab keeps the old path (a new sample with the existing results carried) and Create reads "Create add-on order (new sample)". `retest-options` sends `original_published`; when it is missing the published path is used.
 - The Orders tab shows same-sample add-on orders as "same sample" in the Sample column, then "applied" once the services reach the sample.
 
+### Fixed
+- The analysis hover's "Captured" time on Mk1-native rows showed the UTC clock as local time. Display-only fix: a `captured` value with no zone marker is read as UTC and rendered in the lab's time zone (America/Los_Angeles); the wire format is unchanged because COA readers consume it.
+
 ## v1.30.1 - 2026-09-29
 
 ### Changed
