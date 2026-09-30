@@ -5,13 +5,23 @@ import type * as ApiModule from '@/lib/api'
 
 vi.mock('@/lib/api', async importOriginal => {
   const actual = await importOriginal<typeof ApiModule>()
-  return { ...actual, getRetestOptions: vi.fn(), createRetest: vi.fn() }
+  return {
+    ...actual,
+    getRetestOptions: vi.fn(),
+    createRetest: vi.fn(),
+    createAddonOrder: vi.fn(),
+  }
 })
 vi.mock('sonner', () => ({ toast: { success: vi.fn(), error: vi.fn() } }))
 
-import { createRetest, getRetestOptions } from '@/lib/api'
+import { createAddonOrder, createRetest, getRetestOptions } from '@/lib/api'
 import { toast } from 'sonner'
-import { useCreateRetest, useRetestOptions } from '@/hooks/use-retest'
+import {
+  useCreateAddonOrder,
+  useCreateRetest,
+  useRetestOptions,
+} from '@/hooks/use-retest'
+import { NATIVE_PARENT_ANALYSES_QUERY_KEY } from '@/lib/native-parent-analyses'
 
 function wrapper() {
   const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } })
@@ -182,6 +192,86 @@ describe('useCreateRetest', () => {
     })
     expect(toast.success).toHaveBeenCalledWith('Retest order WP-7930 created', {
       description: 'Order completed; the new sample is being created now.',
+    })
+  })
+})
+
+describe('useCreateAddonOrder', () => {
+  const body = {
+    profiles: ['sterility-usp71'],
+    variance_points: 0,
+    additional_vials: 0,
+    fee: 'paid' as const,
+    reason: 'r',
+  }
+
+  it('paid: waiting-for-payment toast with Copy link, invalidates the sample queries', async () => {
+    vi.mocked(createAddonOrder).mockResolvedValue({
+      order_id: 8611,
+      order_number: '8611',
+      status: 'pending',
+      payment_url: 'https://pay/8611',
+      total: 150,
+    })
+    const { qc, Wrapper } = wrapper()
+    const spy = vi.spyOn(qc, 'invalidateQueries')
+    const onCreated = vi.fn()
+    const { result } = renderHook(
+      () => useCreateAddonOrder('P-1', { onCreated }),
+      { wrapper: Wrapper }
+    )
+    await act(async () => {
+      await result.current.mutateAsync(body)
+    })
+    expect(createAddonOrder).toHaveBeenCalledWith('P-1', body)
+    expect(toast.success).toHaveBeenCalledWith(
+      'Add-on order 8611 created. Waiting for payment; the services are added to P-1 when it is paid.',
+      expect.objectContaining({
+        duration: 15000,
+        action: expect.objectContaining({ label: 'Copy link' }),
+      })
+    )
+    expect(spy).toHaveBeenCalledWith({ queryKey: ['retest-options', 'P-1'] })
+    expect(spy).toHaveBeenCalledWith({
+      queryKey: [NATIVE_PARENT_ANALYSES_QUERY_KEY, 'P-1'],
+    })
+    expect(spy).toHaveBeenCalledWith({ queryKey: ['sub-samples', 'P-1'] })
+    expect(onCreated).toHaveBeenCalled()
+  })
+
+  it('free: completed toast without a payment action', async () => {
+    vi.mocked(createAddonOrder).mockResolvedValue({
+      order_id: 8612,
+      order_number: '8612',
+      status: 'completed',
+      payment_url: null,
+      total: 0,
+    })
+    const { Wrapper } = wrapper()
+    const { result } = renderHook(() => useCreateAddonOrder('P-1', {}), {
+      wrapper: Wrapper,
+    })
+    await act(async () => {
+      await result.current.mutateAsync({ ...body, fee: 'free' })
+    })
+    expect(toast.success).toHaveBeenCalledWith(
+      'Add-on order 8612 completed; the services are being added to P-1 now.'
+    )
+  })
+
+  it('toasts the server detail on failure', async () => {
+    vi.mocked(createAddonOrder).mockRejectedValue(
+      new Error('already on sample')
+    )
+    const { Wrapper } = wrapper()
+    const { result } = renderHook(() => useCreateAddonOrder('P-1', {}), {
+      wrapper: Wrapper,
+    })
+    await act(async () => {
+      await result.current.mutateAsync(body).catch(() => undefined)
+    })
+    expect(toast.error).toHaveBeenCalledWith('Add-on order failed', {
+      description: 'already on sample',
     })
   })
 })

@@ -142,6 +142,10 @@ test.describe('Mk1-native retest dialog', () => {
     await expect(
       dialog.getByRole('heading', { name: `Add services to ${SAMPLE_ID}` })
     ).toBeVisible()
+    // Published -> new sample; in progress -> same sample. Either is valid here.
+    await expect(dialog.getByTestId('addon-mode')).toHaveText(
+      new RegExp(`^${SAMPLE_ID} is (published|in progress): `)
+    )
     await expect(
       dialog.getByRole('radiogroup', { name: 'Billing' })
     ).toBeVisible()
@@ -152,7 +156,11 @@ test.describe('Mk1-native retest dialog', () => {
       'Tick at least one service'
     )
     await expect(
-      dialog.getByRole('button', { name: 'Create add-on order' })
+      dialog.getByRole('button', {
+        name: new RegExp(
+          `^(Create add-on order \\(new sample\\)|Add services to ${SAMPLE_ID})$`
+        ),
+      })
     ).toBeDisabled()
   })
 })

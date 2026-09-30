@@ -1,7 +1,13 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { toast } from 'sonner'
-import { createRetest, getRetestOptions } from '@/lib/api'
-import type { RetestCreated, RetestRequestBody } from '@/lib/api'
+import { createAddonOrder, createRetest, getRetestOptions } from '@/lib/api'
+import type {
+  AddonOrderBody,
+  AddonOrderCreated,
+  RetestCreated,
+  RetestRequestBody,
+} from '@/lib/api'
+import { NATIVE_PARENT_ANALYSES_QUERY_KEY } from '@/lib/native-parent-analyses'
 
 export const RETEST_OPTIONS_KEY = 'retest-options'
 
@@ -55,6 +61,50 @@ export function useCreateRetest(
     },
     onError: (e: Error) => {
       toast.error('Retest failed', { description: e.message })
+    },
+  })
+}
+
+/** Same-sample add-on (original in progress): no new sample is minted. */
+export function useCreateAddonOrder(
+  sampleId: string,
+  opts: { onCreated?: (r: AddonOrderCreated) => void }
+) {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: (body: AddonOrderBody) => createAddonOrder(sampleId, body),
+    onSuccess: r => {
+      const paymentUrl = r.payment_url
+      if (paymentUrl)
+        toast.success(
+          `Add-on order ${r.order_number} created. Waiting for payment; the services are added to ${sampleId} when it is paid.`,
+          {
+            duration: 15000,
+            action: {
+              label: 'Copy link',
+              onClick: () => {
+                void navigator.clipboard?.writeText(paymentUrl)
+              },
+            },
+          }
+        )
+      else
+        toast.success(
+          `Add-on order ${r.order_number} completed; the services are being added to ${sampleId} now.`
+        )
+      // ponytail: a waived order applies asynchronously (WP -> IS -> Mk1), so this
+      // refetch can land before the rows exist; reopening the sample shows them.
+      for (const queryKey of [
+        [RETEST_OPTIONS_KEY, sampleId],
+        ['ordered-products', sampleId],
+        [NATIVE_PARENT_ANALYSES_QUERY_KEY, sampleId],
+        ['sub-samples', sampleId],
+      ])
+        queryClient.invalidateQueries({ queryKey })
+      opts.onCreated?.(r)
+    },
+    onError: (e: Error) => {
+      toast.error('Add-on order failed', { description: e.message })
     },
   })
 }
