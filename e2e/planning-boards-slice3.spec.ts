@@ -483,7 +483,9 @@ test('drag a text chip from the drawer into the frame', async ({
       y: box.y + target.y,
     })
   } else {
-    await chip.dragTo(frame, { targetPosition: target })
+    // force: the seeded note (zIndex 1) may cover this point; the drop bubbles to the flow
+    // wrapper either way and the parent is resolved from the item centre against frames.
+    await chip.dragTo(frame, { targetPosition: target, force: true })
   }
   await page.waitForTimeout(800)
 
