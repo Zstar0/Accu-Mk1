@@ -189,6 +189,24 @@ def test_validation_400s_never_call_is(client, db_session, body, needle):
     post.assert_not_called()
 
 
+def test_offer_list_excludes_profiles_with_live_parent_rows(client, db_session):
+    """retest-options must not offer what the add-on route would refuse."""
+    from lims_analyses.manage_native import add_profile_to_parent
+    _seed(db_session)
+    s = db_session.execute(select(LimsSample).where(LimsSample.sample_id == "P-5191")).scalar_one()
+    usp71 = db_session.execute(select(AnalysisProfile).where(
+        AnalysisProfile.key == "sterility-usp71")).scalar_one()
+    add_profile_to_parent(db_session, parent=s, profile=usp71, user_id=None)
+    db_session.commit()
+    resp = MagicMock(status_code=200)
+    resp.json.return_value = {"addons": {}, "variance": {"point_price": None}}
+    with (patch.dict(os.environ, {"INTEGRATION_SERVICE_URL": "http://is", "ACCU_MK1_API_KEY": "k"}),
+          patch("lims_analyses.retest_routes.requests.get", return_value=resp)):
+        r = client.get("/api/samples/P-5191/retest-options")
+    assert r.status_code == 200, r.text
+    assert "sterility-usp71" not in [a["key"] for a in r.json()["addons"]]
+
+
 def test_profile_with_live_parent_rows_is_already_on(client, db_session):
     """Added by the lab via Manage Analyses (not in the snapshot): still refused."""
     from lims_analyses.manage_native import add_profile_to_parent

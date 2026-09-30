@@ -142,11 +142,17 @@ def retest_options(sample_id: str, db: Session = Depends(get_db), _user=Depends(
         })
     context = _fetch_retest_context(sample.sample_id)
     price_map = (context or {}).get("addons") or {}
+    from lims_analyses.manage_native import _live_parent_service_ids
+    live_ids = _live_parent_service_ids(db, sample)
     candidates = []
     for prof in db.execute(select(AnalysisProfile).where(
             AnalysisProfile.active.is_(True)
     ).order_by(AnalysisProfile.sort_order, AnalysisProfile.key)).scalars().all():
+        # Offer only what the add-on route would accept: not in the snapshot and
+        # without live parent rows for every member (same predicate as the route).
         if prof.key in have or prof.key in LEGACY_ADDON_EXCLUDE:
+            continue
+        if prof.analysis_services and all(m.id in live_ids for m in prof.analysis_services):
             continue
         wp_type = WP_ADDON_TYPE_BY_PROFILE.get(prof.key)
         # WordPress keys add-on prices by its ADDON_TYPES key, which has been the
