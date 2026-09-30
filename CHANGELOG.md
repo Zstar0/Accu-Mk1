@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+### Team
+- **accumark-feature-workflow skill** (`.claude/skills/`): the team process for any Accumark repo (memory first, design gate, worktree per task, TDD with failure-set-diff gates, verification on your own devbox stack via a push-to-mount script, PR contract, write-back) plus references for devbox/stack traps, repo pitfalls and onboarding. `AGENTS.md` points at it.
+
 ## v1.30.1 - 2026-09-29
 
 ### Changed
