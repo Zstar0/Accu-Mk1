@@ -273,8 +273,9 @@ def _profile_names(db: Session, keys) -> list[str]:
 
 
 def _validate_addon_profiles(db: Session, sample: LimsSample, keys: list[str]) -> None:
-    from lims_analyses.manage_native import _is_all_native
+    from lims_analyses.manage_native import _is_all_native, _live_parent_service_ids
     have = set(snapshot_profile_keys(sample))
+    live = _live_parent_service_ids(db, sample) if keys else set()
     for key in keys:
         prof = db.execute(select(AnalysisProfile).where(AnalysisProfile.key == key)).scalar_one_or_none()
         if prof is None:
@@ -283,7 +284,8 @@ def _validate_addon_profiles(db: Session, sample: LimsSample, keys: list[str]) -
             raise HTTPException(status_code=400, detail=f"profile {key!r} is inactive")
         if key in LEGACY_ADDON_EXCLUDE or not _is_all_native(prof):
             raise HTTPException(status_code=400, detail=f"profile {key!r} is not a native profile")
-        if key in have:
+        # Same predicate add_profile_to_parent uses: every member has a live parent row.
+        if key in have or all(m.id in live for m in prof.analysis_services):
             raise HTTPException(status_code=400, detail=f"profile {key!r} is already on {sample.sample_id}")
 
 
@@ -299,7 +301,9 @@ def create_addon_order(sample_id: str, req: AddonOrderRequest, db: Session = Dep
     if sample.status == "published":
         raise HTTPException(status_code=400, detail="sample is published; use the retest route")
     profiles = list(dict.fromkeys(req.profiles))
-    if not profiles and not req.variance_points:
+    if req.variance_points > 0:
+        raise HTTPException(status_code=400, detail="variance is sold through a retest; use the Re-test tab")
+    if not profiles:
         raise HTTPException(status_code=400, detail="nothing selected")
     _validate_addon_profiles(db, sample, profiles)
     base, key = _is_base_and_key()
@@ -341,9 +345,7 @@ def _record_addon_order(db: Session, sample: LimsSample, out: dict, body: dict, 
              "profiles": body["profiles"], "fee": body["fee"]}
     kept = [a for a in _addon_orders(sample) if str(a.get("order_id")) != str(order_id)]
     sample.catalog_snapshot = {**(sample.catalog_snapshot or {}), "addon_orders": [*kept, entry]}
-    what = [*_profile_names(db, body["profiles"])]
-    if body.get("variance_points"):
-        what.append(f"variance {body['variance_points']} points")
+    what = _profile_names(db, body["profiles"])
     fee = "waived" if body["fee"] == "free" else "charged"
     label = (f"Add-on order {entry['order_number'] or order_id} requested for this sample ({fee}): "
              f"{', '.join(what)}. Reason: {body['reason']}")

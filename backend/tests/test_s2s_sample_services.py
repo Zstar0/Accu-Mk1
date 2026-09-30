@@ -148,6 +148,21 @@ def test_null_snapshot_is_not_given_a_partial_profiles_list(client, db_session, 
     assert _parent(db_session).catalog_snapshot is None
 
 
+def test_added_keys_limits_what_is_added(client, db_session, world):
+    """IS diff present: only added_keys are considered, never the rest of services."""
+    p = _parent(db_session)
+    p.catalog_snapshot = None  # HPLC would be re-added from the full dict
+    db_session.commit()
+    r = _post(client, _body(added_keys=["moisture"]))
+    assert r.status_code == 200, r.text
+    assert r.json() == {"added": ["moisture"], "skipped": [], "ignored": []}
+
+
+def test_added_keys_empty_adds_nothing(client, db_session, world):
+    r = _post(client, _body(added_keys=[]))
+    assert r.status_code == 200 and r.json() == {"added": [], "skipped": [], "ignored": []}
+
+
 def test_published_sample_409(client, db_session, world):
     p = _parent(db_session)
     p.status = "published"

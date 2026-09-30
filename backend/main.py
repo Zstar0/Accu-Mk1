@@ -25570,6 +25570,9 @@ class RegistrySampleServices(BaseModel):
     variance_value: Optional[Any] = None
     event_id: Optional[str] = None
     order_id: Optional[Any] = None
+    # Newly-true keys (IS diff). When present, only these are added; absent =
+    # fall back to every true key in `services`.
+    added_keys: Optional[list[str]] = None
 
 
 class RegistrySampleServicesResponse(BaseModel):
@@ -25596,7 +25599,9 @@ def s2s_add_lims_sample_services(
         logger.warning("addon_services.refused_published sample_id=%s order_id=%s", sample_id, req.order_id)
         raise HTTPException(status_code=409, detail="sample is published")
     try:
-        out = apply_addon_services(db, row, services=req.services, order_id=req.order_id,
+        services = ({k: True for k in req.added_keys} if req.added_keys is not None
+                    else req.services)
+        out = apply_addon_services(db, row, services=services, order_id=req.order_id,
                                    variance_value=req.variance_value, event_id=req.event_id)
         db.commit()
     except Exception:

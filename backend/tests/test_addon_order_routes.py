@@ -146,11 +146,28 @@ def test_null_snapshot_gets_addon_orders_only(client, db_session):
     (_body(profiles=["legacy-thing"]), "native"),
     (_body(profiles=["hplc-purity-identity"]), "already on"),
     (_body(profiles=[], variance_points=0), "nothing selected"),
+    (_body(profiles=[], variance_points=2), "variance is sold through a retest; use the Re-test tab"),
+    (_body(variance_points=1), "variance is sold through a retest; use the Re-test tab"),
 ])
 def test_validation_400s_never_call_is(client, db_session, body, needle):
     _seed(db_session)
     r, post = _post(client, body)
     assert r.status_code == 400 and needle in r.json()["detail"], r.text
+    post.assert_not_called()
+
+
+def test_profile_with_live_parent_rows_is_already_on(client, db_session):
+    """Added by the lab via Manage Analyses (not in the snapshot): still refused."""
+    from lims_analyses.manage_native import add_profile_to_parent
+    _seed(db_session)
+    s = db_session.execute(select(LimsSample).where(LimsSample.sample_id == "P-5191")).scalar_one()
+    usp71 = db_session.execute(select(AnalysisProfile).where(
+        AnalysisProfile.key == "sterility-usp71")).scalar_one()
+    add_profile_to_parent(db_session, parent=s, profile=usp71, user_id=None)
+    db_session.commit()
+    r, post = _post(client, _body())
+    assert r.status_code == 400
+    assert r.json()["detail"] == "profile 'sterility-usp71' is already on P-5191"
     post.assert_not_called()
 
 
