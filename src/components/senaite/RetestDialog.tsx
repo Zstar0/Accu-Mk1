@@ -359,13 +359,16 @@ export function RetestDialog({
               ? ' The new sample is checked in on creation.'
               : '')
     )
+    // Email facts from the WordPress side: payment_complete() on a waived
+    // order sends WooCommerce's order confirmation; a charged retest / new-
+    // sample order is emailed an invoice with the pay link; the same-sample
+    // addon-order route leaves a charged order pending with no email.
     outcome.push(
       waived
-        ? 'No payment is needed.'
+        ? "Email: the customer gets WooCommerce's order confirmation now (no payment needed)."
         : sameSample
-          ? // The addon-order route leaves the order pending without an invoice email.
-            'No payment email is sent; copy the payment link from the Orders tab.'
-          : 'The customer is emailed an invoice with the payment link.'
+          ? 'Email: none now; copy the payment link from the Orders tab. The order confirmation goes out when the customer pays.'
+          : 'Email: the customer is sent an invoice with the payment link now; the order confirmation follows when they pay.'
     )
   }
 

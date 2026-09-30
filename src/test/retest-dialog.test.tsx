@@ -254,7 +254,7 @@ describe('RetestDialog overlay v2', () => {
       'P-9001 is unchanged and stays linked to the new sample.'
     )
     expect(outcome).toHaveTextContent(
-      'The customer is emailed an invoice with the payment link.'
+      'Email: the customer is sent an invoice with the payment link now; the order confirmation follows when they pay.'
     )
     expect(disabledReason()).toHaveTextContent('Enter a reason')
     await user.type(screen.getByLabelText('Reason (required)'), 'purity re-run')
@@ -777,7 +777,7 @@ describe('RetestDialog overlay v2', () => {
       'No new sample; P-9001 keeps its current results.'
     )
     expect(outcome).toHaveTextContent(
-      'No payment email is sent; copy the payment link from the Orders tab.'
+      'Email: none now; copy the payment link from the Orders tab. The order confirmation goes out when the customer pays.'
     )
     expect(outcome).not.toHaveTextContent('new sample is created')
     const summary = screen.getByTestId('retest-summary')
@@ -799,7 +799,9 @@ describe('RetestDialog overlay v2', () => {
     expect(outcome).toHaveTextContent(
       'At once: Rapid Sterility (PCR) added to P-9001; needs 2 more vials from the customer.'
     )
-    expect(outcome).toHaveTextContent('No payment is needed.')
+    expect(outcome).toHaveTextContent(
+      "Email: the customer gets WooCommerce's order confirmation now (no payment needed)."
+    )
     await user.type(screen.getByLabelText('Reason (required)'), 'add usp71')
     await user.click(
       screen.getByRole('button', { name: 'Add services to P-9001' })
