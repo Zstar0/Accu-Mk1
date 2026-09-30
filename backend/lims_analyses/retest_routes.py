@@ -341,9 +341,17 @@ def _record_addon_order(db: Session, sample: LimsSample, out: dict, body: dict, 
     from lims_analyses.retest_carry import _event
     out = out if isinstance(out, dict) else {}
     order_id = out.get("order_id")
+    # A waived order is applied synchronously inside the IS call (WP ->
+    # payment_complete -> IS -> Mk1 s2s), which rewrote this sample's snapshot
+    # while we held a stale copy. Reload before merging, and never lose an
+    # applied flag the s2s path already set.
+    db.refresh(sample)
+    previous = next((a for a in _addon_orders(sample) if str(a.get("order_id")) == str(order_id)), {})
     entry = {"order_id": order_id, "order_number": out.get("order_number"),
              "status": out.get("status"), "requested_at": body["requested_at"],
              "profiles": body["profiles"], "fee": body["fee"]}
+    if previous.get("applied") or set(body["profiles"]) <= set(snapshot_profile_keys(sample)):
+        entry["applied"] = True
     kept = [a for a in _addon_orders(sample) if str(a.get("order_id")) != str(order_id)]
     sample.catalog_snapshot = {**(sample.catalog_snapshot or {}), "addon_orders": [*kept, entry]}
     what = _profile_names(db, body["profiles"])

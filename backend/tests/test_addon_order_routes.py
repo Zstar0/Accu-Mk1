@@ -119,6 +119,39 @@ def test_success_stores_order_on_snapshot_and_emits_event(client, db_session):
     assert not any(ord(c) in (0x2013, 0x2014) for c in ev.details["label"])
 
 
+def test_snapshot_rewritten_during_is_call_is_not_overwritten(client, db_session):
+    """A waived order is applied inside the IS round-trip (WP -> IS -> Mk1 s2s):
+    the route must reload the sample and keep the applied flag and profiles."""
+    _seed(db_session)
+    from database import SessionLocal
+    resp = MagicMock(status_code=200)
+    resp.json.return_value = IS_OK
+
+    def during_is_call(*_a, **_k):
+        other = SessionLocal()
+        try:
+            o = other.execute(select(LimsSample).where(LimsSample.sample_id == "P-5191")).scalar_one()
+            snap = dict(o.catalog_snapshot or {})
+            snap["profiles"] = [*snap.get("profiles", []), {"key": "sterility-usp71", "name": "Sterility USP 71"}]
+            snap["addon_orders"] = [{"order_id": 8611, "order_number": "8611", "status": "completed",
+                                     "profiles": ["sterility-usp71"], "fee": "free", "applied": True}]
+            o.catalog_snapshot = snap
+            other.commit()
+        finally:
+            other.close()
+        return resp
+
+    with (patch.dict(os.environ, {"INTEGRATION_SERVICE_URL": "http://is", "ACCU_MK1_API_KEY": "k"}),
+          patch("lims_analyses.retest_routes.requests.post", side_effect=during_is_call)):
+        r = client.post("/api/samples/P-5191/addon-order", json=_body())
+    assert r.status_code == 200, r.text
+    db_session.expire_all()
+    s = db_session.execute(select(LimsSample).where(LimsSample.sample_id == "P-5191")).scalar_one()
+    [entry] = s.catalog_snapshot["addon_orders"]
+    assert entry["applied"] is True
+    assert "sterility-usp71" in [p["key"] for p in s.catalog_snapshot["profiles"]]
+
+
 def test_same_order_id_replaces_entry(client, db_session):
     _seed(db_session)
     _post(client, _body())
