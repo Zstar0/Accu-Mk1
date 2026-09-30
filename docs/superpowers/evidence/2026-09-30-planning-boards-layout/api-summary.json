@@ -1,0 +1,76 @@
+{
+  "run": "wg98",
+  "seed": {
+    "slug": "org-wg98",
+    "boss": 81,
+    "reportA": 82,
+    "reportB": 83
+  },
+  "drawn_edge": [
+    {
+      "id": 22,
+      "board_id": 31,
+      "source_id": 82,
+      "target_id": 81,
+      "kind": "reports_to",
+      "label": null
+    },
+    {
+      "id": 23,
+      "board_id": 31,
+      "source_id": 83,
+      "target_id": 81,
+      "kind": "reports_to",
+      "label": null
+    }
+  ],
+  "layout": {
+    "before": {
+      "81": {
+        "x": 300,
+        "y": 60
+      },
+      "82": {
+        "x": 80,
+        "y": 300
+      },
+      "83": {
+        "x": 420,
+        "y": 220
+      }
+    },
+    "after": {
+      "81": {
+        "x": 244,
+        "y": 60
+      },
+      "82": {
+        "x": 346,
+        "y": 156
+      },
+      "83": {
+        "x": 80,
+        "y": 156
+      }
+    }
+  },
+  "layout_undone": true,
+  "retyped_edges": [
+    {
+      "id": 23,
+      "board_id": 31,
+      "source_id": 83,
+      "target_id": 81,
+      "kind": "reports_to",
+      "label": null
+    },
+    {
+      "id": 24,
+      "board_id": 31,
+      "source_id": 81,
+      "target_id": 82,
+      "kind": "related",
+      "label": null
+    }
+  ]
+}
