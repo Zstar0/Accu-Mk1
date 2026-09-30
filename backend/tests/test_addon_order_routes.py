@@ -230,13 +230,84 @@ def test_fee_must_be_paid_or_free(client, db_session):
     post.assert_not_called()
 
 
-def test_is_error_maps_to_502_and_stores_nothing(client, db_session):
-    _seed(db_session)
-    r, _ = _post(client, _body(), status_code=409)
-    assert r.status_code == 502 and r.json()["detail"] == "Integration Service returned 409"
+def _stored_orders(db_session):
     db_session.expire_all()
     s = db_session.execute(select(LimsSample).where(LimsSample.sample_id == "P-5191")).scalar_one()
-    assert "addon_orders" not in s.catalog_snapshot
+    return s.catalog_snapshot.get("addon_orders")
+
+
+def test_is_error_4xx_relayed_5xx_502_and_stores_nothing(client, db_session):
+    _seed(db_session)
+    r, _ = _post(client, _body(), status_code=409, resp_json={
+        "detail": {"code": "already_on_sample", "message": "sterility-usp71 is already on P-5191"}})
+    assert r.status_code == 409 and r.json()["detail"] == "sterility-usp71 is already on P-5191"
+    assert _stored_orders(db_session) is None
+    r, _ = _post(client, _body(), status_code=400, resp_json={"detail": "invalid_profile"})
+    assert r.status_code == 400 and r.json()["detail"] == "invalid_profile"
+    r, _ = _post(client, _body(), status_code=500)
+    assert r.status_code == 502 and r.json()["detail"] == "Integration Service returned 500"
+    assert _stored_orders(db_session) is None
+
+
+def test_is_4xx_non_json_falls_back_to_raw_text(client, db_session):
+    _seed(db_session)
+    resp = MagicMock(status_code=404, text="sample in no order")
+    resp.json.side_effect = ValueError("not json")
+    with patch.dict(os.environ, ENV), patch("lims_analyses.retest_routes.requests.post", return_value=resp):
+        r = client.post("/api/samples/P-5191/addon-order", json=_body())
+    assert r.status_code == 404 and r.json()["detail"] == "sample in no order"
+
+
+@pytest.mark.parametrize("status", ["cancelled", "rejected"])
+def test_terminal_sample_400(client, db_session, status):
+    _seed(db_session, status=status)
+    r, post = _post(client, _body())
+    assert r.status_code == 400 and r.json()["detail"] == f"sample is {status}; use the retest route"
+    post.assert_not_called()
+
+
+def test_replayed_create_logs_one_event(client, db_session):
+    _seed(db_session)
+    _post(client, _body())
+    _post(client, _body())
+    assert len(db_session.execute(select(LimsSubSampleEvent).where(
+        LimsSubSampleEvent.event == "addon_order_requested")).scalars().all()) == 1
+
+
+def test_options_staff_addon_without_mk1_entry_applied_from_wp_status(client, db_session):
+    _seed(db_session)
+    ctx = {"order": None, "retest_fee": None, "addons": {}, "variance": {},
+           "retest_orders": [
+               {"order_id": 9001, "kind": "addon", "same_sample": True, "status": "pending"},
+               {"order_id": 9002, "kind": "addon", "same_sample": True, "status": "processing"},
+               {"order_id": 9003, "kind": "addon", "same_sample": True, "status": "completed"}]}
+    resp = MagicMock(status_code=200)
+    resp.json.return_value = ctx
+    with patch.dict(os.environ, ENV), patch("lims_analyses.retest_routes.requests.get", return_value=resp):
+        a, b, c = client.get("/api/samples/P-5191/retest-options").json()["context"]["orders"]
+    assert a["applied"] is False and b["applied"] is True and c["applied"] is True
+
+
+def test_reprovision_keeps_addon_orders(db_session, monkeypatch):
+    from types import SimpleNamespace
+    s = LimsSample(sample_id="P-7000", status="received",
+                   catalog_snapshot={"profiles": [], "addon_orders": [{"order_id": 1, "applied": True}]})
+    db_session.add(s)
+    db_session.commit()
+    admin = SimpleNamespace(id=7, role="admin", email="a@test")
+    app.dependency_overrides[get_db] = lambda: (yield db_session)
+    app.dependency_overrides[auth.get_current_user] = lambda: admin
+    app.dependency_overrides[auth.require_admin] = lambda: admin
+    monkeypatch.setattr("sub_samples.service.fetch_sample_services",
+                        lambda _sid: {"services": {"x": True}, "package": None})
+    try:
+        r = TestClient(app).post("/lims-samples/P-7000/reprovision-snapshot")
+    finally:
+        for dep in (get_db, auth.get_current_user, auth.require_admin):
+            app.dependency_overrides.pop(dep, None)
+    assert r.status_code == 200, r.text
+    snap = r.json()["catalog_snapshot"]
+    assert snap["addon_orders"] == [{"order_id": 1, "applied": True}] and "resolved_at" in snap
 
 
 def test_is_unreachable_502(client, db_session):

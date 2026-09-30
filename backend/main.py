@@ -25595,9 +25595,11 @@ def s2s_add_lims_sample_services(
     row = db.execute(select(LimsSample).where(LimsSample.sample_id == sample_id)).scalar_one_or_none()
     if row is None:
         raise HTTPException(status_code=404, detail=f"sample {sample_id!r} not known to Mk1")
-    if row.status == "published":
-        logger.warning("addon_services.refused_published sample_id=%s order_id=%s", sample_id, req.order_id)
-        raise HTTPException(status_code=409, detail="sample is published")
+    from lims_analyses.retest_routes import TERMINAL_SAMPLE_STATUSES
+    if row.status in TERMINAL_SAMPLE_STATUSES:
+        logger.warning("addon_services.refused_terminal sample_id=%s status=%s order_id=%s",
+                       sample_id, row.status, req.order_id)
+        raise HTTPException(status_code=409, detail=f"sample is {row.status}")
     try:
         services = ({k: True for k in req.added_keys} if req.added_keys is not None
                     else req.services)
@@ -26686,6 +26688,8 @@ def reprovision_catalog_snapshot(
     new_snapshot = compute_catalog_snapshot(
         db, raw.get("services") or {}, raw.get("package"),
     )
+    # Keep keys the builder does not produce (addon_orders, retest rider).
+    new_snapshot = {**(parent.catalog_snapshot or {}), **new_snapshot}
 
     user_id = getattr(current_user, "id", None)
     was_null = parent.catalog_snapshot is None
