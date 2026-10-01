@@ -13,12 +13,13 @@ from __future__ import annotations
 import logging
 from dataclasses import dataclass
 from datetime import datetime
+from fnmatch import fnmatchcase
 
-from sqlalchemy import select
+from sqlalchemy import or_, select
 from sqlalchemy.orm import Session
 
 from lims_analyses.service import BadRequestError
-from models import AnalysisProfile, LimsAnalysis, LimsSample
+from models import AnalysisProfile, AnalysisService, LimsAnalysis, LimsSample
 
 logger = logging.getLogger(__name__)
 
@@ -27,6 +28,46 @@ CARRIED = "carried"
 HPLC_PROFILE_KEYS = frozenset({"hplcpurity_identity", "hplc-purity-identity"})
 _CARRY_SOURCE_STATES = ("verified", "published")
 _FEES = ("paid", "free")
+# Catalog rows that are aliases of a native profile or are sold through another control
+# (variance = points on the Re-test tab). Never offered as add-ons. An alias may still be
+# an effective (re-test) key when it is the active member of a legacy key family.
+LEGACY_ADDON_EXCLUDE = frozenset({"hplcpurity_identity", "endotoxin", "sterility_pcr", "variance"})
+
+# SENAITE-era keyword -> profile key FAMILY, for samples registered before the catalog
+# (spec docs/superpowers/specs/2026-09-30-retest-legacy-fallback-and-combined.md). The
+# effective key is the first family member whose profile exists and is active (prod:
+# hplc-purity-identity is inactive and the alias hplcpurity_identity is the live one).
+# Case-sensitive fnmatch patterns, first match wins. Only SENAITE-origin rows are
+# classified here; mk1-origin rows (prod USP-71 BACTERIA/FUNGI included) resolve
+# through profile membership. Bac Water lists the spec names plus the keywords the
+# SENAITE services actually carry (Benzyl_Alcohol_Assay, FILL-NET-CONTENT, PH-DETERM).
+_HPLC_FAMILY = ("hplc-purity-identity", "hplcpurity_identity")
+_ENDO_FAMILY = ("endotoxin-usp85-lal", "endotoxin")
+_PCR_FAMILY = ("rapid-sterility-pcr", "sterility_pcr")
+_BAC_WATER_FAMILY = ("bac_water_panel",)
+LEGACY_KEYWORD_PROFILES: tuple[tuple[str, tuple[str, ...]], ...] = (
+    ("HPLC-PUR", _HPLC_FAMILY),
+    ("PEPT-Total", _HPLC_FAMILY),
+    ("HPLC-ID", _HPLC_FAMILY),
+    ("ID_*", _HPLC_FAMILY),
+    ("ANALYTE-*-PUR", _HPLC_FAMILY),
+    ("ANALYTE-*-QTY", _HPLC_FAMILY),
+    ("BLEND-PUR", _HPLC_FAMILY),
+    ("HPLC-BLEND-*", _HPLC_FAMILY),
+    ("ENDO-LAL", _ENDO_FAMILY),
+    ("STER-PCR", _PCR_FAMILY),
+    ("PCR-BACTERIA", _PCR_FAMILY),      # older split form (service.py legacy map)
+    ("PCR-FUNGI", _PCR_FAMILY),
+    ("BA", _BAC_WATER_FAMILY),
+    ("PH", _BAC_WATER_FAMILY),
+    ("FILL-VOL", _BAC_WATER_FAMILY),
+    ("Benzyl_Alcohol_Assay", _BAC_WATER_FAMILY),
+    ("FILL-NET-CONTENT", _BAC_WATER_FAMILY),
+    ("PH-DETERM", _BAC_WATER_FAMILY),
+)
+_DEAD_STATES = ("rejected", "retracted")
+_DEAD_MIRROR_STATES = ("rejected", "retracted", "cancelled", "registered")
+LEGACY_CARRY_REASON = "SENAITE-era result: cannot be carried, re-test it instead"
 
 
 @dataclass(frozen=True)
@@ -136,6 +177,88 @@ def snapshot_profile_keys(sample: LimsSample) -> list[str]:
     return [p.get("key") for p in (snap.get("profiles") or []) if p.get("key")]
 
 
+@dataclass(frozen=True)
+class EffectiveProfile:
+    key: str
+    legacy: bool
+    source: str            # "snapshot" | "rows"
+
+
+def _legacy_family(keyword: str | None) -> tuple[str, ...]:
+    return next((fam for pat, fam in LEGACY_KEYWORD_PROFILES if fnmatchcase(keyword or "", pat)), ())
+
+
+def effective_profiles(db: Session, sample: LimsSample) -> list[EffectiveProfile]:
+    """The original's profile keys for the retest flow. The frozen snapshot
+    when it has any; otherwise derived from LIVE parent-tier rows (samples
+    registered before the catalog have no snapshot profiles). A key is
+    legacy only when every row behind it is SENAITE-origin."""
+    from lims_analyses.manage_native import _is_all_native  # local: import cycle
+    snap = snapshot_profile_keys(sample)
+    if snap:
+        return [EffectiveProfile(k, False, "snapshot") for k in snap]
+    rows = [(r.keyword, svc) for r, svc in _live_parent_rows(db, sample)]
+    if not rows:
+        return []
+    active = [p for p in db.execute(select(AnalysisProfile).where(
+        AnalysisProfile.active.is_(True)
+    ).order_by(AnalysisProfile.sort_order, AnalysisProfile.key)).scalars()]
+    active_keys = {p.key for p in active}
+    found: dict[str, bool] = {}            # key -> legacy
+    unknown: list[str] = []
+    for keyword, svc in rows:
+        if svc is not None and (svc.origin or "") == "mk1":
+            key = next((p.key for p in active if p.key not in LEGACY_ADDON_EXCLUDE
+                        and svc.id in {m.id for m in p.analysis_services} and _is_all_native(p)), None)
+            legacy = False
+        else:
+            family = _legacy_family((svc.keyword if svc is not None else None) or keyword)
+            key = next((k for k in family if k in active_keys), None)
+            legacy = True
+        if key is None:
+            unknown.append(keyword)
+            continue
+        found[key] = found.get(key, True) and legacy     # native wins the dedupe
+    if unknown:
+        logger.debug("retest.effective_profiles.unknown sample_id=%s keywords=%s",
+                     sample.sample_id, sorted({k or "" for k in unknown}))
+    return [EffectiveProfile(p.key, found[p.key], "rows") for p in active if p.key in found]
+
+
+_MIRROR_STATE_RANK = {"published": 3, "verified": 2, "to_be_verified": 1}
+
+
+def legacy_mirror_state(db: Session, sample: LimsSample, key: str) -> str | None:
+    """Best SENAITE mirror_review_state among the live shadow rows behind a
+    legacy effective profile: 'published' > 'verified' > 'to_be_verified';
+    anything else is None."""
+    best = None
+    for row, svc in _live_parent_rows(db, sample):
+        if row.provenance != "shadow" or (svc is not None and (svc.origin or "") == "mk1"):
+            continue
+        if key not in _legacy_family((svc.keyword if svc is not None else None) or row.keyword):
+            continue
+        if _MIRROR_STATE_RANK.get(row.mirror_review_state or "", 0) > _MIRROR_STATE_RANK.get(best or "", 0):
+            best = row.mirror_review_state
+    return best
+
+
+def _live_parent_rows(db: Session, sample: LimsSample) -> list:
+    """(row, service) for LIVE parent-tier canonical/shadow rows on the sample."""
+    return db.execute(
+        select(LimsAnalysis, AnalysisService)
+        .outerjoin(AnalysisService, AnalysisService.id == LimsAnalysis.analysis_service_id)
+        .where(
+            LimsAnalysis.lims_sample_pk == sample.id,
+            LimsAnalysis.lims_sub_sample_pk.is_(None),
+            LimsAnalysis.provenance.in_(("canonical", "shadow")),
+            LimsAnalysis.review_state.notin_(_DEAD_STATES),
+            or_(LimsAnalysis.provenance != "shadow",
+                LimsAnalysis.mirror_review_state.is_(None),
+                LimsAnalysis.mirror_review_state.notin_(_DEAD_MIRROR_STATES)),
+        )).all()
+
+
 def _live_carry_rows(db: Session, original: LimsSample, service_ids: set[int]) -> list[LimsAnalysis]:
     """Parent-tier canonical rows on the original that a carry may copy."""
     if not service_ids:
@@ -192,23 +315,40 @@ def _carry_plan(db: Session, original: LimsSample, prof: AnalysisProfile):
     return rows, withdrawn
 
 
-def carry_eligible_profile_keys(db: Session, original: LimsSample) -> set[str]:
-    """Snapshot profiles on the original that _carry_plan accepts.
+def carry_eligible_profile_keys(db: Session, original: LimsSample,
+                                effective: list[EffectiveProfile] | None = None) -> set[str]:
+    """Effective profiles on the original that _carry_plan accepts. A legacy
+    (SENAITE-era) profile never is: nothing native to copy.
 
     A member with no row at any tier on the original does not block the
     carry: such members were never seeded (e.g. the blend aggregate services
     on a single-analyte sample), so there is nothing pending to wait for."""
-    profiles = _profiles_by_key(db, snapshot_profile_keys(original))
+    eff = effective if effective is not None else effective_profiles(db, original)
+    profiles = _profiles_by_key(db, [e.key for e in eff if not e.legacy])
     return {key for key, prof in profiles.items() if _carry_plan(db, original, prof) is not None}
+
+
+def carry_blocked_reason(db: Session, original: LimsSample, profile: EffectiveProfile,
+                         eligible: set[str]) -> str | None:
+    """Why the overlay's Carry box is disabled; None exactly when eligible."""
+    if profile.key in eligible:
+        return None
+    if profile.legacy:
+        return LEGACY_CARRY_REASON
+    prof = _profiles_by_key(db, [profile.key]).get(profile.key)
+    if prof is None or not _live_carry_rows(db, original, {s.id for s in prof.analysis_services}):
+        return "not verified yet"
+    return "a member result is still pending"
 
 
 def validate_retest_spec(db: Session, *, original: LimsSample, spec: RetestSpec) -> list[str]:
     """Raise BadRequestError on any hard rule; return the retest/carry keys the
-    original's snapshot does not have (soft: caller mints without them and warns)."""
+    original's effective profiles do not have (soft: caller mints without them and warns)."""
     if spec.retest_of_sample_id != original.sample_id:
         raise BadRequestError(
             f"retest_spec is for {spec.retest_of_sample_id!r}, not {original.sample_id!r}")
-    have = set(snapshot_profile_keys(original))
+    eff = effective_profiles(db, original)
+    have = {e.key for e in eff}
     unknown_drop = [k for k in spec.drop if k not in have]
     if unknown_drop:
         raise BadRequestError(f"not on {original.sample_id}, cannot be dropped: {unknown_drop}")
@@ -219,7 +359,10 @@ def validate_retest_spec(db: Session, *, original: LimsSample, spec: RetestSpec)
     unknown = [k for k in spec.add_profiles if k not in known]
     if unknown:
         raise BadRequestError(f"unknown profile(s): {unknown}")
-    eligible = carry_eligible_profile_keys(db, original)
+    legacy = [k for k in spec.carry if k in {e.key for e in eff if e.legacy}]
+    if legacy:
+        raise BadRequestError(f"cannot carry SENAITE-era result(s): {legacy}; re-test them instead")
+    eligible = carry_eligible_profile_keys(db, original, eff)
     not_eligible = [k for k in spec.carry if k in have and k not in eligible]
     if not_eligible:
         raise BadRequestError(
@@ -227,12 +370,16 @@ def validate_retest_spec(db: Session, *, original: LimsSample, spec: RetestSpec)
     return [k for k in (*spec.retest, *spec.carry) if k not in have]
 
 
-def dropped_profile_keys(original: LimsSample, spec: RetestSpec) -> list[str]:
-    """Original snapshot profiles in neither retest nor carry: recorded as
-    drop regardless of what the client's own `drop` list said (a 1.29 client
-    omits it entirely; an incomplete/omitted drop is filled in here)."""
+def dropped_profile_keys(original: LimsSample, spec: RetestSpec,
+                         db: Session | None = None) -> list[str]:
+    """Original profiles in neither retest nor carry: recorded as drop
+    regardless of what the client's own `drop` list said (a 1.29 client
+    omits it entirely; an incomplete/omitted drop is filled in here). With
+    `db`, the effective keys (rows-derived when the snapshot is empty)."""
     demand = set(spec.retest) | set(spec.carry)
-    return [k for k in snapshot_profile_keys(original) if k not in demand]
+    have = ([e.key for e in effective_profiles(db, original)] if db is not None
+            else snapshot_profile_keys(original))
+    return [k for k in have if k not in demand]
 
 
 def _ultimate_source(db: Session, row: LimsAnalysis) -> LimsAnalysis:
@@ -474,7 +621,7 @@ def apply_retest_spec(db: Session, *, parent: LimsSample, raw_spec: dict,
         # The registration fallback may have seeded + stamped the FULL
         # services dict before this ran (C2): freeze the demand profiles only.
         snap["profiles"] = _demand_snapshot_profiles(db, demand, package, snap)
-    drop_keys = dropped_profile_keys(original, spec)
+    drop_keys = dropped_profile_keys(original, spec, db)
     snap["retest"] = {**spec.as_dict(), "missing": missing, "drop": drop_keys}
     parent.catalog_snapshot = snap
 
