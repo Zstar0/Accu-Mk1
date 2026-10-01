@@ -30,6 +30,15 @@ def db_session():
     s.close()
 
 
+@pytest.fixture(autouse=True)
+def _is_context_down():
+    """The create routes look up the IS order context before posting (409 guard);
+    default it to unreachable so no test touches the network. A test's own
+    patch of requests.get overrides this one."""
+    with patch("lims_analyses.retest_routes.requests.get", side_effect=ConnectionError("down")):
+        yield
+
+
 @pytest.fixture
 def client(db_session):
     app.dependency_overrides[get_db] = lambda: (yield db_session)
@@ -114,6 +123,17 @@ def test_options_lists_profiles_eligibility_addons_and_prices(client, db_session
     assert body["context"]["retest_fee"]["price"] == 85.0
     [pending] = body["context"]["pending_orders"]
     assert pending["order_number"] == "WP-7501" and pending["payment_url"].endswith("/501")
+    # Spec 2026-09-30 regression pin: a snapshot sample's profile rows are exactly
+    # the pre-existing fields plus the two additive ones.
+    assert body["profiles"] == [
+        {"key": "hplcpurity_identity", "name": "HPLC", "carry_eligible": False,
+         "state": "parent_to_verify", "verified_at": None, "state_label": "Pending",
+         "legacy": False, "carry_blocked_reason": "not verified yet"},
+        {"key": "heavy_metals", "name": "Heavy Metals", "carry_eligible": True,
+         "state": "published", "verified_at": "2026-09-20T10:00:00", "state_label": "Verified 9/20",
+         "legacy": False, "carry_blocked_reason": None},
+    ]
+    assert body["profiles_source"] == "snapshot" and body["context_error"] is None
 
 
 def test_options_prices_addons_keyed_by_native_key(client, db_session):
@@ -268,3 +288,60 @@ def test_options_orders_default_to_empty_list_when_absent(client, db_session):
     with patch.dict(os.environ, {"INTEGRATION_SERVICE_URL": "http://is", "ACCU_MK1_API_KEY": "k"}),             patch("lims_analyses.retest_routes.requests.get", return_value=resp):
         body = client.get("/api/samples/P-2799/retest-options").json()
     assert body["context"]["orders"] == []
+
+
+def _ctx_error_resp(status_code, detail):
+    resp = MagicMock(status_code=status_code, text="x")
+    resp.json.return_value = {"detail": detail}
+    return resp
+
+
+@pytest.mark.parametrize("resp,kind,message", [
+    (_ctx_error_resp(404, "sample not in any order"), "no_order",
+     "This sample is not linked to any WooCommerce order, so no retest or add-on order can be created."),
+    (_ctx_error_resp(502, "WordPress 404"), "order_missing",
+     "WooCommerce order 7437 no longer exists (it was deleted), so no retest or add-on order can be created."),
+    (_ctx_error_resp(502, "WordPress unreachable"), "unavailable",
+     "Customer and pricing are unavailable right now (Integration Service or WordPress did not answer)."),
+    (_ctx_error_resp(404, "Not Found"), "unavailable",
+     "Customer and pricing are unavailable right now (Integration Service or WordPress did not answer)."),
+])
+def test_options_context_error_kinds(client, db_session, resp, kind, message):
+    _seed(db_session)
+    with patch.dict(os.environ, {"INTEGRATION_SERVICE_URL": "http://is", "ACCU_MK1_API_KEY": "k"}), \
+            patch("lims_analyses.retest_routes.requests.get", return_value=resp):
+        body = client.get("/api/samples/P-2799/retest-options").json()
+    assert body["context_error"] == {"kind": kind, "message": message}
+    assert body["context"] is None and body["prices_available"] is False
+
+
+def test_options_context_error_unavailable_when_unreachable(client, db_session):
+    _seed(db_session)
+    with patch.dict(os.environ, {"INTEGRATION_SERVICE_URL": "http://is", "ACCU_MK1_API_KEY": "k"}):
+        body = client.get("/api/samples/P-2799/retest-options").json()
+    assert body["context_error"]["kind"] == "unavailable"
+
+
+@pytest.mark.parametrize("resp", [_ctx_error_resp(404, "sample not in any order"),
+                                  _ctx_error_resp(502, "WordPress 404")])
+def test_retest_409_when_wp_order_gone_never_posts(client, db_session, resp):
+    _seed(db_session)
+    with patch.dict(os.environ, {"INTEGRATION_SERVICE_URL": "http://is", "ACCU_MK1_API_KEY": "k"}), \
+            patch("lims_analyses.retest_routes.requests.get", return_value=resp), \
+            patch("lims_analyses.retest_routes.requests.post") as post:
+        r = client.post("/api/samples/P-2799/retest", json=_body())
+    assert r.status_code == 409 and "no retest or add-on order can be created" in r.json()["detail"]
+    post.assert_not_called()
+
+
+def test_retest_proceeds_when_context_merely_unavailable(client, db_session):
+    _seed(db_session)
+    ok = MagicMock(status_code=200)
+    ok.json.return_value = {"order_id": 1, "order_number": "WP-1", "status": "pending"}
+    with patch.dict(os.environ, {"INTEGRATION_SERVICE_URL": "http://is", "ACCU_MK1_API_KEY": "k"}), \
+            patch("lims_analyses.retest_routes.requests.get",
+                  return_value=_ctx_error_resp(502, "WordPress unreachable")), \
+            patch("lims_analyses.retest_routes.requests.post", return_value=ok) as post:
+        r = client.post("/api/samples/P-2799/retest", json=_body())
+    assert r.status_code == 200, r.text
+    post.assert_called_once()
