@@ -18,6 +18,7 @@ P-9001 was restored afterwards (17 parent rows, snapshot 3 profiles, status samp
 
 Stack order 3268 (P-5001's) was force-deleted. IS answers 502 `{"error":{"code":"upstream_unavailable","message":"WordPress 404"}}`; `retest-options` -> `context_error: {kind: "order_missing", message: "WooCommerce order 3268 no longer exists (it was deleted), so no retest or add-on order can be created."}`. Overlay: amber note at the top, Create stays disabled with that reason after ticking a re-test, choosing Waived and entering a reason. Defect caught here: the first build classified every IS error as `unavailable` because IS replies with its error envelope, not `detail`.
 
-## Gates on the merged tree
-- backend pytest (retest routes, carry, effective profiles, addon-order, s2s services, apply-retest-spec): 117 passed
-- vitest retest-dialog: 33 passed (42 with use-retest); tsc clean
+## Gates on the merged tree (final head after the opus review round)
+- backend pytest (retest routes, carry, effective profiles, addon-order, s2s services, apply-retest-spec): 120 passed
+- vitest retest-dialog + use-retest: 42 passed; tsc clean
+- review round applied: fixture script refuses without ACCUMARK_STACK_NAME (verified on the stack container with the variable blanked), SENAITE-era decided per row, alias-snapshot rows read through the member-bearing twin, second validation guarded, effective profiles computed once per request; frontend hides the outcome block on a hard stop, names extra vials, aria-describedby on the disabled Create
