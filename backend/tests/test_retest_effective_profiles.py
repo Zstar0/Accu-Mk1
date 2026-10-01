@@ -278,3 +278,45 @@ def test_split_pcr_pair_maps_to_rapid_sterility_with_best_mirror_state(client, d
     [p] = client.get("/api/samples/P-1908/retest-options").json()["profiles"]
     assert (p["state"], p["state_label"], p["verified_at"]) == (
         "to_be_verified", "Awaiting verification (SENAITE)", None)
+
+
+def _hplc_only_legacy(db, *, native_active):
+    svc = _catalog(db)
+    db.execute(AnalysisProfile.__table__.update()
+               .where(AnalysisProfile.key == "hplc-purity-identity").values(active=native_active))
+    s = _sample(db)
+    _shadow(db, s, svc["HPLC-PUR"])
+    _shadow(db, s, svc["ID_BPC157"])
+    db.commit()
+    db.expire_all()
+    return s
+
+
+def test_legacy_hplc_resolves_to_the_active_alias_when_native_is_inactive(client, db_session):
+    """Prod: hplc-purity-identity inactive, hplcpurity_identity active."""
+    s = _hplc_only_legacy(db_session, native_active=False)
+    assert effective_profiles(db_session, s) == [EffectiveProfile("hplcpurity_identity", True, "rows")]
+    body = client.get("/api/samples/P-1908/retest-options").json()
+    [p] = body["profiles"]
+    assert p["key"] == "hplcpurity_identity" and p["legacy"] is True
+    assert p["state_label"] == "Published (SENAITE)"
+    assert body["variance"]["allowed"] is True
+    # The alias may be a re-test profile but never an add-on candidate.
+    assert "hplcpurity_identity" not in [a["key"] for a in body["addons"]]
+
+
+def test_legacy_hplc_prefers_the_native_key_when_both_are_active(db_session):
+    s = _hplc_only_legacy(db_session, native_active=True)
+    assert effective_profiles(db_session, s) == [EffectiveProfile("hplc-purity-identity", True, "rows")]
+
+
+def test_legacy_family_with_no_active_member_is_dropped(db_session):
+    svc = _catalog(db_session)
+    db_session.execute(AnalysisProfile.__table__.update()
+                       .where(AnalysisProfile.key.in_(("endotoxin-usp85-lal", "endotoxin")))
+                       .values(active=False))
+    s = _sample(db_session)
+    _shadow(db_session, s, svc["ENDO-LAL"])
+    db_session.commit()
+    db_session.expire_all()
+    assert effective_profiles(db_session, s) == []

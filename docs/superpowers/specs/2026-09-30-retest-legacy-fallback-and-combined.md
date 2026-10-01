@@ -31,14 +31,20 @@ New `effective_profiles(db, sample) -> list[EffectiveProfile]` where
   `mirror_review_state NOT IN ('rejected','retracted','cancelled','registered')`):
   - a row whose service has `origin == 'mk1'`: the active, all-native `AnalysisProfile` that
     contains that service (first by `sort_order`); `legacy=False`.
-  - a SENAITE-origin row: by keyword family, `legacy=True`:
+  - a SENAITE-origin row: by keyword family, `legacy=True`. Each family is an ordered list of
+    keys and resolves to the FIRST key whose `AnalysisProfile` exists and is active:
     `HPLC-PUR | PEPT-Total | HPLC-ID | ID_* | ANALYTE-*-PUR | ANALYTE-*-QTY | BLEND-PUR | HPLC-BLEND-*`
-    -> `hplc-purity-identity`; `ENDO-LAL` -> `endotoxin-usp85-lal`; `STER-PCR` -> `rapid-sterility-pcr`;
-    bac-water family (`BA`, `PH`, `FILL-VOL`, whatever `bac_water_panel` members are keyed) ->
-    `bac_water_panel`. Unknown keywords are ignored (logged once per sample at debug).
+    -> (`hplc-purity-identity`, `hplcpurity_identity`); `ENDO-LAL` -> (`endotoxin-usp85-lal`,
+    `endotoxin`); `STER-PCR | PCR-BACTERIA | PCR-FUNGI` -> (`rapid-sterility-pcr`, `sterility_pcr`);
+    bac-water family (`BA`, `PH`, `FILL-VOL`, `Benzyl_Alcohol_Assay`, `FILL-NET-CONTENT`,
+    `PH-DETERM`) -> (`bac_water_panel`). Prod and the stack `retest` catalog have
+    `hplc-purity-identity` INACTIVE and the alias `hplcpurity_identity` active, so a legacy HPLC
+    resolves to the alias there. A family with no active member, and unknown keywords, are
+    ignored (logged once per sample at debug).
   - de-duplicated, ordered by profile `sort_order`; `source="rows"`.
-- A key is only returned if that `AnalysisProfile` exists and is active; the legacy alias
-  profiles (`LEGACY_ADDON_EXCLUDE`) are never returned, the NATIVE key is.
+- A key is only returned if that `AnalysisProfile` exists and is active. The alias profiles in
+  `LEGACY_ADDON_EXCLUDE` may be returned as re-test profiles (as the active member of a family)
+  but are never offered as add-ons, and never resolve an mk1-origin row through membership.
 
 `snapshot_profile_keys` stays as is (other callers untouched). Inside the retest flow only,
 `retest_options`, `carry_eligible_profile_keys`, `validate_retest_spec` and

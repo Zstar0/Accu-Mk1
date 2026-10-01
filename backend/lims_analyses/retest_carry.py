@@ -29,34 +29,41 @@ HPLC_PROFILE_KEYS = frozenset({"hplcpurity_identity", "hplc-purity-identity"})
 _CARRY_SOURCE_STATES = ("verified", "published")
 _FEES = ("paid", "free")
 # Catalog rows that are aliases of a native profile or are sold through another control
-# (variance = points on the Re-test tab). Never offered as add-ons, never an effective key.
+# (variance = points on the Re-test tab). Never offered as add-ons. An alias may still be
+# an effective (re-test) key when it is the active member of a legacy key family.
 LEGACY_ADDON_EXCLUDE = frozenset({"hplcpurity_identity", "endotoxin", "sterility_pcr", "variance"})
 
-# SENAITE-era keyword -> NATIVE profile key, for samples registered before the catalog
-# (spec docs/superpowers/specs/2026-09-30-retest-legacy-fallback-and-combined.md).
+# SENAITE-era keyword -> profile key FAMILY, for samples registered before the catalog
+# (spec docs/superpowers/specs/2026-09-30-retest-legacy-fallback-and-combined.md). The
+# effective key is the first family member whose profile exists and is active (prod:
+# hplc-purity-identity is inactive and the alias hplcpurity_identity is the live one).
 # Case-sensitive fnmatch patterns, first match wins. Only SENAITE-origin rows are
 # classified here; mk1-origin rows (prod USP-71 BACTERIA/FUNGI included) resolve
 # through profile membership. Bac Water lists the spec names plus the keywords the
 # SENAITE services actually carry (Benzyl_Alcohol_Assay, FILL-NET-CONTENT, PH-DETERM).
-LEGACY_KEYWORD_PROFILES: tuple[tuple[str, str], ...] = (
-    ("HPLC-PUR", "hplc-purity-identity"),
-    ("PEPT-Total", "hplc-purity-identity"),
-    ("HPLC-ID", "hplc-purity-identity"),
-    ("ID_*", "hplc-purity-identity"),
-    ("ANALYTE-*-PUR", "hplc-purity-identity"),
-    ("ANALYTE-*-QTY", "hplc-purity-identity"),
-    ("BLEND-PUR", "hplc-purity-identity"),
-    ("HPLC-BLEND-*", "hplc-purity-identity"),
-    ("ENDO-LAL", "endotoxin-usp85-lal"),
-    ("STER-PCR", "rapid-sterility-pcr"),
-    ("PCR-BACTERIA", "rapid-sterility-pcr"),      # older split form (service.py legacy map)
-    ("PCR-FUNGI", "rapid-sterility-pcr"),
-    ("BA", "bac_water_panel"),
-    ("PH", "bac_water_panel"),
-    ("FILL-VOL", "bac_water_panel"),
-    ("Benzyl_Alcohol_Assay", "bac_water_panel"),
-    ("FILL-NET-CONTENT", "bac_water_panel"),
-    ("PH-DETERM", "bac_water_panel"),
+_HPLC_FAMILY = ("hplc-purity-identity", "hplcpurity_identity")
+_ENDO_FAMILY = ("endotoxin-usp85-lal", "endotoxin")
+_PCR_FAMILY = ("rapid-sterility-pcr", "sterility_pcr")
+_BAC_WATER_FAMILY = ("bac_water_panel",)
+LEGACY_KEYWORD_PROFILES: tuple[tuple[str, tuple[str, ...]], ...] = (
+    ("HPLC-PUR", _HPLC_FAMILY),
+    ("PEPT-Total", _HPLC_FAMILY),
+    ("HPLC-ID", _HPLC_FAMILY),
+    ("ID_*", _HPLC_FAMILY),
+    ("ANALYTE-*-PUR", _HPLC_FAMILY),
+    ("ANALYTE-*-QTY", _HPLC_FAMILY),
+    ("BLEND-PUR", _HPLC_FAMILY),
+    ("HPLC-BLEND-*", _HPLC_FAMILY),
+    ("ENDO-LAL", _ENDO_FAMILY),
+    ("STER-PCR", _PCR_FAMILY),
+    ("PCR-BACTERIA", _PCR_FAMILY),      # older split form (service.py legacy map)
+    ("PCR-FUNGI", _PCR_FAMILY),
+    ("BA", _BAC_WATER_FAMILY),
+    ("PH", _BAC_WATER_FAMILY),
+    ("FILL-VOL", _BAC_WATER_FAMILY),
+    ("Benzyl_Alcohol_Assay", _BAC_WATER_FAMILY),
+    ("FILL-NET-CONTENT", _BAC_WATER_FAMILY),
+    ("PH-DETERM", _BAC_WATER_FAMILY),
 )
 _DEAD_STATES = ("rejected", "retracted")
 _DEAD_MIRROR_STATES = ("rejected", "retracted", "cancelled", "registered")
@@ -177,8 +184,8 @@ class EffectiveProfile:
     source: str            # "snapshot" | "rows"
 
 
-def _legacy_profile_key(keyword: str | None) -> str | None:
-    return next((key for pat, key in LEGACY_KEYWORD_PROFILES if fnmatchcase(keyword or "", pat)), None)
+def _legacy_family(keyword: str | None) -> tuple[str, ...]:
+    return next((fam for pat, fam in LEGACY_KEYWORD_PROFILES if fnmatchcase(keyword or "", pat)), ())
 
 
 def effective_profiles(db: Session, sample: LimsSample) -> list[EffectiveProfile]:
@@ -195,19 +202,18 @@ def effective_profiles(db: Session, sample: LimsSample) -> list[EffectiveProfile
         return []
     active = [p for p in db.execute(select(AnalysisProfile).where(
         AnalysisProfile.active.is_(True)
-    ).order_by(AnalysisProfile.sort_order, AnalysisProfile.key)).scalars()
-        if p.key not in LEGACY_ADDON_EXCLUDE]
+    ).order_by(AnalysisProfile.sort_order, AnalysisProfile.key)).scalars()]
     active_keys = {p.key for p in active}
     found: dict[str, bool] = {}            # key -> legacy
     unknown: list[str] = []
     for keyword, svc in rows:
         if svc is not None and (svc.origin or "") == "mk1":
-            key = next((p.key for p in active
-                        if svc.id in {m.id for m in p.analysis_services} and _is_all_native(p)), None)
+            key = next((p.key for p in active if p.key not in LEGACY_ADDON_EXCLUDE
+                        and svc.id in {m.id for m in p.analysis_services} and _is_all_native(p)), None)
             legacy = False
         else:
-            key = _legacy_profile_key((svc.keyword if svc is not None else None) or keyword)
-            key = key if key in active_keys else None
+            family = _legacy_family((svc.keyword if svc is not None else None) or keyword)
+            key = next((k for k in family if k in active_keys), None)
             legacy = True
         if key is None:
             unknown.append(keyword)
@@ -230,7 +236,7 @@ def legacy_mirror_state(db: Session, sample: LimsSample, key: str) -> str | None
     for row, svc in _live_parent_rows(db, sample):
         if row.provenance != "shadow" or (svc is not None and (svc.origin or "") == "mk1"):
             continue
-        if _legacy_profile_key((svc.keyword if svc is not None else None) or row.keyword) != key:
+        if key not in _legacy_family((svc.keyword if svc is not None else None) or row.keyword):
             continue
         if _MIRROR_STATE_RANK.get(row.mirror_review_state or "", 0) > _MIRROR_STATE_RANK.get(best or "", 0):
             best = row.mirror_review_state
