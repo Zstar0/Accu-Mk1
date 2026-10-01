@@ -258,6 +258,7 @@ import { VialsQuickLookDialog } from '@/components/senaite/VialsQuickLookDialog'
 import { EntityFlagButton } from '@/components/flags/EntityFlagButton'
 import { useRegisterActiveFlagEntity } from '@/components/flags/use-active-flag-entity'
 import { useAuthStore } from '@/store/auth-store'
+import { useCoaRegenStore } from '@/store/coa-regen-store'
 import {
   Eye,
   Microscope,
@@ -600,6 +601,21 @@ export function selectEarlierVersions(
 }
 
 /**
+ * The ledger generation behind the certificate a SENAITE-era card displays,
+ * matched by its verification code. No stand-in: when the ledger has moved on
+ * (a regen whose SENAITE attachment failed leaves the old report attached
+ * while a newer code is published), the card's Manage controls must not act
+ * on the newer root, so the caller gets null and shows no Manage.
+ */
+export function selectDisplayedGeneration(
+  gens: ExplorerCOAGeneration[],
+  verificationCode: string | null | undefined
+): ExplorerCOAGeneration | null {
+  if (!verificationCode) return null
+  return gens.find(g => g.verification_code === verificationCode) ?? null
+}
+
+/**
  * Select root (primary) COA generations — those with no parent generation —
  * sorted newest first. Used as a fallback for the "Generated COAs" card when
  * SENAITE has no attached ARReport (e.g. dev stacks lacking the prod-only
@@ -780,23 +796,28 @@ function GeneratedCOAPdfButton({
  * skip_additional_coas, mints a new primary code, and only best-effort
  * attaches to SENAITE — additional COAs keep their codes.
  */
-function PrimaryRegenButton({
+export function PrimaryRegenButton({
   sampleId,
   onRegenerated,
 }: {
   sampleId: string
   onRegenerated: () => void
 }) {
-  const [regenerating, setRegenerating] = useState(false)
+  // Store-backed, not local: this button is mounted inside the Manage popover,
+  // which unmounts on close. The in-flight flag has to outlive that.
+  const regenerating = useCoaRegenStore(s => s.inFlight[sampleId] === true)
+  const startRegen = useCoaRegenStore(s => s.start)
+  const finishRegen = useCoaRegenStore(s => s.finish)
 
   const handleRegen = async () => {
+    if (regenerating) return
     const confirmed = window.confirm(
       `Regenerate & republish the primary COA for ${sampleId}?\n\n` +
         `This mints a NEW verification code for the primary.\n` +
         `Additional COAs keep their existing codes (untouched).`
     )
     if (!confirmed) return
-    setRegenerating(true)
+    startRegen(sampleId)
     try {
       const result = await regenPrimaryCOA(sampleId)
       if (result.success) {
@@ -814,7 +835,7 @@ function PrimaryRegenButton({
         description: err instanceof Error ? err.message : 'Unknown error',
       })
     } finally {
-      setRegenerating(false)
+      finishRegen(sampleId)
     }
   }
 
@@ -6807,15 +6828,10 @@ export function SampleDetails() {
                         coa={data.published_coa}
                         sampleId={data.sample_id}
                         verificationCode={data.coa.verification_code}
-                        generation={
-                          coaGenerations.find(
-                            g =>
-                              g.parent_generation_id == null &&
-                              !isRetiredGeneration(g)
-                          ) ??
-                          selectRootGenerations(coaGenerations)[0] ??
-                          null
-                        }
+                        generation={selectDisplayedGeneration(
+                          coaGenerations,
+                          data.coa.verification_code
+                        )}
                         onRefresh={refreshGeneratedCoas}
                       />
                     )
