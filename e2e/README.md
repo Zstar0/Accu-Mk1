@@ -78,6 +78,15 @@ Screenshots and the API verdicts land in `docs/superpowers/e2e/2026-09-29-coa-fo
 | Regen & Republish on the primary | the old code reads Superseded in Mk1 with Forward to current ON; IS answers `superseded` + `forward_enabled` + the new code; the WordPress page announces the supersession and links to the new code; the new code verifies; the COA Reissued email reaches Mailhog; the lab can switch the pointer off (page renders as issued) and back on |
 | Regen on an additional COA | same for the additional-COA publish path: the old code sits under Earlier versions with Forward ON, IS and WordPress agree |
 
+`coa-senaite-card.spec.ts` flips a sample page's read-source override to
+SENAITE and checks the SENAITE-era certificate card (`PublishedCOACard`) carries
+the same Manage popover as the Accu-Mk1 list: Regen & Republish and Revoke rows
+with help icons, no Forward row on a published certificate, and the Revoke
+dialog opening from it (then cancelled; nothing is minted or revoked). Walks
+`E2E_SENAITE_SAMPLE_IDS` (default: the stack golden's published SENAITE
+samples) until one has an attached report whose code the IS knows. Screenshots
+land in `docs/superpowers/e2e/2026-09-30-coa-senaite-card/`.
+
 `retest.spec.ts` drives the Mk1-native retest overlay (sample details > Actions
 > Retest) on a stack with IS and WordPress mounted:
 
