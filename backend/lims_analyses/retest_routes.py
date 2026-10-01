@@ -28,6 +28,7 @@ from lims_analyses.retest_carry import (
     carry_blocked_reason,
     carry_eligible_profile_keys,
     effective_profiles,
+    legacy_mirror_state,
     parse_retest_spec,
     snapshot_profile_keys,
     validate_retest_spec,
@@ -139,6 +140,10 @@ def _latest_verified_at(db: Session, sample: LimsSample, service_ids: set[int]):
     return max(times) if times else None
 
 
+_LEGACY_STATE_LABELS = {"published": "Published (SENAITE)", "verified": "Verified (SENAITE)",
+                        "to_be_verified": "Awaiting verification (SENAITE)"}
+
+
 def _state_label(state: str | None, verified_at) -> str:
     if verified_at:
         return f"Verified {verified_at.month}/{verified_at.day}"
@@ -162,14 +167,21 @@ def retest_options(sample_id: str, db: Session = Depends(get_db), _user=Depends(
         key = eff.key
         prof = profiles.get(key)
         svc_ids = {s.id for s in prof.analysis_services} if prof else set()
-        state = _best_state(db, sample, svc_ids)
-        verified_at = _latest_verified_at(db, sample, svc_ids)
+        if eff.legacy:
+            # SENAITE-era: the mirror state, no reliable verification timestamp.
+            state = legacy_mirror_state(db, sample, key)
+            verified_at = None
+            label = _LEGACY_STATE_LABELS.get(state, "Not verified (SENAITE)")
+        else:
+            state = _best_state(db, sample, svc_ids)
+            verified_at = _latest_verified_at(db, sample, svc_ids)
+            label = _state_label(state, verified_at)
         out_profiles.append({
             "key": key, "name": prof.name if prof else key,
             "carry_eligible": key in eligible,
             "state": state,
             "verified_at": verified_at.isoformat() if verified_at else None,
-            "state_label": _state_label(state, verified_at),
+            "state_label": label,
             "legacy": eff.legacy,
             "carry_blocked_reason": carry_blocked_reason(db, sample, eff, eligible),
         })

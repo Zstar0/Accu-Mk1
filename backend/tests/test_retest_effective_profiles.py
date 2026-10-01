@@ -57,6 +57,7 @@ def _catalog(db):
         ("BACTERIA", "mk1"), ("FUNGI", "mk1"),
         ("HPLC-PUR", "senaite"), ("PEPT-Total", "senaite"), ("ID_BPC157", "senaite"),
         ("ENDO-LAL", "senaite"), ("STER-PCR", "senaite"), ("PH-DETERM", "senaite"),
+        ("PCR-BACTERIA", "senaite"), ("PCR-FUNGI", "senaite"),
         ("MYSTERY-X", "senaite"),
     )}
     profiles = {key: AnalysisProfile(key=key, name=name, is_addon=False, active=True, sort_order=order)
@@ -103,8 +104,10 @@ def _canonical(db, sample, svc, state="verified"):
 def _legacy_world(db):
     svc = _catalog(db)
     s = _sample(db, snapshot={"profiles": []})
-    for kw in ("HPLC-PUR", "PEPT-Total", "ID_BPC157", "ENDO-LAL", "STER-PCR", "MYSTERY-X"):
+    for kw in ("HPLC-PUR", "PEPT-Total", "ID_BPC157", "MYSTERY-X"):
         _shadow(db, s, svc[kw])
+    _shadow(db, s, svc["ENDO-LAL"], mirror="verified")
+    _shadow(db, s, svc["STER-PCR"], mirror="unassigned", value=None)
     # PB-0350 class: registered / rejected mirror lines are not on the sample.
     _shadow(db, s, svc["PH-DETERM"], mirror="registered", value=None)
     db.commit()
@@ -177,6 +180,13 @@ def test_options_for_a_legacy_sample(client, db_session):
     for p in body["profiles"]:
         assert p["legacy"] is True and p["carry_eligible"] is False
         assert p["carry_blocked_reason"] == "SENAITE-era result: cannot be carried, re-test it instead"
+        assert p["verified_at"] is None
+    # State comes from the SENAITE mirror state, never the native "Not verified".
+    assert [(p["state"], p["state_label"]) for p in body["profiles"]] == [
+        ("published", "Published (SENAITE)"),
+        ("verified", "Verified (SENAITE)"),
+        (None, "Not verified (SENAITE)"),
+    ]
     assert LEGACY_CARRY_REASON == "SENAITE-era result: cannot be carried, re-test it instead"
     assert body["variance"]["allowed"] is True
     # Derived keys are on the original: never offered as add-ons.
@@ -256,3 +266,15 @@ def test_apply_records_derived_keys_as_dropped(db_session):
                                 services={"hplc-purity-identity": True}, package=None, source="test")
     assert out["applied"] is True and out["missing"] == []
     assert retest.catalog_snapshot["retest"]["drop"] == ["endotoxin-usp85-lal", "rapid-sterility-pcr"]
+
+
+def test_split_pcr_pair_maps_to_rapid_sterility_with_best_mirror_state(client, db_session):
+    svc = _catalog(db_session)
+    s = _sample(db_session)
+    _shadow(db_session, s, svc["PCR-BACTERIA"], mirror="unassigned", value=None)
+    _shadow(db_session, s, svc["PCR-FUNGI"], mirror="to_be_verified")
+    db_session.commit()
+    assert effective_profiles(db_session, s) == [EffectiveProfile("rapid-sterility-pcr", True, "rows")]
+    [p] = client.get("/api/samples/P-1908/retest-options").json()["profiles"]
+    assert (p["state"], p["state_label"], p["verified_at"]) == (
+        "to_be_verified", "Awaiting verification (SENAITE)", None)

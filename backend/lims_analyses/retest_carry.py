@@ -49,6 +49,8 @@ LEGACY_KEYWORD_PROFILES: tuple[tuple[str, str], ...] = (
     ("HPLC-BLEND-*", "hplc-purity-identity"),
     ("ENDO-LAL", "endotoxin-usp85-lal"),
     ("STER-PCR", "rapid-sterility-pcr"),
+    ("PCR-BACTERIA", "rapid-sterility-pcr"),      # older split form (service.py legacy map)
+    ("PCR-FUNGI", "rapid-sterility-pcr"),
     ("BA", "bac_water_panel"),
     ("PH", "bac_water_panel"),
     ("FILL-VOL", "bac_water_panel"),
@@ -188,18 +190,7 @@ def effective_profiles(db: Session, sample: LimsSample) -> list[EffectiveProfile
     snap = snapshot_profile_keys(sample)
     if snap:
         return [EffectiveProfile(k, False, "snapshot") for k in snap]
-    rows = db.execute(
-        select(LimsAnalysis.keyword, AnalysisService)
-        .outerjoin(AnalysisService, AnalysisService.id == LimsAnalysis.analysis_service_id)
-        .where(
-            LimsAnalysis.lims_sample_pk == sample.id,
-            LimsAnalysis.lims_sub_sample_pk.is_(None),
-            LimsAnalysis.provenance.in_(("canonical", "shadow")),
-            LimsAnalysis.review_state.notin_(_DEAD_STATES),
-            or_(LimsAnalysis.provenance != "shadow",
-                LimsAnalysis.mirror_review_state.is_(None),
-                LimsAnalysis.mirror_review_state.notin_(_DEAD_MIRROR_STATES)),
-        )).all()
+    rows = [(r.keyword, svc) for r, svc in _live_parent_rows(db, sample)]
     if not rows:
         return []
     active = [p for p in db.execute(select(AnalysisProfile).where(
@@ -226,6 +217,40 @@ def effective_profiles(db: Session, sample: LimsSample) -> list[EffectiveProfile
         logger.debug("retest.effective_profiles.unknown sample_id=%s keywords=%s",
                      sample.sample_id, sorted({k or "" for k in unknown}))
     return [EffectiveProfile(p.key, found[p.key], "rows") for p in active if p.key in found]
+
+
+_MIRROR_STATE_RANK = {"published": 3, "verified": 2, "to_be_verified": 1}
+
+
+def legacy_mirror_state(db: Session, sample: LimsSample, key: str) -> str | None:
+    """Best SENAITE mirror_review_state among the live shadow rows behind a
+    legacy effective profile: 'published' > 'verified' > 'to_be_verified';
+    anything else is None."""
+    best = None
+    for row, svc in _live_parent_rows(db, sample):
+        if row.provenance != "shadow" or (svc is not None and (svc.origin or "") == "mk1"):
+            continue
+        if _legacy_profile_key((svc.keyword if svc is not None else None) or row.keyword) != key:
+            continue
+        if _MIRROR_STATE_RANK.get(row.mirror_review_state or "", 0) > _MIRROR_STATE_RANK.get(best or "", 0):
+            best = row.mirror_review_state
+    return best
+
+
+def _live_parent_rows(db: Session, sample: LimsSample) -> list:
+    """(row, service) for LIVE parent-tier canonical/shadow rows on the sample."""
+    return db.execute(
+        select(LimsAnalysis, AnalysisService)
+        .outerjoin(AnalysisService, AnalysisService.id == LimsAnalysis.analysis_service_id)
+        .where(
+            LimsAnalysis.lims_sample_pk == sample.id,
+            LimsAnalysis.lims_sub_sample_pk.is_(None),
+            LimsAnalysis.provenance.in_(("canonical", "shadow")),
+            LimsAnalysis.review_state.notin_(_DEAD_STATES),
+            or_(LimsAnalysis.provenance != "shadow",
+                LimsAnalysis.mirror_review_state.is_(None),
+                LimsAnalysis.mirror_review_state.notin_(_DEAD_MIRROR_STATES)),
+        )).all()
 
 
 def _live_carry_rows(db: Session, original: LimsSample, service_ids: set[int]) -> list[LimsAnalysis]:
