@@ -12,10 +12,11 @@ fixture for spec docs/superpowers/specs/2026-09-30-retest-legacy-fallback-and-co
     services (a keyword with no such service is skipped)
   * prints effective_profiles() for the sample as the self-check
 
-Refuses unless the Mk1 DB name contains "stack" or STACK=1 is set. Never run
-it against prod.
+Refuses unless ACCUMARK_STACK_NAME is set (only accumark-stack containers set
+it; the stack DB itself is named accumark_mk1, like prod). Never run it
+against prod. Inside the stack's backend container:
 
-  STACK=1 python scripts/dev/fabricate_legacy_sample.py P-0123 --peptide BPC157
+  python scripts/dev/fabricate_legacy_sample.py P-0123 --peptide BPC157
 """
 import argparse
 import os
@@ -29,11 +30,8 @@ ID_RESULT = "Conforms"
 
 
 def _guard() -> None:
-    # After database's load_dotenv: the name the session will actually use.
-    from database import DATABASE_URL
-    db_name = DATABASE_URL.rsplit("/", 1)[-1]
-    if "stack" not in db_name.lower() and os.environ.get("STACK") != "1":
-        sys.exit(f"refusing: DB {db_name!r} is not a stack DB (name lacks 'stack' and STACK=1 is not set)")
+    if not os.environ.get("ACCUMARK_STACK_NAME", "").strip():
+        sys.exit("refusing: ACCUMARK_STACK_NAME is not set (accumark-stack containers only)")
 
 
 def main() -> int:
