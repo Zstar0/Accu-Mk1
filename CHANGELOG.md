@@ -2,6 +2,16 @@
 
 ## Unreleased
 
+## v1.32.0 - 2026-09-30
+
+### Added
+- **Re-test overlay works on samples registered before the catalog.** When a sample has no catalog snapshot (every sample registered before 2026-09-08), the Re-test tab now derives its profiles from the live parent rows: native rows through profile membership, SENAITE-era rows (HPLC-PUR / PEPT-Total / ID_*, ENDO-LAL, STER-PCR, the PCR split pair, bac water) through a keyword map to the member-bearing native profile. Those rows show a "SENAITE-era" tag, their SENAITE state ("Published (SENAITE)"), and cannot be carried (the reason is shown under the Carry box); re-test them instead.
+- **Re-test + add services in one order.** The Re-test tab has an "Also add services" section; the request sends `retest`, `carry`, `drop` and `add` together and WordPress builds one order with the retest line plus the add-on lines. Summary, Total and "When you press Create" list all three.
+- **Visible reasons when Create is blocked.** `retest-options` returns `context_error {kind, message}`: a WooCommerce order that no longer exists or a sample in no order shows an amber note and disables Create on every tab (Waived does not bypass it; the routes also answer 409 before contacting IS); "unavailable" keeps the old behaviour plus the note. Carry boxes explain why they are disabled; a sample with nothing on record says so.
+
+### Fixed
+- A retest keyed on an alias profile (`hplcpurity_identity`, `endotoxin`, `sterility_pcr`, carried by older snapshots) minted the new sample without that profile, because the alias profiles are active but have no member services. Spec keys now resolve to their member-bearing twin (`hplc-purity-identity`, `endotoxin-usp85-lal`, `rapid-sterility-pcr`).
+
 ## v1.31.1 - 2026-09-30
 
 ### Changed
