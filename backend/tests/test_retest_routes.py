@@ -296,11 +296,28 @@ def _ctx_error_resp(status_code, detail):
     return resp
 
 
+def _ctx_envelope_resp(status_code, code, message):
+    """What IS actually answers: its error envelope, no `detail`."""
+    resp = MagicMock(status_code=status_code, text="x")
+    resp.json.return_value = {"error": {"code": code, "message": message}}
+    return resp
+
+
+ENVELOPE_NO_ORDER = _ctx_envelope_resp(404, "not_found", "sample not in any order")
+ENVELOPE_ORDER_GONE = _ctx_envelope_resp(502, "upstream_unavailable", "WordPress 404")
+
+
 @pytest.mark.parametrize("resp,kind,message", [
     (_ctx_error_resp(404, "sample not in any order"), "no_order",
      "This sample is not linked to any WooCommerce order, so no retest or add-on order can be created."),
     (_ctx_error_resp(502, "WordPress 404"), "order_missing",
      "WooCommerce order 7437 no longer exists (it was deleted), so no retest or add-on order can be created."),
+    (ENVELOPE_NO_ORDER, "no_order",
+     "This sample is not linked to any WooCommerce order, so no retest or add-on order can be created."),
+    (ENVELOPE_ORDER_GONE, "order_missing",
+     "WooCommerce order 7437 no longer exists (it was deleted), so no retest or add-on order can be created."),
+    (_ctx_envelope_resp(502, "upstream_unavailable", "WordPress unreachable"), "unavailable",
+     "Customer and pricing are unavailable right now (Integration Service or WordPress did not answer)."),
     (_ctx_error_resp(502, "WordPress unreachable"), "unavailable",
      "Customer and pricing are unavailable right now (Integration Service or WordPress did not answer)."),
     (_ctx_error_resp(404, "Not Found"), "unavailable",
@@ -323,7 +340,8 @@ def test_options_context_error_unavailable_when_unreachable(client, db_session):
 
 
 @pytest.mark.parametrize("resp", [_ctx_error_resp(404, "sample not in any order"),
-                                  _ctx_error_resp(502, "WordPress 404")])
+                                  _ctx_error_resp(502, "WordPress 404"),
+                                  ENVELOPE_NO_ORDER, ENVELOPE_ORDER_GONE])
 def test_retest_409_when_wp_order_gone_never_posts(client, db_session, resp):
     _seed(db_session)
     with patch.dict(os.environ, {"INTEGRATION_SERVICE_URL": "http://is", "ACCU_MK1_API_KEY": "k"}), \

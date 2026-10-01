@@ -404,11 +404,16 @@ def test_activity_label_for_addon_events():
 @pytest.mark.parametrize("status_code,detail,needle", [
     (404, "sample not in any order", "not linked to any WooCommerce order"),
     (502, "WordPress 404", "WooCommerce order 8600 no longer exists"),
+    # IS's real error envelope.
+    (404, {"error": {"code": "not_found", "message": "sample not in any order"}},
+     "not linked to any WooCommerce order"),
+    (502, {"error": {"code": "upstream_unavailable", "message": "WordPress 404"}},
+     "WooCommerce order 8600 no longer exists"),
 ])
 def test_addon_order_409_when_wp_order_gone_never_posts(client, db_session, status_code, detail, needle):
     _seed(db_session)
     ctx = MagicMock(status_code=status_code, text="x")
-    ctx.json.return_value = {"detail": detail}
+    ctx.json.return_value = {"detail": detail} if not isinstance(detail, dict) else detail
     with patch.dict(os.environ, ENV), \
             patch("lims_analyses.retest_routes.requests.get", return_value=ctx), \
             patch("lims_analyses.retest_routes.requests.post") as post:

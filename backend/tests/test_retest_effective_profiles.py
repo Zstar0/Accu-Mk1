@@ -6,7 +6,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 from fastapi.testclient import TestClient
-from sqlalchemy import create_engine
+from sqlalchemy import create_engine, select
 from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import StaticPool
 
@@ -15,6 +15,7 @@ from database import Base, get_db
 from lims_analyses.retest_carry import (
     LEGACY_CARRY_REASON,
     EffectiveProfile,
+    canonical_retest_key,
     dropped_profile_keys,
     effective_profiles,
     parse_retest_spec,
@@ -292,16 +293,16 @@ def _hplc_only_legacy(db, *, native_active):
     return s
 
 
-def test_legacy_hplc_resolves_to_the_active_alias_when_native_is_inactive(client, db_session):
-    """Prod: hplc-purity-identity inactive, hplcpurity_identity active."""
+def test_legacy_hplc_resolves_to_the_member_bearing_key_even_when_inactive(client, db_session):
+    """Prod and stack: hplc-purity-identity is INACTIVE but holds the HPLC services;
+    the active alias hplcpurity_identity has none and would seed nothing."""
     s = _hplc_only_legacy(db_session, native_active=False)
-    assert effective_profiles(db_session, s) == [EffectiveProfile("hplcpurity_identity", True, "rows")]
+    assert effective_profiles(db_session, s) == [EffectiveProfile("hplc-purity-identity", True, "rows")]
     body = client.get("/api/samples/P-1908/retest-options").json()
     [p] = body["profiles"]
-    assert p["key"] == "hplcpurity_identity" and p["legacy"] is True
+    assert p["key"] == "hplc-purity-identity" and p["legacy"] is True
     assert p["state_label"] == "Published (SENAITE)"
     assert body["variance"]["allowed"] is True
-    # The alias may be a re-test profile but never an add-on candidate.
     assert "hplcpurity_identity" not in [a["key"] for a in body["addons"]]
 
 
@@ -310,13 +311,71 @@ def test_legacy_hplc_prefers_the_native_key_when_both_are_active(db_session):
     assert effective_profiles(db_session, s) == [EffectiveProfile("hplc-purity-identity", True, "rows")]
 
 
-def test_legacy_family_with_no_active_member_is_dropped(db_session):
+def test_legacy_family_with_no_member_bearing_profile_is_dropped(db_session):
     svc = _catalog(db_session)
-    db_session.execute(AnalysisProfile.__table__.update()
-                       .where(AnalysisProfile.key.in_(("endotoxin-usp85-lal", "endotoxin")))
-                       .values(active=False))
+    endo = db_session.execute(select(AnalysisProfile).where(
+        AnalysisProfile.key == "endotoxin-usp85-lal")).scalar_one()
+    endo.analysis_services.clear()          # alias `endotoxin` is empty too
     s = _sample(db_session)
     _shadow(db_session, s, svc["ENDO-LAL"])
     db_session.commit()
-    db_session.expire_all()
     assert effective_profiles(db_session, s) == []
+
+
+def test_canonical_retest_key():
+    assert canonical_retest_key("hplcpurity_identity") == "hplc-purity-identity"
+    assert canonical_retest_key("endotoxin") == "endotoxin-usp85-lal"
+    assert canonical_retest_key("sterility_pcr") == "rapid-sterility-pcr"
+    assert canonical_retest_key("heavy_metals") == "heavy_metals"
+
+
+def test_alias_snapshot_retest_seeds_the_native_hplc_profile(db_session):
+    """P-2604 shape: the original's SNAPSHOT carries the alias; the retest
+    (spec retest ['hplcpurity_identity']) must seed the member-bearing twin."""
+    import json
+
+    from lims_analyses.parent_placeholders import PROVENANCE_ORDERED
+    from lims_analyses.retest_carry import apply_retest_spec
+    from models import VialRole
+    svc = _catalog(db_session)
+    db_session.execute(AnalysisProfile.__table__.update()
+                       .where(AnalysisProfile.key == "hplc-purity-identity").values(active=False))
+    db_session.add(VialRole(code="hplc", label="HPLC", sort_order=0))
+    alias = db_session.execute(select(AnalysisProfile).where(
+        AnalysisProfile.key == "hplcpurity_identity")).scalar_one()
+    original = _sample(db_session, sample_id="P-2604",
+                       snapshot={"profiles": [{"key": "hplcpurity_identity", "profile_id": alias.id,
+                                               "service_ids": []}]})
+    _canonical(db_session, original, svc["HPLC-PURITY"], state="published")
+    retest = LimsSample(sample_id="P-5004", external_lims_system="mk1", status="sample_due",
+                        analytes=json.dumps([{"name": "BPC-157 - Identity (HPLC)"}]))
+    db_session.add(retest)
+    db_session.commit()
+    raw = {"retest_of_sample_id": "P-2604", "retest": ["hplcpurity_identity"], "fee": "paid", "reason": "r"}
+    out = apply_retest_spec(db_session, parent=retest, raw_spec=raw,
+                            services={"hplcpurity_identity": True}, package=None, source="test")
+    db_session.commit()
+    assert out["applied"] is True and out["missing"] == []
+    assert out["demand_keys"] == ["hplc-purity-identity"]
+    assert retest.catalog_snapshot["retest"]["retest"] == ["hplc-purity-identity"]
+    keywords = {r.keyword for r in db_session.execute(select(LimsAnalysis).where(
+        LimsAnalysis.lims_sample_pk == retest.id,
+        LimsAnalysis.provenance == PROVENANCE_ORDERED)).scalars()}
+    assert "HPLC-PURITY" in keywords
+
+
+def test_alias_and_twin_spellings_both_count_as_on_the_original(db_session):
+    from lims_analyses.retest_carry import validate_retest_spec
+    _catalog(db_session)
+    alias = db_session.execute(select(AnalysisProfile).where(
+        AnalysisProfile.key == "hplcpurity_identity")).scalar_one()
+    original = _sample(db_session, sample_id="P-2604",
+                       snapshot={"profiles": [{"key": "hplcpurity_identity", "profile_id": alias.id}]})
+    db_session.commit()
+    for key in ("hplcpurity_identity", "hplc-purity-identity"):
+        spec = parse_retest_spec({"retest_of_sample_id": "P-2604", "retest": [key], "fee": "paid", "reason": "r"})
+        assert validate_retest_spec(db_session, original=original, spec=spec) == []
+    spec = parse_retest_spec({"retest_of_sample_id": "P-2604", "retest": ["endotoxin-usp85-lal"],
+                              "drop": ["hplc-purity-identity"], "fee": "paid", "reason": "r"})
+    assert validate_retest_spec(db_session, original=original, spec=spec) == ["endotoxin-usp85-lal"]
+    assert dropped_profile_keys(original, spec, db_session) == ["hplc-purity-identity"]
