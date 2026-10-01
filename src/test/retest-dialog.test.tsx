@@ -563,6 +563,9 @@ describe('RetestDialog overlay v2', () => {
     await user.clear(screen.getByLabelText('Extra vials to ship'))
     await user.type(screen.getByLabelText('Extra vials to ship'), '1')
     expect(total()).toHaveTextContent('Total (excluding extra vials)$315.00')
+    expect(screen.getByTestId('retest-outcome')).toHaveTextContent(
+      'Once paid: a new sample is created with HPLC Purity + Identity re-tested; Heavy Metals carried as verified results; Endotoxin USP85 LAL dropped; Rapid Sterility (PCR) added; 1 extra vial shipped.'
+    )
 
     await user.type(screen.getByLabelText('Reason (required)'), 'x')
     await user.click(
@@ -981,9 +984,12 @@ describe('RetestDialog visible reasons', () => {
     await user.type(screen.getByLabelText('Reason (required)'), 'x')
     await user.click(screen.getByLabelText('Waived (whole order free)'))
     expect(disabledReason()).toHaveTextContent(ORDER_GONE)
-    expect(
-      screen.getByRole('button', { name: 'Create retest order' })
-    ).toBeDisabled()
+    expect(disabledReason()).toHaveAttribute('id', 'retest-disabled-reason')
+    const create = screen.getByRole('button', { name: 'Create retest order' })
+    expect(create).toBeDisabled()
+    expect(create).toHaveAccessibleDescription(ORDER_GONE)
+    // Nothing will be created, so no "When you press Create" block.
+    expect(screen.queryByTestId('retest-outcome')).not.toBeInTheDocument()
 
     await user.click(screen.getByRole('tab', { name: 'Add services' }))
     await user.click(
@@ -994,6 +1000,7 @@ describe('RetestDialog visible reasons', () => {
     expect(
       screen.getByRole('button', { name: 'Create add-on order (new sample)' })
     ).toBeDisabled()
+    expect(screen.queryByTestId('retest-outcome')).not.toBeInTheDocument()
   })
 
   it('no_order blocks the same-sample add-on route too', async () => {
@@ -1030,9 +1037,9 @@ describe('RetestDialog visible reasons', () => {
     expect(disabledReason()).toHaveTextContent('Pricing unavailable')
     await user.click(screen.getByLabelText('Waived (whole order free)'))
     expect(disabledReason()).not.toBeInTheDocument()
-    expect(
-      screen.getByRole('button', { name: 'Create retest order' })
-    ).toBeEnabled()
+    const create = screen.getByRole('button', { name: 'Create retest order' })
+    expect(create).toBeEnabled()
+    expect(create).not.toHaveAttribute('aria-describedby')
   })
 
   it('legacy rows: SENAITE-era tag, Carry disabled with the backend reason, rule sentence suffix', async () => {

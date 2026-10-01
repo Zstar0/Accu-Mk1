@@ -327,7 +327,8 @@ export function RetestDialog({
   // "When you press Create": built from the same state as the request body,
   // so it cannot say something the request does not do.
   const outcome: string[] = []
-  if (tab === 'retest' ? anyRetest : tickedAddons.length > 0) {
+  // Hard stop: nothing will be created, so there is no outcome to describe.
+  if (!hardStop && (tab === 'retest' ? anyRetest : tickedAddons.length > 0)) {
     const kind = tab === 'retest' ? 'retest order' : 'add-on order'
     const orig = options.context?.order
     const who = orig
@@ -353,6 +354,9 @@ export function RetestDialog({
             : '') +
           (dropped.length ? `; ${names(dropped)} dropped` : '') +
           (tickedAddons.length ? `; ${names(tickedAddons)} added` : '') +
+          (state.extraVials > 0
+            ? `; ${state.extraVials} extra vial${state.extraVials === 1 ? '' : 's'} shipped`
+            : '') +
           '.'
       )
     } else if (sameSample) {
@@ -982,6 +986,7 @@ export function RetestDialog({
         <DialogFooter className="sm:items-center">
           {blocked && (
             <span
+              id="retest-disabled-reason"
               data-testid="retest-disabled-reason"
               className="text-sm text-muted-foreground sm:mr-auto"
             >
@@ -1001,6 +1006,7 @@ export function RetestDialog({
               className="min-h-11"
               onClick={submit}
               disabled={blocked !== null || pending}
+              aria-describedby={blocked ? 'retest-disabled-reason' : undefined}
             >
               {pending
                 ? 'Creating…'
