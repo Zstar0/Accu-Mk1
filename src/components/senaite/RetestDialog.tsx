@@ -315,6 +315,15 @@ export function RetestDialog({
 
   const eligible = profiles.filter(p => p.carry_eligible)
   const ineligible = profiles.filter(p => !p.carry_eligible)
+  // "; A dropped (reason)" per distinct carry_blocked_reason, in row order.
+  const byReason = new Map<string, string[]>()
+  for (const p of ineligible) {
+    const why = p.carry_blocked_reason ?? 'not verified'
+    byReason.set(why, [...(byReason.get(why) ?? []), p.name])
+  }
+  const droppedByReason = [...byReason]
+    .map(([why, n]) => `; ${n.join(', ')} dropped (${why})`)
+    .join('')
   // "When you press Create": built from the same state as the request body,
   // so it cannot say something the request does not do.
   const outcome: string[] = []
@@ -362,9 +371,7 @@ export function RetestDialog({
           (eligible.length
             ? `; ${names(eligible)} carried from ${sampleId}`
             : '') +
-          (ineligible.length
-            ? `; ${names(ineligible)} dropped (not verified)`
-            : '') +
+          droppedByReason +
           '.'
       )
     }

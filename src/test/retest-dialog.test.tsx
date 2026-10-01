@@ -1071,6 +1071,34 @@ describe('RetestDialog visible reasons', () => {
     ).toBeInTheDocument()
   })
 
+  it('Add services outcome groups dropped rows by carry_blocked_reason', async () => {
+    vi.mocked(getRetestOptions).mockResolvedValue({
+      ...OPTIONS,
+      profiles_source: 'rows',
+      profiles: OPTIONS.profiles.map(p =>
+        p.key === HPLC
+          ? {
+              ...p,
+              carry_eligible: false,
+              legacy: true,
+              carry_blocked_reason: LEGACY_REASON,
+            }
+          : p.key === ENDO
+            ? { ...p, carry_blocked_reason: 'not verified yet' }
+            : { ...p, carry_blocked_reason: null }
+      ),
+    })
+    const { user } = renderDialog()
+    await screen.findByTestId(`retest-row-${HPLC}`)
+    await user.click(screen.getByRole('tab', { name: 'Add services' }))
+    await user.click(
+      screen.getByRole('checkbox', { name: 'Rapid Sterility (PCR)' })
+    )
+    expect(screen.getByTestId('retest-outcome')).toHaveTextContent(
+      `Once paid: a new sample is created with Rapid Sterility (PCR); Heavy Metals carried from P-9001; HPLC Purity + Identity dropped (${LEGACY_REASON}); Endotoxin USP85 LAL dropped (not verified yet).`
+    )
+  })
+
   it('profiles_source none: empty-state sentence replaces the table, Create blocked', async () => {
     vi.mocked(getRetestOptions).mockResolvedValue({
       ...OPTIONS,
