@@ -25,10 +25,11 @@ from database import get_db
 from lims_analyses.retest_carry import (
     HPLC_PROFILE_KEYS,
     LEGACY_ADDON_EXCLUDE,
+    _resolve_retest_keys,
     carry_blocked_reason,
     carry_eligible_profile_keys,
     effective_profiles,
-    legacy_mirror_state,
+    legacy_mirror_states,
     parse_retest_spec,
     snapshot_profile_keys,
     validate_retest_spec,
@@ -171,17 +172,22 @@ def retest_options(sample_id: str, db: Session = Depends(get_db), _user=Depends(
         raise HTTPException(status_code=404, detail=f"sample {sample_id!r} not known to Mk1")
     effective = effective_profiles(db, sample)
     have = [e.key for e in effective]
+    # An alias snapshot key reads its member-bearing twin's rows (same profile carry plans on).
+    resolved = _resolve_retest_keys(db, have)
+    wanted = set(have) | set(resolved.values())
     profiles = {p.key: p for p in db.execute(
-        select(AnalysisProfile).where(AnalysisProfile.key.in_(have))).scalars().all()} if have else {}
+        select(AnalysisProfile).where(AnalysisProfile.key.in_(wanted))).scalars().all()} if have else {}
     eligible = carry_eligible_profile_keys(db, sample, effective)
+    mirror = legacy_mirror_states(db, sample) if any(e.legacy for e in effective) else {}
     out_profiles = []
     for eff in effective:
         key = eff.key
         prof = profiles.get(key)
-        svc_ids = {s.id for s in prof.analysis_services} if prof else set()
+        source = profiles.get(resolved[key])
+        svc_ids = {s.id for s in source.analysis_services} if source else set()
         if eff.legacy:
             # SENAITE-era: the mirror state, no reliable verification timestamp.
-            state = legacy_mirror_state(db, sample, key)
+            state = mirror.get(key)
             verified_at = None
             label = _LEGACY_STATE_LABELS.get(state, "Not verified (SENAITE)")
         else:

@@ -379,3 +379,43 @@ def test_alias_and_twin_spellings_both_count_as_on_the_original(db_session):
                               "drop": ["hplc-purity-identity"], "fee": "paid", "reason": "r"})
     assert validate_retest_spec(db_session, original=original, spec=spec) == ["endotoxin-usp85-lal"]
     assert dropped_profile_keys(original, spec, db_session) == ["hplc-purity-identity"]
+
+
+def test_mirrored_rows_of_mk1_services_are_senaite_era(client, db_session):
+    """USP-71 BACTERIA/FUNGI are mk1 services, but on a mirrored sample their
+    parent rows are SENAITE 'shadow' rows: legacy, with the mirror state."""
+    svc = _catalog(db_session)
+    s = _sample(db_session)
+    _shadow(db_session, s, svc["BACTERIA"], mirror="published", value="Not Detected")
+    _shadow(db_session, s, svc["FUNGI"], mirror="verified", value="Not Detected")
+    db_session.commit()
+    assert effective_profiles(db_session, s) == [EffectiveProfile("sterility-usp71", True, "rows")]
+    [p] = client.get("/api/samples/P-1908/retest-options").json()["profiles"]
+    assert (p["legacy"], p["state"], p["state_label"], p["verified_at"]) == (
+        True, "published", "Published (SENAITE)", None)
+    assert p["carry_eligible"] is False and p["carry_blocked_reason"] == LEGACY_CARRY_REASON
+
+
+def test_native_row_wins_over_a_shadow_row_of_the_same_key(db_session):
+    svc = _catalog(db_session)
+    s = _sample(db_session)
+    _shadow(db_session, s, svc["BACTERIA"])
+    _canonical(db_session, s, svc["FUNGI"])
+    db_session.commit()
+    assert effective_profiles(db_session, s) == [EffectiveProfile("sterility-usp71", False, "rows")]
+
+
+def test_alias_snapshot_key_reads_the_twin_rows_for_state_and_carry(client, db_session):
+    """P-2604 shape: snapshot holds the empty alias, the verified rows belong to
+    the member-bearing twin; state and carry_eligible must agree."""
+    svc = _catalog(db_session)
+    alias = db_session.execute(select(AnalysisProfile).where(
+        AnalysisProfile.key == "hplcpurity_identity")).scalar_one()
+    s = _sample(db_session, sample_id="P-2604",
+                snapshot={"profiles": [{"key": "hplcpurity_identity", "profile_id": alias.id}]})
+    _canonical(db_session, s, svc["HPLC-PURITY"], state="verified")
+    db_session.commit()
+    [p] = client.get("/api/samples/P-2604/retest-options").json()["profiles"]
+    assert p["key"] == "hplcpurity_identity" and p["legacy"] is False
+    assert (p["state"], p["state_label"], p["verified_at"]) == ("verified", "Verified 9/1", "2026-09-01T12:00:00")
+    assert p["carry_eligible"] is True and p["carry_blocked_reason"] is None
