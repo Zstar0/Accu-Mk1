@@ -89,15 +89,27 @@ def _fetch_retest_context(sample: LimsSample) -> tuple[dict | None, dict | None]
                            headers={"X-API-Key": key}, timeout=10)
         if resp.status_code == 200:
             return resp.json(), None
-        detail = _is_error_message(resp)
+        detail = _is_envelope_message(resp)
     except Exception as e:  # noqa: BLE001
         logger.warning("retest_options.context_unavailable sample_id=%s err=%s", sample.sample_id, e)
         return None, _context_error("unavailable", sample)
-    if resp.status_code == 404 and detail == "sample not in any order":
+    if detail == "sample not in any order":
         return None, _context_error("no_order", sample)
-    if resp.status_code == 502 and detail.startswith("WordPress 404"):
+    if detail.startswith("WordPress 404"):
         return None, _context_error("order_missing", sample)
     return None, _context_error("unavailable", sample)
+
+
+def _is_envelope_message(resp) -> str:
+    """IS error text: its envelope {"error": {"code", "message"}} (what IS
+    actually answers), else FastAPI's {"detail": ...}, else the raw text."""
+    try:
+        err = resp.json().get("error")
+    except Exception:  # noqa: BLE001
+        err = None
+    if isinstance(err, dict) and err.get("message"):
+        return str(err["message"])
+    return _is_error_message(resp)
 
 
 def _refuse_when_order_gone(sample: LimsSample) -> None:

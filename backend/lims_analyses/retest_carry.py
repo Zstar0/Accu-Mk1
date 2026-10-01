@@ -11,7 +11,7 @@ Nothing here commits; callers own the transaction.
 from __future__ import annotations
 
 import logging
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import datetime
 from fnmatch import fnmatchcase
 
@@ -35,8 +35,9 @@ LEGACY_ADDON_EXCLUDE = frozenset({"hplcpurity_identity", "endotoxin", "sterility
 
 # SENAITE-era keyword -> profile key FAMILY, for samples registered before the catalog
 # (spec docs/superpowers/specs/2026-09-30-retest-legacy-fallback-and-combined.md). The
-# effective key is the first family member whose profile exists and is active (prod:
-# hplc-purity-identity is inactive and the alias hplcpurity_identity is the live one).
+# effective key is the first family member whose profile exists and has an mk1-origin
+# member; `active` is not consulted (prod: hplc-purity-identity is inactive but holds the
+# HPLC services, the active alias hplcpurity_identity has no members and seeds nothing).
 # Case-sensitive fnmatch patterns, first match wins. Only SENAITE-origin rows are
 # classified here; mk1-origin rows (prod USP-71 BACTERIA/FUNGI included) resolve
 # through profile membership. Bac Water lists the spec names plus the keywords the
@@ -65,6 +66,10 @@ LEGACY_KEYWORD_PROFILES: tuple[tuple[str, tuple[str, ...]], ...] = (
     ("FILL-NET-CONTENT", _BAC_WATER_FAMILY),
     ("PH-DETERM", _BAC_WATER_FAMILY),
 )
+# Alias profile key -> its member-bearing native twin (same spec).
+ALIAS_TWINS = {"hplcpurity_identity": "hplc-purity-identity",
+               "endotoxin": "endotoxin-usp85-lal",
+               "sterility_pcr": "rapid-sterility-pcr"}
 _DEAD_STATES = ("rejected", "retracted")
 _DEAD_MIRROR_STATES = ("rejected", "retracted", "cancelled", "registered")
 LEGACY_CARRY_REASON = "SENAITE-era result: cannot be carried, re-test it instead"
@@ -188,32 +193,50 @@ def _legacy_family(keyword: str | None) -> tuple[str, ...]:
     return next((fam for pat, fam in LEGACY_KEYWORD_PROFILES if fnmatchcase(keyword or "", pat)), ())
 
 
+def canonical_retest_key(key: str) -> str:
+    """Alias profile key -> its member-bearing native twin; identity otherwise."""
+    return ALIAS_TWINS.get(key, key)
+
+
+def _has_native_member(prof: AnalysisProfile | None) -> bool:
+    return prof is not None and any((m.origin or "") == "mk1" for m in prof.analysis_services)
+
+
+def _resolve_retest_keys(db: Session, keys) -> dict[str, str]:
+    """key -> the key Mk1 seeds and carries for it: the native twin when that
+    profile has mk1 members, else the key unchanged."""
+    twins = {k: canonical_retest_key(k) for k in keys}
+    profs = _profiles_by_key(db, {t for k, t in twins.items() if t != k})
+    return {k: (t if t != k and _has_native_member(profs.get(t)) else k) for k, t in twins.items()}
+
+
 def effective_profiles(db: Session, sample: LimsSample) -> list[EffectiveProfile]:
     """The original's profile keys for the retest flow. The frozen snapshot
     when it has any; otherwise derived from LIVE parent-tier rows (samples
     registered before the catalog have no snapshot profiles). A key is
     legacy only when every row behind it is SENAITE-origin."""
-    from lims_analyses.manage_native import _is_all_native  # local: import cycle
     snap = snapshot_profile_keys(sample)
     if snap:
         return [EffectiveProfile(k, False, "snapshot") for k in snap]
     rows = [(r.keyword, svc) for r, svc in _live_parent_rows(db, sample)]
     if not rows:
         return []
-    active = [p for p in db.execute(select(AnalysisProfile).where(
-        AnalysisProfile.active.is_(True)
-    ).order_by(AnalysisProfile.sort_order, AnalysisProfile.key)).scalars()]
-    active_keys = {p.key for p in active}
+    catalog = list(db.execute(select(AnalysisProfile).order_by(
+        AnalysisProfile.sort_order, AnalysisProfile.key)).scalars())
+    by_key = {p.key: p for p in catalog}
+    # Membership candidates: all-mk1 non-alias profiles, active ones first.
+    native = sorted((p for p in catalog if p.key not in LEGACY_ADDON_EXCLUDE and _has_native_member(p)
+                     and all((m.origin or "") == "mk1" for m in p.analysis_services)),
+                    key=lambda p: not p.active)
     found: dict[str, bool] = {}            # key -> legacy
     unknown: list[str] = []
     for keyword, svc in rows:
         if svc is not None and (svc.origin or "") == "mk1":
-            key = next((p.key for p in active if p.key not in LEGACY_ADDON_EXCLUDE
-                        and svc.id in {m.id for m in p.analysis_services} and _is_all_native(p)), None)
+            key = next((p.key for p in native if svc.id in {m.id for m in p.analysis_services}), None)
             legacy = False
         else:
             family = _legacy_family((svc.keyword if svc is not None else None) or keyword)
-            key = next((k for k in family if k in active_keys), None)
+            key = next((k for k in family if _has_native_member(by_key.get(k))), None)
             legacy = True
         if key is None:
             unknown.append(keyword)
@@ -222,7 +245,7 @@ def effective_profiles(db: Session, sample: LimsSample) -> list[EffectiveProfile
     if unknown:
         logger.debug("retest.effective_profiles.unknown sample_id=%s keywords=%s",
                      sample.sample_id, sorted({k or "" for k in unknown}))
-    return [EffectiveProfile(p.key, found[p.key], "rows") for p in active if p.key in found]
+    return [EffectiveProfile(p.key, found[p.key], "rows") for p in catalog if p.key in found]
 
 
 _MIRROR_STATE_RANK = {"published": 3, "verified": 2, "to_be_verified": 1}
@@ -324,8 +347,11 @@ def carry_eligible_profile_keys(db: Session, original: LimsSample,
     carry: such members were never seeded (e.g. the blend aggregate services
     on a single-analyte sample), so there is nothing pending to wait for."""
     eff = effective if effective is not None else effective_profiles(db, original)
-    profiles = _profiles_by_key(db, [e.key for e in eff if not e.legacy])
-    return {key for key, prof in profiles.items() if _carry_plan(db, original, prof) is not None}
+    keys = [e.key for e in eff if not e.legacy]
+    resolved = _resolve_retest_keys(db, keys)       # an alias snapshot key plans on its twin
+    profiles = _profiles_by_key(db, set(resolved.values()))
+    return {k for k in keys if resolved[k] in profiles
+            and _carry_plan(db, original, profiles[resolved[k]]) is not None}
 
 
 def carry_blocked_reason(db: Session, original: LimsSample, profile: EffectiveProfile,
@@ -335,7 +361,8 @@ def carry_blocked_reason(db: Session, original: LimsSample, profile: EffectivePr
         return None
     if profile.legacy:
         return LEGACY_CARRY_REASON
-    prof = _profiles_by_key(db, [profile.key]).get(profile.key)
+    key = _resolve_retest_keys(db, [profile.key])[profile.key]
+    prof = _profiles_by_key(db, [key]).get(key)
     if prof is None or not _live_carry_rows(db, original, {s.id for s in prof.analysis_services}):
         return "not verified yet"
     return "a member result is still pending"
@@ -348,8 +375,15 @@ def validate_retest_spec(db: Session, *, original: LimsSample, spec: RetestSpec)
         raise BadRequestError(
             f"retest_spec is for {spec.retest_of_sample_id!r}, not {original.sample_id!r}")
     eff = effective_profiles(db, original)
+    # Either spelling of an alias/twin pair counts as on the original.
     have = {e.key for e in eff}
-    unknown_drop = [k for k in spec.drop if k not in have]
+    have |= set(_resolve_retest_keys(db, have).values())
+    rk = _resolve_retest_keys(db, (*spec.retest, *spec.carry, *spec.drop))
+
+    def on(k: str) -> bool:
+        return k in have or rk[k] in have
+
+    unknown_drop = [k for k in spec.drop if not on(k)]
     if unknown_drop:
         raise BadRequestError(f"not on {original.sample_id}, cannot be dropped: {unknown_drop}")
     clash = set(spec.add_profiles) & have
@@ -359,15 +393,18 @@ def validate_retest_spec(db: Session, *, original: LimsSample, spec: RetestSpec)
     unknown = [k for k in spec.add_profiles if k not in known]
     if unknown:
         raise BadRequestError(f"unknown profile(s): {unknown}")
-    legacy = [k for k in spec.carry if k in {e.key for e in eff if e.legacy}]
+    legacy_keys = {e.key for e in eff if e.legacy}
+    legacy_keys |= set(_resolve_retest_keys(db, legacy_keys).values())
+    legacy = [k for k in spec.carry if k in legacy_keys or rk[k] in legacy_keys]
     if legacy:
         raise BadRequestError(f"cannot carry SENAITE-era result(s): {legacy}; re-test them instead")
     eligible = carry_eligible_profile_keys(db, original, eff)
-    not_eligible = [k for k in spec.carry if k in have and k not in eligible]
+    eligible |= set(_resolve_retest_keys(db, eligible).values())
+    not_eligible = [k for k in spec.carry if on(k) and k not in eligible and rk[k] not in eligible]
     if not_eligible:
         raise BadRequestError(
             f"cannot carry unverified profile(s): {not_eligible}; retest them instead")
-    return [k for k in (*spec.retest, *spec.carry) if k not in have]
+    return [k for k in (*spec.retest, *spec.carry) if not on(k)]
 
 
 def dropped_profile_keys(original: LimsSample, spec: RetestSpec,
@@ -375,11 +412,24 @@ def dropped_profile_keys(original: LimsSample, spec: RetestSpec,
     """Original profiles in neither retest nor carry: recorded as drop
     regardless of what the client's own `drop` list said (a 1.29 client
     omits it entirely; an incomplete/omitted drop is filled in here). With
-    `db`, the effective keys (rows-derived when the snapshot is empty)."""
-    demand = set(spec.retest) | set(spec.carry)
-    have = ([e.key for e in effective_profiles(db, original)] if db is not None
-            else snapshot_profile_keys(original))
-    return [k for k in have if k not in demand]
+    `db`, the effective keys (rows-derived when the snapshot is empty), each
+    resolved to its member-bearing twin (canonical_retest_key)."""
+    if db is None:
+        demand = set(spec.retest) | set(spec.carry)
+        return [k for k in snapshot_profile_keys(original) if k not in demand]
+    have = [e.key for e in effective_profiles(db, original)]
+    res = _resolve_retest_keys(db, (*have, *spec.retest, *spec.carry))
+    demand = {res[k] for k in (*spec.retest, *spec.carry)}
+    return list(dict.fromkeys(res[k] for k in have if res[k] not in demand))
+
+
+def _resolved_spec(db: Session, spec: RetestSpec) -> RetestSpec:
+    """The spec with retest/carry/drop keys resolved to the profiles Mk1 seeds
+    and carries (an alias with no members would seed nothing)."""
+    rk = _resolve_retest_keys(db, (*spec.retest, *spec.carry, *spec.drop))
+    return replace(spec, retest=tuple(dict.fromkeys(rk[k] for k in spec.retest)),
+                   carry=tuple(dict.fromkeys(rk[k] for k in spec.carry)),
+                   drop=tuple(dict.fromkeys(rk[k] for k in spec.drop)))
 
 
 def _ultimate_source(db: Session, row: LimsAnalysis) -> LimsAnalysis:
@@ -608,6 +658,15 @@ def apply_retest_spec(db: Session, *, parent: LimsSample, raw_spec: dict,
         missing = validate_retest_spec(db, original=original, spec=spec)
     except BadRequestError as e:
         return _fallback("invalid_spec", str(e))
+    resolved = _resolved_spec(db, spec)
+    if resolved != spec:
+        # WP's order lines keep the key it sold (often the alias); seed the twin with its value.
+        services = dict(services or {})
+        for raw, new in zip((*spec.retest, *spec.carry), (*resolved.retest, *resolved.carry)):
+            if new != raw and raw in services:
+                services.setdefault(new, services[raw])
+        spec = resolved
+        missing = validate_retest_spec(db, original=original, spec=spec)   # same rules, resolved keys
 
     first_time = "retest" not in (parent.catalog_snapshot or {})
     user_id = spec.requested_by_user_id

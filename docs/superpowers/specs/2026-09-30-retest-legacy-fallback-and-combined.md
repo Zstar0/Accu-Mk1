@@ -29,22 +29,31 @@ New `effective_profiles(db, sample) -> list[EffectiveProfile]` where
 - Snapshot empty: derive from LIVE parent-tier rows (`lims_sub_sample_pk IS NULL`,
   `provenance IN ('canonical','shadow')`, `review_state NOT IN dead states`, and for shadow rows
   `mirror_review_state NOT IN ('rejected','retracted','cancelled','registered')`):
-  - a row whose service has `origin == 'mk1'`: the active, all-native `AnalysisProfile` that
-    contains that service (first by `sort_order`); `legacy=False`.
+  - a row whose service has `origin == 'mk1'`: the all-native, non-alias `AnalysisProfile` that
+    contains that service (active ones first, then by `sort_order`); `legacy=False`.
   - a SENAITE-origin row: by keyword family, `legacy=True`. Each family is an ordered list of
-    keys and resolves to the FIRST key whose `AnalysisProfile` exists and is active:
+    keys and resolves to the FIRST key whose `AnalysisProfile` exists and has at least one
+    mk1-origin member; `active` is NOT consulted:
     `HPLC-PUR | PEPT-Total | HPLC-ID | ID_* | ANALYTE-*-PUR | ANALYTE-*-QTY | BLEND-PUR | HPLC-BLEND-*`
     -> (`hplc-purity-identity`, `hplcpurity_identity`); `ENDO-LAL` -> (`endotoxin-usp85-lal`,
     `endotoxin`); `STER-PCR | PCR-BACTERIA | PCR-FUNGI` -> (`rapid-sterility-pcr`, `sterility_pcr`);
     bac-water family (`BA`, `PH`, `FILL-VOL`, `Benzyl_Alcohol_Assay`, `FILL-NET-CONTENT`,
     `PH-DETERM`) -> (`bac_water_panel`). Prod and the stack `retest` catalog have
-    `hplc-purity-identity` INACTIVE and the alias `hplcpurity_identity` active, so a legacy HPLC
-    resolves to the alias there. A family with no active member, and unknown keywords, are
-    ignored (logged once per sample at debug).
+    `hplc-purity-identity` INACTIVE but holding the HPLC services, while the ACTIVE alias
+    `hplcpurity_identity` has no members (same for `endotoxin` / `sterility_pcr`). Resolving to
+    the alias minted a retest with no HPLC rows (stack P-5004), so membership decides, not
+    `active`. A family with no member-bearing profile, and unknown keywords, are ignored
+    (logged once per sample at debug).
   - de-duplicated, ordered by profile `sort_order`; `source="rows"`.
-- A key is only returned if that `AnalysisProfile` exists and is active. The alias profiles in
-  `LEGACY_ADDON_EXCLUDE` may be returned as re-test profiles (as the active member of a family)
-  but are never offered as add-ons, and never resolve an mk1-origin row through membership.
+- The alias profiles in `LEGACY_ADDON_EXCLUDE` are never offered as add-ons and never resolve
+  an mk1-origin row through membership.
+- `canonical_retest_key(key)` maps an alias to its member-bearing twin
+  (`hplcpurity_identity` -> `hplc-purity-identity`, `endotoxin` -> `endotoxin-usp85-lal`,
+  `sterility_pcr` -> `rapid-sterility-pcr`, identity otherwise). `validate_retest_spec`,
+  `apply_retest_spec` and `dropped_profile_keys` resolve `retest`, `carry` and `drop` keys
+  through it (only when the twin has mk1 members), so a sample whose SNAPSHOT carries the alias
+  (prod P-2604) also mints a retest with HPLC rows. Either spelling counts as on the original
+  for the drop/clash/missing checks. The spec forwarded to IS keeps the keys as sent.
 
 `snapshot_profile_keys` stays as is (other callers untouched). Inside the retest flow only,
 `retest_options`, `carry_eligible_profile_keys`, `validate_retest_spec` and
@@ -72,9 +81,12 @@ drop (and the existing `retest_spec_warning` event names it), exactly like a nat
   `carry_eligible` stays and must equal `carry_blocked_reason is None`.
 - top level `context_error: {kind, message} | null` from `_fetch_retest_context`, which now
   returns `(data, error)`:
-  - IS 404 `"sample not in any order"` -> `kind="no_order"`,
+  IS answers errors with its envelope, not FastAPI's `detail`; the message is read from
+  `error.message` (falling back to `detail`, then the raw text):
+  - IS 404 `{"error":{"code":"not_found","message":"sample not in any order"}}` -> `kind="no_order"`,
     `message="This sample is not linked to any WooCommerce order, so no retest or add-on order can be created."`
-  - IS 502 whose detail starts with `"WordPress 404"` -> `kind="order_missing"`,
+  - IS 502 `{"error":{"code":"upstream_unavailable","message":"WordPress 404"}}` (message starts
+    with `"WordPress 404"`) -> `kind="order_missing"`,
     `message=f"WooCommerce order {n} no longer exists (it was deleted), so no retest or add-on order can be created."`
     where `n` is the sample's `client_order_number` without the `WP-` prefix.
   - anything else (unreachable, 5xx, unconfigured) -> `kind="unavailable"`,
