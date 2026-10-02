@@ -24,7 +24,12 @@ from auth import get_current_user
 from database import get_db
 from lims_analyses.retest_carry import (
     HPLC_PROFILE_KEYS,
+    LEGACY_ADDON_EXCLUDE,
+    _resolve_retest_keys,
+    carry_blocked_reason,
     carry_eligible_profile_keys,
+    effective_profiles,
+    legacy_mirror_states,
     parse_retest_spec,
     snapshot_profile_keys,
     validate_retest_spec,
@@ -34,10 +39,6 @@ from models import AnalysisProfile, LimsAnalysis, LimsSample
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/samples", tags=["retest"])
-
-# Catalog rows that are aliases of a native profile or are sold through another control
-# (variance = points on the Re-test tab). Never offered as add-ons.
-LEGACY_ADDON_EXCLUDE = frozenset({"hplcpurity_identity", "endotoxin", "sterility_pcr", "variance"})
 
 WP_ADDON_TYPE_BY_PROFILE = {
     "endotoxin-usp85-lal": "endotoxin",
@@ -57,24 +58,66 @@ def _list_or_empty(v):
     return v if isinstance(v, list) else []
 
 
-def _fetch_retest_context(sample_id: str) -> dict | None:
-    """IS resolves the sample's WP order, retest fee, add-on prices and the
-    variance point price. None when unreachable, or 404 (sample is in no
-    WP order): the overlay still renders, with prices and the order block
-    blank."""
+ORDER_GONE_KINDS = ("no_order", "order_missing")
+
+
+def _context_error(kind: str, sample: LimsSample) -> dict:
+    if kind == "no_order":
+        message = ("This sample is not linked to any WooCommerce order, "
+                   "so no retest or add-on order can be created.")
+    elif kind == "order_missing":
+        n = (sample.client_order_number or "").removeprefix("WP-")
+        order = f"WooCommerce order {n}" if n else "The WooCommerce order"
+        message = (f"{order} no longer exists (it was deleted), "
+                   "so no retest or add-on order can be created.")
+    else:
+        message = ("Customer and pricing are unavailable right now "
+                   "(Integration Service or WordPress did not answer).")
+    return {"kind": kind, "message": message}
+
+
+def _fetch_retest_context(sample: LimsSample) -> tuple[dict | None, dict | None]:
+    """(context, error). IS resolves the sample's WP order, retest fee, add-on
+    prices and the variance point price. Context is None when unreachable or
+    the order lookup fails: the overlay still renders, with prices and the
+    order block blank, and `error` says why ({kind, message})."""
     base, key = _is_base_and_key()
     if not base or not key:
-        return None
+        return None, _context_error("unavailable", sample)
     try:
         resp = requests.get(f"{base}/api/service/retest-context",
-                           params={"sample_id": sample_id},
+                           params={"sample_id": sample.sample_id},
                            headers={"X-API-Key": key}, timeout=10)
-        if resp.status_code != 200:
-            return None
-        return resp.json()
+        if resp.status_code == 200:
+            return resp.json(), None
+        detail = _is_envelope_message(resp)
     except Exception as e:  # noqa: BLE001
-        logger.warning("retest_options.context_unavailable sample_id=%s err=%s", sample_id, e)
-        return None
+        logger.warning("retest_options.context_unavailable sample_id=%s err=%s", sample.sample_id, e)
+        return None, _context_error("unavailable", sample)
+    if detail == "sample not in any order":
+        return None, _context_error("no_order", sample)
+    if detail.startswith("WordPress 404"):
+        return None, _context_error("order_missing", sample)
+    return None, _context_error("unavailable", sample)
+
+
+def _is_envelope_message(resp) -> str:
+    """IS error text: its envelope {"error": {"code", "message"}} (what IS
+    actually answers), else FastAPI's {"detail": ...}, else the raw text."""
+    try:
+        err = resp.json().get("error")
+    except Exception:  # noqa: BLE001
+        err = None
+    if isinstance(err, dict) and err.get("message"):
+        return str(err["message"])
+    return _is_error_message(resp)
+
+
+def _refuse_when_order_gone(sample: LimsSample) -> None:
+    """Fail closed BEFORE any IS write: no WP order means no retest/add-on order."""
+    _, error = _fetch_retest_context(sample)
+    if error and error["kind"] in ORDER_GONE_KINDS:
+        raise HTTPException(status_code=409, detail=error["message"])
 
 
 def _best_state(db: Session, sample: LimsSample, service_ids: set[int]) -> str | None:
@@ -110,6 +153,10 @@ def _latest_verified_at(db: Session, sample: LimsSample, service_ids: set[int]):
     return max(times) if times else None
 
 
+_LEGACY_STATE_LABELS = {"published": "Published (SENAITE)", "verified": "Verified (SENAITE)",
+                        "to_be_verified": "Awaiting verification (SENAITE)"}
+
+
 def _state_label(state: str | None, verified_at) -> str:
     if verified_at:
         return f"Verified {verified_at.month}/{verified_at.day}"
@@ -123,24 +170,40 @@ def retest_options(sample_id: str, db: Session = Depends(get_db), _user=Depends(
     sample = db.execute(select(LimsSample).where(LimsSample.sample_id == sample_id)).scalar_one_or_none()
     if sample is None:
         raise HTTPException(status_code=404, detail=f"sample {sample_id!r} not known to Mk1")
-    have = snapshot_profile_keys(sample)
+    effective = effective_profiles(db, sample)
+    have = [e.key for e in effective]
+    # An alias snapshot key reads its member-bearing twin's rows (same profile carry plans on).
+    resolved = _resolve_retest_keys(db, have)
+    wanted = set(have) | set(resolved.values())
     profiles = {p.key: p for p in db.execute(
-        select(AnalysisProfile).where(AnalysisProfile.key.in_(have))).scalars().all()} if have else {}
-    eligible = carry_eligible_profile_keys(db, sample)
+        select(AnalysisProfile).where(AnalysisProfile.key.in_(wanted))).scalars().all()} if have else {}
+    eligible = carry_eligible_profile_keys(db, sample, effective)
+    mirror = legacy_mirror_states(db, sample) if any(e.legacy for e in effective) else {}
     out_profiles = []
-    for key in have:
+    for eff in effective:
+        key = eff.key
         prof = profiles.get(key)
-        svc_ids = {s.id for s in prof.analysis_services} if prof else set()
-        state = _best_state(db, sample, svc_ids)
-        verified_at = _latest_verified_at(db, sample, svc_ids)
+        source = profiles.get(resolved[key])
+        svc_ids = {s.id for s in source.analysis_services} if source else set()
+        if eff.legacy:
+            # SENAITE-era: the mirror state, no reliable verification timestamp.
+            state = mirror.get(key)
+            verified_at = None
+            label = _LEGACY_STATE_LABELS.get(state, "Not verified (SENAITE)")
+        else:
+            state = _best_state(db, sample, svc_ids)
+            verified_at = _latest_verified_at(db, sample, svc_ids)
+            label = _state_label(state, verified_at)
         out_profiles.append({
             "key": key, "name": prof.name if prof else key,
             "carry_eligible": key in eligible,
             "state": state,
             "verified_at": verified_at.isoformat() if verified_at else None,
-            "state_label": _state_label(state, verified_at),
+            "state_label": label,
+            "legacy": eff.legacy,
+            "carry_blocked_reason": carry_blocked_reason(db, sample, eff, eligible),
         })
-    context = _fetch_retest_context(sample.sample_id)
+    context, context_error = _fetch_retest_context(sample)
     price_map = (context or {}).get("addons") or {}
     from lims_analyses.manage_native import _live_parent_service_ids
     live_ids = _live_parent_service_ids(db, sample)
@@ -171,6 +234,8 @@ def retest_options(sample_id: str, db: Session = Depends(get_db), _user=Depends(
         "original_published": sample.status == "published",
         "order_number": sample.client_order_number,
         "profiles": out_profiles, "addons": addons,
+        "profiles_source": effective[0].source if effective else "none",
+        "context_error": context_error,
         "variance": {"point_price": ((context or {}).get("variance") or {}).get("point_price"),
                      "allowed": bool(HPLC_PROFILE_KEYS & set(have))},
         "prices_available": context is not None,
@@ -247,6 +312,7 @@ def create_retest(sample_id: str, req: RetestRequest, db: Session = Depends(get_
     base, key = _is_base_and_key()
     if not base or not key:
         raise HTTPException(status_code=502, detail="Integration Service not configured")
+    _refuse_when_order_gone(sample)
     headers = {"X-API-Key": key, "Idempotency-Key": _idempotency_key(sample.sample_id, spec)}
     try:
         resp = requests.post(f"{base}/api/service/retest-orders",
@@ -324,6 +390,7 @@ def create_addon_order(sample_id: str, req: AddonOrderRequest, db: Session = Dep
     base, key = _is_base_and_key()
     if not base or not key:
         raise HTTPException(status_code=502, detail="Integration Service not configured")
+    _refuse_when_order_gone(sample)
     body = {**req.model_dump(), "profiles": profiles, "sample_id": sample.sample_id,
             "requested_by_user_id": getattr(user, "id", None),
             "requested_at": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")}

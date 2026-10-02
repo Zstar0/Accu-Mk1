@@ -85,6 +85,13 @@ const RULE_SENTENCE =
 const ADDON_BILLING =
   'Add-ons are billed at the listed price unless Billing is Waived.'
 const ADDON_SENTENCE = `${ADDON_BILLING} Existing results are carried to the new sample.`
+const LEGACY_RULE =
+  ' Results from the previous system cannot be carried; re-test them if they are needed on the new certificate.'
+const NO_PROFILES =
+  'No tests on record for this sample; nothing can be re-tested or carried.'
+/** Amber note, shared by the unpaid strip and the context error. */
+const AMBER =
+  'rounded-md border border-amber-500/40 bg-amber-500/10 px-3 text-sm text-amber-900 dark:text-amber-200'
 
 /** Class for a 44 px tap target wrapping a small control. */
 const TARGET = 'inline-flex min-h-11 min-w-11 items-center justify-center'
@@ -268,16 +275,16 @@ export function RetestDialog({
         price:
           pointPrice === null ? null : (state.variancePoints - 1) * pointPrice,
       })
-  } else {
-    for (const a of tickedAddons)
-      summary.push({ key: `addon-${a.key}`, label: a.name, price: a.price })
-    if (state.extraVials > 0)
-      summary.push({
-        key: 'extra-vials',
-        label: `Extra vials, ${state.extraVials}: price set by the shop`,
-        price: 'shop',
-      })
   }
+  // Add-ons ride on both tabs (the Re-test tab's "Also add services").
+  for (const a of tickedAddons)
+    summary.push({ key: `addon-${a.key}`, label: a.name, price: a.price })
+  if (state.extraVials > 0)
+    summary.push({
+      key: 'extra-vials',
+      label: `Extra vials, ${state.extraVials}: price set by the shop`,
+      price: 'shop',
+    })
   const total = summary.some(l => l.price === null)
     ? null
     : summary.reduce(
@@ -286,9 +293,18 @@ export function RetestDialog({
       )
   const excludesExtraVials = summary.some(l => l.price === 'shop')
 
+  const contextError = options.context_error ?? null
+  // No order to bill against: nothing can be created, Waived included.
+  const hardStop =
+    contextError?.kind === 'no_order' || contextError?.kind === 'order_missing'
+      ? contextError.message
+      : null
+  const noProfiles = options.profiles_source === 'none'
+
   const reasonText = state.reason.trim()
   let blocked: string | null = null
   if (tab === 'orders') blocked = null
+  else if (hardStop) blocked = hardStop
   else if (tab === 'retest' && !anyRetest) blocked = 'Tick at least one Re-test'
   else if (tab === 'addons' && tickedAddons.length === 0)
     blocked = 'Tick at least one service'
@@ -299,10 +315,20 @@ export function RetestDialog({
 
   const eligible = profiles.filter(p => p.carry_eligible)
   const ineligible = profiles.filter(p => !p.carry_eligible)
+  // "; A dropped (reason)" per distinct carry_blocked_reason, in row order.
+  const byReason = new Map<string, string[]>()
+  for (const p of ineligible) {
+    const why = p.carry_blocked_reason ?? 'not verified'
+    byReason.set(why, [...(byReason.get(why) ?? []), p.name])
+  }
+  const droppedByReason = [...byReason]
+    .map(([why, n]) => `; ${n.join(', ')} dropped (${why})`)
+    .join('')
   // "When you press Create": built from the same state as the request body,
   // so it cannot say something the request does not do.
   const outcome: string[] = []
-  if (tab === 'retest' ? anyRetest : tickedAddons.length > 0) {
+  // Hard stop: nothing will be created, so there is no outcome to describe.
+  if (!hardStop && (tab === 'retest' ? anyRetest : tickedAddons.length > 0)) {
     const kind = tab === 'retest' ? 'retest order' : 'add-on order'
     const orig = options.context?.order
     const who = orig
@@ -327,6 +353,10 @@ export function RetestDialog({
             ? `; ${names(carried)} carried as verified results`
             : '') +
           (dropped.length ? `; ${names(dropped)} dropped` : '') +
+          (tickedAddons.length ? `; ${names(tickedAddons)} added` : '') +
+          (state.extraVials > 0
+            ? `; ${state.extraVials} extra vial${state.extraVials === 1 ? '' : 's'} shipped`
+            : '') +
           '.'
       )
     } else if (sameSample) {
@@ -345,9 +375,7 @@ export function RetestDialog({
           (eligible.length
             ? `; ${names(eligible)} carried from ${sampleId}`
             : '') +
-          (ineligible.length
-            ? `; ${names(ineligible)} dropped (not verified)`
-            : '') +
+          droppedByReason +
           '.'
       )
     }
@@ -396,9 +424,9 @@ export function RetestDialog({
         carry: carried.map(p => p.key),
         drop: dropped.map(p => p.key),
         add: {
-          profiles: [],
+          profiles: tickedAddons.map(a => a.key),
           variance_points: varianceOn ? state.variancePoints : 0,
-          additional_vials: 0,
+          additional_vials: state.extraVials,
         },
         fee: state.fee,
       }
@@ -461,6 +489,85 @@ export function RetestDialog({
     </div>
   )
 
+  // One add-on table, one `addons` set: rendered on Add services and as
+  // "Also add services" on Re-test (only one tab is mounted at a time).
+  const addonTable = (
+    <Table>
+      <TableHeader>
+        <TableRow>
+          <TableHead className="w-11" />
+          <TableHead>Service</TableHead>
+          <TableHead>Price</TableHead>
+          <TableHead>Vials</TableHead>
+        </TableRow>
+      </TableHeader>
+      <TableBody>
+        {options.addons.map(a => (
+          <TableRow
+            key={a.key}
+            data-testid={`addon-row-${a.key}`}
+            aria-label={a.name}
+            aria-disabled={!a.sellable || undefined}
+            className={a.sellable ? undefined : 'opacity-60'}
+          >
+            <TableCell>
+              <label className={TARGET}>
+                <Checkbox
+                  aria-label={a.name}
+                  checked={state.addons.has(a.key)}
+                  disabled={!a.sellable}
+                  onCheckedChange={c => setAddon(a.key, c === true)}
+                />
+              </label>
+            </TableCell>
+            <TableCell className="whitespace-normal">{a.name}</TableCell>
+            <TableCell className="text-muted-foreground">
+              {!a.sellable
+                ? 'not sold post-order'
+                : a.price === null
+                  ? 'price unavailable'
+                  : formatMoney(a.price)}
+            </TableCell>
+            <TableCell>{a.vials ?? 0}</TableCell>
+          </TableRow>
+        ))}
+      </TableBody>
+    </Table>
+  )
+
+  const moreOptions = (withCheckin: boolean) => (
+    <Collapsible
+      defaultOpen={(withCheckin && state.autoCheckin) || state.extraVials > 0}
+    >
+      <CollapsibleTrigger asChild>
+        <Button variant="ghost" size="sm" className="min-h-11 group/more">
+          More options
+          <ChevronRight className="transition-transform group-data-[state=open]/more:rotate-90" />
+        </Button>
+      </CollapsibleTrigger>
+      <CollapsibleContent className="space-y-2 pt-2 pl-3">
+        <div className="flex flex-wrap items-center gap-2 text-sm">
+          <Label htmlFor="extra-vials">Extra vials to ship</Label>
+          <Input
+            id="extra-vials"
+            type="number"
+            min={0}
+            max={20}
+            value={state.extraVials}
+            onChange={e =>
+              update({ extraVials: clampInt(e.target.value, 0, 20) })
+            }
+            className="w-20 min-h-11"
+          />
+          <span className="text-xs text-muted-foreground">
+            added to the order at the per-vial price, no test
+          </span>
+        </div>
+        {withCheckin && checkin(false)}
+      </CollapsibleContent>
+    </Collapsible>
+  )
+
   const ctx = options.context
   const order = ctx?.order ?? null
   // Older WordPress sends only pending_retest_orders: show those as unpaid rows.
@@ -518,8 +625,20 @@ export function RetestDialog({
             )}
           </div>
         ) : (
-          <p className="text-sm text-muted-foreground">
-            Customer and pricing unavailable
+          !contextError && (
+            <p className="text-sm text-muted-foreground">
+              Customer and pricing unavailable
+            </p>
+          )
+        )}
+
+        {contextError && (
+          <p
+            role="status"
+            data-testid="retest-context-error"
+            className={`${AMBER} py-2`}
+          >
+            {contextError.message}
           </p>
         )}
 
@@ -527,7 +646,7 @@ export function RetestDialog({
           <div
             role="status"
             data-testid="retest-unpaid-strip"
-            className="flex items-center gap-1 rounded-md border border-amber-500/40 bg-amber-500/10 px-3 text-sm text-amber-900 dark:text-amber-200"
+            className={`flex items-center gap-1 ${AMBER}`}
           >
             <span>
               {unpaid.length} unpaid retest order
@@ -559,64 +678,89 @@ export function RetestDialog({
           </TabsList>
 
           <TabsContent value="retest" className="space-y-3">
-            <Table>
-              <TableHeader>
-                <TableRow>
-                  <TableHead>Profile</TableHead>
-                  <TableHead>State</TableHead>
-                  <TableHead className="text-center">Re-test</TableHead>
-                  <TableHead className="text-center">Carry results</TableHead>
-                </TableRow>
-              </TableHeader>
-              <TableBody>
-                {profiles.map(p => {
-                  const row = rowOf(p)
-                  return (
-                    <TableRow
-                      key={p.key}
-                      data-testid={`retest-row-${p.key}`}
-                      aria-label={p.name}
-                    >
-                      <TableCell className="whitespace-normal">
-                        {p.name}
-                      </TableCell>
-                      <TableCell className="text-muted-foreground">
-                        {p.state_label}
-                      </TableCell>
-                      <TableCell className="text-center">
-                        <label className={TARGET}>
-                          <Checkbox
-                            aria-label={`Re-test ${p.name}`}
-                            checked={row.retest}
-                            onCheckedChange={c =>
-                              setRow(p.key, 'retest', c === true)
-                            }
-                          />
-                        </label>
-                      </TableCell>
-                      <TableCell className="text-center whitespace-normal">
-                        <label className={TARGET}>
-                          <Checkbox
-                            aria-label={`Carry results ${p.name}`}
-                            checked={row.carry}
-                            disabled={!p.carry_eligible}
-                            onCheckedChange={c =>
-                              setRow(p.key, 'carry', c === true)
-                            }
-                          />
-                        </label>
-                        {!p.carry_eligible && (
-                          <span className="block text-xs text-muted-foreground">
-                            cannot carry: not verified
-                          </span>
-                        )}
-                      </TableCell>
-                    </TableRow>
-                  )
-                })}
-              </TableBody>
-            </Table>
-            <p className="text-xs text-muted-foreground">{RULE_SENTENCE}</p>
+            {noProfiles ? (
+              <p
+                data-testid="retest-no-profiles"
+                className="py-4 text-sm text-muted-foreground"
+              >
+                {NO_PROFILES}
+              </p>
+            ) : (
+              <Table>
+                <TableHeader>
+                  <TableRow>
+                    <TableHead>Profile</TableHead>
+                    <TableHead>State</TableHead>
+                    <TableHead className="text-center">Re-test</TableHead>
+                    <TableHead className="text-center">Carry results</TableHead>
+                  </TableRow>
+                </TableHeader>
+                <TableBody>
+                  {profiles.map(p => {
+                    const row = rowOf(p)
+                    return (
+                      <TableRow
+                        key={p.key}
+                        data-testid={`retest-row-${p.key}`}
+                        aria-label={p.name}
+                      >
+                        <TableCell className="whitespace-normal">
+                          {p.name}
+                          {p.legacy && (
+                            <span
+                              data-testid={`retest-legacy-tag-${p.key}`}
+                              title="Result from the previous system (SENAITE)"
+                              className="ml-2 rounded border border-border/60 px-1.5 py-0.5 text-xs text-muted-foreground"
+                            >
+                              SENAITE-era
+                            </span>
+                          )}
+                        </TableCell>
+                        <TableCell className="text-muted-foreground">
+                          {p.state_label}
+                        </TableCell>
+                        <TableCell className="text-center">
+                          <label className={TARGET}>
+                            <Checkbox
+                              aria-label={`Re-test ${p.name}`}
+                              checked={row.retest}
+                              onCheckedChange={c =>
+                                setRow(p.key, 'retest', c === true)
+                              }
+                            />
+                          </label>
+                        </TableCell>
+                        <TableCell className="text-center whitespace-normal">
+                          <label className={TARGET}>
+                            <Checkbox
+                              aria-label={`Carry results ${p.name}`}
+                              checked={row.carry}
+                              disabled={!p.carry_eligible}
+                              onCheckedChange={c =>
+                                setRow(p.key, 'carry', c === true)
+                              }
+                            />
+                          </label>
+                          {!p.carry_eligible && (
+                            <span className="block text-xs text-muted-foreground">
+                              {p.carry_blocked_reason ??
+                                'cannot carry: not verified'}
+                            </span>
+                          )}
+                        </TableCell>
+                      </TableRow>
+                    )
+                  })}
+                </TableBody>
+              </Table>
+            )}
+            {!noProfiles && (
+              <p className="text-xs text-muted-foreground">
+                {options.profiles_source === 'rows'
+                  ? RULE_SENTENCE + LEGACY_RULE
+                  : RULE_SENTENCE}
+              </p>
+            )}
 
             {showVariance && (
               <div className="flex flex-wrap items-center gap-2 text-sm">
@@ -658,6 +802,21 @@ export function RetestDialog({
               </div>
             )}
 
+            {!noProfiles && options.addons.length > 0 && (
+              <section
+                data-testid="retest-also-add"
+                aria-labelledby="retest-also-add-title"
+                className="space-y-2 border-t border-border/40 pt-3"
+              >
+                <h3 id="retest-also-add-title" className="text-sm font-medium">
+                  Also add services
+                </h3>
+                {addonTable}
+                <p className="text-xs text-muted-foreground">{ADDON_BILLING}</p>
+                {moreOptions(false)}
+              </section>
+            )}
+
             {billing}
 
             {checkin(true)}
@@ -669,88 +828,12 @@ export function RetestDialog({
                 ? `${sampleId} is in progress: the selected services are added to this sample once the order is paid (or at once if waived).`
                 : `${sampleId} is published: a new sample is created with the existing results carried.`}
             </p>
-            <Table>
-              <TableHeader>
-                <TableRow>
-                  <TableHead className="w-11" />
-                  <TableHead>Service</TableHead>
-                  <TableHead>Price</TableHead>
-                  <TableHead>Vials</TableHead>
-                </TableRow>
-              </TableHeader>
-              <TableBody>
-                {options.addons.map(a => (
-                  <TableRow
-                    key={a.key}
-                    data-testid={`addon-row-${a.key}`}
-                    aria-label={a.name}
-                    aria-disabled={!a.sellable || undefined}
-                    className={a.sellable ? undefined : 'opacity-60'}
-                  >
-                    <TableCell>
-                      <label className={TARGET}>
-                        <Checkbox
-                          aria-label={a.name}
-                          checked={state.addons.has(a.key)}
-                          disabled={!a.sellable}
-                          onCheckedChange={c => setAddon(a.key, c === true)}
-                        />
-                      </label>
-                    </TableCell>
-                    <TableCell className="whitespace-normal">
-                      {a.name}
-                    </TableCell>
-                    <TableCell className="text-muted-foreground">
-                      {!a.sellable
-                        ? 'not sold post-order'
-                        : a.price === null
-                          ? 'price unavailable'
-                          : formatMoney(a.price)}
-                    </TableCell>
-                    <TableCell>{a.vials ?? 0}</TableCell>
-                  </TableRow>
-                ))}
-              </TableBody>
-            </Table>
+            {addonTable}
             <p className="text-xs text-muted-foreground">
               {sameSample ? ADDON_BILLING : ADDON_SENTENCE}
             </p>
-
-            <Collapsible
-              defaultOpen={state.autoCheckin || state.extraVials > 0}
-            >
-              <CollapsibleTrigger asChild>
-                <Button
-                  variant="ghost"
-                  size="sm"
-                  className="min-h-11 group/more"
-                >
-                  More options
-                  <ChevronRight className="transition-transform group-data-[state=open]/more:rotate-90" />
-                </Button>
-              </CollapsibleTrigger>
-              <CollapsibleContent className="space-y-2 pt-2 pl-3">
-                <div className="flex flex-wrap items-center gap-2 text-sm">
-                  <Label htmlFor="extra-vials">Extra vials to ship</Label>
-                  <Input
-                    id="extra-vials"
-                    type="number"
-                    min={0}
-                    max={20}
-                    value={state.extraVials}
-                    onChange={e =>
-                      update({ extraVials: clampInt(e.target.value, 0, 20) })
-                    }
-                    className="w-20 min-h-11"
-                  />
-                  <span className="text-xs text-muted-foreground">
-                    added to the order at the per-vial price, no test
-                  </span>
-                </div>
-                {/* The addon-order route has no auto check-in. */}
-                {!sameSample && checkin(false)}
-              </CollapsibleContent>
-            </Collapsible>
+            {/* The addon-order route has no auto check-in. */}
+            {moreOptions(!sameSample)}
             {billing}
           </TabsContent>
 
@@ -903,6 +986,7 @@ export function RetestDialog({
         <DialogFooter className="sm:items-center">
           {blocked && (
             <span
+              id="retest-disabled-reason"
               data-testid="retest-disabled-reason"
               className="text-sm text-muted-foreground sm:mr-auto"
             >
@@ -922,6 +1006,7 @@ export function RetestDialog({
               className="min-h-11"
               onClick={submit}
               disabled={blocked !== null || pending}
+              aria-describedby={blocked ? 'retest-disabled-reason' : undefined}
             >
               {pending
                 ? 'Creating…'

@@ -7134,7 +7134,15 @@ export async function getSampleRetestInfo(sampleId: string): Promise<SampleRetes
 
 export const HPLC_PROFILE_KEYS = ['hplcpurity_identity', 'hplc-purity-identity'] as const
 
-export interface RetestOptionProfile { key: string; name: string; carry_eligible: boolean; state: string | null; verified_at: string | null; state_label: string }
+export interface RetestOptionProfile {
+  key: string; name: string; carry_eligible: boolean; state: string | null; verified_at: string | null; state_label: string
+  /** Derived from SENAITE-era rows (no catalog snapshot): never carryable. */
+  legacy?: boolean
+  /** Why Carry is disabled; null when eligible. Missing on older backends. */
+  carry_blocked_reason?: string | null
+}
+/** `no_order` / `order_missing` block every create; `unavailable` only blanks prices. */
+export interface RetestContextError { kind: 'no_order' | 'order_missing' | 'unavailable'; message: string }
 export interface RetestOptionAddon { key: string; name: string; wp_type: string | null; price: number | null; vials: number | null; sellable: boolean }
 export interface RetestContextOrderLine { key: string; label: string; price: number }
 export interface RetestContextOrder {
@@ -7191,6 +7199,9 @@ export interface RetestOptions {
   context?: RetestContext | null
   /** False while the original is in progress: Add services then adds to this same sample. Missing = true. */
   original_published?: boolean
+  /** Where `profiles` came from: catalog snapshot, live rows (legacy fallback), or nothing. */
+  profiles_source?: 'snapshot' | 'rows' | 'none'
+  context_error?: RetestContextError | null
 }
 export interface RetestRequestBody {
   retest: string[]

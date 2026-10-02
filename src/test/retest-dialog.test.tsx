@@ -493,7 +493,7 @@ describe('RetestDialog overlay v2', () => {
     )
   })
 
-  it('sends only the active tab half: add-ons ticked on Add services are not sent from Re-test', async () => {
+  it('Re-test tab sends retest + carry + drop + add; add-on ticks are shared with Add services', async () => {
     vi.mocked(createRetest).mockResolvedValue({ order_number: 'WP-7922' })
     const { user } = renderDialog()
     await screen.findByTestId(`retest-row-${HPLC}`)
@@ -502,7 +502,71 @@ describe('RetestDialog overlay v2', () => {
       screen.getByRole('checkbox', { name: 'Rapid Sterility (PCR)' })
     )
     await user.click(screen.getByRole('tab', { name: 'Re-test' }))
+    const alsoAdd = screen.getByTestId('retest-also-add')
+    expect(
+      within(alsoAdd).getByRole('heading', { name: 'Also add services' })
+    ).toBeInTheDocument()
+    expect(
+      within(alsoAdd).getByRole('checkbox', { name: 'Rapid Sterility (PCR)' })
+    ).toBeChecked()
     await user.click(retestBox(HPLC))
+
+    const summary = screen.getByTestId('retest-summary')
+    expect(
+      within(summary).getByText('Rapid Sterility (PCR)')
+    ).toBeInTheDocument()
+    expect(total()).toHaveTextContent('$315.00')
+    const outcome = screen.getByTestId('retest-outcome')
+    expect(outcome).toHaveTextContent(
+      'Creates a WooCommerce retest order for Jane Doe against order WP-3134 ($315.00).'
+    )
+    expect(outcome).toHaveTextContent(
+      'Once paid: a new sample is created with HPLC Purity + Identity re-tested; Heavy Metals carried as verified results; Endotoxin USP85 LAL dropped; Rapid Sterility (PCR) added.'
+    )
+
+    await user.type(screen.getByLabelText('Reason (required)'), 'x')
+    await user.click(
+      screen.getByRole('button', { name: 'Create retest order' })
+    )
+    await waitFor(() =>
+      expect(createRetest).toHaveBeenCalledWith('P-9001', {
+        retest: [HPLC],
+        carry: [HM],
+        drop: [ENDO],
+        add: {
+          profiles: ['rapid-sterility-pcr'],
+          variance_points: 0,
+          additional_vials: 0,
+        },
+        auto_checkin: false,
+        fee: 'paid',
+        reason: 'x',
+      })
+    )
+  })
+
+  it('Re-test tab: Also add services works on its own, extra vials included', async () => {
+    vi.mocked(createRetest).mockResolvedValue({ order_number: 'WP-7923' })
+    const { user } = renderDialog()
+    await screen.findByTestId(`retest-row-${HPLC}`)
+    const alsoAdd = screen.getByTestId('retest-also-add')
+    expect(
+      within(alsoAdd).getByRole('checkbox', { name: 'Mystery Assay' })
+    ).toBeDisabled()
+    await user.click(retestBox(HPLC))
+    await user.click(
+      within(alsoAdd).getByRole('checkbox', { name: 'Rapid Sterility (PCR)' })
+    )
+    await user.click(
+      within(alsoAdd).getByRole('button', { name: 'More options' })
+    )
+    await user.clear(screen.getByLabelText('Extra vials to ship'))
+    await user.type(screen.getByLabelText('Extra vials to ship'), '1')
+    expect(total()).toHaveTextContent('Total (excluding extra vials)$315.00')
+    expect(screen.getByTestId('retest-outcome')).toHaveTextContent(
+      'Once paid: a new sample is created with HPLC Purity + Identity re-tested; Heavy Metals carried as verified results; Endotoxin USP85 LAL dropped; Rapid Sterility (PCR) added; 1 extra vial shipped.'
+    )
+
     await user.type(screen.getByLabelText('Reason (required)'), 'x')
     await user.click(
       screen.getByRole('button', { name: 'Create retest order' })
@@ -512,8 +576,33 @@ describe('RetestDialog overlay v2', () => {
         'P-9001',
         expect.objectContaining({
           retest: [HPLC],
-          add: { profiles: [], variance_points: 0, additional_vials: 0 },
+          add: {
+            profiles: ['rapid-sterility-pcr'],
+            variance_points: 0,
+            additional_vials: 1,
+          },
         })
+      )
+    )
+  })
+
+  it('Add services tab still sends retest: [] when Re-test rows are ticked', async () => {
+    vi.mocked(createRetest).mockResolvedValue({ order_number: 'WP-7924' })
+    const { user } = renderDialog()
+    await screen.findByTestId(`retest-row-${HPLC}`)
+    await user.click(retestBox(HPLC))
+    await user.click(screen.getByRole('tab', { name: 'Add services' }))
+    await user.click(
+      screen.getByRole('checkbox', { name: 'Rapid Sterility (PCR)' })
+    )
+    await user.type(screen.getByLabelText('Reason (required)'), 'x')
+    await user.click(
+      screen.getByRole('button', { name: 'Create add-on order (new sample)' })
+    )
+    await waitFor(() =>
+      expect(createRetest).toHaveBeenCalledWith(
+        'P-9001',
+        expect.objectContaining({ retest: [], carry: [HPLC, HM] })
       )
     )
   })
@@ -865,5 +954,198 @@ describe('RetestDialog overlay v2', () => {
     const applied = screen.getByTestId('retest-order-3279')
     expect(within(applied).getByText('applied')).toBeInTheDocument()
     expect(within(applied).queryByRole('link')).not.toBeInTheDocument()
+  })
+})
+
+describe('RetestDialog visible reasons', () => {
+  const ORDER_GONE =
+    'WooCommerce order 3555 no longer exists (it was deleted), so no retest or add-on order can be created.'
+  const UNAVAILABLE =
+    'Customer and pricing are unavailable right now (Integration Service or WordPress did not answer).'
+  const LEGACY_REASON =
+    'SENAITE-era result: cannot be carried, re-test it instead'
+
+  it('order_missing: amber note, Create disabled with the message on both tabs even when Waived', async () => {
+    vi.mocked(getRetestOptions).mockResolvedValue({
+      ...OPTIONS,
+      context: null,
+      prices_available: false,
+      context_error: { kind: 'order_missing', message: ORDER_GONE },
+    })
+    const { user } = renderDialog()
+    const note = await screen.findByTestId('retest-context-error')
+    expect(note).toHaveTextContent(ORDER_GONE)
+    expect(note).toHaveAttribute('role', 'status')
+    expect(
+      screen.queryByText('Customer and pricing unavailable')
+    ).not.toBeInTheDocument()
+
+    await user.click(retestBox(HPLC))
+    await user.type(screen.getByLabelText('Reason (required)'), 'x')
+    await user.click(screen.getByLabelText('Waived (whole order free)'))
+    expect(disabledReason()).toHaveTextContent(ORDER_GONE)
+    expect(disabledReason()).toHaveAttribute('id', 'retest-disabled-reason')
+    const create = screen.getByRole('button', { name: 'Create retest order' })
+    expect(create).toBeDisabled()
+    expect(create).toHaveAccessibleDescription(ORDER_GONE)
+    // Nothing will be created, so no "When you press Create" block.
+    expect(screen.queryByTestId('retest-outcome')).not.toBeInTheDocument()
+
+    await user.click(screen.getByRole('tab', { name: 'Add services' }))
+    await user.click(
+      screen.getByRole('checkbox', { name: 'Rapid Sterility (PCR)' })
+    )
+    await user.click(screen.getByLabelText('Waived (whole order free)'))
+    expect(disabledReason()).toHaveTextContent(ORDER_GONE)
+    expect(
+      screen.getByRole('button', { name: 'Create add-on order (new sample)' })
+    ).toBeDisabled()
+    expect(screen.queryByTestId('retest-outcome')).not.toBeInTheDocument()
+  })
+
+  it('no_order blocks the same-sample add-on route too', async () => {
+    const message =
+      'This sample is not linked to any WooCommerce order, so no retest or add-on order can be created.'
+    vi.mocked(getRetestOptions).mockResolvedValue({
+      ...OPTIONS,
+      original_published: false,
+      context: null,
+      context_error: { kind: 'no_order', message },
+    })
+    const { user } = renderDialog()
+    await screen.findByTestId(`retest-row-${HPLC}`)
+    await user.click(screen.getByRole('tab', { name: 'Add services' }))
+    expect(disabledReason()).toHaveTextContent(message)
+    expect(
+      screen.getByRole('button', { name: 'Add services to P-9001' })
+    ).toBeDisabled()
+  })
+
+  it('unavailable: note shown, Waived still unblocks Create', async () => {
+    vi.mocked(getRetestOptions).mockResolvedValue({
+      ...OPTIONS,
+      context: null,
+      prices_available: false,
+      context_error: { kind: 'unavailable', message: UNAVAILABLE },
+    })
+    const { user } = renderDialog()
+    expect(await screen.findByTestId('retest-context-error')).toHaveTextContent(
+      UNAVAILABLE
+    )
+    await user.click(retestBox(HPLC))
+    await user.type(screen.getByLabelText('Reason (required)'), 'x')
+    expect(disabledReason()).toHaveTextContent('Pricing unavailable')
+    await user.click(screen.getByLabelText('Waived (whole order free)'))
+    expect(disabledReason()).not.toBeInTheDocument()
+    const create = screen.getByRole('button', { name: 'Create retest order' })
+    expect(create).toBeEnabled()
+    expect(create).not.toHaveAttribute('aria-describedby')
+  })
+
+  it('legacy rows: SENAITE-era tag, Carry disabled with the backend reason, rule sentence suffix', async () => {
+    vi.mocked(getRetestOptions).mockResolvedValue({
+      ...OPTIONS,
+      profiles_source: 'rows',
+      profiles: OPTIONS.profiles.map(p => ({
+        ...p,
+        carry_eligible: false,
+        legacy: p.key !== HM,
+        carry_blocked_reason:
+          p.key === HM ? 'a member result is still pending' : LEGACY_REASON,
+      })),
+    })
+    renderDialog()
+    await screen.findByTestId(`retest-row-${HPLC}`)
+    expect(screen.getByTestId(`retest-legacy-tag-${HPLC}`)).toHaveTextContent(
+      'SENAITE-era'
+    )
+    expect(
+      screen.queryByTestId(`retest-legacy-tag-${HM}`)
+    ).not.toBeInTheDocument()
+    expect(carryBox(HPLC)).toBeDisabled()
+    expect(carryBox(HPLC)).not.toBeChecked()
+    expect(within(row(HPLC)).getByText(LEGACY_REASON)).toBeInTheDocument()
+    expect(
+      within(row(HM)).getByText('a member result is still pending')
+    ).toBeInTheDocument()
+    expect(
+      screen.queryByText('cannot carry: not verified')
+    ).not.toBeInTheDocument()
+    expect(
+      screen.getByText(
+        'Rows not re-tested are carried as verified results linked to this sample. Untick Carry to leave a result off the new sample. Results from the previous system cannot be carried; re-test them if they are needed on the new certificate.'
+      )
+    ).toBeInTheDocument()
+  })
+
+  it('Add services outcome groups dropped rows by carry_blocked_reason', async () => {
+    vi.mocked(getRetestOptions).mockResolvedValue({
+      ...OPTIONS,
+      profiles_source: 'rows',
+      profiles: OPTIONS.profiles.map(p =>
+        p.key === HPLC
+          ? {
+              ...p,
+              carry_eligible: false,
+              legacy: true,
+              carry_blocked_reason: LEGACY_REASON,
+            }
+          : p.key === ENDO
+            ? { ...p, carry_blocked_reason: 'not verified yet' }
+            : { ...p, carry_blocked_reason: null }
+      ),
+    })
+    const { user } = renderDialog()
+    await screen.findByTestId(`retest-row-${HPLC}`)
+    await user.click(screen.getByRole('tab', { name: 'Add services' }))
+    await user.click(
+      screen.getByRole('checkbox', { name: 'Rapid Sterility (PCR)' })
+    )
+    expect(screen.getByTestId('retest-outcome')).toHaveTextContent(
+      `Once paid: a new sample is created with Rapid Sterility (PCR); Heavy Metals carried from P-9001; HPLC Purity + Identity dropped (${LEGACY_REASON}); Endotoxin USP85 LAL dropped (not verified yet).`
+    )
+  })
+
+  it('profiles_source none: empty-state sentence replaces the table, Create blocked', async () => {
+    vi.mocked(getRetestOptions).mockResolvedValue({
+      ...OPTIONS,
+      profiles: [],
+      profiles_source: 'none',
+    })
+    const { user } = renderDialog()
+    expect(await screen.findByTestId('retest-no-profiles')).toHaveTextContent(
+      'No tests on record for this sample; nothing can be re-tested or carried.'
+    )
+    expect(screen.queryAllByTestId(/^retest-row-/)).toHaveLength(0)
+    expect(screen.queryByTestId('retest-also-add')).not.toBeInTheDocument()
+    await user.type(screen.getByLabelText('Reason (required)'), 'x')
+    expect(disabledReason()).toHaveTextContent('Tick at least one Re-test')
+    expect(
+      screen.getByRole('button', { name: 'Create retest order' })
+    ).toBeDisabled()
+
+    await user.click(screen.getByRole('tab', { name: 'Add services' }))
+    await user.click(
+      screen.getByRole('checkbox', { name: 'Rapid Sterility (PCR)' })
+    )
+    expect(
+      screen.getByRole('button', { name: 'Create add-on order (new sample)' })
+    ).toBeEnabled()
+  })
+
+  it("older backend (new fields absent): no note, no tag, today's carry text and rule sentence", async () => {
+    renderDialog()
+    await screen.findByTestId(`retest-row-${HPLC}`)
+    expect(screen.queryByTestId('retest-context-error')).not.toBeInTheDocument()
+    expect(screen.queryByTestId('retest-no-profiles')).not.toBeInTheDocument()
+    expect(screen.queryAllByTestId(/^retest-legacy-tag-/)).toHaveLength(0)
+    expect(
+      within(row(ENDO)).getByText('cannot carry: not verified')
+    ).toBeInTheDocument()
+    expect(
+      screen.getByText(
+        'Rows not re-tested are carried as verified results linked to this sample. Untick Carry to leave a result off the new sample.'
+      )
+    ).toBeInTheDocument()
   })
 })

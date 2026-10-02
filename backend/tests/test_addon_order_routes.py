@@ -33,6 +33,15 @@ def db_session():
     s.close()
 
 
+@pytest.fixture(autouse=True)
+def _is_context_down():
+    """The create routes look up the IS order context before posting (409 guard);
+    default it to unreachable so no test touches the network. A test's own
+    patch of requests.get overrides this one."""
+    with patch("lims_analyses.retest_routes.requests.get", side_effect=ConnectionError("down")):
+        yield
+
+
 @pytest.fixture
 def client(db_session):
     app.dependency_overrides[get_db] = lambda: (yield db_session)
@@ -390,3 +399,24 @@ def test_activity_label_for_addon_events():
     from main import retest_activity_label
     assert retest_activity_label("addon_services_applied", {"label": "Services added"}) == "Services added"
     assert retest_activity_label("addon_order_requested", {"label": "Add-on order 1"}) == "Add-on order 1"
+
+
+@pytest.mark.parametrize("status_code,detail,needle", [
+    (404, "sample not in any order", "not linked to any WooCommerce order"),
+    (502, "WordPress 404", "WooCommerce order 8600 no longer exists"),
+    # IS's real error envelope.
+    (404, {"error": {"code": "not_found", "message": "sample not in any order"}},
+     "not linked to any WooCommerce order"),
+    (502, {"error": {"code": "upstream_unavailable", "message": "WordPress 404"}},
+     "WooCommerce order 8600 no longer exists"),
+])
+def test_addon_order_409_when_wp_order_gone_never_posts(client, db_session, status_code, detail, needle):
+    _seed(db_session)
+    ctx = MagicMock(status_code=status_code, text="x")
+    ctx.json.return_value = {"detail": detail} if not isinstance(detail, dict) else detail
+    with patch.dict(os.environ, ENV), \
+            patch("lims_analyses.retest_routes.requests.get", return_value=ctx), \
+            patch("lims_analyses.retest_routes.requests.post") as post:
+        r = client.post("/api/samples/P-5191/addon-order", json=_body())
+    assert r.status_code == 409 and needle in r.json()["detail"]
+    post.assert_not_called()
