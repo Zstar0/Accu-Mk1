@@ -367,3 +367,18 @@ describe('useSampleSla', () => {
     expect(sent.map(i => i.target_minutes).sort((a, b) => a - b)).toEqual([1440, 6720])
   })
 })
+
+describe('useSampleSla: native-born sample (no UID)', () => {
+  it('keys the batch by sample id and returns a snapshot', async () => {
+    fetchSlaStatusesMock.mockResolvedValue([
+      {
+        key: 'P-5028|no-group',
+        status: { target_minutes: 1440, elapsed_minutes: 60, remaining_minutes: 1380, breached: false },
+      },
+    ])
+    const lookup = makeLookup({ sample_id: 'P-5028', sample_uid: null } as never)
+    const { result } = renderHook(() => useSampleSla(lookup), { wrapper })
+    await waitFor(() => expect(result.current.snapshots).toHaveLength(1))
+    expect(fetchSlaStatusesMock.mock.calls[0]?.[0]?.[0]?.key).toBe('P-5028|no-group')
+  })
+})
