@@ -57,6 +57,7 @@ import {
   DropdownMenuItem,
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu'
+import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
 import { toast } from 'sonner'
 import {
   EMPTY_PROMOTION_INDEX,
@@ -85,6 +86,9 @@ import {
   cancelScheduledPublish,
   regenPrimaryCOA,
   regenAdditionalCOA,
+  revokeCoaGeneration,
+  getCoaRevokePreview,
+  setCoaForwardEnabled,
   listSamplePreps,
   listAnalysisServices,
   addAnalysisToSample,
@@ -101,6 +105,7 @@ import {
   type SenaitePublishedCOA,
   type AdditionalCOAConfig,
   type ExplorerCOAGeneration,
+  type RevokePreviewItem,
   type WooOrder,
   type SamplePrep,
   type HplcScanMatch,
@@ -253,6 +258,7 @@ import { VialsQuickLookDialog } from '@/components/senaite/VialsQuickLookDialog'
 import { EntityFlagButton } from '@/components/flags/EntityFlagButton'
 import { useRegisterActiveFlagEntity } from '@/components/flags/use-active-flag-entity'
 import { useAuthStore } from '@/store/auth-store'
+import { useCoaRegenStore } from '@/store/coa-regen-store'
 import {
   Eye,
   Microscope,
@@ -562,6 +568,53 @@ function formatFileSize(bytes: number | null): string {
   return `${(bytes / (1024 * 1024)).toFixed(2)} MB`
 }
 
+/** Superseded and revoked generations are retired: never "current" for anything. */
+export function isRetiredGeneration(g: ExplorerCOAGeneration): boolean {
+  return g.status === 'superseded' || g.status === 'revoked'
+}
+
+/**
+ * Earlier versions of a certificate: the superseded generations whose recorded
+ * replacement chain (superseded_by_id) ends at `currentId`. Brand-correct by
+ * construction (another brand's history never points here). A row with no
+ * recorded link, or a cycle, is left out. Newest first.
+ */
+export function selectEarlierVersions(
+  gens: ExplorerCOAGeneration[],
+  currentId: string | null
+): ExplorerCOAGeneration[] {
+  if (!currentId) return []
+  const byId = new Map(gens.map(g => [g.id, g]))
+  const endsAtCurrent = (start: ExplorerCOAGeneration): boolean => {
+    const seen = new Set<string>()
+    let cur: ExplorerCOAGeneration | undefined = start
+    while (cur && cur.superseded_by_id && !seen.has(cur.id)) {
+      if (cur.superseded_by_id === currentId) return true
+      seen.add(cur.id)
+      cur = byId.get(cur.superseded_by_id)
+    }
+    return false
+  }
+  return gens
+    .filter(g => g.status === 'superseded' && g.id !== currentId && endsAtCurrent(g))
+    .sort((a, b) => b.generation_number - a.generation_number)
+}
+
+/**
+ * The ledger generation behind the certificate a SENAITE-era card displays,
+ * matched by its verification code. No stand-in: when the ledger has moved on
+ * (a regen whose SENAITE attachment failed leaves the old report attached
+ * while a newer code is published), the card's Manage controls must not act
+ * on the newer root, so the caller gets null and shows no Manage.
+ */
+export function selectDisplayedGeneration(
+  gens: ExplorerCOAGeneration[],
+  verificationCode: string | null | undefined
+): ExplorerCOAGeneration | null {
+  if (!verificationCode) return null
+  return gens.find(g => g.verification_code === verificationCode) ?? null
+}
+
 /**
  * Select root (primary) COA generations — those with no parent generation —
  * sorted newest first. Used as a fallback for the "Generated COAs" card when
@@ -594,7 +647,7 @@ export function selectVialGenerations(
 ): ExplorerCOAGeneration[] {
   const byVial = new Map<number, ExplorerCOAGeneration>()
   for (const g of gens) {
-    if (g.vial_sequence == null || g.status === 'superseded') continue
+    if (g.vial_sequence == null || isRetiredGeneration(g)) continue
     const cur = byVial.get(g.vial_sequence)
     if (!cur) {
       byVial.set(g.vial_sequence, g)
@@ -626,7 +679,7 @@ export function selectRegularGenerations(
 ): ExplorerCOAGeneration[] {
   let cur: ExplorerCOAGeneration | null = null
   for (const g of gens) {
-    if (!g.is_regular_coa || g.status === 'superseded') continue
+    if (!g.is_regular_coa || isRetiredGeneration(g)) continue
     if (!cur) {
       cur = g
       continue
@@ -643,7 +696,7 @@ export function selectRegularGenerations(
 }
 
 /** Derive a human-readable release status from the generation + ingestion records. */
-function coaReleaseStatus(gen: ExplorerCOAGeneration | null | undefined): {
+export function coaReleaseStatus(gen: ExplorerCOAGeneration | null | undefined): {
   label: string
   color: 'amber' | 'emerald' | 'red' | 'zinc'
   title: string
@@ -659,6 +712,14 @@ function coaReleaseStatus(gen: ExplorerCOAGeneration | null | undefined): {
       label: 'Generated',
       color: 'amber',
       title: 'COA saved to SENAITE — not yet published',
+    }
+  if (gen.status === 'revoked')
+    return {
+      label: 'Revoked',
+      color: 'red',
+      title: gen.revocation_reason
+        ? `Revoked: ${gen.revocation_reason}`
+        : 'Revoked by the lab. This certificate no longer stands.',
     }
   if (gen.status === 'superseded')
     return {
@@ -735,23 +796,28 @@ function GeneratedCOAPdfButton({
  * skip_additional_coas, mints a new primary code, and only best-effort
  * attaches to SENAITE — additional COAs keep their codes.
  */
-function PrimaryRegenButton({
+export function PrimaryRegenButton({
   sampleId,
   onRegenerated,
 }: {
   sampleId: string
   onRegenerated: () => void
 }) {
-  const [regenerating, setRegenerating] = useState(false)
+  // Store-backed, not local: this button is mounted inside the Manage popover,
+  // which unmounts on close. The in-flight flag has to outlive that.
+  const regenerating = useCoaRegenStore(s => s.inFlight[sampleId] === true)
+  const startRegen = useCoaRegenStore(s => s.start)
+  const finishRegen = useCoaRegenStore(s => s.finish)
 
   const handleRegen = async () => {
+    if (regenerating) return
     const confirmed = window.confirm(
       `Regenerate & republish the primary COA for ${sampleId}?\n\n` +
         `This mints a NEW verification code for the primary.\n` +
         `Additional COAs keep their existing codes (untouched).`
     )
     if (!confirmed) return
-    setRegenerating(true)
+    startRegen(sampleId)
     try {
       const result = await regenPrimaryCOA(sampleId)
       if (result.success) {
@@ -769,7 +835,7 @@ function PrimaryRegenButton({
         description: err instanceof Error ? err.message : 'Unknown error',
       })
     } finally {
-      setRegenerating(false)
+      finishRegen(sampleId)
     }
   }
 
@@ -804,15 +870,424 @@ function PrimaryRegenButton({
  * the current published root; the Core COA card omits it (a child is not a
  * primary). Exported for the render test.
  */
+/**
+ * The lab's per-COA switch. The Integration Service turns it on when a
+ * publish replaces the certificate (ruling 2026-09-29). On: the public page
+ * shows a Superseded notice with a link to the current certificate (the
+ * prelim-to-final flow). Off: it shows this superseded COA as issued.
+ */
+export function ForwardToCurrentToggle({
+  gen,
+  onChanged,
+  hideLabel,
+}: {
+  gen: ExplorerCOAGeneration
+  onChanged?: () => void
+  hideLabel?: boolean
+}) {
+  return (
+    <span
+      className="flex items-center gap-1.5 text-[11px] text-muted-foreground select-none"
+      title="On (set automatically when a newer certificate replaces this one): the public page shows a Superseded notice with a link to the current certificate. Off: the public page shows this COA as issued."
+    >
+      <Checkbox
+        aria-label="Forward to current"
+        checked={!!gen.forward_enabled}
+        onCheckedChange={async checked => {
+          const enabled = checked === true
+          try {
+            await setCoaForwardEnabled(gen.id, enabled)
+            toast.success(enabled ? 'Forwarding enabled' : 'Forwarding disabled', {
+              description: gen.verification_code,
+            })
+            onChanged?.()
+          } catch (err) {
+            toast.error('Forward update failed', {
+              description: err instanceof Error ? err.message : 'Unknown error',
+            })
+          }
+        }}
+      />
+      {!hideLabel && <span>Forward to current</span>}
+    </span>
+  )
+}
+
+/**
+ * Revoke an issued COA generation. Terminal: the public page shows
+ * "Certificate Revoked" with the reason and no results; nothing replaces it.
+ *
+ * On a primary the lab may also take every other certificate issued for the
+ * sample (published and superseded, any kind, whichever primary it hangs
+ * off). The dialog previews exactly which codes that is and sends that list
+ * back, so the server revokes what was shown and nothing more. Admin only:
+ * the server refuses anyone else, so the trigger is hidden for everyone else.
+ */
+export function RevokeCOADialog({
+  gen,
+  onRevoked,
+  open,
+  onOpenChange,
+  hideTrigger,
+}: {
+  gen: ExplorerCOAGeneration
+  onRevoked?: () => void
+  open?: boolean
+  onOpenChange?: (open: boolean) => void
+  hideTrigger?: boolean
+}) {
+  const isAdmin = useAuthStore(s => s.user?.role === 'admin')
+  const [ownOpen, setOwnOpen] = useState(false)
+  const isOpen = open ?? ownOpen
+  const setOpenState = (o: boolean) => {
+    if (open === undefined) setOwnOpen(o)
+    onOpenChange?.(o)
+  }
+  const [reason, setReason] = useState('')
+  const [busy, setBusy] = useState(false)
+  const [includeOthers, setIncludeOthers] = useState(false)
+  const [emailCustomer, setEmailCustomer] = useState(true)
+  const [preview, setPreview] = useState<RevokePreviewItem[] | null>(null)
+  const [previewError, setPreviewError] = useState<string | null>(null)
+  const isPrimary = gen.parent_generation_id == null
+
+  const loadPreview = async () => {
+    setPreviewError(null)
+    try {
+      const p = await getCoaRevokePreview(gen.id)
+      setPreview(p.others)
+    } catch (err) {
+      setPreview(null)
+      setPreviewError(err instanceof Error ? err.message : 'Unknown error')
+    }
+  }
+
+  const includeCodes =
+    includeOthers && preview ? preview.map(p => p.verification_code) : []
+  const count = 1 + includeCodes.length
+  const canSubmit =
+    !busy && reason.trim().length > 0 && (!includeOthers || preview !== null)
+
+  const reset = () => {
+    setReason('')
+    setIncludeOthers(false)
+    setEmailCustomer(true)
+    setPreview(null)
+    setPreviewError(null)
+  }
+
+  const handleRevoke = async () => {
+    setBusy(true)
+    try {
+      const result = await revokeCoaGeneration(gen.id, reason.trim(), includeCodes, emailCustomer)
+      const codes = result.revoked.map(r => r.verification_code)
+      toast.success(
+        codes.length === 1 ? `Revoked ${codes[0]}` : `Revoked ${codes.length} certificates`,
+        { description: codes.length > 1 ? codes.join(', ') : undefined }
+      )
+      if (result.skipped.length > 0) {
+        toast.warning('Some certificates were not revoked', {
+          description: `${result.skipped.join(', ')} changed since the preview. Open Revoke again to see the current list.`,
+        })
+      }
+      if (!result.wp_notified) {
+        toast.warning('Revoked, but the customer was not updated', {
+          description:
+            result.wp_error ??
+            'WordPress did not accept the notice. The portal and email need a manual follow-up.',
+        })
+      }
+      setOpenState(false)
+      reset()
+      onRevoked?.()
+    } catch (err) {
+      toast.error('Revoke failed', {
+        description: err instanceof Error ? err.message : 'Unknown error',
+      })
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  if (!isAdmin) return null
+
+  return (
+    <>
+      {!hideTrigger && (
+        <Button
+          type="button"
+          variant="ghost"
+          size="sm"
+          className="h-6 px-2 text-[11px] text-red-600 hover:text-red-700"
+          onClick={() => setOpenState(true)}
+        >
+          Revoke…
+        </Button>
+      )}
+      <Dialog
+        open={isOpen}
+        onOpenChange={o => {
+          setOpenState(o)
+          if (!o) reset()
+        }}
+      >
+        <DialogContent className="max-w-md">
+          <DialogHeader>
+            <DialogTitle>Revoke COA {gen.verification_code}</DialogTitle>
+          </DialogHeader>
+          <p className="text-xs text-muted-foreground -mt-2">
+            This is final. The public verification page will show &quot;Certificate
+            Revoked&quot; with the reason below and no results. Nothing replaces a
+            revoked certificate; regenerate if a corrected COA is needed.
+          </p>
+          <Textarea
+            value={reason}
+            onChange={e => setReason(e.target.value)}
+            placeholder="Reason (printed on the public verdict)"
+            rows={3}
+          />
+          {isPrimary && (
+            <div className="space-y-1.5">
+              <label className="flex items-center gap-2 text-xs select-none cursor-pointer">
+                <Checkbox
+                  aria-label="Also revoke every other certificate issued for this sample"
+                  checked={includeOthers}
+                  onCheckedChange={checked => {
+                    const on = checked === true
+                    setIncludeOthers(on)
+                    if (on && preview === null) void loadPreview()
+                  }}
+                />
+                <span>Also revoke every other certificate issued for this sample</span>
+              </label>
+              {includeOthers && previewError && (
+                <p className="text-[11px] text-red-500 pl-6">
+                  Could not load the list: {previewError}
+                </p>
+              )}
+              {includeOthers && preview !== null && preview.length === 0 && (
+                <p className="text-[11px] text-muted-foreground pl-6">
+                  Nothing else is issued for this sample.
+                </p>
+              )}
+              {includeOthers && preview !== null && preview.length > 0 && (
+                <ul
+                  className="text-[11px] pl-6 space-y-0.5"
+                  aria-label="Certificates that will also be revoked"
+                >
+                  {preview.map(p => (
+                    <li key={p.generation_id} className="flex items-center gap-2">
+                      <span className="font-mono">{p.verification_code}</span>
+                      <span className="text-muted-foreground">
+                        {p.kind}
+                        {p.brand ? ` (${p.brand})` : ''} · {p.status}
+                      </span>
+                    </li>
+                  ))}
+                </ul>
+              )}
+            </div>
+          )}
+          <label className="flex items-center gap-2 text-xs select-none cursor-pointer">
+            <Checkbox
+              aria-label="Email the customer about this revocation"
+              checked={emailCustomer}
+              onCheckedChange={checked => setEmailCustomer(checked === true)}
+            />
+            <span>Email the customer about this revocation</span>
+          </label>
+          {!emailCustomer && (
+            <p className="text-[11px] text-muted-foreground pl-6">
+              No email goes out. The portal and the public page still show Revoked.
+            </p>
+          )}
+          <div className="flex justify-end gap-2">
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              onClick={() => {
+                setOpenState(false)
+                reset()
+              }}
+              disabled={busy}
+            >
+              Cancel
+            </Button>
+            <Button
+              type="button"
+              variant="destructive"
+              size="sm"
+              onClick={() => void handleRevoke()}
+              disabled={!canSubmit}
+            >
+              {busy
+                ? 'Revoking…'
+                : `Revoke ${count} certificate${count === 1 ? '' : 's'}`}
+            </Button>
+          </div>
+        </DialogContent>
+      </Dialog>
+    </>
+  )
+}
+
+const FORWARD_HELP =
+  'This certificate was replaced by a newer one. On (set automatically when it is replaced): the public page shows a Superseded notice and links to the current certificate. Off: the public page still shows it exactly as issued, with no notice. Certificates replaced before this release stay off until you switch them on. PDF downloads keep working either way. Any lab user can switch this.'
+const REGEN_HELP_PRIMARY =
+  'Builds a new primary generation with a new verification code and publishes it. This certificate becomes Superseded and stays verifiable. Additional COAs keep their codes.'
+const REGEN_HELP_ADDITIONAL =
+  'Builds a new generation of this additional COA with a new verification code and publishes it. This one becomes Superseded and stays verifiable.'
+const REVOKE_HELP =
+  'Withdraws the certificate permanently. The public page and the AccuVerify badge show Certificate Revoked with your reason, the customer portal marks it Revoked and its PDF can no longer be downloaded, and the customer is emailed unless you switch that off. Nothing replaces a revoked certificate; regenerate if a corrected one is needed. On a primary you can also revoke every other certificate of the sample in one action. Admins only.'
+
+function ManageRow({
+  title,
+  hint,
+  help,
+  destructive,
+  children,
+}: {
+  title: string
+  hint: string
+  help: string
+  destructive?: boolean
+  children: React.ReactNode
+}) {
+  return (
+    <div className="flex items-start justify-between gap-3">
+      <div className="min-w-0 space-y-0.5">
+        <div className="flex items-center gap-1.5">
+          <span className={cn('text-xs font-medium', destructive && 'text-red-600')}>
+            {title}
+          </span>
+          <HoverTooltip>
+            <TooltipTrigger asChild>
+              <button
+                type="button"
+                className="inline-flex text-muted-foreground/70 hover:text-foreground"
+                aria-label={`About ${title}`}
+              >
+                <Info size={12} />
+              </button>
+            </TooltipTrigger>
+            <TooltipContent side="top" className="max-w-xs text-[11px] leading-snug">
+              {help}
+            </TooltipContent>
+          </HoverTooltip>
+        </div>
+        <p className="text-[11px] text-muted-foreground">{hint}</p>
+      </div>
+      <div className="shrink-0 flex items-center">{children}</div>
+    </div>
+  )
+}
+
+/**
+ * Per-row popover that gathers the lab COA actions (Forward to current,
+ * Regen & Republish, Revoke) behind a single "Manage" trigger, each with a
+ * one-line hint and a hover help icon. View Digital COA and PDF stay inline
+ * at the call site; this only replaces the inline control clusters.
+ */
+export function CoaManagePopover({
+  gen,
+  onStateChanged,
+  regen,
+  regenHelp = REGEN_HELP_PRIMARY,
+}: {
+  gen: ExplorerCOAGeneration
+  onStateChanged?: () => void
+  /** The row's existing regen control (PrimaryRegenButton or the ACOA Regen button), rendered inside the popover. */
+  regen?: React.ReactNode
+  regenHelp?: string
+}) {
+  const isAdmin = useAuthStore(s => s.user?.role === 'admin')
+  const [open, setOpen] = useState(false)
+  const [revokeOpen, setRevokeOpen] = useState(false)
+  const issued = gen.status === 'published' || gen.status === 'superseded'
+  const showForward = gen.status === 'superseded'
+  const showRevoke = isAdmin && issued
+  const showRegen = regen != null
+  if (!showForward && !showRevoke && !showRegen) return null
+  return (
+    <>
+      <Popover open={open} onOpenChange={setOpen}>
+        <PopoverTrigger asChild>
+          <Button type="button" variant="outline" size="sm" className="h-6 px-2 text-[11px]">
+            Manage
+          </Button>
+        </PopoverTrigger>
+        <PopoverContent align="end" className="w-80 p-3 space-y-3">
+          <div className="flex items-center gap-2 text-xs">
+            <span className="font-mono">{gen.verification_code}</span>
+            <span className="text-muted-foreground">Gen #{gen.generation_number}</span>
+          </div>
+          {showForward && (
+            <ManageRow
+              title="Forward to current"
+              hint="Public page adds a Superseded notice and a link to the current certificate"
+              help={FORWARD_HELP}
+            >
+              <ForwardToCurrentToggle gen={gen} onChanged={onStateChanged} hideLabel />
+            </ManageRow>
+          )}
+          {showRegen && (
+            <ManageRow
+              title="Regen & Republish"
+              hint="New generation and code; this one becomes Superseded"
+              help={regenHelp}
+            >
+              {regen}
+            </ManageRow>
+          )}
+          {showRevoke && (
+            <ManageRow
+              title="Revoke"
+              hint="Permanent. Public page shows Certificate Revoked"
+              help={REVOKE_HELP}
+              destructive
+            >
+              <Button
+                type="button"
+                variant="ghost"
+                size="sm"
+                className="h-6 px-2 text-[11px] text-red-600 hover:text-red-700"
+                onClick={() => {
+                  setOpen(false)
+                  setRevokeOpen(true)
+                }}
+              >
+                Revoke…
+              </Button>
+            </ManageRow>
+          )}
+        </PopoverContent>
+      </Popover>
+      {showRevoke && (
+        <RevokeCOADialog
+          gen={gen}
+          onRevoked={onStateChanged}
+          open={revokeOpen}
+          onOpenChange={setRevokeOpen}
+          hideTrigger
+        />
+      )}
+    </>
+  )
+}
+
 export function GeneratedCOAFallbackList({
   generations,
   sampleId,
   onPrimaryRegenerated,
+  onStateChanged,
 }: {
   generations: ExplorerCOAGeneration[]
   sampleId: string
   /** When set, the newest published root row gets Regen & Republish. */
   onPrimaryRegenerated?: () => void
+  /** Called after a row's verdict state changes (forward toggle, revoke) so the list refetches. */
+  onStateChanged?: () => void
 }) {
   const allDraft = generations.every(g => g.status === 'draft')
   // Newest first (selectRootGenerations), so `find` is the current published
@@ -872,12 +1347,18 @@ export function GeneratedCOAFallbackList({
                     sampleId={sampleId}
                     generationNumber={gen.generation_number}
                   />
-                  {onPrimaryRegenerated && gen.id === regenTarget?.id && (
-                    <PrimaryRegenButton
-                      sampleId={sampleId}
-                      onRegenerated={onPrimaryRegenerated}
-                    />
-                  )}
+                  <CoaManagePopover
+                    gen={gen}
+                    onStateChanged={onStateChanged}
+                    regen={
+                      onPrimaryRegenerated && gen.id === regenTarget?.id ? (
+                        <PrimaryRegenButton
+                          sampleId={sampleId}
+                          onRegenerated={onPrimaryRegenerated}
+                        />
+                      ) : undefined
+                    }
+                  />
                 </div>
               </div>
               <div className="grid grid-cols-2 gap-x-3 gap-y-1">
@@ -927,10 +1408,13 @@ export function GeneratedCOAFallbackList({
  * one HPLC vial's own figure ("Vial N"), with its own verification code and
  * release status. Mirrors GeneratedCOAFallbackList's visual language.
  */
-function VialCOAList({
+export function VialCOAList({
   generations,
+  onStateChanged,
 }: {
   generations: ExplorerCOAGeneration[]
+  /** After a verdict change (forward toggle, revoke): refetch the lists. */
+  onStateChanged?: () => void
 }) {
   return (
     <div className="space-y-2">
@@ -970,6 +1454,9 @@ function VialCOAList({
                 >
                   {release.label}
                 </span>
+                <span className="ml-auto flex items-center gap-2 shrink-0">
+                  <CoaManagePopover gen={gen} onStateChanged={onStateChanged} />
+                </span>
               </div>
               <div className="grid grid-cols-2 gap-x-3 gap-y-1">
                 <div className="flex flex-col">
@@ -1008,7 +1495,7 @@ function VialCOAList({
   )
 }
 
-function PublishedCOACard({
+export function PublishedCOACard({
   coa,
   sampleId,
   verificationCode,
@@ -1089,7 +1576,15 @@ function PublishedCOACard({
               )}
               PDF
             </button>
-            <PrimaryRegenButton sampleId={sampleId} onRegenerated={onRefresh} />
+            {generation ? (
+              <CoaManagePopover
+                gen={generation}
+                onStateChanged={onRefresh}
+                regen={<PrimaryRegenButton sampleId={sampleId} onRegenerated={onRefresh} />}
+              />
+            ) : (
+              <PrimaryRegenButton sampleId={sampleId} onRegenerated={onRefresh} />
+            )}
           </div>
         </div>
         <div className="grid grid-cols-2 gap-x-3 gap-y-1">
@@ -2985,13 +3480,66 @@ function AddRemarkForm({
   )
 }
 
+/** Superseded versions of one certificate, each with its Forward switch and Revoke. */
+function EarlierVersionsList({
+  versions,
+  onStateChanged,
+}: {
+  versions: ExplorerCOAGeneration[]
+  onStateChanged?: () => void
+}) {
+  const [open, setOpen] = useState(false)
+  if (versions.length === 0) return null
+  return (
+    <div className="py-1.5 border-b border-border/50">
+      <button
+        type="button"
+        onClick={() => setOpen(o => !o)}
+        aria-expanded={open}
+        className="flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground cursor-pointer"
+      >
+        {open ? <ChevronDown size={12} /> : <ChevronRight size={12} />}
+        Earlier versions ({versions.length})
+      </button>
+      {open && (
+        <ul className="mt-1.5 space-y-1.5 pl-4">
+          {versions.map(v => (
+            <li key={v.id} className="flex items-center justify-between gap-2 text-[11px]">
+              <span className="flex items-center gap-2 min-w-0">
+                <a
+                  href={accuverifyUrl(v.verification_code)}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="font-mono hover:underline truncate"
+                >
+                  {v.verification_code}
+                </a>
+                <span className="text-muted-foreground shrink-0">Gen #{v.generation_number}</span>
+                <span className="text-muted-foreground shrink-0">
+                  {v.superseded_at ? `superseded ${formatDate(v.superseded_at)}` : 'superseded'}
+                </span>
+              </span>
+              <span className="flex items-center gap-2 shrink-0">
+                <CoaManagePopover gen={v} onStateChanged={onStateChanged} />
+              </span>
+            </li>
+          ))}
+        </ul>
+      )}
+    </div>
+  )
+}
+
 // --- Additional COA Card (collapsible) ---
 
-function AdditionalCoaCard({
+export function AdditionalCoaCard({
   coa,
   sampleId,
   onUpdateState,
   onRegenerated,
+  generation,
+  earlierVersions,
+  onStateChanged,
 }: {
   coa: AdditionalCOAConfig
   sampleId: string
@@ -3000,10 +3548,19 @@ function AdditionalCoaCard({
     newValue: string | number | null
   ) => void
   onRegenerated: () => void
+  /** The ACOA's current generation (by coa.generation_id); null before the first publish. */
+  generation: ExplorerCOAGeneration | null
+  /** Superseded versions of this ACOA (selectEarlierVersions). */
+  earlierVersions: ExplorerCOAGeneration[]
+  /** After a verdict change (forward toggle, revoke): refetch the lists. */
+  onStateChanged: () => void
 }) {
   const [open, setOpen] = useState(false)
   const [downloading, setDownloading] = useState(false)
   const [regenerating, setRegenerating] = useState(false)
+  // The generation's status is the truth once it exists (a revoke never
+  // touches the config row); fall back to the config status before publish.
+  const displayStatus = generation?.status ?? coa.status
 
   const handleRegen = async () => {
     const confirmed = window.confirm(
@@ -3065,6 +3622,22 @@ function AdditionalCoaCard({
     }
   }
 
+  const regenButton = coa.generation_id ? (
+    <button
+      onClick={handleRegen}
+      disabled={regenerating}
+      title="Regenerate & republish just this additional COA. Mints a new verification code."
+      className="inline-flex items-center gap-1 px-2 py-1 text-xs rounded-md border border-amber-500/40 bg-amber-500/10 text-amber-600 hover:bg-amber-500/20 transition-colors disabled:opacity-50 cursor-pointer dark:text-amber-400"
+    >
+      {regenerating ? (
+        <Loader2 size={11} className="animate-spin" />
+      ) : (
+        <RefreshCw size={11} />
+      )}
+      Regen
+    </button>
+  ) : undefined
+
   return (
     <div className="rounded-lg bg-muted/50 border border-border/30">
       <button
@@ -3089,17 +3662,19 @@ function AdditionalCoaCard({
         </div>
         <Badge
           variant={
-            coa.status === 'published'
-              ? 'default'
-              : coa.status === 'generated'
-                ? 'secondary'
-                : coa.status === 'failed'
-                  ? 'destructive'
-                  : 'outline'
+            displayStatus === 'revoked'
+              ? 'destructive'
+              : displayStatus === 'published'
+                ? 'default'
+                : displayStatus === 'generated'
+                  ? 'secondary'
+                  : displayStatus === 'failed'
+                    ? 'destructive'
+                    : 'outline'
           }
           className="text-[10px] shrink-0"
         >
-          {coa.status}
+          {displayStatus}
         </Badge>
       </button>
       {open && (
@@ -3160,23 +3735,19 @@ function AdditionalCoaCard({
                   PDF
                 </button>
               )}
-              {coa.generation_id && (
-                <button
-                  onClick={handleRegen}
-                  disabled={regenerating}
-                  title="Regenerate & republish just this additional COA. Mints a new verification code."
-                  className="inline-flex items-center gap-1 px-2 py-1 text-xs rounded-md border border-amber-500/40 bg-amber-500/10 text-amber-600 hover:bg-amber-500/20 transition-colors disabled:opacity-50 cursor-pointer dark:text-amber-400"
-                >
-                  {regenerating ? (
-                    <Loader2 size={11} className="animate-spin" />
-                  ) : (
-                    <RefreshCw size={11} />
-                  )}
-                  Regen
-                </button>
+              {generation ? (
+                <CoaManagePopover
+                  gen={generation}
+                  onStateChanged={onStateChanged}
+                  regen={regenButton}
+                  regenHelp={REGEN_HELP_ADDITIONAL}
+                />
+              ) : (
+                regenButton
               )}
             </div>
           </div>
+          <EarlierVersionsList versions={earlierVersions} onStateChanged={onStateChanged} />
           <EditableDataRow
             label="Company"
             value={coa.coa_info.company_name ?? null}
@@ -4657,9 +5228,10 @@ export function SampleDetails() {
 
     // Fetch generously: the explorer orders primaries first (parent_generation_id
     // IS NULL), so a sample with many primary regens would push its CHILD COAs
-    // (per-vial + the regular parent-services COA) past a small limit. 50 keeps
-    // the current children on the page for realistic regen counts.
-    getExplorerCOAGenerations(sampleId, 50)
+    // (per-vial + the regular parent-services COA) past a small limit. 200 (the
+    // IS maximum) keeps the current children on the page for realistic regen
+    // and many-brand-ACOA counts.
+    getExplorerCOAGenerations(sampleId, 200)
       .then(gens => {
         if (!cancelled) setCoaGenerations(gens)
       })
@@ -4885,7 +5457,7 @@ export function SampleDetails() {
           )
         }
         refreshSample(sampleId)
-        getExplorerCOAGenerations(sampleId, 50)
+        getExplorerCOAGenerations(sampleId, 200)
           .then(setCoaGenerations)
           .catch(() => {})
         getSampleAdditionalCOAs(sampleId)
@@ -4906,7 +5478,7 @@ export function SampleDetails() {
 
   const handleGenerateVialCOAs = async () => {
     const primaryGen = coaGenerations.find(
-      g => g.parent_generation_id == null && g.status !== 'superseded'
+      g => g.parent_generation_id == null && !isRetiredGeneration(g)
     )
     if (!primaryGen) {
       toast.error('Generate the parent COA first', {
@@ -4926,7 +5498,7 @@ export function SampleDetails() {
         settle(true)
         toast.success('Per-vial COAs', { description: result.message })
         refreshSample(sampleId)
-        getExplorerCOAGenerations(sampleId, 50)
+        getExplorerCOAGenerations(sampleId, 200)
           .then(setCoaGenerations)
           .catch(() => {})
         getSampleAdditionalCOAs(sampleId)
@@ -4997,7 +5569,7 @@ export function SampleDetails() {
           })
         }
         refreshSample(sampleId)
-        getExplorerCOAGenerations(sampleId, 50)
+        getExplorerCOAGenerations(sampleId, 200)
           .then(setCoaGenerations)
           .catch(() => {})
       } else {
@@ -5034,7 +5606,7 @@ export function SampleDetails() {
           })
         }
         refreshSample(sampleId)
-        getExplorerCOAGenerations(sampleId, 50)
+        getExplorerCOAGenerations(sampleId, 200)
           .then(setCoaGenerations)
           .catch(() => undefined)
         getSampleAdditionalCOAs(sampleId)
@@ -5084,7 +5656,7 @@ export function SampleDetails() {
         })
         if (pending) {
           refreshSample(sampleId)
-          getExplorerCOAGenerations(sampleId, 50)
+          getExplorerCOAGenerations(sampleId, 200)
             .then(setCoaGenerations)
             .catch(() => undefined)
         }
@@ -5128,6 +5700,17 @@ export function SampleDetails() {
 
   const senaiteBaseUrl = getSenaiteUrl()
 
+  // Refetch the generated + additional COA lists (and the sample) after a COA
+  // action. Component scope so both COA cards (root + regular) can use it.
+  const refreshGeneratedCoas = () => {
+    refreshSample(sampleId)
+    getExplorerCOAGenerations(sampleId, 200)
+      .then(setCoaGenerations)
+      .catch(() => undefined)
+    getSampleAdditionalCOAs(sampleId)
+      .then(setAdditionalCoas)
+      .catch(() => undefined)
+  }
   return (
     <div className="max-w-6xl mx-auto px-6 py-6">
       {/* Breadcrumb — scrolls away with the page */}
@@ -5724,7 +6307,7 @@ export function SampleDetails() {
                             !coaGenerations.some(
                               g =>
                                 g.parent_generation_id == null &&
-                                g.status !== 'superseded'
+                                !isRetiredGeneration(g)
                             )
                           }
                           className="cursor-pointer"
@@ -6239,28 +6822,16 @@ export function SampleDetails() {
             <Card className="p-4">
               <SectionHeader icon={FileText} title="Generated COAs">
                 {(() => {
-                  const refreshGeneratedCoas = () => {
-                    refreshSample(sampleId)
-                    getExplorerCOAGenerations(sampleId, 50)
-                      .then(setCoaGenerations)
-                      .catch(() => {})
-                    getSampleAdditionalCOAs(sampleId)
-                      .then(setAdditionalCoas)
-                      .catch(() => {})
-                  }
                   if (data.published_coa) {
                     return (
                       <PublishedCOACard
                         coa={data.published_coa}
                         sampleId={data.sample_id}
                         verificationCode={data.coa.verification_code}
-                        generation={
-                          coaGenerations.find(
-                            g =>
-                              g.parent_generation_id == null &&
-                              g.status !== 'superseded'
-                          ) ?? null
-                        }
+                        generation={selectDisplayedGeneration(
+                          coaGenerations,
+                          data.coa.verification_code
+                        )}
                         onRefresh={refreshGeneratedCoas}
                       />
                     )
@@ -6277,6 +6848,7 @@ export function SampleDetails() {
                       generations={rootGens}
                       sampleId={sampleId}
                       onPrimaryRegenerated={refreshGeneratedCoas}
+                      onStateChanged={refreshGeneratedCoas}
                     />
                   ) : (
                     <p className="text-sm text-muted-foreground">
@@ -6298,7 +6870,10 @@ export function SampleDetails() {
                     icon={FileText}
                     title={`Per-Vial COAs (${vialGens.length})`}
                   >
-                    <VialCOAList generations={vialGens} />
+                    <VialCOAList
+                      generations={vialGens}
+                      onStateChanged={refreshGeneratedCoas}
+                    />
                   </SectionHeader>
                 </Card>
               ) : null
@@ -6316,6 +6891,7 @@ export function SampleDetails() {
                     <GeneratedCOAFallbackList
                       generations={regularGens}
                       sampleId={sampleId}
+                      onStateChanged={refreshGeneratedCoas}
                     />
                   </SectionHeader>
                 </Card>
@@ -6357,6 +6933,11 @@ export function SampleDetails() {
                             key={coa.config_id}
                             coa={coa}
                             sampleId={data.sample_id}
+                            generation={
+                              coaGenerations.find(g => g.id === coa.generation_id) ?? null
+                            }
+                            earlierVersions={selectEarlierVersions(coaGenerations, coa.generation_id)}
+                            onStateChanged={refreshGeneratedCoas}
                             onUpdateState={(field, newValue) =>
                               setAdditionalCoas(prev =>
                                 prev.map(c =>
@@ -6376,7 +6957,7 @@ export function SampleDetails() {
                               getSampleAdditionalCOAs(data.sample_id)
                                 .then(setAdditionalCoas)
                                 .catch(() => {})
-                              getExplorerCOAGenerations(data.sample_id, 50)
+                              getExplorerCOAGenerations(data.sample_id, 200)
                                 .then(setCoaGenerations)
                                 .catch(() => {})
                             }}
@@ -6820,7 +7401,7 @@ export function SampleDetails() {
                       const activeGen = coaGenerations.find(
                         g =>
                           g.parent_generation_id == null &&
-                          g.status !== 'superseded'
+                          !isRetiredGeneration(g)
                       )
                       return (
                         <TabbedChromatogramChart
