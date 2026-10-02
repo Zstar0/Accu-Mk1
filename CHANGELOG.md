@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+## v1.31.2 - 2026-10-02
+
+### Fixed
+- Native-born samples (no SENAITE UID) now get an SLA: the Customer Orders SLA column no longer reads "Awaiting sample" for a received native-born sample, and the Sample Details header shows its SLA. Both hooks key `/sla/status` on the sample UID, falling back to the sample id.
+- An order whose samples are all published except cancelled/invalid/rejected ones now reads met instead of "Awaiting sample". Withdrawn samples are ignored by the order SLA verdict and never get an SLA clock.
+
 ## v1.31.1 - 2026-09-30
 
 ### Changed
