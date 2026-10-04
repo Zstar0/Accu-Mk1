@@ -9,9 +9,10 @@ can be included BEFORE /documents/{doc_id}; otherwise FastAPI parses the word
 from __future__ import annotations
 
 import logging
+import re
 from typing import List, Optional
 
-from fastapi import APIRouter, Depends, Header, HTTPException, Query, Response, status
+from fastapi import APIRouter, Depends, File, Header, HTTPException, Query, Response, UploadFile, status
 from fastapi.security import OAuth2PasswordBearer
 from sqlalchemy.orm import Session
 
@@ -20,7 +21,7 @@ from database import get_db
 from documents import comments, labels, service
 from documents.comments import Actor, actor_from_agent, actor_from_user
 from documents.routes import _http, _match_agent
-from documents.schemas import (CommentCreate, CommentLabelOut, CommentListOut, CommentOut,
+from documents.schemas import (CommentAttachmentOut, CommentCreate, CommentLabelOut, CommentListOut, CommentOut,
                                CommentPatch)
 
 router = APIRouter(prefix="/api", tags=["document-comments"])
@@ -52,6 +53,25 @@ def require_comment_actor(
 @router.get("/documents/comment-labels", response_model=List[CommentLabelOut])
 def list_comment_labels(user=Depends(get_current_user)):
     return labels.labels_out()
+
+
+@router.get("/documents/comment-attachments/{attachment_id}")
+def get_comment_attachment(attachment_id: int, db: Session = Depends(get_db),
+                           user=Depends(get_current_user)):
+    try:
+        att = comments.get_attachment(db, attachment_id)
+        data = comments._attachment_storage().fetch(att.storage_key)
+    except Exception as e:
+        from flags import seams as flag_seams
+        if isinstance(e, flag_seams.AttachmentNotFound):
+            raise HTTPException(status_code=404, detail="attachment file missing from storage")
+        raise _http(e)
+    safe_name = re.sub(r"[^A-Za-z0-9._-]", "_", att.filename or "") or "attachment"
+    return Response(content=data, media_type=att.content_type, headers={
+        "X-Content-Type-Options": "nosniff",
+        "Content-Disposition": f'inline; filename="{safe_name}"',
+        "Cache-Control": "private, max-age=0",
+    })
 
 
 # --- single comment by id (literal "comments" segment, declared before /documents/{doc_id}) ---
@@ -126,5 +146,21 @@ def create_comment(doc_id: int, req: CommentCreate, db: Session = Depends(get_db
         if actor.agent:
             logger.info("documents.agent_comment agent=%s code=%s comment=%s", actor.agent, row.code, row.id)
         return comments.comment_out(db, row)
+    except Exception as e:
+        raise _http(e)
+
+
+# SYNC def so the blocking storage put runs in the threadpool (same rule as flags).
+@router.post("/documents/{doc_id}/comment-attachments", response_model=CommentAttachmentOut,
+             status_code=201)
+def add_comment_attachment(doc_id: int, file: UploadFile = File(...),
+                           db: Session = Depends(get_db),
+                           actor: Actor = Depends(require_comment_actor)):
+    try:
+        doc = service.get_document(db, doc_id)
+        data = file.file.read()
+        att = comments.add_attachment(db, doc=doc, actor=actor, data=data,
+                                      filename=file.filename or "upload")
+        return CommentAttachmentOut.model_validate(att)
     except Exception as e:
         raise _http(e)

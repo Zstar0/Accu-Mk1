@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 import logging
+import re
 from datetime import datetime
 from typing import Iterable, Optional
 
@@ -124,8 +125,16 @@ def create_comment(db: Session, *, document_id: int, actor: Actor, kind: str = "
 
 
 def _link_attachments(db: Session, code: str, comment_id: int, body: str) -> None:
-    """Completed in Task 5. Claims {attachment:ID} tokens for this code."""
-    return None
+    """FK the {attachment:ID} tokens in a saved body back to the comment so
+    they survive the orphan sweep. Only unlinked rows on THIS code are claimed."""
+    ids = {int(m) for m in _ATTACHMENT_TOKEN.findall(body or "")}
+    if not ids:
+        return
+    for att in db.execute(select(DocumentCommentAttachment).where(
+            DocumentCommentAttachment.code == code,
+            DocumentCommentAttachment.id.in_(ids),
+            DocumentCommentAttachment.comment_id.is_(None))).scalars():
+        att.comment_id = comment_id
 
 
 def patch_comment(db: Session, comment_id: int, actor: Actor, *, body: Optional[str] = None,
@@ -325,3 +334,56 @@ def list_comments(db: Session, code: str, status: str = "open") -> dict:
     latest = max(revisions.values()) if revisions else 0
     return {"items": items, "code": code, "latest_revision": latest,
             "open_count": sum(1 for _, r in numbered if r.status == "open")}
+
+
+MAX_ATTACHMENT_BYTES = 10 * 1024 * 1024
+_ATTACHMENT_TOKEN = re.compile(r"\{attachment:(\d+)\}")
+_EXT_FOR_CT = {"image/png": ".png", "image/jpeg": ".jpg", "image/gif": ".gif", "image/webp": ".webp"}
+
+
+def _sniff_image(data: bytes) -> str:
+    """Magic bytes decide; the client's Content-Type is never trusted. Same four
+    raster types as flag attachments (a copy, not an import: flags.service
+    raises its own BadRequestError class, which our routes would not map)."""
+    if data[:8] == b"\x89PNG\r\n\x1a\n":
+        return "image/png"
+    if data[:3] == b"\xff\xd8\xff":
+        return "image/jpeg"
+    if data[:6] in (b"GIF87a", b"GIF89a"):
+        return "image/gif"
+    if data[:4] == b"RIFF" and data[8:12] == b"WEBP":
+        return "image/webp"
+    raise BadRequestError("attachment must be a PNG, JPEG, GIF, or WEBP image")
+
+
+def _attachment_storage():
+    """The flag attachment seam, reused (spec §4.2). Imported lazily because
+    flags/seams.py imports documents.models for the entity registration."""
+    from flags import seams as flag_seams
+    return flag_seams.get_attachment_storage()
+
+
+def add_attachment(db: Session, *, doc: Document, actor: Actor, data: bytes,
+                   filename: str) -> DocumentCommentAttachment:
+    if not data:
+        raise BadRequestError("empty upload")
+    if len(data) > MAX_ATTACHMENT_BYTES:
+        raise BadRequestError("attachment exceeds 10 MB")
+    content_type = _sniff_image(data)
+    ext = _EXT_FOR_CT[content_type]
+    key = _attachment_storage().save(f"documents/{doc.code}", data, f"upload{ext}")
+    att = DocumentCommentAttachment(
+        code=doc.code, comment_id=None, uploaded_by_user_id=actor.user_id,
+        uploaded_by_agent=actor.agent, filename=(filename or f"upload{ext}")[:255],
+        content_type=content_type, size_bytes=len(data), storage_key=key)
+    db.add(att)
+    db.commit()
+    db.refresh(att)
+    return att
+
+
+def get_attachment(db: Session, attachment_id: int) -> DocumentCommentAttachment:
+    att = db.get(DocumentCommentAttachment, attachment_id)
+    if att is None:
+        raise NotFoundError(f"attachment {attachment_id} not found")
+    return att

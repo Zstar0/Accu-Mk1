@@ -486,11 +486,13 @@ async def lifespan(app: FastAPI):
     # Orphaned-attachment GC — always registered (no Slack env needed); hourly is
     # plenty for a 24h TTL. Lives in flags/ (zero Slack coupling).
     from flags import attachments_gc as _attachments_gc
+    from documents import comment_attachments_gc as _comment_attachments_gc
 
     def _gc_job(now):
         db = _SessionLocal()
         try:
             _attachments_gc.gc_orphaned_attachments(db, now=now)
+            _comment_attachments_gc.gc_orphaned_comment_attachments(db, now=now)
         finally:
             db.close()
     _flag_scheduler.register("attachment_gc", interval=_timedelta(hours=1),
