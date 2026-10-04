@@ -9,6 +9,7 @@ import {
 import {
   ArrowLeft,
   Download,
+  FilePenLine,
   Loader2,
   MessageSquareText,
   MousePointerClick,
@@ -28,7 +29,12 @@ import { useTheme } from '@/hooks/use-theme'
 import { useAuthStore } from '@/store/auth-store'
 import { useUIStore } from '@/store/ui-store'
 import { EntityFlagButton } from '@/components/flags/EntityFlagButton'
-import { useDocument, useDocumentContent } from '@/services/documents'
+import {
+  useCreateRevision,
+  useDocument,
+  useDocumentContent,
+  useReplaceDraftContent,
+} from '@/services/documents'
 import {
   DOC_STATUS_LABEL,
   documentDownloadName,
@@ -53,6 +59,7 @@ import {
   useCommentLabels,
   useCreateComment,
   useDocumentComments,
+  useSetCommentStatus,
 } from '@/services/document-comments'
 import {
   buildViewerSrcDoc,
@@ -70,6 +77,8 @@ import {
   type ComposerMode,
 } from './annotations/CommentComposer'
 import { CommentsPanel } from './annotations/CommentsPanel'
+import { EditModeBar } from './annotations/EditModeBar'
+import { stripViewerInjection } from './annotations/stripViewerInjection'
 
 /**
  * Renders one revision inside a sandboxed frame (spec §8.3). `srcdoc` +
@@ -101,7 +110,7 @@ export function DocumentViewer({ id }: { id: number }) {
   const navigateToDocument = useUIStore(s => s.navigateToDocument)
   const isAdmin = useAuthStore(s => s.user?.role === 'admin')
   const { theme } = useTheme()
-  const [editing, setEditing] = useState(false)
+  const [retitling, setRetitling] = useState(false)
 
   const detail = useDocument(id)
   const content = useDocumentContent(id)
@@ -178,12 +187,55 @@ export function DocumentViewer({ id }: { id: number }) {
     [comments]
   )
 
+  const [editMode, setEditMode] = useState(false)
+  const [saving, setSaving] = useState(false)
+  const [frameKey, setFrameKey] = useState(0)
+  const pendingApply = useRef<number | null>(null)
+  const replaceContent = useReplaceDraftContent()
+  const createRevision = useCreateRevision()
+  const setCommentStatus = useSetCommentStatus(id)
+
+  const guardLeave = () => !editMode || window.confirm('Discard unsaved edits?')
+  useEffect(() => {
+    if (!editMode) return
+    const onUnload = (e: BeforeUnloadEvent) => {
+      e.preventDefault()
+    }
+    window.addEventListener('beforeunload', onUnload)
+    return () => window.removeEventListener('beforeunload', onUnload)
+  }, [editMode])
+
+  const saveSerialized = async (html: string): Promise<boolean> => {
+    if (!doc || !content.data) return false
+    const clean = stripViewerInjection(html, content.data)
+    setSaving(true)
+    try {
+      if (doc.status === 'draft') {
+        await replaceContent.mutateAsync({ id: doc.id, html: clean })
+        exitEdit()
+        setFrameKey(k => k + 1)
+      } else {
+        const created = await createRevision.mutateAsync({
+          code: doc.code,
+          html: clean,
+        })
+        exitEdit()
+        navigateToDocument(created.id)
+      }
+      return true
+    } catch {
+      return false
+    } finally {
+      setSaving(false)
+    }
+  }
+
   const bridge = useDocumentBridge({
     iframeRef,
-    documentKey: `${id}:${mode}`,
+    documentKey: `${id}:${mode}:${frameKey}`,
     comments: bridgeComments,
     inputMethod,
-    annotateActive: true,
+    annotateActive: !editMode,
     onSelection: s => {
       setSelection(s)
       // A global composer keeps its draft when the frame clears its selection.
@@ -194,7 +246,40 @@ export function DocumentViewer({ id }: { id: number }) {
       setSelectedId(markId)
       setPanelOpen(true)
     },
+    onSerialized: (html, appliedId) => {
+      void saveSerialized(html).then(ok => {
+        const applied = pendingApply.current
+        pendingApply.current = null
+        if (
+          ok &&
+          appliedId &&
+          applied != null &&
+          String(applied) === appliedId
+        ) {
+          setCommentStatus.mutate({ id: applied, status: 'resolved' })
+        }
+      })
+    },
+    onApplyFailed: () => {
+      pendingApply.current = null
+      toast.error('That suggestion lost its place in this revision')
+    },
   })
+
+  const enterEdit = () => {
+    setEditMode(true)
+    setSelection(null)
+    setComposer(null)
+    bridge.setEditMode(true)
+  }
+  function exitEdit() {
+    setEditMode(false)
+    bridge.setEditMode(false)
+  }
+  const cancelEdit = () => {
+    exitEdit()
+    setFrameKey(k => k + 1)
+  }
 
   // The iframe is the stage's first child, so frame coords are stage coords.
   const stageRect = selection?.rect ?? null
@@ -270,6 +355,11 @@ export function DocumentViewer({ id }: { id: number }) {
       onNavigateHeading={bridge.scrollToFragment}
       me={user ? { id: user.id } : null}
       isAdmin={isAdmin}
+      onApply={c => {
+        if (!c.suggested_text) return
+        pendingApply.current = c.id
+        bridge.applyReplacement(String(c.id), c.suggested_text)
+      }}
     />
   )
 
@@ -290,7 +380,13 @@ export function DocumentViewer({ id }: { id: number }) {
   return (
     <div className="flex h-full flex-col">
       <div className="flex flex-wrap items-center gap-2 border-b px-4 py-2">
-        <Button variant="ghost" size="sm" onClick={clear}>
+        <Button
+          variant="ghost"
+          size="sm"
+          onClick={() => {
+            if (guardLeave()) clear()
+          }}
+        >
           <ArrowLeft className="mr-1 h-4 w-4" />
           Documents
         </Button>
@@ -352,7 +448,9 @@ export function DocumentViewer({ id }: { id: number }) {
               {doc.revisions.length > 1 && (
                 <Select
                   value={String(doc.id)}
-                  onValueChange={v => navigateToDocument(Number(v))}
+                  onValueChange={v => {
+                    if (guardLeave()) navigateToDocument(Number(v))
+                  }}
                 >
                   <SelectTrigger
                     id="document-revision"
@@ -383,7 +481,18 @@ export function DocumentViewer({ id }: { id: number }) {
                 <Button
                   variant="outline"
                   size="sm"
-                  onClick={() => setEditing(true)}
+                  disabled={bridge.status !== 'ready' || editMode}
+                  onClick={enterEdit}
+                >
+                  <FilePenLine className="mr-1 h-4 w-4" />
+                  Edit
+                </Button>
+              )}
+              {isAdmin && (
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => setRetitling(true)}
                 >
                   <Pencil className="mr-1 h-4 w-4" />
                   Edit details
@@ -393,6 +502,14 @@ export function DocumentViewer({ id }: { id: number }) {
           </>
         )}
       </div>
+
+      {editMode && (
+        <EditModeBar
+          saving={saving}
+          onSave={() => bridge.serialize()}
+          onCancel={cancelEdit}
+        />
+      )}
 
       {(detail.error || content.error) && (
         <p className="px-4 py-3 text-sm text-destructive">
@@ -437,6 +554,7 @@ export function DocumentViewer({ id }: { id: number }) {
                 )}
                 <div className="relative min-h-0 flex-1">
                   <iframe
+                    key={frameKey}
                     ref={iframeRef}
                     title={doc?.title ?? `Document ${id}`}
                     sandbox="allow-scripts"
@@ -516,7 +634,7 @@ export function DocumentViewer({ id }: { id: number }) {
       )}
 
       {doc && (
-        <RetitleDialog doc={doc} open={editing} onOpenChange={setEditing} />
+        <RetitleDialog doc={doc} open={retitling} onOpenChange={setRetitling} />
       )}
     </div>
   )

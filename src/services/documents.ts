@@ -10,12 +10,14 @@ import {
 import { toast } from 'sonner'
 import {
   createDocumentCategory,
+  createDocumentRevision,
   deleteDocumentCategory,
   getDocument,
   getDocumentContent,
   listDocumentCategories,
   listDocuments,
   patchDocument,
+  replaceDraftContent,
   updateDocumentCategory,
   type DocumentCategoryCreate,
   type DocumentCategoryUpdate,
@@ -71,6 +73,34 @@ export function usePatchDocument() {
       qc.invalidateQueries({ queryKey: documentKeys.lists })
       qc.invalidateQueries({ queryKey: documentKeys.detail(id) })
       toast.success('Document updated')
+    },
+    onError: (e: Error) => toast.error(e.message),
+  })
+}
+
+export function useReplaceDraftContent() {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: ({ id, html }: { id: number; html: string }) =>
+      replaceDraftContent(id, html),
+    onSuccess: (_row, { id }) => {
+      qc.invalidateQueries({ queryKey: documentKeys.content(id) })
+      qc.invalidateQueries({ queryKey: documentKeys.detail(id) })
+      qc.invalidateQueries({ queryKey: documentKeys.lists })
+      toast.success('Draft updated')
+    },
+    onError: (e: Error) => toast.error(e.message),
+  })
+}
+
+export function useCreateRevision() {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: ({ code, html }: { code: string; html: string }) =>
+      createDocumentRevision(code, html),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: documentKeys.lists })
+      toast.success('Saved as a new draft revision')
     },
     onError: (e: Error) => toast.error(e.message),
   })
