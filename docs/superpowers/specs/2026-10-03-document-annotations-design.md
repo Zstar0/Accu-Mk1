@@ -351,3 +351,14 @@ Deploy notes: tables via `create_all` plus idempotent DDL at boot; no env change
 ## 14. Follow-ons
 
 Live updates over the flags SSE bus pattern; label catalog in Settings; mentions and notifications; shift-click multi-target comments; active-heading tracking; revision diff view (plannotator's `htmlDiff` is MIT too); an MCP tool that returns attachment images; SRI on the bridge asset; a dedicated `documents/` S3 prefix for both document blobs and comment images.
+
+## 15. Amendments during implementation (2026-10-03)
+
+Recorded from the execution ledger; each supersedes the earlier text above.
+
+- §4.1 **Numbering is stored, not computed.** "Computed on read, never stored" contradicted "deletes leave gaps": a position cannot keep a gap. `document_comments.number` (Integer, NULL on replies) is set to `max(number) + 1` per code at create time, with `UniqueConstraint(code, number)`; a concurrent collision surfaces as the existing 409 "conflicting write; retry". The stability promise ("item 7 stays item 7") is what the number exists for and stands.
+- §4 **No `_run_migrations` entry.** Both tables are new; boot's `create_all` builds missing tables exactly as it built `documents` in 1.22.0. The DDL list is for ALTERs on existing tables.
+- §4.2 **`_sniff_image` is copied, not imported.** `flags.service._sniff_image` raises `flags.errors.BadRequestError`, which the documents error mapper would turn into a 500. Ten duplicated lines beat coupling the two modules' error types. The storage seam is still shared, imported lazily.
+- §5 **Text extraction joins with no separator.** `document_text` concatenates text nodes directly so inline markup (`per <em>USP</em>.`) verifies as rendered. A quote spanning two block elements is a false negative the agent sees as a 400 and can rephrase.
+- §6 **One `_http`.** `comment_routes.py` imports `_http` and `_match_agent` from `documents.routes`; the `ForbiddenError` → 403 branch lives in `routes._http`.
+- **Line endings.** `backend/` is LF in the git index (639 of 642 Python files), as is `src/`. `git ls-files --eol` is the only trustworthy check on the development machine, whose system-level git config sets `core.autocrlf=true`; a `git show | grep -c $'\r'` count misreported LF blobs as CRLF and briefly produced two CRLF files, since renormalised.
