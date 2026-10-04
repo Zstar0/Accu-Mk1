@@ -187,10 +187,12 @@ export function buildSrcdocInjection({
  * `script-src` for the origin the asset is served from.
  */
 // accumark: csp-restore
-// Exported so stripViewerInjection can put the author's tag back on save.
+// Exported so stripViewerInjection can put the author's tag back on save. The
+// placeholder is a tag, not a comment: a comment placeholder inside an author's
+// commented-out CSP meta would close that comment early.
 export const META_CSP_RE =
   /<meta\s[^>]*http-equiv\s*=\s*["']?\s*content-security-policy\s*["']?[^>]*\/?>/gi;
-export const META_CSP_PLACEHOLDER = "<!-- plannotator: meta CSP removed for annotation -->";
+export const META_CSP_PLACEHOLDER = '<meta name="pn-csp-removed">';
 
 export function neutralizeMetaCsp(rawHtml: string): string {
   return rawHtml.replace(META_CSP_RE, META_CSP_PLACEHOLDER);

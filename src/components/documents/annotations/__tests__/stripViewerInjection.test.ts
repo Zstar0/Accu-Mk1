@@ -85,4 +85,29 @@ describe('stripViewerInjection', () => {
     ).toBe(orig)
     expect(stripViewerInjection(orig, orig)).toBe(orig)
   })
+
+  // What the frame does to the bytes: parse, then serialize the live DOM.
+  const browserRoundTrip = (html: string) =>
+    new DOMParser().parseFromString(html, 'text/html').documentElement.outerHTML
+
+  it('a commented-out CSP meta survives the browser round trip intact', () => {
+    const commented =
+      '<!-- <meta http-equiv="Content-Security-Policy" content="x"> -->'
+    const orig = `<html><head>${commented}<title>t</title></head><body><p>Body</p></body></html>`
+    const saved = stripViewerInjection(
+      browserRoundTrip(neutralizeMetaCsp(orig)),
+      orig
+    )
+    expect(saved).toBe(browserRoundTrip(orig))
+    expect(saved).toContain(commented)
+    expect(
+      new DOMParser().parseFromString(saved, 'text/html').body.textContent
+    ).toBe('Body')
+  })
+
+  it('an author literal placeholder tag is restored as itself, nothing foreign written', () => {
+    const csp = '<meta http-equiv="Content-Security-Policy" content="x">'
+    const orig = `<html><head>${META_CSP_PLACEHOLDER}${csp}</head><body></body></html>`
+    expect(stripViewerInjection(neutralizeMetaCsp(orig), orig)).toBe(orig)
+  })
 })

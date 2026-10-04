@@ -21,7 +21,9 @@ by copying the upstream file over and `git diff`.
   removed so the 185 KB literal tree-shakes out of the app bundle; the bridge is
   always loaded by URL (spec §7.2).
 - srcdoc.ts `csp-restore`: `META_CSP_RE` and the placeholder string are exported so
-  the parent's stripViewerInjection restores an author CSP `<meta>` on save.
+  the parent's stripViewerInjection restores an author CSP `<meta>` on save. The
+  placeholder is the tag `<meta name="pn-csp-removed">` instead of upstream's HTML
+  comment, so it stays intact inside an author's commented-out CSP meta.
 - bridge-script.ts: `headings` extension (Task 9, present: heading feed plus minted `pn-h-N` ids, fenced `// accumark: headings`).
 - bridge-script.ts `edit-mode`: set-edit-mode / serialize / apply-replacement handlers and the two selection gates (Task 18).
 - image-annotator/index.tsx `local-shortcuts`: upstream imported ../../shortcuts,

@@ -41,10 +41,26 @@ export function stripViewerInjection(html: string, original: string): string {
   })
   // Only the <body> start tag: the sole element the viewer makes editable.
   out = out.replace(BODY_TAG, tag => tag.replace(CONTENTEDITABLE_ATTR, ''))
-  // In order; a placeholder with no original tag left is dropped. Built with
-  // split, not a replace string, so `$&` in an author policy is never expanded.
-  const csp = original.match(META_CSP_RE) ?? []
+  // Every placeholder in the output, in document order, is either an author
+  // CSP tag the viewer swapped out or an author's own literal placeholder
+  // text; both come back from the original bytes, and a placeholder with no
+  // original left is dropped. Split, not a replace string, so `$&` in an
+  // author policy is never expanded.
+  const restore = cspRestoreList(original)
   return out
     .split(META_CSP_PLACEHOLDER)
-    .reduce((acc, part, k) => acc + (csp[k - 1] ?? '') + part)
+    .reduce((acc, part, k) => acc + (restore[k - 1] ?? '') + part)
+}
+
+function cspRestoreList(original: string): string[] {
+  const found: [number, string][] = [...original.matchAll(META_CSP_RE)].map(
+    m => [m.index, m[0]]
+  )
+  for (
+    let at = original.indexOf(META_CSP_PLACEHOLDER);
+    at !== -1;
+    at = original.indexOf(META_CSP_PLACEHOLDER, at + 1)
+  )
+    found.push([at, META_CSP_PLACEHOLDER])
+  return found.sort((a, b) => a[0] - b[0]).map(f => f[1])
 }

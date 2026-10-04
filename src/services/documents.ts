@@ -30,8 +30,12 @@ export const documentKeys = {
   all: ['documents'] as const,
   lists: ['documents', 'list'] as const,
   list: (params: DocumentListParams) => ['documents', 'list', params] as const,
+  details: ['documents', 'detail'] as const,
   detail: (id: number) => ['documents', 'detail', id] as const,
-  content: (id: number) => ['documents', 'content', id] as const,
+  // Keyed by the hash too: a draft's bytes change in place (PUT /content), so
+  // the shown bytes must always be the ones the detail's hash describes.
+  content: (id: number, sha?: string) =>
+    ['documents', 'content', id, sha] as const,
   allCategories: ['documents', 'categories'] as const,
   categories: (activeOnly: boolean) =>
     ['documents', 'categories', activeOnly] as const,
@@ -54,12 +58,12 @@ export function useDocument(id: number | null) {
   })
 }
 
-export function useDocumentContent(id: number | null) {
+export function useDocumentContent(id: number | null, sha?: string) {
   return useQuery({
-    queryKey: documentKeys.content(id ?? -1),
+    queryKey: documentKeys.content(id ?? -1, sha),
     queryFn: () => getDocumentContent(id as number),
-    enabled: id != null,
-    staleTime: Infinity, // content is immutable per revision
+    enabled: id != null && sha != null,
+    staleTime: Infinity, // immutable per (revision, hash)
   })
 }
 
@@ -97,7 +101,8 @@ export function useReplaceDraftContent() {
       qc.setQueryData<DocumentDetail>(documentKeys.detail(id), old =>
         old ? { ...old, content_sha256: row.content_sha256 } : old
       )
-      qc.invalidateQueries({ queryKey: documentKeys.content(id) })
+      // No content invalidation: the caller seeds the new (id, hash) key
+      // with the bytes it saved, and the old key is never shown again.
       qc.invalidateQueries({ queryKey: documentKeys.detail(id) })
       qc.invalidateQueries({ queryKey: documentKeys.lists })
       toast.success('Draft updated')
@@ -120,6 +125,9 @@ export function useCreateRevision() {
     }) => createDocumentRevision(code, html, author),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: documentKeys.lists })
+      // Every cached detail of the code lists its revisions; a stale one
+      // would keep Edit live on a revision that is no longer the latest.
+      qc.invalidateQueries({ queryKey: documentKeys.details })
       toast.success('Saved as a new draft revision')
     },
     onError: (e: Error) => toast.error(e.message),

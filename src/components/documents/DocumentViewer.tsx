@@ -119,7 +119,14 @@ export function DocumentViewer({ id }: { id: number }) {
   const [retitling, setRetitling] = useState(false)
 
   const detail = useDocument(id)
-  const content = useDocumentContent(id)
+  // Edit mode freezes the content hash next to the theme: the PUT carries the
+  // hash of the bytes the admin opened, and a detail refetch mid-edit cannot
+  // swap (and remount) the frame.
+  const [frozenSha, setFrozenSha] = useState<string | null>(null)
+  const content = useDocumentContent(
+    id,
+    frozenSha ?? detail.data?.content_sha256
+  )
 
   const mode = resolveDocTheme(theme, usePrefersDark())
   // Edit mode freezes the frame's theme: a flip would rebuild srcDoc and
@@ -203,6 +210,9 @@ export function DocumentViewer({ id }: { id: number }) {
   // nobody re-enters edit mode on the revision being left.
   const [navigating, setNavigating] = useState(false)
   const scriptsConfirmed = useRef(false)
+  // Bumped per edit session; a save that resolves after the admin cancelled
+  // and started again must not touch the newer session.
+  const editGen = useRef(0)
   const [frameKey, setFrameKey] = useState(0)
   // The parent saves only what it asked for: a document's own scripts can
   // post a forged `serialized` message from inside the sandbox.
@@ -251,15 +261,21 @@ export function DocumentViewer({ id }: { id: number }) {
       return { ok: false }
     }
     const clean = stripViewerInjection(html, content.data)
+    const gen = editGen.current
+    const stale = () => gen !== editGen.current
     try {
       if (doc.status === 'draft') {
-        await replaceContent.mutateAsync({
+        const row = await replaceContent.mutateAsync({
           id: doc.id,
           html: clean,
-          expectedSha256: doc.content_sha256,
+          expectedSha256: frozenSha ?? doc.content_sha256,
         })
+        if (stale()) return { ok: false }
         exitEdit()
-        queryClient.setQueryData(documentKeys.content(doc.id), clean)
+        queryClient.setQueryData(
+          documentKeys.content(doc.id, row.content_sha256),
+          clean
+        )
         setFrameKey(k => k + 1)
       } else {
         const created = await createRevision.mutateAsync({
@@ -267,6 +283,7 @@ export function DocumentViewer({ id }: { id: number }) {
           html: clean,
           author: user ? displayName(user) : undefined,
         })
+        if (stale()) return { ok: false }
         setNavigating(true)
         exitEdit()
         return { ok: true, createdId: created.id }
@@ -275,8 +292,11 @@ export function DocumentViewer({ id }: { id: number }) {
     } catch {
       return { ok: false }
     } finally {
-      inFlight.current = false
-      setSaving(false)
+      // A stale save's flags belong to the newer session; leave them.
+      if (!stale()) {
+        inFlight.current = false
+        setSaving(false)
+      }
     }
   }
 
@@ -343,7 +363,13 @@ export function DocumentViewer({ id }: { id: number }) {
   })
 
   const enterEdit = () => {
+    editGen.current += 1
+    // Anything still pending belongs to the previous session.
+    saveRequest.current = null
+    inFlight.current = false
+    setSaving(false)
     setFrozenMode(mode)
+    setFrozenSha(doc?.content_sha256 ?? null)
     scriptsConfirmed.current = false
     setEditMode(true)
     setSelection(null)
@@ -356,8 +382,20 @@ export function DocumentViewer({ id }: { id: number }) {
     inFlight.current = false
     setSaving(false)
     setFrozenMode(null)
+    setFrozenSha(null)
+    scriptsConfirmed.current = false
     setEditMode(false)
     bridge.setEditMode(false)
+  }
+  // Serialize captures the rendered page, including DOM the document's own
+  // scripts built; say so once per edit session (each Apply outside edit
+  // mode is its own session).
+  const confirmScripts = () => {
+    if (scriptsConfirmed.current || !/<script\b/i.test(content.data ?? ''))
+      return true
+    if (!window.confirm(SCRIPT_SAVE_CONFIRM)) return false
+    if (editMode) scriptsConfirmed.current = true
+    return true
   }
   const cancelEdit = () => {
     exitEdit()
@@ -442,6 +480,7 @@ export function DocumentViewer({ id }: { id: number }) {
       onApply={c => {
         if (!c.suggested_text || editBlocked) return
         if (inFlight.current || saveRequest.current) return
+        if (!confirmScripts()) return
         inFlight.current = true
         setSaving(true)
         saveRequest.current = { kind: 'apply', id: c.id }
@@ -609,15 +648,7 @@ export function DocumentViewer({ id }: { id: number }) {
           saving={saving}
           onSave={() => {
             if (inFlight.current || saveRequest.current) return
-            // Serialize captures the rendered page, including DOM the
-            // document's own scripts built; say so once per edit session.
-            if (
-              !scriptsConfirmed.current &&
-              /<script\b/i.test(content.data ?? '')
-            ) {
-              if (!window.confirm(SCRIPT_SAVE_CONFIRM)) return
-              scriptsConfirmed.current = true
-            }
+            if (!confirmScripts()) return
             inFlight.current = true
             setSaving(true)
             saveRequest.current = { kind: 'save' }

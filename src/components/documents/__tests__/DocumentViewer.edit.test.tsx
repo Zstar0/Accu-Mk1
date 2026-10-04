@@ -19,6 +19,8 @@ let docStatus = 'draft'
 let viewedId = 10
 let contentHtml = '<html><head></head><body><p>hi</p></body></html>'
 let themeValue: 'light' | 'dark' = 'light'
+let docSha = 'sha-10'
+let contentCalls: unknown[][] = []
 
 vi.mock('sonner', () => ({
   toast: { error: toastError, success: vi.fn(), message: vi.fn() },
@@ -35,7 +37,7 @@ vi.mock('@/services/documents', () => ({
       revision: viewedId === 9 ? 1 : 2,
       title: 'Audit',
       status: docStatus,
-      content_sha256: 'sha-10',
+      content_sha256: docSha,
       category_name: 'Artifact',
       author: 'F',
       co_author: null,
@@ -51,11 +53,10 @@ vi.mock('@/services/documents', () => ({
     isLoading: false,
     error: null,
   }),
-  useDocumentContent: () => ({
-    data: contentHtml,
-    isLoading: false,
-    error: null,
-  }),
+  useDocumentContent: (...args: unknown[]) => {
+    contentCalls.push(args)
+    return { data: contentHtml, isLoading: false, error: null }
+  },
   useDocumentCategories: () => ({ data: [] }), // RetitleDialog
   usePatchDocument: () => ({ mutate: vi.fn(), isPending: false }),
   useReplaceDraftContent: () => ({ mutateAsync: replace }),
@@ -63,7 +64,7 @@ vi.mock('@/services/documents', () => ({
   documentKeys: {
     detail: (id: number) => ['documents', 'detail', id],
     lists: ['documents', 'list'],
-    content: (id: number) => ['documents', 'content', id],
+    content: (id: number, sha?: string) => ['documents', 'content', id, sha],
   },
 }))
 vi.mock('@/components/flags/EntityFlagButton', () => ({
@@ -171,6 +172,8 @@ describe('DocumentViewer edit mode', { timeout: 20_000 }, () => {
     viewedId = 10
     contentHtml = '<html><head></head><body><p>hi</p></body></html>'
     themeValue = 'light'
+    docSha = 'sha-10'
+    contentCalls = []
   })
 
   it('Save on a draft PUTs the stripped html in place', async () => {
@@ -229,7 +232,7 @@ describe('DocumentViewer edit mode', { timeout: 20_000 }, () => {
     expect(clear).toHaveBeenCalled()
   })
 
-  it('Apply sends apply-replacement, saves, then resolves; apply-failed only toasts', async () => {
+  it('Apply sends apply-replacement, saves, then resolves; a late apply-failed is ignored', async () => {
     await renderViewer()
     fireEvent.click(screen.getByRole('button', { name: /Comments/ }))
     const frame = screen.getByTitle('Audit') as HTMLIFrameElement
@@ -448,6 +451,108 @@ describe('DocumentViewer edit mode', { timeout: 20_000 }, () => {
     expect(serializeCount(post)).toBe(1)
     expect(confirm).toHaveBeenCalledTimes(2)
     confirm.mockRestore()
+  })
+
+  const rerenderViewer = (view: { rerender: (ui: React.ReactNode) => void }) =>
+    view.rerender(
+      <QueryClientProvider client={new QueryClient()}>
+        <DocumentViewer id={viewedId} />
+      </QueryClientProvider>
+    )
+
+  it('sends the sha frozen at Edit even after the detail changes mid-edit', async () => {
+    const view = await renderViewer()
+    fireEvent.click(editButton())
+    const frame = screen.getByTitle('Audit')
+    docSha = 'sha-other'
+    rerenderViewer(view)
+    // The frame keeps showing (and keying on) the bytes the admin opened.
+    expect(contentCalls.at(-1)).toEqual([10, 'sha-10'])
+    expect(screen.getByTitle('Audit')).toBe(frame)
+    fireEvent.click(screen.getByRole('button', { name: 'Save' }))
+    act(() => frameSays({ type: 'plannotator-bridge-serialized', html: HTML }))
+    await waitFor(() =>
+      expect(replace).toHaveBeenCalledWith(
+        expect.objectContaining({ expectedSha256: 'sha-10' })
+      )
+    )
+  })
+
+  it('a detail sha change outside edit mode refetches content under the new key', async () => {
+    const view = await renderViewer()
+    expect(contentCalls.at(-1)).toEqual([10, 'sha-10'])
+    docSha = 'sha-2'
+    rerenderViewer(view)
+    expect(contentCalls.at(-1)).toEqual([10, 'sha-2'])
+  })
+
+  it('a stale save completing after Cancel does not end the newer edit session', async () => {
+    let finishFirst: ((v: unknown) => void) | undefined
+    replace.mockImplementationOnce(
+      () =>
+        new Promise(r => {
+          finishFirst = r
+        })
+    )
+    await renderViewer()
+    fireEvent.click(editButton())
+    fireEvent.click(screen.getByRole('button', { name: 'Save' }))
+    act(() => frameSays({ type: 'plannotator-bridge-serialized', html: HTML }))
+    await waitFor(() => expect(replace).toHaveBeenCalledTimes(1))
+    fireEvent.click(screen.getByRole('button', { name: 'Cancel' }))
+    act(ready)
+    await waitFor(() => expect(editButton()).toBeEnabled())
+    fireEvent.click(editButton())
+    const frame = screen.getByTitle('Audit')
+    await act(async () => finishFirst?.({ id: 10, content_sha256: 'sha-x' }))
+    expect(screen.getByText(/^Editing/)).toBeInTheDocument()
+    expect(screen.getByTitle('Audit')).toBe(frame)
+    expect(screen.getByRole('button', { name: 'Save' })).toBeEnabled()
+  })
+
+  it('Apply on a script-bearing document confirms; declining posts nothing', async () => {
+    contentHtml =
+      '<html><head><script>document.body.append("x")</script></head><body><p>hi</p></body></html>'
+    await renderViewer()
+    fireEvent.click(screen.getByRole('button', { name: /Comments/ }))
+    const frame = screen.getByTitle('Audit') as HTMLIFrameElement
+    const post = vi.spyOn(frame.contentWindow as Window, 'postMessage')
+    const confirm = vi.spyOn(window, 'confirm').mockReturnValue(false)
+    confirm.mockClear()
+    fireEvent.click(await screen.findByRole('button', { name: 'Apply' }))
+    expect(confirm).toHaveBeenCalledTimes(1)
+    const applies = () =>
+      post.mock.calls.filter(
+        c =>
+          (c[0] as { type: string }).type ===
+          'plannotator-bridge-apply-replacement'
+      ).length
+    expect(applies()).toBe(0)
+    confirm.mockReturnValue(true)
+    fireEvent.click(screen.getByRole('button', { name: 'Apply' }))
+    expect(applies()).toBe(1)
+    confirm.mockRestore()
+  })
+
+  it('a matching apply-failed toasts and lets Apply be used again', async () => {
+    await renderViewer()
+    fireEvent.click(screen.getByRole('button', { name: /Comments/ }))
+    const frame = screen.getByTitle('Audit') as HTMLIFrameElement
+    const post = vi.spyOn(frame.contentWindow as Window, 'postMessage')
+    const applies = () =>
+      post.mock.calls.filter(
+        c =>
+          (c[0] as { type: string }).type ===
+          'plannotator-bridge-apply-replacement'
+      ).length
+    fireEvent.click(await screen.findByRole('button', { name: 'Apply' }))
+    expect(applies()).toBe(1)
+    act(() => frameSays({ type: 'plannotator-bridge-apply-failed', id: '5' }))
+    expect(toastError).toHaveBeenCalledWith(
+      'That suggestion lost its place in this revision'
+    )
+    fireEvent.click(screen.getByRole('button', { name: 'Apply' }))
+    expect(applies()).toBe(2)
   })
 
   it('Save on a document without scripts does not confirm', async () => {
