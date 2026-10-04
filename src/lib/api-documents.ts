@@ -47,6 +47,8 @@ export interface DocumentRow {
   created_at: string
   updated_at: string
   revision_count: number
+  /** Open top-level comments on this code (spec §6.2). */
+  open_comment_count: number
 }
 
 export interface DocumentDetail extends DocumentRow {
