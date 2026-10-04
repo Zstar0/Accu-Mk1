@@ -126,6 +126,7 @@ from priority.routes import router as priority_router
 from workflow.cancel_routes import router as cancel_router
 from conformance.routes import router as conformance_router
 from documents.routes import router as documents_router
+from documents.comment_routes import router as document_comments_router
 
 import logging
 
@@ -621,6 +622,7 @@ app.include_router(workflow_router)
 app.include_router(priority_router)
 app.include_router(cancel_router)
 app.include_router(conformance_router)
+app.include_router(document_comments_router)  # literal /documents/comments* paths must beat /documents/{doc_id}
 app.include_router(documents_router)
 
 # --- Endpoints ---

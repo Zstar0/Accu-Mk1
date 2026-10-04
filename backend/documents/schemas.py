@@ -92,3 +92,11 @@ class DocumentPatch(BaseModel):
     category_id: Optional[int] = None
     effective_date: Optional[date] = None
     updated_by: Optional[str] = None
+
+
+class CommentLabelOut(BaseModel):
+    id: str
+    emoji: str
+    text: str
+    color: str
+    tip: Optional[str] = None

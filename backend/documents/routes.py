@@ -16,7 +16,7 @@ from sqlalchemy.orm import Session
 from auth import get_current_user, require_admin, require_internal_service_token
 from database import get_db
 from documents import service
-from documents.errors import BadRequestError, ConflictError, NotFoundError
+from documents.errors import BadRequestError, ConflictError, ForbiddenError, NotFoundError
 from documents.models import Document, DocumentCategory
 from documents.schemas import (CategoryCreate, CategoryOut, CategoryUpdate, DocumentCreate,
                                DocumentDetail, DocumentListOut, DocumentOut, DocumentPatch)
@@ -108,6 +108,8 @@ def _audit(writer, action: str, doc: Document) -> None:
 def _http(e: Exception) -> HTTPException:
     if isinstance(e, NotFoundError) or isinstance(e, DocumentNotFound):
         return HTTPException(status_code=404, detail=str(e))
+    if isinstance(e, ForbiddenError):
+        return HTTPException(status_code=403, detail=str(e))
     if isinstance(e, ConflictError):
         return HTTPException(status_code=409, detail=str(e))
     if isinstance(e, BadRequestError):
