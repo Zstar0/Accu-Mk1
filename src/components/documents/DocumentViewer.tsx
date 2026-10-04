@@ -32,6 +32,7 @@ import { EntityFlagButton } from '@/components/flags/EntityFlagButton'
 import {
   useCreateRevision,
   useDocument,
+  documentKeys,
   useDocumentContent,
   useReplaceDraftContent,
 } from '@/services/documents'
@@ -42,6 +43,7 @@ import {
   resolveDocTheme,
 } from '@/components/documents/documents-utils'
 import { RetitleDialog } from '@/components/documents/RetitleDialog'
+import { useQueryClient } from '@tanstack/react-query'
 import { toast } from 'sonner'
 import { ToggleGroup, ToggleGroupItem } from '@/components/ui/toggle-group'
 import {
@@ -190,7 +192,13 @@ export function DocumentViewer({ id }: { id: number }) {
   const [editMode, setEditMode] = useState(false)
   const [saving, setSaving] = useState(false)
   const [frameKey, setFrameKey] = useState(0)
-  const pendingApply = useRef<number | null>(null)
+  // The parent saves only what it asked for: a document's own scripts can
+  // post a forged `serialized` message from inside the sandbox.
+  const saveRequest = useRef<
+    null | { kind: 'save' } | { kind: 'apply'; id: number }
+  >(null)
+  const inFlight = useRef(false)
+  const queryClient = useQueryClient()
   const replaceContent = useReplaceDraftContent()
   const createRevision = useCreateRevision()
   const setCommentStatus = useSetCommentStatus(id)
@@ -200,19 +208,24 @@ export function DocumentViewer({ id }: { id: number }) {
     if (!editMode) return
     const onUnload = (e: BeforeUnloadEvent) => {
       e.preventDefault()
+      e.returnValue = ''
     }
     window.addEventListener('beforeunload', onUnload)
     return () => window.removeEventListener('beforeunload', onUnload)
   }, [editMode])
 
   const saveSerialized = async (html: string): Promise<boolean> => {
-    if (!doc || !content.data) return false
+    if (!doc || !content.data) {
+      inFlight.current = false
+      setSaving(false)
+      return false
+    }
     const clean = stripViewerInjection(html, content.data)
-    setSaving(true)
     try {
       if (doc.status === 'draft') {
         await replaceContent.mutateAsync({ id: doc.id, html: clean })
         exitEdit()
+        queryClient.setQueryData(documentKeys.content(doc.id), clean)
         setFrameKey(k => k + 1)
       } else {
         const created = await createRevision.mutateAsync({
@@ -226,6 +239,7 @@ export function DocumentViewer({ id }: { id: number }) {
     } catch {
       return false
     } finally {
+      inFlight.current = false
       setSaving(false)
     }
   }
@@ -247,21 +261,27 @@ export function DocumentViewer({ id }: { id: number }) {
       setPanelOpen(true)
     },
     onSerialized: (html, appliedId) => {
+      const request = saveRequest.current
+      saveRequest.current = null
+      if (!request) {
+        console.warn('ignored unsolicited serialized message')
+        return
+      }
       void saveSerialized(html).then(ok => {
-        const applied = pendingApply.current
-        pendingApply.current = null
         if (
           ok &&
+          request.kind === 'apply' &&
           appliedId &&
-          applied != null &&
-          String(applied) === appliedId
+          String(request.id) === appliedId
         ) {
-          setCommentStatus.mutate({ id: applied, status: 'resolved' })
+          setCommentStatus.mutate({ id: request.id, status: 'resolved' })
         }
       })
     },
     onApplyFailed: () => {
-      pendingApply.current = null
+      saveRequest.current = null
+      inFlight.current = false
+      setSaving(false)
       toast.error('That suggestion lost its place in this revision')
     },
   })
@@ -273,6 +293,7 @@ export function DocumentViewer({ id }: { id: number }) {
     bridge.setEditMode(true)
   }
   function exitEdit() {
+    saveRequest.current = null
     setEditMode(false)
     bridge.setEditMode(false)
   }
@@ -357,7 +378,10 @@ export function DocumentViewer({ id }: { id: number }) {
       isAdmin={isAdmin}
       onApply={c => {
         if (!c.suggested_text) return
-        pendingApply.current = c.id
+        if (inFlight.current || saveRequest.current) return
+        inFlight.current = true
+        setSaving(true)
+        saveRequest.current = { kind: 'apply', id: c.id }
         bridge.applyReplacement(String(c.id), c.suggested_text)
       }}
     />
@@ -506,7 +530,13 @@ export function DocumentViewer({ id }: { id: number }) {
       {editMode && (
         <EditModeBar
           saving={saving}
-          onSave={() => bridge.serialize()}
+          onSave={() => {
+            if (inFlight.current || saveRequest.current) return
+            inFlight.current = true
+            setSaving(true)
+            saveRequest.current = { kind: 'save' }
+            bridge.serialize()
+          }}
           onCancel={cancelEdit}
         />
       )}

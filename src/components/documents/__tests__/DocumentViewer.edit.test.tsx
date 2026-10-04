@@ -221,4 +221,59 @@ describe('DocumentViewer edit mode', { timeout: 20_000 }, () => {
     act(() => frameSays({ type: 'plannotator-bridge-apply-failed', id: '5' }))
     expect(setStatus).not.toHaveBeenCalled()
   })
+
+  const HTML = '<html><head></head><body><p>x</p></body></html>'
+
+  it('ignores an unsolicited serialized message', async () => {
+    await renderViewer()
+    act(() =>
+      frameSays({
+        type: 'plannotator-bridge-serialized',
+        html: HTML,
+        appliedId: '5',
+      })
+    )
+    await new Promise(r => setTimeout(r, 50))
+    expect(replace).not.toHaveBeenCalled()
+    expect(createRev).not.toHaveBeenCalled()
+    expect(setStatus).not.toHaveBeenCalled()
+  })
+
+  it('double Save posts serialize once and saves once; a plain Save never resolves', async () => {
+    await renderViewer()
+    fireEvent.click(screen.getByRole('button', { name: 'Edit' }))
+    const frame = screen.getByTitle('Audit') as HTMLIFrameElement
+    const post = vi.spyOn(frame.contentWindow as Window, 'postMessage')
+    const save = screen.getByRole('button', { name: /Save/ })
+    fireEvent.click(save)
+    fireEvent.click(save)
+    const serializes = () =>
+      post.mock.calls.filter(
+        c => (c[0] as { type: string }).type === 'plannotator-bridge-serialize'
+      ).length
+    expect(serializes()).toBe(1)
+    act(() => frameSays({ type: 'plannotator-bridge-serialized', html: HTML }))
+    await waitFor(() => expect(replace).toHaveBeenCalledTimes(1))
+    await waitFor(() =>
+      expect(screen.queryByText('Editing · unsaved')).toBeNull()
+    )
+    expect(setStatus).not.toHaveBeenCalled()
+  })
+
+  it('Apply whose save rejects does not resolve', async () => {
+    replace.mockRejectedValueOnce(new Error('nope'))
+    await renderViewer()
+    fireEvent.click(screen.getByRole('button', { name: /Comments/ }))
+    fireEvent.click(await screen.findByRole('button', { name: 'Apply' }))
+    act(() =>
+      frameSays({
+        type: 'plannotator-bridge-serialized',
+        html: HTML,
+        appliedId: '5',
+      })
+    )
+    await waitFor(() => expect(replace).toHaveBeenCalledTimes(1))
+    await new Promise(r => setTimeout(r, 50))
+    expect(setStatus).not.toHaveBeenCalled()
+  })
 })
