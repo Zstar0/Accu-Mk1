@@ -92,3 +92,10 @@ def test_comment_number_is_nullable(db):
     db.add(c)
     db.commit()
     assert c.id and c.number is None
+
+
+def test_comment_counter_persists(db):
+    from documents.models import DocumentCommentCounter
+    db.add(DocumentCommentCounter(code="ART-0001", next_number=3))
+    db.commit()
+    assert db.get(DocumentCommentCounter, "ART-0001").next_number == 3

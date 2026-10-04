@@ -46,6 +46,15 @@ class DocumentCodeCounter(Base):
     next_number: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
 
 
+class DocumentCommentCounter(Base):
+    """High-water comment number per code. Bumped under row lock; never decremented, so a
+    deleted number is never handed out again."""
+    __tablename__ = "document_comment_counters"
+
+    code: Mapped[str] = mapped_column(String(30), primary_key=True)
+    next_number: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
+
+
 class Document(Base):
     """One row per revision. Same controlled-document shape as hplc_methods
     (slice 3): (code, revision) unique, at most one 'active' row per code,

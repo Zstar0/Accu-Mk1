@@ -12,7 +12,8 @@ from sqlalchemy.orm import Session
 
 from documents import anchors, labels
 from documents.errors import BadRequestError, ForbiddenError, NotFoundError
-from documents.models import Document, DocumentComment, DocumentCommentAttachment
+from documents.models import (Document, DocumentComment, DocumentCommentAttachment,
+                              DocumentCommentCounter)
 
 
 @dataclass(frozen=True)
@@ -98,11 +99,18 @@ def create_comment(db: Session, *, document_id: int, actor: Actor, kind: str = "
             html = read_content(doc).decode("utf-8", "replace")
             if not anchors.quote_occurs(anchor["originalText"], html):
                 raise BadRequestError(
-                    f'quote not found in {doc.code} r{doc.revision}: "{anchor["originalText"][:80]}"')
+                    f'quote not found in {doc.code} r{doc.revision}: "{anchor["originalText"]}"')
     if not body and label is None and kind == "comment":
         raise BadRequestError("a comment needs a body or a label")
-    number = None if parent_id is not None else db.execute(select(func.coalesce(func.max(
-        DocumentComment.number), 0) + 1).where(DocumentComment.code == doc.code)).scalar_one()
+    number = None
+    if parent_id is None:
+        counter = db.get(DocumentCommentCounter, doc.code, with_for_update=True)
+        if counter is None:
+            counter = DocumentCommentCounter(code=doc.code, next_number=1)
+            db.add(counter)
+            db.flush()
+        number = counter.next_number
+        counter.next_number += 1
     row = DocumentComment(code=doc.code, document_id=doc.id, parent_id=parent_id, number=number, kind=kind,
                           anchor=anchor, label=label, body=body,
                           suggested_text=(suggested_text.strip() if kind == "suggestion" else None),
@@ -127,12 +135,18 @@ def patch_comment(db: Session, comment_id: int, actor: Actor, *, body: Optional[
         raise ForbiddenError("only the author or an admin may edit this comment")
     if suggested_text is not None and row.kind != "suggestion":
         raise BadRequestError("only a suggestion carries suggested_text")
-    if body is not None:
-        row.body = body.strip()
+    new_body = body.strip() if body is not None else row.body
+    new_suggested = row.suggested_text
     if suggested_text is not None:
-        if not suggested_text.strip():
+        new_suggested = suggested_text.strip()
+        if not new_suggested:
             raise BadRequestError("a suggestion needs suggested_text")
-        row.suggested_text = suggested_text.strip()
+    if row.kind == "comment" and not new_body and row.label is None:
+        raise BadRequestError("a comment needs a body or a label")
+    if new_body == row.body and new_suggested == row.suggested_text:
+        return row
+    row.body = new_body
+    row.suggested_text = new_suggested
     row.edited_at = datetime.utcnow()
     _link_attachments(db, row.code, row.id, row.body)
     db.commit()

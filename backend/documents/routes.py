@@ -197,9 +197,9 @@ def list_documents(q: Optional[str] = None, category_id: Optional[int] = None,
         rows, total = service.list_documents(db, q=q, category_id=category_id,
                                              statuses=tuple(statuses), sort=sort,
                                              page=page, page_size=page_size)
+        counts = comments.open_comment_counts(db, [d.code for d, _ in rows])
     except Exception as e:
         raise _http(e)
-    counts = comments.open_comment_counts(db, [d.code for d, _ in rows])
     return DocumentListOut(items=[_doc_out(d, n, counts.get(d.code, 0)) for d, n in rows], total=total,
                            page=max(1, page), page_size=max(1, min(200, page_size)))
 
@@ -209,10 +209,10 @@ def get_document(doc_id: int, db: Session = Depends(get_db), user=Depends(get_cu
     try:
         doc = service.get_document(db, doc_id)
         revisions = service.get_revisions(db, doc.code)
+        counts = comments.open_comment_counts(db, [doc.code])
     except Exception as e:
         raise _http(e)
     n = len(revisions)
-    counts = comments.open_comment_counts(db, [doc.code])
     out = _doc_out(doc, n, counts.get(doc.code, 0))
     return DocumentDetail(**out.model_dump(), revisions=[_doc_out(r, n) for r in revisions])
 

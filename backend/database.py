@@ -212,6 +212,9 @@ def _run_migrations():
     """
     from sqlalchemy import text
     migrations = [
+        # Document comments (2026-10-03): stored numbering added after the table first shipped via create_all.
+        "ALTER TABLE document_comments ADD COLUMN IF NOT EXISTS number INTEGER",
+        "CREATE UNIQUE INDEX IF NOT EXISTS uq_document_comments_code_number ON document_comments (code, number)",
         "ALTER TABLE users ADD COLUMN IF NOT EXISTS senaite_password_encrypted TEXT",
         "ALTER TABLE users ADD COLUMN IF NOT EXISTS first_name VARCHAR(100)",
         "ALTER TABLE users ADD COLUMN IF NOT EXISTS last_name VARCHAR(100)",
