@@ -89,4 +89,12 @@ describe('parseBridgeMessage', () => {
       parseBridgeMessage(t('serialized', { html: '<p>x</p>', appliedId: '7' }))
     ).toEqual({ type: 'serialized', html: '<p>x</p>', appliedId: '7' })
   })
+
+  it('rejects a non-integer heading level', () => {
+    expect(
+      parseBridgeMessage(
+        t('headings', { headings: [{ id: 'a', level: 2.5, text: 'b' }] })
+      )
+    ).toBeNull()
+  })
 })

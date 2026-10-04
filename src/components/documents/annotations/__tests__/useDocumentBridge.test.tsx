@@ -123,16 +123,16 @@ describe('useDocumentBridge', () => {
     const types = post.mock.calls.map(c =>
       (c[0] as { type: string }).type.replace('plannotator-bridge-', '')
     )
-    expect(types).toEqual(
-      expect.arrayContaining([
-        'set-input-method',
-        'set-annotate-mode',
-        'clear-marks',
-        'find-and-mark',
-        'sync-annotations',
-        'report-unanchored',
-      ])
-    )
+    // First replay pass, strictly ordered (a second idempotent pass may follow
+    // from the re-sync effect once status flips to ready).
+    expect(types.slice(0, 6)).toEqual([
+      'set-input-method',
+      'set-annotate-mode',
+      'clear-marks',
+      'find-and-mark',
+      'sync-annotations',
+      'report-unanchored',
+    ])
     const fam = post.mock.calls.find(
       c =>
         (c[0] as { type: string }).type === 'plannotator-bridge-find-and-mark'
@@ -159,6 +159,26 @@ describe('useDocumentBridge', () => {
       () => expect(bridge.unavailable).toEqual({ kind: 'timeout' }),
       { timeout: 1000 }
     )
+  })
+
+  it('accepts headings delivered before ready', () => {
+    let bridge!: DocumentBridge
+    render(
+      <Harness
+        comments={[]}
+        onBridge={b => {
+          bridge = b
+        }}
+      />
+    )
+    act(() =>
+      frameMessage({
+        type: 'plannotator-bridge-headings',
+        headings: [{ id: 'h1', level: 2, text: 'Intro' }],
+      })
+    )
+    expect(bridge.status).toBe('loading')
+    expect(bridge.headings).toEqual([{ id: 'h1', level: 2, text: 'Intro' }])
   })
 })
 

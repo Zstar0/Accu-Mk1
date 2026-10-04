@@ -32,4 +32,27 @@ describe('stripViewerInjection', () => {
   it('is a no-op on untouched html', () => {
     expect(stripViewerInjection(ORIGINAL, ORIGINAL)).toBe(ORIGINAL)
   })
+
+  it('removes contenteditable only from the body tag; author elements and code samples survive', () => {
+    const authored =
+      '<!doctype html><html><head></head><body><div contenteditable="true">x</div><p>&lt;div contenteditable="true"&gt;</p></body></html>'
+    const viewed = authored.replace('<body>', '<body contenteditable="true">')
+    expect(stripViewerInjection(viewed, authored)).toBe(authored)
+  })
+
+  it('only removes the real head block; author markers in the body are left alone', () => {
+    const authored = `<!doctype html><html><head></head><body><p>a</p>${INJECT_CLOSE}<p>b</p>${INJECT_OPEN}<p>c</p></body></html>`
+    const viewed = authored.replace(
+      '</head>',
+      `${INJECT_OPEN}<style>x{}</style>${INJECT_CLOSE}</head>`
+    )
+    expect(stripViewerInjection(viewed, authored)).toBe(authored)
+  })
+
+  it('restores an unquoted authored data-theme', () => {
+    const orig =
+      '<!doctype html><html data-theme=light><head></head><body></body></html>'
+    const viewed = orig.replace('data-theme=light', 'data-theme="dark"')
+    expect(stripViewerInjection(viewed, orig)).toBe(orig)
+  })
 })

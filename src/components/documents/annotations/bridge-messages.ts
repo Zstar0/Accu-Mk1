@@ -153,7 +153,14 @@ export function parseBridgeMessage(data: unknown): ParsedBridgeMessage | null {
           typeof h.text === 'string' && h.text.length <= MAX_HEADING_TEXT
             ? h.text
             : null
-        if (!id || level === null || level < 1 || level > 6 || text === null)
+        if (
+          !id ||
+          level === null ||
+          !Number.isInteger(level) ||
+          level < 1 ||
+          level > 6 ||
+          text === null
+        )
           return null
         headings.push({ id, level, text })
       }
