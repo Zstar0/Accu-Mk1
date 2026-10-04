@@ -1,240 +1,4 @@
-/**
- * Bridge script injected into the HTML viewer iframe.
- *
- * Handles text selection, annotation marks, theme updates, and resize
- * notifications. Communicates with the parent via postMessage using a
- * "plannotator-bridge-*" message protocol.
- *
- * This is a string constant — it gets prepended to the iframe's srcdoc.
- * No external dependencies.
- */
-
-/**
- * Reads only viewer-namespaced \`--pn-*\` variables (with fallbacks): arbitrary
- * documents may define bare token names like \`--accent\` for themselves, and the
- * viewer must never depend on — or collide with — the author's namespace.
- */
-export const ANNOTATION_HIGHLIGHT_CSS = `
-/* Committed annotation visuals (highlight rectangles + numbered placed
- * markers) render inside a shadow-rooted fixed overlay host — see OVERLAY_CSS
- * in the bridge script. Nothing annotation-related is ever wrapped into or
- * styled onto the author's own elements. */
-/* Vim pinpoint target tint. The MOUSE pinpoint path no longer mutates author
- * elements — it draws the dedicated overlay box below — but keyboard (vim)
- * navigation keeps this class-based visual. */
-.plannotator-pinpoint-hover {
-  background-color: oklch(from var(--pn-focus-highlight, #4493f8) l c h / 0.12) !important;
-  border-radius: 3px;
-  cursor: pointer !important;
-}
-/* SVG groups can't render a CSS background, so use a soft glow instead. */
-.plannotator-pinpoint-hover:is(g, svg) {
-  filter: drop-shadow(0 0 4px oklch(from var(--pn-focus-highlight, #4493f8) l c h / 0.55));
-}
-/* Mouse pinpoint hover: a fixed-position outline box sized to the hovered
- * element's rect. Never a class/style write on the page's own elements. */
-[data-plannotator-pinpoint-box] {
-  position: fixed;
-  z-index: 2147483643;
-  pointer-events: none;
-  display: none;
-  box-sizing: border-box;
-  border: 2px solid oklch(from var(--pn-focus-highlight, #4493f8) l c h / 0.85);
-  border-radius: 5px;
-  background: oklch(from var(--pn-focus-highlight, #4493f8) l c h / 0.06);
-}
-[data-plannotator-pinpoint-box].pn-pin-enter {
-  animation: pn-pinpoint-in 0.12s ease-out;
-}
-[data-plannotator-pinpoint-box][data-pinned] {
-  border-color: var(--pn-accent, #d97757);
-  background: oklch(from var(--pn-accent, #d97757) l c h / 0.08);
-}
-@keyframes pn-pinpoint-in {
-  from { opacity: 0; transform: scale(0.985); }
-  to { opacity: 1; transform: scale(1); }
-}
-/* Pinpoint mode affordance: crosshair everywhere. Placed markers live in the
- * shadow overlay and keep their own pointer cursor there. */
-body[data-plannotator-pinpoint-cursor],
-body[data-plannotator-pinpoint-cursor] * {
-  cursor: crosshair !important;
-}
-/* Armed pinpoint over an EMBEDDED local document: the embed is one element
- * from the outer page's point of view, and the bridge is never injected into a
- * nested frame, so a click inside it would simply vanish into another document.
- * Making frames transparent to the pointer while armed is what lets that click
- * pin the <iframe>/<embed>/<object> itself. Interact (Esc, the header pen or
- * Mod+Shift+A) restores native interaction inside the embed — which is also
- * the only state a link inside it can be followed from.
- * Live-app sessions never set this attribute: they annotate a real app whose
- * own nested frames belong to it. */
-body[data-plannotator-frame-inert] :is(iframe, frame, embed, object) {
-  pointer-events: none !important;
-}
-@media (prefers-reduced-motion: reduce) {
-  [data-plannotator-pinpoint-box].pn-pin-enter {
-    animation: none;
-  }
-}
-@media print {
-  /* Viewer overlays are review chrome, not page content: never bake pinpoint
-     boxes/labels or vim UI into a printed page. The outer app chrome is
-     print-hidden by print.css, but this CSS lives inside the iframe's own
-     document and must carry its own rule. The annotation overlay host carries
-     its own print rule inside its shadow root. */
-  [data-plannotator-pinpoint-box],
-  [data-plannotator-pinpoint-label],
-  [data-plannotator-vim-ui],
-  [data-plannotator-vim-cursor] {
-    display: none !important;
-  }
-}
-/* Print-parity layer: committed highlight rects re-projected into an
- * absolute-positioned light-DOM layer built on beforeprint and torn down on
- * afterprint (the fixed overlay cannot paginate). Guarded here so it can
- * never flash on screen even if an afterprint teardown is missed. */
-@media screen {
-  [data-plannotator-print-layer] {
-    display: none !important;
-  }
-}
-body[data-plannotator-vim-focus-owner]:focus {
-  outline: none !important;
-}
-[data-plannotator-vim-cursor] {
-  position: fixed;
-  z-index: 2147483646;
-  width: 2px;
-  min-height: 1em;
-  border-radius: 2px;
-  background: var(--pn-focus-highlight, #4493f8);
-  pointer-events: none;
-}
-[data-plannotator-vim-reticle] {
-  position: fixed;
-  z-index: 2147483645;
-  inset: 0;
-  overflow: visible;
-  pointer-events: none;
-}
-[data-plannotator-vim-reticle] [data-vim-reticle-fill],
-[data-plannotator-vim-reticle] [data-vim-reticle-corner],
-[data-plannotator-vim-reticle] [data-vim-reticle-label] {
-  position: absolute;
-  top: 0;
-  left: 0;
-  will-change: transform;
-  transition: transform 90ms cubic-bezier(.22,1,.36,1);
-}
-[data-plannotator-vim-reticle] [data-vim-reticle-fill] {
-  width: 100px;
-  height: 100px;
-  transform-origin: 0 0;
-  border-radius: 8px;
-  background: rgba(167,139,250,.045);
-  box-shadow:
-    inset 0 0 0 1px rgba(196,181,253,.16),
-    0 0 42px rgba(139,92,246,.12);
-}
-[data-plannotator-vim-reticle] [data-vim-reticle-corner] {
-  width: 28px;
-  height: 28px;
-  border-color: #c4b5fd;
-  filter:
-    drop-shadow(0 0 6px rgba(167,139,250,.92))
-    drop-shadow(0 0 18px rgba(124,58,237,.42));
-}
-[data-plannotator-vim-reticle] [data-vim-reticle-corner="top-left"] {
-  border-top: 3px solid;
-  border-left: 3px solid;
-  border-top-left-radius: 8px;
-}
-[data-plannotator-vim-reticle] [data-vim-reticle-corner="top-right"] {
-  border-top: 3px solid;
-  border-right: 3px solid;
-  border-top-right-radius: 8px;
-}
-[data-plannotator-vim-reticle] [data-vim-reticle-corner="bottom-left"] {
-  border-bottom: 3px solid;
-  border-left: 3px solid;
-  border-bottom-left-radius: 8px;
-}
-[data-plannotator-vim-reticle] [data-vim-reticle-corner="bottom-right"] {
-  border-right: 3px solid;
-  border-bottom: 3px solid;
-  border-bottom-right-radius: 8px;
-}
-[data-plannotator-vim-reticle] [data-vim-reticle-label] {
-  z-index: 1;
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  min-width: 118px;
-  height: 30px;
-  max-width: min(280px, calc(100vw - 24px));
-  padding: 0 11px;
-  overflow: hidden;
-  border: 1px solid rgba(216,206,255,.42);
-  border-radius: 9px;
-  color: #f6f2ff;
-  background: rgba(18,14,28,.84);
-  box-shadow:
-    0 10px 28px rgba(0,0,0,.42),
-    0 0 20px rgba(139,92,246,.18);
-  backdrop-filter: blur(10px);
-  font: 700 10px/1 ui-monospace, SFMono-Regular, Menlo, monospace;
-  letter-spacing: .13em;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-[data-plannotator-vim-reticle] [data-vim-reticle-label]::before {
-  width: 7px;
-  height: 7px;
-  flex: 0 0 auto;
-  border-radius: 999px;
-  background: #c4b5fd;
-  box-shadow: 0 0 12px rgba(167,139,250,.94);
-  content: "";
-}
-@media (prefers-reduced-motion: reduce) {
-  [data-plannotator-vim-reticle] [data-vim-reticle-fill],
-  [data-plannotator-vim-reticle] [data-vim-reticle-corner],
-  [data-plannotator-vim-reticle] [data-vim-reticle-label] {
-    transition: none;
-  }
-}
-[data-plannotator-vim-badge] {
-  position: fixed;
-  z-index: 2147483647;
-  left: 50%;
-  bottom: 12px;
-  transform: translateX(-50%);
-  padding: 4px 9px;
-  border: 1px solid color-mix(in srgb, var(--pn-focus-highlight, #4493f8) 35%, transparent);
-  border-radius: 6px;
-  background: color-mix(in srgb, var(--pn-background, #111) 94%, transparent);
-  color: var(--pn-focus-highlight, #4493f8);
-  box-shadow: 0 4px 18px rgba(0,0,0,.25);
-  font: 700 10px/1.2 ui-monospace, SFMono-Regular, Menlo, monospace;
-  letter-spacing: .04em;
-  pointer-events: none;
-}
-`;
-
-/**
- * Bridge protocol version. Stamped on the bridge's `ready` message
- * (`protocolVersion`) and compared by the parent (HtmlViewer) against this
- * same constant. Bump it whenever a message shape changes in a way an older
- * bridge or an older parent would misread. The inline srcdoc path and the
- * live proxy always ship the bridge from the same bundle as the parent, so
- * they match by construction; the check exists for hosts that serve the
- * generated `bridge-script.asset.js` separately (`bridgeScriptUrl`), where a
- * cached asset from a previous package version can outlive the parent code.
- */
-export const BRIDGE_PROTOCOL_VERSION = 1;
-
-export const BRIDGE_SCRIPT = `(function() {
+(function() {
   var PREFIX = 'plannotator-bridge-';
 
   // --- Live mode (proxied local app) ---
@@ -1159,7 +923,7 @@ export const BRIDGE_SCRIPT = `(function() {
     for (var i = 0; i < el.classList.length && out.length < 2; i++) {
       var cls = el.classList[i];
       if (isLikelyGeneratedClass(cls)) continue;
-      var parts = String(cls).split(/[\\s_-]+/);
+      var parts = String(cls).split(/[\s_-]+/);
       for (var j = 0; j < parts.length && out.length < 2; j++) {
         var token = parts[j];
         if (token.length <= 2) continue;
@@ -1183,7 +947,7 @@ export const BRIDGE_SCRIPT = `(function() {
     if (role && role.trim()) return truncateLabel(role.trim());
     var tokens = meaningfulClassTokens(el);
     if (tokens.length) return truncateLabel(tokens.join(' '));
-    var text = (el.textContent || '').replace(/\\s+/g, ' ').trim();
+    var text = (el.textContent || '').replace(/\s+/g, ' ').trim();
     if (text && text.length <= MAX_HOVER_LABEL) return text;
     return 'container';
   }
@@ -1389,7 +1153,7 @@ export const BRIDGE_SCRIPT = `(function() {
     '@media (prefers-reduced-motion: reduce) { .pn-marker { animation: none; } }',
     ':host([data-pn-hittest]) .pn-marker, [data-plannotator-overlay-host][data-pn-hittest] .pn-marker { pointer-events: none !important; }',
     '@media print { .pn-layer { display: none !important; } }'
-  ].join('\\n');
+  ].join('\n');
 
   // Product-owned speech-bubble marker (26x25 box, accent fill, white stroke).
   var MARKER_SVG = '<svg class="pn-marker-icon" viewBox="0 0 26 25" aria-hidden="true" focusable="false"><path d="M13 1.1C6.55 1.1 1.4 5.83 1.4 11.62c0 3.62 2.02 6.8 5.08 8.68l-0.85 3.5 4.28-2.02c1.01 0.25 2.05 0.38 3.09 0.38 6.45 0 11.6-4.73 11.6-10.54C24.6 5.83 19.45 1.1 13 1.1Z"/></svg>';
@@ -2614,7 +2378,7 @@ export const BRIDGE_SCRIPT = `(function() {
   var ANCHOR_IDENTITY_ATTRS = ['data-annotate', 'data-testid', 'data-test', 'data-test-id', 'data-cy', 'data-qa', 'aria-label', 'name', 'role', 'href', 'alt'];
 
   function anchorTextSnapshot(el) {
-    var text = (el.textContent || '').replace(/\\s+/g, ' ').trim();
+    var text = (el.textContent || '').replace(/\s+/g, ' ').trim();
     return text.length > 180 ? text.slice(0, 180) : text;
   }
 
@@ -2628,7 +2392,7 @@ export const BRIDGE_SCRIPT = `(function() {
   }
 
   function escapeAttrValue(value) {
-    return '"' + value.replace(/\\\\/g, '\\\\\\\\').replace(/"/g, '\\\\"') + '"';
+    return '"' + value.replace(/\\/g, '\\\\').replace(/"/g, '\\"') + '"';
   }
 
   function isLikelyGeneratedClass(name) {
@@ -2650,7 +2414,7 @@ export const BRIDGE_SCRIPT = `(function() {
       var value = el.getAttribute && el.getAttribute(name);
       if (!value) continue;
       value = value.trim();
-      if (!value || value.length > 240 || value.indexOf('\\n') >= 0) continue;
+      if (!value || value.length > 240 || value.indexOf('\n') >= 0) continue;
       var attrSel = tag + '[' + name + '=' + escapeAttrValue(value) + ']';
       if (uniquelySelects(attrSel, el)) return attrSel;
     }
@@ -2816,7 +2580,7 @@ export const BRIDGE_SCRIPT = `(function() {
 
   // Collapse control characters and whitespace runs; the parent does it again.
   function ctxCollapse(value, max) {
-    var s = String(value == null ? '' : value).replace(/[\\x00-\\x1f\\x7f]+/g, ' ').replace(/\\s+/g, ' ').trim();
+    var s = String(value == null ? '' : value).replace(/[\x00-\x1f\x7f]+/g, ' ').replace(/\s+/g, ' ').trim();
     return max ? ctxTruncate(s, max) : s;
   }
 
@@ -2848,7 +2612,7 @@ export const BRIDGE_SCRIPT = `(function() {
       var comma = v.indexOf(',');
       return (comma > 0 ? v.slice(0, Math.min(comma, 40)) : v.slice(0, 40)) + ',…';
     }
-    if (/^https?:\\/\\//i.test(v)) {
+    if (/^https?:\/\//i.test(v)) {
       try {
         var u = new URL(v);
         return u.origin + u.pathname + (u.search || u.hash ? '?…' : '');
@@ -2916,7 +2680,7 @@ export const BRIDGE_SCRIPT = `(function() {
     if (aria && aria.trim()) return ctxCollapse(aria, 120);
     var by = el.getAttribute('aria-labelledby');
     if (by && by.trim()) {
-      var ids = by.trim().split(/\\s+/);
+      var ids = by.trim().split(/\s+/);
       var parts = [];
       for (var i = 0; i < ids.length && i < 4; i++) {
         var ref = document.getElementById(ids[i]);
@@ -3065,7 +2829,7 @@ export const BRIDGE_SCRIPT = `(function() {
     for (var i = 0; i < shown.length; i++) lines.push('  ' + ctxChildTag(shown[i], depth - 1));
     if (kids.length > shown.length) lines.push('  <!-- +' + (kids.length - shown.length) + ' more: ' + ctxTagCounts(kids.slice(shown.length)) + ' -->');
     lines.push('</' + tag + '>');
-    return lines.join('\\n');
+    return lines.join('\n');
   }
 
   function ctxOutlineAtDepth(el, attrs, kids, depth) {
@@ -3080,12 +2844,12 @@ export const BRIDGE_SCRIPT = `(function() {
     var shown = kids.slice(0, CTX_MAX_CHILDREN);
     for (var i = 0; i < shown.length; i++) {
       var rendered = ctxChildTag(shown[i], depth);
-      var childLines = rendered.split('\\n');
+      var childLines = rendered.split('\n');
       for (var j = 0; j < childLines.length; j++) lines.push('  ' + childLines[j]);
     }
     if (kids.length > shown.length) lines.push('  <!-- +' + (kids.length - shown.length) + ' more: ' + ctxTagCounts(kids.slice(shown.length)) + ' -->');
     lines.push('</' + tag + '>');
-    return lines.join('\\n');
+    return lines.join('\n');
   }
 
   // Adaptive depth: two levels, then one, then a per-tag count — the first
@@ -4990,7 +4754,7 @@ export const BRIDGE_SCRIPT = `(function() {
       var h = nodes[i];
       if (isViewerOverlayNode(h)) continue;
       if (!h.id) { headingSeq += 1; h.id = 'pn-h-' + headingSeq; }
-      var text = (h.textContent || '').replace(/\s+/g, ' ').trim();
+      var text = (h.textContent || '').replace(/s+/g, ' ').trim();
       if (text.length > HEADING_TEXT_MAX) text = text.slice(0, HEADING_TEXT_MAX);
       out.push({ id: h.id, level: Number(h.tagName.charAt(1)) || 1, text: text });
     }
@@ -5180,7 +4944,7 @@ export const BRIDGE_SCRIPT = `(function() {
     // pinpoint: show the cursor affordance immediately instead of waiting for
     // the parent's first set-input-method/set-annotate-mode round trip.
     updatePinpointCursor();
-    var readyMsg = { type: PREFIX + 'ready', protocolVersion: ${BRIDGE_PROTOCOL_VERSION} };
+    var readyMsg = { type: PREFIX + 'ready', protocolVersion: 1 };
     if (LIVE) readyMsg.pageUrl = currentPageUrl();
     postToParent(readyMsg);
   }
@@ -5209,23 +4973,4 @@ export const BRIDGE_SCRIPT = `(function() {
       return out;
     }
   };
-})();`;
-
-/**
- * Live-mode bootstrap, prepended to BRIDGE_SCRIPT by the annotate server when
- * composing the proxy-served bridge body. Reads the JSON config prelude
- * (window.__plannotatorLiveConfig) and installs the annotation CSS that srcdoc
- * mode splices as a <style> tag. Runs before the bridge IIFE and before its
- * MutationObserver exists, so this write never feeds the reconcile loop.
- * Same escaping rules as BRIDGE_SCRIPT: a dependency-free string constant.
- */
-export const LIVE_BRIDGE_BOOTSTRAP = `(function() {
-  var config = window.__plannotatorLiveConfig;
-  if (!config || typeof config.css !== 'string') return;
-  try {
-    var style = document.createElement('style');
-    style.setAttribute('data-plannotator-live-css', '');
-    style.appendChild(document.createTextNode(config.css));
-    (document.head || document.documentElement).appendChild(style);
-  } catch (ex) {}
-})();`;
+})();
