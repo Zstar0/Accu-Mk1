@@ -43,7 +43,10 @@ export function CommentComposer({
 }: Props) {
   const [body, setBody] = useState('')
   const [replacement, setReplacement] = useState(quote)
-  const [label, setLabel] = useState<CommentLabel | null>(initialLabel)
+  // keyed on the id: object identity churn must not wipe a typed draft
+  const initialLabelId = initialLabel?.id ?? null
+  const [labelId, setLabelId] = useState<string | null>(initialLabelId)
+  const label = labels.find(l => l.id === labelId) ?? null
   const [saving, setSaving] = useState(false)
   const [draw, setDraw] = useState<{ src: string; name: string } | null>(null)
   const taRef = useRef<HTMLTextAreaElement>(null)
@@ -53,11 +56,9 @@ export function CommentComposer({
     if (!open) return
     setBody('')
     setReplacement(quote)
-    setLabel(initialLabel)
+    setLabelId(initialLabelId)
     queueMicrotask(() => taRef.current?.focus())
-    // keyed on the label id: object identity churn must not wipe a typed draft
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [open, quote, initialLabel?.id])
+  }, [open, quote, initialLabelId])
 
   useEffect(() => {
     const src = draw?.src
@@ -150,7 +151,7 @@ export function CommentComposer({
             <button
               type="button"
               className="mb-2 rounded-full border px-2 py-0.5 text-xs"
-              onClick={() => setLabel(null)}
+              onClick={() => setLabelId(null)}
               title="Remove label"
             >
               {label.emoji} {label.text} ×
@@ -163,7 +164,7 @@ export function CommentComposer({
                   key={l.id}
                   type="button"
                   className="rounded-full border px-2 py-0.5 text-xs hover:bg-muted"
-                  onClick={() => setLabel(l)}
+                  onClick={() => setLabelId(l.id)}
                 >
                   {l.emoji} {l.text}
                 </button>
