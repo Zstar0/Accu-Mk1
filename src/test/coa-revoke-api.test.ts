@@ -79,3 +79,28 @@ describe('revoke API client', () => {
     })
   })
 })
+
+describe('resume API client', () => {
+  it('resumeCoaRevocation POSTs the resume route with notify_customer', async () => {
+    const { resumeCoaRevocation } = await import('@/lib/api')
+    const fetchMock = stubFetch({
+      revoked: [],
+      skipped: [],
+      wp_notified: true,
+      wp_error: null,
+      wp_warning: null,
+      pdfs_withdrawn: ['RVKD-0001'],
+      pdfs_withdraw_failed: [],
+      resumed: true,
+    })
+    const out = await resumeCoaRevocation('g1')
+    const [url, init] = fetchMock.mock.calls[0] ?? []
+    expect(String(url)).toMatch(
+      /\/explorer\/coa-generations\/g1\/revoke\/resume$/
+    )
+    expect(init?.method).toBe('POST')
+    expect(JSON.parse(String(init?.body))).toEqual({ notify_customer: true })
+    expect(out.resumed).toBe(true)
+    expect(out.pdfs_withdrawn).toEqual(['RVKD-0001'])
+  })
+})

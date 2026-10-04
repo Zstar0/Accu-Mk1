@@ -2133,6 +2133,36 @@ export interface RevokeCOAResult {
   skipped: string[]
   wp_notified: boolean
   wp_error: string | null
+  /** WordPress accepted the notice but qualified it (rows it has no certificate for, an email it did not send). */
+  wp_warning: string | null
+  /** PDFs moved out of the public prefix; a failed move stays public until the follow-ups are re-run. */
+  pdfs_withdrawn: string[]
+  pdfs_withdraw_failed: string[]
+  /** True when the result came from the resume route. */
+  resumed: boolean
+}
+
+/**
+ * Re-run a revocation's follow-ups (WordPress notice, PDF withdrawal) for an
+ * already revoked certificate. Idempotent on the IS side. Admin only.
+ */
+export async function resumeCoaRevocation(
+  generationId: string,
+  notifyCustomer = true
+): Promise<RevokeCOAResult> {
+  const response = await fetch(
+    `${API_BASE_URL()}/explorer/coa-generations/${encodeURIComponent(generationId)}/revoke/resume`,
+    {
+      method: 'POST',
+      headers: getBearerHeaders('application/json'),
+      body: JSON.stringify({ notify_customer: notifyCustomer }),
+    }
+  )
+  if (!response.ok)
+    throw new Error(
+      await extractErrorMessage(response, `COA revocation resume failed: ${response.status}`)
+    )
+  return response.json()
 }
 
 /** What "also revoke every other certificate issued for this sample" would take. Admin only. */

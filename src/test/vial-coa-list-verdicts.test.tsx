@@ -95,8 +95,12 @@ describe('VialCOAList verdict controls', () => {
         ]}
       />
     )
-    expect(screen.queryByRole('button', { name: 'Manage' })).toBeNull()
-    expect(screen.queryByRole('button', { name: /revoke/i })).toBeNull()
+    // The draft offers nothing; the revoked vial keeps one admin control, the
+    // revocation follow-ups (no Revoke, no Forward).
+    expect(screen.getAllByRole('button', { name: 'Manage' })).toHaveLength(1)
+    fireEvent.click(screen.getByRole('button', { name: 'Manage' }))
+    expect(screen.getByText('Revocation follow-ups')).toBeTruthy()
+    expect(screen.queryByRole('button', { name: /^revoke/i })).toBeNull()
     expect(screen.queryByLabelText('Forward to current')).toBeNull()
     expect(screen.getByText('Revoked')).toBeTruthy()
   })

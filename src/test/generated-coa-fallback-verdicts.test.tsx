@@ -144,6 +144,10 @@ describe('GeneratedCOAFallbackList verdict controls', () => {
       skipped: [],
       wp_notified: true,
       wp_error: null,
+      wp_warning: null,
+      pdfs_withdrawn: [],
+      pdfs_withdraw_failed: [],
+      resumed: false,
     })
 
     render(
@@ -187,6 +191,10 @@ describe('GeneratedCOAFallbackList verdict controls', () => {
       skipped: [],
       wp_notified: true,
       wp_error: null,
+      wp_warning: null,
+      pdfs_withdrawn: [],
+      pdfs_withdraw_failed: [],
+      resumed: false,
     })
 
     render(
@@ -237,8 +245,10 @@ describe('GeneratedCOAFallbackList verdict controls', () => {
       />
     )
     expect(screen.getByText('Revoked')).toBeTruthy()
-    expect(screen.queryByRole('button', { name: 'Manage' })).toBeNull()
-    expect(screen.queryByRole('button', { name: /revoke/i })).toBeNull()
+    // An admin keeps one control on a revoked row: re-running the follow-ups.
+    fireEvent.click(screen.getByRole('button', { name: 'Manage' }))
+    expect(screen.getByText('Revocation follow-ups')).toBeTruthy()
+    expect(screen.queryByRole('button', { name: /^revoke/i })).toBeNull()
     expect(screen.queryByLabelText('Forward to current')).toBeNull()
   })
 
@@ -286,6 +296,10 @@ describe('GeneratedCOAFallbackList verdict controls', () => {
       skipped: [],
       wp_notified: true,
       wp_error: null,
+      wp_warning: null,
+      pdfs_withdrawn: [],
+      pdfs_withdraw_failed: [],
+      resumed: false,
     })
 
     render(
@@ -359,6 +373,10 @@ describe('GeneratedCOAFallbackList verdict controls', () => {
       skipped: ['GONE-0000'],
       wp_notified: false,
       wp_error: 'HTTP 500: boom',
+      wp_warning: null,
+      pdfs_withdrawn: [],
+      pdfs_withdraw_failed: [],
+      resumed: false,
     })
     render(
       <GeneratedCOAFallbackList generations={[PUBLISHED]} sampleId="P-0001" />
@@ -385,6 +403,51 @@ describe('GeneratedCOAFallbackList verdict controls', () => {
         .mocked(toast.warning)
         .mock.calls.some(c => String(c[1]?.description).includes('GONE-0000'))
     ).toBe(true)
+  })
+
+  it('warns when WordPress qualified the notice or a PDF withdrawal failed', async () => {
+    const { toast } = await import('sonner')
+    vi.mocked(toast.warning).mockReset()
+    mockRevoke.mockResolvedValue({
+      revoked: [
+        {
+          generation_id: 'g2',
+          verification_code: 'NEW-0002',
+          status: 'revoked',
+          kind: 'primary',
+          brand: null,
+          revoked_at: null,
+          revocation_reason: 'r',
+        },
+      ],
+      skipped: [],
+      wp_notified: true,
+      wp_error: null,
+      wp_warning: 'No certificate row in WordPress for ACOA-0002',
+      pdfs_withdrawn: [],
+      pdfs_withdraw_failed: ['NEW-0002'],
+      resumed: false,
+    })
+    render(
+      <GeneratedCOAFallbackList generations={[PUBLISHED]} sampleId="P-0001" />
+    )
+    fireEvent.click(screen.getByRole('button', { name: 'Manage' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Revoke…' }))
+    fireEvent.change(screen.getByPlaceholderText(/reason/i), {
+      target: { value: 'r' },
+    })
+    fireEvent.click(
+      screen.getByRole('button', { name: /^revoke 1 certificate$/i })
+    )
+    await waitFor(() =>
+      expect(vi.mocked(toast.warning)).toHaveBeenCalledTimes(2)
+    )
+    const texts = vi
+      .mocked(toast.warning)
+      .mock.calls.map(c => `${c[0]} ${c[1]?.description ?? ''}`)
+      .join(' ')
+    expect(texts).toContain('ACOA-0002')
+    expect(texts).toContain('NEW-0002')
   })
 
   it('cancel clears the dialog so a reopened cascade fetches a fresh preview', async () => {

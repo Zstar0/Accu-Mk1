@@ -242,3 +242,55 @@ def test_any_lab_user_can_set_the_forward_switch(monkeypatch):
 def test_generation_list_model_declares_the_chain_and_author_fields():
     fields = main.ExplorerCOAGenerationResponse.model_fields
     assert {"superseded_by_id", "revoked_by", "forward_enabled", "revoked_at", "revocation_reason"} <= set(fields)
+
+
+# --- resume: re-run a revocation's follow-ups ---------------------------------
+
+RESUMED = {
+    **REVOKED,
+    "wp_warning": "No certificate row in WordPress for ACOA-0002",
+    "pdfs_withdrawn": ["PRIM-0002"],
+    "pdfs_withdraw_failed": [],
+    "resumed": True,
+}
+
+
+def test_resume_posts_to_the_is_resume_route(monkeypatch):
+    captured = {}
+    _patch_is(monkeypatch, captured, body=RESUMED)
+    out = asyncio.run(main.resume_coa_revocation(GEN, main.ResumeRevocationRequest(), admin=ADMIN))
+    assert captured["method"] == "POST"
+    assert captured["url"] == f"http://is.test/explorer/coa-generations/{GEN}/revoke/resume"
+    assert captured["body"] == {"notify_customer": True}
+    assert out["resumed"] is True and out["pdfs_withdrawn"] == ["PRIM-0002"]
+
+
+def test_resume_is_admin_only_and_keeps_the_follow_up_fields_through_the_mounted_route(monkeypatch):
+    captured = {}
+    _patch_is(monkeypatch, captured, body=RESUMED)
+    try:
+        denied = _as("hplc").post(f"/explorer/coa-generations/{GEN}/revoke/resume", json={})
+        resp = _as("admin").post(f"/explorer/coa-generations/{GEN}/revoke/resume", json={"notify_customer": False})
+    finally:
+        _clear()
+    assert denied.status_code == 403
+    assert resp.status_code == 200
+    body = resp.json()
+    # response_model must declare these, or FastAPI silently drops them.
+    assert body["wp_warning"] == "No certificate row in WordPress for ACOA-0002"
+    assert body["pdfs_withdrawn"] == ["PRIM-0002"] and body["pdfs_withdraw_failed"] == []
+    assert body["resumed"] is True
+    assert captured["body"] == {"notify_customer": False}
+
+
+def test_revoke_keeps_wp_warning_and_withdrawal_fields_through_the_mounted_route(monkeypatch):
+    captured = {}
+    _patch_is(monkeypatch, captured, body={**REVOKED, "wp_warning": "WordPress did not send the customer email", "pdfs_withdrawn": ["PRIM-0002"], "pdfs_withdraw_failed": ["ACOA-0002"]})
+    try:
+        resp = _as("admin").post(f"/explorer/coa-generations/{GEN}/revoke", json={"reason": "Lot recalled"})
+    finally:
+        _clear()
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["wp_warning"] == "WordPress did not send the customer email"
+    assert body["pdfs_withdraw_failed"] == ["ACOA-0002"]

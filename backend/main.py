@@ -11909,6 +11909,16 @@ class RevokeCOAResponse(BaseModel):
     skipped: list[str]
     wp_notified: bool
     wp_error: Optional[str] = None
+    # Declared or FastAPI drops them from the proxied body: WordPress's
+    # qualification of a 200, the PDF withdrawal outcome, and the resume marker.
+    wp_warning: Optional[str] = None
+    pdfs_withdrawn: list[str] = Field(default_factory=list)
+    pdfs_withdraw_failed: list[str] = Field(default_factory=list)
+    resumed: bool = False
+
+
+class ResumeRevocationRequest(BaseModel):
+    notify_customer: bool = Field(True, description="Let WordPress send the customer email it still owes")
 
 
 def _revoked_by_label(user) -> str:
@@ -11951,6 +11961,18 @@ async def revoke_coa_generation(
     """
     payload = {**body.model_dump(), "revoked_by": _revoked_by_label(admin)}
     return await _proxy_explorer_send("POST", f"/coa-generations/{generation_id}/revoke", payload)
+
+
+@app.post("/explorer/coa-generations/{generation_id}/revoke/resume", response_model=RevokeCOAResponse)
+async def resume_coa_revocation(
+    generation_id: str, body: ResumeRevocationRequest, admin=Depends(require_admin)
+):
+    """Re-run a revocation's follow-ups (WordPress notice, PDF withdrawal) for an
+    already revoked certificate. Idempotent on the IS side. Admin only, like Revoke.
+    """
+    return await _proxy_explorer_send(
+        "POST", f"/coa-generations/{generation_id}/revoke/resume", body.model_dump()
+    )
 
 
 @app.patch("/explorer/coa-generations/{generation_id}/forward", response_model=COAGenerationStateResponse)

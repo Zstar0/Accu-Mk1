@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
-import { fireEvent, render, screen } from '@testing-library/react'
+import { fireEvent, render, screen, waitFor } from '@testing-library/react'
 import type { ComponentProps } from 'react'
 import type * as ApiModule from '@/lib/api'
 import type { ExplorerCOAGeneration, SenaitePublishedCOA } from '@/lib/api'
@@ -11,6 +11,8 @@ vi.mock('@/lib/api', async importOriginal => {
     setCoaForwardEnabled: vi.fn(),
     revokeCoaGeneration: vi.fn(),
     getCoaRevokePreview: vi.fn(),
+    getExplorerCOASignedUrl: vi.fn(),
+    fetchSenaiteReportUrl: vi.fn(),
   }
 })
 vi.mock('sonner', () => ({
@@ -19,6 +21,7 @@ vi.mock('sonner', () => ({
 
 import { PublishedCOACard } from '@/components/senaite/SampleDetails'
 import { useAuthStore } from '@/store/auth-store'
+import { fetchSenaiteReportUrl, getExplorerCOASignedUrl } from '@/lib/api'
 
 // PublishedCOACard is the SENAITE-attached-ARReport card (the primary on most
 // prod samples). It carries the same additive controls as the other COA
@@ -118,5 +121,51 @@ describe('PublishedCOACard verdict controls', () => {
     renderCard({ generation: PUBLISHED })
     fireEvent.click(screen.getByRole('button', { name: 'Manage' }))
     expect(screen.queryByRole('button', { name: /^revoke/i })).toBeNull()
+  })
+})
+
+// The code on the card comes from the SENAITE sample field, which publish
+// updates even when the PDF attachment fails; the attached report can then be
+// an older certificate. When the ledger generation behind the displayed code
+// is known, the PDF button must open THAT certificate's PDF, so what the
+// operator reads and what Manage acts on are the same document.
+describe('PublishedCOACard PDF source', () => {
+  beforeEach(() => {
+    vi.mocked(getExplorerCOASignedUrl).mockReset()
+    vi.mocked(fetchSenaiteReportUrl).mockReset()
+    vi.stubGlobal('open', vi.fn())
+  })
+
+  it('opens the ledger generation’s PDF when the displayed code resolves to one', async () => {
+    vi.mocked(getExplorerCOASignedUrl).mockResolvedValue({
+      url: 'https://is.test/signed.pdf',
+    } as never)
+    renderCard({ coa: COA, sampleId: 'P-0001', generation: PUBLISHED })
+
+    fireEvent.click(screen.getByRole('button', { name: /PDF/ }))
+
+    await waitFor(() =>
+      expect(getExplorerCOASignedUrl).toHaveBeenCalledWith(
+        'P-0001',
+        PUBLISHED.generation_number
+      )
+    )
+    expect(fetchSenaiteReportUrl).not.toHaveBeenCalled()
+    expect(window.open).toHaveBeenCalledWith(
+      'https://is.test/signed.pdf',
+      '_blank'
+    )
+  })
+
+  it('falls back to the SENAITE attachment when no ledger generation matches', async () => {
+    vi.mocked(fetchSenaiteReportUrl).mockResolvedValue('blob:senaite')
+    renderCard({ coa: COA, sampleId: 'P-0001', generation: null })
+
+    fireEvent.click(screen.getByRole('button', { name: /PDF/ }))
+
+    await waitFor(() =>
+      expect(fetchSenaiteReportUrl).toHaveBeenCalledWith('uid-1')
+    )
+    expect(getExplorerCOASignedUrl).not.toHaveBeenCalled()
   })
 })

@@ -87,6 +87,7 @@ import {
   regenPrimaryCOA,
   regenAdditionalCOA,
   revokeCoaGeneration,
+  resumeCoaRevocation,
   getCoaRevokePreview,
   setCoaForwardEnabled,
   listSamplePreps,
@@ -205,7 +206,9 @@ import {
   SchedulePublishDialog,
   ScheduledPublishBadge,
 } from '@/components/senaite/SchedulePublishDialog'
-import type { ScheduledPublishState, SampleRetestInfo } from '@/lib/api'
+import type { ScheduledPublishState, SampleRetestInfo,
+  RevokeCOAResult,
+} from '@/lib/api'
 import { fmtWhen } from '@/lib/scheduled-publish'
 import { formatLabDateTime } from '@/lib/lab-time'
 import { isHplcAnalyteService } from '@/lib/hplc-analyte-services'
@@ -601,11 +604,12 @@ export function selectEarlierVersions(
 }
 
 /**
- * The ledger generation behind the certificate a SENAITE-era card displays,
- * matched by its verification code. No stand-in: when the ledger has moved on
- * (a regen whose SENAITE attachment failed leaves the old report attached
- * while a newer code is published), the card's Manage controls must not act
- * on the newer root, so the caller gets null and shows no Manage.
+ * The ledger generation behind the code a SENAITE-era card displays, matched
+ * by verification code, no stand-in. The code comes from the SENAITE sample
+ * field, which publish updates even when the PDF attachment fails, so the
+ * attached report can lag behind it; the card therefore opens THIS
+ * generation's PDF when one resolves. With no match (the ledger does not know
+ * the code) the caller gets null and the card shows no Manage.
  */
 export function selectDisplayedGeneration(
   gens: ExplorerCOAGeneration[],
@@ -613,6 +617,34 @@ export function selectDisplayedGeneration(
 ): ExplorerCOAGeneration | null {
   if (!verificationCode) return null
   return gens.find(g => g.verification_code === verificationCode) ?? null
+}
+
+/**
+ * Superseded per-vial certificates of one vial, newest first. The current-row
+ * selector drops them by design; they still carry the forward pointer the lab
+ * may switch off and an admin may revoke one on its own, so each vial lists
+ * its history with Manage. Revoked rows are terminal and not listed.
+ */
+export function selectVialHistory(
+  gens: ExplorerCOAGeneration[],
+  vialSequence: number | null
+): ExplorerCOAGeneration[] {
+  if (vialSequence == null) return []
+  return gens
+    .filter(g => g.vial_sequence === vialSequence && g.status === 'superseded')
+    .sort((a, b) => b.generation_number - a.generation_number)
+}
+
+/** Superseded Core (regular) certificates, newest first; same reasoning as selectVialHistory. */
+export function selectRegularHistory(
+  gens: ExplorerCOAGeneration[]
+): ExplorerCOAGeneration[] {
+  return gens
+    .filter(
+      g =>
+        g.is_regular_coa && g.vial_sequence == null && g.status === 'superseded'
+    )
+    .sort((a, b) => b.generation_number - a.generation_number)
 }
 
 /**
@@ -997,6 +1029,7 @@ export function RevokeCOADialog({
             'WordPress did not accept the notice. The portal and email need a manual follow-up.',
         })
       }
+      warnAboutFollowUps(result)
       setOpenState(false)
       reset()
       onRevoked?.()
@@ -1141,6 +1174,75 @@ const REGEN_HELP_ADDITIONAL =
 const REVOKE_HELP =
   'Withdraws the certificate permanently. The public page and the AccuVerify badge show Certificate Revoked with your reason, the customer portal marks it Revoked and its PDF can no longer be downloaded, and the customer is emailed unless you switch that off. Nothing replaces a revoked certificate; regenerate if a corrected one is needed. On a primary you can also revoke every other certificate of the sample in one action. Admins only.'
 
+/**
+ * What a revoke (or a resumed one) could not finish. WordPress may accept the
+ * notice but qualify it, and a PDF withdrawal may fail; both are retried from
+ * the revoked row's Manage ("Revocation follow-ups"), so the operator must see them.
+ */
+function warnAboutFollowUps(result: RevokeCOAResult) {
+  if (result.wp_notified && result.wp_warning) {
+    toast.warning('Revoked, but WordPress reported a gap', {
+      description: `${result.wp_warning}. Re-run the follow-ups from the revoked row's Manage.`,
+    })
+  }
+  if (result.pdfs_withdraw_failed?.length) {
+    toast.warning('Revoked, but a PDF is still public', {
+      description: `Withdrawal failed for ${result.pdfs_withdraw_failed.join(', ')}. Re-run the follow-ups from the revoked row's Manage.`,
+    })
+  }
+}
+
+const RESUME_HELP =
+  'The revoke itself is done. This re-sends the WordPress notice (portal marker, download block, the customer email if it is still owed) and moves the PDF out of public reach again. Safe to repeat: nothing is stamped or emailed twice.'
+
+function ResumeRevocationButton({
+  gen,
+  onDone,
+}: {
+  gen: ExplorerCOAGeneration
+  onDone?: () => void
+}) {
+  const [busy, setBusy] = useState(false)
+  const run = async () => {
+    setBusy(true)
+    try {
+      const result = await resumeCoaRevocation(gen.id)
+      toast.success('Revocation follow-ups re-run', {
+        description: result.pdfs_withdrawn.length
+          ? `PDF withdrawn for ${result.pdfs_withdrawn.join(', ')}`
+          : 'Nothing was left to withdraw',
+      })
+      if (!result.wp_notified) {
+        toast.warning('WordPress still not updated', {
+          description:
+            result.wp_error ?? 'WordPress did not accept the notice.',
+        })
+      }
+      warnAboutFollowUps(result)
+      onDone?.()
+    } catch (err) {
+      toast.error('Follow-ups failed', {
+        description: err instanceof Error ? err.message : 'Unknown error',
+      })
+    } finally {
+      setBusy(false)
+    }
+  }
+  return (
+    <Button
+      type="button"
+      variant="outline"
+      size="sm"
+      className="h-6 px-2 text-[11px]"
+      disabled={busy}
+      onClick={run}
+    >
+      {busy ? <Loader2 size={11} className="animate-spin" /> : null}
+      Retry
+    </Button>
+  )
+}
+
 function ManageRow({
   title,
   hint,
@@ -1208,7 +1310,9 @@ export function CoaManagePopover({
   const showForward = gen.status === 'superseded'
   const showRevoke = isAdmin && issued
   const showRegen = regen != null
-  if (!showForward && !showRevoke && !showRegen) return null
+  // A revoked row has one thing left: re-running the revoke's follow-ups.
+  const showResume = isAdmin && gen.status === 'revoked'
+  if (!showForward && !showRevoke && !showRegen && !showResume) return null
   return (
     <>
       <Popover open={open} onOpenChange={setOpen}>
@@ -1238,6 +1342,15 @@ export function CoaManagePopover({
               help={regenHelp}
             >
               {regen}
+            </ManageRow>
+          )}
+          {showResume && (
+            <ManageRow
+              title="Revocation follow-ups"
+              hint="Re-send the WordPress notice and withdraw the PDF"
+              help={RESUME_HELP}
+            >
+              <ResumeRevocationButton gen={gen} onDone={onStateChanged} />
             </ManageRow>
           )}
           {showRevoke && (
@@ -1410,9 +1523,12 @@ export function GeneratedCOAFallbackList({
  */
 export function VialCOAList({
   generations,
+  allGenerations,
   onStateChanged,
 }: {
   generations: ExplorerCOAGeneration[]
+  /** Every generation of the sample: each vial lists its superseded history from it. */
+  allGenerations?: ExplorerCOAGeneration[]
   /** After a verdict change (forward toggle, revoke): refetch the lists. */
   onStateChanged?: () => void
 }) {
@@ -1420,6 +1536,7 @@ export function VialCOAList({
     <div className="space-y-2">
       {generations.map(gen => {
         const release = coaReleaseStatus(gen)
+        const history = selectVialHistory(allGenerations ?? [], gen.vial_sequence)
         return (
           <div
             key={gen.id}
@@ -1487,6 +1604,10 @@ export function VialCOAList({
                   </span>
                 </div>
               </div>
+              <EarlierVersionsList
+                versions={history}
+                onStateChanged={onStateChanged}
+              />
             </div>
           </div>
         )
@@ -1514,6 +1635,17 @@ export function PublishedCOACard({
   const handleOpen = async () => {
     setLoading(true)
     try {
+      if (generation) {
+        // The ledger certificate behind the displayed code: the SENAITE
+        // attachment can be an older report when a regen's attach failed,
+        // and Manage acts on this generation, so the PDF must be its own.
+        const { url } = await getExplorerCOASignedUrl(
+          sampleId,
+          generation.generation_number
+        )
+        window.open(url, '_blank')
+        return
+      }
       const url = await fetchSenaiteReportUrl(coa.report_uid)
       window.open(url, '_blank')
       // Revoke after enough time for the new tab to read the blob
@@ -6872,6 +7004,7 @@ export function SampleDetails() {
                   >
                     <VialCOAList
                       generations={vialGens}
+                      allGenerations={coaGenerations}
                       onStateChanged={refreshGeneratedCoas}
                     />
                   </SectionHeader>
@@ -6891,6 +7024,11 @@ export function SampleDetails() {
                     <GeneratedCOAFallbackList
                       generations={regularGens}
                       sampleId={sampleId}
+                      onStateChanged={refreshGeneratedCoas}
+                    />
+                    {/* Superseded Core certificates keep their Manage (forward pointer, revoke). */}
+                    <EarlierVersionsList
+                      versions={selectRegularHistory(coaGenerations)}
                       onStateChanged={refreshGeneratedCoas}
                     />
                   </SectionHeader>

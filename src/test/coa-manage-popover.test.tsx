@@ -147,8 +147,17 @@ describe('CoaManagePopover', () => {
     expect(screen.queryByRole('button', { name: 'Manage' })).toBeNull()
   })
 
-  it('a revoked row with no regen offers no Manage button', () => {
+  it('a revoked row offers an admin only the revocation follow-ups, and other roles nothing', () => {
     render(<CoaManagePopover gen={gen({ status: 'revoked' })} />)
+    openManage()
+    expect(screen.getByText('Revocation follow-ups')).toBeTruthy()
+    expect(screen.queryByText('Forward to current')).toBeNull()
+    expect(screen.queryByText('Regen & Republish')).toBeNull()
+    expect(screen.queryByRole('button', { name: 'Revoke…' })).toBeNull()
+
+    // Switching the role re-renders the mounted popover too: no admin, no Manage anywhere.
+    signInAs('hplc')
+    render(<CoaManagePopover gen={gen({ status: 'revoked', id: 'g-other' })} />)
     expect(screen.queryByRole('button', { name: 'Manage' })).toBeNull()
   })
 
