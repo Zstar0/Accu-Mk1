@@ -159,3 +159,22 @@ class CommentListOut(BaseModel):
     code: str
     latest_revision: int
     open_count: int
+
+
+class CommentIndexRow(BaseModel):
+    id: int
+    code: str
+    title: str
+    document_id: int
+    revision: int
+    number: Optional[int] = None
+    kind: str
+    label: Optional[str] = None
+    author: str
+    status: str
+    created_at: datetime
+    body_excerpt: str
+
+
+class CommentIndexOut(BaseModel):
+    items: List[CommentIndexRow]

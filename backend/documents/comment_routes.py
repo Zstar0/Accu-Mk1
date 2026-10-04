@@ -13,16 +13,17 @@ import re
 from typing import List, Optional
 
 from fastapi import APIRouter, Depends, File, Header, HTTPException, Query, Response, UploadFile, status
+from fastapi.responses import PlainTextResponse
 from fastapi.security import OAuth2PasswordBearer
 from sqlalchemy.orm import Session
 
 from auth import get_current_user, require_internal_service_token
 from database import get_db
-from documents import comments, labels, service
+from documents import comment_export, comments, labels, service
 from documents.comments import Actor, actor_from_agent, actor_from_user
 from documents.routes import _http, _match_agent
-from documents.schemas import (CommentAttachmentOut, CommentCreate, CommentLabelOut, CommentListOut, CommentOut,
-                               CommentPatch)
+from documents.schemas import (CommentAttachmentOut, CommentCreate, CommentIndexOut, CommentLabelOut, CommentListOut,
+                               CommentOut, CommentPatch)
 
 router = APIRouter(prefix="/api", tags=["document-comments"])
 logger = logging.getLogger(__name__)
@@ -76,6 +77,17 @@ def get_comment_attachment(attachment_id: int, db: Session = Depends(get_db),
 
 # --- single comment by id (literal "comments" segment, declared before /documents/{doc_id}) ---
 
+@router.get("/documents/comments", response_model=CommentIndexOut)
+def comments_index(status_filter: str = Query("open", alias="status"),
+                   author_agent: Optional[str] = None, code_prefix: Optional[str] = None,
+                   limit: int = 100, db: Session = Depends(get_db), user=Depends(get_current_user)):
+    try:
+        return {"items": comment_export.list_index(db, status=status_filter, author_agent=author_agent,
+                                                   code_prefix=code_prefix, limit=limit)}
+    except Exception as e:
+        raise _http(e)
+
+
 @router.get("/documents/comments/{comment_id}", response_model=CommentOut)
 def get_comment(comment_id: int, db: Session = Depends(get_db), user=Depends(get_current_user)):
     try:
@@ -124,6 +136,17 @@ def reopen_comment(comment_id: int, db: Session = Depends(get_db),
 
 
 # --- per revision ------------------------------------------------------------------------
+
+@router.get("/documents/{doc_id}/comments/export", response_class=PlainTextResponse)
+def export_comments(doc_id: int, status_filter: str = Query("open", alias="status"),
+                    db: Session = Depends(get_db), user=Depends(get_current_user)):
+    try:
+        doc = service.get_document(db, doc_id)
+        text = comment_export.export_markdown(db, doc.code, status=status_filter)
+    except Exception as e:
+        raise _http(e)
+    return PlainTextResponse(text, media_type="text/markdown; charset=utf-8")
+
 
 @router.get("/documents/{doc_id}/comments", response_model=CommentListOut)
 def list_comments(doc_id: int, status_filter: str = Query("open", alias="status"),
