@@ -93,6 +93,7 @@
     "jsbarcode": "^3.12.3",
     "lucide-react": "^0.561.0",
     "markdown-it": "14.1.0",
+    "perfect-freehand": "1.2.2",
     "qrcode.react": "^4.2.0",
     "radix-ui": "^1.4.3",
     "react": "^19.2.3",

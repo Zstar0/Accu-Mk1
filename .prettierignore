@@ -24,3 +24,6 @@ src/lib/bindings.ts
 
 # Published document theme (byte-identical to the spec appendix)
 src/docs-theme/
+
+# Vendored MIT code (plannotator); keep upstream formatting diffable
+src/vendor/
