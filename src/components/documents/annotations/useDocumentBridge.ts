@@ -140,7 +140,12 @@ export function useDocumentBridge(
   useEffect(() => {
     const onMessage = (e: MessageEvent) => {
       const frame = latest.current.iframeRef.current
-      if (!frame || e.source !== frame.contentWindow || e.origin !== 'null')
+      if (
+        !frame ||
+        !frame.contentWindow ||
+        e.source !== frame.contentWindow ||
+        e.origin !== 'null'
+      )
         return
       const m = parseBridgeMessage(e.data)
       if (!m) return

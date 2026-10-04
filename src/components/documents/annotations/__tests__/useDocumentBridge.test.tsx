@@ -84,6 +84,25 @@ describe('useDocumentBridge', () => {
     expect(bridge.status).toBe('loading')
   })
 
+  it('rejects a null-source message (frame.contentWindow must be non-null and equal to source)', () => {
+    const onSelection = vi.fn()
+    render(
+      <Harness comments={[]} onSelection={onSelection} onBridge={vi.fn()} />
+    )
+    expect(theFrame().contentWindow).toBeTruthy()
+    const sel = {
+      type: 'plannotator-bridge-selection',
+      text: 'q',
+      rect: { top: 0, left: 0, width: 1, height: 1 },
+    }
+    act(() => {
+      window.dispatchEvent(
+        new MessageEvent('message', { data: sel, origin: 'null', source: null })
+      )
+    })
+    expect(onSelection).not.toHaveBeenCalled()
+  })
+
   it('marks the bridge unavailable on a version mismatch', async () => {
     let bridge!: DocumentBridge
     render(
