@@ -135,11 +135,12 @@ export function replaceDraftContent(
 /** The next revision of `code` as a DRAFT; title and description are inherited. */
 export function createDocumentRevision(
   code: string,
-  html: string
+  html: string,
+  author?: string
 ): Promise<DocumentRow> {
   return apiFetch<DocumentRow>('/api/documents', {
     method: 'POST',
-    body: JSON.stringify({ code, html, activate: false }),
+    body: JSON.stringify({ code, html, activate: false, author }),
   })
 }
 

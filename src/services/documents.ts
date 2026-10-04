@@ -96,8 +96,15 @@ export function useReplaceDraftContent() {
 export function useCreateRevision() {
   const qc = useQueryClient()
   return useMutation({
-    mutationFn: ({ code, html }: { code: string; html: string }) =>
-      createDocumentRevision(code, html),
+    mutationFn: ({
+      code,
+      html,
+      author,
+    }: {
+      code: string
+      html: string
+      author?: string
+    }) => createDocumentRevision(code, html, author),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: documentKeys.lists })
       toast.success('Saved as a new draft revision')

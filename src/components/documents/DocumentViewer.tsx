@@ -27,6 +27,7 @@ import {
 } from '@/components/ui/select'
 import { useTheme } from '@/hooks/use-theme'
 import { useAuthStore } from '@/store/auth-store'
+import { displayName } from '@/lib/user-display'
 import { useUIStore } from '@/store/ui-store'
 import { EntityFlagButton } from '@/components/flags/EntityFlagButton'
 import {
@@ -214,11 +215,13 @@ export function DocumentViewer({ id }: { id: number }) {
     return () => window.removeEventListener('beforeunload', onUnload)
   }, [editMode])
 
-  const saveSerialized = async (html: string): Promise<boolean> => {
+  const saveSerialized = async (
+    html: string
+  ): Promise<{ ok: boolean; createdId?: number }> => {
     if (!doc || !content.data) {
       inFlight.current = false
       setSaving(false)
-      return false
+      return { ok: false }
     }
     const clean = stripViewerInjection(html, content.data)
     try {
@@ -231,13 +234,14 @@ export function DocumentViewer({ id }: { id: number }) {
         const created = await createRevision.mutateAsync({
           code: doc.code,
           html: clean,
+          author: user ? displayName(user) : undefined,
         })
         exitEdit()
-        navigateToDocument(created.id)
+        return { ok: true, createdId: created.id }
       }
-      return true
+      return { ok: true }
     } catch {
-      return false
+      return { ok: false }
     } finally {
       inFlight.current = false
       setSaving(false)
@@ -267,15 +271,25 @@ export function DocumentViewer({ id }: { id: number }) {
         console.warn('ignored unsolicited serialized message')
         return
       }
-      void saveSerialized(html).then(ok => {
+      // Resolve BEFORE navigating, so the new revision's first comments
+      // fetch cannot read pre-resolve state.
+      void saveSerialized(html).then(async r => {
+        if (!r.ok) return
         if (
-          ok &&
           request.kind === 'apply' &&
           appliedId &&
           String(request.id) === appliedId
         ) {
-          setCommentStatus.mutate({ id: request.id, status: 'resolved' })
+          try {
+            await setCommentStatus.mutateAsync({
+              id: request.id,
+              status: 'resolved',
+            })
+          } catch {
+            /* the hook already toasts */
+          }
         }
+        if (r.createdId != null) navigateToDocument(r.createdId)
       })
     },
     onApplyFailed: () => {

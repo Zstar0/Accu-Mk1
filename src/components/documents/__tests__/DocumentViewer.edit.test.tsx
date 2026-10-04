@@ -99,7 +99,15 @@ vi.mock('@/services/document-comments', () => ({
 }))
 vi.mock('@/store/auth-store', () => ({
   useAuthStore: (sel: (s: unknown) => unknown) =>
-    sel({ user: { id: 1, role: 'admin' } }),
+    sel({
+      user: {
+        id: 1,
+        role: 'admin',
+        email: 'f@x.io',
+        first_name: 'Forrest',
+        last_name: 'P',
+      },
+    }),
 }))
 vi.mock('@/store/ui-store', () => ({
   useUIStore: (sel: (s: unknown) => unknown) =>
@@ -179,6 +187,7 @@ describe('DocumentViewer edit mode', { timeout: 20_000 }, () => {
       expect(createRev).toHaveBeenCalledWith({
         code: 'ART-0001',
         html: '<html><head></head><body><p>edited</p></body></html>',
+        author: 'Forrest P',
       })
     )
     await waitFor(() => expect(navigate).toHaveBeenCalledWith(11))
@@ -223,6 +232,35 @@ describe('DocumentViewer edit mode', { timeout: 20_000 }, () => {
   })
 
   const HTML = '<html><head></head><body><p>x</p></body></html>'
+
+  async function applyOnActive() {
+    docStatus = 'active'
+    await renderViewer()
+    fireEvent.click(screen.getByRole('button', { name: /Comments/ }))
+    fireEvent.click(await screen.findByRole('button', { name: 'Apply' }))
+    act(() =>
+      frameSays({
+        type: 'plannotator-bridge-serialized',
+        html: HTML,
+        appliedId: '5',
+      })
+    )
+  }
+
+  it('Apply on an active revision resolves BEFORE navigating', async () => {
+    await applyOnActive()
+    await waitFor(() => expect(navigate).toHaveBeenCalledWith(11))
+    expect(setStatus).toHaveBeenCalledWith({ id: 5, status: 'resolved' })
+    expect(setStatus.mock.invocationCallOrder[0] ?? Infinity).toBeLessThan(
+      navigate.mock.invocationCallOrder[0] ?? 0
+    )
+  })
+
+  it('Apply still navigates when the resolve rejects', async () => {
+    setStatus.mockRejectedValueOnce(new Error('x'))
+    await applyOnActive()
+    await waitFor(() => expect(navigate).toHaveBeenCalledWith(11))
+  })
 
   it('ignores an unsolicited serialized message', async () => {
     await renderViewer()
