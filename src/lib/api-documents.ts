@@ -124,11 +124,13 @@ export function patchDocument(
 /** Admin-only in-place content replace for a DRAFT (spec 2026-10-03 §10.3). */
 export function replaceDraftContent(
   id: number,
-  html: string
+  html: string,
+  expectedSha256?: string
 ): Promise<DocumentRow> {
+  // expected_sha256: the server 409s when the draft changed since it was opened.
   return apiFetch<DocumentRow>(`/api/documents/${id}/content`, {
     method: 'PUT',
-    body: JSON.stringify({ html }),
+    body: JSON.stringify({ html, expected_sha256: expectedSha256 }),
   })
 }
 

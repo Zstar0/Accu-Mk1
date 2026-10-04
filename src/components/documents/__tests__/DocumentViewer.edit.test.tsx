@@ -14,16 +14,28 @@ const createRev = vi.hoisted(() => vi.fn())
 const navigate = vi.hoisted(() => vi.fn())
 const clear = vi.hoisted(() => vi.fn())
 const setStatus = vi.hoisted(() => vi.fn())
+const toastError = vi.hoisted(() => vi.fn())
 let docStatus = 'draft'
+let viewedId = 10
+let contentHtml = '<html><head></head><body><p>hi</p></body></html>'
+let themeValue: 'light' | 'dark' = 'light'
+
+vi.mock('sonner', () => ({
+  toast: { error: toastError, success: vi.fn(), message: vi.fn() },
+}))
+vi.mock('@/hooks/use-theme', () => ({
+  useTheme: () => ({ theme: themeValue, setTheme: vi.fn() }),
+}))
 
 vi.mock('@/services/documents', () => ({
   useDocument: () => ({
     data: {
-      id: 10,
+      id: viewedId,
       code: 'ART-0001',
-      revision: 2,
+      revision: viewedId === 9 ? 1 : 2,
       title: 'Audit',
       status: docStatus,
+      content_sha256: 'sha-10',
       category_name: 'Artifact',
       author: 'F',
       co_author: null,
@@ -40,7 +52,7 @@ vi.mock('@/services/documents', () => ({
     error: null,
   }),
   useDocumentContent: () => ({
-    data: '<html><head></head><body><p>hi</p></body></html>',
+    data: contentHtml,
     isLoading: false,
     error: null,
   }),
@@ -127,17 +139,24 @@ function frameSays(data: unknown) {
 const ready = () =>
   frameSays({ type: 'plannotator-bridge-ready', protocolVersion: 1 })
 
-async function renderViewer() {
-  render(
+// The header Edit renders before any comment card's own Edit.
+const editButton = () =>
+  screen.getAllByRole('button', { name: 'Edit' })[0] as HTMLElement
+const serializeCount = (post: { mock: { calls: unknown[][] } }) =>
+  post.mock.calls.filter(
+    c => (c[0] as { type: string }).type === 'plannotator-bridge-serialize'
+  ).length
+
+async function renderViewer({ waitEnabled = true } = {}) {
+  const view = render(
     <QueryClientProvider client={new QueryClient()}>
-      <DocumentViewer id={10} />
+      <DocumentViewer id={viewedId} />
     </QueryClientProvider>
   )
   await waitFor(() => expect(screen.getByTitle('Audit')).toBeInTheDocument())
   act(ready)
-  await waitFor(() =>
-    expect(screen.getByRole('button', { name: 'Edit' })).toBeEnabled()
-  )
+  if (waitEnabled) await waitFor(() => expect(editButton()).toBeEnabled())
+  return view
 }
 
 describe('DocumentViewer edit mode', { timeout: 20_000 }, () => {
@@ -147,7 +166,11 @@ describe('DocumentViewer edit mode', { timeout: 20_000 }, () => {
     navigate.mockReset()
     clear.mockReset()
     setStatus.mockReset().mockResolvedValue({})
+    toastError.mockReset()
     docStatus = 'draft'
+    viewedId = 10
+    contentHtml = '<html><head></head><body><p>hi</p></body></html>'
+    themeValue = 'light'
   })
 
   it('Save on a draft PUTs the stripped html in place', async () => {
@@ -165,6 +188,7 @@ describe('DocumentViewer edit mode', { timeout: 20_000 }, () => {
       expect(replace).toHaveBeenCalledWith({
         id: 10,
         html: '<!doctype html>\n<html><head></head><body><p>edited</p></body></html>',
+        expectedSha256: 'sha-10',
       })
     )
     await waitFor(() =>
@@ -313,5 +337,125 @@ describe('DocumentViewer edit mode', { timeout: 20_000 }, () => {
     await waitFor(() => expect(replace).toHaveBeenCalledTimes(1))
     await new Promise(r => setTimeout(r, 50))
     expect(setStatus).not.toHaveBeenCalled()
+  })
+
+  it('an unanswered Save never locks editing: Cancel, Edit, Save posts serialize again', async () => {
+    await renderViewer()
+    fireEvent.click(editButton())
+    const first = screen.getByTitle('Audit') as HTMLIFrameElement
+    const post1 = vi.spyOn(first.contentWindow as Window, 'postMessage')
+    fireEvent.click(screen.getByRole('button', { name: 'Save' }))
+    expect(serializeCount(post1)).toBe(1)
+    const cancel = screen.getByRole('button', { name: 'Cancel' })
+    expect(cancel).toBeEnabled()
+    fireEvent.click(cancel)
+    expect(screen.queryByText(/^Editing/)).toBeNull()
+    // Cancel reloads the frame; the new one reports ready again.
+    act(ready)
+    await waitFor(() => expect(editButton()).toBeEnabled())
+    fireEvent.click(editButton())
+    const second = screen.getByTitle('Audit') as HTMLIFrameElement
+    const post2 = vi.spyOn(second.contentWindow as Window, 'postMessage')
+    const save = screen.getByRole('button', { name: 'Save' })
+    expect(save).toBeEnabled()
+    fireEvent.click(save)
+    expect(serializeCount(post2)).toBe(1)
+  })
+
+  it('a forged apply-failed with no pending apply is ignored', async () => {
+    await renderViewer()
+    fireEvent.click(editButton())
+    fireEvent.click(screen.getByRole('button', { name: 'Save' }))
+    act(() => frameSays({ type: 'plannotator-bridge-apply-failed', id: '5' }))
+    expect(toastError).not.toHaveBeenCalled()
+    expect(screen.getByRole('button', { name: /Saving/ })).toBeDisabled()
+    // The real answer is still honoured.
+    act(() => frameSays({ type: 'plannotator-bridge-serialized', html: HTML }))
+    await waitFor(() => expect(replace).toHaveBeenCalledTimes(1))
+  })
+
+  it('Edit and Apply are blocked on a revision that has a newer one', async () => {
+    viewedId = 9
+    docStatus = 'active'
+    await renderViewer({ waitEnabled: false })
+    const stale = 'A newer revision exists; edit that one'
+    await waitFor(() => expect(editButton()).toHaveAttribute('title', stale))
+    expect(editButton()).toBeDisabled()
+    fireEvent.click(screen.getByRole('button', { name: /Comments/ }))
+    expect(await screen.findByRole('button', { name: 'Apply' })).toBeDisabled()
+    fireEvent.click(screen.getByRole('button', { name: /Newest revision/ }))
+    expect(navigate).toHaveBeenCalledWith(10)
+  })
+
+  it('the newest revision keeps Edit enabled and offers no jump', async () => {
+    await renderViewer()
+    expect(editButton()).toBeEnabled()
+    expect(screen.queryByRole('button', { name: /Newest revision/ })).toBeNull()
+  })
+
+  it('Edit stays disabled from a created revision until the navigate fires', async () => {
+    let finishResolve: ((v: unknown) => void) | undefined
+    setStatus.mockImplementation(
+      () =>
+        new Promise(r => {
+          finishResolve = r
+        })
+    )
+    await applyOnActive()
+    await waitFor(() => expect(setStatus).toHaveBeenCalled())
+    expect(navigate).not.toHaveBeenCalled()
+    expect(editButton()).toBeDisabled()
+    expect(screen.getByRole('button', { name: 'Apply' })).toBeDisabled()
+    await act(async () => finishResolve?.({}))
+    await waitFor(() => expect(navigate).toHaveBeenCalledWith(11))
+  })
+
+  it('a theme flip during edit mode does not reload the frame', async () => {
+    const view = await renderViewer()
+    fireEvent.click(editButton())
+    const frame = screen.getByTitle('Audit') as HTMLIFrameElement
+    const before = frame.getAttribute('srcdoc')
+    themeValue = 'dark'
+    view.rerender(
+      <QueryClientProvider client={new QueryClient()}>
+        <DocumentViewer id={viewedId} />
+      </QueryClientProvider>
+    )
+    expect(screen.getByTitle('Audit')).toBe(frame)
+    expect(frame.getAttribute('srcdoc')).toBe(before)
+    expect(screen.getByText(/^Editing/)).toBeInTheDocument()
+    fireEvent.click(screen.getByRole('button', { name: 'Cancel' }))
+    expect(
+      (screen.getByTitle('Audit') as HTMLIFrameElement).getAttribute('srcdoc')
+    ).not.toBe(before)
+  })
+
+  it('Save on a script-bearing document confirms once; cancel posts nothing', async () => {
+    contentHtml =
+      '<html><head><script>document.body.append("x")</script></head><body><p>hi</p></body></html>'
+    await renderViewer()
+    fireEvent.click(editButton())
+    const frame = screen.getByTitle('Audit') as HTMLIFrameElement
+    const post = vi.spyOn(frame.contentWindow as Window, 'postMessage')
+    const confirm = vi.spyOn(window, 'confirm').mockReturnValue(false)
+    confirm.mockClear()
+    fireEvent.click(screen.getByRole('button', { name: 'Save' }))
+    expect(confirm).toHaveBeenCalledTimes(1)
+    expect(serializeCount(post)).toBe(0)
+    expect(screen.getByText(/^Editing/)).toBeInTheDocument()
+    confirm.mockReturnValue(true)
+    fireEvent.click(screen.getByRole('button', { name: 'Save' }))
+    expect(serializeCount(post)).toBe(1)
+    expect(confirm).toHaveBeenCalledTimes(2)
+    confirm.mockRestore()
+  })
+
+  it('Save on a document without scripts does not confirm', async () => {
+    await renderViewer()
+    fireEvent.click(editButton())
+    const confirm = vi.spyOn(window, 'confirm').mockClear()
+    fireEvent.click(screen.getByRole('button', { name: 'Save' }))
+    expect(confirm).not.toHaveBeenCalled()
+    confirm.mockRestore()
   })
 })

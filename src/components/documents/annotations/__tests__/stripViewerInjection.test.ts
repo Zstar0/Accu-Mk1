@@ -4,6 +4,10 @@ import {
   INJECT_OPEN,
   stripViewerInjection,
 } from '../stripViewerInjection'
+import {
+  META_CSP_PLACEHOLDER,
+  neutralizeMetaCsp,
+} from '@/vendor/plannotator/srcdoc'
 
 const ORIGINAL =
   '<!doctype html><html><head><style>/* accumark-docs v1 */</style></head><body><p>Hi</p></body></html>'
@@ -54,5 +58,31 @@ describe('stripViewerInjection', () => {
       '<!doctype html><html data-theme=light><head></head><body></body></html>'
     const viewed = orig.replace('data-theme=light', 'data-theme="dark"')
     expect(stripViewerInjection(viewed, orig)).toBe(orig)
+  })
+
+  it('puts an author CSP meta back where the viewer neutralized it', () => {
+    const csp =
+      '<meta http-equiv="Content-Security-Policy" content="default-src \'none\'; style-src $&">'
+    const orig = `<!doctype html><html><head>${csp}<title>t</title></head><body></body></html>`
+    const viewed = stripViewerInjection(
+      neutralizeMetaCsp(orig).replace(
+        '</head>',
+        `${INJECT_OPEN}<style></style>${INJECT_CLOSE}</head>`
+      ),
+      orig
+    )
+    expect(viewed).toBe(orig)
+    expect(viewed).not.toContain(META_CSP_PLACEHOLDER)
+  })
+
+  it('drops placeholders it has no original tag for; a CSP-free document is unchanged', () => {
+    const orig = '<!doctype html><html><head></head><body></body></html>'
+    expect(
+      stripViewerInjection(
+        orig.replace('<head>', `<head>${META_CSP_PLACEHOLDER}`),
+        orig
+      )
+    ).toBe(orig)
+    expect(stripViewerInjection(orig, orig)).toBe(orig)
   })
 })

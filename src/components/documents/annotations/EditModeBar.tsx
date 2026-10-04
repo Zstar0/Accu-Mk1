@@ -18,13 +18,7 @@ export function EditModeBar({
       <span className="text-muted-foreground">
         Click into the page and change text. Ctrl+B and Ctrl+I work.
       </span>
-      <Button
-        size="sm"
-        variant="ghost"
-        className="ml-auto"
-        onClick={onCancel}
-        disabled={saving}
-      >
+      <Button size="sm" variant="ghost" className="ml-auto" onClick={onCancel}>
         Cancel
       </Button>
       <Button size="sm" onClick={onSave} disabled={saving}>

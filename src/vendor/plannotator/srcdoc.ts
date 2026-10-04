@@ -186,12 +186,16 @@ export function buildSrcdocInjection({
  * HOST page is inherited by the srcdoc document, and the host must allow
  * `script-src` for the origin the asset is served from.
  */
-const META_CSP_RE =
+// accumark: csp-restore
+// Exported so stripViewerInjection can put the author's tag back on save.
+export const META_CSP_RE =
   /<meta\s[^>]*http-equiv\s*=\s*["']?\s*content-security-policy\s*["']?[^>]*\/?>/gi;
+export const META_CSP_PLACEHOLDER = "<!-- plannotator: meta CSP removed for annotation -->";
 
 export function neutralizeMetaCsp(rawHtml: string): string {
-  return rawHtml.replace(META_CSP_RE, "<!-- plannotator: meta CSP removed for annotation -->");
+  return rawHtml.replace(META_CSP_RE, META_CSP_PLACEHOLDER);
 }
+// /accumark
 
 /** Splice the injection just before `</head>`, or prepend when there is none. */
 export function injectIntoHead(rawHtml: string, injection: string): string {

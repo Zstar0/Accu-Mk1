@@ -108,6 +108,9 @@ function usePrefersDark(): boolean {
   )
 }
 
+const SCRIPT_SAVE_CONFIRM =
+  'This document runs scripts; the saved copy captures the rendered page, including anything the scripts built. Save anyway?'
+
 export function DocumentViewer({ id }: { id: number }) {
   const clear = useUIStore(s => s.clearDocumentViewer)
   const navigateToDocument = useUIStore(s => s.navigateToDocument)
@@ -119,6 +122,10 @@ export function DocumentViewer({ id }: { id: number }) {
   const content = useDocumentContent(id)
 
   const mode = resolveDocTheme(theme, usePrefersDark())
+  // Edit mode freezes the frame's theme: a flip would rebuild srcDoc and
+  // reload the frame, discarding unsaved edits.
+  const [frozenMode, setFrozenMode] = useState<typeof mode | null>(null)
+  const frameMode = frozenMode ?? mode
   const doc = detail.data
   const user = useAuthStore(s => s.user)
   const iframeRef = useRef<HTMLIFrameElement>(null)
@@ -161,9 +168,9 @@ export function DocumentViewer({ id }: { id: number }) {
   const srcDoc = useMemo(
     () =>
       content.data
-        ? buildViewerSrcDoc(content.data, mode, readThemeTokens())
+        ? buildViewerSrcDoc(content.data, frameMode, readThemeTokens())
         : '',
-    [content.data, mode]
+    [content.data, frameMode]
   )
 
   // Only OPEN comments carry marks; resolved ones stay in the panel under the filter.
@@ -192,6 +199,10 @@ export function DocumentViewer({ id }: { id: number }) {
 
   const [editMode, setEditMode] = useState(false)
   const [saving, setSaving] = useState(false)
+  // Set once a new revision exists and until the viewer has moved to it, so
+  // nobody re-enters edit mode on the revision being left.
+  const [navigating, setNavigating] = useState(false)
+  const scriptsConfirmed = useRef(false)
   const [frameKey, setFrameKey] = useState(0)
   // The parent saves only what it asked for: a document's own scripts can
   // post a forged `serialized` message from inside the sandbox.
@@ -203,6 +214,22 @@ export function DocumentViewer({ id }: { id: number }) {
   const replaceContent = useReplaceDraftContent()
   const createRevision = useCreateRevision()
   const setCommentStatus = useSetCommentStatus(id)
+
+  // A new revision is minted on top of the code's LATEST row, so editing an
+  // older one would fork the chain. Highest revision number wins, then id.
+  const latestId = doc?.revisions.length
+    ? doc.revisions.reduce((a, r) =>
+        r.revision > a.revision || (r.revision === a.revision && r.id > a.id)
+          ? r
+          : a
+      ).id
+    : doc?.id
+  const isLatest = !doc || latestId === doc.id
+  const editBlocked = !isLatest
+    ? 'A newer revision exists; edit that one'
+    : navigating
+      ? 'Opening the new revision'
+      : undefined
 
   const guardLeave = () => !editMode || window.confirm('Discard unsaved edits?')
   useEffect(() => {
@@ -226,7 +253,11 @@ export function DocumentViewer({ id }: { id: number }) {
     const clean = stripViewerInjection(html, content.data)
     try {
       if (doc.status === 'draft') {
-        await replaceContent.mutateAsync({ id: doc.id, html: clean })
+        await replaceContent.mutateAsync({
+          id: doc.id,
+          html: clean,
+          expectedSha256: doc.content_sha256,
+        })
         exitEdit()
         queryClient.setQueryData(documentKeys.content(doc.id), clean)
         setFrameKey(k => k + 1)
@@ -236,6 +267,7 @@ export function DocumentViewer({ id }: { id: number }) {
           html: clean,
           author: user ? displayName(user) : undefined,
         })
+        setNavigating(true)
         exitEdit()
         return { ok: true, createdId: created.id }
       }
@@ -250,7 +282,7 @@ export function DocumentViewer({ id }: { id: number }) {
 
   const bridge = useDocumentBridge({
     iframeRef,
-    documentKey: `${id}:${mode}:${frameKey}`,
+    documentKey: `${id}:${frameMode}:${frameKey}`,
     comments: bridgeComments,
     inputMethod,
     annotateActive: !editMode,
@@ -289,10 +321,20 @@ export function DocumentViewer({ id }: { id: number }) {
             /* the hook already toasts */
           }
         }
-        if (r.createdId != null) navigateToDocument(r.createdId)
+        if (r.createdId != null) {
+          navigateToDocument(r.createdId)
+          setNavigating(false)
+        }
       })
     },
-    onApplyFailed: () => {
+    onApplyFailed: failedId => {
+      // Honour it only for the apply we asked for; a document script can
+      // forge this message too.
+      const request = saveRequest.current
+      if (request?.kind !== 'apply' || String(request.id) !== failedId) {
+        console.warn('ignored unsolicited apply-failed message')
+        return
+      }
       saveRequest.current = null
       inFlight.current = false
       setSaving(false)
@@ -301,13 +343,19 @@ export function DocumentViewer({ id }: { id: number }) {
   })
 
   const enterEdit = () => {
+    setFrozenMode(mode)
+    scriptsConfirmed.current = false
     setEditMode(true)
     setSelection(null)
     setComposer(null)
     bridge.setEditMode(true)
   }
+  // Also the escape hatch for a frame that never answers `serialize`.
   function exitEdit() {
     saveRequest.current = null
+    inFlight.current = false
+    setSaving(false)
+    setFrozenMode(null)
     setEditMode(false)
     bridge.setEditMode(false)
   }
@@ -390,8 +438,9 @@ export function DocumentViewer({ id }: { id: number }) {
       onNavigateHeading={bridge.scrollToFragment}
       me={user ? { id: user.id } : null}
       isAdmin={isAdmin}
+      applyBlocked={editBlocked}
       onApply={c => {
-        if (!c.suggested_text) return
+        if (!c.suggested_text || editBlocked) return
         if (inFlight.current || saveRequest.current) return
         inFlight.current = true
         setSaving(true)
@@ -519,11 +568,25 @@ export function DocumentViewer({ id }: { id: number }) {
                 <Button
                   variant="outline"
                   size="sm"
-                  disabled={bridge.status !== 'ready' || editMode}
+                  disabled={
+                    bridge.status !== 'ready' || editMode || !!editBlocked
+                  }
+                  title={editBlocked}
                   onClick={enterEdit}
                 >
                   <FilePenLine className="mr-1 h-4 w-4" />
                   Edit
+                </Button>
+              )}
+              {isAdmin && !isLatest && latestId != null && (
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  onClick={() => {
+                    if (guardLeave()) navigateToDocument(latestId)
+                  }}
+                >
+                  Newest revision
                 </Button>
               )}
               {isAdmin && (
@@ -546,6 +609,15 @@ export function DocumentViewer({ id }: { id: number }) {
           saving={saving}
           onSave={() => {
             if (inFlight.current || saveRequest.current) return
+            // Serialize captures the rendered page, including DOM the
+            // document's own scripts built; say so once per edit session.
+            if (
+              !scriptsConfirmed.current &&
+              /<script\b/i.test(content.data ?? '')
+            ) {
+              if (!window.confirm(SCRIPT_SAVE_CONFIRM)) return
+              scriptsConfirmed.current = true
+            }
             inFlight.current = true
             setSaving(true)
             saveRequest.current = { kind: 'save' }

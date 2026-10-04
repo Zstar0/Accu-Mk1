@@ -21,6 +21,7 @@ import {
   updateDocumentCategory,
   type DocumentCategoryCreate,
   type DocumentCategoryUpdate,
+  type DocumentDetail,
   type DocumentPatch,
 } from '@/lib/api-documents'
 import type { DocumentListParams } from '@/components/documents/documents-utils'
@@ -81,9 +82,21 @@ export function usePatchDocument() {
 export function useReplaceDraftContent() {
   const qc = useQueryClient()
   return useMutation({
-    mutationFn: ({ id, html }: { id: number; html: string }) =>
-      replaceDraftContent(id, html),
-    onSuccess: (_row, { id }) => {
+    mutationFn: ({
+      id,
+      html,
+      expectedSha256,
+    }: {
+      id: number
+      html: string
+      expectedSha256?: string
+    }) => replaceDraftContent(id, html, expectedSha256),
+    onSuccess: (row, { id }) => {
+      // The next save in this session must send the NEW hash, even before the
+      // detail refetch lands, or it would 409 against itself.
+      qc.setQueryData<DocumentDetail>(documentKeys.detail(id), old =>
+        old ? { ...old, content_sha256: row.content_sha256 } : old
+      )
       qc.invalidateQueries({ queryKey: documentKeys.content(id) })
       qc.invalidateQueries({ queryKey: documentKeys.detail(id) })
       qc.invalidateQueries({ queryKey: documentKeys.lists })

@@ -3,7 +3,10 @@
  * the injection block, the bridge script tag, the theme stamp, and the editable
  * attribute. The bridge strips its own overlay nodes and minted heading ids;
  * both sides strip so a miss on one side cannot leak viewer markup into a revision.
+ * It also restores any author CSP `<meta>` the viewer neutralized for display.
  */
+import { META_CSP_PLACEHOLDER, META_CSP_RE } from '@/vendor/plannotator/srcdoc'
+
 export const INJECT_OPEN = '<!--pn-inject-->'
 export const INJECT_CLOSE = '<!--/pn-inject-->'
 const BRIDGE_SCRIPT_TAG =
@@ -38,5 +41,10 @@ export function stripViewerInjection(html: string, original: string): string {
   })
   // Only the <body> start tag: the sole element the viewer makes editable.
   out = out.replace(BODY_TAG, tag => tag.replace(CONTENTEDITABLE_ATTR, ''))
+  // In order; a placeholder with no original tag left is dropped. Built with
+  // split, not a replace string, so `$&` in an author policy is never expanded.
+  const csp = original.match(META_CSP_RE) ?? []
   return out
+    .split(META_CSP_PLACEHOLDER)
+    .reduce((acc, part, k) => acc + (csp[k - 1] ?? '') + part)
 }
