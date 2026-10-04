@@ -83,3 +83,12 @@ def test_attachment_row_persists_unlinked(db):
 def test_forbidden_error_exists():
     from documents.errors import ForbiddenError
     assert issubclass(ForbiddenError, Exception)
+
+
+def test_comment_number_is_nullable(db):
+    from documents.models import DocumentComment
+    c = DocumentComment(code=db.doc.code, document_id=db.doc.id, number=None, body="r",
+                        author_agent="jarvis")
+    db.add(c)
+    db.commit()
+    assert c.id and c.number is None

@@ -11,16 +11,17 @@ from __future__ import annotations
 import logging
 from typing import List, Optional
 
-from fastapi import APIRouter, Depends, Header, HTTPException, status
+from fastapi import APIRouter, Depends, Header, HTTPException, Query, Response, status
 from fastapi.security import OAuth2PasswordBearer
 from sqlalchemy.orm import Session
 
 from auth import get_current_user, require_internal_service_token
 from database import get_db
-from documents import labels
+from documents import comments, labels, service
 from documents.comments import Actor, actor_from_agent, actor_from_user
 from documents.routes import _http, _match_agent
-from documents.schemas import CommentLabelOut
+from documents.schemas import (CommentCreate, CommentLabelOut, CommentListOut, CommentOut,
+                               CommentPatch)
 
 router = APIRouter(prefix="/api", tags=["document-comments"])
 logger = logging.getLogger(__name__)
@@ -51,3 +52,79 @@ def require_comment_actor(
 @router.get("/documents/comment-labels", response_model=List[CommentLabelOut])
 def list_comment_labels(user=Depends(get_current_user)):
     return labels.labels_out()
+
+
+# --- single comment by id (literal "comments" segment, declared before /documents/{doc_id}) ---
+
+@router.get("/documents/comments/{comment_id}", response_model=CommentOut)
+def get_comment(comment_id: int, db: Session = Depends(get_db), user=Depends(get_current_user)):
+    try:
+        return comments.comment_out(db, comments.get_comment(db, comment_id))
+    except Exception as e:
+        raise _http(e)
+
+
+@router.patch("/documents/comments/{comment_id}", response_model=CommentOut)
+def patch_comment(comment_id: int, req: CommentPatch, db: Session = Depends(get_db),
+                  actor: Actor = Depends(require_comment_actor)):
+    try:
+        row = comments.patch_comment(db, comment_id, actor, body=req.body,
+                                     suggested_text=req.suggested_text)
+        return comments.comment_out(db, row)
+    except Exception as e:
+        raise _http(e)
+
+
+@router.delete("/documents/comments/{comment_id}", status_code=204)
+def delete_comment(comment_id: int, db: Session = Depends(get_db),
+                   actor: Actor = Depends(require_comment_actor)):
+    try:
+        comments.delete_comment(db, comment_id, actor)
+    except Exception as e:
+        raise _http(e)
+    return Response(status_code=204)
+
+
+@router.post("/documents/comments/{comment_id}/resolve", response_model=CommentOut)
+def resolve_comment(comment_id: int, db: Session = Depends(get_db),
+                    actor: Actor = Depends(require_comment_actor)):
+    try:
+        return comments.comment_out(db, comments.set_status(db, comment_id, actor, "resolved"))
+    except Exception as e:
+        raise _http(e)
+
+
+@router.post("/documents/comments/{comment_id}/reopen", response_model=CommentOut)
+def reopen_comment(comment_id: int, db: Session = Depends(get_db),
+                   actor: Actor = Depends(require_comment_actor)):
+    try:
+        return comments.comment_out(db, comments.set_status(db, comment_id, actor, "open"))
+    except Exception as e:
+        raise _http(e)
+
+
+# --- per revision ------------------------------------------------------------------------
+
+@router.get("/documents/{doc_id}/comments", response_model=CommentListOut)
+def list_comments(doc_id: int, status_filter: str = Query("open", alias="status"),
+                  db: Session = Depends(get_db), user=Depends(get_current_user)):
+    try:
+        doc = service.get_document(db, doc_id)
+        return comments.list_comments(db, doc.code, status=status_filter)
+    except Exception as e:
+        raise _http(e)
+
+
+@router.post("/documents/{doc_id}/comments", response_model=CommentOut, status_code=201)
+def create_comment(doc_id: int, req: CommentCreate, db: Session = Depends(get_db),
+                   actor: Actor = Depends(require_comment_actor)):
+    try:
+        row = comments.create_comment(
+            db, document_id=doc_id, actor=actor, kind=req.kind, body=req.body,
+            anchor=req.anchor, label=req.label, suggested_text=req.suggested_text,
+            parent_id=req.parent_id)
+        if actor.agent:
+            logger.info("documents.agent_comment agent=%s code=%s comment=%s", actor.agent, row.code, row.id)
+        return comments.comment_out(db, row)
+    except Exception as e:
+        raise _http(e)

@@ -118,6 +118,7 @@ class DocumentComment(Base):
         CheckConstraint("(kind = 'suggestion') = (suggested_text IS NOT NULL)",
                         name="ck_document_comments_suggestion_text"),
         Index("ix_document_comments_code_status", "code", "status"),
+        UniqueConstraint("code", "number", name="uq_document_comments_code_number"),
     )
 
     id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
@@ -126,6 +127,7 @@ class DocumentComment(Base):
         ForeignKey("documents.id", ondelete="CASCADE"), nullable=False, index=True)
     parent_id: Mapped[Optional[int]] = mapped_column(
         ForeignKey("document_comments.id", ondelete="CASCADE"), nullable=True, index=True)
+    number: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)  # top-level only, stored, stable
     kind: Mapped[str] = mapped_column(String(12), nullable=False, default="comment")
     anchor: Mapped[Optional[dict]] = mapped_column(
         JSONB().with_variant(JSON(), "sqlite"), nullable=True)

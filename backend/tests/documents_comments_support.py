@@ -55,6 +55,11 @@ def client(monkeypatch):
                            connect_args={"check_same_thread": False}, poolclass=StaticPool)
     Base.metadata.create_all(engine)
     shared = sessionmaker(bind=engine)()
+    from models import User
+    for u in (USER, OTHER, ADMIN):  # comment display names resolve from users rows
+        shared.add(User(id=u.id, email=u.email, hashed_password="x", role=u.role,
+                        first_name=u.first_name, last_name=u.last_name))
+    shared.commit()
     service.seed_categories(shared)
     storage.set_storage_for_tests(storage.InMemoryDocumentStorage())
     flag_seams.set_attachment_storage_for_tests(flag_seams.InMemoryAttachmentStorage())
