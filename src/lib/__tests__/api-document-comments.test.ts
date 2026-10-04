@@ -66,7 +66,7 @@ describe('api-document-comments', () => {
       'shot.png'
     )
     const calls = // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    (fetch as unknown as ReturnType<typeof vi.fn>).mock.calls as any
+      (fetch as unknown as ReturnType<typeof vi.fn>).mock.calls as any
     const [url, init] = calls[0]
     expect(url).toBe('http://api/api/documents/7/comment-attachments')
     expect((init.body as FormData).get('file')).toBeInstanceOf(Blob)

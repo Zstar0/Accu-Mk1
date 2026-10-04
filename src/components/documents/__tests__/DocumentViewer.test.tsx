@@ -1,7 +1,14 @@
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { act, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { DocumentViewer } from '@/components/documents/DocumentViewer'
 import { BRIDGE_PROTOCOL_VERSION } from '@/vendor/plannotator/bridge-script'
+
+// The real module is a 5,200-line template literal; keep it out of this file.
+vi.mock('@/vendor/plannotator/bridge-script', () => ({
+  BRIDGE_PROTOCOL_VERSION: 1,
+  ANNOTATION_HIGHLIGHT_CSS: '',
+}))
 
 const h = vi.hoisted(() => ({
   mutateAsync: vi.fn(),
@@ -73,10 +80,8 @@ vi.mock('@/store/auth-store', () => ({
     sel({ user: { id: 1, role: 'admin' } }),
 }))
 
-describe('DocumentViewer', () => {
+describe('DocumentViewer', { timeout: 20_000 }, () => {
   it('renders the sandboxed frame with the injected bridge and the Comments toggle with its count', async () => {
-    const { DocumentViewer } =
-      await import('@/components/documents/DocumentViewer')
     render(
       <QueryClientProvider client={new QueryClient()}>
         <DocumentViewer id={10} />
@@ -94,8 +99,6 @@ describe('DocumentViewer', () => {
   })
 
   async function mount() {
-    const { DocumentViewer } =
-      await import('@/components/documents/DocumentViewer')
     render(
       <QueryClientProvider client={new QueryClient()}>
         <DocumentViewer id={10} />
@@ -156,5 +159,30 @@ describe('DocumentViewer', () => {
     select(frame)
     fireEvent.click(await screen.findByRole('button', { name: 'Nice work' }))
     expect(h.mutateAsync).not.toHaveBeenCalled()
+  })
+
+  it('stores no synthetic quote for an element-only pinpoint', async () => {
+    h.mutateAsync.mockResolvedValue({ id: 1 })
+    const frame = await mount()
+    post(frame, {
+      type: 'plannotator-bridge-ready',
+      protocolVersion: BRIDGE_PROTOCOL_VERSION,
+    })
+    post(frame, {
+      type: 'plannotator-bridge-selection',
+      text: '[element: Image]',
+      pinpoint: true,
+      anchor: { selector: 'img', tagName: 'img' },
+      rect: { top: 10, left: 10, width: 20, height: 20 },
+    })
+    fireEvent.click(await screen.findByRole('button', { name: 'Comment' }))
+    fireEvent.change(await screen.findByPlaceholderText('Add a comment…'), {
+      target: { value: 'needs alt text' },
+    })
+    fireEvent.click(screen.getByRole('button', { name: 'Save' }))
+    await waitFor(() => expect(h.mutateAsync).toHaveBeenCalled())
+    const arg = h.mutateAsync.mock.calls[0]?.[0]
+    expect(arg.anchor.originalText).toBe('')
+    expect(arg.anchor.htmlAnchor.tagName).toBe('img')
   })
 })

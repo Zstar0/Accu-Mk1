@@ -64,6 +64,7 @@ import {
   type BridgeSelection,
 } from './annotations/useDocumentBridge'
 import { SelectionToolbar } from './annotations/SelectionToolbar'
+import { SYNTHETIC_ELEMENT_QUOTE } from './annotations/bridge-messages'
 import {
   CommentComposer,
   type ComposerMode,
@@ -212,7 +213,10 @@ export function DocumentViewer({ id }: { id: number }) {
       m === 'global' || !selection
         ? null
         : {
-            originalText: selection.text,
+            originalText:
+              selection.pinpoint && SYNTHETIC_ELEMENT_QUOTE.test(selection.text)
+                ? ''
+                : selection.text,
             htmlAnchor: selection.anchor ?? undefined,
             elementContext: (selection.context ?? undefined) as
               | Record<string, unknown>

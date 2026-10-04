@@ -139,6 +139,20 @@ describe('CommentsPanel', () => {
     expect(within(card).getByText('img')).toBeInTheDocument()
   })
 
+  it('treats a stored synthetic element quote as element-only', () => {
+    renderPanel([
+      base({
+        anchor: {
+          originalText: '[element: Image]',
+          htmlAnchor: { selector: 'img', tagName: 'img' },
+        },
+      }),
+    ])
+    const card = screen.getByTestId('comment-card')
+    expect(within(card).queryByText(/“/)).toBeNull()
+    expect(within(card).getByText('img')).toBeInTheDocument()
+  })
+
   it('shows a label chip with the catalog colour and a suggestion with its replacement', () => {
     renderPanel([
       base({ label: 'verify-this' }),

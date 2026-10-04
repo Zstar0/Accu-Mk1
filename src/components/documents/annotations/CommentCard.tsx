@@ -10,6 +10,7 @@ import {
   type DocumentComment,
 } from '@/lib/api-document-comments'
 import { labelStyle } from './label-colors'
+import { SYNTHETIC_ELEMENT_QUOTE } from './bridge-messages'
 
 export interface CardActions {
   reply: (c: DocumentComment, body: string) => Promise<void>
@@ -52,7 +53,8 @@ export function CommentCard({
   const [replyDraft, setReplyDraft] = useState('')
   const [editDraft, setEditDraft] = useState('')
   const label = c.label ? labels.get(c.label) : undefined
-  const quote = c.anchor?.originalText ?? ''
+  const rawQuote = c.anchor?.originalText ?? ''
+  const quote = SYNTHETIC_ELEMENT_QUOTE.test(rawQuote) ? '' : rawQuote
   const elementTag = c.anchor?.htmlAnchor?.tagName
   const heading = c.anchor?.elementContext?.heading
 

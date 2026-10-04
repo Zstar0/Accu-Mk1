@@ -11,6 +11,8 @@ import {
 } from '@/vendor/plannotator/html-anchor'
 
 export const PN = 'plannotator-bridge-'
+/** The bridge's stand-in text for a pinpointed element with no text of its own. */
+export const SYNTHETIC_ELEMENT_QUOTE = /^\[element: .*\]$/
 export const MAX_SELECTION_TEXT = 10_000
 export const MAX_ID = 256
 export const MAX_HEADINGS = 500
