@@ -123,3 +123,16 @@ def test_agent_uploads_are_stamped_with_the_agent(client):
     row = client.db.get(DocumentCommentAttachment, r.json()["id"])
     assert (row.uploaded_by_agent, row.uploaded_by_user_id) == ("jarvis", None)
     assert row.storage_key.startswith(f"documents/{doc['code']}/")
+
+
+def test_another_users_pending_upload_is_not_claimed(client):
+    from documents_comments_support import OTHER, USER
+    doc = publish(client)
+    client.as_user(OTHER)
+    theirs = _upload(client, doc["id"]).json()["id"]
+    client.as_user(USER)
+    mine = _upload(client, doc["id"]).json()["id"]
+    c = comment(client, doc["id"], body=f"{{attachment:{theirs}}} {{attachment:{mine}}}")
+    assert [a["id"] for a in c["attachments"]] == [mine]
+    from documents.models import DocumentCommentAttachment
+    assert client.db.get(DocumentCommentAttachment, theirs).comment_id is None

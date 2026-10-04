@@ -182,3 +182,5 @@ class CommentIndexOut(BaseModel):
 
 class DocumentContentReplace(BaseModel):
     html: str
+    # Optimistic concurrency: the content_sha256 the editor opened; a mismatch is 409.
+    expected_sha256: Optional[str] = None

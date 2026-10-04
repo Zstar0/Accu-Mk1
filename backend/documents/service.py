@@ -559,7 +559,8 @@ def read_content(doc: Document) -> bytes:
     return get_storage().fetch(doc.storage_key)
 
 
-def replace_draft_content(db: Session, doc_id: int, *, html, updated_by: Optional[str]) -> tuple[Document, bool]:
+def replace_draft_content(db: Session, doc_id: int, *, html, updated_by: Optional[str],
+                          expected_sha256: Optional[str] = None) -> tuple[Document, bool]:
     """In-place content replace for a DRAFT only (spec §10.3). Anything that was
     ever active is immutable: an edit to it is a new revision through
     create_document. Blob ordering mirrors delete_document: write the new
@@ -575,6 +576,8 @@ def replace_draft_content(db: Session, doc_id: int, *, html, updated_by: Optiona
     ).scalar_one_or_none()
     if dependent is not None:
         raise ConflictError(f"revision {doc.id} is superseded by {dependent}; edit that one")
+    if expected_sha256 is not None and expected_sha256 != doc.content_sha256:
+        raise ConflictError("this draft changed since you opened it; reload and edit again")
     data = validate_html(html)
     sha = hashlib.sha256(data).hexdigest()
     if sha == doc.content_sha256:

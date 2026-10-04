@@ -118,22 +118,30 @@ def create_comment(db: Session, *, document_id: int, actor: Actor, kind: str = "
                           author_user_id=actor.user_id, author_agent=actor.agent, status="open")
     db.add(row)
     db.flush()
-    _link_attachments(db, row.code, row.id, row.body)
+    _link_attachments(db, row.code, row.id, row.body, actor)
     db.commit()
     db.refresh(row)
     return row
 
 
-def _link_attachments(db: Session, code: str, comment_id: int, body: str) -> None:
+def _link_attachments(db: Session, code: str, comment_id: int, body: str, actor: Actor) -> None:
     """FK the {attachment:ID} tokens in a saved body back to the comment so
-    they survive the orphan sweep. Only unlinked rows on THIS code are claimed."""
+    they survive the orphan sweep. Only unlinked rows on THIS code that the
+    acting user or agent uploaded are claimed."""
     ids = {int(m) for m in _ATTACHMENT_TOKEN.findall(body or "")}
     if not ids:
         return
+    if actor.user_id is not None:
+        owner = DocumentCommentAttachment.uploaded_by_user_id == actor.user_id
+    elif actor.agent:
+        owner = DocumentCommentAttachment.uploaded_by_agent == actor.agent
+    else:
+        return  # no identity to match; never claim (a NULL match would take user uploads)
     for att in db.execute(select(DocumentCommentAttachment).where(
             DocumentCommentAttachment.code == code,
             DocumentCommentAttachment.id.in_(ids),
-            DocumentCommentAttachment.comment_id.is_(None))).scalars():
+            DocumentCommentAttachment.comment_id.is_(None),
+            owner)).scalars():
         att.comment_id = comment_id
 
 
@@ -157,7 +165,7 @@ def patch_comment(db: Session, comment_id: int, actor: Actor, *, body: Optional[
     row.body = new_body
     row.suggested_text = new_suggested
     row.edited_at = datetime.utcnow()
-    _link_attachments(db, row.code, row.id, row.body)
+    _link_attachments(db, row.code, row.id, row.body, actor)
     db.commit()
     db.refresh(row)
     return row

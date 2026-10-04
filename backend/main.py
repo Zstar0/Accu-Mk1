@@ -492,11 +492,20 @@ async def lifespan(app: FastAPI):
         db = _SessionLocal()
         try:
             _attachments_gc.gc_orphaned_attachments(db, now=now)
-            _comment_attachments_gc.gc_orphaned_comment_attachments(db, now=now)
         finally:
             db.close()
     _flag_scheduler.register("attachment_gc", interval=_timedelta(hours=1),
                              fn=_gc_job)
+
+    # Its own job so a flags-side failure never skips the comment sweep.
+    def _comment_gc_job(now):
+        db = _SessionLocal()
+        try:
+            _comment_attachments_gc.gc_orphaned_comment_attachments(db, now=now)
+        finally:
+            db.close()
+    _flag_scheduler.register("document_comment_attachment_gc", interval=_timedelta(hours=1),
+                             fn=_comment_gc_job)
     # State-change watches poller (Plan 6) — polls the host `state` seam every
     # ~2 min and fires armed watches once. Job fn takes `now` (the ticker calls
     # fn(now=now)); run_watch_poll owns its own Session via _watch_poll_job.

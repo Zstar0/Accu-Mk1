@@ -229,8 +229,9 @@ def get_document(doc_id: int, db: Session = Depends(get_db), user=Depends(get_cu
     except Exception as e:
         raise _http(e)
     n = len(revisions)
-    out = _doc_out(doc, n, counts.get(doc.code, 0))
-    return DocumentDetail(**out.model_dump(), revisions=[_doc_out(r, n) for r in revisions])
+    open_n = counts.get(doc.code, 0)  # comments live on the code, so every revision shares it
+    out = _doc_out(doc, n, open_n)
+    return DocumentDetail(**out.model_dump(), revisions=[_doc_out(r, n, open_n) for r in revisions])
 
 
 @router.get("/documents/{doc_id}/content")
@@ -312,7 +313,8 @@ def replace_document_content(doc_id: int, req: DocumentContentReplace,
                              admin=Depends(require_document_admin_user)):
     try:
         doc, changed = service.replace_draft_content(db, doc_id, html=req.html,
-                                                     updated_by=admin.email)
+                                                     updated_by=admin.email,
+                                                     expected_sha256=req.expected_sha256)
         n = service.revision_count(db, doc.code)
     except Exception as e:
         raise _http(e)

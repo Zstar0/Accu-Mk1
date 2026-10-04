@@ -94,3 +94,20 @@ def test_only_an_admin_bearer_may_replace_content(client):
         assert r.status_code == 403
     finally:
         routes_mod.get_current_user = saved
+
+
+def test_expected_sha256_mismatch_is_409_before_any_write(client):
+    r1 = publish(client)
+    draft = publish(client, code=r1["code"], html=HTML.replace("Audit", "draft"), activate=False)
+    _as_admin_bearer(client)
+    from documents.models import Document
+    old_key = client.db.get(Document, draft["id"]).storage_key
+    r = client.put(f"/api/documents/{draft['id']}/content",
+                   json={"html": NEW, "expected_sha256": "0" * 64})
+    assert r.status_code == 409 and "changed since you opened it" in r.text
+    row = client.db.get(Document, draft["id"])
+    assert (row.storage_key, row.content_sha256) == (old_key, draft["content_sha256"])
+    r = client.put(f"/api/documents/{draft['id']}/content",
+                   json={"html": NEW, "expected_sha256": draft["content_sha256"]})
+    assert r.status_code == 200, r.text
+    assert r.json()["content_sha256"] != draft["content_sha256"]
