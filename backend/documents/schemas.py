@@ -178,3 +178,7 @@ class CommentIndexRow(BaseModel):
 
 class CommentIndexOut(BaseModel):
     items: List[CommentIndexRow]
+
+
+class DocumentContentReplace(BaseModel):
+    html: str
