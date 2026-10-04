@@ -72,11 +72,26 @@ def test_patch_relinks_and_delete_removes_rows_and_blobs(client):
     c = comment(client, doc["id"], body="no token yet")
     r = client.patch(f"/api/documents/comments/{c['id']}", json={"body": f"now {{attachment:{aid}}}"})
     assert [a["id"] for a in r.json()["attachments"]] == [aid]
-    assert client.delete(f"/api/documents/comments/{c['id']}").status_code == 204
-    assert client.get(f"/api/documents/comment-attachments/{aid}").status_code == 404
     from flags import seams
     from documents.models import DocumentCommentAttachment
+    key = client.db.get(DocumentCommentAttachment, aid).storage_key
+    assert client.delete(f"/api/documents/comments/{c['id']}").status_code == 204
+    assert client.get(f"/api/documents/comment-attachments/{aid}").status_code == 404
+    client.db.expire_all()
     assert client.db.query(DocumentCommentAttachment).count() == 0
+    with pytest.raises(seams.AttachmentNotFound):
+        seams.get_attachment_storage().fetch(key)
+
+
+def test_missing_blob_is_404_not_500(client):
+    doc = publish(client)
+    aid = _upload(client, doc["id"]).json()["id"]
+    from flags import seams
+    from documents.models import DocumentCommentAttachment
+    seams.get_attachment_storage().delete(client.db.get(DocumentCommentAttachment, aid).storage_key)
+    r = client.get(f"/api/documents/comment-attachments/{aid}")
+    assert r.status_code == 404
+    assert r.json()["detail"] == "attachment file missing from storage"
 
 
 def test_gc_sweeps_only_unlinked_rows_past_the_cutoff(client):
