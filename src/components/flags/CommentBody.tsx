@@ -16,10 +16,13 @@ export function CommentBody({
   body,
   mentions,
   users,
+  resolveAttachmentUrl = fetchFlagAttachmentUrl,
 }: {
   body: string
   mentions: number[]
   users: UserMap
+  /** Document comments serve their images from another route (spec 2026-10-03 §8). */
+  resolveAttachmentUrl?: (id: number) => Promise<string | null>
 }) {
   const html = useMemo(() => {
     const tokens: MentionToken[] = mentions.map(id => ({
@@ -42,14 +45,14 @@ export function CommentBody({
     imgs.forEach(img => {
       const id = Number(img.dataset.attachmentId)
       if (!Number.isFinite(id)) return
-      void fetchFlagAttachmentUrl(id).then(url => {
+      void resolveAttachmentUrl(id).then(url => {
         if (!cancelled && url) img.src = url
       })
     })
     return () => {
       cancelled = true
     }
-  }, [html])
+  }, [html, resolveAttachmentUrl])
 
   return (
     <>
