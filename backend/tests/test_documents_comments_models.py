@@ -56,6 +56,17 @@ def test_anchor_round_trips_as_json(db):
     assert db.get(DocumentComment, row.id).anchor == anchor
 
 
+def test_document_level_anchor_is_sql_null(db):
+    from sqlalchemy import select
+    from documents.models import DocumentComment
+    doc_level = _comment(db, anchor=None)
+    anchored = _comment(db, anchor={"originalText": "x"})
+    ids = [r.id for r in db.execute(
+        select(DocumentComment).where(DocumentComment.anchor.is_(None))).scalars().all()]
+    assert doc_level.id in ids
+    assert anchored.id not in ids
+
+
 @pytest.mark.parametrize("over", [
     {"author_user_id": 1, "author_agent": "jarvis"},            # two authors
     {"author_user_id": None, "author_agent": None},             # no author

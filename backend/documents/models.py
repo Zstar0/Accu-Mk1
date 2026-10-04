@@ -138,8 +138,9 @@ class DocumentComment(Base):
         ForeignKey("document_comments.id", ondelete="CASCADE"), nullable=True, index=True)
     number: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)  # top-level only, stored, stable
     kind: Mapped[str] = mapped_column(String(12), nullable=False, default="comment")
+    # none_as_null: a document-level comment is SQL NULL, so "anchor IS NULL" filters work
     anchor: Mapped[Optional[dict]] = mapped_column(
-        JSONB().with_variant(JSON(), "sqlite"), nullable=True)
+        JSONB(none_as_null=True).with_variant(JSON(none_as_null=True), "sqlite"), nullable=True)
     label: Mapped[Optional[str]] = mapped_column(String(40), nullable=True)
     body: Mapped[str] = mapped_column(Text, nullable=False, default="", server_default="")
     suggested_text: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
