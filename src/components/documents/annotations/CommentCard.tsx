@@ -20,6 +20,8 @@ export interface CardActions {
   remove: (c: DocumentComment) => void
   /** Part 4: admins apply a suggestion into a draft. */
   apply?: (c: DocumentComment) => void
+  /** Reason Apply is unavailable (e.g. a newer revision exists). */
+  applyBlocked?: string
 }
 interface Props {
   c: DocumentComment
@@ -261,6 +263,8 @@ export function CommentCard({
               size="sm"
               variant="outline"
               className="ml-auto"
+              disabled={!!actions.applyBlocked}
+              title={actions.applyBlocked}
               onClick={() => actions.apply?.(c)}
             >
               <Wand2 className="mr-1 h-3.5 w-3.5" />

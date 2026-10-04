@@ -43,6 +43,8 @@ interface Props {
   me: { id?: number | null } | null
   isAdmin: boolean
   onApply?: (c: DocumentComment) => void
+  /** When set, Apply renders disabled with this reason as its title. */
+  applyBlocked?: string
 }
 
 export function CommentsPanel(p: Props) {
@@ -84,6 +86,7 @@ export function CommentsPanel(p: Props) {
         remove.mutate(c.id)
     },
     apply: p.onApply,
+    applyBlocked: p.applyBlocked,
   }
   const canEdit = (c: DocumentComment) =>
     p.isAdmin || (p.me?.id != null && c.author_user_id === p.me.id)
