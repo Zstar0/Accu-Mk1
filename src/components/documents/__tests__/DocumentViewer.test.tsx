@@ -1,6 +1,14 @@
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
-import { render, screen } from '@testing-library/react'
-import { describe, expect, it, vi } from 'vitest'
+import { act, fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { BRIDGE_PROTOCOL_VERSION } from '@/vendor/plannotator/bridge-script'
+
+const h = vi.hoisted(() => ({
+  mutateAsync: vi.fn(),
+  isPending: false,
+  toastError: vi.fn(),
+}))
+vi.mock('sonner', () => ({ toast: { error: h.toastError, success: vi.fn() } }))
 
 vi.mock('@/services/documents', () => ({
   useDocument: () => ({
@@ -39,10 +47,23 @@ vi.mock('@/components/flags/EntityFlagButton', () => ({
 })) // needs the flags stack; not under test
 vi.mock('@/services/document-comments', () => ({
   useDocumentComments: () => ({
-    data: { items: [], code: 'ART-0001', latest_revision: 2, open_count: 2 },
+    data: { items: [], code: 'ART-0001', latest_revision: 2, open_count: 3 },
   }),
-  useCommentLabels: () => ({ data: [] }),
-  useCreateComment: () => ({ mutateAsync: vi.fn() }),
+  useCommentLabels: () => ({
+    data: [
+      {
+        id: 'nice-work',
+        emoji: 'x',
+        text: 'Nice work',
+        color: 'green',
+        tip: null,
+      },
+    ],
+  }),
+  useCreateComment: () => ({
+    mutateAsync: h.mutateAsync,
+    isPending: h.isPending,
+  }),
   usePatchComment: () => ({ mutateAsync: vi.fn() }),
   useDeleteComment: () => ({ mutate: vi.fn() }),
   useSetCommentStatus: () => ({ mutate: vi.fn() }),
@@ -66,9 +87,74 @@ describe('DocumentViewer', () => {
     expect(frame.getAttribute('srcdoc')).toContain('/pn-bridge.v')
     expect(frame.getAttribute('srcdoc')).toContain('<!--pn-inject-->')
     expect(
-      screen.getByRole('button', { name: /Comments \(2\)/ })
+      screen.getByRole('button', { name: /Comments \(3\)/ })
     ).toBeInTheDocument()
     expect(screen.getByRole('radio', { name: 'Select' })).toBeInTheDocument()
     expect(screen.getByRole('radio', { name: 'Pinpoint' })).toBeInTheDocument()
+  })
+
+  async function mount() {
+    const { DocumentViewer } =
+      await import('@/components/documents/DocumentViewer')
+    render(
+      <QueryClientProvider client={new QueryClient()}>
+        <DocumentViewer id={10} />
+      </QueryClientProvider>
+    )
+    return screen.getByTitle('Audit') as HTMLIFrameElement
+  }
+  const post = (frame: HTMLIFrameElement, data: unknown) =>
+    act(() => {
+      window.dispatchEvent(
+        new MessageEvent('message', {
+          data,
+          origin: 'null',
+          source: frame.contentWindow ?? undefined,
+        })
+      )
+    })
+  const select = (frame: HTMLIFrameElement) => {
+    post(frame, {
+      type: 'plannotator-bridge-ready',
+      protocolVersion: BRIDGE_PROTOCOL_VERSION,
+    })
+    post(frame, {
+      type: 'plannotator-bridge-selection',
+      text: 'hi',
+      rect: { top: 1, left: 1, width: 5, height: 5 },
+    })
+  }
+
+  beforeEach(() => {
+    h.mutateAsync.mockReset()
+    h.toastError.mockReset()
+    h.isPending = false
+  })
+
+  it('fills its pane until the bridge is ready, then follows the reported height', async () => {
+    const frame = await mount()
+    expect(frame.style.height).toBe('100%')
+    post(frame, {
+      type: 'plannotator-bridge-ready',
+      protocolVersion: BRIDGE_PROTOCOL_VERSION,
+    })
+    post(frame, { type: 'plannotator-bridge-resize', height: 1234 })
+    await waitFor(() => expect(frame.style.height).toBe('1234px'))
+  })
+
+  it('reports a failed quick label with a toast instead of throwing', async () => {
+    h.mutateAsync.mockRejectedValue(new Error('boom'))
+    const frame = await mount()
+    select(frame)
+    fireEvent.click(await screen.findByRole('button', { name: 'Nice work' }))
+    await waitFor(() => expect(h.toastError).toHaveBeenCalledWith('boom'))
+  })
+
+  it('ignores a quick label while a comment is already being created', async () => {
+    h.isPending = true
+    const frame = await mount()
+    select(frame)
+    fireEvent.click(await screen.findByRole('button', { name: 'Nice work' }))
+    expect(h.mutateAsync).not.toHaveBeenCalled()
   })
 })

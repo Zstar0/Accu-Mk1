@@ -36,6 +36,7 @@ import {
   resolveDocTheme,
 } from '@/components/documents/documents-utils'
 import { RetitleDialog } from '@/components/documents/RetitleDialog'
+import { toast } from 'sonner'
 import { ToggleGroup, ToggleGroupItem } from '@/components/ui/toggle-group'
 import {
   ResizableHandle,
@@ -108,22 +109,22 @@ export function DocumentViewer({ id }: { id: number }) {
   const doc = detail.data
   const user = useAuthStore(s => s.user)
   const iframeRef = useRef<HTMLIFrameElement>(null)
-  const stageRef = useRef<HTMLDivElement>(null)
   const [inputMethod, setInputMethod] = useState<'drag' | 'pinpoint'>('drag')
   const [filter, setFilter] = useState<CommentStatusFilter>('open')
   // null = follow the default (open when the document has open comments)
   const [panelPref, setPanelOpen] = useState<boolean | null>(null)
-  const panelOpen = panelPref ?? (detail.data?.open_comment_count ?? 0) > 0
+  const [narrow, setNarrow] = useState(
+    () => window.matchMedia('(max-width: 767px)').matches
+  )
+  // Default-open only on wide screens (no Sheet over a phone on load).
+  const panelOpen =
+    panelPref ?? (!narrow && (detail.data?.open_comment_count ?? 0) > 0)
   const [selection, setSelection] = useState<BridgeSelection | null>(null)
   const [composer, setComposer] = useState<{
     mode: ComposerMode
     label: CommentLabel | null
   } | null>(null)
-  const [frameOff, setFrameOff] = useState({ top: 0, left: 0 })
   const [selectedId, setSelectedId] = useState<string | null>(null)
-  const [narrow, setNarrow] = useState(
-    () => window.matchMedia('(max-width: 767px)').matches
-  )
   useEffect(() => {
     const mq = window.matchMedia('(max-width: 767px)')
     const on = () => setNarrow(mq.matches)
@@ -131,11 +132,16 @@ export function DocumentViewer({ id }: { id: number }) {
     return () => mq.removeEventListener('change', on)
   }, [])
 
-  const commentsQ = useDocumentComments(id, filter)
+  const commentsQ = useDocumentComments(id, 'all')
   const labelsQ = useCommentLabels()
   const createComment = useCreateComment(id)
   const labels = labelsQ.data ?? []
   const comments = useMemo(() => commentsQ.data?.items ?? [], [commentsQ.data])
+  const panelComments = useMemo(
+    () =>
+      filter === 'all' ? comments : comments.filter(c => c.status === filter),
+    [comments, filter]
+  )
   const openCount =
     commentsQ.data?.open_count ?? detail.data?.open_comment_count ?? 0
 
@@ -178,14 +184,9 @@ export function DocumentViewer({ id }: { id: number }) {
     inputMethod,
     annotateActive: true,
     onSelection: s => {
-      // Frame offset within the stage is captured when the selection arrives
-      // (not during render) so no ref is read in render.
-      const f = iframeRef.current
-      setFrameOff(
-        f ? { top: f.offsetTop, left: f.offsetLeft } : { top: 0, left: 0 }
-      )
       setSelection(s)
-      if (!s) setComposer(null)
+      // A global composer keeps its draft when the frame clears its selection.
+      if (!s) setComposer(c => (c?.mode === 'global' ? c : null))
     },
     onSelectionRect: r => setSelection(s => (s ? { ...s, rect: r } : s)),
     onMarkClick: markId => {
@@ -194,13 +195,8 @@ export function DocumentViewer({ id }: { id: number }) {
     },
   })
 
-  const stageRect = selection
-    ? {
-        ...selection.rect,
-        top: selection.rect.top + frameOff.top,
-        left: selection.rect.left + frameOff.left,
-      }
-    : null
+  // The iframe is the stage's first child, so frame coords are stage coords.
+  const stageRect = selection?.rect ?? null
 
   const uploadImage = useCallback(
     async (blob: Blob, name: string) =>
@@ -239,14 +235,20 @@ export function DocumentViewer({ id }: { id: number }) {
     setSelection(null)
     setPanelOpen(true)
   }
-  const quickLabel = (label: CommentLabel) =>
-    void submitComment({ body: '', label: label.id }, 'comment')
+  const quickLabel = async (label: CommentLabel) => {
+    if (createComment.isPending) return
+    try {
+      await submitComment({ body: '', label: label.id }, 'comment')
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : 'Could not add the comment')
+    }
+  }
 
   const panel = doc && (
     <CommentsPanel
       docId={id}
       currentRevision={doc.revision}
-      comments={comments}
+      comments={panelComments}
       labels={labels}
       filter={filter}
       onFilterChange={setFilter}
@@ -409,8 +411,13 @@ export function DocumentViewer({ id }: { id: number }) {
             direction="horizontal"
             className="min-h-0 flex-1"
           >
-            <ResizablePanel defaultSize={72} minSize={40}>
-              <div className="h-full overflow-y-auto">
+            <ResizablePanel
+              id="document-frame"
+              order={1}
+              defaultSize={72}
+              minSize={40}
+            >
+              <div className="flex h-full flex-col overflow-y-auto">
                 {bridge.status === 'unavailable' && (
                   <p
                     role="status"
@@ -424,14 +431,17 @@ export function DocumentViewer({ id }: { id: number }) {
                     work.
                   </p>
                 )}
-                <div ref={stageRef} className="relative">
+                <div className="relative min-h-0 flex-1">
                   <iframe
                     ref={iframeRef}
                     title={doc?.title ?? `Document ${id}`}
                     sandbox="allow-scripts"
                     srcDoc={srcDoc}
                     className="block w-full border-0 bg-background"
-                    style={{ height: bridge.height }}
+                    style={{
+                      height:
+                        bridge.status === 'ready' ? bridge.height : '100%',
+                    }}
                   />
                   {selection &&
                     !composer &&
@@ -468,6 +478,7 @@ export function DocumentViewer({ id }: { id: number }) {
                       onSubmit={v => submitComment(v, composer.mode)}
                       onCancel={() => {
                         setComposer(null)
+                        setSelection(null)
                         bridge.cancelSelection()
                       }}
                       uploadImage={uploadImage}
@@ -479,7 +490,12 @@ export function DocumentViewer({ id }: { id: number }) {
             {panelOpen && !narrow && (
               <>
                 <ResizableHandle withHandle />
-                <ResizablePanel defaultSize={28} minSize={20}>
+                <ResizablePanel
+                  id="document-comments"
+                  order={2}
+                  defaultSize={28}
+                  minSize={20}
+                >
                   {panel}
                 </ResizablePanel>
               </>
