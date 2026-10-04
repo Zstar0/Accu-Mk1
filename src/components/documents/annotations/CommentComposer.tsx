@@ -55,7 +55,16 @@ export function CommentComposer({
     setReplacement(quote)
     setLabel(initialLabel)
     queueMicrotask(() => taRef.current?.focus())
-  }, [open, quote, initialLabel])
+    // keyed on the label id: object identity churn must not wipe a typed draft
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [open, quote, initialLabel?.id])
+
+  useEffect(() => {
+    const src = draw?.src
+    return () => {
+      if (src) URL.revokeObjectURL(src)
+    }
+  }, [draw?.src])
 
   const overCap = mode !== 'global' && quote.length > MAX_QUOTE
   const needsReplacement =
@@ -93,6 +102,8 @@ export function CommentComposer({
         suggested_text: mode === 'suggestion' ? replacement.trim() : undefined,
         label: label?.id ?? null,
       })
+    } catch {
+      /* the mutation hook has toasted; keep the draft */
     } finally {
       setSaving(false)
     }
@@ -117,7 +128,12 @@ export function CommentComposer({
         <PopoverContent
           align="start"
           className="w-[380px] p-3"
-          onEscapeKeyDown={onCancel}
+          onInteractOutside={e => {
+            if (draw) e.preventDefault()
+          }}
+          onFocusOutside={e => {
+            if (draw) e.preventDefault()
+          }}
         >
           {mode !== 'global' && quote && (
             <p className="mb-2 line-clamp-2 border-l-2 pl-2 text-xs text-muted-foreground">
@@ -174,10 +190,7 @@ export function CommentComposer({
             placeholder="Add a comment…"
             onChange={e => setBody(e.target.value)}
             onKeyDown={e => {
-              if (e.key === 'Escape') {
-                e.preventDefault()
-                onCancel()
-              } else if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) {
+              if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) {
                 e.preventDefault()
                 void submit()
               }
@@ -217,6 +230,7 @@ export function CommentComposer({
               size="sm"
               variant="ghost"
               onClick={() => fileRef.current?.click()}
+              aria-label="Attach image"
               title="Attach an image (draw on it first)"
             >
               <ImagePlus className="h-4 w-4" />
