@@ -111,3 +111,16 @@ def test_expected_sha256_mismatch_is_409_before_any_write(client):
                    json={"html": NEW, "expected_sha256": draft["content_sha256"]})
     assert r.status_code == 200, r.text
     assert r.json()["content_sha256"] != draft["content_sha256"]
+
+
+def test_a_retried_put_with_the_old_sha_and_identical_bytes_is_a_no_op(client):
+    r1 = publish(client)
+    draft = publish(client, code=r1["code"], html=HTML.replace("Audit", "draft"), activate=False)
+    _as_admin_bearer(client)
+    body = {"html": NEW, "expected_sha256": draft["content_sha256"]}
+    first = client.put(f"/api/documents/{draft['id']}/content", json=body)
+    assert first.status_code == 200, first.text
+    # The client never saw the first response and retries with the same body.
+    retry = client.put(f"/api/documents/{draft['id']}/content", json=body)
+    assert retry.status_code == 200, retry.text
+    assert retry.json()["content_sha256"] == first.json()["content_sha256"]

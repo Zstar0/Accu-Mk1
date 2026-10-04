@@ -576,12 +576,12 @@ def replace_draft_content(db: Session, doc_id: int, *, html, updated_by: Optiona
     ).scalar_one_or_none()
     if dependent is not None:
         raise ConflictError(f"revision {doc.id} is superseded by {dependent}; edit that one")
-    if expected_sha256 is not None and expected_sha256 != doc.content_sha256:
-        raise ConflictError("this draft changed since you opened it; reload and edit again")
     data = validate_html(html)
     sha = hashlib.sha256(data).hexdigest()
     if sha == doc.content_sha256:
-        return doc, False
+        return doc, False  # before the hash check: a retried PUT that already landed is a 200
+    if expected_sha256 is not None and expected_sha256 != doc.content_sha256:
+        raise ConflictError("this draft changed since you opened it; reload and edit again")
     old_key = doc.storage_key
     doc.storage_key = get_storage().save(doc.code, doc.revision, data)
     doc.size_bytes = len(data)
