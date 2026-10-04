@@ -140,7 +140,7 @@ export function CommentsPanel(p: Props) {
       >
         {placed.length === 0 && lost.length === 0 && (
           <p className="text-xs text-muted-foreground">
-            No {p.filter === 'all' ? '' : p.filter} comments.
+            {p.filter === 'all' ? 'No comments.' : `No ${p.filter} comments.`}
           </p>
         )}
         {placed.map(c => card(c, false))}

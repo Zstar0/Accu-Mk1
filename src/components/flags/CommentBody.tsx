@@ -21,7 +21,7 @@ export function CommentBody({
   body: string
   mentions: number[]
   users: UserMap
-  /** Document comments serve their images from another route (spec 2026-10-03 §8). */
+  /** Document comments serve their images from another route (spec 2026-10-03 section 8). */
   resolveAttachmentUrl?: (id: number) => Promise<string | null>
 }) {
   const html = useMemo(() => {

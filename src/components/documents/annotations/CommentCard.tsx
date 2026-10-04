@@ -49,7 +49,8 @@ export function CommentCard({
 }: Props) {
   const [replying, setReplying] = useState(false)
   const [editing, setEditing] = useState(false)
-  const [draft, setDraft] = useState('')
+  const [replyDraft, setReplyDraft] = useState('')
+  const [editDraft, setEditDraft] = useState('')
   const label = c.label ? labels.get(c.label) : undefined
   const quote = c.anchor?.originalText ?? ''
   const elementTag = c.anchor?.htmlAnchor?.tagName
@@ -104,9 +105,9 @@ export function CommentCard({
       {editing ? (
         <div className="mb-1">
           <Textarea
-            value={draft}
+            value={editDraft}
             rows={3}
-            onChange={e => setDraft(e.target.value)}
+            onChange={e => setEditDraft(e.target.value)}
           />
           <div className="mt-1 flex justify-end gap-1">
             <Button size="sm" variant="ghost" onClick={() => setEditing(false)}>
@@ -115,7 +116,12 @@ export function CommentCard({
             <Button
               size="sm"
               onClick={() =>
-                void actions.edit(c, draft).then(() => setEditing(false))
+                void actions
+                  .edit(c, editDraft)
+                  .then(() => setEditing(false))
+                  .catch(() => {
+                    /* toasted by the mutation hook; keep the draft */
+                  })
               }
             >
               Save
@@ -153,10 +159,10 @@ export function CommentCard({
       {replying && (
         <div className="mt-1">
           <Textarea
-            value={draft}
+            value={replyDraft}
             rows={2}
             placeholder="Reply…"
-            onChange={e => setDraft(e.target.value)}
+            onChange={e => setReplyDraft(e.target.value)}
           />
           <div className="mt-1 flex justify-end gap-1">
             <Button
@@ -168,12 +174,17 @@ export function CommentCard({
             </Button>
             <Button
               size="sm"
-              disabled={!draft.trim()}
+              disabled={!replyDraft.trim()}
               onClick={() =>
-                void actions.reply(c, draft).then(() => {
-                  setReplying(false)
-                  setDraft('')
-                })
+                void actions
+                  .reply(c, replyDraft)
+                  .then(() => {
+                    setReplying(false)
+                    setReplyDraft('')
+                  })
+                  .catch(() => {
+                    /* toasted by the mutation hook; keep the draft */
+                  })
               }
             >
               Reply
@@ -190,7 +201,7 @@ export function CommentCard({
           variant="ghost"
           aria-label="Reply"
           onClick={() => {
-            setDraft('')
+            setEditing(false)
             setReplying(v => !v)
           }}
         >
@@ -222,7 +233,8 @@ export function CommentCard({
               variant="ghost"
               aria-label="Edit"
               onClick={() => {
-                setDraft(c.body)
+                setReplying(false)
+                setEditDraft(c.body)
                 setEditing(true)
               }}
             >
