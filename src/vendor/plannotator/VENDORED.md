@@ -20,7 +20,8 @@ by copying the upstream file over and `git diff`.
 - srcdoc.ts `url-only`: the inline-script branch and the BRIDGE_SCRIPT import are
   removed so the 185 KB literal tree-shakes out of the app bundle; the bridge is
   always loaded by URL (spec §7.2).
-- bridge-script.ts: `headings` extension (Task 9, present: heading feed plus minted `pn-h-N` ids, fenced `// accumark: headings`); `edit-mode` and `serialize` land in Task 18.
+- bridge-script.ts: `headings` extension (Task 9, present: heading feed plus minted `pn-h-N` ids, fenced `// accumark: headings`).
+- bridge-script.ts `edit-mode`: set-edit-mode / serialize / apply-replacement handlers and the two selection gates (Task 18).
 - image-annotator/index.tsx `local-shortcuts`: upstream imported ../../shortcuts,
   which is not vendored; a local keydown handler provides 1/2/3, Mod+Z,
   Mod+Shift+Z, Esc. `overlay-class`: `pn-visible-viewport-overlay` -> `fixed inset-0`.

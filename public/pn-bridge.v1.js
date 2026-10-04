@@ -204,6 +204,7 @@
   }
 
   function handleSelection(modeOverride, extras) {
+    if (editModeActive) return; // accumark: edit-mode
     var sel = window.getSelection();
     if (!sel || sel.isCollapsed || !sel.rangeCount) {
       // Trailing clear from a plain-click element annotation — consume it once.
@@ -557,6 +558,21 @@
         updateVimUi();
       }
     }
+
+    // accumark: edit-mode handlers
+    else if (type === PREFIX + 'set-edit-mode') {
+      setEditMode(e.data.on === true);
+    }
+    else if (type === PREFIX + 'serialize') {
+      postToParent({ type: PREFIX + 'serialized', html: serializeDocument() });
+    }
+    else if (type === PREFIX + 'apply-replacement') {
+      var applyOk = typeof e.data.id === 'string' && typeof e.data.text === 'string'
+        && applyReplacement(e.data.id, e.data.text);
+      if (applyOk) postToParent({ type: PREFIX + 'serialized', html: serializeDocument(), appliedId: e.data.id });
+      else postToParent({ type: PREFIX + 'apply-failed', id: e.data.id });
+    }
+    // /accumark
   });
 
   // --- Pinpoint: hover to outline the element under the cursor, click to pin ---
@@ -1268,6 +1284,7 @@
     dragYieldStart = { x: e.clientX, y: e.clientY };
   }, true);
   document.addEventListener('mouseup', function() {
+    if (editModeActive) return; // accumark: edit-mode
     // Text drag-selection commenting is ALWAYS live: both surfaces, armed or
     // Interact. In armed pinpoint a plain click belongs to the pinpoint
     // handler — only a drag that actually PRODUCED a text selection owns its
@@ -4771,6 +4788,65 @@
   function scheduleHeadings() {
     if (headingsTimer) return;
     headingsTimer = setTimeout(postHeadings, 150);
+  }
+  // /accumark
+  // accumark: edit-mode
+  // Admin edit mode (spec §7.4 ext 2+3, §10). Native contenteditable on the
+  // body; drag-selection posting is gated off (see the mouseup listener and
+  // handleSelection); the parent disarms pinpoint via set-annotate-mode.
+  var editModeActive = false;
+  function setEditMode(on) {
+    editModeActive = !!on;
+    if (!document.body) return;
+    if (editModeActive) {
+      document.body.setAttribute('contenteditable', 'true');
+      if (pendingSelection) postToParent({ type: PREFIX + 'selection-clear' });
+      pendingSelection = null;
+      pendingRange = null;
+      clearMultiTargets();
+      clearPendingPin();
+      try { window.getSelection().removeAllRanges(); } catch (ex) {}
+      renderAnnotationOverlay();
+    } else {
+      document.body.removeAttribute('contenteditable');
+    }
+  }
+  var VIEWER_NODE_SELECTOR = '[data-plannotator-overlay-host],[data-plannotator-pinpoint-box],' +
+    '[data-plannotator-pinpoint-label],[data-plannotator-vim-ui],[data-plannotator-vim-badge],' +
+    '[data-plannotator-vim-cursor],[data-plannotator-vim-reticle],[data-plannotator-print-layer],' +
+    '[data-plannotator-live-css],[data-plannotator-marker]';
+  function serializeDocument() {
+    var root = document.documentElement.cloneNode(true);
+    var junk = root.querySelectorAll(VIEWER_NODE_SELECTOR);
+    for (var i = 0; i < junk.length; i++) junk[i].parentNode.removeChild(junk[i]);
+    var body = root.querySelector('body');
+    if (body) {
+      body.removeAttribute('contenteditable');
+      body.removeAttribute('data-plannotator-pinpoint-cursor');
+      body.removeAttribute('data-plannotator-frame-inert');
+    }
+    var minted = root.querySelectorAll('[id^="pn-h-"]');
+    for (var j = 0; j < minted.length; j++) minted[j].removeAttribute('id');
+    return '<!doctype html>\n' + root.outerHTML;
+  }
+  function applyReplacement(id, text) {
+    var record = findAnnRecord(id);
+    if (!record) return false;
+    var target = null;
+    for (var i = 0; i < record.targets.length; i++) {
+      var t = record.targets[i];
+      if (t.kind === 'range' && rangeAlive(t.range)) { target = t.range; break; }
+    }
+    if (!target) return false;
+    try {
+      target.deleteContents();
+      target.insertNode(document.createTextNode(text));
+    } catch (ex) {
+      return false;
+    }
+    removeAnnRecord(id);
+    renderAnnotationOverlay();
+    return true;
   }
   // /accumark
 
