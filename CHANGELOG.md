@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+## v1.32.1 - 2026-10-05
+
+### Changed
+- Analyte Trends: the quantity band is now ±20% (was ±10%, which marked about half of all COAs as outside it). Colouring only; no pass/fail verdicts change.
+
 ## v1.32.0 - 2026-10-05
 
 ### Added
