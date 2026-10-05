@@ -25,8 +25,9 @@ export const TREND_WINDOW_DAYS = 90
 export const TREND_MIN_N = 5
 /** A trend this many percentage points up is called out as "rising". */
 export const RISING_PP = 10
-// ponytail: flat ±10% band for "qty off"; make it per-product if the lab sets one.
-export const QTY_FLAG_PCT = 10
+// Flat ±20% band for "qty off" (Handler 2026-10-05: ±10% flagged 52% of prod
+// COAs; ±20% keeps 74% inside). ponytail: per-product if the lab sets one.
+export const QTY_FLAG_PCT = 20
 
 const DAY_MS = 86_400_000
 
