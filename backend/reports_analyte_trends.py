@@ -81,10 +81,15 @@ def _and(a: Optional[bool], b: Optional[bool]) -> Optional[bool]:
 
 
 def _addon_ok(status: Any) -> Optional[bool]:
+    """CONFORMS passes; DOES NOT CONFORM / NON-CONFORMING / FAIL* fails; anything
+    else (PENDING, N/A, blank) is not a verdict yet. The IS table writer counts
+    PENDING as a failure, one more reason this report reads the COA JSON."""
     s = str(status or "").strip().upper()
-    if not s or s == "N/A":
-        return None
-    return s == "CONFORMS"
+    if s == "CONFORMS":
+        return True
+    if "NOT CONFORM" in s or "NON-CONFORM" in s or s.startswith("FAIL"):
+        return False
+    return None
 
 
 def _section_ok(rows: list) -> Optional[bool]:

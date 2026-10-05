@@ -74,6 +74,8 @@ def test_native_sections_heavy_metals_and_sterility():
     ]
     assert addon_verdicts(None, native) == {"endo": None, "sterility": True, "hm": False}
     assert addon_verdicts([{"test_name": "Endotoxin (LAL)", "status": ""}], "[]")["endo"] is None
+    # A pending add-on is not a failure (stack data has 5 of them).
+    assert addon_verdicts([{"test_name": "Endotoxin (LAL)", "status": "PENDING"}], None)["endo"] is None
     # Titles are catalog-authored: fall back to the USP name and the profile key.
     assert addon_verdicts(None, [{"title": "Elemental Impurities", "rows": [{"conforms": True}]}])["hm"] is True
     assert addon_verdicts(None, [{"title": "ICP-MS", "profile_key": "hm", "rows": [{"conforms": False}]}])["hm"] is False

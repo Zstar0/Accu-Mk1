@@ -42,8 +42,8 @@ import { AnalyteTrendDetail, PeriodPicker } from './AnalyteTrendDetail'
 function failTint(failed: number, tested: number) {
   if (!tested || !failed) return ''
   return failed / tested >= 0.1
-    ? 'bg-red-500/15 text-red-300'
-    : 'bg-amber-500/10 text-amber-300'
+    ? 'bg-red-500/15 text-red-700 dark:text-red-300'
+    : 'bg-amber-500/10 text-amber-700 dark:text-amber-300'
 }
 
 const pctText = (x: number) => `${Math.round(x * 100)}%`
@@ -458,9 +458,9 @@ function QtyCell({ row }: { row: ProductRow }) {
           className={cn(
             'rounded px-1.5 py-0.5',
             Math.abs(median) > QTY_FLAG_PCT
-              ? 'bg-red-500/15 text-red-300'
+              ? 'bg-red-500/15 text-red-700 dark:text-red-300'
               : flagged
-                ? 'text-amber-300'
+                ? 'text-amber-700 dark:text-amber-300'
                 : 'text-muted-foreground'
           )}
         >
@@ -509,7 +509,7 @@ function RisingPanel({
               key={`${i.product}|${i.test}`}
               type="button"
               onClick={() => onOpen(i.product, i.test)}
-              className="inline-flex items-center gap-1.5 rounded-full border border-red-500/30 bg-red-500/10 px-2.5 py-0.5 text-xs text-red-300 hover:bg-red-500/20 cursor-pointer"
+              className="inline-flex items-center gap-1.5 rounded-full border border-red-500/30 bg-red-500/10 px-2.5 py-0.5 text-xs text-red-700 dark:text-red-300 hover:bg-red-500/20 cursor-pointer"
             >
               <TrendingUp className="h-3 w-3" />
               <span className="font-medium text-foreground">{i.product}</span>

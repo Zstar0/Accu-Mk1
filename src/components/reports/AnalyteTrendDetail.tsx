@@ -64,7 +64,7 @@ export function FailChips({ coa }: { coa: AnalyteTrendCoa }) {
       {failedTests(coa).map(k => (
         <span
           key={k}
-          className="rounded bg-red-500/15 px-1.5 py-0.5 text-[10px] font-medium text-red-300"
+          className="rounded bg-red-500/15 px-1.5 py-0.5 text-[10px] font-medium text-red-700 dark:text-red-300"
         >
           {FAIL_LABEL[k]} ✗
         </span>
@@ -177,7 +177,7 @@ function DayTooltip({
             <span>{p.coa.sample_id}</span>
             <span className="text-right">{format(p)}</span>
             {failedTests(p.coa).length > 0 && (
-              <span className="col-start-2 col-span-2 text-red-300">
+              <span className="col-start-2 col-span-2 text-red-700 dark:text-red-300">
                 {failedTests(p.coa)
                   .map(k => FAIL_LABEL[k])
                   .join(', ')}{' '}
