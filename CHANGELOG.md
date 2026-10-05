@@ -2,6 +2,19 @@
 
 ## Unreleased
 
+## v1.32.0 - 2026-10-05
+
+### Added
+- Reports > Analyte Trends replaces the Reports Dashboard. Each product shows failed/tested for Purity, Identity, Endotoxin, Sterility, Heavy Metals and bac water assays, the median measured-vs-declared quantity, last-90-days vs prior-90-days trend arrows, and a Rising failures panel.
+- The product page charts results on a real time axis in lab time, lists every result from the hovered day, highlights a COA's table row when its point is clicked, shows why each COA failed, and charts each bac water assay.
+
+### Fixed
+- The list and the product page now count the same published primary COAs. Additional COA copies and superseded COAs no longer inflate the counts, and a COA that failed endotoxin, sterility or identity no longer shows as conforming on the product page.
+- Chart dates no longer show the previous day.
+
+### Removed
+- The card view and the Additional column on the reports list.
+
 ## v1.31.2 - 2026-10-02
 
 ### Fixed
