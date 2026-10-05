@@ -18,6 +18,7 @@ const baseUser: AuthUser = {
   senaite_configured: false,
   first_name: 'Jane',
   last_name: 'Doe',
+  title: 'Lab Director',
 }
 
 async function renderFlyout(
@@ -53,6 +54,17 @@ describe('UserEditFlyout', () => {
     expect((screen.getByLabelText('Email') as HTMLInputElement).value).toBe(
       'jane@lab.com'
     )
+  })
+
+  it('pre-fills and saves the title', async () => {
+    updateUser.mockResolvedValue({ ...baseUser, title: 'QA Lead' })
+    await renderFlyout()
+    const title = screen.getByLabelText('Title') as HTMLInputElement
+    expect(title.value).toBe('Lab Director')
+    await userEvent.clear(title)
+    await userEvent.type(title, 'QA Lead')
+    await userEvent.click(screen.getByRole('button', { name: /save changes/i }))
+    expect(updateUser).toHaveBeenCalledWith(7, { title: 'QA Lead' })
   })
 
   it('saves only changed fields and calls onSaved', async () => {

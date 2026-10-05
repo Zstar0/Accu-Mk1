@@ -119,3 +119,40 @@ def test_worksheets_users_avatar_null_without_slack_link(client_as, db, user):
     assert r.status_code == 200
     mine = next(x for x in r.json() if x["email"] == "me@lab.test")
     assert mine["avatar_url"] is None
+
+
+def test_patch_me_sets_title(client_as, db, user):
+    r = client_as.patch("/auth/me", json={"title": "  Lab Director "})
+    assert r.status_code == 200, r.text
+    assert r.json()["title"] == "Lab Director"
+    db.refresh(user)
+    assert user.title == "Lab Director"
+    r = client_as.patch("/auth/me", json={"title": ""})
+    assert r.status_code == 200
+    db.refresh(user)
+    assert user.title is None
+
+
+def test_admin_update_sets_title(client_as, db, user):
+    prev = app.dependency_overrides.get(auth.require_admin)
+    app.dependency_overrides[auth.require_admin] = lambda: user
+    try:
+        r = client_as.put(f"/auth/users/{user.id}", json={"title": "QA Lead"})
+        assert r.status_code == 200, r.text
+        assert r.json()["title"] == "QA Lead"
+        db.refresh(user)
+        assert user.title == "QA Lead"
+    finally:
+        if prev is None:
+            app.dependency_overrides.pop(auth.require_admin, None)
+        else:
+            app.dependency_overrides[auth.require_admin] = prev
+
+
+def test_title_reaches_me_directory_and_worksheets_users(client_as, db, user):
+    user.title = "Lab Director"; db.commit()
+    assert client_as.get("/auth/me").json()["title"] == "Lab Director"
+    mine = next(x for x in client_as.get("/auth/directory").json() if x["email"] == "me@lab.test")
+    assert mine["title"] == "Lab Director"
+    mine = next(x for x in client_as.get("/worksheets/users").json() if x["email"] == "me@lab.test")
+    assert mine["title"] == "Lab Director"

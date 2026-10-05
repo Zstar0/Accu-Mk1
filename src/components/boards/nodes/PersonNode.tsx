@@ -1,16 +1,24 @@
 import { Handle, Position } from '@xyflow/react'
 import type { NodeProps } from '@xyflow/react'
 import { FlagAvatar } from '@/components/flags/FlagAvatar'
+import { displayName } from '@/lib/user-display'
 import { useDirectoryUsers } from '@/services/groups'
 import type { BoardFlowNode } from '../board-mapping'
 
-export function PersonNode({ data }: NodeProps<BoardFlowNode>) {
-  const userId = Number((data.row.data as { user_id?: number } | null)?.user_id)
+/** `data` keys a person node stores (backend PersonData); rows made before `show` existed have only `user_id`. */
+export interface PersonNodeData extends Record<string, unknown> {
+  user_id?: number
+  show?: 'name' | 'email'
+  show_title?: boolean
+}
+
+export function PersonNode({ data }: Pick<NodeProps<BoardFlowNode>, 'data'>) {
+  const d = (data.row.data ?? {}) as PersonNodeData
   const directory = useDirectoryUsers()
-  const u = directory.data?.find(x => x.id === userId)
-  const name = u
-    ? [u.first_name, u.last_name].filter(Boolean).join(' ') || u.email
-    : data.row.label
+  const u = directory.data?.find(x => x.id === Number(d.user_id))
+  const name = u ? displayName(u) : data.row.label
+  const line = d.show === 'email' && u ? u.email : name
+  const title = d.show_title !== false ? u?.title : null
   const initials =
     name
       .split(/\s+/)
@@ -31,7 +39,12 @@ export function PersonNode({ data }: NodeProps<BoardFlowNode>) {
         size={22}
         avatarUrl={u?.avatar_url ?? null}
       />
-      <span className="font-medium">{name}</span>
+      <div className="flex flex-col leading-tight">
+        <span className="font-medium">{line}</span>
+        {title && (
+          <span className="text-[10px] text-muted-foreground">{title}</span>
+        )}
+      </div>
       <Handle
         type="source"
         position={Position.Bottom}

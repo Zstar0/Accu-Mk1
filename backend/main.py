@@ -682,6 +682,9 @@ async def update_me(
     if "last_name" in fields:
         v = (fields["last_name"] or "").strip()
         current_user.last_name = v or None
+    if "title" in fields:
+        v = (fields["title"] or "").strip()
+        current_user.title = v or None
     db.commit()
     db.refresh(current_user)
     return _user_to_read(current_user)
@@ -769,11 +772,12 @@ async def user_directory(
     """Lightweight id/email/name list for ALL users (active + inactive) so the
     FE can resolve historical analyst emails to names. Auth-only, not admin."""
     rows = db.execute(
-        select(User.id, User.email, User.first_name, User.last_name)
+        select(User.id, User.email, User.first_name, User.last_name, User.title)
         .order_by(User.email)
     ).all()
     return [
-        {"id": r.id, "email": r.email, "first_name": r.first_name, "last_name": r.last_name}
+        {"id": r.id, "email": r.email, "first_name": r.first_name, "last_name": r.last_name,
+         "title": r.title}
         for r in rows
     ]
 
@@ -837,6 +841,8 @@ async def update_user(
         user.first_name = data.first_name.strip() or None
     if data.last_name is not None:
         user.last_name = data.last_name.strip() or None
+    if data.title is not None:
+        user.title = data.title.strip() or None
 
     db.commit()
     db.refresh(user)
@@ -16618,6 +16624,7 @@ def _user_to_read(user) -> UserRead:
         senaite_configured=user.senaite_password_encrypted is not None,
         first_name=user.first_name,
         last_name=user.last_name,
+        title=user.title,
     )
 
 
@@ -23162,7 +23169,7 @@ async def get_worksheets_users(
     from models import SlackDmPrefs
     users = db.execute(
         select(
-            User.id, User.email, User.first_name, User.last_name,
+            User.id, User.email, User.first_name, User.last_name, User.title,
             SlackDmPrefs.slack_avatar_url,
         )
         .outerjoin(SlackDmPrefs, SlackDmPrefs.user_id == User.id)
@@ -23171,7 +23178,7 @@ async def get_worksheets_users(
     ).all()
     return [
         {"id": row.id, "email": row.email, "first_name": row.first_name,
-         "last_name": row.last_name, "avatar_url": row.slack_avatar_url}
+         "last_name": row.last_name, "title": row.title, "avatar_url": row.slack_avatar_url}
         for row in users
     ]
 

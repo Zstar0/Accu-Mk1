@@ -30,6 +30,7 @@ class User(Base):
     senaite_password_encrypted: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     first_name: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
     last_name: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
+    title: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)  # job title, shown on boards
 
     def __repr__(self) -> str:
         return f"<User(id={self.id}, email='{self.email}', role='{self.role}')>"

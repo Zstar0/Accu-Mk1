@@ -96,13 +96,19 @@ def test_create_each_kind_with_validation(client):
     assert client.post("/api/boards/org/nodes", json={"kind": "entity", "entity_type": "board_node", "entity_id": "1"}).status_code == 400
     assert client.post("/api/boards/org/nodes", json={"kind": "entity", "entity_type": "worksheet"}).status_code == 400
     assert client.post("/api/boards/org/nodes", json={"kind": "text", "entity_type": "worksheet", "entity_id": "1"}).status_code == 400
-    assert _node(client, kind="person", data={"user_id": EDITOR.id})["data"] == {"user_id": EDITOR.id}
+    # Person display defaults are stored with the node, so old rows and new rows read alike.
+    assert _node(client, kind="person", data={"user_id": EDITOR.id})["data"] == {
+        "user_id": EDITOR.id, "show": "name", "show_title": True}
+    assert _node(client, kind="person", data={"user_id": EDITOR.id, "show": "email", "show_title": False})["data"] == {
+        "user_id": EDITOR.id, "show": "email", "show_title": False}
+    assert client.post("/api/boards/org/nodes", json={"kind": "person", "data": {"user_id": EDITOR.id, "show": "initials"}}).status_code == 400
+    assert client.post("/api/boards/org/nodes", json={"kind": "person", "data": {"user_id": EDITOR.id, "badge": True}}).status_code == 400
     assert client.post("/api/boards/org/nodes", json={"kind": "person", "data": {"user_id": 999}}).status_code == 400
     assert client.post("/api/boards/org/nodes", json={"kind": "person", "data": {"user_id": 13}}).status_code == 400
     assert client.post("/api/boards/org/nodes", json={"kind": "widget", "data": {"key": "sla"}}).status_code == 400
     assert client.post("/api/boards/org/nodes", json={"kind": "sticker"}).status_code == 400
     detail = client.get("/api/boards/org").json()
-    assert detail["node_count"] == 6
+    assert detail["node_count"] == 7
     ctxs = [n["context"] for n in detail["nodes"] if n["kind"] == "entity"]
     assert ctxs and ctxs[0]["label"] == "Worksheet 1"
 

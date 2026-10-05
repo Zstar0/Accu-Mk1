@@ -49,13 +49,14 @@ function NameSection() {
   const user = useAuthStore(state => state.user)
   const [firstName, setFirstName] = useState(user?.first_name ?? '')
   const [lastName, setLastName] = useState(user?.last_name ?? '')
+  const [title, setTitle] = useState(user?.title ?? '')
   const [savingName, setSavingName] = useState(false)
 
   const handleSaveName = async (e: FormEvent) => {
     e.preventDefault()
     setSavingName(true)
     try {
-      await updateMe({ first_name: firstName, last_name: lastName })
+      await updateMe({ first_name: firstName, last_name: lastName, title })
       toast.success('Name updated')
     } catch (err) {
       toast.error(err instanceof Error ? err.message : 'Failed to update name')
@@ -69,7 +70,8 @@ function NameSection() {
       <CardHeader>
         <CardTitle>Name</CardTitle>
         <CardDescription>
-          Shown as the analyst on samples and worksheets.
+          Shown as the analyst on samples and worksheets; the title shows on
+          planning boards.
         </CardDescription>
       </CardHeader>
       <CardContent>
@@ -90,6 +92,15 @@ function NameSection() {
               value={lastName}
               onChange={e => setLastName(e.target.value)}
               placeholder="Lovelace"
+            />
+          </div>
+          <div className="flex flex-col gap-2">
+            <Label htmlFor="title">Title</Label>
+            <Input
+              id="title"
+              value={title}
+              onChange={e => setTitle(e.target.value)}
+              placeholder="Lab Director"
             />
           </div>
           <Button type="submit" disabled={savingName} className="w-fit gap-2">

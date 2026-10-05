@@ -3,7 +3,9 @@ import { ExternalLink, Trash2, X } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
+import { Switch } from '@/components/ui/switch'
 import { Textarea } from '@/components/ui/textarea'
+import { ToggleGroup, ToggleGroupItem } from '@/components/ui/toggle-group'
 import { FlagCard } from '@/components/flags/FlagCard'
 import { RaiseFlagButton } from '@/components/flags/RaiseFlagButton'
 import { entityMeta, navigateToDeepLink } from '@/components/flags/flag-entity'
@@ -14,8 +16,10 @@ import {
   usePatchNode,
 } from '@/services/boards'
 import { useDirectoryUsers } from '@/services/groups'
+import { displayName } from '@/lib/user-display'
 import type { BoardDetail, BoardNode } from '@/lib/api-boards'
 import { DocumentPreviewFrame } from './DocumentPreviewFrame'
+import type { PersonNodeData } from './nodes/PersonNode'
 import { isSafeHttpUrl, openExternal } from './open-external'
 
 const GENERIC = new Set(['frame', 'text', 'note', 'link', 'person', 'widget'])
@@ -200,7 +204,15 @@ function NodePanel({
           />
         </section>
       )}
-      {node.kind === 'person' && <PersonInfo node={node} />}
+      {node.kind === 'person' && (
+        <PersonInfo
+          node={node}
+          canEdit={canEdit}
+          onSave={data =>
+            patch.mutate({ id: node.id, data: { version: node.version, data } })
+          }
+        />
+      )}
 
       {canEdit && (
         <div className="mt-auto">
@@ -339,13 +351,68 @@ function DeepLinkButton({
   )
 }
 
-function PersonInfo({ node }: { node: BoardNode }) {
+function PersonInfo({
+  node,
+  canEdit,
+  onSave,
+}: {
+  node: BoardNode
+  canEdit: boolean
+  onSave: (data: PersonNodeData) => void
+}) {
   const directory = useDirectoryUsers()
-  const uid = Number((node.data as { user_id?: number } | null)?.user_id)
-  const u = directory.data?.find(x => x.id === uid)
+  const d = (node.data ?? {}) as PersonNodeData
+  const u = directory.data?.find(x => x.id === Number(d.user_id))
+  const show = d.show === 'email' ? 'email' : 'name'
+  const showTitle = d.show_title !== false
+  // patch_node replaces data wholesale, so every key goes back each time.
+  const save = (next: Partial<PersonNodeData>) =>
+    onSave({ user_id: d.user_id, show, show_title: showTitle, ...next })
   return (
-    <section className="text-xs text-muted-foreground">
-      {u ? u.email : `user ${uid}`}
+    <section className="space-y-2 text-xs">
+      <div className="text-muted-foreground">
+        {u ? (
+          <>
+            <div>{displayName(u)}</div>
+            <div>{u.email}</div>
+            {u.title && <div>{u.title}</div>}
+          </>
+        ) : (
+          `user ${d.user_id}`
+        )}
+      </div>
+      {canEdit && (
+        <>
+          <div className="grid gap-1">
+            <Label className="text-xs">Show</Label>
+            <ToggleGroup
+              type="single"
+              size="sm"
+              variant="outline"
+              aria-label="Show"
+              value={show}
+              onValueChange={v => v && save({ show: v as 'name' | 'email' })}
+            >
+              <ToggleGroupItem value="name" className="flex-none px-3">
+                Name
+              </ToggleGroupItem>
+              <ToggleGroupItem value="email" className="flex-none px-3">
+                Email
+              </ToggleGroupItem>
+            </ToggleGroup>
+          </div>
+          <div className="flex items-center gap-2">
+            <Switch
+              id={`show-title-${node.id}`}
+              checked={showTitle}
+              onCheckedChange={v => save({ show_title: v })}
+            />
+            <Label htmlFor={`show-title-${node.id}`} className="text-xs">
+              Show title
+            </Label>
+          </div>
+        </>
+      )}
     </section>
   )
 }

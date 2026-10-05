@@ -3,7 +3,7 @@ lives in KIND_DATA (Task 6 fills it)."""
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Dict, List, Optional
+from typing import Dict, List, Literal, Optional
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -161,6 +161,9 @@ class EntityData(BaseModel):
 
 class PersonData(BaseModel):
     user_id: int
+    # How the card reads on the canvas: the directory name or the email, with the job title under it.
+    show: Literal["name", "email"] = "name"
+    show_title: bool = True
     model_config = ConfigDict(extra="forbid")
 
 

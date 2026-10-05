@@ -5998,6 +5998,8 @@ export interface WorksheetUser {
   email: string
   first_name?: string | null
   last_name?: string | null
+  /** Job title, shown under the name on planning boards. */
+  title?: string | null
   /** Slack profile photo (image_72) when the user is Slack-linked; null → the
    *  FE keeps the colored-initials avatar. Shared with the worksheets UI. */
   avatar_url?: string | null

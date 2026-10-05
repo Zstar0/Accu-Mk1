@@ -34,7 +34,18 @@ vi.mock('@/services/boards', () => ({
   useBoardsForEntity: () => ({ data: [], isLoading: false }),
 }))
 vi.mock('@/services/groups', () => ({
-  useDirectoryUsers: () => ({ data: [], isLoading: false }),
+  useDirectoryUsers: () => ({
+    data: [
+      {
+        id: 4,
+        email: 'ada@lab.test',
+        first_name: 'Ada',
+        last_name: 'Lovelace',
+        title: 'Lab Director',
+      },
+    ],
+    isLoading: false,
+  }),
 }))
 vi.mock('@/components/boards/DocumentPreviewFrame', () => ({
   DocumentPreviewFrame: () => <div>preview</div>,
@@ -194,5 +205,64 @@ describe('BoardSidePanel', () => {
       },
       expect.anything()
     )
+  })
+
+  it('person panel shows the directory details and saves the display choices', async () => {
+    const user = userEvent.setup()
+    const person = node({
+      id: 3,
+      kind: 'person',
+      label: 'Ada',
+      data: { user_id: 4 },
+      version: 5,
+    })
+    render(
+      <BoardSidePanel
+        board={board(true, [person])}
+        selectedId={3}
+        // eslint-disable-next-line @typescript-eslint/no-empty-function
+        onClose={() => {}}
+      />
+    )
+    expect(screen.getByText('ada@lab.test')).toBeInTheDocument()
+    expect(screen.getByText('Lab Director')).toBeInTheDocument()
+    await user.click(screen.getByRole('radio', { name: 'Email' }))
+    expect(h.patch).toHaveBeenCalledWith({
+      id: 3,
+      data: {
+        version: 5,
+        data: { user_id: 4, show: 'email', show_title: true },
+      },
+    })
+    await user.click(screen.getByRole('switch', { name: 'Show title' }))
+    expect(h.patch).toHaveBeenCalledWith({
+      id: 3,
+      data: {
+        version: 5,
+        data: { user_id: 4, show: 'name', show_title: false },
+      },
+    })
+  })
+
+  it('viewer sees the person details but no display controls', () => {
+    const person = node({
+      id: 3,
+      kind: 'person',
+      label: 'Ada',
+      data: { user_id: 4 },
+    })
+    render(
+      <BoardSidePanel
+        board={board(false, [person])}
+        selectedId={3}
+        // eslint-disable-next-line @typescript-eslint/no-empty-function
+        onClose={() => {}}
+      />
+    )
+    expect(screen.getByText('Lab Director')).toBeInTheDocument()
+    expect(
+      screen.queryByRole('radio', { name: 'Email' })
+    ).not.toBeInTheDocument()
+    expect(screen.queryByRole('switch')).not.toBeInTheDocument()
   })
 })
