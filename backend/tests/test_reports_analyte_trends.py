@@ -9,10 +9,15 @@ AT = datetime(2026, 9, 1, 23, 30, tzinfo=timezone.utc)
 def row(code, analyte, *, product=None, is_blend=False, overall_row=False,
         purity=None, purity_ok=None, identity=None, qty=None, unit="mg/mL",
         status="PASSED", declared=None, addons=None, native=None, generic=False,
-        spec=None):
+        spec=None, results=None):
+    results = dict(results or {})
+    if addons is not None:
+        results["addons"] = addons
+    if generic:
+        results["tests"] = []
     return (code, "P-" + code, AT, product or analyte, is_blend, "Peptide", "LOT1",
             analyte, overall_row, purity, purity_ok, spec, identity,
-            qty, unit, status, declared, addons, native, generic)
+            qty, unit, status, declared, results, native)
 
 
 def test_single_peptide_fails_on_endotoxin_not_purity():
@@ -80,6 +85,20 @@ def test_native_sections_heavy_metals_and_sterility():
     assert addon_verdicts(None, [{"title": "Elemental Impurities", "rows": [{"conforms": True}]}])["hm"] is True
     assert addon_verdicts(None, [{"title": "ICP-MS", "profile_key": "hm", "rows": [{"conforms": False}]}])["hm"] is False
     assert addon_verdicts(None, [{"title": "Micro", "profile_key": "sterility_pcr", "rows": [{"conforms": True}]}])["sterility"] is True
+
+
+def test_status_only_verdicts_fill_null_table_columns():
+    # Older COAs: {"status": "CONFORMS"} with no "conforms" key -> NULL in the table.
+    single = {"purity": {"status": "CONFORMS"}, "identity": {"status": "DOES NOT CONFORM"}}
+    [rec] = build_coa_records([row("S", "Semaglutide", purity=99.0, results=single)])
+    assert (rec["purity_ok"], rec["identity_ok"]) == (True, False)
+
+    blend = {"product": "A, B", "is_blend": True,
+             "results": {"analytes": [{"name": "A", "identity": {"status": "CONFORMS"}},
+                                      {"name": "B", "identity": {"status": "CONFORMS"}}]}}
+    [rec] = build_coa_records([row("M", "A", **blend), row("M", "B", **blend),
+                               row("M", "Peptide Blend", overall_row=True, **blend)])
+    assert rec["identity_ok"] is True
 
 
 def test_parse_mass_mg():

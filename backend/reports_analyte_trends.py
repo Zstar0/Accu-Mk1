@@ -28,9 +28,8 @@ ANALYTE_TRENDS_SQL = """
         r.purity_percent, r.purity_conforms, r.purity_spec, r.identity_conforms,
         r.quantity_value, r.quantity_unit, r.overall_status,
         cg.coa_data->'product'->>'declared_quantity',
-        cg.coa_data->'results'->'addons',
-        cg.coa_data->'native_sections',
-        (cg.coa_data->'results') ? 'tests'
+        cg.coa_data->'results',
+        cg.coa_data->'native_sections'
     FROM published_coa_results r
     JOIN coa_generations cg ON cg.id = r.coa_generation_id
     WHERE cg.status = 'published'
@@ -126,6 +125,31 @@ def parse_mass_mg(text: Any) -> Optional[float]:
     return float(m.group(1)) if m else None
 
 
+def _verdict(test: Any) -> Optional[bool]:
+    """A COA test dict's verdict. Older COAs carry only `status` (no `conforms`),
+    which the IS table writer stores as NULL, so fall back to the status text."""
+    if not isinstance(test, dict):
+        return None
+    if test.get("conforms") is not None:
+        return bool(test["conforms"])
+    return _addon_ok(test.get("status"))
+
+
+def json_verdicts(results: Any) -> dict[Optional[str], tuple[Optional[bool], Optional[bool]]]:
+    """(purity_ok, identity_ok) per analyte name from coa_data.results; key None
+    holds a single-peptide COA's flat purity/identity."""
+    results = _json(results) or {}
+    if not isinstance(results, dict):
+        return {}
+    out: dict[Optional[str], tuple[Optional[bool], Optional[bool]]] = {
+        None: (_verdict(results.get("purity")), _verdict(results.get("identity")))
+    }
+    for a in results.get("analytes") or []:
+        if isinstance(a, dict):
+            out[a.get("name")] = (_verdict(a.get("purity")), _verdict(a.get("identity")))
+    return out
+
+
 def _identity(rows: list[dict]) -> Optional[bool]:
     vals = [r["identity_conforms"] for r in rows if r["identity_conforms"] is not None]
     return all(vals) if vals else None
@@ -137,15 +161,22 @@ def build_coa_records(rows: list[tuple]) -> list[dict]:
     for row in rows:
         (code, sample_id, published_at, product, is_blend, sample_type, lot,
          analyte, is_overall, purity, purity_ok, purity_spec, identity_ok,
-         qty, qty_unit, overall, declared, addons, native, is_generic) = row
+         qty, qty_unit, overall, declared, results, native) = row
+        results = _json(results) if results is not None else None
+        results = results if isinstance(results, dict) else {}
+        jp, ji = json_verdicts(results).get(
+            analyte if results.get("analytes") else None, (None, None))
         by_code.setdefault(code, []).append({
             "sample_id": sample_id, "published_at": published_at, "product": product,
             "is_blend": bool(is_blend), "sample_type": sample_type, "lot": lot,
             "analyte": analyte, "is_overall": bool(is_overall),
-            "purity": purity, "purity_ok": purity_ok, "purity_spec": purity_spec,
-            "identity_conforms": identity_ok, "qty": qty, "qty_unit": qty_unit,
-            "overall": overall, "declared": declared, "addons": addons,
-            "native": native, "is_generic": bool(is_generic),
+            "purity": purity,
+            "purity_ok": purity_ok if purity_ok is not None else jp,
+            "purity_spec": purity_spec,
+            "identity_conforms": identity_ok if identity_ok is not None else ji,
+            "qty": qty, "qty_unit": qty_unit,
+            "overall": overall, "declared": declared, "addons": results.get("addons"),
+            "native": native, "is_generic": "tests" in results,
         })
 
     records = []
