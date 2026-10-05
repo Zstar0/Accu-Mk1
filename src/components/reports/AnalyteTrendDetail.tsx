@@ -44,6 +44,8 @@ const TICK = '#9ca3af'
 const PASS = '#34d399'
 const FAIL = '#f87171'
 const OTHER = '#fbbf24'
+// Qty has no pass/fail spec (MEASURE): out-of-band gets its own colour, never "failed".
+const OUTSIDE = '#a78bfa'
 
 function accuverifyUrl(code: string): string {
   return `${getWordpressUrl()}/accuverify/?accuverify_code=${encodeURIComponent(code)}`
@@ -117,10 +119,18 @@ interface Point {
   coa: AnalyteTrendCoa
   /** Did THIS metric fail (red), or did the COA fail on something else (amber)? */
   ownOk: Outcome
+  /** Quantity only: outside the ±QTY_FLAG_PCT band. */
+  outside?: boolean
 }
 
 const pointColor = (p: Point) =>
-  p.ownOk === false ? FAIL : isFailed(p.coa) ? OTHER : PASS
+  p.outside
+    ? OUTSIDE
+    : p.ownOk === false
+      ? FAIL
+      : isFailed(p.coa)
+        ? OTHER
+        : PASS
 
 function DayTooltip({
   active,
@@ -319,7 +329,7 @@ function TrendChart({
   )
 }
 
-function Legend() {
+function Legend({ qty }: { qty: boolean }) {
   const dot = (c: string) => (
     <span
       className="h-2 w-2 rounded-full inline-block"
@@ -337,6 +347,11 @@ function Legend() {
       <span className="inline-flex items-center gap-1.5">
         {dot(OTHER)} COA failed on another test
       </span>
+      {qty && (
+        <span className="inline-flex items-center gap-1.5">
+          {dot(OUTSIDE)} Qty outside ±{QTY_FLAG_PCT}%
+        </span>
+      )}
     </div>
   )
 }
@@ -417,7 +432,15 @@ export function AnalyteTrendDetail({
   const qtyPoints: Point[] = chartSource.flatMap(c => {
     const d = qtyDeltaPct(c)
     return d != null && !Number.isNaN(ts(c))
-      ? [{ t: ts(c), y: d, coa: c, ownOk: Math.abs(d) <= QTY_FLAG_PCT }]
+      ? [
+          {
+            t: ts(c),
+            y: d,
+            coa: c,
+            ownOk: null,
+            outside: Math.abs(d) > QTY_FLAG_PCT,
+          },
+        ]
       : []
   })
 
@@ -525,7 +548,7 @@ export function AnalyteTrendDetail({
           </button>
         ))}
         <div className="flex-1" />
-        <Legend />
+        <Legend qty={!generic} />
       </div>
 
       {generic ? (

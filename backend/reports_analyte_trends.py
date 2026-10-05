@@ -45,12 +45,30 @@ ANALYTE_TRENDS_SQL = """
 # declared mass and gets no discrepancy.
 _MASS_UNITS = {"mg", "mg/ml"}
 
-_ADDON_KINDS = (("endotoxin", "endo"), ("sterility", "sterility"), ("heavy metal", "hm"))
+# Section titles are authored per catalog profile, so match the common names
+# (USP <232> calls heavy metals "Elemental Impurities") and fall back to the
+# profile key (e.g. "hm", "endotoxin", "sterility_pcr").
+_ADDON_KINDS = (
+    ("endotoxin", "endo"),
+    ("sterility", "sterility"),
+    ("heavy metal", "hm"),
+    ("elemental impurit", "hm"),
+)
+_HM_KEY = re.compile(r"(^|[_\-\s])hm([_\-\s]|$)", re.IGNORECASE)
 
 
 def _kind(name: str) -> Optional[str]:
     n = (name or "").lower()
     return next((k for needle, k in _ADDON_KINDS if needle in n), None)
+
+
+def _section_kind(sec: dict) -> Optional[str]:
+    key = str(sec.get("profile_key") or "")
+    return (
+        _kind(sec.get("title", ""))
+        or _kind(key.replace("_", " "))
+        or ("hm" if _HM_KEY.search(key) else None)
+    )
 
 
 def _and(a: Optional[bool], b: Optional[bool]) -> Optional[bool]:
@@ -92,7 +110,7 @@ def addon_verdicts(addons: Any, native_sections: Any) -> dict[str, Optional[bool
         if isinstance(a, dict) and (k := _kind(a.get("test_name", ""))):
             out[k] = _and(out[k], _addon_ok(a.get("status")))
     for sec in _json(native_sections) or []:
-        if isinstance(sec, dict) and (k := _kind(sec.get("title", ""))):
+        if isinstance(sec, dict) and (k := _section_kind(sec)):
             out[k] = _and(out[k], _section_ok(sec.get("rows") or []))
     return out
 

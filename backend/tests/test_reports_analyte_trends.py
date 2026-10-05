@@ -74,6 +74,10 @@ def test_native_sections_heavy_metals_and_sterility():
     ]
     assert addon_verdicts(None, native) == {"endo": None, "sterility": True, "hm": False}
     assert addon_verdicts([{"test_name": "Endotoxin (LAL)", "status": ""}], "[]")["endo"] is None
+    # Titles are catalog-authored: fall back to the USP name and the profile key.
+    assert addon_verdicts(None, [{"title": "Elemental Impurities", "rows": [{"conforms": True}]}])["hm"] is True
+    assert addon_verdicts(None, [{"title": "ICP-MS", "profile_key": "hm", "rows": [{"conforms": False}]}])["hm"] is False
+    assert addon_verdicts(None, [{"title": "Micro", "profile_key": "sterility_pcr", "rows": [{"conforms": True}]}])["sterility"] is True
 
 
 def test_parse_mass_mg():
@@ -81,3 +85,59 @@ def test_parse_mass_mg():
     assert parse_mass_mg("12") == 12.0
     assert parse_mass_mg("20 mL") is None
     assert parse_mass_mg(None) is None
+
+
+class _FakeConn:
+    def __init__(self, rows):
+        self.rows = rows
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *_a):
+        return False
+
+    def cursor(self):
+        return self
+
+    def execute(self, *_a, **_k):
+        pass
+
+    def fetchall(self):
+        return self.rows
+
+
+def test_route_serializes_every_field(monkeypatch):
+    """response_model drops undeclared keys silently; prove the wire carries them."""
+    from unittest.mock import MagicMock
+
+    from fastapi.testclient import TestClient
+
+    import main as main_module
+    import scheduled_publish
+    from auth import get_current_user
+    from database import get_db
+
+    rows = [
+        row("A", "5-Amino-1MQ", purity=99.1, purity_ok=True, identity=True, qty=9.8,
+            status="FAILED", declared="10.0 mg",
+            addons=[{"test_name": "Endotoxin (LAL)", "status": "DOES NOT CONFORM"}],
+            native=[{"title": "Heavy Metals", "rows": [{"conforms": True}]}]),
+        row("W", "pH Determination", product="Bacteriostatic Water", qty=5.5,
+            purity_ok=True, unit="pH", generic=True),
+    ]
+    monkeypatch.setattr(main_module, "get_integration_db", lambda: _FakeConn(rows))
+    monkeypatch.setattr(scheduled_publish, "lab_tz", lambda _db: "America/Los_Angeles")
+    app = main_module.app
+    app.dependency_overrides[get_current_user] = lambda: MagicMock(id=1)
+    app.dependency_overrides[get_db] = lambda: None
+    try:
+        body = TestClient(app).get("/reports/analyte-trends").json()
+    finally:
+        app.dependency_overrides.pop(get_current_user, None)
+        app.dependency_overrides.pop(get_db, None)
+
+    assert body["tz"] == "America/Los_Angeles"
+    a, w = body["coas"]
+    assert (a["endo"], a["hm"], a["qty_declared"], a["overall"]) == (False, True, 10.0, "FAILED")
+    assert w["tests"] == [{"name": "pH Determination", "value": 5.5, "unit": "pH", "ok": True, "spec": None}]
