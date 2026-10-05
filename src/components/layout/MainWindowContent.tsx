@@ -21,7 +21,7 @@ import { ReceiveSample } from '@/components/intake/ReceiveSample'
 import { ActiveBoxesPage } from '@/components/intake/ActiveBoxesPage'
 import { UserManagement } from '@/components/auth/UserManagement'
 import { ProfilePage } from '@/components/auth/ProfilePage'
-import { ReportsDashboard } from '@/components/reports/ReportsDashboard'
+import { AnalyteTrends } from '@/components/reports/AnalyteTrends'
 import { DocumentsPage } from '@/components/documents/DocumentsPage'
 import { ReportsSyncDebug } from '@/components/reports/ReportsSyncDebug'
 import { CheckInTimesReport } from '@/components/reports/CheckInTimesReport'
@@ -91,7 +91,7 @@ export function MainWindowContent({
         if (activeSubSection === 'sla-performance')
           return <SlaPerformanceReport />
         if (activeSubSection === 'bottlenecks') return <TurnaroundReport />
-        return <ReportsDashboard />
+        return <AnalyteTrends />
       case 'accumark-tools':
         if (activeSubSection === 'chromatographs')
           return <ChromatographViewer />

@@ -6505,56 +6505,52 @@ export async function createWorksheetFromDrop(
 
 // ── Reports API ─────────────────────────────────────────────────
 
-export interface ReportsSummary {
-  total_peptides: number
-  total_coas: number
-  conforming: number
-  non_conforming: number
+export interface AnalyteTrendTest {
+  name: string
+  value: number | null
+  unit: string
+  ok: boolean | null
+  spec: string | null
 }
 
-export interface PeptideCard {
-  analyte_name: string
-  is_blend: boolean
-  total_coas: number
-  additional_coas: number
-  conforming: number
-  non_conforming: number
-  most_recent_code: string | null
-  most_recent_sample: string | null
-  most_recent_status: string | null
-  most_recent_date: string | null
-  most_recent_lot: string | null
-}
-
-export interface ReportsDashboard {
-  summary: ReportsSummary
-  peptides: PeptideCard[]
-  blends: PeptideCard[]
-}
-
-export interface PurityTrendPoint {
-  date: string
-  purity_percent: number
+/** One published PRIMARY COA (Additional copies and superseded COAs excluded). */
+export interface AnalyteTrendCoa {
+  code: string
   sample_id: string
-  verification_code: string
-  conforms: boolean | null
+  /** ISO timestamp (UTC). Format in the lab zone, never by slicing the string. */
+  published_at: string | null
+  product: string
+  is_blend: boolean
+  matrix: string | null
+  lot: string | null
+  /** COA verdict: PASSED / FAILED. */
+  overall: string
+  purity: number | null
+  purity_ok: boolean | null
+  purity_spec: string | null
+  identity_ok: boolean | null
+  /** Measured mass, mg. */
+  qty: number | null
+  /** Declared mass from the order, mg (null when unknown). */
+  qty_declared: number | null
+  /** null = not tested. */
+  endo: boolean | null
+  sterility: boolean | null
+  hm: boolean | null
+  /** Non-peptide matrices (bac water): one entry per assay. */
+  tests: AnalyteTrendTest[]
 }
 
-export async function getReportsDashboard(): Promise<ReportsDashboard> {
-  const response = await fetch(`${API_BASE_URL()}/reports/dashboard`, {
+export interface AnalyteTrendsResponse {
+  tz: string
+  coas: AnalyteTrendCoa[]
+}
+
+export async function getAnalyteTrends(): Promise<AnalyteTrendsResponse> {
+  const response = await fetch(`${API_BASE_URL()}/reports/analyte-trends`, {
     headers: getBearerHeaders(),
   })
-  if (!response.ok) throw new Error(`Reports dashboard failed: ${response.status}`)
-  return response.json()
-}
-
-export async function getReportsPurityTrend(analyteName: string, isBlend = false): Promise<PurityTrendPoint[]> {
-  const params = isBlend ? '?is_blend=true' : ''
-  const response = await fetch(
-    `${API_BASE_URL()}/reports/purity-trend/${encodeURIComponent(analyteName)}${params}`,
-    { headers: getBearerHeaders() }
-  )
-  if (!response.ok) throw new Error(`Purity trend failed: ${response.status}`)
+  if (!response.ok) throw new Error(`Analyte trends failed: ${response.status}`)
   return response.json()
 }
 

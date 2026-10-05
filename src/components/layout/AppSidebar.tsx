@@ -119,7 +119,7 @@ const navItems: NavItem[] = [
     label: 'Reports',
     icon: Activity,
     subItems: [
-      { id: 'dashboard', label: 'Dashboard' },
+      { id: 'dashboard', label: 'Analyte Trends' },
       { id: 'checkin-times', label: 'Check-In Times' },
       { id: 'ready-to-publish', label: 'Ready to Publish' },
       { id: 'scheduled-publishes', label: 'Scheduled Publishes' },
