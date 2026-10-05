@@ -653,3 +653,8 @@ and PR. Deploy follows the `accumark-deploy` skill; boards need no env change.
   drawn manager to report. Retyping a line into or out of `reports_to` swaps the stored ends,
   which `PATCH edge` cannot do, so the new edge is created first and the old one deleted. A
   line-kind picker (related, reports to, depends on, next) shows for exactly one selected line.
+- Slice 4c (person cards, PR #277): users gain an optional job `title` (100 chars; Profile page and
+  the admin user flyout; `/auth/directory` and `/worksheets/users` carry it). `PersonData` gains
+  `show` (`name` | `email`, default `name`) and `show_title` (default true); the card renders the
+  chosen line with the title under it, and the side panel offers both controls to editors. Rows
+  stored before these keys exist read with the defaults.
