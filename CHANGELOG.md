@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+### Fixed
+- A SENAITE-born sample with a retested line (e.g. bac water) no longer sticks at Ready to verify after it is verified and published. The workflow engine now ignores the old retested copy of a line and uses the furthest-along live copy.
+
 ## v1.32.1 - 2026-10-05
 
 ### Changed
