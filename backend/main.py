@@ -10225,6 +10225,59 @@ async def reports_purity_trend(
         raise HTTPException(status_code=503, detail=f"Reports database error: {e}")
 
 
+class AnalyteTrendTest(BaseModel):
+    name: str
+    value: Optional[float] = None
+    unit: str = ""
+    ok: Optional[bool] = None
+    spec: Optional[str] = None
+
+
+class AnalyteTrendCoa(BaseModel):
+    code: str
+    sample_id: str
+    published_at: Optional[str] = None
+    product: str
+    is_blend: bool
+    matrix: Optional[str] = None
+    lot: Optional[str] = None
+    overall: str
+    purity: Optional[float] = None
+    purity_ok: Optional[bool] = None
+    purity_spec: Optional[str] = None
+    identity_ok: Optional[bool] = None
+    qty: Optional[float] = None
+    qty_declared: Optional[float] = None
+    endo: Optional[bool] = None
+    sterility: Optional[bool] = None
+    hm: Optional[bool] = None
+    tests: list[AnalyteTrendTest] = []
+
+
+class AnalyteTrendsResponse(BaseModel):
+    tz: str
+    coas: list[AnalyteTrendCoa]
+
+
+@app.get("/reports/analyte-trends", response_model=AnalyteTrendsResponse)
+async def reports_analyte_trends(
+    db: Session = Depends(get_db),
+    _current_user=Depends(get_current_user),
+):
+    """Every published primary COA, one record each, for the Analyte Trends report."""
+    import scheduled_publish as _sp
+    from reports_analyte_trends import ANALYTE_TRENDS_SQL, build_coa_records
+
+    try:
+        with get_integration_db() as conn:
+            with conn.cursor() as cur:
+                cur.execute(ANALYTE_TRENDS_SQL)
+                rows = cur.fetchall()
+    except Exception as e:
+        raise HTTPException(status_code=503, detail=f"Reports database error: {e}")
+    return AnalyteTrendsResponse(tz=_sp.lab_tz(db), coas=build_coa_records(rows))
+
+
 class CheckInRecord(BaseModel):
     sample_id: str
     sample_uid: str
