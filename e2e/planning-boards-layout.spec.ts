@@ -91,6 +91,7 @@ async function open(page: Page) {
 let boss = 0
 let reportA = 0
 let reportB = 0
+let bossUserId = 0
 const SEED = [
   { x: 300, y: 60 },
   { x: 80, y: 300 },
@@ -112,8 +113,16 @@ test('seed an org board through the API', async ({ request }) => {
 
   const users = (await (
     await request.get(`${BACKEND_URL}/worksheets/users`, { headers: h })
-  ).json()) as { id: number }[]
+  ).json()) as {
+    id: number
+    first_name?: string | null
+    last_name?: string | null
+  }[]
   expect(users.length).toBeGreaterThan(0)
+  // The manager is a user with both names when the stack has one, so the person-card test
+  // can tell the name line from the email line.
+  const named = users.find(u => u.first_name && u.last_name) ?? users[0]
+  const pick = [named, ...users.filter(u => u !== named)]
   const ids: number[] = []
   for (const [i, at] of SEED.entries()) {
     const r = await request.post(`${BACKEND_URL}/api/boards/${SLUG}/nodes`, {
@@ -122,13 +131,14 @@ test('seed an org board through the API', async ({ request }) => {
         kind: 'person',
         label: `Person ${i + 1}`,
         ...at,
-        data: { user_id: users[i % users.length]?.id },
+        data: { user_id: pick[i % pick.length]?.id },
       },
     })
     expect(r.status(), await r.text()).toBe(201)
     ids.push(((await r.json()) as { id: number }).id)
   }
   ;[boss, reportA, reportB] = ids as [number, number, number]
+  bossUserId = named?.id ?? 0
 
   // Stored as "report reports_to manager".
   const e = await request.post(`${BACKEND_URL}/api/boards/${SLUG}/edges`, {
@@ -187,7 +197,10 @@ test('Layout puts the manager above the reports, and Undo puts everything back',
   const after = xy((await detail(request)).nodes)
   record('layout', { before, after })
   expect(after[boss]!.y).toBeLessThan(after[reportA]!.y)
-  expect(after[reportA]!.y).toBe(after[reportB]!.y)
+  // Same rank: dagre aligns rank centres, and a card showing a title is a line taller.
+  expect(Math.abs(after[reportA]!.y - after[reportB]!.y)).toBeLessThanOrEqual(
+    20
+  )
   expect(after[reportA]!.x).not.toBe(after[reportB]!.x)
   await shot(page, '02-org-board-after-layout.png')
 
@@ -232,4 +245,71 @@ test('the kind picker retypes a line and keeps it drawn the same way', async ({
   const related = edges.find(e => e.kind === 'related')
   expect(related?.source_id).toBe(boss)
   expect([reportA, reportB]).toContain(related?.target_id)
+})
+
+test('a person card shows the job title, and can show the email instead', async ({
+  page,
+  request,
+}) => {
+  const h = bearer(await token(request))
+  const title = `Lab Director ${RUN}`
+  const was = (await (
+    await request.get(`${BACKEND_URL}/auth/users/${bossUserId}`, { headers: h })
+  ).json()) as { title?: string | null }
+  const r = await request.put(`${BACKEND_URL}/auth/users/${bossUserId}`, {
+    headers: h,
+    data: { title },
+  })
+  expect(r.status(), await r.text()).toBe(200)
+  const users = (await (
+    await request.get(`${BACKEND_URL}/worksheets/users`, { headers: h })
+  ).json()) as {
+    id: number
+    email: string
+    first_name?: string | null
+    last_name?: string | null
+    title: string | null
+  }[]
+  const bossUser = users.find(u => u.id === bossUserId)
+  if (!bossUser) throw new Error('manager user not in the directory')
+  expect(bossUser.title).toBe(title)
+  // The name line falls back to the email on a user with no names (same rule as the app).
+  const nameLine =
+    [bossUser.first_name, bossUser.last_name].filter(Boolean).join(' ') ||
+    bossUser.email
+  record('person_name_line', { nameLine, email: bossUser.email })
+
+  await open(page)
+  const card = page.locator(`.react-flow__node[data-id="${boss}"]`)
+  await expect(card).toContainText(title)
+  await expect(card).toContainText(nameLine)
+  if (nameLine !== bossUser.email)
+    await expect(card).not.toContainText(bossUser.email)
+  await shot(page, '04-person-card-title.png')
+
+  // Select the card: the side panel offers Name / Email and the title switch.
+  await card.click({ position: { x: 12, y: 12 } })
+  await page.getByRole('radio', { name: 'Email' }).click()
+  await expect(card).toContainText(bossUser.email, { timeout: 10_000 })
+  if (nameLine !== bossUser.email)
+    await expect(card).not.toContainText(nameLine, { timeout: 10_000 })
+  await page.getByRole('switch', { name: 'Show title' }).click()
+  await expect(card).not.toContainText(title, { timeout: 10_000 })
+  const node = (await detail(request)).nodes.find(n => n.id === boss) as
+    | (NodeRow & { data: Record<string, unknown> })
+    | undefined
+  record('person_display', node?.data)
+  expect(node?.data).toEqual({
+    user_id: bossUserId,
+    show: 'email',
+    show_title: false,
+  })
+  await shot(page, '05-person-card-email.png')
+
+  // Leave the shared stack user as it was (empty string clears the title).
+  const back = await request.put(`${BACKEND_URL}/auth/users/${bossUserId}`, {
+    headers: h,
+    data: { title: was.title ?? '' },
+  })
+  expect(back.status()).toBe(200)
 })

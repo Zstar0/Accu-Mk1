@@ -1,76 +1,85 @@
 {
-  "run": "67k3",
+  "run": "8zpw",
   "seed": {
-    "slug": "org-67k3",
-    "boss": 84,
-    "reportA": 85,
-    "reportB": 86
+    "slug": "org-8zpw",
+    "boss": 93,
+    "reportA": 94,
+    "reportB": 95
   },
   "drawn_edge": [
     {
-      "id": 25,
-      "board_id": 32,
-      "source_id": 85,
-      "target_id": 84,
+      "id": 33,
+      "board_id": 35,
+      "source_id": 94,
+      "target_id": 93,
       "kind": "reports_to",
       "label": null
     },
     {
-      "id": 26,
-      "board_id": 32,
-      "source_id": 86,
-      "target_id": 84,
+      "id": 34,
+      "board_id": 35,
+      "source_id": 95,
+      "target_id": 93,
       "kind": "reports_to",
       "label": null
     }
   ],
   "layout": {
     "before": {
-      "84": {
+      "93": {
         "x": 300,
         "y": 60
       },
-      "85": {
+      "94": {
         "x": 80,
         "y": 300
       },
-      "86": {
+      "95": {
         "x": 420,
         "y": 220
       }
     },
     "after": {
-      "84": {
-        "x": 244,
+      "93": {
+        "x": 268,
         "y": 60
       },
-      "85": {
-        "x": 346,
+      "94": {
+        "x": 350,
         "y": 156
       },
-      "86": {
+      "95": {
         "x": 80,
-        "y": 156
+        "y": 159
       }
     }
   },
   "layout_undone": true,
   "retyped_edges": [
     {
-      "id": 26,
-      "board_id": 32,
-      "source_id": 86,
-      "target_id": 84,
+      "id": 34,
+      "board_id": 35,
+      "source_id": 95,
+      "target_id": 93,
       "kind": "reports_to",
       "label": null
     },
     {
-      "id": 27,
-      "board_id": 32,
-      "source_id": 84,
-      "target_id": 85,
+      "id": 35,
+      "board_id": 35,
+      "source_id": 93,
+      "target_id": 94,
       "kind": "related",
       "label": null
     }
-  ]
+  ],
+  "person_name_line": {
+    "nameLine": "Stack Dev",
+    "email": "stackdev@accumark.local"
+  },
+  "person_display": {
+    "show": "email",
+    "user_id": 166,
+    "show_title": false
+  }
 }
