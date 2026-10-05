@@ -149,6 +149,13 @@ def test_admin_update_sets_title(client_as, db, user):
             app.dependency_overrides[auth.require_admin] = prev
 
 
+def test_title_longer_than_the_column_is_a_422(client_as, db, user):
+    r = client_as.patch("/auth/me", json={"title": "x" * 101})
+    assert r.status_code == 422
+    db.refresh(user)
+    assert user.title is None
+
+
 def test_title_reaches_me_directory_and_worksheets_users(client_as, db, user):
     user.title = "Lab Director"; db.commit()
     assert client_as.get("/auth/me").json()["title"] == "Lab Director"

@@ -67,6 +67,14 @@ describe('UserEditFlyout', () => {
     expect(updateUser).toHaveBeenCalledWith(7, { title: 'QA Lead' })
   })
 
+  it('clearing the title sends an empty string, which the route stores as null', async () => {
+    updateUser.mockResolvedValue({ ...baseUser, title: null })
+    await renderFlyout()
+    await userEvent.clear(screen.getByLabelText('Title'))
+    await userEvent.click(screen.getByRole('button', { name: /save changes/i }))
+    expect(updateUser).toHaveBeenCalledWith(7, { title: '' })
+  })
+
   it('saves only changed fields and calls onSaved', async () => {
     updateUser.mockResolvedValue({ ...baseUser, first_name: 'Janet' })
     const { onSaved } = await renderFlyout()

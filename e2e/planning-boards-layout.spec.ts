@@ -253,63 +253,68 @@ test('a person card shows the job title, and can show the email instead', async 
 }) => {
   const h = bearer(await token(request))
   const title = `Lab Director ${RUN}`
-  const was = (await (
-    await request.get(`${BACKEND_URL}/auth/users/${bossUserId}`, { headers: h })
-  ).json()) as { title?: string | null }
+  const list = await request.get(`${BACKEND_URL}/auth/users`, { headers: h })
+  expect(list.ok(), await list.text()).toBeTruthy()
+  const was = (
+    (await list.json()) as { id: number; title?: string | null }[]
+  ).find(u => u.id === bossUserId)
+  if (!was) throw new Error('manager user not in the admin list')
   const r = await request.put(`${BACKEND_URL}/auth/users/${bossUserId}`, {
     headers: h,
     data: { title },
   })
   expect(r.status(), await r.text()).toBe(200)
-  const users = (await (
-    await request.get(`${BACKEND_URL}/worksheets/users`, { headers: h })
-  ).json()) as {
-    id: number
-    email: string
-    first_name?: string | null
-    last_name?: string | null
-    title: string | null
-  }[]
-  const bossUser = users.find(u => u.id === bossUserId)
-  if (!bossUser) throw new Error('manager user not in the directory')
-  expect(bossUser.title).toBe(title)
-  // The name line falls back to the email on a user with no names (same rule as the app).
-  const nameLine =
-    [bossUser.first_name, bossUser.last_name].filter(Boolean).join(' ') ||
-    bossUser.email
-  record('person_name_line', { nameLine, email: bossUser.email })
+  try {
+    const users = (await (
+      await request.get(`${BACKEND_URL}/worksheets/users`, { headers: h })
+    ).json()) as {
+      id: number
+      email: string
+      first_name?: string | null
+      last_name?: string | null
+      title: string | null
+    }[]
+    const bossUser = users.find(u => u.id === bossUserId)
+    if (!bossUser) throw new Error('manager user not in the directory')
+    expect(bossUser.title).toBe(title)
+    // The name line falls back to the email on a user with no names (same rule as the app).
+    const nameLine =
+      [bossUser.first_name, bossUser.last_name].filter(Boolean).join(' ') ||
+      bossUser.email
+    record('person_name_line', { nameLine, email: bossUser.email })
 
-  await open(page)
-  const card = page.locator(`.react-flow__node[data-id="${boss}"]`)
-  await expect(card).toContainText(title)
-  await expect(card).toContainText(nameLine)
-  if (nameLine !== bossUser.email)
-    await expect(card).not.toContainText(bossUser.email)
-  await shot(page, '04-person-card-title.png')
+    await open(page)
+    const card = page.locator(`.react-flow__node[data-id="${boss}"]`)
+    await expect(card).toContainText(title)
+    await expect(card).toContainText(nameLine)
+    if (nameLine !== bossUser.email)
+      await expect(card).not.toContainText(bossUser.email)
+    await shot(page, '04-person-card-title.png')
 
-  // Select the card: the side panel offers Name / Email and the title switch.
-  await card.click({ position: { x: 12, y: 12 } })
-  await page.getByRole('radio', { name: 'Email' }).click()
-  await expect(card).toContainText(bossUser.email, { timeout: 10_000 })
-  if (nameLine !== bossUser.email)
-    await expect(card).not.toContainText(nameLine, { timeout: 10_000 })
-  await page.getByRole('switch', { name: 'Show title' }).click()
-  await expect(card).not.toContainText(title, { timeout: 10_000 })
-  const node = (await detail(request)).nodes.find(n => n.id === boss) as
-    | (NodeRow & { data: Record<string, unknown> })
-    | undefined
-  record('person_display', node?.data)
-  expect(node?.data).toEqual({
-    user_id: bossUserId,
-    show: 'email',
-    show_title: false,
-  })
-  await shot(page, '05-person-card-email.png')
-
-  // Leave the shared stack user as it was (empty string clears the title).
-  const back = await request.put(`${BACKEND_URL}/auth/users/${bossUserId}`, {
-    headers: h,
-    data: { title: was.title ?? '' },
-  })
-  expect(back.status()).toBe(200)
+    // Select the card: the side panel offers Name / Email and the title switch.
+    await card.click({ position: { x: 12, y: 12 } })
+    await page.getByRole('radio', { name: 'Email' }).click()
+    await expect(card).toContainText(bossUser.email, { timeout: 10_000 })
+    if (nameLine !== bossUser.email)
+      await expect(card).not.toContainText(nameLine, { timeout: 10_000 })
+    await page.getByRole('switch', { name: 'Show title' }).click()
+    await expect(card).not.toContainText(title, { timeout: 10_000 })
+    const node = (await detail(request)).nodes.find(n => n.id === boss) as
+      | (NodeRow & { data: Record<string, unknown> })
+      | undefined
+    record('person_display', node?.data)
+    expect(node?.data).toEqual({
+      user_id: bossUserId,
+      show: 'email',
+      show_title: false,
+    })
+    await shot(page, '05-person-card-email.png')
+  } finally {
+    // Leave the shared stack user as it was (empty string clears the title).
+    const back = await request.put(`${BACKEND_URL}/auth/users/${bossUserId}`, {
+      headers: h,
+      data: { title: was.title ?? '' },
+    })
+    expect(back.status()).toBe(200)
+  }
 })

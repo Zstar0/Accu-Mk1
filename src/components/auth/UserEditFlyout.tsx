@@ -45,7 +45,8 @@ export function UserEditFlyout({
     patch.first_name = firstName.trim() || null
   if (lastName.trim() !== (user.last_name ?? ''))
     patch.last_name = lastName.trim() || null
-  if (title.trim() !== (user.title ?? '')) patch.title = title.trim() || null
+  // '' clears it: the route treats null as "not sent".
+  if (title.trim() !== (user.title ?? '')) patch.title = title.trim()
   if (emailTrim !== user.email) patch.email = emailTrim
   if (!isSelf && role !== user.role) patch.role = role
   if (!isSelf && isActive !== user.is_active) patch.is_active = isActive
@@ -115,6 +116,7 @@ export function UserEditFlyout({
               <Input
                 id="edit-title"
                 value={title}
+                maxLength={100}
                 onChange={e => setTitle(e.target.value)}
                 placeholder="Lab Director"
               />

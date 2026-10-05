@@ -15,7 +15,7 @@ import bcrypt
 from fastapi import Depends, Header, HTTPException, status
 from fastapi.security import OAuth2PasswordBearer
 from jose import JWTError, jwt
-from pydantic import BaseModel, EmailStr
+from pydantic import BaseModel, EmailStr, Field
 from sqlalchemy.orm import Session
 
 from database import get_db
@@ -77,12 +77,12 @@ class UserUpdate(BaseModel):
     is_active: Optional[bool] = None
     first_name: Optional[str] = None
     last_name: Optional[str] = None
-    title: Optional[str] = None
+    title: Optional[str] = Field(None, max_length=100)
 
 class MeUpdate(BaseModel):
     first_name: Optional[str] = None
     last_name: Optional[str] = None
-    title: Optional[str] = None
+    title: Optional[str] = Field(None, max_length=100)
 
 class PasswordChange(BaseModel):
     current_password: str

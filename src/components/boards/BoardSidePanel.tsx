@@ -208,6 +208,7 @@ function NodePanel({
         <PersonInfo
           node={node}
           canEdit={canEdit}
+          pending={patch.isPending}
           onSave={data =>
             patch.mutate({ id: node.id, data: { version: node.version, data } })
           }
@@ -354,10 +355,12 @@ function DeepLinkButton({
 function PersonInfo({
   node,
   canEdit,
+  pending,
   onSave,
 }: {
   node: BoardNode
   canEdit: boolean
+  pending: boolean
   onSave: (data: PersonNodeData) => void
 }) {
   const directory = useDirectoryUsers()
@@ -381,7 +384,8 @@ function PersonInfo({
           `user ${d.user_id}`
         )}
       </div>
-      {canEdit && (
+      {/* No controls for a user the directory no longer lists: the save would be refused. */}
+      {canEdit && u && (
         <>
           <div className="grid gap-1">
             <Label className="text-xs">Show</Label>
@@ -391,6 +395,7 @@ function PersonInfo({
               variant="outline"
               aria-label="Show"
               value={show}
+              disabled={pending}
               onValueChange={v => v && save({ show: v as 'name' | 'email' })}
             >
               <ToggleGroupItem value="name" className="flex-none px-3">
@@ -405,6 +410,7 @@ function PersonInfo({
             <Switch
               id={`show-title-${node.id}`}
               checked={showTitle}
+              disabled={pending}
               onCheckedChange={v => save({ show_title: v })}
             />
             <Label htmlFor={`show-title-${node.id}`} className="text-xs">

@@ -56,7 +56,12 @@ function NameSection() {
     e.preventDefault()
     setSavingName(true)
     try {
-      await updateMe({ first_name: firstName, last_name: lastName, title })
+      await updateMe({
+        first_name: firstName,
+        last_name: lastName,
+        // Only when edited here: an admin may have set it since this session loaded.
+        ...(title !== (user?.title ?? '') ? { title } : {}),
+      })
       toast.success('Name updated')
     } catch (err) {
       toast.error(err instanceof Error ? err.message : 'Failed to update name')
@@ -99,6 +104,7 @@ function NameSection() {
             <Input
               id="title"
               value={title}
+              maxLength={100}
               onChange={e => setTitle(e.target.value)}
               placeholder="Lab Director"
             />
