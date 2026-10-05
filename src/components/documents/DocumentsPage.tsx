@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from 'react'
 import type { ColumnDef } from '@tanstack/react-table'
 import { useQuery } from '@tanstack/react-query'
 import {
+  FilePlus2,
   FileText,
   Loader2,
   MessageSquare,
@@ -18,11 +19,13 @@ import {
   SelectTrigger,
   SelectValue,
 } from '@/components/ui/select'
+import { useAuthStore } from '@/store/auth-store'
 import { useUIStore } from '@/store/ui-store'
 import { flagKeys } from '@/hooks/use-flags'
 import { listFlags } from '@/lib/flags-api'
 import { useDocumentCategories, useDocuments } from '@/services/documents'
 import type { DocumentRow } from '@/lib/api-documents'
+import { NewDocumentDialog } from './NewDocumentDialog'
 import {
   DEFAULT_STATUSES,
   DOC_STATUS_LABEL,
@@ -76,6 +79,8 @@ export function DocumentsPage() {
 
 function DocumentsList() {
   const navigateToDocument = useUIStore(s => s.navigateToDocument)
+  const isAdmin = useAuthStore(s => s.user?.role === 'admin')
+  const [newOpen, setNewOpen] = useState(false)
   const [query, setQuery] = useState('')
   const [categoryId, setCategoryId] = useState<number | null>(null)
   const [statusFilter, setStatusFilter] = useState<StatusFilter>('live')
@@ -270,10 +275,21 @@ function DocumentsList() {
             Artifacts, SOPs and other controlled documents published to the lab.
           </p>
         </div>
-        {isFetching && !isLoading && (
-          <Loader2 className="h-4 w-4 animate-spin text-muted-foreground" />
-        )}
+        <div className="flex items-center gap-2">
+          {isFetching && !isLoading && (
+            <Loader2 className="h-4 w-4 animate-spin text-muted-foreground" />
+          )}
+          {isAdmin && (
+            <Button size="sm" onClick={() => setNewOpen(true)}>
+              <FilePlus2 className="mr-1 h-4 w-4" />
+              New document
+            </Button>
+          )}
+        </div>
       </div>
+      {isAdmin && (
+        <NewDocumentDialog open={newOpen} onOpenChange={setNewOpen} />
+      )}
 
       <div className="flex flex-wrap items-center gap-2">
         <Input
@@ -365,8 +381,9 @@ function DocumentsList() {
           <p className="text-sm">No documents match.</p>
           <p className="max-w-md text-xs">
             Documents are published by agents with the{' '}
-            <span className="font-mono">mk1-publish-document</span> skill. Clear
-            the search or widen the status filter to see more.
+            <span className="font-mono">mk1-publish-document</span> skill, or by
+            an admin with New document. Clear the search or widen the status
+            filter to see more.
           </p>
         </div>
       ) : (

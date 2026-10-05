@@ -116,6 +116,9 @@ interface UIState {
   // customerDetailTargetId; generic navigateTo clears it so the sidebar
   // entry always lands on the list.
   documentViewerTargetId: number | null
+  // One-shot: the viewer enters edit mode on arrival (New document dialog).
+  // Consumed by the viewer; any other navigation drops it.
+  documentViewerEditRequested: boolean
   customerListPage: number
   customerSearchTerm: string
   hideTestAccounts: boolean
@@ -160,6 +163,8 @@ interface UIState {
   navigateToPeptideRequest: (requestId: string) => void
   navigateToCustomer: (id: number) => void
   navigateToDocument: (id: number) => void
+  openDocumentForEditing: (id: number) => void
+  consumeDocumentEditRequest: () => void
   clearDocumentViewer: () => void
   navigateToCustomers: () => void
   /** Order Status with ONLY the Order ID text filter set (other text axes
@@ -272,6 +277,7 @@ export const useUIStore = create<UIState>()(
       peptideRequestTargetId: null,
       customerDetailTargetId: null,
       documentViewerTargetId: null,
+      documentViewerEditRequested: false,
       customerListPage: 0,
       customerSearchTerm: '',
       hideTestAccounts: true,
@@ -361,6 +367,7 @@ export const useUIStore = create<UIState>()(
             activeSection: section,
             activeSubSection: subSection,
             documentViewerTargetId: null,
+            documentViewerEditRequested: false,
             navigationKey: state.navigationKey + 1,
           }),
           undefined,
@@ -421,14 +428,39 @@ export const useUIStore = create<UIState>()(
             activeSection: 'reports',
             activeSubSection: 'documents',
             documentViewerTargetId: id,
+            documentViewerEditRequested: false,
             navigationKey: state.navigationKey + 1,
           }),
           undefined,
           'navigateToDocument'
         ),
 
+      openDocumentForEditing: id =>
+        set(
+          state => ({
+            activeSection: 'reports',
+            activeSubSection: 'documents',
+            documentViewerTargetId: id,
+            documentViewerEditRequested: true,
+            navigationKey: state.navigationKey + 1,
+          }),
+          undefined,
+          'openDocumentForEditing'
+        ),
+
+      consumeDocumentEditRequest: () =>
+        set(
+          { documentViewerEditRequested: false },
+          undefined,
+          'consumeDocumentEditRequest'
+        ),
+
       clearDocumentViewer: () =>
-        set({ documentViewerTargetId: null }, undefined, 'clearDocumentViewer'),
+        set(
+          { documentViewerTargetId: null, documentViewerEditRequested: false },
+          undefined,
+          'clearDocumentViewer'
+        ),
 
       navigateToSamplePrep: prepId =>
         set(

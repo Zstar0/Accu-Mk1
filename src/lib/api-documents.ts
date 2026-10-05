@@ -192,3 +192,20 @@ export function deleteDocumentCategory(id: number): Promise<void> {
     method: 'DELETE',
   })
 }
+
+export interface DocumentCreate {
+  title: string
+  html: string
+  category_id: number
+  description?: string | null
+  effective_date?: string | null
+  author?: string
+}
+
+/** A brand-new controlled document, born as a DRAFT; the server mints the code. */
+export function createDocument(body: DocumentCreate): Promise<DocumentRow> {
+  return apiFetch<DocumentRow>('/api/documents', {
+    method: 'POST',
+    body: JSON.stringify({ ...body, activate: false }),
+  })
+}
