@@ -365,3 +365,17 @@ def test_reverse_lookup_of_a_hidden_document_is_empty(client):
     client.as_user(OUTSIDER)
     r = client.get("/api/boards/for-entity", params=q)
     assert r.status_code == 200 and r.json() == []
+
+
+def test_board_node_flag_context_never_carries_a_pinned_document_title(client):
+    """The `board_node` flag closures have no viewer; an entity node on a view-scoped type
+    shows its code there (flag entity links, notifications), never the stored title."""
+    from flags import seams
+    doc = _secret_document(client.db)
+    client.as_user(ADMIN)
+    n = _node(client, kind="entity", label="", entity_type="document", entity_id=doc.code)
+    w = _node(client, kind="entity", label="", entity_type="worksheet", entity_id="1")
+    assert seams.resolve_context(client.db, "board_node", str(n["id"]))["label"] == f"Org > {doc.code}"
+    assert seams.resolve_contexts(client.db, "board_node", [str(n["id"])])[str(n["id"])]["label"] == f"Org > {doc.code}"
+    assert seams.get_entity_spec("board_node").label(client.db, str(n["id"])) == f"Org > {doc.code}"
+    assert seams.resolve_context(client.db, "board_node", str(w["id"]))["label"] == "Org > Worksheet 1"

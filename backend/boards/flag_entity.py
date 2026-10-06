@@ -29,15 +29,24 @@ def _load(db: Session, eid: str):
     return (row[0], row[1]) if row else (None, None)
 
 
+def _node_text(node) -> str:
+    """An `entity` node pointing at a view-scoped type (a document) stores the title its
+    pinner saw. These closures have no viewer, so they show the code instead (spec 9.3)."""
+    from flags.seams import is_view_scoped
+    if node.kind == "entity" and node.entity_id and is_view_scoped(node.entity_type):
+        return node.entity_id
+    return node.label
+
+
 def _ctx(node, board) -> dict:
-    return {"label": f"{board.name} > {node.label}", "sample_id": None, "analyses": [], "lot": None,
+    return {"label": f"{board.name} > {_node_text(node)}", "sample_id": None, "analyses": [], "lot": None,
             "deep_link": {"kind": "board_node", "id": f"{board.slug}:{node.id}"},
             "board_slug": board.slug, "node_kind": node.kind}
 
 
 def _label(db, eid) -> str:
     node, board = _load(db, eid)
-    return f"{board.name} > {node.label}" if node else DELETED_LABEL
+    return f"{board.name} > {_node_text(node)}" if node else DELETED_LABEL
 
 
 def _context(db, eid) -> Optional[dict]:
