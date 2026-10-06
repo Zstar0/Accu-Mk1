@@ -34,8 +34,10 @@ def customer_key(customer_id: int | None, email: str | None) -> str | None:
     return f"email:{e}" if e else None
 
 
-def is_excluded(key: str, *, exclude_launch: bool) -> bool:
+def is_excluded(key: str, *, exclude_launch: bool, email: str | None = None) -> bool:
     if key in INTERNAL_CUSTOMER_KEYS:
+        return True
+    if (email or "").strip().lower() in TEST_EMAILS:
         return True
     if key.startswith("email:") and key[6:] in TEST_EMAILS:
         return True

@@ -67,3 +67,9 @@ def test_resolve_period() -> None:
     start, end = rules.resolve_period(None, date(2026, 9, 1), date(2026, 9, 30), now, "America/Los_Angeles")
     assert start == datetime(2026, 9, 1, 7, tzinfo=timezone.utc)   # 00:00 PDT
     assert end == datetime(2026, 10, 1, 7, tzinfo=timezone.utc)    # end date inclusive
+
+
+def test_registered_test_account_excluded_by_email() -> None:
+    assert rules.is_excluded("wc:9", exclude_launch=False, email="Forrest@ValenceAnalytical.com ")
+    assert not rules.is_excluded("wc:9", exclude_launch=False, email="buyer@example.com")
+    assert not rules.is_excluded("wc:9", exclude_launch=False)

@@ -1,5 +1,6 @@
 # backend/tests/test_customer_insights_metrics.py
 from datetime import datetime, timedelta, timezone
+from dataclasses import replace
 from decimal import Decimal
 
 from customer_insights import metrics
@@ -172,3 +173,16 @@ def test_changes_feed_types() -> None:
     types = {(c["type"], c["customer_key"]) for c in metrics.changes(data, since=since, end=end, tz=TZ)}
     assert ("became_at_risk", "wc:1") in types
     assert ("first_reorder", "wc:2") in types
+
+
+def test_scope_drops_registered_test_account_by_email() -> None:
+    data = ds([o("wc:9", 0, "5000"), o("wc:1", 1, "100")])
+    customers = dict(data.customers)
+    customers["wc:9"] = Customer("wc:9", "T", "Forrest@ValenceAnalytical.com", None, 9)
+    data = replace(data, customers=customers)
+    scoped = metrics.scope(data, exclude_launch=False)
+    assert [x.customer_key for x in scoped.orders] == ["wc:1"]
+    assert set(scoped.customers) == {"wc:1"}
+    out = metrics.summary(scoped, start=T0 - timedelta(days=1), end=T0 + timedelta(days=100), tz=TZ)
+    assert out["kpis"]["active_customers"]["value"] == 1
+    assert out["kpis"]["revenue"]["value"] == "100.00"

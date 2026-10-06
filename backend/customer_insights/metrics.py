@@ -21,7 +21,11 @@ def money(d: Decimal) -> str:
 
 
 def scope(ds: Dataset, *, exclude_launch: bool) -> Dataset:
-    keep = [o for o in ds.orders if not rules.is_excluded(o.customer_key, exclude_launch=exclude_launch)]
+    def drop(key: str) -> bool:
+        c = ds.customers.get(key)
+        return rules.is_excluded(key, exclude_launch=exclude_launch, email=c.email if c else None)
+
+    keep = [o for o in ds.orders if not drop(o.customer_key)]
     keys = {o.customer_key for o in keep}
     return replace(ds, orders=tuple(keep), customers={k: c for k, c in ds.customers.items() if k in keys})
 
