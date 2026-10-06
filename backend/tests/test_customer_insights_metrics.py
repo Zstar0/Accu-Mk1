@@ -83,3 +83,37 @@ def test_concentration_pins_lifetime_values() -> None:
     assert c["repeat_share"] == 0.6667
     assert c["median_ltv"] == "100.00"
     assert c["mean_ltv"] == "200.00"
+
+
+def test_customer_rows_status_and_gap() -> None:
+    weekly = [o("wc:1", d, "100") for d in (0, 7, 14, 21)]
+    data = ds(weekly + [o("wc:2", 0, "125")])
+    end = T0 + timedelta(days=60)
+    rows = {r["key"]: r for r in metrics.customer_rows(data, start=end - timedelta(days=30), end=end, tz=TZ)}
+    assert rows["wc:1"]["status"] == "at_risk"
+    assert rows["wc:1"]["usual_gap_days"] == 7.0
+    assert rows["wc:1"]["top_tests"] == ["HPLC"]
+    assert rows["wc:2"]["status"] == "one_time"
+    assert rows["wc:2"]["usual_gap_days"] is None
+
+
+def test_new_customer_with_two_orders_is_not_at_risk_early() -> None:
+    data = ds([o("wc:9", 0), o("wc:9", 3)])
+    end = T0 + timedelta(days=20)
+    (row,) = metrics.customer_rows(data, start=None, end=end, tz=TZ)
+    assert row["status"] != "at_risk"   # 17 d since last < max(2*60, 21)
+
+
+def test_at_risk_sorted_by_12m_spend() -> None:
+    a = [o("wc:1", d, "100") for d in (0, 7, 14)]
+    b = [o("wc:2", d, "900") for d in (0, 7, 14)]
+    out = metrics.at_risk(ds(a + b), end=T0 + timedelta(days=200), tz=TZ)
+    assert [r["key"] for r in out] == ["wc:2", "wc:1"]
+    assert out[0]["spend_12m"] == "2700.00"
+
+
+def test_order_rows_window() -> None:
+    data = ds([o("wc:1", 0, oid=5, number="5"), o("wc:1", 50, oid=6, number="6")])
+    rows = metrics.order_rows(data, start=T0 + timedelta(days=10), end=T0 + timedelta(days=100))
+    assert [r["order_number"] for r in rows] == ["6"]
+    assert rows[0]["net"] == "100.00"

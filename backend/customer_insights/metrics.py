@@ -165,3 +165,63 @@ def cohorts(ds: Dataset, *, end: datetime, tz: str, max_months: int = 12) -> dic
             cells.append(round(sum(target in months_by_key[c] for c in members) / len(members), 4))
         rows.append({"cohort": cohort, "size": len(members), "cells": cells})
     return {"months": [f"M{k}" for k in range(1, max_months + 1)], "rows": rows}
+
+
+def _spend(orders: list[Order], start: datetime | None, end: datetime) -> Decimal:
+    return sum((o.net for o in orders if (start is None or o.paid_at >= start) and o.paid_at <= end), ZERO)
+
+
+def _by_customer(ds: Dataset, end: datetime) -> dict[str, list[Order]]:
+    out: dict[str, list[Order]] = defaultdict(list)
+    for x in ds.orders:
+        if x.paid_at <= end:
+            out[x.customer_key].append(x)
+    return out
+
+
+def customer_rows(ds: Dataset, *, start: datetime | None, end: datetime, tz: str) -> list[dict[str, Any]]:
+    rows = []
+    span = (end - start) if start else timedelta(days=90)
+    p_start = start or end - span
+    for key, orders in _by_customer(ds, end).items():
+        c = ds.customers.get(key)
+        dates = [x.paid_at for x in orders if x.is_testing]
+        period = _spend(orders, p_start, end)
+        prior = _spend(orders, p_start - span, p_start)
+        risk = rules.is_at_risk(dates, end)
+        monthly: dict[str, Decimal] = defaultdict(lambda: ZERO)
+        for x in orders:
+            monthly[rules.lab_month(x.paid_at, tz)] += x.net
+        tests = Counter(t for x in orders for t in x.tests)
+        rows.append({
+            "key": key, "name": c.name if c else key, "email": c.email if c else None,
+            "company": c.company if c else None,
+            "period_spend": money(period), "prior_spend": money(prior),
+            "delta_pct": round(float((period - prior) / prior), 4) if prior else None,
+            "lifetime": money(_spend(orders, None, end)), "orders": len(orders),
+            "samples": sum(x.samples for x in orders),
+            "usual_gap_days": round(rules.usual_gap_days(dates), 1) if len(dates) >= 3 else None,
+            "last_order_at": max(dates).isoformat() if dates else None,
+            "top_tests": [t for t, _ in tests.most_common(3)],
+            "status": rules.spend_status(paid_orders=len(orders), at_risk=risk, period=period, prior=prior),
+            "monthly": [{"month": m, "spend": money(v)} for m, v in sorted(monthly.items())],
+        })
+    return rows
+
+
+def at_risk(ds: Dataset, *, end: datetime, tz: str) -> list[dict[str, Any]]:
+    rows = [r for r in customer_rows(ds, start=end - timedelta(days=90), end=end, tz=tz) if r["status"] == "at_risk"]
+    by = _by_customer(ds, end)
+    for r in rows:
+        r["spend_12m"] = money(_spend(by[r["key"]], end - timedelta(days=365), end))
+        r["overdue"] = rules.overdue_ratio([x.paid_at for x in by[r["key"]] if x.is_testing], end)
+    return sorted(rows, key=lambda r: Decimal(r["spend_12m"]), reverse=True)
+
+
+def order_rows(ds: Dataset, *, start: datetime | None, end: datetime) -> list[dict[str, Any]]:
+    return [{
+        "customer_key": x.customer_key, "order_id": x.order_id, "order_number": x.order_number,
+        "paid_at": x.paid_at.isoformat(), "net": money(x.net), "discount": money(x.discount),
+        "coupons": list(x.coupons), "categories": list(x.categories), "samples": x.samples,
+        "tests": sorted(set(x.tests)),
+    } for x in _window(ds, start, end)]
