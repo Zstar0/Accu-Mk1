@@ -24,6 +24,7 @@ from documents.schemas import (CategoryCreate, CategoryOut, CategoryUpdate, Docu
                                SpaceCreate, SpaceGrantsOut, SpaceGrantsReplace, SpaceOut,
                                SpaceUpdate)
 from documents.storage import DocumentNotFound
+from groups.access import is_admin
 
 router = APIRouter(prefix="/api", tags=["documents"])
 logger = logging.getLogger(__name__)
@@ -35,7 +36,8 @@ _AGENT_NAME = re.compile(r"^[a-z0-9][a-z0-9_-]{0,39}$")
 _MIN_AGENT_TOKEN = 32
 
 
-_SLUG_LIST = re.compile(r"^[a-z0-9][a-z0-9-]{0,59}(\+[a-z0-9][a-z0-9-]{0,59})*$")
+_SLUG_ATOM = service.SPACE_SLUG_RE.pattern.lstrip("^").rstrip("$")
+_SLUG_LIST = re.compile(rf"^{_SLUG_ATOM}(\+{_SLUG_ATOM})*$")
 
 
 @dataclass(frozen=True)
@@ -267,7 +269,6 @@ def list_spaces(include_inactive: bool = False, db: Session = Depends(get_db),
         return [_space_out(sp, n, True) for sp, n in rows if sp.slug in who.spaces]
     if who is None:
         return [_space_out(sp, n, True) for sp, n in rows]
-    from groups.access import is_admin
     return [_space_out(sp, n, is_admin(who)) for sp, n in rows if access.can_view_space(db, who, sp)]
 
 
@@ -392,13 +393,19 @@ def create_document(req: DocumentCreate, response: Response, db: Session = Depen
             target = space if space is not None else service.general_space(db)
             if not agent_may_write(writer, target):
                 raise BadRequestError(f"space {target.slug!r} is not allowed for this agent")
+            if not target.is_active:
+                raise BadRequestError(f"space {target.slug!r} is inactive")
         doc, created = service.create_document(
             db, title=req.title, html=req.html, category=cat, description=req.description,
             code=req.code, author=req.author, source_session=req.source_session,
             effective_date=req.effective_date, activate=req.activate,
             user_id=getattr(writer, "id", None),
             co_author=writer.name if isinstance(writer, AgentWriter) else None,
-            space=space)
+            space=space,
+            # Re-checked under the row lock: the read above is unlocked, so a code minted
+            # into a hidden space in between must still read as missing.
+            may_revise=lambda d: _agent_may_see(writer, d) and access.can_view_document(
+                db, _reader_for(writer), d))
         n = service.revision_count(db, doc.code)
     except Exception as e:
         raise _http(e)
@@ -416,22 +423,24 @@ def patch_document(doc_id: int, req: DocumentPatch, db: Session = Depends(get_db
         doc = _gate_write(db, writer, doc_id)
         patch = req.model_dump(exclude_unset=True)
         move_to = patch.pop("space_id", None)
+        if move_to is not None and (writer is None or isinstance(writer, AgentWriter)):
+            raise HTTPException(status.HTTP_403_FORBIDDEN,
+                                "only an admin login can move a document between spaces")
+        if patch or move_to is None:
+            # The actor comes from the credential, never from the request body alone:
+            # an admin is their login; an agent is "<who it acted for> via <agent>".
+            if isinstance(writer, AgentWriter):
+                given = (patch.get("updated_by") or "").strip()[:150]
+                patch["updated_by"] = f"{given} via {writer.name}" if given else writer.name
+            elif writer is not None:
+                patch["updated_by"] = writer.email
+            doc = service.patch_document(db, doc_id, **patch)
         if move_to is not None:
-            if writer is None or isinstance(writer, AgentWriter):
-                raise HTTPException(status.HTTP_403_FORBIDDEN,
-                                    "only an admin login can move a document between spaces")
+            # Fields first, so a bad field blocks the whole request. They are two commits:
+            # if the move then fails (unknown or inactive space) the field patch stays
+            # applied and the client sees the move's error.
             service.move_document_space(db, doc.code, int(move_to), updated_by=writer.email)
-            if not patch:
-                doc = service.get_document(db, doc_id)
-                return _doc_out(doc, service.revision_count(db, doc.code))
-        # The actor comes from the credential, never from the request body alone:
-        # an admin is their login; an agent is "<who it acted for> via <agent>".
-        if isinstance(writer, AgentWriter):
-            given = (patch.get("updated_by") or "").strip()[:150]
-            patch["updated_by"] = f"{given} via {writer.name}" if given else writer.name
-        elif writer is not None:
-            patch["updated_by"] = writer.email
-        doc = service.patch_document(db, doc_id, **patch)
+            doc = service.get_document(db, doc_id)
         n = service.revision_count(db, doc.code)
     except Exception as e:
         raise _http(e)

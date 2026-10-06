@@ -13,14 +13,14 @@ import re
 from datetime import date, datetime
 from functools import lru_cache
 from pathlib import Path
-from typing import Optional
+from typing import Callable, Optional
 
 from sqlalchemy import and_, case, func, or_, select
 from sqlalchemy.orm import Session, lazyload
 
 from documents.errors import BadRequestError, ConflictError, NotFoundError
 from documents.models import (Document, DocumentCategory, DocumentCodeCounter, DocumentSpace,
-                              DocumentSpaceGrant, SPACE_VISIBILITIES)  # noqa: F401
+                              DocumentSpaceGrant, SPACE_VISIBILITIES)
 from documents.storage import get_storage
 
 PREFIX_RE = re.compile(r"^[A-Z0-9]{2,10}$")
@@ -225,11 +225,14 @@ def resolve_space(db: Session, *, space: Optional[str] = None,
 
 def _space_counts(db: Session) -> dict[int, int]:
     """Distinct codes per space whose rows are draft or active (what the default list
-    shows). A code with only retired rows does not count."""
-    rows = db.execute(select(Document.space_id, func.count(func.distinct(Document.code)))
+    shows). A code with only retired rows does not count. NULL space_id reads as General."""
+    general_id = db.execute(select(DocumentSpace.id).where(DocumentSpace.slug == GENERAL_SLUG)
+                            ).scalar_one_or_none()
+    sid = func.coalesce(Document.space_id, general_id) if general_id is not None else Document.space_id
+    rows = db.execute(select(sid, func.count(func.distinct(Document.code)))
                       .where(Document.status.in_(("draft", "active")))
-                      .group_by(Document.space_id)).all()
-    return {sid: n for sid, n in rows}
+                      .group_by(sid)).all()
+    return {k: n for k, n in rows}
 
 
 def list_spaces(db: Session, include_inactive: bool = False) -> list[tuple[DocumentSpace, int]]:
@@ -463,9 +466,13 @@ def create_document(db: Session, *, title: str = "", html, category: Optional[Do
                     effective_date: Optional[date] = None, activate: bool = True,
                     user_id: Optional[int] = None,
                     co_author: Optional[str] = None,
-                    space: Optional[DocumentSpace] = None) -> tuple[Document, bool]:
+                    space: Optional[DocumentSpace] = None,
+                    may_revise: Optional[Callable[[Document], bool]] = None) -> tuple[Document, bool]:
     """Create revision 1 of a new code, or the next revision of an existing one.
-    Identical bytes on an existing code => metadata patch, no new row (§5.5)."""
+    Identical bytes on an existing code => metadata patch, no new row (§5.5).
+    `may_revise` is checked under the row lock: False reads as an unknown code, so a
+    code minted into a hidden space between the caller's check and this lock is never
+    revised (or named) by a caller who cannot see it."""
     title = (title or "").strip()
     data = validate_html(html)
     sha = hashlib.sha256(data).hexdigest()
@@ -474,6 +481,8 @@ def create_document(db: Session, *, title: str = "", html, category: Optional[Do
     if code:
         code = _clean_code(code)
         latest = _latest(db, code, for_update=True)  # serialize same-code pushes
+        if latest is not None and may_revise is not None and not may_revise(latest):
+            raise NotFoundError(f"document {code!r} not found")
 
     if latest is not None:
         # A revision push may omit title and description: "revise SOP-0001 with this
@@ -520,7 +529,8 @@ def create_document(db: Session, *, title: str = "", html, category: Optional[Do
                 select(Document.code, Document.revision)
                 .where(Document.content_sha256 == sha,
                        Document.category_id == cat.id,
-                       Document.space_id == space_id)
+                       (or_(Document.space_id == space_id, Document.space_id.is_(None))
+                        if space_id == general_space(db).id else Document.space_id == space_id))
                 .order_by(Document.id).limit(1)
             ).first()
             if existing is not None:
@@ -583,6 +593,8 @@ def latest_revision(db: Session, code: str) -> Optional[Document]:
 def move_document_space(db: Session, code: str, space_id: int, *, updated_by: Optional[str]) -> list[Document]:
     """Move EVERY revision of a code to another space in one transaction (spec 4.3)."""
     space = get_space(db, int(space_id))
+    if not space.is_active:
+        raise BadRequestError(f"space {space.slug!r} is inactive")
     code = _clean_code(code)
     # Take the same row lock create_document holds while it inserts revision r+1, so
     # a concurrent push either lands before this read (and is moved) or waits until

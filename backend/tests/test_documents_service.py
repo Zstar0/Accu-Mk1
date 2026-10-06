@@ -885,3 +885,57 @@ def test_list_space_filter_general_includes_null_rows(db):
     assert total == 1 and rows[0][0].id == d.id
     rows, total = service.list_documents(db, space_id=lab.id)
     assert total == 0
+
+
+def test_may_revise_refusal_reads_as_missing_and_writes_nothing(db):
+    """Important 2: the lock-time check closes the gap between the route's unlocked read
+    and the insert. A refusal is the unknown-code 404 text, and no row lands."""
+    from documents import service
+    from documents.errors import NotFoundError
+    from documents.models import Document
+    cat = service.resolve_category(db, category="ART")
+    d, _ = service.create_document(db, title="Secret", html=HTML, category=cat)
+    seen = []
+
+    def deny(doc):
+        seen.append(doc.code)
+        return False
+    with pytest.raises(NotFoundError) as e:
+        service.create_document(db, code=d.code, html=HTML + "<!--2-->", category=cat, may_revise=deny)
+    assert str(e.value) == f"document {d.code!r} not found"
+    assert seen == [d.code]
+    assert db.query(Document).count() == 1
+    # A new code never consults the callback (there is nothing to reveal).
+    service.create_document(db, title="New", html=HTML + "<!--n-->", category=cat, may_revise=deny)
+    assert seen == [d.code]
+
+
+def test_move_to_an_inactive_space_is_refused(db):
+    from documents import service
+    from documents.errors import BadRequestError
+    cat = service.resolve_category(db, category="ART")
+    old = _space(db, "old")
+    old.is_active = False
+    db.commit()
+    d, _ = service.create_document(db, title="A", html=HTML, category=cat)
+    with pytest.raises(BadRequestError) as e:
+        service.move_document_space(db, d.code, old.id, updated_by="admin@x.t")
+    assert str(e.value) == "space 'old' is inactive"
+    assert db.get(type(d), d.id).space_id == service.general_space(db).id
+
+
+def test_null_space_rows_count_and_dedupe_as_general(db):
+    """Minor 5: a NULL space_id row is General for the space count and for the
+    identical-bytes dedupe (no second code minted for the same content)."""
+    from documents import service
+    from documents.errors import ConflictError
+    from documents.models import Document
+    cat = service.resolve_category(db, category="ART")
+    d, _ = service.create_document(db, title="Old", html=HTML, category=cat)
+    service.create_document(db, title="New", html=HTML + "<!--n-->", category=cat)
+    db.execute(Document.__table__.update().where(Document.id == d.id).values(space_id=None))
+    db.commit()
+    counts = {sp.slug: n for sp, n in service.list_spaces(db)}
+    assert counts["general"] == 2
+    with pytest.raises(ConflictError, match=d.code):
+        service.create_document(db, title="Again", html=HTML, category=cat)

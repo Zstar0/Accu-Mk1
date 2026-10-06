@@ -506,3 +506,38 @@ def test_agent_fresh_code_honours_allowlist(client):
         assert r.status_code == 400 and r.json()["detail"] == "space 'general' is not allowed for this agent"
         r = client.post("/api/documents", json={**body, "space": "lab"}, headers=h)
         assert r.status_code == 201 and r.json()["space_slug"] == "lab"
+
+
+def test_new_document_into_an_inactive_space_is_refused(client):
+    """Minor 4: an archived space takes no new codes; revising a code already there is fine."""
+    _as_admin(client)
+    from documents.models import DocumentSpace
+    old = DocumentSpace(slug="old", name="Old")
+    client.db.add(old)
+    client.db.commit()
+    kept = _publish(client, space="old").json()
+    old.is_active = False
+    client.db.commit()
+    r = _publish(client, html=HTML + "<!--new-->", space="old")
+    assert r.status_code == 400 and r.json()["detail"] == "space 'old' is inactive"
+    r = _publish(client, html=HTML + "<!--new-->", space_id=old.id)
+    assert r.status_code == 400 and r.json()["detail"] == "space 'old' is inactive"
+    r = client.post("/api/documents", json={"code": kept["code"], "html": HTML + "<!--r2-->", "category": "ART"})
+    assert r.status_code == 201 and r.json()["revision"] == 2 and r.json()["space_slug"] == "old"
+
+
+def test_patch_with_a_bad_field_does_not_move_the_document(client):
+    """Minor 7: the field patch runs before the move, so a bad title blocks the whole request."""
+    _as_admin(client)
+    from documents.models import DocumentSpace
+    lab = DocumentSpace(slug="lab", name="Lab")
+    client.db.add(lab)
+    client.db.commit()
+    d = _publish(client).json()
+    r = client.patch(f"/api/documents/{d['id']}", json={"space_id": lab.id, "title": "   "})
+    assert r.status_code == 400
+    _read_as(client, 1, "admin")
+    assert client.get(f"/api/documents/{d['id']}").json()["space_slug"] == "general"
+    r = client.patch(f"/api/documents/{d['id']}", json={"space_id": lab.id, "title": "Renamed"})
+    assert r.status_code == 200
+    assert (r.json()["space_slug"], r.json()["title"]) == ("lab", "Renamed")
