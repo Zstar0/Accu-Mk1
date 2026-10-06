@@ -64,13 +64,17 @@ test('customer dashboard tab opens from the at-risk list or the list', async ({ 
   test.skip(!target, 'no customers with paid orders on this stack')
   if (risk.rows[0]) {
     await page.getByText(target.name, { exact: true }).first().click()
-    await expect(page.getByText(target.name).or(page.getByText(target.email)).first()).toBeVisible()
   } else {
     await page.goto('/#accumark-tools/customers')
     // The Customers page labels rows by email, so match on that.
     await page.getByText(target.email, { exact: true }).first().click()
-    await page.getByRole('tab', { name: 'Dashboard' }).click()
   }
+  // Detail-view-only evidence: neither control exists on the Insights page.
+  await expect(page.getByRole('button', { name: /Back to Customers/ })).toBeVisible({ timeout: 20_000 })
+  await page.getByRole('tab', { name: 'Dashboard' }).click()
+  // The opened customer is the clicked one: check the header card, not the page.
+  const header = page.locator('[data-slot="card"]').first()
+  await expect(header.getByText(target.email).or(header.getByText(target.name)).first()).toBeVisible()
   await expect(page.getByText(/Lifetime spend/i)).toBeVisible({ timeout: 20_000 })
   const d = await api<{ kpis: { lifetime: string; orders: number } }>(page, `/reports/customers/${encodeURIComponent(target.key)}`)
   const money = (v: string) => {
