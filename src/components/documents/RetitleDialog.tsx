@@ -19,7 +19,11 @@ import {
 } from '@/components/ui/select'
 import { Textarea } from '@/components/ui/textarea'
 import type { DocumentRow } from '@/lib/api-documents'
-import { useDocumentCategories, usePatchDocument } from '@/services/documents'
+import {
+  useDocumentCategories,
+  useDocumentSpaces,
+  usePatchDocument,
+} from '@/services/documents'
 
 interface RetitleDialogProps {
   doc: DocumentRow
@@ -34,6 +38,8 @@ export function RetitleDialog({ doc, open, onOpenChange }: RetitleDialogProps) {
   const [description, setDescription] = useState(doc.description ?? '')
   const [categoryId, setCategoryId] = useState(String(doc.category_id))
   const [effective, setEffective] = useState(doc.effective_date ?? '')
+  const [spaceId, setSpaceId] = useState(String(doc.space_id ?? ''))
+  const spaces = useDocumentSpaces(false)
   const categories = useDocumentCategories(false)
   const patch = usePatchDocument()
 
@@ -51,6 +57,7 @@ export function RetitleDialog({ doc, open, onOpenChange }: RetitleDialogProps) {
       setDescription(doc.description ?? '')
       setCategoryId(String(doc.category_id))
       setEffective(doc.effective_date ?? '')
+      setSpaceId(String(doc.space_id ?? ''))
     }
   }
 
@@ -65,6 +72,9 @@ export function RetitleDialog({ doc, open, onOpenChange }: RetitleDialogProps) {
           description: description.trim() || null,
           category_id: Number(categoryId),
           effective_date: effective || null,
+          ...(spaceId && Number(spaceId) !== doc.space_id
+            ? { space_id: Number(spaceId) }
+            : {}),
         },
       },
       { onSuccess: () => onOpenChange(false) }
@@ -99,7 +109,7 @@ export function RetitleDialog({ doc, open, onOpenChange }: RetitleDialogProps) {
               onChange={e => setDescription(e.target.value)}
             />
           </div>
-          <div className="grid grid-cols-2 gap-3">
+          <div className="grid grid-cols-3 gap-3">
             <div className="grid gap-1.5">
               <Label htmlFor="doc-category">Category</Label>
               <Select value={categoryId} onValueChange={setCategoryId}>
@@ -123,6 +133,24 @@ export function RetitleDialog({ doc, open, onOpenChange }: RetitleDialogProps) {
                 value={effective}
                 onChange={e => setEffective(e.target.value)}
               />
+            </div>
+            <div className="grid gap-1.5">
+              <Label htmlFor="doc-space">Space</Label>
+              <Select value={spaceId} onValueChange={setSpaceId}>
+                <SelectTrigger id="doc-space">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  {(spaces.data ?? []).map(s => (
+                    <SelectItem key={s.id} value={String(s.id)}>
+                      {s.name}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+              <p className="text-xs text-muted-foreground">
+                Moving changes every revision of {doc.code}.
+              </p>
             </div>
           </div>
         </div>

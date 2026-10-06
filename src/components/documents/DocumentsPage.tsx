@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from 'react'
 import type { ColumnDef } from '@tanstack/react-table'
 import { useQuery } from '@tanstack/react-query'
-import { FileText, Loader2, MessageSquare } from 'lucide-react'
+import { ChevronRight, FileText, Loader2, MessageSquare } from 'lucide-react'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { DataTable } from '@/components/ui/data-table'
@@ -16,7 +16,11 @@ import {
 import { useUIStore } from '@/store/ui-store'
 import { flagKeys } from '@/hooks/use-flags'
 import { listFlags } from '@/lib/flags-api'
-import { useDocumentCategories, useDocuments } from '@/services/documents'
+import {
+  useDocumentCategories,
+  useDocuments,
+  useDocumentSpaces,
+} from '@/services/documents'
 import type { DocumentRow } from '@/lib/api-documents'
 import {
   DEFAULT_STATUSES,
@@ -26,6 +30,7 @@ import {
   type DocumentStatus,
 } from '@/components/documents/documents-utils'
 import { DocumentViewer } from '@/components/documents/DocumentViewer'
+import { SpacesGrid } from '@/components/documents/SpacesGrid'
 
 const PAGE_SIZE = 50
 
@@ -65,12 +70,46 @@ function useDebounced(value: string, ms: number): string {
 
 export function DocumentsPage() {
   const targetId = useUIStore(s => s.documentViewerTargetId)
+  const spaceSlug = useUIStore(s => s.documentsSpaceSlug)
   if (targetId != null) return <DocumentViewer id={targetId} />
-  return <DocumentsList />
+  return spaceSlug ? <DocumentsList spaceSlug={spaceSlug} /> : <SpacesLanding />
 }
 
-function DocumentsList() {
+function SpacesLanding() {
+  const spaces = useDocumentSpaces(false)
+  const navigateToDocumentSpace = useUIStore(s => s.navigateToDocumentSpace)
+  return (
+    <div className="flex h-full flex-col gap-3 p-4">
+      <div>
+        <h1 className="text-lg font-semibold">Documents</h1>
+        <p className="text-sm text-muted-foreground">
+          Artifacts, SOPs and other controlled documents, organised by who they
+          are for.
+        </p>
+      </div>
+      {spaces.error ? (
+        <p className="text-sm text-destructive">
+          Could not load spaces: {spaces.error.message}
+        </p>
+      ) : spaces.isLoading ? (
+        <div className="flex items-center justify-center py-12">
+          <Loader2 className="h-5 w-5 animate-spin text-muted-foreground" />
+        </div>
+      ) : (
+        <SpacesGrid
+          spaces={spaces.data ?? []}
+          onOpen={navigateToDocumentSpace}
+        />
+      )}
+    </div>
+  )
+}
+
+function DocumentsList({ spaceSlug }: { spaceSlug: string }) {
   const navigateToDocument = useUIStore(s => s.navigateToDocument)
+  const navigateToDocumentSpace = useUIStore(s => s.navigateToDocumentSpace)
+  const spaces = useDocumentSpaces(true)
+  const space = spaces.data?.find(s => s.slug === spaceSlug) ?? null
   const [query, setQuery] = useState('')
   const [categoryId, setCategoryId] = useState<number | null>(null)
   const [statusFilter, setStatusFilter] = useState<StatusFilter>('live')
@@ -81,13 +120,14 @@ function DocumentsList() {
   const params = useMemo(
     () => ({
       q,
+      spaceId: space ? space.id : -1,
       categoryId,
       statuses: STATUS_FILTERS[statusFilter],
       sort,
       page,
       pageSize: PAGE_SIZE,
     }),
-    [q, categoryId, statusFilter, sort, page]
+    [q, space, categoryId, statusFilter, sort, page]
   )
   const { data, isLoading, isFetching, error } = useDocuments(params)
   const categories = useDocumentCategories(false)
@@ -241,9 +281,26 @@ function DocumentsList() {
     <div className="flex h-full flex-col gap-3 p-4">
       <div className="flex items-center justify-between gap-3">
         <div>
-          <h1 className="text-lg font-semibold">Documents</h1>
+          <h1
+            className="flex items-center gap-1 text-lg font-semibold"
+            aria-label={`Documents / ${space?.name ?? spaceSlug}`}
+          >
+            <button
+              type="button"
+              className="hover:underline"
+              onClick={() => navigateToDocumentSpace(null)}
+            >
+              Documents
+            </button>
+            <ChevronRight
+              className="h-4 w-4 text-muted-foreground"
+              aria-hidden
+            />
+            <span>{space?.name ?? spaceSlug}</span>
+          </h1>
           <p className="text-sm text-muted-foreground">
-            Artifacts, SOPs and other controlled documents published to the lab.
+            {space?.description ??
+              'Artifacts, SOPs and other controlled documents published to the lab.'}
           </p>
         </div>
         {isFetching && !isLoading && (
@@ -331,7 +388,7 @@ function DocumentsList() {
         <p className="text-sm text-destructive">
           Could not load documents: {error.message}
         </p>
-      ) : isLoading ? (
+      ) : isLoading || spaces.isLoading ? (
         <div className="flex items-center justify-center py-12">
           <Loader2 className="h-5 w-5 animate-spin text-muted-foreground" />
         </div>

@@ -106,6 +106,11 @@ export function DocumentViewer({ id }: { id: number }) {
               {DOC_STATUS_LABEL[doc.status]}
             </Badge>
             <Badge variant="outline">{doc.category_name}</Badge>
+            <Badge
+              variant={doc.space_slug === 'general' ? 'outline' : 'secondary'}
+            >
+              {doc.space_name}
+            </Badge>
             <span className="text-xs text-muted-foreground">
               effective {formatDocDate(doc.effective_date)} · by{' '}
               {doc.author ?? 'unknown author'}
