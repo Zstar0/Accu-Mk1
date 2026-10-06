@@ -31,6 +31,7 @@ import {
   usePatchPositions,
 } from '@/services/boards'
 import { useUIStore } from '@/store/ui-store'
+import { useTheme } from '@/hooks/use-theme'
 import { nodeTypes } from './nodes'
 import { BoardToolDrawer } from './BoardToolDrawer'
 import { layoutScope } from './board-layout'
@@ -117,6 +118,8 @@ function CanvasInner({
   const [initialViewport] = useState(() =>
     readViewport(board.slug, board.default_viewport)
   )
+  // xyflow styles its own Controls, MiniMap and Background per colorMode; 'system' tracks the OS like the app does.
+  const { theme } = useTheme()
   const pendingNode = useUIStore(s => s.pendingBoardNode)
   const consumePendingBoardNode = useUIStore(s => s.consumePendingBoardNode)
 
@@ -373,6 +376,7 @@ function CanvasInner({
         fitView={!initialViewport}
         minZoom={0.2}
         maxZoom={2}
+        colorMode={theme}
         proOptions={{ hideAttribution: true }}
       >
         <Background />
