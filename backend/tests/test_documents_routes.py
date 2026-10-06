@@ -418,22 +418,22 @@ def test_list_for_hidden_space_is_empty(client):
 
 
 def test_writes_on_a_hidden_document_are_404(client):
-    """A standard member of nothing cannot even learn the id exists through a write."""
+    """An agent whose allow-list excludes the space gets 404s that match a missing id on every write."""
     sp, secret = _restricted_world(client)
     from main import app
     from documents.routes import require_document_writer
-    # writer = a non-admin "admin" override would be wrong; use the internal token path
-    # with a reader that cannot see the doc: the gate runs on the READ identity for
-    # bearer writers, so simulate an admin bearer that IS allowed, then an agent token
-    # whose allow-list excludes the space.
     app.dependency_overrides.pop(require_document_writer, None)
     with patch.dict(os.environ, {"MK1_DOCUMENT_AGENT_TOKENS": "bot:" + "b" * 40}):
         h = {"X-Service-Token": "b" * 40}
-        assert client.post(f"/api/documents/{secret['id']}/retire", headers=h).status_code == 404
-        assert client.patch(f"/api/documents/{secret['id']}", json={"title": "x"}, headers=h).status_code == 404
+        gone = {"detail": f"document {secret['id']} not found"}
+        for r in (client.post(f"/api/documents/{secret['id']}/retire", headers=h),
+                  client.post(f"/api/documents/{secret['id']}/activate", headers=h),
+                  client.patch(f"/api/documents/{secret['id']}", json={"title": "x"}, headers=h)):
+            assert r.status_code == 404 and r.json() == gone
         r = client.post("/api/documents", json={"code": secret["code"], "html": HTML + "<!--2-->",
                                                 "category": "ART"}, headers=h)
         assert r.status_code == 404
+        assert r.json() == {"detail": f"document {secret['code']!r} not found"}
 
 
 def test_agent_write_outside_allowlist(client):
@@ -487,3 +487,22 @@ def test_publish_into_space_by_slug_and_id(client):
     assert _publish(client, space="lab").json()["space_slug"] == "lab"
     assert _publish(client, html=HTML + "<!--x-->", space_id=lab.id).json()["space_slug"] == "lab"
     assert _publish(client, html=HTML + "<!--y-->", space="nope").status_code == 404
+
+
+def test_agent_fresh_code_honours_allowlist(client):
+    from main import app
+    from documents.routes import require_document_writer
+    from documents.models import DocumentSpace
+    app.dependency_overrides.pop(require_document_writer, None)
+    client.db.add_all([DocumentSpace(slug="lab", name="Lab"),
+                       DocumentSpace(slug="accounting", name="Accounting", visibility="restricted")])
+    client.db.commit()
+    with patch.dict(os.environ, {"MK1_DOCUMENT_AGENT_TOKENS": "bot:" + "b" * 40 + ":lab"}):
+        h = {"X-Service-Token": "b" * 40}
+        body = {"title": "T", "html": HTML, "category": "ART", "author": "F", "code": "ART-0777"}
+        r = client.post("/api/documents", json={**body, "space": "accounting"}, headers=h)
+        assert r.status_code == 400 and r.json()["detail"] == "space 'accounting' is not allowed for this agent"
+        r = client.post("/api/documents", json=body, headers=h)
+        assert r.status_code == 400 and r.json()["detail"] == "space 'general' is not allowed for this agent"
+        r = client.post("/api/documents", json={**body, "space": "lab"}, headers=h)
+        assert r.status_code == 201 and r.json()["space_slug"] == "lab"

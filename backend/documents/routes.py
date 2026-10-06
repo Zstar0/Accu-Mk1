@@ -300,11 +300,11 @@ def create_document(req: DocumentCreate, response: Response, db: Session = Depen
         space = None
         if req.space_id is not None or req.space:
             space = service.resolve_space(db, space=req.space, space_id=req.space_id)
-        if req.code:
-            latest = service.latest_revision(db, req.code)
-            if latest is not None and (not _agent_may_see(writer, latest) or not access.can_view_document(
-                    db, _reader_for(writer), latest)):
-                raise NotFoundError(f"document {latest.id} not found")
+        latest = service.latest_revision(db, req.code) if req.code else None
+        if latest is not None:
+            if not _agent_may_see(writer, latest) or not access.can_view_document(
+                    db, _reader_for(writer), latest):
+                raise NotFoundError(f"document {req.code!r} not found")
         else:
             target = space if space is not None else service.general_space(db)
             if not agent_may_write(writer, target):
