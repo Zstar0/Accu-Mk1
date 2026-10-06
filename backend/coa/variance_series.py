@@ -21,8 +21,9 @@ from typing import Optional
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
+from coa.bw_shim import BW_NATIVE_KEYWORDS, bw_wire_keyword
 from coa.hplc_shim import slot_wires, wire_keyword
-from lims_analyses.hplc_native import AGGREGATES, TRIO, native_category
+from lims_analyses.hplc_native import AGGREGATES, TRIO, is_native_born, native_category
 from models import AnalysisService, LimsAnalysis, LimsSubSample, Peptide
 
 _NATIVE_KWS = frozenset(TRIO + AGGREGATES)
@@ -381,6 +382,10 @@ def build_variance_analyte_series(db: Session, parent) -> dict:
             raw_kw = (la.keyword or "").strip()
             if svc.origin == "mk1" and raw_kw.upper() in _NATIVE_KWS:
                 kw = wire_keyword(raw_kw, la.slot, n_slots)
+            elif (svc.origin == "mk1" and raw_kw.upper() in BW_NATIVE_KEYWORDS
+                  and is_native_born(parent)):
+                # MB5: same legacy vocabulary legacy_rows puts on the wire.
+                kw = bw_wire_keyword(raw_kw)
             else:
                 kw = raw_kw or (svc.keyword or "").strip()
             if not kw:
