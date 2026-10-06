@@ -3,7 +3,7 @@
 
 Usage:
   publish_document.py PAGE.html --title T --category ART [--description D]
-      [--code ART-0012] [--author "Forrest Parker"] [--session ID] [--draft]
+      [--code ART-0012] [--author "Forrest Parker"] [--session ID] [--draft] [--space SLUG]
       [--effective YYYY-MM-DD] [--base-url URL]
       [--allow-secrets] [--dry-run]
   publish_document.py --self-test
@@ -79,10 +79,14 @@ def self_test() -> None:
     assert find_secrets("Authorization: Bearer abcdefghijklmnopqrstuvwxyz0123") == ["bearer token"]
     assert find_secrets("<p>password: hunter2</p>") == ["password assignment"]
     assert find_secrets(doc) == []
+    ns = build_parser().parse_args(["x.html", "--title", "t", "--category", "ART", "--space", "Accounting"])
+    assert ns.space == "accounting"
+    ns = build_parser().parse_args(["x.html", "--title", "t", "--category", "ART"])
+    assert ns.space == "general"
     print("self-test ok")
 
 
-def main(argv=None) -> int:
+def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(description="Publish an HTML document to Accu-Mk1.")
     p.add_argument("file", nargs="?", help="HTML file (full document or artifact fragment)")
     p.add_argument("--title")
@@ -94,12 +98,19 @@ def main(argv=None) -> int:
                         "(not the agent; provenance goes in --session)")
     p.add_argument("--session", default=os.environ.get("MK1_DOC_SESSION"),
                    help="provenance: the Claude Code session id")
+    p.add_argument("--space", default="general", type=lambda s: s.strip().lower(),
+                   help="space slug (default general); the token must be allowed to write there")
     p.add_argument("--draft", action="store_true", help="publish as draft (activate=false)")
     p.add_argument("--effective", help="effective date YYYY-MM-DD")
     p.add_argument("--base-url", default=os.environ.get("MK1_API_BASE_URL"))
     p.add_argument("--allow-secrets", action="store_true")
     p.add_argument("--dry-run", action="store_true", help="print the payload summary, do not POST")
     p.add_argument("--self-test", action="store_true")
+    return p
+
+
+def main(argv=None) -> int:
+    p = build_parser()
     args = p.parse_args(argv)
 
     if args.self_test:
@@ -132,7 +143,7 @@ def main(argv=None) -> int:
         "title": args.title, "html": html, "category": args.category,
         "description": args.description, "code": args.code, "author": args.author,
         "source_session": args.session, "effective_date": args.effective,
-        "activate": not args.draft,
+        "activate": not args.draft, "space": args.space,
     }
     if args.dry_run:
         summary = {k: v for k, v in payload.items() if k != "html"}
@@ -158,6 +169,7 @@ def main(argv=None) -> int:
         print(f"publish failed: {type(e).__name__}: {e}", file=sys.stderr)
         return 1
     print(f"{doc['code']} r{doc['revision']} id={doc['id']} status={doc['status']}"
+          f" space={doc.get('space_slug', '?')}"
           f"  open: #reports/documents?id={doc['id']}")
     return 0
 
