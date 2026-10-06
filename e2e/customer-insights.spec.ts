@@ -32,17 +32,20 @@ test('insights page renders and matches the API', async ({ authedPage: page }) =
 test('customer dashboard tab opens from the at-risk list or the list', async ({ authedPage: page }) => {
   await page.goto('/#accumark-tools/customer-insights')
   const risk = await api<{ rows: { key: string; name: string }[] }>(page, '/reports/customers/at-risk')
-  const list = await api<{ rows: { key: string; name: string }[] }>(page, '/reports/customers/list?period=all&page_size=1')
+  const list = await api<{ rows: { key: string; name: string; email: string }[] }>(page, '/reports/customers/list?period=all&page_size=1')
   const target = risk.rows[0] ?? list.rows[0]
   test.skip(!target, 'no customers with paid orders on this stack')
   if (risk.rows[0]) {
     await page.getByText(target.name, { exact: true }).first().click()
   } else {
     await page.goto('/#accumark-tools/customers')
-    await page.getByText(target.name, { exact: true }).first().click()
+    // The Customers page labels rows by email, so match on that.
+    await page.getByText((target as { email: string }).email, { exact: true }).first().click()
     await page.getByRole('tab', { name: 'Dashboard' }).click()
   }
   await expect(page.getByText(/Lifetime spend/i)).toBeVisible({ timeout: 20_000 })
+  await page.mouse.move(0, 0)
+  await page.waitForTimeout(500)
   await page.screenshot({ path: `${SHOTS}/02-customer-dashboard.png`, fullPage: true })
 })
 

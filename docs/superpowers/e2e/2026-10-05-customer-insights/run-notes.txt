@@ -1,8 +1,9 @@
-Customer Insights stack e2e, 2026-10-06
-Stack: insights (devbox). Mk1 = origin/feat/customer-insights ef3aa67f, IS order-mirror branch mounted, IS migration applied.
-wc_orders: 258 stack orders (149 paid, 14 customers).
+Customer Insights stack e2e, 2026-10-06 (re-captured after fix b607f041)
+Stack: insights (devbox). Mk1 = origin/feat/customer-insights incl. b607f041, IS order-mirror branch mounted, IS migration applied.
+wc_orders: 258 stack orders.
 DEV DATA: this is golden/stack data. Money values (revenue, spend, LTV) mean nothing.
+Bug caught by the first run: the at-risk list and dashboard showed wc:1539 (forrest@valenceanalytical.com), a registered TEST account that should have been excluded. Fixed in b607f041; screenshots re-captured.
 Command: . /c/tmp/insights-e2e.env && node node_modules/@playwright/test/cli.js test e2e/customer-insights.spec.ts --reporter=list
 Result: 3 passed.
-01-insights.png: page at period All (stack orders are months old, so 90D is empty; the spec asserts the 90D paid-orders KPI against the API, then switches to All for the shot).
-02-customer-dashboard.png: Dashboard tab for the first at-risk customer (#1539).
+01-insights.png: period All; 5 active customers, 11 paid orders; at-risk panel is empty ("No customers are overdue right now").
+02-customer-dashboard.png: no at-risk customer remains, so the spec falls back to the list's first customer (hello@valera.codes) and opens its Dashboard tab.
