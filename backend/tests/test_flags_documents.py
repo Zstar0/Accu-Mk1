@@ -27,6 +27,8 @@ def db():
     from database import Base
     import models  # noqa: F401
     import documents.models  # noqa: F401
+    import groups.models  # noqa: F401
+    import boards.models  # noqa: F401
     import flags.models  # noqa: F401
     from documents import service as docs, storage
     from flags import seams, types_service
@@ -85,9 +87,9 @@ def test_search_matches_code_prefix_and_title_once_per_code(db):
     from flags import seams
     doc = _sop(db, activate=False)
     _sop(db, html=HTML + "<!--2-->", code=doc.code, activate=False)
-    hits = seams.resolve_entity_search(db, "document", "sop")
+    hits = seams.resolve_entity_search(db, "document", "sop", user=USER)
     assert [h["entity_id"] for h in hits] == ["SOP-0001"], "two revisions, one hit"
-    assert seams.resolve_entity_search(db, "document", "waste")[0]["entity_id"] == "SOP-0001"
+    assert seams.resolve_entity_search(db, "document", "waste", user=USER)[0]["entity_id"] == "SOP-0001"
 
 
 def test_a_thread_records_the_revision_it_was_raised_on(db):
@@ -104,14 +106,15 @@ def test_a_thread_records_the_revision_it_was_raised_on(db):
     # the thread survives the revision that answers it
     _sop(db, html=HTML + "<!--2-->", code=doc.code)
     still = service.list_flags(db, user_id=USER.id, tab="all_open",
-                               entity_type="document", entity_id=doc.code)
+                               entity_type="document", entity_id=doc.code, user=USER)
     assert [f.id for f in still] == [flag.id]
 
 
 def test_an_unknown_document_code_is_refused(db):
     from flags import service
-    from flags.errors import BadRequestError
-    with pytest.raises(BadRequestError, match="not found"):
+    from flags.errors import PermissionDeniedError
+    # can_raise fails closed on an unknown code (existence is never confirmed)
+    with pytest.raises(PermissionDeniedError):
         service.create_flag(db, user=USER, entity_type="document", entity_id="SOP-9999",
                             type="question", title="x")
 
@@ -144,7 +147,55 @@ def test_flags_can_be_listed_by_entity_type_alone(db):
                         type="doc_review", title="a")
     service.create_flag(db, user=USER, entity_type="sample", entity_id="P-1",
                         type="question", title="b")
-    rows = service.list_flags(db, user_id=USER.id, tab="all_open", entity_type="document")
+    rows = service.list_flags(db, user_id=USER.id, tab="all_open", entity_type="document", user=USER)
     assert [(f.entity_type, f.entity_id) for f in rows] == [("document", "SOP-0001")]
-    assert len(service.list_flags(db, user_id=USER.id, tab="all_open")) == 2
+    assert len(service.list_flags(db, user_id=USER.id, tab="all_open", user=USER)) == 2
 
+
+# --- spaces (spec 2026-10-06 section 6) --------------------------------------------------
+
+ADMIN_U = SimpleNamespace(id=1, role="admin", email="a@x.t", is_active=True)
+MEMBER_U = SimpleNamespace(id=10, role="standard", email="m@x.t", is_active=True)
+OUTSIDER_U = SimpleNamespace(id=11, role="standard", email="o@x.t", is_active=True)
+
+
+def _restricted(db):
+    from documents import service as docs
+    from documents.models import DocumentSpace, DocumentSpaceGrant
+    from groups.models import UserGroup, UserGroupMember
+    import groups.models  # noqa: F401
+    docs.seed_spaces(db)
+    g = UserGroup(slug="leaders", name="L")
+    sp = DocumentSpace(slug="leadership", name="L", visibility="restricted")
+    db.add_all([g, sp])
+    db.flush()
+    db.add_all([UserGroupMember(group_id=g.id, user_id=MEMBER_U.id),
+                DocumentSpaceGrant(space_id=sp.id, group_id=g.id)])
+    db.commit()
+    cat = docs.resolve_category(db, category="ART")
+    secret, _ = docs.create_document(db, title="Q4 plan", html=HTML, category=cat, space=sp)
+    public, _ = docs.create_document(db, title="Public", html=HTML + "<!--p-->", category=cat)
+    return g, sp, secret, public
+
+
+def test_document_seams_follow_the_space(db):
+    from flags import seams
+    seams.register_mk1_entities()
+    spec = seams.get_entity_spec("document")
+    g, sp, secret, public = _restricted(db)
+    assert spec.can_view(db, OUTSIDER_U, secret.code) is False
+    assert spec.can_view(db, MEMBER_U, secret.code) is True
+    assert spec.can_view(db, OUTSIDER_U, public.code) is True
+    assert spec.can_view(db, OUTSIDER_U, "ART-9999") is False  # unknown anchor: fail closed
+    assert spec.can_view(db, ADMIN_U, "ART-9999") is True
+    assert spec.can_raise(db, OUTSIDER_U, secret.code) is False
+    assert spec.can_raise(db, MEMBER_U, secret.code) is True
+    assert spec.visible_entity_ids(db, ADMIN_U) is None
+    visible = set(db.execute(spec.visible_entity_ids(db, OUTSIDER_U)).scalars().all())
+    assert visible == {public.code}
+    labels = [r["entity_id"] for r in spec.search_scoped(db, OUTSIDER_U, "Q4")]
+    assert labels == []
+    assert [r["entity_id"] for r in spec.search_scoped(db, MEMBER_U, "Q4")] == [secret.code]
+    assert spec.audience(db, public.code) is None
+    assert spec.audience(db, secret.code) == {"groups": [g.id]}
+    assert spec.audience(db, "ART-9999") == {"groups": []}
