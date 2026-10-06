@@ -73,18 +73,21 @@ def summary(ds: Dataset, *, start: datetime | None, end: datetime, tz: str) -> d
         m = rules.lab_month(x.paid_at, tz)
         by_month[m]["new" if first_paid[x.customer_key] == m else "returning"] += x.net
 
-    paid_keys = {x.customer_key for x in _upto(ds, end)}  # customers WITH orders (not every wc_customers row)
-    ltv = sorted((sum((x.net for x in _upto(ds, end) if x.customer_key == k), ZERO) for k in paid_keys), reverse=True)
+    upto = _upto(ds, end)
+    net_by_key: dict[str, Decimal] = defaultdict(lambda: ZERO)  # customers WITH orders only
+    for x in upto:
+        net_by_key[x.customer_key] += x.net
+    ltv = sorted(net_by_key.values(), reverse=True)
     total = sum(ltv, ZERO)
     dates = testing_dates(ds, end)
     repeaters = {k for k, d in dates.items() if len(d) >= 2}
-    repeat_rev = sum((x.net for x in _upto(ds, end) if x.customer_key in repeaters), ZERO)
+    repeat_rev = sum((v for k, v in net_by_key.items() if k in repeaters), ZERO)
     decile = max(1, len(ltv) // 10) if ltv else 0
 
     def share(part: Decimal) -> float:
         return round(float(part / total), 4) if total else 0.0
 
-    testing = [x for x in _upto(ds, end) if x.is_testing]
+    testing = [x for x in upto if x.is_testing]
     first_ids = {d[0] for d in dates.values()}
     attach = []
     for t in ADDON_TESTS + ("Additional COAs",):

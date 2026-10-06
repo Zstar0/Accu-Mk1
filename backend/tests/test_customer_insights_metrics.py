@@ -71,3 +71,15 @@ def test_non_testing_orders_ignored_for_reorders() -> None:
     out = metrics.summary(data, start=None, end=T0 + timedelta(days=100), tz=TZ)
     assert out["kpis"]["repeat_rate"]["value"] == 0.0
     assert out["kpis"]["paid_orders"]["value"] == 2
+
+
+def test_concentration_pins_lifetime_values() -> None:
+    # lifetime nets: wc:1 = 400 (repeater), wc:2 = 100, wc:3 = 100; total 600
+    data = ds([o("wc:1", 0, "100"), o("wc:1", 20, "300"), o("wc:2", 1, "100"), o("wc:3", 2, "100")])
+    c = metrics.summary(data, start=None, end=T0 + timedelta(days=100), tz=TZ)["concentration"]
+    assert c["customers"] == 3
+    assert c["top10_share"] == 1.0
+    assert c["top_decile_share"] == 0.6667   # max(1, 3 // 10) = 1 customer: 400 / 600
+    assert c["repeat_share"] == 0.6667
+    assert c["median_ltv"] == "100.00"
+    assert c["mean_ltv"] == "200.00"
