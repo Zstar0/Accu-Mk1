@@ -1,4 +1,4 @@
-"""
+﻿"""
 FastAPI backend for Accu-Mk1.
 Provides REST API for scientific calculations, database access, and audit logging.
 """
@@ -39,6 +39,7 @@ from sqlalchemy import select, desc, delete, update, func, extract, and_, or_
 from sqlalchemy.exc import IntegrityError
 
 from database import get_db, init_db
+from test_accounts import TEST_EMAILS
 from sla_engine import BusinessSchedule, compute_business_minutes, compute_business_deadline, sla_status_dict
 from throughput import (
     SERIES_START as THROUGHPUT_SERIES_START,
@@ -10318,7 +10319,6 @@ def _test_order_senaite_ids() -> set[str]:
     every Mk1 sample registered under a test client (no order needed). Each
     leg degrades to an empty set on failure — nothing flagged as test.
     """
-    TEST_EMAILS = {"forrestp@outlook.com", "forrest@valenceanalytical.com"}
     test_ids: set[str] = set()
 
     try:
@@ -22747,7 +22747,6 @@ async def get_worksheets_inbox(
     # Step 1b: Filter to only samples linked to tracked orders in integration DB.
     # (Order-level priority is NOT copied out of the order payload any more —
     # it reaches each row through the resolver chain; spec §4.)
-    TEST_EMAILS = ["forrestp@outlook.com", "forrest@valenceanalytical.com"]
     try:
         from integration_db import get_integration_db
         from psycopg2.extras import RealDictCursor
