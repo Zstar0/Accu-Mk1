@@ -1,4 +1,4 @@
-import { describe, it, expect } from 'vitest'
+import { describe, it, expect, beforeEach } from 'vitest'
 import { useUIStore } from '@/store/ui-store'
 import { applyNavToStore, buildHash, parseNavHash } from '@/lib/hash-navigation'
 
@@ -13,6 +13,15 @@ function currentHash() {
 }
 
 describe('documents space in the hash', () => {
+  beforeEach(() => {
+    useUIStore.setState({
+      activeSection: 'dashboard',
+      activeSubSection: 'orders',
+      documentsSpaceSlug: null,
+      documentViewerTargetId: null,
+    })
+  })
+
   it('parses ?space= into the store and builds it back', () => {
     applyHash('#reports/documents?space=accounting')
     expect(useUIStore.getState().documentsSpaceSlug).toBe('accounting')
@@ -29,5 +38,12 @@ describe('documents space in the hash', () => {
   it('honours id when a hash carries both', () => {
     applyHash('#reports/documents?space=accounting&id=7')
     expect(useUIStore.getState().documentViewerTargetId).toBe(7)
+  })
+
+  it('generic navigateTo clears the selected space', () => {
+    useUIStore.getState().navigateToDocumentSpace('accounting')
+    useUIStore.getState().navigateTo('reports', 'documents')
+    expect(useUIStore.getState().documentsSpaceSlug).toBeNull()
+    expect(currentHash()).toBe('#reports/documents')
   })
 })

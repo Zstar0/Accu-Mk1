@@ -380,6 +380,7 @@ export const useUIStore = create<UIState>()(
             activeSection: section,
             activeSubSection: subSection,
             documentViewerTargetId: null,
+            documentsSpaceSlug: null,
             boardTargetSlug: null,
             navigationKey: state.navigationKey + 1,
           }),
