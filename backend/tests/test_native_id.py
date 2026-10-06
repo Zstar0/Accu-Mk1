@@ -52,14 +52,17 @@ def test_requires_some_identity_source(db):
 from sub_samples.native_id import mint_customer_sample_id, CUSTOMER_PREFIXES
 
 
-def _seed_customer_counters(db, p=5000, pb=1000):
+def _seed_customer_counters(db, p=5000, pb=1000, bw=1000):
     db.add(LimsNativeIdSequence(prefix="P", next_value=p))
     db.add(LimsNativeIdSequence(prefix="PB", next_value=pb))
+    db.add(LimsNativeIdSequence(prefix="BW", next_value=bw))
     db.commit()
 
 
-def test_customer_prefix_map_is_peptide_and_blend_only():
-    assert CUSTOMER_PREFIXES == {"peptide": "P", "peptide blend": "PB"}
+def test_customer_prefix_map_is_peptide_blend_and_bac_water():
+    # Bac Water became native-born in spec 2026-10-05 (R3: BW-1000).
+    assert CUSTOMER_PREFIXES == {"peptide": "P", "peptide blend": "PB",
+                                 "bacteriostatic water": "BW"}
 
 
 def test_customer_id_mints_from_seeded_counter(db):
@@ -85,12 +88,27 @@ def test_customer_id_refuses_unseeded_prefix(db):
         mint_customer_sample_id(db, "Peptide")
 
 
-def test_customer_id_refuses_bac_water_and_unknown(db):
+def test_customer_id_refuses_unknown_type(db):
     _seed_customer_counters(db)
     with pytest.raises(ValueError):
-        mint_customer_sample_id(db, "Bacteriostatic Water")
-    with pytest.raises(ValueError):
         mint_customer_sample_id(db, "Mystery Goo")
+
+
+def test_customer_id_mints_bac_water_from_1000_and_skips_taken(db):
+    from models import LimsSample
+    _seed_customer_counters(db)
+    assert mint_customer_sample_id(db, "Bacteriostatic Water") == "BW-1000"
+    db.add(LimsSample(sample_id="BW-1001"))
+    db.commit()
+    assert mint_customer_sample_id(db, "Bacteriostatic Water") == "BW-1002"
+    # P / PB untouched by the BW counter.
+    assert mint_customer_sample_id(db, "Peptide") == "P-5000"
+    assert mint_customer_sample_id(db, "Peptide Blend") == "PB-1000"
+
+
+def test_customer_id_refuses_unseeded_bw_prefix(db):
+    with pytest.raises(ValueError, match="not seeded"):
+        mint_customer_sample_id(db, "Bacteriostatic Water")
 
 
 def test_internal_native_id_unchanged_for_customer_ids(db):

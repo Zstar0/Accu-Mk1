@@ -214,6 +214,15 @@ def init_db():
     except Exception as e:  # never block startup
         log.warning("demand_catalog_verify_skipped err=%s", e)
 
+    # Customer-id counters (P/PB/BW) must stay above SENAITE's max while the
+    # legacy drain runs. ERROR per violation inside; never blocks startup.
+    try:
+        from sub_samples.native_id import customer_id_headroom_violations
+        with SessionLocal() as _s:
+            customer_id_headroom_violations(_s)
+    except Exception as e:  # never block startup
+        log.warning("customer_id_headroom_check_skipped err=%s", e)
+
 
 def _run_migrations():
     """Run lightweight ALTER TABLE migrations for new columns on existing tables.

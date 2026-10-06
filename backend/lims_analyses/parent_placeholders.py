@@ -60,6 +60,8 @@ def seed_parent_placeholders(
     to the archetype gate here would reintroduce the exact invisibility this
     feature exists to remove.
     """
+    from catalog.bw_keys import is_bw_sample
+    from coa.bw_shim import LEGACY_BW_ARCHETYPE
     from models import LimsAnalysis
     from coa.native_sections import _ordered_native_profiles
     from lims_analyses.hplc_native import (AGGREGATES, TRIO, flag_unresolved_slots,
@@ -73,8 +75,14 @@ def seed_parent_placeholders(
     profiles = _ordered_native_profiles(db, services or {}, package,
                                         require_archetype=False)
 
+    # Slots are the PEPTIDE model (one HPLC trio per analyte). A native-born
+    # Bac Water parent (spec 2026-10-05 MB3) carries "Benzyl Alcohol" as its
+    # analyte but its panel is slot-less, so it never resolves slots and never
+    # raises the unresolved-analyte flag (which would block its COA). Gated by
+    # BW exclusion, not a peptide allow-list: native rows with a NULL
+    # sample_type_title (retest rows) must keep resolving slots.
     native_slots = None
-    if is_native_born(parent):
+    if is_native_born(parent) and not is_bw_sample(parent):
         native_slots = resolve_slot_peptides(db, parent)
         if not native_slots:
             log.error("registry.native_placeholder_no_analyte_slots sample_id=%s", parent.sample_id)
@@ -105,6 +113,12 @@ def seed_parent_placeholders(
         stats["created_ids"].append(row.id)
 
     for prof in profiles:
+        # The native BW panel is placeheld ONLY on a native-born parent; a
+        # SENAITE-born BW sample keeps its SENAITE shadow trio as the single
+        # entry surface.
+        if prof.coa_archetype == LEGACY_BW_ARCHETYPE and not is_native_born(parent):
+            stats["skipped"] += len(prof.analysis_services)
+            continue
         for svc in prof.analysis_services:
             if (getattr(svc, "origin", None) or "") != "mk1":
                 stats["skipped"] += 1
