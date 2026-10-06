@@ -42,6 +42,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from catalog.departments import ANALYTICAL_DEPARTMENT, department_id_by_name
+from catalog.bw_keys import BW_NATIVE_KEYWORDS, BW_PRIMARY_KEYS
 from catalog.hplc_keys import HPLC_PRIMARY_KEYS
 from lims_analyses import service as la_service
 from models import (
@@ -65,9 +66,14 @@ _PARENT_ANALYTE = re.compile(r"^ANALYTE-([1-4])-(PUR|QTY)$")
 # Their services are Analytical-department since 2026-09-01 (worksheet-inbox
 # lane visibility), which would otherwise let the department allow-list mirror
 # them onto the S01 vial and open a second, dead-end entry surface.
+# Native BW keywords are listed too (spec 2026-10-05 MB2) as a guard only:
+# this set is read solely by the SENAITE mirror below, so a native keyword
+# can never be mirrored onto a vial from a SENAITE AR. Native BW vials seed
+# their panel on the vial through seed_analyses_for_vial (task M5); they are
+# NOT parent-bench rows.
 _PARENT_BENCH_ONLY_KEYWORDS = frozenset({
     "Benzyl_Alcohol_Assay", "PH-DETERM", "FILL-NET-CONTENT",
-})
+}) | BW_NATIVE_KEYWORDS
 
 # Role → set of WP service keys that imply analyses at this role.
 #
@@ -77,9 +83,10 @@ _PARENT_BENCH_ONLY_KEYWORDS = frozenset({
 # facing service categories no longer get an entry here: they resolve
 # directly from Analysis Profile membership (fulfillment_dim='role') via
 # _catalog_members_for_role. This map is never extended for new roles.
-# hplc: both primary keys (legacy + native profile key) — see catalog/hplc_keys.py
+# hplc: both HPLC primary keys and both Bac Water primary keys (legacy +
+# native profile key each), see catalog/hplc_keys.py and catalog/bw_keys.py
 ROLE_TO_WP_KEYS: Dict[str, Set[str]] = {
-    "hplc": set(HPLC_PRIMARY_KEYS) | {"bac_water_panel"},
+    "hplc": set(HPLC_PRIMARY_KEYS) | set(BW_PRIMARY_KEYS),
     "endo": {"endotoxin"},
     "ster": {"sterility_pcr"},
     "xtra": set(),  # XTRA vials seed nothing; see scope decision #1
