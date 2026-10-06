@@ -138,6 +138,13 @@ def test_dossier_shape_and_lab_comparisons() -> None:
     assert metrics.dossier(data, "wc:404", end=T0, tz=TZ) is None
 
 
+def test_dossier_lab_nonconforming_ignores_out_of_scope_coas() -> None:
+    data = ds([o("wc:1", 0, oid=10, number="10")],
+              coas=[Coa("10", "P-1", "BPC-157", True, T0), Coa("999", "P-9", "BPC-157", False, T0)])
+    d = metrics.dossier(data, "wc:1", end=T0 + timedelta(days=1), tz=TZ)
+    assert d["kpis"]["lab_nonconforming_rate"] == 0.0   # order 999 is not in scope
+
+
 def test_dossier_without_sla_or_coas() -> None:
     d = metrics.dossier(ds([o("wc:1", 0)]), "wc:1", end=T0 + timedelta(days=1), tz=TZ)
     assert d["kpis"]["on_time_rate"] is None and d["kpis"]["nonconforming_rate"] is None

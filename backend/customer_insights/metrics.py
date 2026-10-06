@@ -259,6 +259,7 @@ def dossier(ds: Dataset, key: str, *, end: datetime, tz: str) -> dict[str, Any] 
         return _rate(len(delivered - ds.late_orders), len(delivered))
 
     all_numbers = {x.order_number for x in ds.orders if x.paid_at <= end}
+    lab_coas = [x for x in ds.coas if x.order_number in all_numbers]  # scope() filters orders, not COAs
     monthly: dict[str, dict[str, Any]] = defaultdict(lambda: {"spend": ZERO, "samples": 0})
     for x in orders:
         m = monthly[rules.lab_month(x.paid_at, tz)]
@@ -287,7 +288,7 @@ def dossier(ds: Dataset, key: str, *, end: datetime, tz: str) -> dict[str, Any] 
             "usual_gap_days": round(rules.usual_gap_days(dates), 1) if len(dates) >= 3 else None,
             "gap_iqr": iqr,
             "nonconforming_rate": _rate(sum(not x.passed for x in mine), len(mine)),
-            "lab_nonconforming_rate": _rate(sum(not x.passed for x in ds.coas), len(ds.coas)),
+            "lab_nonconforming_rate": _rate(sum(not x.passed for x in lab_coas), len(lab_coas)),
             "on_time_rate": on_time(numbers), "lab_on_time_rate": on_time(all_numbers),
         },
         "status": rules.spend_status(paid_orders=len(orders), at_risk=risk, period=period, prior=prior),
