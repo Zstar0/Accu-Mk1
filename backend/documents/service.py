@@ -20,7 +20,7 @@ from sqlalchemy.orm import Session, lazyload
 
 from documents.errors import BadRequestError, ConflictError, NotFoundError
 from documents.models import (Document, DocumentCategory, DocumentCodeCounter, DocumentSpace,
-                              DocumentSpaceGrant)  # noqa: F401
+                              DocumentSpaceGrant, SPACE_VISIBILITIES)  # noqa: F401
 from documents.storage import get_storage
 
 PREFIX_RE = re.compile(r"^[A-Z0-9]{2,10}$")
@@ -30,7 +30,6 @@ STATUSES = ("draft", "active", "retired")
 SORTS = ("updated_at", "title", "code", "effective_date")
 GENERAL_SLUG = "general"
 SPACE_SLUG_RE = re.compile(r"^[a-z0-9][a-z0-9-]{0,59}$")
-SPACE_VISIBILITIES = ("company", "restricted")
 
 # (name, code_prefix, description, sort_order) — seeded idempotently at boot.
 _SEED_CATEGORIES = (
@@ -242,6 +241,85 @@ def list_spaces(db: Session, include_inactive: bool = False) -> list[tuple[Docum
     # General first regardless of sort_order (spec 9.1).
     rows = sorted(rows, key=lambda sp: (0 if sp.slug == GENERAL_SLUG else 1))
     return [(sp, counts.get(sp.id, 0)) for sp in rows]
+
+
+
+def create_space(db: Session, *, slug: str, name: str, description: Optional[str] = None,
+                 visibility: str = "company", sort_order: int = 0) -> DocumentSpace:
+    slug = _clean_slug(slug)
+    name = _clean_name(name)
+    if visibility not in SPACE_VISIBILITIES:
+        raise BadRequestError(f"visibility must be one of {SPACE_VISIBILITIES}")
+    if db.execute(select(DocumentSpace.id).where(DocumentSpace.slug == slug)).scalar_one_or_none():
+        raise ConflictError(f"space slug {slug!r} is taken")
+    sp = DocumentSpace(slug=slug, name=name, description=(description or "").strip() or None,
+                       visibility=visibility, sort_order=int(sort_order))
+    db.add(sp)
+    db.commit()
+    db.refresh(sp)
+    return sp
+
+
+def update_space(db: Session, space_id: int, **fields) -> DocumentSpace:
+    sp = get_space(db, space_id)
+    allowed = {"name", "description", "visibility", "is_active", "sort_order"}
+    unknown = set(fields) - allowed
+    if unknown:
+        raise BadRequestError(f"cannot update {sorted(unknown)}")
+    if sp.slug == GENERAL_SLUG:
+        if fields.get("visibility") == "restricted":
+            raise BadRequestError("General is always company-visible")
+        if fields.get("is_active") is False:
+            raise BadRequestError("General cannot be deactivated")
+    if fields.get("visibility") is not None and fields["visibility"] not in SPACE_VISIBILITIES:
+        raise BadRequestError(f"visibility must be one of {SPACE_VISIBILITIES}")
+    if fields.get("name") is not None:
+        sp.name = _clean_name(fields["name"])
+    if "description" in fields:
+        sp.description = (fields["description"] or "").strip() or None
+    if fields.get("visibility") is not None:
+        sp.visibility = fields["visibility"]
+    if fields.get("is_active") is not None:
+        sp.is_active = bool(fields["is_active"])
+    if fields.get("sort_order") is not None:
+        sp.sort_order = int(fields["sort_order"])
+    db.commit()
+    db.refresh(sp)
+    return sp
+
+
+def list_space_grants(db: Session, space_id: int) -> list[int]:
+    get_space(db, space_id)
+    return sorted(int(g) for g in db.execute(
+        select(DocumentSpaceGrant.group_id).where(DocumentSpaceGrant.space_id == space_id)).scalars())
+
+
+def replace_space_grants(db: Session, space_id: int, group_ids: list[int]) -> list[int]:
+    """Whole-list replace. Every id must be an ACTIVE group (spec 8.1)."""
+    from groups.models import UserGroup
+    get_space(db, space_id)
+    wanted = sorted(set(int(g) for g in group_ids))
+    if wanted:
+        ok = set(db.execute(select(UserGroup.id).where(UserGroup.id.in_(wanted),
+                                                       UserGroup.is_active.is_(True))).scalars())
+        bad = [g for g in wanted if g not in ok]
+        if bad:
+            raise BadRequestError(f"unknown or inactive group ids: {bad}")
+    db.query(DocumentSpaceGrant).filter(DocumentSpaceGrant.space_id == space_id).delete()
+    db.add_all([DocumentSpaceGrant(space_id=space_id, group_id=g) for g in wanted])
+    db.commit()
+    return wanted
+
+
+def delete_space(db: Session, space_id: int) -> None:
+    sp = get_space(db, space_id)
+    if sp.slug == GENERAL_SLUG:
+        raise BadRequestError("General cannot be deleted")
+    held = db.execute(select(func.count(Document.id)).where(Document.space_id == sp.id)).scalar_one()
+    if held:
+        raise ConflictError(f"space {sp.slug!r} still holds {held} document revision(s); move them first")
+    db.delete(sp)
+    db.commit()
 
 
 # --- code minting --------------------------------------------------------------

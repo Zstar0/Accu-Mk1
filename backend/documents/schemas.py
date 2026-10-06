@@ -60,6 +60,7 @@ class SpaceCreate(BaseModel):
 
 class SpaceUpdate(BaseModel):
     """Partial. No slug: immutable."""
+    model_config = ConfigDict(extra="forbid")
     name: Optional[str] = None
     description: Optional[str] = None
     visibility: Optional[str] = None

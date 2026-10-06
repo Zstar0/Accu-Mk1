@@ -9,7 +9,7 @@ from dataclasses import dataclass
 from types import SimpleNamespace
 from typing import Dict, List, Optional
 
-from fastapi import APIRouter, Depends, Header, HTTPException, Query, Response, status
+from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request, Response, status
 from fastapi.security import OAuth2PasswordBearer
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
@@ -127,6 +127,28 @@ def require_document_admin_writer(writer=Depends(require_document_writer)):
     return writer
 
 
+def _space_reader(
+    request: Request,
+    x_service_token: Optional[str] = Header(None),
+    token: Optional[str] = Depends(_optional_bearer),
+    db: Session = Depends(get_db),
+):
+    """GET /document-spaces: a login sees what it can read; an agent token sees its
+    allow-list (the MCP's documents_spaces tool). Internal token: everything."""
+    if x_service_token is not None:
+        agent = _match_agent(x_service_token)
+        if agent is not None:
+            return agent
+        require_internal_service_token(x_service_token)
+        return None
+    # Resolved through dependency_overrides so tests (and any future auth swap) apply.
+    # get_current_user cannot be a plain Depends here: it would 401 agent-token callers.
+    resolve = request.app.dependency_overrides.get(get_current_user, get_current_user)
+    if resolve is get_current_user and not token:
+        raise HTTPException(status.HTTP_401_UNAUTHORIZED, "authentication required")
+    return resolve() if resolve is not get_current_user else get_current_user(token=token, db=db)
+
+
 def _reader_for(writer):
     """The identity the READ gate uses on a write route. Admin bearer: that user.
     Agent token or internal token: an unrestricted pseudo-reader (their allow-list,
@@ -234,6 +256,71 @@ def delete_category(category_id: int, db: Session = Depends(get_db),
                     writer=Depends(require_document_admin_writer)):
     try:
         service.delete_category(db, category_id)
+    except Exception as e:
+        raise _http(e)
+    return Response(status_code=204)
+
+
+# --- spaces (spec 2026-10-06 section 8.1) ------------------------------------------------
+
+@router.get("/document-spaces", response_model=List[SpaceOut])
+def list_spaces(include_inactive: bool = False, db: Session = Depends(get_db),
+                who=Depends(_space_reader)):
+    rows = service.list_spaces(db, include_inactive=include_inactive)
+    if isinstance(who, AgentWriter):
+        return [_space_out(sp, n, True) for sp, n in rows if sp.slug in who.spaces]
+    if who is None:
+        return [_space_out(sp, n, True) for sp, n in rows]
+    from groups.access import is_admin
+    return [_space_out(sp, n, is_admin(who)) for sp, n in rows if access.can_view_space(db, who, sp)]
+
+
+@router.post("/document-spaces", response_model=SpaceOut, status_code=201)
+def create_space(req: SpaceCreate, db: Session = Depends(get_db),
+                 writer=Depends(require_document_admin_writer)):
+    try:
+        sp = service.create_space(db, slug=req.slug, name=req.name, description=req.description,
+                                  visibility=req.visibility, sort_order=req.sort_order)
+    except Exception as e:
+        raise _http(e)
+    return _space_out(sp, 0, True)
+
+
+@router.put("/document-spaces/{space_id}", response_model=SpaceOut)
+def update_space(space_id: int, req: SpaceUpdate, db: Session = Depends(get_db),
+                 writer=Depends(require_document_admin_writer)):
+    try:
+        sp = service.update_space(db, space_id, **req.model_dump(exclude_unset=True))
+        count = dict((s.id, n) for s, n in service.list_spaces(db, include_inactive=True)).get(sp.id, 0)
+    except Exception as e:
+        raise _http(e)
+    return _space_out(sp, count, True)
+
+
+@router.get("/document-spaces/{space_id}/grants", response_model=SpaceGrantsOut)
+def get_space_grants(space_id: int, db: Session = Depends(get_db),
+                     writer=Depends(require_document_admin_writer)):
+    try:
+        return SpaceGrantsOut(space_id=space_id, group_ids=service.list_space_grants(db, space_id))
+    except Exception as e:
+        raise _http(e)
+
+
+@router.put("/document-spaces/{space_id}/grants", response_model=SpaceGrantsOut)
+def put_space_grants(space_id: int, req: SpaceGrantsReplace, db: Session = Depends(get_db),
+                     writer=Depends(require_document_admin_writer)):
+    try:
+        ids = service.replace_space_grants(db, space_id, req.group_ids)
+    except Exception as e:
+        raise _http(e)
+    return SpaceGrantsOut(space_id=space_id, group_ids=ids)
+
+
+@router.delete("/document-spaces/{space_id}", status_code=204)
+def delete_space(space_id: int, db: Session = Depends(get_db),
+                 writer=Depends(require_document_admin_writer)):
+    try:
+        service.delete_space(db, space_id)
     except Exception as e:
         raise _http(e)
     return Response(status_code=204)
