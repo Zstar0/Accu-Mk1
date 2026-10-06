@@ -615,6 +615,47 @@ def _seed_rows_from_services(
     return inserted
 
 
+def _seed_native_bw_rows(
+    db: Session,
+    *,
+    sub_sample: LimsSubSample,
+    existing_kw: set,
+    existing_service_ids: set,
+    created_by_user_id: Optional[int],
+    commit: bool,
+) -> List[LimsAnalysis]:
+    """Seed the bacteriostatic-water-panel members on a native-born BW hplc
+    vial, through the same per-profile origin gate as every catalog family.
+    Live profile membership, like seed_native_hplc_rows' native_hplc_services
+    read. No members (profile missing, empty, or mixed-origin) is logged as an
+    ERROR and seeds nothing: never raised, because set_assignment_role runs
+    this inside the vial check-in transaction."""
+    from catalog.bw_native_seed import BW_NATIVE_PROFILE_KEY
+
+    prof = db.query(AnalysisProfile).filter_by(key=BW_NATIVE_PROFILE_KEY).one_or_none()
+    services = (
+        _members_through_origin_gate([(prof, prof.key, prof.analysis_services)])
+        if prof is not None else []
+    )
+    if not services:
+        log.error(
+            "seeder.native_bw.no_panel_members sub=%s profile=%s: native-born "
+            "Bac Water vial seeded nothing; check the catalog seed",
+            sub_sample.sample_id, BW_NATIVE_PROFILE_KEY,
+        )
+        return []
+    return _seed_rows_from_services(
+        db,
+        sub_sample=sub_sample,
+        services=services,
+        existing_kw=existing_kw,
+        existing_service_ids=existing_service_ids,
+        created_by_user_id=created_by_user_id,
+        commit=commit,
+        log_event="native_bw_seeded",
+    )
+
+
 def _analytical_vials_for_role(
     db: Session, *, sub_sample: LimsSubSample, role: str
 ) -> Optional[int]:
@@ -741,12 +782,24 @@ def seed_analyses_for_vial(
 
     # ── HPLC ──────────────────────────────────────────────────────────────────
     if role == "hplc":
-        from lims_analyses.hplc_native import is_native_born, seed_native_hplc_rows
+        from catalog.bw_keys import is_bw_sample
+        from lims_analyses import hplc_native
         parent = sub_sample.parent_sample if sub_sample.parent_sample_pk else None
-        if parent is not None and is_native_born(parent):
-            # Native-born (spec 2026-09-10 M4): no SENAITE AR to mirror — the
+        if parent is not None and hplc_native.is_native_born(parent) and is_bw_sample(parent):
+            # Native-born Bac Water (spec 2026-10-05 MB4, as ruled in the
+            # plan): the panel is seeded HERE on the vial and promoted like
+            # every other native family. A parent-tier 'ordered' placeholder
+            # cannot take a result (state_machine TIER_PARENT has no submit)
+            # and native_sections certifies only promoted canonical rows.
+            inserted = _seed_native_bw_rows(
+                db, sub_sample=sub_sample,
+                existing_kw=existing_kw, existing_service_ids=existing_service_ids,
+                created_by_user_id=created_by_user_id, commit=commit,
+            )
+        elif parent is not None and hplc_native.is_native_born(parent):
+            # Native-born (spec 2026-09-10 M4): no SENAITE AR to mirror; the
             # trio per analyte slot comes from lims_samples.analytes.
-            inserted = seed_native_hplc_rows(
+            inserted = hplc_native.seed_native_hplc_rows(
                 db, sub_sample=sub_sample, parent=parent,
                 existing_keys=existing_kw, existing_service_ids=existing_service_ids,
                 created_by_user_id=created_by_user_id, commit=commit,
