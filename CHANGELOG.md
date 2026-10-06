@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## v1.33.0 - 2026-10-06
+
 ### Planning boards, slice 1: groups and boards backend
 - **Deactivating a group suspends its board grants** (spec 4.8): members of a deactivated group lose the restricted boards and flags it granted until it is re-activated; admins are unaffected.
 - **User groups.** New `user_groups` / `user_group_members` tables, admin CRUD at `/api/groups`, a Groups pane in Settings (create, rename, deactivate, edit members; delete only when unused). Groups are the unit of access for boards and, through board nodes, for flags.
