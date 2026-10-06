@@ -281,3 +281,73 @@ def test_for_entity_lists_visible_boards_only(client):
     client.as_user(EDITOR)
     r = client.get("/api/boards/for-entity", params={"entity_type": "worksheet", "entity_id": "1"})
     assert sorted(x["board_slug"] for x in r.json()) == ["exec", "org"]
+
+
+# --- document spaces (spec 2026-10-06 section 9.3) ----------------------------------------
+
+_DOC_HTML = ("<!doctype html><html><head><title>t</title><style>/* accumark-docs v1 */</style>"
+             "</head><body><p>hi</p></body></html>")
+
+
+def _secret_document(db):
+    """A document in a restricted space granted to a group holding VIEWER only. Documents
+    models are imported here, never at module level (boards stays lazy about documents)."""
+    from database import Base
+    import documents.models  # noqa: F401
+    from documents import service as docs, storage
+    from documents.models import DocumentSpace, DocumentSpaceGrant
+    from groups.models import UserGroup, UserGroupMember
+    Base.metadata.create_all(db.get_bind())
+    storage.set_storage_for_tests(storage.InMemoryDocumentStorage())
+    docs.seed_categories(db)
+    docs.seed_spaces(db)
+    g = UserGroup(slug="leaders", name="Leaders")
+    sp = DocumentSpace(slug="leadership", name="Leadership", visibility="restricted")
+    db.add_all([g, sp])
+    db.flush()
+    db.add_all([UserGroupMember(group_id=g.id, user_id=VIEWER.id),
+                DocumentSpaceGrant(space_id=sp.id, group_id=g.id)])
+    db.commit()
+    cat = docs.resolve_category(db, category="ART")
+    doc, _ = docs.create_document(db, title="Q4 layoffs plan", html=_DOC_HTML, category=cat, space=sp)
+    return doc
+
+
+def _entity_nodes(client, slug="org"):
+    return [n for n in client.get(f"/api/boards/{slug}").json()["nodes"] if n["kind"] == "entity"]
+
+
+def test_hidden_document_node_renders_restricted_code_only(client):
+    doc = _secret_document(client.db)
+    client.as_user(ADMIN)
+    made = _node(client, kind="entity", label="", entity_type="document", entity_id=doc.code)
+    assert made["label"] == f"{doc.code} · Q4 layoffs plan"
+    for who in (ADMIN, VIEWER):
+        client.as_user(who)
+        [n] = _entity_nodes(client)
+        assert n["context"]["label"] == f"{doc.code} · Q4 layoffs plan"
+    client.as_user(OUTSIDER)
+    r = client.get("/api/boards/org")
+    assert "Q4 layoffs" not in r.text
+    [n] = [x for x in r.json()["nodes"] if x["kind"] == "entity"]
+    assert n["label"] == doc.code
+    assert n["context"] == {"entity_type": "document", "entity_id": doc.code, "label": "Restricted",
+                            "sample_id": None, "analyses": [], "lot": None, "deep_link": None}
+    # A write that echoes the node (positions) masks it too.
+    client.as_user(EDITOR)
+    r = client.patch("/api/boards/org/nodes/positions",
+                     json=[{"id": n["id"], "version": n["version"], "x": 5, "y": 5}])
+    assert r.status_code == 200, r.text
+    assert "Q4 layoffs" not in r.text
+
+
+def test_pinning_a_hidden_document_reads_as_missing(client):
+    doc = _secret_document(client.db)
+    client.as_user(EDITOR)  # may edit `org`, cannot see the leadership space
+    hidden = client.post("/api/boards/org/nodes",
+                         json={"kind": "entity", "entity_type": "document", "entity_id": doc.code})
+    missing = client.post("/api/boards/org/nodes",
+                          json={"kind": "entity", "entity_type": "document", "entity_id": "ART-9999"})
+    assert hidden.status_code == missing.status_code == 400
+    assert hidden.json()["detail"].replace(doc.code, "X") == missing.json()["detail"].replace("ART-9999", "X")
+    assert "Q4 layoffs" not in hidden.text
