@@ -183,27 +183,27 @@ function CustomerListView() {
     staleTime: 60_000,
   })
 
-  // Insight columns (Customer Insights). Joined to the explorer rows by
-  // customer key. period=all makes the spend column the last 90 days.
-  // ponytail: top 200 by lifetime for the current search; rows beyond that
-  // show a dash until the explorer list is retired.
-  const { data: insightData } = useQuery({
-    queryKey: ['customers', 'list', 'all', customerSearchTerm, envName],
-    queryFn: () =>
-      getCustomerList({
-        period: 'all',
-        search: customerSearchTerm || undefined,
-        sort: 'lifetime',
-        dir: 'desc',
-        page: 1,
-        page_size: 200,
-      }),
+  // Insight columns (Customer Insights). Every customer's 90d row is paged in
+  // (200 per call) and joined to the explorer rows by customer key, so rows
+  // are never missing just because the explorer sorts by recency.
+  const { data: insightRows, isError: insightError } = useQuery({
+    queryKey: ['customers', 'list', '90d', envName],
+    queryFn: async () => {
+      const all: InsightRow[] = []
+      for (let page = 1; ; page++) {
+        const res = await getCustomerList({
+          period: '90d',
+          page_size: 200,
+          page,
+        })
+        all.push(...res.rows)
+        if (res.rows.length === 0 || all.length >= res.total) return all
+      }
+    },
     enabled: status?.connected === true,
     staleTime: 60_000,
   })
-  const insightByKey = new Map(
-    (insightData?.rows ?? []).map(r => [r.key, r] as const)
-  )
+  const insightByKey = new Map((insightRows ?? []).map(r => [r.key, r] as const))
 
   // --- Derived (no client-side filter — D-07, T-29-03) ---
   const customers = customersData?.customers ?? []
@@ -316,6 +316,12 @@ function CustomerListView() {
             Retry
           </Button>
         </Alert>
+      )}
+
+      {insightError && (
+        <p className="text-xs text-muted-foreground">
+          Spend insights unavailable
+        </p>
       )}
 
       {/* Customers card */}

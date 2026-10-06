@@ -142,8 +142,12 @@ vi.mock('@/components/explorer/senaite-queue', () => ({
   }),
 }))
 
-const { getExplorerStatus, getExplorerCustomers, getExplorerOrdersByCustomer } =
-  await import('@/lib/api')
+const {
+  getCustomerList,
+  getExplorerStatus,
+  getExplorerCustomers,
+  getExplorerOrdersByCustomer,
+} = await import('@/lib/api')
 const { enqueueSenaiteLookup } = await import(
   '@/components/explorer/senaite-queue'
 )
@@ -252,6 +256,15 @@ describe('CustomerStatusPage — list view', () => {
     resetState()
     vi.mocked(getExplorerStatus).mockReset()
     vi.mocked(getExplorerCustomers).mockReset()
+    vi.mocked(getCustomerList).mockReset()
+    vi.mocked(getCustomerList).mockResolvedValue({
+      tz: 'UTC',
+      synced_at: null,
+      rows: [],
+      total: 0,
+      page: 1,
+      page_size: 200,
+    })
     vi.mocked(getExplorerStatus).mockResolvedValue({ connected: true })
     vi.mocked(getExplorerCustomers).mockResolvedValue({
       customers: FIVE_CUSTOMERS_PLUS_GUEST,
@@ -289,6 +302,45 @@ describe('CustomerStatusPage — list view', () => {
       'Top tests',
       'Status',
     ])
+  })
+
+  it('joins insight cells by wc:<id> key across paged results', async () => {
+    const row = {
+      key: 'wc:1',
+      name: 'Alice A',
+      email: 'a@example.com',
+      company: null,
+      period_spend: '4321.00',
+      prior_spend: '1000.00',
+      delta_pct: 3.3,
+      lifetime: '9000.00',
+      orders: 3,
+      samples: 7,
+      usual_gap_days: 12,
+      last_order_at: null,
+      top_tests: ['HPLC'],
+      status: 'growing',
+      monthly: [],
+    }
+    vi.mocked(getCustomerList).mockResolvedValue({
+      tz: 'UTC',
+      synced_at: null,
+      rows: [row],
+      total: 1,
+      page: 1,
+      page_size: 200,
+    })
+    render(<CustomerStatusPage />, { wrapper })
+    expect(await screen.findByText('$4,321')).toBeInTheDocument()
+    expect(screen.getByText('Growing')).toBeInTheDocument()
+  })
+
+  it('shows a muted note when the insight query fails', async () => {
+    vi.mocked(getCustomerList).mockRejectedValue(new Error('boom'))
+    render(<CustomerStatusPage />, { wrapper })
+    expect(
+      await screen.findByText('Spend insights unavailable')
+    ).toBeInTheDocument()
   })
 
   it('renders one row per customer plus header (5 registered + 1 guest + header = 7 rows)', async () => {

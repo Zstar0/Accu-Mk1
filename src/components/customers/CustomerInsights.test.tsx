@@ -29,7 +29,7 @@ vi.mock('recharts', async importOriginal => {
 
 const k = <T,>(value: T, prior: T | null = null) => ({ value, prior })
 
-function setup() {
+function setup(riskFails = false) {
   vi.mocked(api.getCustomerSummary).mockResolvedValue({
     tz: 'America/Los_Angeles',
     synced_at: '2026-10-05T18:00:00Z',
@@ -86,6 +86,8 @@ function setup() {
       },
     ],
   })
+  if (riskFails)
+    vi.mocked(api.getCustomerAtRisk).mockRejectedValue(new Error('boom'))
   const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } })
   return render(
     <QueryClientProvider client={qc}>
@@ -105,5 +107,14 @@ describe('CustomerInsights', () => {
     ).toBeInTheDocument()
     expect(screen.getByText('5.2× gap')).toBeInTheDocument()
     expect(screen.getByText(/orders synced/i)).toBeInTheDocument()
+  })
+
+  it('shows an error with Retry, and no overdue badge, when at-risk fails', async () => {
+    setup(true)
+    expect(
+      await screen.findByText(/Failed to load at-risk customers/)
+    ).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Retry' })).toBeInTheDocument()
+    expect(screen.queryByText(/overdue$/)).not.toBeInTheDocument()
   })
 })

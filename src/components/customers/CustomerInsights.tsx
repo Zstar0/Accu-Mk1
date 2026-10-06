@@ -23,7 +23,13 @@ import {
   TooltipContent,
   TooltipTrigger,
 } from '@/components/ui/tooltip'
-import { cohortTint, fmtDelta, fmtMoney, fmtPct } from './insights-utils'
+import {
+  cohortTint,
+  fmtDelta,
+  fmtMoney,
+  fmtPct,
+  fmtPoints,
+} from './insights-utils'
 
 const PERIODS: { key: InsightsPeriod; label: string }[] = [
   { key: '30d', label: '30D' },
@@ -78,6 +84,23 @@ function Kpi({
         {delta.text}
         {suffix}
       </div>
+    </div>
+  )
+}
+
+function SectionError({
+  label,
+  onRetry,
+}: {
+  label: string
+  onRetry: () => void
+}) {
+  return (
+    <div className="flex items-center justify-center gap-2 py-6 text-sm text-red-500">
+      <XCircle className="h-4 w-4" /> Failed to load {label}
+      <button type="button" className="underline" onClick={onRetry}>
+        Retry
+      </button>
     </div>
   )
 }
@@ -199,11 +222,9 @@ export function CustomerInsights({
             <Kpi
               label="Repeat rate"
               value={fmtPct(s.kpis.repeat_rate.value)}
-              delta={fmtDelta(
-                s.kpis.repeat_rate.value != null &&
-                  s.kpis.repeat_rate.prior != null
-                  ? s.kpis.repeat_rate.value - s.kpis.repeat_rate.prior
-                  : null
+              delta={fmtPoints(
+                s.kpis.repeat_rate.value,
+                s.kpis.repeat_rate.prior
               )}
             />
             <Kpi
@@ -289,150 +310,170 @@ export function CustomerInsights({
                 Share of each first-order month&apos;s customers who ordered
                 again N months later (launch accounts excluded)
               </p>
-              <table className="w-full text-xs tabular-nums">
-                <thead>
-                  <tr className="text-muted-foreground">
-                    <th className="py-1 text-left font-medium">Cohort</th>
-                    <th className="font-medium">n</th>
-                    {cohorts.data?.months.slice(0, 6).map(m => (
-                      <th key={m} className="font-medium">
-                        {m}
-                      </th>
-                    ))}
-                  </tr>
-                </thead>
-                <tbody>
-                  {cohorts.data?.rows.map(r => (
-                    <tr key={r.cohort}>
-                      <td className="py-0.5">{r.cohort}</td>
-                      <td className="text-center">{r.size}</td>
-                      {r.cells.slice(0, 6).map((c, i) => (
-                        <td
-                          key={i}
-                          className={cn('rounded text-center', cohortTint(c))}
-                        >
-                          {c == null ? '' : fmtPct(c, c < 0.2 ? 1 : 0)}
-                        </td>
+              {cohorts.error ? (
+                <SectionError
+                  label="cohorts"
+                  onRetry={() => cohorts.refetch()}
+                />
+              ) : (
+                <table className="w-full text-xs tabular-nums">
+                  <thead>
+                    <tr className="text-muted-foreground">
+                      <th className="py-1 text-left font-medium">Cohort</th>
+                      <th className="font-medium">n</th>
+                      {cohorts.data?.months.slice(0, 6).map(m => (
+                        <th key={m} className="font-medium">
+                          {m}
+                        </th>
                       ))}
                     </tr>
-                  ))}
-                </tbody>
-              </table>
+                  </thead>
+                  <tbody>
+                    {cohorts.data?.rows.map(r => (
+                      <tr key={r.cohort}>
+                        <td className="py-0.5">{r.cohort}</td>
+                        <td className="text-center">{r.size}</td>
+                        {r.cells.slice(0, 6).map((c, i) => (
+                          <td
+                            key={i}
+                            className={cn('rounded text-center', cohortTint(c))}
+                          >
+                            {c == null ? '' : fmtPct(c, c < 0.2 ? 1 : 0)}
+                          </td>
+                        ))}
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              )}
             </section>
           </div>
 
           <section className={CARD}>
             <h2 className="text-sm font-medium">
               At-risk customers
-              <span className="ml-2 rounded-full bg-red-500/15 px-2 text-xs text-red-700 dark:text-red-300">
-                {risk.data?.rows.length ?? 0} overdue
-              </span>
+              {risk.data && (
+                <span className="ml-2 rounded-full bg-red-500/15 px-2 text-xs text-red-700 dark:text-red-300">
+                  {risk.data.rows.length} overdue
+                </span>
+              )}
             </h2>
             <p className="mb-2 text-[11px] text-muted-foreground">
               Overdue against their own usual re-order gap, ranked by 12-month
               spend
             </p>
-            <table className="w-full text-sm tabular-nums">
-              <thead>
-                <tr className="text-[11px] uppercase tracking-wider text-muted-foreground">
-                  <th className="py-1 text-left font-medium">Customer</th>
-                  <th className="text-right font-medium">12-mo spend</th>
-                  <th className="text-right font-medium">Orders</th>
-                  <th className="text-right font-medium">Usual gap</th>
-                  <th className="text-right font-medium">Last order</th>
-                  <th className="text-right font-medium">Overdue</th>
-                </tr>
-              </thead>
-              <tbody>
-                {risk.data?.rows.map(r => {
-                  // Guest (email:) rows are not openable until key-based detail lands.
-                  const openable = r.key.startsWith('wc:')
-                  return (
-                    <Tooltip key={r.key}>
-                      <TooltipTrigger asChild>
-                        <tr
-                          className={cn(
-                            'border-t border-border/20 hover:bg-muted/30',
-                            openable && 'cursor-pointer'
-                          )}
-                          tabIndex={openable ? 0 : undefined}
-                          onClick={
-                            openable ? () => onOpenCustomer(r.key) : undefined
-                          }
-                          onKeyDown={
-                            openable
-                              ? e => {
-                                  if (e.key === 'Enter') onOpenCustomer(r.key)
-                                }
-                              : undefined
-                          }
-                        >
-                          <td className="py-1.5 font-medium">{r.name}</td>
-                          <td className="text-right">
-                            {fmtMoney(r.spend_12m)}
-                          </td>
-                          <td className="text-right">{r.orders}</td>
-                          <td className="text-right">
-                            {r.usual_gap_days == null
-                              ? 'n/a'
-                              : `${r.usual_gap_days} d`}
-                          </td>
-                          <td className="text-right">
-                            {r.last_order_at
-                              ? new Date(r.last_order_at).toLocaleDateString(
-                                  'en-US',
-                                  {
-                                    month: 'short',
-                                    day: 'numeric',
-                                    timeZone: s.tz,
+            {risk.error ? (
+              <SectionError
+                label="at-risk customers"
+                onRetry={() => risk.refetch()}
+              />
+            ) : risk.data && risk.data.rows.length === 0 ? (
+              <p className="py-4 text-center text-sm text-muted-foreground">
+                No customers are overdue right now
+              </p>
+            ) : (
+              <table className="w-full text-sm tabular-nums">
+                <thead>
+                  <tr className="text-[11px] uppercase tracking-wider text-muted-foreground">
+                    <th className="py-1 text-left font-medium">Customer</th>
+                    <th className="text-right font-medium">12-mo spend</th>
+                    <th className="text-right font-medium">Orders</th>
+                    <th className="text-right font-medium">Usual gap</th>
+                    <th className="text-right font-medium">Last order</th>
+                    <th className="text-right font-medium">Overdue</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {risk.data?.rows.map(r => {
+                    // Guest (email:) rows are not openable until key-based detail lands.
+                    const openable = r.key.startsWith('wc:')
+                    return (
+                      <Tooltip key={r.key}>
+                        <TooltipTrigger asChild>
+                          <tr
+                            className={cn(
+                              'border-t border-border/20 hover:bg-muted/30',
+                              openable && 'cursor-pointer'
+                            )}
+                            tabIndex={openable ? 0 : undefined}
+                            onClick={
+                              openable ? () => onOpenCustomer(r.key) : undefined
+                            }
+                            onKeyDown={
+                              openable
+                                ? e => {
+                                    if (e.key === 'Enter') onOpenCustomer(r.key)
                                   }
-                                )
-                              : ''}
-                          </td>
-                          <td className="text-right">
-                            <span
-                              className={cn(
-                                'rounded-full px-2 text-xs font-semibold',
-                                r.overdue >= 3
-                                  ? 'bg-red-500/15 text-red-700 dark:text-red-300'
-                                  : 'bg-amber-500/15 text-amber-700 dark:text-amber-300'
-                              )}
-                            >
-                              {r.overdue}× gap
-                            </span>
-                          </td>
-                        </tr>
-                      </TooltipTrigger>
-                      <TooltipContent className="max-w-xs p-0">
-                        <div className="flex flex-col gap-1.5 p-3 font-mono text-xs">
-                          <div className="border-b border-primary-foreground/20 pb-1.5 font-semibold">
-                            {r.name}
+                                : undefined
+                            }
+                          >
+                            <td className="py-1.5 font-medium">{r.name}</td>
+                            <td className="text-right">
+                              {fmtMoney(r.spend_12m)}
+                            </td>
+                            <td className="text-right">{r.orders}</td>
+                            <td className="text-right">
+                              {r.usual_gap_days == null
+                                ? 'n/a'
+                                : `${r.usual_gap_days} d`}
+                            </td>
+                            <td className="text-right">
+                              {r.last_order_at
+                                ? new Date(r.last_order_at).toLocaleDateString(
+                                    'en-US',
+                                    {
+                                      month: 'short',
+                                      day: 'numeric',
+                                      timeZone: s.tz,
+                                    }
+                                  )
+                                : ''}
+                            </td>
+                            <td className="text-right">
+                              <span
+                                className={cn(
+                                  'rounded-full px-2 text-xs font-semibold',
+                                  r.overdue >= 3
+                                    ? 'bg-red-500/15 text-red-700 dark:text-red-300'
+                                    : 'bg-amber-500/15 text-amber-700 dark:text-amber-300'
+                                )}
+                              >
+                                {r.overdue}× gap
+                              </span>
+                            </td>
+                          </tr>
+                        </TooltipTrigger>
+                        <TooltipContent className="max-w-xs p-0">
+                          <div className="flex flex-col gap-1.5 p-3 font-mono text-xs">
+                            <div className="border-b border-primary-foreground/20 pb-1.5 font-semibold">
+                              {r.name}
+                            </div>
+                            <div>{r.email ?? 'no email'}</div>
+                            <div>
+                              Usual gap{' '}
+                              {r.usual_gap_days == null
+                                ? 'n/a'
+                                : `${r.usual_gap_days} d`}
+                              {' · '}last order{' '}
+                              {r.last_order_at
+                                ? r.last_order_at.slice(0, 10)
+                                : 'n/a'}
+                            </div>
+                            <div className="border-t border-primary-foreground/20 pt-1.5">
+                              Lifetime {fmtMoney(r.lifetime)} · {r.samples}{' '}
+                              samples
+                            </div>
+                            <div>
+                              Top tests: {r.top_tests.join(', ') || 'n/a'}
+                            </div>
                           </div>
-                          <div>{r.email ?? 'no email'}</div>
-                          <div>
-                            Usual gap{' '}
-                            {r.usual_gap_days == null
-                              ? 'n/a'
-                              : `${r.usual_gap_days} d`}
-                            {' · '}last order{' '}
-                            {r.last_order_at
-                              ? r.last_order_at.slice(0, 10)
-                              : 'n/a'}
-                          </div>
-                          <div className="border-t border-primary-foreground/20 pt-1.5">
-                            Lifetime {fmtMoney(r.lifetime)} · {r.samples}{' '}
-                            samples
-                          </div>
-                          <div>
-                            Top tests: {r.top_tests.join(', ') || 'n/a'}
-                          </div>
-                        </div>
-                      </TooltipContent>
-                    </Tooltip>
-                  )
-                })}
-              </tbody>
-            </table>
+                        </TooltipContent>
+                      </Tooltip>
+                    )
+                  })}
+                </tbody>
+              </table>
+            )}
           </section>
 
           <div className="grid gap-3 lg:grid-cols-3">

@@ -19,6 +19,18 @@ export function fmtDelta(x: number | null | undefined): {
   return { text, tone: x > 0 ? 'up' : 'down' }
 }
 
+/** Change in a rate, in percentage points (the inputs are 0..1 shares). */
+export function fmtPoints(
+  value: number | null | undefined,
+  prior: number | null | undefined
+): { text: string; tone: 'up' | 'down' | 'flat' } {
+  if (value == null || prior == null) return { text: 'n/a', tone: 'flat' }
+  const pts = (value - prior) * 100
+  const text = `${pts >= 0 ? '▲' : '▼'} ${Math.abs(pts).toFixed(1)} pts`
+  if (Math.abs(pts) < 1) return { text, tone: 'flat' }
+  return { text, tone: pts > 0 ? 'up' : 'down' }
+}
+
 export const STATUS_LABEL: Record<string, string> = {
   at_risk: 'At risk',
   dropping: 'Dropping',
