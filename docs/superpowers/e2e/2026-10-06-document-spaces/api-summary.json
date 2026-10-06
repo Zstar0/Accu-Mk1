@@ -1,5 +1,5 @@
 {
-  "run": "luvc",
+  "run": "updw",
   "1_setup": {
     "create_users": [
       200,
@@ -15,12 +15,12 @@
       201,
       201
     ],
-    "doc_code": "ART-0004"
+    "doc_code": "ART-0007"
   },
   "3_admin_ui": {
     "grid": [
       "General",
-      "Leadership luvc"
+      "Leadership updw"
     ],
     "list_has_doc": true
   },

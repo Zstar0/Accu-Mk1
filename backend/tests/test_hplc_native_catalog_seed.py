@@ -241,6 +241,11 @@ def test_init_db_calls_hplc_native_seed_between_vial_roles_and_specs(monkeypatch
     database.init_db()
 
     assert calls.index("vial_roles") < calls.index("hplc_native") < calls.index("service_specs")
+    # Document spaces: the space_id FK column needs document_spaces, so it runs after
+    # create_all and before the first seeder.
+    assert (calls.index("migrations") < calls.index("create_all")
+            < calls.index("documents_space_column") < calls.index("reconcile_per_substance")
+            < calls.index("vial_roles"))
 
 
 def test_seeded_services_match_admin_create_contract(db_session):

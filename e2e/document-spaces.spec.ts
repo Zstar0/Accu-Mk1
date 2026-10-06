@@ -159,8 +159,8 @@ test('1. setup: group, member, outsider', async ({ request }) => {
   outsiderTok = await login(request, outsiderEmail, pw)
   record('1_setup', {
     create_users: created,
-    create_group: 201,
-    add_member: 200,
+    create_group: g.status(),
+    add_member: m.status(),
   })
 })
 
@@ -213,8 +213,8 @@ test('2. admin creates a restricted space, grants the group, publishes into it',
     }
   }
   record('2_space', {
-    create_space: 201,
-    put_grants: 200,
+    create_space: sp.status(),
+    put_grants: gr.status(),
     publish: statuses,
     doc_code: docCode,
   })
@@ -392,7 +392,7 @@ test('6. a doc_review flag on the code follows the space', async ({
   expect(await titles(o)).not.toContain(FLAG_TITLE)
   expect(await titles(m)).toContain(FLAG_TITLE)
   record('6_flags', {
-    raise_by_member: 201,
+    raise_by_member: fl.status(),
     outsider_point_read: oPoint.status(),
     member_point_read: mPoint.status(),
     outsider_all_open_has_flag: false,
@@ -513,14 +513,18 @@ test('9. agent token: General-only allow-list refuses the restricted space', asy
   const refused = run(['--space', SPACE_SLUG])
   expect(refused.status, refused.stderr).toBe(1)
   expect(refused.stderr).toContain('HTTP 400')
-  expect(refused.stderr).toContain(`space '${SPACE_SLUG}' is not allowed`)
+  expect(refused.stderr).toContain(
+    `space '${SPACE_SLUG}' is not allowed for this agent`
+  )
   const ok = run([])
   expect(ok.status, ok.stderr).toBe(0)
   expect(ok.stdout).toContain('space=general')
   fs.rmSync(file, { force: true })
   record('9_agent', {
     restricted_space_exit: refused.status,
-    restricted_space_http: 400,
+    restricted_space_http: Number(
+      /HTTP (\d{3})/.exec(refused.stderr)?.[1] ?? NaN
+    ),
     general_exit: ok.status,
   })
 })
