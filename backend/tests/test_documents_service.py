@@ -778,3 +778,96 @@ def test_ensure_documents_space_column_is_idempotent_on_a_pre_space_table():
     assert "space_id" in cols
     names = {ix["name"] for ix in inspect(engine).get_indexes("documents")}
     assert "ix_documents_space_id" in names
+
+
+def _space(db, slug, visibility="company"):
+    from documents.models import DocumentSpace
+    sp = DocumentSpace(slug=slug, name=slug.title(), visibility=visibility)
+    db.add(sp)
+    db.commit()
+    return sp
+
+
+def test_new_document_defaults_to_general_and_revision_inherits(db):
+    from documents import service
+    cat = service.resolve_category(db, category="ART")
+    lab = _space(db, "lab")
+    d1, _ = service.create_document(db, title="A", html=HTML, category=cat)
+    assert d1.space_id == service.general_space(db).id
+    d2, _ = service.create_document(db, title="B", html=HTML + "<!--b-->", category=cat, space=lab)
+    assert d2.space_id == lab.id
+    d2r2, created = service.create_document(db, code=d2.code, html=HTML + "<!--b2-->", category=cat)
+    assert created and d2r2.space_id == lab.id
+
+
+def test_revision_cannot_change_space(db):
+    """Review Focus 2: a revision push naming another space is refused, not moved."""
+    from documents import service
+    from documents.errors import BadRequestError
+    cat = service.resolve_category(db, category="ART")
+    lab = _space(db, "lab")
+    d, _ = service.create_document(db, title="A", html=HTML, category=cat, space=lab)
+    with pytest.raises(BadRequestError, match="move"):
+        service.create_document(db, code=d.code, html=HTML + "<!--2-->", category=cat,
+                                space=service.general_space(db))
+    assert service.revision_count(db, d.code) == 1
+
+
+def test_identical_bytes_dedupe_is_scoped_to_category_and_space(db):
+    """A duplicate inside another space is not named (spec 5.2); same space still 409s."""
+    from documents import service
+    from documents.errors import ConflictError
+    cat = service.resolve_category(db, category="ART")
+    lab = _space(db, "lab")
+    a, _ = service.create_document(db, title="A", html=HTML, category=cat, space=lab)
+    b, created = service.create_document(db, title="B", html=HTML, category=cat)  # General
+    assert created and b.code != a.code
+    with pytest.raises(ConflictError, match=a.code):
+        service.create_document(db, title="C", html=HTML, category=cat, space=lab)
+
+
+def test_move_document_space_moves_every_revision(db):
+    from documents import service
+    cat = service.resolve_category(db, category="ART")
+    lab = _space(db, "lab")
+    d1, _ = service.create_document(db, title="A", html=HTML, category=cat)
+    service.create_document(db, code=d1.code, html=HTML + "<!--2-->", category=cat)
+    service.create_document(db, code=d1.code, html=HTML + "<!--3-->", category=cat, activate=False)
+    rows = service.move_document_space(db, d1.code, lab.id, updated_by="admin@x.t")
+    assert len(rows) == 3 and {r.space_id for r in rows} == {lab.id}
+    assert {r.updated_by for r in rows} == {"admin@x.t"}
+
+
+def test_list_filters_by_space_and_visibility(db):
+    from sqlalchemy import select
+    from documents import service
+    from documents.models import DocumentSpace
+    cat = service.resolve_category(db, category="ART")
+    lab = _space(db, "lab")
+    secret = _space(db, "leadership", "restricted")
+    service.create_document(db, title="G", html=HTML, category=cat)
+    service.create_document(db, title="L", html=HTML + "<!--l-->", category=cat, space=lab)
+    service.create_document(db, title="S", html=HTML + "<!--s-->", category=cat, space=secret)
+    rows, total = service.list_documents(db)
+    assert total == 3
+    rows, total = service.list_documents(db, space_id=lab.id)
+    assert total == 1 and rows[0][0].title == "L"
+    visible = select(DocumentSpace.id).where(DocumentSpace.visibility == "company")
+    rows, total = service.list_documents(db, visible_spaces=visible)
+    assert total == 2 and {r[0].title for r in rows} == {"G", "L"}
+    rows, total = service.list_documents(db, space_id=secret.id, visible_spaces=visible)
+    assert total == 0 and rows == []
+
+
+def test_list_includes_null_space_rows(db):
+    """Review Focus 1: a NULL space_id row is General and stays listed under a visibility filter."""
+    from sqlalchemy import select
+    from documents import service
+    from documents.models import Document, DocumentSpace
+    cat = service.resolve_category(db, category="ART")
+    d, _ = service.create_document(db, title="Old", html=HTML, category=cat)
+    db.execute(Document.__table__.update().where(Document.id == d.id).values(space_id=None))
+    db.commit()
+    visible = select(DocumentSpace.id).where(DocumentSpace.visibility == "company")
+    rows, total = service.list_documents(db, visible_spaces=visible)
+    assert total == 1 and rows[0][0].id == d.id

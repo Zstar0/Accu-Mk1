@@ -379,7 +379,7 @@ def _lab_today(db: Session) -> date:
     return lab_day(datetime.utcnow(), tz)
 
 
-def create_document(db: Session, *, title: str, html, category: Optional[DocumentCategory],
+def create_document(db: Session, *, title: str = "", html, category: Optional[DocumentCategory],
                     description: Optional[str] = None, code: Optional[str] = None,
                     author: Optional[str] = None, source_session: Optional[str] = None,
                     effective_date: Optional[date] = None, activate: bool = True,
@@ -412,6 +412,10 @@ def create_document(db: Session, *, title: str, html, category: Optional[Documen
             # row whenever the bytes happen to match.
             raise BadRequestError(
                 f"code prefix must be {category.code_prefix} for category {category.name}")
+        if space is not None and space.id != (latest.space_id or general_space(db).id):
+            raise BadRequestError(
+                f"revisions stay in the document's space; move {code} with PATCH space_id instead")
+        space_id = latest.space_id if latest.space_id is not None else general_space(db).id
         if latest.content_sha256 == sha:
             latest.title = title
             if description is not None:
@@ -428,6 +432,7 @@ def create_document(db: Session, *, title: str, html, category: Optional[Documen
         if category is None:
             raise BadRequestError("category is required for a new document")
         cat = category
+        space_id = (space or general_space(db)).id
         if code:
             if code.split("-", 1)[0] != cat.code_prefix:
                 raise BadRequestError(
@@ -436,7 +441,8 @@ def create_document(db: Session, *, title: str, html, category: Optional[Documen
             existing = db.execute(
                 select(Document.code, Document.revision)
                 .where(Document.content_sha256 == sha,
-                       Document.category_id == cat.id)
+                       Document.category_id == cat.id,
+                       Document.space_id == space_id)
                 .order_by(Document.id).limit(1)
             ).first()
             if existing is not None:
@@ -447,6 +453,9 @@ def create_document(db: Session, *, title: str, html, category: Optional[Documen
                 # Scoped to the category on purpose: an SOP and an artifact that
                 # share bytes are different controlled documents, and the code
                 # prefix a category fixes is what makes them different.
+                # Scoped to the category AND the space: a 409 that named a code in a
+                # space the caller cannot see would confirm that document exists
+                # (spec 5.2).
                 raise ConflictError(
                     f"this content is already published as {existing[0]} "
                     f"r{existing[1]}; pass code={existing[0]} to publish it as a new "
@@ -457,7 +466,7 @@ def create_document(db: Session, *, title: str, html, category: Optional[Documen
 
     key = get_storage().save(code, revision, data)
     doc = Document(code=code, revision=revision, title=title, description=description,
-                   category_id=cat.id, space_id=(space or general_space(db)).id,
+                   category_id=cat.id, space_id=space_id,
                    status="draft", effective_date=effective_date,
                    supersedes_id=supersedes_id, author=author, updated_by=author,
                    co_author=co_author,
@@ -483,6 +492,31 @@ def get_document(db: Session, doc_id: int) -> Document:
 def get_revisions(db: Session, code: str) -> list[Document]:
     return db.execute(select(Document).where(Document.code == code)
                       .order_by(Document.revision)).scalars().all()
+
+
+def latest_revision(db: Session, code: str) -> Optional[Document]:
+    """Highest revision of a code, or None. Public twin of _latest without the lock."""
+    try:
+        return _latest(db, _clean_code(code))
+    except BadRequestError:
+        return None
+
+
+def move_document_space(db: Session, code: str, space_id: int, *, updated_by: Optional[str]) -> list[Document]:
+    """Move EVERY revision of a code to another space in one transaction (spec 4.3)."""
+    space = get_space(db, int(space_id))
+    rows = get_revisions(db, code)
+    if not rows:
+        raise NotFoundError(f"document {code!r} not found")
+    for r in rows:
+        r.space_id = space.id
+        if updated_by:
+            r.updated_by = updated_by
+    db.commit()
+    for r in rows:
+        db.refresh(r)
+    logging.getLogger(__name__).info("documents.space_moved code=%s to=%s by=%s", code, space.slug, updated_by)
+    return rows
 
 
 def revision_count(db: Session, code: str) -> int:
@@ -553,7 +587,9 @@ def patch_document(db: Session, doc_id: int, **fields) -> Document:
     """Metadata only (§5.1 PATCH). Never bumps revision, never touches content.
     Every field is validated BEFORE any attribute is assigned: a half-applied
     patch would leave the row dirty in the session, and the next autoflush would
-    persist it even though the caller saw an exception."""
+    persist it even though the caller saw an exception.
+    `space_id` is not a patch field here: the route routes it to move_document_space
+    because it rewrites every revision."""
     doc = get_document(db, doc_id)
     updated_by = fields.pop("updated_by", None)
     allowed = {"title", "description", "category_id", "effective_date"}
@@ -591,6 +627,7 @@ def patch_document(db: Session, doc_id: int, **fields) -> Document:
 
 
 def list_documents(db: Session, *, q: Optional[str] = None, category_id: Optional[int] = None,
+                   space_id: Optional[int] = None, visible_spaces=None,
                    statuses=("draft", "active"), sort: str = "updated_at",
                    page: int = 1, page_size: int = 50) -> tuple[list[tuple[Document, int]], int]:
     """Latest revision per code AMONG the rows matching `statuses`, then the other
@@ -620,6 +657,11 @@ def list_documents(db: Session, *, q: Optional[str] = None, category_id: Optiona
             .join(counts, Document.code == counts.c.code))
     if category_id is not None:
         stmt = stmt.where(Document.category_id == category_id)
+    if space_id is not None:
+        stmt = stmt.where(Document.space_id == int(space_id))
+    if visible_spaces is not None:
+        # NULL = General = company (spec 4.4), so it is always inside a visibility filter.
+        stmt = stmt.where(or_(Document.space_id.in_(visible_spaces), Document.space_id.is_(None)))
     if q and q.strip():
         like = f"%{q.strip()}%"
         stmt = stmt.where(or_(Document.code.ilike(like), Document.title.ilike(like),
