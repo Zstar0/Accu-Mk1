@@ -125,3 +125,31 @@ def test_changes_and_churn_routes(client) -> None:
     assert churn.status_code == 200      # not swallowed by /{customer_key} (would 404)
     assert "buckets" in churn.json() and churn.json()["window_days"] == 60
     assert client.get("/reports/customers/changes").status_code == 422   # since is required
+
+
+def test_from_to_aliases_filter_the_window(client) -> None:
+    base = "/reports/customers/orders?period=all"
+    assert client.get(base).json()["total"] == 4
+    assert client.get(base + "&from=2026-08-01&to=2026-08-31").json()["total"] == 0
+    assert client.get(base + "&from=2026-09-20&to=2026-09-30").json()["total"] == 1
+    assert client.get(base + "&start=2026-09-20&end=2026-09-30").json()["total"] == 1
+    summ = client.get("/reports/customers/summary?from=2026-08-01&to=2026-08-31").json()
+    assert summ["kpis"]["revenue"]["value"] == "0.00"
+    lst = client.get("/reports/customers/list?from=2026-09-20&to=2026-09-30").json()
+    assert {r["key"]: r["period_spend"] for r in lst["rows"]}["email:g@x.com"] == "125.00"
+
+
+def test_list_sort_allowlist_and_nulls_last(client) -> None:
+    for bad in ("monthly", "top_tests", "nope"):
+        assert client.get(f"/reports/customers/list?period=all&sort={bad}").status_code == 422
+    for d in ("asc", "desc"):   # wc:1 usual_gap_days = 10.0, guest = None
+        rows = client.get(f"/reports/customers/list?period=all&sort=usual_gap_days&dir={d}").json()["rows"]
+        assert [r["key"] for r in rows] == ["wc:1", "email:g@x.com"]
+    rows = client.get("/reports/customers/list?period=all&sort=lifetime&dir=asc").json()["rows"]
+    assert [r["key"] for r in rows] == ["email:g@x.com", "wc:1"]
+
+
+def test_changes_since_in_the_future_is_422(client) -> None:
+    assert client.get("/reports/customers/changes?since=2026-10-06T00:00:00Z").status_code == 422
+    assert client.get("/reports/customers/changes?since=2026-10-06T00:00:00").status_code == 422
+    assert client.get("/reports/customers/changes?since=2026-10-05T17:00:00Z").status_code == 200

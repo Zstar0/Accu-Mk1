@@ -4,6 +4,7 @@ from __future__ import annotations
 import csv
 import io
 from datetime import date, datetime, timezone
+from decimal import Decimal
 from typing import Literal, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Response
@@ -161,6 +162,17 @@ class OrdersResponse(Meta):
     page_size: int
 
 
+SortField = Literal["key", "name", "email", "company", "period_spend", "prior_spend", "delta_pct", "lifetime",
+                    "orders", "samples", "usual_gap_days", "last_order_at", "status"]
+_MONEY_FIELDS = {"period_spend", "prior_spend", "lifetime"}
+
+
+def _dates(start: Optional[date] = None, end: Optional[date] = None,
+           from_: Optional[date] = Query(None, alias="from"), to: Optional[date] = None):
+    """Spec section 4 names the range from/to; start/end stay accepted."""
+    return start or from_, end or to
+
+
 def _ctx(db: Session, period: Optional[str], start: Optional[date], end: Optional[date], exclude: bool):
     now, tz = _now(), _tz(db)
     lo, hi = rules.resolve_period(period, start, end, now, tz)
@@ -170,10 +182,10 @@ def _ctx(db: Session, period: Optional[str], start: Optional[date], end: Optiona
 
 
 @router.get("/summary", response_model=SummaryResponse)
-def customers_summary(period: Period = "90d", start: Optional[date] = None, end: Optional[date] = None,
+def customers_summary(period: Period = "90d", dates: tuple = Depends(_dates),
                       exclude_launch_accounts: bool = False, db: Session = Depends(get_db),
                       _u=Depends(get_current_user)):
-    ds, lo, hi, tz, meta = _ctx(db, period, start, end, exclude_launch_accounts)
+    ds, lo, hi, tz, meta = _ctx(db, period, *dates, exclude_launch_accounts)
     return {**meta, **metrics.summary(ds, start=lo, end=hi, tz=tz)}
 
 
@@ -192,36 +204,30 @@ def customers_at_risk(exclude_launch_accounts: bool = False, db: Session = Depen
 
 
 @router.get("/list", response_model=ListResponse)
-def customers_list(period: Period = "90d", start: Optional[date] = None, end: Optional[date] = None,
-                   exclude_launch_accounts: bool = False, search: str = "", sort: str = "period_spend",
+def customers_list(period: Period = "90d", dates: tuple = Depends(_dates),
+                   exclude_launch_accounts: bool = False, search: str = "", sort: SortField = "period_spend",
                    dir: Literal["asc", "desc"] = "desc", page: int = Query(1, ge=1),
                    page_size: int = Query(50, ge=1, le=200), db: Session = Depends(get_db),
                    _u=Depends(get_current_user)):
-    ds, lo, hi, tz, meta = _ctx(db, period, start, end, exclude_launch_accounts)
+    ds, lo, hi, tz, meta = _ctx(db, period, *dates, exclude_launch_accounts)
     rows = metrics.customer_rows(ds, start=lo, end=hi, tz=tz)
     q = search.strip().lower()
     if q:
         rows = [r for r in rows if q in " ".join(str(r.get(f) or "") for f in ("name", "email", "company", "key")).lower()]
-    money_fields = {"period_spend", "prior_spend", "lifetime"}
-
-    def keyf(r):
-        v = r.get(sort)
-        if sort in money_fields:
-            return float(v)
-        return (v is None, v if v is not None else 0)
-
-    rows.sort(key=keyf, reverse=(dir == "desc"))
+    present = [r for r in rows if r.get(sort) is not None]
+    present.sort(key=lambda r: Decimal(r[sort]) if sort in _MONEY_FIELDS else r[sort], reverse=(dir == "desc"))
+    rows = present + [r for r in rows if r.get(sort) is None]  # nulls last in both directions
     total = len(rows)
     return {**meta, "rows": rows[(page - 1) * page_size: page * page_size], "total": total,
             "page": page, "page_size": page_size}
 
 
 @router.get("/orders", response_model=OrdersResponse)
-def customers_orders(period: Period = "all", start: Optional[date] = None, end: Optional[date] = None,
+def customers_orders(period: Period = "all", dates: tuple = Depends(_dates),
                      exclude_launch_accounts: bool = False, format: Literal["json", "csv"] = "json",
                      page: int = Query(1, ge=1), page_size: int = Query(500, ge=1, le=5000),
                      db: Session = Depends(get_db), _u=Depends(get_current_user)):
-    ds, lo, hi, _tz_, meta = _ctx(db, period, start, end, exclude_launch_accounts)
+    ds, lo, hi, _tz_, meta = _ctx(db, period, *dates, exclude_launch_accounts)
     rows = metrics.order_rows(ds, start=lo, end=hi)
     if format == "csv":
         buf = io.StringIO()
@@ -336,8 +342,10 @@ def customers_churn(db: Session = Depends(get_db), _u=Depends(get_current_user))
 
 @router.get("/changes", response_model=ChangesResponse)
 def customers_changes(since: datetime, db: Session = Depends(get_db), _u=Depends(get_current_user)):
-    ds, _lo, hi, tz, meta = _ctx(db, "all", None, None, False)
     since_utc = since if since.tzinfo else since.replace(tzinfo=timezone.utc)
+    if since_utc > _now():
+        raise HTTPException(status_code=422, detail="since is in the future")
+    ds, _lo, hi, tz, meta = _ctx(db, "all", None, None, False)
     return {**meta, "since": since_utc.isoformat(), "events": metrics.changes(ds, since=since_utc, end=hi, tz=tz)}
 
 
