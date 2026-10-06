@@ -162,3 +162,20 @@ def test_bw_titled_parent_without_native_key_takes_the_trio_path(db, monkeypatch
     rows = seeder.seed_analyses_for_vial(db, sub_sample=v, role="hplc",
                                          wp_services={"hplc-purity-identity": True}, commit=False)
     assert called == ["trio"] and rows == []
+
+
+def test_bw_vial_with_partial_services_still_seeds_panel_not_trio(db, monkeypatch):
+    """wp_services with hplc demand but lacking the BW key (vial create /
+    manage-analyses paths): the parent's live ordered BW placeholders still
+    route it to the panel, not the peptide trio."""
+    from lims_analyses import hplc_native, parent_placeholders, seeder
+    _catalog(db)
+    called = []
+    monkeypatch.setattr(hplc_native, "seed_native_hplc_rows", lambda *a, **k: called.append("trio") or [])
+    p = _parent(db, system="mk1", sample_id="BW-1012")
+    parent_placeholders.seed_parent_placeholders(db, parent=p, services=NATIVE_WP)
+    v = _vial(db, p)
+    rows = seeder.seed_analyses_for_vial(db, sub_sample=v, role="hplc",
+                                         wp_services={"hplc-purity-identity": True}, commit=False)
+    assert called == []
+    assert sorted(r.keyword for r in rows) == ["BENZYL-ALCOHOL-BW", "FILL-VOLUME-BW", "PH-BW"]

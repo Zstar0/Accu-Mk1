@@ -174,3 +174,19 @@ def test_headroom_errors_when_senaite_reaches_counter(db, caplog):
 def test_init_db_runs_headroom_check():
     import database
     assert "customer_id_headroom_violations" in inspect.getsource(database.init_db)
+
+
+@pytest.mark.parametrize("partial", [{"endotoxin-usp85-lal": True}, {"endotoxin": True}])
+def test_partial_services_on_bw_parent_with_live_panel_raises_no_slot_flag(db, caplog, partial):
+    """Callers (add profile, retest, add-on) pass a partial services map lacking
+    the BW key; the parent's live ordered BW placeholders still identify it."""
+    _catalog(db)
+    p = _bw_parent(db, system="mk1", sample_id="BW-1030")
+    seed_parent_placeholders(db, parent=p, services={"bacteriostatic-water-panel": True})
+    assert len(_ordered(db, p)) == 3
+    with caplog.at_level(logging.ERROR):
+        seed_parent_placeholders(db, parent=p, services=partial)
+    assert not any("native_placeholder_no_analyte_slots" in r.message for r in caplog.records)
+    assert db.execute(select(FlagFlag).where(FlagFlag.entity_type == "sample",
+                                             FlagFlag.entity_id == str(p.id))).scalars().all() == []
+    assert all(r.slot is None for r in _ordered(db, p))
