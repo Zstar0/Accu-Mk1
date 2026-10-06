@@ -132,8 +132,10 @@ def _ordered_native_profiles(db: Session, services: dict, package: Optional[str]
             # aborts on an unknown archetype) — treated like NULL here.
             # Local import: hplc_shim imports NativeSectionsError from this
             # module at load time, so a module-level import back would cycle.
+            # MB5: legacy_bw rides page 1 via coa/bw_shim.py on the same terms.
+            from coa.bw_shim import LEGACY_BW_ARCHETYPE
             from coa.hplc_shim import LEGACY_HPLC_ARCHETYPE
-            if prof.coa_archetype is None or prof.coa_archetype == LEGACY_HPLC_ARCHETYPE:
+            if prof.coa_archetype in (None, LEGACY_HPLC_ARCHETYPE, LEGACY_BW_ARCHETYPE):
                 continue
         members = prof.analysis_services  # ordered by member sort_order (spec 1)
         if not members or any(svc.origin != "mk1" for svc in members):
