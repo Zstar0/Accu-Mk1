@@ -159,7 +159,10 @@ def replace_grants(db: Session, user, slug: str, grants) -> list[GrantOut]:
 # --- reverse lookup ----------------------------------------------------------------
 
 def boards_for_entity(db: Session, user, entity_type: str, entity_id: str) -> list[tuple[Board, BoardNode]]:
-    rows = db.execute(select(Board, BoardNode).join(BoardNode, BoardNode.board_id == Board.id)
+    from flags import seams
+    if seams.is_view_scoped(entity_type) and not seams.can_view_entity(db, user, entity_type, entity_id):
+        return []  # a hidden entity reads as one that is on no board (node labels hold titles)
+    rows =db.execute(select(Board, BoardNode).join(BoardNode, BoardNode.board_id == Board.id)
                       .where(BoardNode.entity_type == entity_type, BoardNode.entity_id == str(entity_id),
                              Board.id.in_(access.visible_board_ids(db, user)))
                       .order_by(Board.name, BoardNode.id)).all()

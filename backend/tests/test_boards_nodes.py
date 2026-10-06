@@ -351,3 +351,17 @@ def test_pinning_a_hidden_document_reads_as_missing(client):
     assert hidden.status_code == missing.status_code == 400
     assert hidden.json()["detail"].replace(doc.code, "X") == missing.json()["detail"].replace("ART-9999", "X")
     assert "Q4 layoffs" not in hidden.text
+
+
+def test_reverse_lookup_of_a_hidden_document_is_empty(client):
+    """`for-entity` echoes the persisted node label, which holds the title an admin saw."""
+    doc = _secret_document(client.db)
+    client.as_user(ADMIN)
+    _node(client, kind="entity", label="", entity_type="document", entity_id=doc.code)
+    q = {"entity_type": "document", "entity_id": doc.code}
+    assert len(client.get("/api/boards/for-entity", params=q).json()) == 1
+    client.as_user(VIEWER)
+    assert len(client.get("/api/boards/for-entity", params=q).json()) == 1
+    client.as_user(OUTSIDER)
+    r = client.get("/api/boards/for-entity", params=q)
+    assert r.status_code == 200 and r.json() == []
