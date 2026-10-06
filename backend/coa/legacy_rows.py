@@ -29,14 +29,21 @@ reads, keyed by the parent's resolved analyte slots. An unresolved slot
 (no catalog peptide) aborts generation rather than shipping a blank title.
 
 Native-born Bac Water rows (service_origin == 'mk1', keyword in
-coa.bw_shim.BW_NATIVE_KEYWORDS) ride the same wire when their owning
-profile's archetype is legacy_bw: coa/bw_shim.py maps them to the SENAITE
-keyword/title GenericAssayEngine reads (PH-DETERM, Benzyl_Alcohol_Assay,
-FILL-NET-CONTENT). They are parent-tier with no analyte slots, so the
-slot_wires/empty_slots machinery below stays HPLC-only.
+coa.bw_shim.BW_NATIVE_KEYWORDS) ride the same wire when the parent is
+native-born and their owning profile's archetype is legacy_bw: coa/bw_shim.py
+maps them to the SENAITE keyword/title GenericAssayEngine reads (PH-DETERM,
+Benzyl_Alcohol_Assay, FILL-NET-CONTENT). They are promoted parent rows with
+no analyte slots, so the slot_wires/empty_slots machinery below stays
+HPLC-only. A SENAITE-born parent never admits them: its BW lines arrive as
+shadow rows under the legacy keywords already, and the shape collapse keys
+on the RAW keyword, so admitting a stray native row would print the line
+twice. A re-keyed BW row that still collides with another emitted Keyword
+aborts generation.
 
 Spec: docs/superpowers/specs/2026-08-26-coa-legacy-rows-mk1-source-design.md
 """
+from collections import Counter
+
 from coa.bw_shim import (
     LEGACY_BW_ARCHETYPE, bw_wire_keyword, bw_wire_title, is_native_bw_row,
 )
@@ -47,7 +54,7 @@ from coa.hplc_shim import (
 from coa.identity_verdict import identity_wire_result
 from coa.native_sections import NativeSectionsError, _spec_wire_dict
 from coa.spec_rules import SpecRuleError, evaluate, normalize_matrix, resolve_spec
-from lims_analyses.hplc_native import TRIO
+from lims_analyses.hplc_native import TRIO, is_native_born
 
 # Twin contract: src/coabuilder_core/legacy_rows.py + tests/
 # test_legacy_rows_contract.py in the coabuilder repo pin the same tuple.
@@ -102,14 +109,17 @@ def _native_spec_fields(db, parent, r, wire_result) -> dict:
     return {"specification": _spec_wire_dict(spec), "conforms": conforms}
 
 
-def _page_one_archetype(r):
+def _page_one_archetype(r, parent):
     """The coa_archetype that admits this native row onto page 1, or None
     for a row that never rides page 1 (SENAITE-origin, or a native service
     outside the HPLC and Bac Water shims, e.g. endotoxin/PCR/heavy metals,
-    which belong to native_sections)."""
+    which belong to native_sections). Native BW rows ride only on a
+    native-born parent (the seeder's own predicate, seeder.py is_native_born
+    + is_bw_sample): on a SENAITE-born parent the shadow PH-DETERM etc. are
+    the certified lines and a native twin would print them twice."""
     if is_native_hplc_row(r):
         return LEGACY_HPLC_ARCHETYPE
-    if is_native_bw_row(r):
+    if is_native_bw_row(r) and is_native_born(parent):
         return LEGACY_BW_ARCHETYPE
     return None
 
@@ -142,11 +152,11 @@ def build_legacy_rows(db, parent) -> list[dict]:
     # BW row). Same "absent = can't tell = admit" rule for both.
     archetype_by_service = (
         native_hplc_service_archetypes(db, parent)
-        if any(_page_one_archetype(r) for r in shaped) else {}
+        if any(_page_one_archetype(r, parent) for r in shaped) else {}
     ) or {}
 
     def _rides_page_one(r) -> bool:
-        archetype = _page_one_archetype(r)
+        archetype = _page_one_archetype(r, parent)
         if archetype is None:
             return False
         service_id = getattr(r, "analysis_service_id", None)
@@ -204,6 +214,7 @@ def build_legacy_rows(db, parent) -> list[dict]:
                 f"{empty_slots[0]} has no analysis rows — remove it via "
                 f"relabel/Manage Analyses before COA")
     rows = []
+    bw_wire_keywords: set = set()
     for r in legacy:
         keyword, title = r.keyword, r.title
         if is_native_hplc_row(r):
@@ -229,6 +240,7 @@ def build_legacy_rows(db, parent) -> list[dict]:
         elif is_native_bw_row(r):
             keyword = bw_wire_keyword(r.keyword)
             title = bw_wire_title(db, r.keyword, r.title)
+            bw_wire_keywords.add(keyword)
         if not (keyword or "").strip():
             raise NativeSectionsError(
                 f"legacy rows: analysis {r.uid} on {parent.sample_id} has no "
@@ -253,6 +265,19 @@ def build_legacy_rows(db, parent) -> list[dict]:
             "review_state": r.review_state,
             "ResultCaptureDate": r.captured,
             **(_native_spec_fields(db, parent, r, wire_result)
-               if _page_one_archetype(r) else {}),
+               if _page_one_archetype(r, parent) else {}),
         })
+    # Fail closed on a re-keyed BW row colliding with another emitted row
+    # (e.g. a native-born parent that also carries a live shadow PH-DETERM):
+    # the shape collapse keys on the RAW keyword, so it cannot catch this,
+    # and a certificate must never print the same test twice. Scoped to the
+    # BW wire keywords so SENAITE-born and HPLC output stay byte-identical.
+    if bw_wire_keywords:
+        wire_counts = Counter(row["Keyword"] for row in rows)
+        dupes = sorted(k for k in bw_wire_keywords if wire_counts[k] > 1)
+        if dupes:
+            raise NativeSectionsError(
+                f"legacy rows: {parent.sample_id} emits wire keyword "
+                f"{dupes[0]} more than once (native BW row collides with "
+                f"another row) - aborting")
     return rows

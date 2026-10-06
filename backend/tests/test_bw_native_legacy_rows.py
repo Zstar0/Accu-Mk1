@@ -126,7 +126,7 @@ def test_senaite_born_bw_is_byte_identical_and_never_calls_resolver(monkeypatch)
 
 # ---------------- real catalog + real row selection (end to end) ------------
 
-def _native_bw_sample(db, monkeypatch, values=None):
+def _native_bw_sample(db, monkeypatch, values=None, external_lims_system="mk1"):
     from catalog.bw_native_seed import seed_bw_native_catalog
     from models import AnalysisService, Department, LimsAnalysis, LimsSample
     # seed_bw_native_catalog seeds nothing without the Analytical department.
@@ -135,7 +135,7 @@ def _native_bw_sample(db, monkeypatch, values=None):
     seed_bw_native_catalog(db)
     for kw, title in LEGACY_TITLES.items():
         db.add(AnalysisService(title=title, keyword=kw, origin="senaite"))
-    parent = LimsSample(sample_id="BW-1001", external_lims_system="mk1",
+    parent = LimsSample(sample_id="BW-1001", external_lims_system=external_lims_system,
                         sample_type_title="Bacteriostatic Water")
     db.add(parent)
     db.flush()
@@ -207,4 +207,42 @@ def test_profile_rearchetyped_off_legacy_bw_removes_page_one_rows(db, monkeypatc
     db.query(AnalysisProfile).filter_by(key=BW_PROFILE_KEY).one().coa_archetype = "limit_table"
     db.flush()
     with pytest.raises(NativeSectionsError, match="no legacy-family analyses"):
+        build_legacy_rows(db, parent)
+
+
+def _shadow_ph_determ(db, parent, result="6.1"):
+    """A live SENAITE mirror row for PH-DETERM on the parent (what every
+    SENAITE-born BW parent carries)."""
+    from models import AnalysisService, LimsAnalysis
+    svc = db.query(AnalysisService).filter_by(keyword="PH-DETERM", origin="senaite").one()
+    db.add(LimsAnalysis(
+        lims_sample_pk=parent.id, analysis_service_id=svc.id,
+        keyword=svc.keyword, title=svc.title, result_value=result,
+        review_state="senaite_mirror", mirror_review_state="published",
+        provenance="shadow", retested=False,
+    ))
+    db.flush()
+
+
+def test_senaite_born_parent_never_admits_a_native_bw_row(db, monkeypatch):
+    # Review fix: a canonical PH-BW on a SENAITE-born parent (reachable via
+    # POST /api/lims-analyses + promote) must not ride beside the shadow
+    # PH-DETERM. The shape collapse keys on the RAW keyword, so only the
+    # native-born gate keeps the line from printing twice.
+    parent = _native_bw_sample(db, monkeypatch, values={"PH-BW": "5.5"},
+                               external_lims_system="senaite")
+    _shadow_ph_determ(db, parent, result="6.1")
+    rows = build_legacy_rows(db, parent)
+    assert [r["Keyword"] for r in rows] == ["PH-DETERM"]
+    [ph] = rows
+    assert ph["Result"] == "6.1"
+    assert "specification" not in ph and "conforms" not in ph
+
+
+def test_native_born_bw_wire_keyword_collision_aborts(db, monkeypatch):
+    # A native-born parent that also carries a live shadow PH-DETERM would
+    # emit two PH-DETERM rows after re-keying: fail closed, never print twice.
+    parent = _native_bw_sample(db, monkeypatch, values={"PH-BW": "5.5"})
+    _shadow_ph_determ(db, parent)
+    with pytest.raises(NativeSectionsError, match="PH-DETERM more than once"):
         build_legacy_rows(db, parent)
