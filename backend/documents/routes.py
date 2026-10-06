@@ -441,6 +441,8 @@ def patch_document(doc_id: int, req: DocumentPatch, db: Session = Depends(get_db
             # applied and the client sees the move's error.
             service.move_document_space(db, doc.code, int(move_to), updated_by=writer.email)
             doc = service.get_document(db, doc_id)
+            if not patch:  # a move alone is logged by the service, not audited as a patch
+                return _doc_out(doc, service.revision_count(db, doc.code))
         n = service.revision_count(db, doc.code)
     except Exception as e:
         raise _http(e)
