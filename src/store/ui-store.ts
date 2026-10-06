@@ -46,6 +46,7 @@ export type AccuMarkToolsSubSection =
   | 'order-explorer'
   | 'order-status'
   | 'customers'
+  | 'customer-insights'
   | 'customer-detail'
   | 'coa-explorer'
   | 'chromatographs'

@@ -8921,3 +8921,112 @@ export async function getReadyToPublish(
     throw new Error(`Ready to publish failed: ${response.status}`)
   return response.json()
 }
+
+// ---------------------------------------------------------------------------
+// Customer Insights (/reports/customers/*)
+// ---------------------------------------------------------------------------
+
+export interface KpiPair<T> {
+  value: T
+  prior: T | null
+}
+export interface CustomerSummary {
+  tz: string
+  synced_at: string | null
+  kpis: {
+    active_customers: KpiPair<number>
+    revenue: KpiPair<string>
+    paid_orders: KpiPair<number>
+    aov: KpiPair<string>
+    repeat_rate: KpiPair<number | null>
+    median_days_to_second: KpiPair<number | null>
+  }
+  revenue_by_month: { month: string; new: string; returning: string }[]
+  concentration: {
+    top10_share: number
+    top_decile_share: number
+    repeat_share: number
+    median_ltv: string
+    mean_ltv: string
+    customers: number
+  }
+  attach: { test: string; new: number; returning: number }[]
+  first_order: { kind: string; customers: number; repeat_rate: number | null }[]
+}
+export interface CustomerCohorts {
+  tz: string
+  synced_at: string | null
+  months: string[]
+  rows: { cohort: string; size: number; cells: (number | null)[] }[]
+}
+export interface CustomerRow {
+  key: string
+  name: string
+  email: string | null
+  company: string | null
+  period_spend: string
+  prior_spend: string
+  delta_pct: number | null
+  lifetime: string
+  orders: number
+  samples: number
+  usual_gap_days: number | null
+  last_order_at: string | null
+  top_tests: string[]
+  status: string
+  monthly: { month: string; spend: string }[]
+}
+export interface AtRiskRow extends CustomerRow {
+  spend_12m: string
+  overdue: number
+}
+export interface CustomerListResponse {
+  tz: string
+  synced_at: string | null
+  rows: CustomerRow[]
+  total: number
+  page: number
+  page_size: number
+}
+export type InsightsPeriod = '30d' | '90d' | '6m' | '1y' | 'all'
+
+async function getReport<T>(
+  path: string,
+  params: Record<string, string | number | boolean | undefined> = {}
+): Promise<T> {
+  const qs = new URLSearchParams(
+    Object.entries(params)
+      .filter(([, v]) => v !== undefined && v !== '')
+      .map(([k, v]) => [k, String(v)])
+  )
+  const response = await fetch(
+    `${API_BASE_URL()}${path}${qs.size ? `?${qs}` : ''}`,
+    { headers: getBearerHeaders() }
+  )
+  if (!response.ok) throw new Error(`${path} failed: ${response.status}`)
+  return response.json()
+}
+export const getCustomerSummary = (
+  period: InsightsPeriod,
+  excludeLaunch = false
+) =>
+  getReport<CustomerSummary>('/reports/customers/summary', {
+    period,
+    exclude_launch_accounts: excludeLaunch,
+  })
+export const getCustomerCohorts = (excludeLaunch = true) =>
+  getReport<CustomerCohorts>('/reports/customers/cohorts', {
+    exclude_launch_accounts: excludeLaunch,
+  })
+export const getCustomerAtRisk = () =>
+  getReport<{ tz: string; synced_at: string | null; rows: AtRiskRow[] }>(
+    '/reports/customers/at-risk'
+  )
+export const getCustomerList = (p: {
+  period: InsightsPeriod
+  search?: string
+  sort?: string
+  dir?: 'asc' | 'desc'
+  page?: number
+  page_size?: number
+}) => getReport<CustomerListResponse>('/reports/customers/list', p)

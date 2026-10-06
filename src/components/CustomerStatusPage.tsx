@@ -55,10 +55,12 @@ import {
 
 import { cn } from '@/lib/utils'
 import {
+  getCustomerList,
   getExplorerCustomerById,
   getExplorerCustomers,
   getExplorerOrdersByCustomer,
   getExplorerStatus,
+  type CustomerRow as InsightRow,
   type ExplorerCustomer,
   type ExplorerCustomersResponse,
   type ExplorerOrder,
@@ -70,6 +72,12 @@ import {
   getWordpressUrl,
 } from '@/lib/api-profiles'
 import { useUIStore } from '@/store/ui-store'
+import {
+  fmtDelta,
+  fmtMoney,
+  STATUS_CLASS,
+  STATUS_LABEL,
+} from '@/components/customers/insights-utils'
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert'
 import { Button } from '@/components/ui/button'
 import {
@@ -174,6 +182,28 @@ function CustomerListView() {
     enabled: status?.connected === true,
     staleTime: 60_000,
   })
+
+  // Insight columns (Customer Insights). Joined to the explorer rows by
+  // customer key. period=all makes the spend column the last 90 days.
+  // ponytail: top 200 by lifetime for the current search; rows beyond that
+  // show a dash until the explorer list is retired.
+  const { data: insightData } = useQuery({
+    queryKey: ['customers', 'list', 'all', customerSearchTerm, envName],
+    queryFn: () =>
+      getCustomerList({
+        period: 'all',
+        search: customerSearchTerm || undefined,
+        sort: 'lifetime',
+        dir: 'desc',
+        page: 1,
+        page_size: 200,
+      }),
+    enabled: status?.connected === true,
+    staleTime: 60_000,
+  })
+  const insightByKey = new Map(
+    (insightData?.rows ?? []).map(r => [r.key, r] as const)
+  )
 
   // --- Derived (no client-side filter — D-07, T-29-03) ---
   const customers = customersData?.customers ?? []
@@ -313,6 +343,27 @@ function CustomerListView() {
                   <th className="py-2 px-3 text-xs font-semibold uppercase text-muted-foreground whitespace-nowrap">
                     Most Recent
                   </th>
+                  <th className="py-2 px-3 text-xs font-semibold uppercase text-muted-foreground whitespace-nowrap text-right">
+                    Spend (90d)
+                  </th>
+                  <th className="py-2 px-3 text-xs font-semibold uppercase text-muted-foreground whitespace-nowrap text-right">
+                    Δ
+                  </th>
+                  <th className="py-2 px-3 text-xs font-semibold uppercase text-muted-foreground whitespace-nowrap text-right">
+                    Lifetime
+                  </th>
+                  <th className="py-2 px-3 text-xs font-semibold uppercase text-muted-foreground whitespace-nowrap text-right">
+                    Samples
+                  </th>
+                  <th className="py-2 px-3 text-xs font-semibold uppercase text-muted-foreground whitespace-nowrap text-right">
+                    Usual gap
+                  </th>
+                  <th className="py-2 px-3 text-xs font-semibold uppercase text-muted-foreground whitespace-nowrap">
+                    Top tests
+                  </th>
+                  <th className="py-2 px-3 text-xs font-semibold uppercase text-muted-foreground whitespace-nowrap">
+                    Status
+                  </th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-border/50">
@@ -326,7 +377,7 @@ function CustomerListView() {
                   !hasError &&
                   Array.from({ length: 8 }).map((_, i) => (
                     <tr key={`skeleton-${i}`} data-testid="customer-row-skeleton">
-                      {Array.from({ length: 6 }).map((__, j) => (
+                      {Array.from({ length: 13 }).map((__, j) => (
                         <td key={j} className="py-3 px-3">
                           <Skeleton className="h-4 w-full" />
                         </td>
@@ -340,7 +391,7 @@ function CustomerListView() {
                   !hasError &&
                   customers.length === 0 && (
                     <tr>
-                      <td colSpan={6} className="py-16">
+                      <td colSpan={13} className="py-16">
                         <div className="flex flex-col items-center text-center">
                           <Users className="h-8 w-8 text-muted-foreground/40 mb-2" />
                           <p className="text-sm font-medium text-muted-foreground">
@@ -370,6 +421,11 @@ function CustomerListView() {
                           : `g-${customer.email}`
                       }
                       customer={customer}
+                      insight={insightByKey.get(
+                        customer.customer_id !== null
+                          ? `wc:${customer.customer_id}`
+                          : `email:${customer.email.toLowerCase()}`
+                      )}
                       onNavigate={navigateToCustomer}
                     />
                   ))}
@@ -427,9 +483,11 @@ function CustomerListView() {
  */
 function CustomerRow({
   customer,
+  insight,
   onNavigate,
 }: {
   customer: ExplorerCustomer
+  insight?: InsightRow
   onNavigate: (id: number) => void
 }) {
   const customerId = customer.customer_id
@@ -480,7 +538,63 @@ function CustomerRow({
       <td className="py-3 px-3 text-sm text-muted-foreground">
         {formatDate(customer.most_recent_order_at)}
       </td>
+      <InsightCells insight={insight} />
     </tr>
+  )
+}
+
+/** Customer Insights cells for one list row; dashes when no insight matched. */
+function InsightCells({ insight }: { insight?: InsightRow }) {
+  if (!insight) {
+    return (
+      <>
+        {Array.from({ length: 7 }).map((_, i) => (
+          <td key={i} className="py-3 px-3 text-sm text-muted-foreground">
+            -
+          </td>
+        ))}
+      </>
+    )
+  }
+  const delta = fmtDelta(insight.delta_pct)
+  return (
+    <>
+      <td className="py-3 px-3 text-sm text-right tabular-nums">
+        {fmtMoney(insight.period_spend)}
+      </td>
+      <td
+        className={cn(
+          'py-3 px-3 text-sm text-right tabular-nums',
+          delta.tone === 'up' && 'text-emerald-600 dark:text-emerald-400',
+          delta.tone === 'down' && 'text-red-600 dark:text-red-400',
+          delta.tone === 'flat' && 'text-muted-foreground'
+        )}
+      >
+        {delta.text}
+      </td>
+      <td className="py-3 px-3 text-sm text-right tabular-nums">
+        {fmtMoney(insight.lifetime)}
+      </td>
+      <td className="py-3 px-3 text-sm text-right tabular-nums">
+        {insight.samples}
+      </td>
+      <td className="py-3 px-3 text-sm text-right tabular-nums text-muted-foreground">
+        {insight.usual_gap_days == null ? 'n/a' : `${insight.usual_gap_days} d`}
+      </td>
+      <td className="py-3 px-3 text-sm text-muted-foreground">
+        {insight.top_tests.join(', ') || '-'}
+      </td>
+      <td className="py-3 px-3 text-sm">
+        <span
+          className={cn(
+            'rounded-full px-2 py-0.5 text-xs font-medium whitespace-nowrap',
+            STATUS_CLASS[insight.status]
+          )}
+        >
+          {STATUS_LABEL[insight.status] ?? insight.status}
+        </span>
+      </td>
+    </>
   )
 }
 

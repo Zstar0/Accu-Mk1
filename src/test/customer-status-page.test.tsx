@@ -75,6 +75,14 @@ vi.mock('@/lib/api', async () => {
     ...actual,
     getExplorerStatus: vi.fn(),
     getExplorerCustomers: vi.fn(),
+    getCustomerList: vi.fn().mockResolvedValue({
+      tz: 'UTC',
+      synced_at: null,
+      rows: [],
+      total: 0,
+      page: 1,
+      page_size: 200,
+    }),
     getExplorerOrdersByCustomer: vi.fn(),
   }
 })
@@ -256,7 +264,7 @@ describe('CustomerStatusPage — list view', () => {
     vi.unstubAllEnvs()
   })
 
-  it('renders 6-column header with exact UI-SPEC copy', async () => {
+  it('renders the 6 original columns plus the 7 Customer Insights columns', async () => {
     render(<CustomerStatusPage />, { wrapper })
 
     // Wait for query to settle; thead is in DOM unconditionally so we can poll.
@@ -272,6 +280,14 @@ describe('CustomerStatusPage — list view', () => {
       'Outstanding',
       'Total COAs',
       'Most Recent',
+      // Customer Insights columns (additive).
+      'Spend (90d)',
+      'Δ',
+      'Lifetime',
+      'Samples',
+      'Usual gap',
+      'Top tests',
+      'Status',
     ])
   })
 
