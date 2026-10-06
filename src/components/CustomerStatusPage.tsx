@@ -81,7 +81,6 @@ import {
   dossierQuery,
   fmtDelta,
   fmtMoney,
-  normOrderNumber,
   STATUS_CLASS,
   STATUS_LABEL,
 } from '@/components/customers/insights-utils'
@@ -1023,10 +1022,13 @@ function CustomerOrdersTab({
 }) {
   // Total / Discount / Coupon cells come from the insights dossier (same
   // query key as the Dashboard tab: one fetch). Errors or a 404 leave the
-  // cells as "-"; the orders table itself never depends on it.
+  // cells as "-"; the orders table itself never depends on it. Joined on the
+  // WC order id (ExplorerOrder.order_id is the WP post id, as OrderRow's
+  // edit link shows; the dossier's order_id is wc_orders.id): order NUMBER
+  // formats differ across sources.
   const dossier = useQuery(dossierQuery(customerKey))
   const moneyByOrder = new Map(
-    (dossier.data?.orders ?? []).map(o => [o.order_number, o])
+    (dossier.data?.orders ?? []).map(o => [String(o.order_id), o])
   )
 
   // One local state slot per axis. Seed from the committed store value so a
@@ -1374,9 +1376,7 @@ function CustomerOrdersTab({
                       highlightSampleId={highlightSampleId}
                       highlightLot={highlightLot}
                       showFinance
-                      money={moneyByOrder.get(
-                        normOrderNumber(order.order_number)
-                      )}
+                      money={moneyByOrder.get(String(order.order_id))}
                       slaVerdict={orderSla.verdictByOrderId.get(order.order_id)}
                       sampleSlaStatusesMap={orderSla.sampleStatusesBySampleId}
                       productsBySampleId={productsBySampleId}

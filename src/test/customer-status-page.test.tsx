@@ -740,9 +740,9 @@ describe('CustomerStatusPage — detail view', () => {
     expect(getExplorerOrdersByCustomer).not.toHaveBeenCalled()
   })
 
-  it('Orders tab: Total/Discount/Coupon headers, money joined on the normalized order number', async () => {
+  it('Orders tab: Total/Discount/Coupon headers, money joined on the WC order id', async () => {
     vi.mocked(getExplorerOrdersByCustomer).mockResolvedValue([
-      makeOrder({ order_number: 'WP-3001' }),
+      makeOrder({ order_id: '3001', order_number: 'WP-3001' }),
     ])
     vi.mocked(getCustomerDossier).mockResolvedValue({
       orders: [

@@ -59,13 +59,6 @@ export function cohortTint(share: number | null): string {
   return 'bg-emerald-500/30'
 }
 
-/** Mirrors backend norm_order_number: "WP-8642" / "#8642" / " 8642 " -> "8642". */
-export const normOrderNumber = (v: string | number): string =>
-  String(v)
-    .trim()
-    .replace(/^(wp-|#)/i, '')
-    .trim()
-
 /** One query for a customer dossier so the Dashboard, the Orders-tab money
  *  cells and the guest header share a single fetch. */
 export const dossierQuery = (key: string) => ({
