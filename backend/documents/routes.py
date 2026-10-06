@@ -9,7 +9,7 @@ from dataclasses import dataclass
 from types import SimpleNamespace
 from typing import Dict, List, Optional
 
-from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request, Response, status
+from fastapi import APIRouter, Depends, Header, HTTPException, Query, Response, status
 from fastapi.security import OAuth2PasswordBearer
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
@@ -128,7 +128,6 @@ def require_document_admin_writer(writer=Depends(require_document_writer)):
 
 
 def _space_reader(
-    request: Request,
     x_service_token: Optional[str] = Header(None),
     token: Optional[str] = Depends(_optional_bearer),
     db: Session = Depends(get_db),
@@ -141,12 +140,9 @@ def _space_reader(
             return agent
         require_internal_service_token(x_service_token)
         return None
-    # Resolved through dependency_overrides so tests (and any future auth swap) apply.
-    # get_current_user cannot be a plain Depends here: it would 401 agent-token callers.
-    resolve = request.app.dependency_overrides.get(get_current_user, get_current_user)
-    if resolve is get_current_user and not token:
+    if not token:
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, "authentication required")
-    return resolve() if resolve is not get_current_user else get_current_user(token=token, db=db)
+    return get_current_user(token=token, db=db)
 
 
 def _reader_for(writer):

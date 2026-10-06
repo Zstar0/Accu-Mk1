@@ -27,7 +27,7 @@ def client():
     import groups.models  # noqa: F401
     import documents.models  # noqa: F401
     from documents import service, storage
-    from documents.routes import require_document_writer
+    from documents.routes import _space_reader, require_document_writer
     engine = create_engine("sqlite:///:memory:", connect_args={"check_same_thread": False},
                            poolclass=StaticPool)
     Base.metadata.create_all(engine)
@@ -42,10 +42,11 @@ def client():
     def _db():
         yield shared
 
-    keys = (get_db, get_current_user, require_document_writer)
+    keys = (get_db, get_current_user, require_document_writer, _space_reader)
     saved = {k: app.dependency_overrides.get(k) for k in keys}
     app.dependency_overrides[get_db] = _db
     app.dependency_overrides[get_current_user] = lambda: SimpleNamespace(id=42, role="standard", email="t@x.t", is_active=True)
+    app.dependency_overrides[_space_reader] = lambda: SimpleNamespace(id=42, role="standard", email="t@x.t", is_active=True)
     app.dependency_overrides[require_document_writer] = lambda: SimpleNamespace(id=1, role="admin", email="admin@x.t", is_active=True)
     tc = TestClient(app)
     tc.db = shared
@@ -121,9 +122,10 @@ def test_agent_token_cannot_administer_spaces(client):
 def test_agent_token_lists_its_allowlist(client):
     from main import app
     from auth import get_current_user
-    from documents.routes import require_document_writer
+    from documents.routes import _space_reader, require_document_writer
     app.dependency_overrides.pop(require_document_writer, None)
     app.dependency_overrides.pop(get_current_user, None)
+    app.dependency_overrides.pop(_space_reader, None)
     with patch.dict(os.environ, {"MK1_DOCUMENT_AGENT_TOKENS": "bot:" + "b" * 40 + ":general+lab"}):
         r = client.get("/api/document-spaces", headers={"X-Service-Token": "b" * 40})
         assert r.status_code == 200
