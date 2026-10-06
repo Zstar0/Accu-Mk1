@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+### Document spaces
+- **Spaces are the first level of the Documents page** and decide who can read what. A company space is readable by every login; a restricted space only by the user groups you grant. General is seeded and every existing document now lives in it.
+- Every document route, the list, search, comments and attachments, and the document flag threads answer 404 for a document the caller cannot see, exactly as for a missing one.
+- Admins create and grant spaces in Settings > Documents, and move a document (every revision together) from Edit details. The publish skill and labmanager-mcp take a `space`; agent tokens may carry a space allow-list (`name:token:slug+slug`, absent = General only).
+
 ## v1.33.0 - 2026-10-06
 
 ### Planning boards, slice 1: groups and boards backend
