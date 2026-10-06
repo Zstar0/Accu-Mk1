@@ -1,4 +1,4 @@
-﻿"""
+"""
 FastAPI backend for Accu-Mk1.
 Provides REST API for scientific calculations, database access, and audit logging.
 """
