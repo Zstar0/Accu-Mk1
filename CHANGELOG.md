@@ -3,6 +3,7 @@
 ## Unreleased
 
 ### Planning boards, slice 1: groups and boards backend
+- **Deactivating a group suspends its board grants** (spec 4.8): members of a deactivated group lose the restricted boards and flags it granted until it is re-activated; admins are unaffected.
 - **User groups.** New `user_groups` / `user_group_members` tables, admin CRUD at `/api/groups`, a Groups pane in Settings (create, rename, deactivate, edit members; delete only when unused). Groups are the unit of access for boards and, through board nodes, for flags.
 - **Boards API.** `board_boards`, `board_grants`, `board_nodes`, `board_edges` and `/api/boards` (boards, grants, nodes with per-kind validation and optimistic versions, a positions batch that is all-or-nothing, edges, and a `for-entity` reverse lookup). Company boards are viewable by every active user and editable by granted groups; restricted boards cannot be created yet (`RESTRICTED_BOARDS_ENABLED` is off until the flag visibility slice lands). Boards a user cannot see answer 404 on every route.
 - **`board_node` is a flag entity.** Frames, notes, links and text on a board can carry flags; a node of kind `entity` refuses them with a 400 that names the real anchor. Frames roll up their children's flags through `descendants`. Deleting a node or board with open flags is refused (409).

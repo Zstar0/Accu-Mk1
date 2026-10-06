@@ -86,7 +86,7 @@ columns with no FK, matching the flags module, except where noted.
 | slug | str(60) unique | immutable; `[a-z0-9-]`, set at create, never changed |
 | name | str(120) | display |
 | description | text null | |
-| is_active | bool default true | deactivate hides from pickers; grants keep working |
+| is_active | bool default true | deactivate hides from pickers and suspends the group's grants (4.8; ruled 2026-10-06, see 14) |
 | created_at | datetime | |
 
 ### 4.2 `user_group_members`
@@ -653,6 +653,11 @@ and PR. Deploy follows the `accumark-deploy` skill; boards need no env change.
   drawn manager to report. Retyping a line into or out of `reports_to` swaps the stored ends,
   which `PATCH edge` cannot do, so the new edge is created first and the old one deleted. A
   line-kind picker (related, reports to, depends on, next) shows for exactly one selected line.
+- Release candidate (2026-10-06, Handler ruling): 4.1 said a deactivated group's grants keep
+  working; 4.8 said a restricted board left with only deactivated groups is admin-only. 4.8
+  wins: `groups.access.user_group_ids` counts active groups only, so deactivation suspends
+  the group's board grants and, through them, flag visibility, the live-stream audience and
+  Slack recipients. Re-activation restores everything; memberships and grants are untouched.
 - Slice 4c (person cards, PR #277): users gain an optional job `title` (100 chars; Profile page and
   the admin user flyout; `/auth/directory` and `/worksheets/users` carry it). `PersonData` gains
   `show` (`name` | `email`, default `name`) and `show_title` (default true); the card renders the

@@ -83,6 +83,23 @@ def test_require_helpers_map_to_errors(world):
     require_edit(s, EDITOR, world.secret)
 
 
+def test_deactivated_group_grants_are_suspended(world):
+    """Spec 4.8 (ruled 2026-10-06): deactivating a group suspends its grants. A restricted
+    board whose only group is deactivated is visible to admins only; a company board stays
+    visible; re-activation restores access without touching memberships or grants."""
+    from boards.access import can_view_board as v, visible_board_ids
+    s = world.s
+    world.viewers.is_active = False
+    s.commit()
+    assert v(s, VIEWER, world.secret) is False
+    assert v(s, ADMIN, world.secret) is True
+    assert v(s, VIEWER, world.company) is True
+    assert set(s.execute(visible_board_ids(s, VIEWER)).scalars().all()) == {world.company.id}
+    world.viewers.is_active = True
+    s.commit()
+    assert v(s, VIEWER, world.secret) is True
+
+
 def test_visibility_reads_membership_live(world):
     """A user pulled from every group loses access on the next call, same session,
     same user object, no re-login (Review Focus 1)."""
