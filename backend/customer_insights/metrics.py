@@ -305,3 +305,63 @@ def dossier(ds: Dataset, key: str, *, end: datetime, tz: str) -> dict[str, Any] 
         "recent": [recent_row(x) for x in sorted(orders, key=lambda x: x.paid_at, reverse=True)[:6]],
         "orders": order_rows(replace(ds, orders=tuple(orders)), start=None, end=end),
     }
+
+
+def churn_signals(ds: Dataset, *, end: datetime) -> dict[str, Any]:
+    window = timedelta(days=rules.CHURN_WINDOW_DAYS)
+    testing = [x for x in ds.orders if x.is_testing]
+    retested = {x.retest_of_order_id for x in ds.orders if x.retest_of_order_id}
+    by_key: dict[str, list[datetime]] = defaultdict(list)
+    for x in testing:
+        by_key[x.customer_key].append(x.paid_at)
+    coa_by_order: dict[str, list[bool]] = defaultdict(list)
+    for c in ds.coas:
+        coa_by_order[c.order_number].append(c.passed)
+    acc: dict[tuple[str, str], list[bool]] = defaultdict(list)
+    for x in testing:
+        if x.paid_at > end - window:
+            continue
+        came_back = any(x.paid_at < d <= x.paid_at + window for d in by_key[x.customer_key])
+        if ds.delivered_orders is not None and ds.late_orders is not None and x.order_number in ds.delivered_orders:
+            acc[("sla", "late" if x.order_number in ds.late_orders else "on_time")].append(came_back)
+        if coa_by_order.get(x.order_number):
+            acc[("conformance", "all_pass" if all(coa_by_order[x.order_number]) else "any_fail")].append(came_back)
+        acc[("retest", "retest" if x.order_id in retested else "no_retest")].append(came_back)
+    return {"window_days": rules.CHURN_WINDOW_DAYS,
+            "buckets": [{"signal": s, "group": g, "orders": len(v), "returned": _rate(sum(v), len(v))}
+                        for (s, g), v in sorted(acc.items())]}
+
+
+def changes(ds: Dataset, *, since: datetime, end: datetime, tz: str) -> list[dict[str, Any]]:
+    """Stateless diff: rule outputs at `since` vs `end`.
+    ponytail: recomputes both instants; persist events if bots need an audit trail."""
+    before = {r["key"]: r for r in customer_rows(ds, start=since - timedelta(days=90), end=since, tz=tz)}
+    after = {r["key"]: r for r in customer_rows(ds, start=end - timedelta(days=90), end=end, tz=tz)}
+
+    def decile(rows: dict[str, dict]) -> set[str]:
+        ranked = sorted(rows.values(), key=lambda r: Decimal(r["lifetime"]), reverse=True)
+        return {r["key"] for r in ranked[: max(1, len(ranked) // 10)]} if ranked else set()
+
+    top_before, top_after = decile(before), decile(after)
+    t_before = testing_dates(ds, since)
+    t_after = testing_dates(ds, end)
+    events: list[dict[str, Any]] = []
+
+    def ev(kind: str, key: str, **detail: Any) -> None:
+        events.append({"type": kind, "customer_key": key, "name": after[key]["name"],
+                       "detected_at": end.isoformat(), "detail": detail})
+
+    for key, r in after.items():
+        prev = before.get(key)
+        prev_status = prev["status"] if prev else None
+        if r["status"] == "at_risk" and prev_status != "at_risk":
+            ev("became_at_risk", key, usual_gap_days=r["usual_gap_days"], last_order_at=r["last_order_at"])
+        if r["status"] == "dropping" and prev_status != "dropping":
+            ev("spend_drop", key, period_spend=r["period_spend"], prior_spend=r["prior_spend"], delta_pct=r["delta_pct"])
+        if len(t_before.get(key, [])) == 1 and len(t_after.get(key, [])) >= 2:
+            ev("first_reorder", key, orders=len(t_after[key]))
+        if prev_status == "at_risk" and r["status"] != "at_risk":
+            ev("returned", key, last_order_at=r["last_order_at"])
+        if key in top_after and key not in top_before:
+            ev("entered_top_decile", key, lifetime=r["lifetime"])
+    return events

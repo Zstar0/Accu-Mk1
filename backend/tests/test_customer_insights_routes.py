@@ -109,3 +109,19 @@ def test_dossier_route_nested_fields_survive(client) -> None:
     assert {"days_since_last", "spend_delta_pct", "analytes"} <= set(body)
     # guest keys match case-insensitively
     assert client.get("/reports/customers/email:G@X.com").status_code == 200
+
+
+def test_changes_and_churn_routes(client) -> None:
+    r = client.get("/reports/customers/changes?since=2026-01-01T00:00:00Z")
+    assert r.status_code == 200
+    body = r.json()
+    assert body["since"].startswith("2026-01-01")
+    assert body["events"], "fixture should yield at least one event"
+    assert {"type", "customer_key", "name", "detected_at", "detail"} <= set(body["events"][0])
+    assert isinstance(body["events"][0]["detail"], dict)
+    # naive since is treated as UTC
+    assert client.get("/reports/customers/changes?since=2026-01-01T00:00:00").status_code == 200
+    churn = client.get("/reports/customers/churn-signals")
+    assert churn.status_code == 200      # not swallowed by /{customer_key} (would 404)
+    assert "buckets" in churn.json() and churn.json()["window_days"] == 60
+    assert client.get("/reports/customers/changes").status_code == 422   # since is required

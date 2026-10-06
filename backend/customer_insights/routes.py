@@ -303,6 +303,44 @@ class DossierResponse(Meta):
     orders: list[OrderRow]
 
 
+class SignalBucket(BaseModel):
+    signal: str
+    group: str
+    orders: int
+    returned: Optional[float] = None
+
+
+class ChurnResponse(Meta):
+    window_days: int
+    buckets: list[SignalBucket]
+
+
+class ChangeEvent(BaseModel):
+    type: str
+    customer_key: str
+    name: str
+    detected_at: str
+    detail: dict
+
+
+class ChangesResponse(Meta):
+    since: str
+    events: list[ChangeEvent]
+
+
+@router.get("/churn-signals", response_model=ChurnResponse)
+def customers_churn(db: Session = Depends(get_db), _u=Depends(get_current_user)):
+    ds, _lo, hi, _tz_, meta = _ctx(db, "all", None, None, False)
+    return {**meta, **metrics.churn_signals(ds, end=hi)}
+
+
+@router.get("/changes", response_model=ChangesResponse)
+def customers_changes(since: datetime, db: Session = Depends(get_db), _u=Depends(get_current_user)):
+    ds, _lo, hi, tz, meta = _ctx(db, "all", None, None, False)
+    since_utc = since if since.tzinfo else since.replace(tzinfo=timezone.utc)
+    return {**meta, "since": since_utc.isoformat(), "events": metrics.changes(ds, since=since_utc, end=hi, tz=tz)}
+
+
 # Declared LAST: FastAPI matches in order, so every fixed path above wins over the key.
 @router.get("/{customer_key}", response_model=DossierResponse)
 def customer_dossier(customer_key: str, db: Session = Depends(get_db), _u=Depends(get_current_user)):

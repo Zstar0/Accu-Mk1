@@ -149,3 +149,26 @@ def test_dossier_without_sla_or_coas() -> None:
     d = metrics.dossier(ds([o("wc:1", 0)]), "wc:1", end=T0 + timedelta(days=1), tz=TZ)
     assert d["kpis"]["on_time_rate"] is None and d["kpis"]["nonconforming_rate"] is None
     assert d["recent"][0]["sla"] is None
+
+
+def test_churn_signals_buckets() -> None:
+    a = [o("wc:1", 0, oid=1, number="1"), o("wc:1", 30, oid=2, number="2")]    # returned within 60
+    b = [o("wc:2", 0, oid=3, number="3")]                                        # never returned
+    coas = [Coa("1", "P", "X", True, T0), Coa("3", "P", "X", False, T0)]
+    data = ds(a + b, coas=coas, late=frozenset({"3"}), delivered=frozenset({"1", "3"}))
+    out = metrics.churn_signals(data, end=T0 + timedelta(days=200))
+    b_ = {(x["signal"], x["group"]): x for x in out["buckets"]}
+    assert b_[("conformance", "all_pass")]["returned"] == 1.0
+    assert b_[("conformance", "any_fail")]["returned"] == 0.0
+    assert b_[("sla", "late")]["orders"] == 1
+    assert ("sla", "late") not in {(x["signal"], x["group"]) for x in metrics.churn_signals(ds(a + b), end=T0 + timedelta(days=200))["buckets"]}
+
+
+def test_changes_feed_types() -> None:
+    weekly = [o("wc:1", d, "100") for d in (0, 7, 14, 21)]
+    second = [o("wc:2", 0), o("wc:2", 40)]
+    data = ds(weekly + second)
+    since, end = T0 + timedelta(days=30), T0 + timedelta(days=60)
+    types = {(c["type"], c["customer_key"]) for c in metrics.changes(data, since=since, end=end, tz=TZ)}
+    assert ("became_at_risk", "wc:1") in types
+    assert ("first_reorder", "wc:2") in types
