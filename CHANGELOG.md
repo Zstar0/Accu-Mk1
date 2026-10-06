@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## v1.33.1 - 2026-10-06
+
 ### Fixed
 - The planning-board canvas and the Settings workflow graph follow dark mode: xyflow's zoom controls, minimap and dotted background no longer render as white panels.
 
