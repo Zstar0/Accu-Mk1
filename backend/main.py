@@ -124,6 +124,7 @@ from slack_notify.routes import router as slack_prefs_router
 from slack_notify.interactions import router as slack_interactions_router
 from workflow.routes import router as workflow_router
 from priority.routes import router as priority_router
+from customer_insights.routes import router as customer_insights_router
 from workflow.cancel_routes import router as cancel_router
 from conformance.routes import router as conformance_router
 from documents.routes import router as documents_router
@@ -620,6 +621,7 @@ app.include_router(slack_prefs_router)
 app.include_router(slack_interactions_router)
 app.include_router(workflow_router)
 app.include_router(priority_router)
+app.include_router(customer_insights_router)
 app.include_router(cancel_router)
 app.include_router(conformance_router)
 app.include_router(documents_router)
