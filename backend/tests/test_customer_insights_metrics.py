@@ -3,7 +3,7 @@ from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 
 from customer_insights import metrics
-from customer_insights.dataset import Customer, Dataset, Order
+from customer_insights.dataset import Coa, Customer, Dataset, Order
 
 TZ = "America/Los_Angeles"
 T0 = datetime(2026, 3, 10, 18, tzinfo=timezone.utc)
@@ -117,3 +117,28 @@ def test_order_rows_window() -> None:
     rows = metrics.order_rows(data, start=T0 + timedelta(days=10), end=T0 + timedelta(days=100))
     assert [r["order_number"] for r in rows] == ["6"]
     assert rows[0]["net"] == "100.00"
+
+
+def test_dossier_shape_and_lab_comparisons() -> None:
+    orders = [o("wc:1", d, "100", oid=10 + i, number=str(10 + i), tests=("HPLC", "Endotoxin"))
+              for i, d in enumerate((0, 7, 14))]
+    orders.append(o("wc:2", 1, "50", oid=20, number="20"))
+    coas = [Coa("10", "P-1", "BPC-157", True, T0), Coa("11", "P-2", "BPC-157", False, T0),
+            Coa("20", "P-3", "TB-500", True, T0)]
+    data = ds(orders, coas=coas, late=frozenset({"11"}), delivered=frozenset({"10", "11", "20"}))
+    d = metrics.dossier(data, "wc:1", end=T0 + timedelta(days=60), tz=TZ)
+    assert d["kpis"]["lifetime"] == "300.00" and d["kpis"]["rank"] == 1
+    assert d["kpis"]["nonconforming_rate"] == 0.5
+    assert d["kpis"]["lab_nonconforming_rate"] == round(1 / 3, 4)
+    assert d["kpis"]["on_time_rate"] == 0.5
+    assert d["analytes"] == [{"product": "BPC-157", "coas": 2, "pass_rate": 0.5}]
+    mix = {m["test"]: m for m in d["test_mix"]}
+    assert mix["Endotoxin"]["share"] == 1.0
+    assert d["recent"][0]["order_number"] == "12"
+    assert metrics.dossier(data, "wc:404", end=T0, tz=TZ) is None
+
+
+def test_dossier_without_sla_or_coas() -> None:
+    d = metrics.dossier(ds([o("wc:1", 0)]), "wc:1", end=T0 + timedelta(days=1), tz=TZ)
+    assert d["kpis"]["on_time_rate"] is None and d["kpis"]["nonconforming_rate"] is None
+    assert d["recent"][0]["sla"] is None

@@ -225,3 +225,82 @@ def order_rows(ds: Dataset, *, start: datetime | None, end: datetime) -> list[di
         "coupons": list(x.coupons), "categories": list(x.categories), "samples": x.samples,
         "tests": sorted(set(x.tests)),
     } for x in _window(ds, start, end)]
+
+
+def _rate(num: int, den: int) -> float | None:
+    return round(num / den, 4) if den else None
+
+
+def dossier(ds: Dataset, key: str, *, end: datetime, tz: str) -> dict[str, Any] | None:
+    by = _by_customer(ds, end)
+    orders = by.get(key)
+    if not orders:
+        return None
+    c = ds.customers.get(key)
+    numbers = {x.order_number for x in orders}
+    lifetimes = sorted(((k, _spend(v, None, end)) for k, v in by.items()), key=lambda kv: kv[1], reverse=True)
+    rank = next(i for i, (k, _) in enumerate(lifetimes, 1) if k == key)
+    dates = [x.paid_at for x in orders if x.is_testing]
+    gaps = sorted((b - a).total_seconds() / 86400 for a, b in zip(dates, dates[1:]))
+    iqr = [round(gaps[len(gaps) // 4], 1), round(gaps[(3 * len(gaps)) // 4], 1)] if len(gaps) >= 2 else None
+    mine = [x for x in ds.coas if x.order_number in numbers]
+    tests = Counter(t for x in orders for t in x.tests)
+    all_tests = Counter(t for x in ds.orders if x.paid_at <= end for t in x.tests)
+    samples = sum(x.samples for x in orders)
+    all_samples = sum(x.samples for x in ds.orders if x.paid_at <= end)
+    products: dict[str, list[bool]] = defaultdict(list)
+    for x in mine:
+        products[x.product].append(x.passed)
+
+    def on_time(nums: set[str]) -> float | None:
+        if ds.delivered_orders is None or ds.late_orders is None:
+            return None
+        delivered = nums & ds.delivered_orders
+        return _rate(len(delivered - ds.late_orders), len(delivered))
+
+    all_numbers = {x.order_number for x in ds.orders if x.paid_at <= end}
+    monthly: dict[str, dict[str, Any]] = defaultdict(lambda: {"spend": ZERO, "samples": 0})
+    for x in orders:
+        m = monthly[rules.lab_month(x.paid_at, tz)]
+        m["spend"] += x.net
+        m["samples"] += x.samples
+    period = _spend(orders, end - timedelta(days=90), end)
+    prior = _spend(orders, end - timedelta(days=180), end - timedelta(days=90))
+    risk = rules.is_at_risk(dates, end)
+
+    def recent_row(x: Order) -> dict[str, Any]:
+        cs = [y for y in mine if y.order_number == x.order_number]
+        sla = None
+        if ds.delivered_orders is not None and ds.late_orders is not None and x.order_number in ds.delivered_orders:
+            sla = "late" if x.order_number in ds.late_orders else "on_time"
+        return {"order_number": x.order_number, "paid_at": x.paid_at.isoformat(), "coas": len(cs),
+                "failed": sum(not y.passed for y in cs), "sla": sla}
+
+    return {
+        "identity": {"key": key, "name": c.name if c else key, "email": c.email if c else None,
+                     "company": c.company if c else None, "wc_id": c.wc_id if c else None,
+                     "since": orders[0].paid_at.isoformat()},
+        "kpis": {
+            "lifetime": money(_spend(orders, None, end)), "rank": rank, "customers": len(lifetimes),
+            "orders": len(orders), "avg_order": money(_spend(orders, None, end) / len(orders)),
+            "samples": samples, "samples_per_order": round(samples / len(orders), 1),
+            "usual_gap_days": round(rules.usual_gap_days(dates), 1) if len(dates) >= 3 else None,
+            "gap_iqr": iqr,
+            "nonconforming_rate": _rate(sum(not x.passed for x in mine), len(mine)),
+            "lab_nonconforming_rate": _rate(sum(not x.passed for x in ds.coas), len(ds.coas)),
+            "on_time_rate": on_time(numbers), "lab_on_time_rate": on_time(all_numbers),
+        },
+        "status": rules.spend_status(paid_orders=len(orders), at_risk=risk, period=period, prior=prior),
+        "days_since_last": round((end - dates[-1]).total_seconds() / 86400, 1) if dates else None,
+        "overdue": rules.overdue_ratio(dates, end),
+        "spend_delta_pct": round(float((period - prior) / prior), 4) if prior else None,
+        "monthly": [{"month": m, "spend": money(v["spend"]), "samples": v["samples"]} for m, v in sorted(monthly.items())],
+        "order_dates": [d.isoformat() for d in dates],
+        "test_mix": [{"test": t, "share": round(n / samples, 4) if samples else 0.0,
+                      "all_share": round(all_tests[t] / all_samples, 4) if all_samples else 0.0}
+                     for t, n in sorted(tests.items(), key=lambda kv: -kv[1])],
+        "analytes": sorted(({"product": p, "coas": len(v), "pass_rate": round(sum(v) / len(v), 4)}
+                            for p, v in products.items()), key=lambda r: -r["coas"])[:8],
+        "recent": [recent_row(x) for x in sorted(orders, key=lambda x: x.paid_at, reverse=True)[:6]],
+        "orders": order_rows(replace(ds, orders=tuple(orders)), start=None, end=end),
+    }

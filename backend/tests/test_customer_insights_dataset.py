@@ -2,7 +2,7 @@
 from datetime import datetime, timezone
 from decimal import Decimal
 
-from customer_insights.dataset import build_dataset, service_label
+from customer_insights.dataset import build_dataset, norm_order_number, service_label
 
 PAID = datetime(2026, 9, 10, 15, tzinfo=timezone.utc)
 
@@ -85,3 +85,17 @@ def test_duplicate_submissions_last_row_wins() -> None:
     ds = build([order_row(1)], [sub_row(1, [SAMPLE], is_transfer=True), sub_row(1, [SAMPLE, SAMPLE])])
     (o,) = ds.orders
     assert o.is_testing and o.samples == 2
+
+
+def test_norm_order_number() -> None:
+    for raw in ("WP-8642", "wp-8642", "#8642", " 8642 ", 8642):
+        assert norm_order_number(raw) == "8642"
+    assert norm_order_number("WP-") == ""
+
+
+def test_sla_wp_prefix_joins_bare_order_numbers() -> None:
+    sla = [{"order": "WP-1", "state": "delivered", "late": True}]
+    ds = build([order_row(1)], sla=sla, coas=[("#1", "P-1", "BPC-157", "PASSED", PAID)])
+    assert ds.orders[0].order_number == "1"
+    assert "1" in ds.late_orders and "1" in ds.delivered_orders
+    assert ds.coas[0].order_number == "1"

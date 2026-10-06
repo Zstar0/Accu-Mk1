@@ -78,6 +78,15 @@ def _sample_tests(sample: dict[str, Any]) -> list[str]:
     return sorted(out)
 
 
+def norm_order_number(v: Any) -> str:
+    """One join form for order numbers: SLA records say "WP-8642", wc_orders/IS say "8642"."""
+    s = str(v).strip()
+    for prefix in ("wp-", "#"):
+        if s.lower().startswith(prefix):
+            s = s[len(prefix):]
+    return s.strip()
+
+
 def _name(first: str | None, last: str | None, fallback: str) -> str:
     return " ".join(p for p in (first, last) if p) or fallback
 
@@ -115,7 +124,7 @@ def build_dataset(
                 int(cid) if cid else None,
             )
         orders.append(Order(
-            order_id=int(oid), order_number=str(number), customer_key=key, paid_at=paid,
+            order_id=int(oid), order_number=norm_order_number(number), customer_key=key, paid_at=paid,
             net=net.quantize(Decimal("0.01")), discount=(discount or Decimal(0)).quantize(Decimal("0.01")),
             coupons=tuple(c.lower() for c in coupons or []),
             categories=tuple(sorted({(i or {}).get("category", "testing") for i in items or []})),
@@ -124,11 +133,13 @@ def build_dataset(
         ))
     orders.sort(key=lambda o: o.paid_at)
 
-    coas = tuple(Coa(str(n), str(s), p or "", (st or "").upper() == "PASSED", at) for n, s, p, st, at in coa_rows if n)
+    coas = tuple(Coa(norm_order_number(n), str(s), p or "", (st or "").upper() == "PASSED", at)
+                 for n, s, p, st, at in coa_rows if n and norm_order_number(n))
 
     late = delivered = None
     if sla_records is not None:
-        recs = [r for r in sla_records if r.get("order") and r.get("state") == "delivered"]
-        delivered = frozenset(r["order"] for r in recs)
-        late = frozenset(r["order"] for r in recs if r.get("late"))
+        recs = [(norm_order_number(r["order"]), r) for r in sla_records
+                if r.get("order") and r.get("state") == "delivered"]
+        delivered = frozenset(n for n, _ in recs if n)
+        late = frozenset(n for n, r in recs if n and r.get("late"))
     return Dataset(customers, tuple(orders), coas, late, delivered, synced_at)

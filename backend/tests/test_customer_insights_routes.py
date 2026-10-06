@@ -81,3 +81,31 @@ def test_orders_json_and_at_risk_fields_survive(client) -> None:
     assert {"customer_key", "net", "tests", "categories"} <= set(body["rows"][0])
     risk = client.get("/reports/customers/at-risk").json()["rows"][0]
     assert {"spend_12m", "overdue", "monthly", "top_tests"} <= set(risk)
+
+
+def test_dossier_route_guest_key_and_404(client) -> None:
+    body = client.get("/reports/customers/email:g@x.com").json()
+    assert body["identity"]["key"] == "email:g@x.com"
+    assert {"lifetime", "rank", "on_time_rate"} <= set(body["kpis"])
+    assert body["orders"][0]["net"] == "125.00"
+    assert client.get("/reports/customers/wc:999").status_code == 404
+    # fixed routes still win over the key route
+    assert client.get("/reports/customers/summary").status_code == 200
+
+
+def test_dossier_route_nested_fields_survive(client) -> None:
+    body = client.get("/reports/customers/wc:1").json()
+    assert body["tz"] == "America/Los_Angeles"
+    assert body["identity"] == {"key": "wc:1", "name": "Halcyon", "email": "ops@h.example",
+                                "company": "Halcyon", "wc_id": 1, "since": body["identity"]["since"]}
+    assert body["kpis"]["gap_iqr"] == [10.0, 10.0] and body["kpis"]["usual_gap_days"] == 10.0
+    assert {"lab_nonconforming_rate", "lab_on_time_rate", "samples_per_order"} <= set(body["kpis"])
+    assert body["status"] == "at_risk" and body["overdue"] > 1
+    assert set(body["monthly"][0]) == {"month", "spend", "samples"}
+    assert set(body["test_mix"][0]) == {"test", "share", "all_share"}
+    assert set(body["recent"][0]) == {"order_number", "paid_at", "coas", "failed", "sla"}
+    assert body["recent"][0]["sla"] is None
+    assert len(body["order_dates"]) == 3 and body["orders"][0]["coupons"] == ["accutry50"]
+    assert {"days_since_last", "spend_delta_pct", "analytes"} <= set(body)
+    # guest keys match case-insensitively
+    assert client.get("/reports/customers/email:G@X.com").status_code == 200

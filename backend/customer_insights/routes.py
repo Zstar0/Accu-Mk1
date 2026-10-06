@@ -6,7 +6,7 @@ import io
 from datetime import date, datetime, timezone
 from typing import Literal, Optional
 
-from fastapi import APIRouter, Depends, Query, Response
+from fastapi import APIRouter, Depends, HTTPException, Query, Response
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
@@ -235,3 +235,80 @@ def customers_orders(period: Period = "all", start: Optional[date] = None, end: 
                         headers={"Content-Disposition": "attachment; filename=customer-orders.csv"})
     return {**meta, "rows": rows[(page - 1) * page_size: page * page_size], "total": len(rows),
             "page": page, "page_size": page_size}
+
+
+class Identity(BaseModel):
+    key: str
+    name: str
+    email: Optional[str] = None
+    company: Optional[str] = None
+    wc_id: Optional[int] = None
+    since: str
+
+
+class DossierKpis(BaseModel):
+    lifetime: str
+    rank: int
+    customers: int
+    orders: int
+    avg_order: str
+    samples: int
+    samples_per_order: float
+    usual_gap_days: Optional[float] = None
+    gap_iqr: Optional[list[float]] = None
+    nonconforming_rate: Optional[float] = None
+    lab_nonconforming_rate: Optional[float] = None
+    on_time_rate: Optional[float] = None
+    lab_on_time_rate: Optional[float] = None
+
+
+class MonthSpendSamples(BaseModel):
+    month: str
+    spend: str
+    samples: int
+
+
+class TestShare(BaseModel):
+    test: str
+    share: float
+    all_share: float
+
+
+class AnalyteRate(BaseModel):
+    product: str
+    coas: int
+    pass_rate: float
+
+
+class RecentOrder(BaseModel):
+    order_number: str
+    paid_at: str
+    coas: int
+    failed: int
+    sla: Optional[str] = None
+
+
+class DossierResponse(Meta):
+    identity: Identity
+    kpis: DossierKpis
+    status: str
+    days_since_last: Optional[float] = None
+    overdue: float
+    spend_delta_pct: Optional[float] = None
+    monthly: list[MonthSpendSamples]
+    order_dates: list[str]
+    test_mix: list[TestShare]
+    analytes: list[AnalyteRate]
+    recent: list[RecentOrder]
+    orders: list[OrderRow]
+
+
+# Declared LAST: FastAPI matches in order, so every fixed path above wins over the key.
+@router.get("/{customer_key}", response_model=DossierResponse)
+def customer_dossier(customer_key: str, db: Session = Depends(get_db), _u=Depends(get_current_user)):
+    ds, _lo, hi, tz, meta = _ctx(db, "all", None, None, False)
+    d = metrics.dossier(ds, customer_key.strip().lower() if customer_key.startswith("email:") else customer_key,
+                        end=hi, tz=tz)
+    if d is None:
+        raise HTTPException(status_code=404, detail="customer not found")
+    return {**meta, **d}
