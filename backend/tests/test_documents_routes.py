@@ -34,6 +34,7 @@ def client():
     Base.metadata.create_all(engine)
     shared = sessionmaker(bind=engine)()
     service.seed_categories(shared)
+    service.seed_spaces(shared)
     storage.set_storage_for_tests(storage.InMemoryDocumentStorage())
 
     def _db():
@@ -332,3 +333,30 @@ def test_a_revision_may_omit_title_over_http(client):
         r = client.post("/api/documents", headers=SVC, json={"html": HTML + "<!--3-->", "category": "ART"})
         assert r.status_code == 400 and "title is required" in r.text
 
+
+# --- spaces: agent allow-list parsing (spec 2026-10-06 section 7.1) ----------------------
+
+def test_agent_tokens_third_segment():
+    """Review Focus 4: the optional third segment parses into a slug set; absent = general;
+    an unknown slug still parses (it is only a string here)."""
+    from documents.routes import AgentWriter, _agent_tokens, _match_agent
+    tok_a, tok_b, tok_c = "a" * 40, "b" * 40, "c" * 40
+    env = {"MK1_DOCUMENT_AGENT_TOKENS":
+           f"jarvis:{tok_a}:general+analytical, tars:{tok_b}, codex:{tok_c}:not-yet-a-space"}
+    with patch.dict(os.environ, env):
+        parsed = _agent_tokens()
+        assert parsed["jarvis"] == (tok_a, frozenset({"general", "analytical"}))
+        assert parsed["tars"] == (tok_b, frozenset({"general"}))
+        assert parsed["codex"] == (tok_c, frozenset({"not-yet-a-space"}))
+        who = _match_agent(tok_a)
+        assert who == AgentWriter("jarvis", frozenset({"general", "analytical"}))
+        assert _match_agent("x" * 40) is None
+    with patch.dict(os.environ, {"MK1_DOCUMENT_AGENT_TOKENS": f"bad:{tok_a}:Not A Slug"}):
+        assert _agent_tokens() == {}  # malformed segment drops the whole entry
+
+
+def test_doc_out_carries_space_fields(client):
+    _as_admin(client)
+    d = _publish(client).json()
+    assert (d["space_slug"], d["space_name"]) == ("general", "General")
+    assert d["space_id"] is not None

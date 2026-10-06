@@ -17,9 +17,11 @@ from auth import get_current_user, require_admin, require_internal_service_token
 from database import get_db
 from documents import service
 from documents.errors import BadRequestError, ConflictError, NotFoundError
-from documents.models import Document, DocumentCategory
+from documents.models import Document, DocumentCategory, DocumentSpace
 from documents.schemas import (CategoryCreate, CategoryOut, CategoryUpdate, DocumentCreate,
-                               DocumentDetail, DocumentListOut, DocumentOut, DocumentPatch)
+                               DocumentDetail, DocumentListOut, DocumentOut, DocumentPatch,
+                               SpaceCreate, SpaceGrantsOut, SpaceGrantsReplace, SpaceOut,
+                               SpaceUpdate)
 from documents.storage import DocumentNotFound
 
 router = APIRouter(prefix="/api", tags=["documents"])
@@ -32,41 +34,58 @@ _AGENT_NAME = re.compile(r"^[a-z0-9][a-z0-9_-]{0,39}$")
 _MIN_AGENT_TOKEN = 32
 
 
+_SLUG_LIST = re.compile(r"^[a-z0-9][a-z0-9-]{0,59}(\+[a-z0-9][a-z0-9-]{0,59})*$")
+
+
 @dataclass(frozen=True)
 class AgentWriter:
-    """A caller holding a documents-scoped agent token. Not a user: it has no
-    id and no email, and it may author and archive but never delete."""
+    """A caller holding a documents-scoped agent token. Not a user: it has no id and
+    no email, and it may author and archive but never delete. `spaces` is the slug
+    allow-list it may publish into (spec 2026-10-06 section 7.1); absent = General."""
     name: str
+    spaces: frozenset = frozenset({"general"})
 
 
-def _agent_tokens() -> Dict[str, str]:
-    """MK1_DOCUMENT_AGENT_TOKENS="jarvis:<token>,tars:<token>" -> {agent: token}.
+def _agent_tokens() -> Dict[str, tuple]:
+    """MK1_DOCUMENT_AGENT_TOKENS="jarvis:<token>:general+analytical,tars:<token>"
+    -> {agent: (token, frozenset(slugs))}.
 
     These exist because the internal service token also opens the s2s order and
     sample endpoints, so it cannot live on a bot host. An agent token opens the
-    documents API and nothing else, and it names the agent, so authorship comes
-    from the credential instead of from whatever the request body claims.
-    A malformed entry is dropped (and logged), never half-accepted."""
-    out: Dict[str, str] = {}
+    documents API and nothing else, names the agent, and (optionally) names the
+    spaces it may write to. A malformed entry is dropped (and logged), never
+    half-accepted."""
+    out: Dict[str, tuple] = {}
     for entry in os.environ.get("MK1_DOCUMENT_AGENT_TOKENS", "").split(","):
         entry = entry.strip()
         if not entry:
             continue
-        name, sep, tok = entry.partition(":")
-        name, tok = name.strip(), tok.strip()
+        name, sep, rest = entry.partition(":")
+        tok, _, spaces = rest.partition(":")
+        name, tok, spaces = name.strip(), tok.strip(), spaces.strip().lower()
         if not sep or not _AGENT_NAME.match(name) or len(tok) < _MIN_AGENT_TOKEN:
             logger.warning("documents.agent_token_ignored agent=%r reason=malformed", name[:40])
             continue
-        out[name] = tok
+        if spaces and not _SLUG_LIST.match(spaces):
+            logger.warning("documents.agent_token_ignored agent=%r reason=bad_spaces", name[:40])
+            continue
+        out[name] = (tok, frozenset(spaces.split("+")) if spaces else frozenset({"general"}))
     return out
 
 
-def _match_agent(presented: str) -> Optional[str]:
+def _match_agent(presented: str) -> Optional[AgentWriter]:
     found = None
-    for name, tok in _agent_tokens().items():  # no early exit: same work for hit or miss
+    for name, (tok, spaces) in _agent_tokens().items():  # no early exit: same work for hit or miss
         if secrets.compare_digest(presented.encode(), tok.encode()):
-            found = name
+            found = AgentWriter(name, spaces)
     return found
+
+
+def agent_may_write(writer, space) -> bool:
+    """Admins and the internal service token write anywhere; an agent only to its list."""
+    if isinstance(writer, AgentWriter):
+        return space.slug in writer.spaces
+    return True
 
 
 def require_document_writer(
@@ -81,7 +100,7 @@ def require_document_writer(
     if x_service_token is not None:
         agent = _match_agent(x_service_token)
         if agent is not None:
-            return AgentWriter(agent)
+            return agent
         require_internal_service_token(x_service_token)
         return None
     if not token:
@@ -129,11 +148,21 @@ def _cat_out(cat: DocumentCategory, count: int) -> CategoryOut:
     return out
 
 
+def _space_out(sp: DocumentSpace, count: int, can_write: bool) -> SpaceOut:
+    out = SpaceOut.model_validate(sp)
+    out.document_count = count
+    out.can_write = can_write
+    return out
+
+
 def _doc_out(doc: Document, revision_count: int) -> DocumentOut:
     return DocumentOut(
         id=doc.id, code=doc.code, revision=doc.revision, title=doc.title,
         description=doc.description, category_id=doc.category_id,
         category_name=doc.category.name, category_prefix=doc.category.code_prefix,
+        space_id=doc.space_id,
+        space_slug=doc.space.slug if doc.space is not None else "general",
+        space_name=doc.space.name if doc.space is not None else "General",
         status=doc.status, effective_date=doc.effective_date, activated_at=doc.activated_at,
         retired_at=doc.retired_at, supersedes_id=doc.supersedes_id, author=doc.author,
         updated_by=doc.updated_by, co_author=doc.co_author,
