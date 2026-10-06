@@ -173,7 +173,7 @@ def test_native_bw_parent_yields_three_legacy_rows_with_specs(db, monkeypatch):
     # prints wire `display` verbatim (native_sections._format_spec_display).
     assert ba["specification"]["display"] == "0.9% (v/v) ±20%"
     assert ph["specification"]["display"] == "4.5 – 7.0"
-    assert fill["specification"]["display"] is None
+    assert fill["specification"]["display"] == "\u2014"  # legacy no-spec glyph
     assert (fill["Result"], fill["specification"]["rule_kind"], fill["conforms"]) == (
         "10.1", "informational", None)
 

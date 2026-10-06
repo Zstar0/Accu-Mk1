@@ -117,7 +117,7 @@ def test_seed_writes_wildcard_specs(db_session):
         "range", Decimal("4.5"), Decimal("7.0"), "4.5 – 7.0")
     assert (ba.rule_kind, ba.min_value, ba.max_value, ba.unit, ba.display_override) == (
         "range", Decimal("0.72"), Decimal("1.08"), "% (v/v)", "0.9% (v/v) ±20%")
-    assert (fill.rule_kind, fill.unit, fill.display_override) == ("informational", "mL", None)
+    assert (fill.rule_kind, fill.unit, fill.display_override) == ("informational", "mL", "\u2014")
 
 
 def test_seed_is_idempotent_and_keeps_admin_edits(db_session):

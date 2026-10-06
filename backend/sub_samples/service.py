@@ -1541,7 +1541,7 @@ def derive_variance_demand(services: dict) -> dict:
 
     The hplc bucket is BW-aware — it reads either HPLC primary key (legacy
     `hplcpurity_identity` or native `hplc-purity-identity`, see catalog/hplc_keys.py)
-    OR bac_water_panel (mirroring derive_base_demand), since both produce chromatography vials and
+    OR either BW primary key (BW_PRIMARY_KEYS, mirroring derive_base_demand), since both produce chromatography vials and
     are mutually exclusive per order. (Handler decision 2026-06-17.)"""
     from catalog.bw_keys import bw_primary_count
     from catalog.hplc_keys import hplc_primary_count
@@ -1636,7 +1636,7 @@ def derive_demand(services: dict, db=None, snapshot: Optional[dict] = None) -> d
     """Translate WP services dict to CORE vial demand per bucket.
 
     HPLC is satisfied by either HPLC primary key (legacy `hplcpurity_identity`
-    or native `hplc-purity-identity`, see catalog/hplc_keys.py) OR `bac_water_panel` —
+    or native `hplc-purity-identity`, see catalog/hplc_keys.py) OR either BW primary key (`BW_PRIMARY_KEYS`):
     both result in chromatography vials. No legacy bucket needs more than
     one vial (ruling 2026-08-05: PCR and USP<71> are separately sold
     products, one vial each).

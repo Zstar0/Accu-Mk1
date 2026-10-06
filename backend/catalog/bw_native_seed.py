@@ -63,7 +63,8 @@ BW_NATIVE_SPECS = {
     "PH-BW": ("range", Decimal("4.5"), Decimal("7.0"), None, "pH", "4.5 – 7.0"),
     "BENZYL-ALCOHOL-BW": ("range", Decimal("0.72"), Decimal("1.08"), None, "% (v/v)",
                           "0.9% (v/v) ±20%"),
-    "FILL-VOLUME-BW": ("informational", None, None, None, "mL", None),  # prints "Measured"
+    # U+2014 matches the legacy no-spec glyph COABuilder prints for FILL-NET-CONTENT.
+    "FILL-VOLUME-BW": ("informational", None, None, None, "mL", "\u2014"),
 }
 
 _SERVICE_LOG_FIELDS = ("title", "keyword", "unit", "result_type", "result_options",
