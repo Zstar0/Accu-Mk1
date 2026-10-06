@@ -194,7 +194,7 @@ def _stats(rows: Sequence[dict]) -> dict:
     }
 
 
-def build_sla_performance(
+def sample_records(
     *,
     samples: Iterable[SampleIn],
     analyses: Iterable[AnalysisIn],
@@ -205,21 +205,13 @@ def build_sla_performance(
     holidays: frozenset,
     now: datetime,
     excluded_sample_ids: frozenset = frozenset(),
-    client: Optional[str] = None,
-    order: Optional[str] = None,
-    departments: Sequence[str] = (),
-    families: Sequence[str] = (),
     profiles: Iterable[ProfileIn] = (),
-) -> dict:
-    """Build the whole SLA performance report from already-fetched rows."""
-    department_keys = tuple(k for k, _ in DEPARTMENTS)
-    for d in departments:
-        if d not in department_keys:
-            raise ValueError("unknown department: %s" % d)
-    for f in families:
-        if f not in FAMILY_NAMES:
-            raise ValueError("unknown family: %s" % f)
+) -> list[dict]:
+    """Per-sample SLA records (one dict per sample in the series window).
 
+    Extracted verbatim from build_sla_performance so Customer Insights can read
+    per-sample delivered/late without re-deriving the SLA rules.
+    """
     tz = schedule.timezone
 
     def bh(start: datetime, end: datetime) -> float:
@@ -343,6 +335,49 @@ def build_sla_performance(
             "verified": fam_verified,
             "last_verified": last_verified,
         })
+    return records
+
+
+def build_sla_performance(
+    *,
+    samples: Iterable[SampleIn],
+    analyses: Iterable[AnalysisIn],
+    coas: Iterable[CoaIn],
+    tiers: Iterable[TierIn],
+    groups: Iterable[GroupIn],
+    schedule: BusinessSchedule,
+    holidays: frozenset,
+    now: datetime,
+    excluded_sample_ids: frozenset = frozenset(),
+    client: Optional[str] = None,
+    order: Optional[str] = None,
+    departments: Sequence[str] = (),
+    families: Sequence[str] = (),
+    profiles: Iterable[ProfileIn] = (),
+) -> dict:
+    """Build the whole SLA performance report from already-fetched rows."""
+    department_keys = tuple(k for k, _ in DEPARTMENTS)
+    for d in departments:
+        if d not in department_keys:
+            raise ValueError("unknown department: %s" % d)
+    for f in families:
+        if f not in FAMILY_NAMES:
+            raise ValueError("unknown family: %s" % f)
+
+    tiers = list(tiers)  # read twice: here and inside sample_records
+    records = sample_records(samples=samples, analyses=analyses, coas=coas, tiers=tiers, groups=groups,
+                             schedule=schedule, holidays=holidays, now=now,
+                             excluded_sample_ids=excluded_sample_ids, profiles=profiles)
+
+    # Recomputed exactly as sample_records does; the report sections below need them.
+    tz = schedule.timezone
+
+    def bh(start: datetime, end: datetime) -> float:
+        return compute_business_minutes(start, end, schedule, holidays.__contains__) / 60.0
+
+    tier_by_id = {t.id: t for t in tiers}
+    default_tier = next((t for t in tier_by_id.values() if t.is_default), None)
+    today = lab_day(now, tz) or now.date()
 
     facets = _facets(records)
 

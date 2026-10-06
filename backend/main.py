@@ -11054,6 +11054,17 @@ def _sla_perf_rows(db: Session) -> tuple[dict, bool]:
         return _sla_perf_rows_cache, False
 
 
+def sla_sample_records(db: Session, now: datetime) -> list[dict]:
+    """Per-sample SLA records for Customer Insights (delivered + late, keyed by order number)."""
+    import sla_perf
+
+    rows, _stale = _sla_perf_rows(db)
+    if now.tzinfo is not None:  # the engine works in naive UTC, as /reports/sla-performance passes it
+        now = now.astimezone(timezone.utc).replace(tzinfo=None)
+    return sla_perf.sample_records(**rows["inputs"], coas=rows["coas"], now=now,
+                                   excluded_sample_ids=rows["test_ids"])
+
+
 def _load_tiered_profiles(db: Session) -> list[tuple[int, str, int, frozenset]]:
     """(id, name, sla_tier_id, service_ids) for every ACTIVE analysis profile
     that carries an SLA tier. The lab hangs its SLAs off profiles ("Sterility
