@@ -99,3 +99,16 @@ def test_sla_wp_prefix_joins_bare_order_numbers() -> None:
     assert ds.orders[0].order_number == "1"
     assert "1" in ds.late_orders and "1" in ds.delivered_orders
     assert ds.coas[0].order_number == "1"
+
+
+def test_retest_order_is_paid_not_testing_and_retested_ids_from_all_submissions() -> None:
+    # Order 2 is a paid retest of 1; order 4 is a FREE retest of 3 (net 0, so not in ds.orders).
+    ds = build([order_row(1), order_row(2), order_row(3), order_row(4, total="0.00")],
+               [sub_row(1, [SAMPLE]), sub_row(2, [SAMPLE], is_retest=True, retest_of=1),
+                sub_row(3, [SAMPLE]), sub_row("4", [SAMPLE], is_retest=True, retest_of="3"),
+                sub_row(5, [SAMPLE])])
+    by_id = {o.order_id: o for o in ds.orders}
+    assert set(by_id) == {1, 2, 3}
+    assert by_id[2].is_retest and not by_id[2].is_testing and by_id[2].samples == 0
+    assert by_id[1].is_testing and by_id[3].is_testing
+    assert ds.retested_order_ids == frozenset({1, 3})

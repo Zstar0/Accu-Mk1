@@ -314,7 +314,7 @@ def dossier(ds: Dataset, key: str, *, end: datetime, tz: str) -> dict[str, Any] 
 def churn_signals(ds: Dataset, *, end: datetime) -> dict[str, Any]:
     window = timedelta(days=rules.CHURN_WINDOW_DAYS)
     testing = [x for x in ds.orders if x.is_testing]
-    retested = {x.retest_of_order_id for x in ds.orders if x.retest_of_order_id}
+    retested = ds.retested_order_ids  # from every submission: free ($0) retests are not in ds.orders
     by_key: dict[str, list[datetime]] = defaultdict(list)
     for x in testing:
         by_key[x.customer_key].append(x.paid_at)

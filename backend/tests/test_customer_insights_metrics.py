@@ -4,7 +4,7 @@ from dataclasses import replace
 from decimal import Decimal
 
 from customer_insights import metrics
-from customer_insights.dataset import Coa, Customer, Dataset, Order
+from customer_insights.dataset import Coa, Customer, Dataset, Order, build_dataset
 
 TZ = "America/Los_Angeles"
 T0 = datetime(2026, 3, 10, 18, tzinfo=timezone.utc)
@@ -186,3 +186,57 @@ def test_scope_drops_registered_test_account_by_email() -> None:
     out = metrics.summary(scoped, start=T0 - timedelta(days=1), end=T0 + timedelta(days=100), tz=TZ)
     assert out["kpis"]["active_customers"]["value"] == 1
     assert out["kpis"]["revenue"]["value"] == "100.00"
+
+
+# --- F1: retests are paid orders, never testing orders (built through build_dataset) ---
+def _raw(oid, day, total="100.00", cid=1):
+    return (oid, str(oid), cid, f"c{cid}@x.example", "completed", Decimal(total), Decimal(0), Decimal(0),
+            [], [{"category": "testing"}], T0 + timedelta(days=day))
+
+
+def _sub(oid, retest_of=None):
+    return (oid, [{"services": {"hplcpurity&identity": True}}], retest_of is not None, retest_of, False, {})
+
+
+def _built(orders, subs, sla=None):
+    return build_dataset(order_rows=orders, submission_rows=subs, customer_rows=(), coa_rows=(),
+                         sla_records=sla, synced_at=None)
+
+
+def test_paid_retest_is_not_a_reorder() -> None:
+    data = _built([_raw(1, 0), _raw(2, 20)], [_sub(1), _sub(2, retest_of=1)])
+    end = T0 + timedelta(days=100)
+    k = metrics.summary(data, start=None, end=end, tz=TZ)["kpis"]
+    assert k["paid_orders"]["value"] == 2 and k["revenue"]["value"] == "200.00"
+    assert k["repeat_rate"]["value"] == 0.0 and k["median_days_to_second"]["value"] is None
+    (row,) = metrics.customer_rows(data, start=None, end=end, tz=TZ)
+    assert row["samples"] == 1
+    events = metrics.changes(data, since=T0 + timedelta(days=10), end=end, tz=TZ)
+    assert not [e for e in events if e["type"] == "first_reorder"]
+
+
+def test_retest_does_not_mark_at_risk_customer_returned() -> None:
+    data = _built([_raw(1, 0), _raw(2, 7), _raw(3, 14), _raw(4, 70)],
+                  [_sub(1), _sub(2), _sub(3), _sub(4, retest_of=3)])
+    since, end = T0 + timedelta(days=60), T0 + timedelta(days=80)
+    events = metrics.changes(data, since=since, end=end, tz=TZ)
+    assert not [e for e in events if e["type"] == "returned"]
+    (row,) = metrics.customer_rows(data, start=end - timedelta(days=90), end=end, tz=TZ)
+    assert row["status"] == "at_risk"
+
+
+def test_churn_retest_buckets_count_free_retests_and_skip_immature() -> None:
+    orders = [_raw(1, 0, cid=1), _raw(2, 20, cid=1),                 # 2 = paid retest of 1
+              _raw(3, 0, cid=2), _raw(4, 5, total="0.00", cid=2),    # 4 = FREE retest of 3 (not in ds.orders)
+              _raw(5, 0, cid=3), _raw(6, 30, cid=3),                 # 3 came back once
+              _raw(7, 190, cid=4)]                                   # inside the last 60 days: immature
+    subs = [_sub(1), _sub(2, retest_of=1), _sub(3), _sub(4, retest_of=3), _sub(5), _sub(6), _sub(7)]
+    sla = [{"order": "1", "state": "delivered", "late": True},
+           {"order": "5", "state": "delivered", "late": False},
+           {"order": "7", "state": "delivered", "late": False}]
+    out = metrics.churn_signals(_built(orders, subs, sla=sla), end=T0 + timedelta(days=200))
+    b = {(x["signal"], x["group"]): x for x in out["buckets"]}
+    assert (b[("retest", "retest")]["orders"], b[("retest", "retest")]["returned"]) == (2, 0.0)
+    assert (b[("retest", "no_retest")]["orders"], b[("retest", "no_retest")]["returned"]) == (2, 0.5)
+    assert (b[("sla", "late")]["orders"], b[("sla", "late")]["returned"]) == (1, 0.0)
+    assert (b[("sla", "on_time")]["orders"], b[("sla", "on_time")]["returned"]) == (1, 1.0)   # 7 is immature

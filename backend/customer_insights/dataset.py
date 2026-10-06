@@ -59,6 +59,8 @@ class Dataset:
     late_orders: frozenset[str] | None
     delivered_orders: frozenset[str] | None
     synced_at: datetime | None
+    # Orders some submission (paid or free) retests; free retests never reach `orders`.
+    retested_order_ids: frozenset[int] = frozenset()
 
 
 def service_label(service_key: str) -> str | None:
@@ -114,7 +116,8 @@ def build_dataset(
             continue
         sub = subs.get(int(oid))
         samples = list((sub[1] if sub else None) or [])
-        is_testing = bool(sub) and bool(samples) and not bool(sub[4])
+        # A retest resends the original samples (no NEW sample), so it is paid but not testing.
+        is_testing = bool(sub) and bool(samples) and not bool(sub[4]) and not bool(sub[2])
         tests = tuple(t for s in samples for t in _sample_tests(s)) if is_testing else ()
         if key not in customers:
             billing = (sub[5] if sub else None) or {}
@@ -142,4 +145,5 @@ def build_dataset(
                 if r.get("order") and r.get("state") == "delivered"]
         delivered = frozenset(n for n, _ in recs if n)
         late = frozenset(n for n, r in recs if n and r.get("late"))
-    return Dataset(customers, tuple(orders), coas, late, delivered, synced_at)
+    retested = frozenset(int(r[3]) for r in subs.values() if r[2] and r[3])
+    return Dataset(customers, tuple(orders), coas, late, delivered, synced_at, retested)
