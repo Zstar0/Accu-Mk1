@@ -9,6 +9,9 @@ from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import StaticPool
 
+HTML = ("<!doctype html><html><head><title>t</title><style>/* accumark-docs v1 */</style>"
+        "</head><body><p>hi</p></body></html>")
+
 
 @pytest.fixture
 def db():
@@ -719,3 +722,37 @@ def test_a_new_document_still_requires_a_title(db):
     from documents.errors import BadRequestError
     with pytest.raises(BadRequestError, match="title is required"):
         service.create_document(db, title="", html=HTML, category=_art(db))
+
+
+# --- spaces (spec 2026-10-06 section 4) --------------------------------------------------
+
+def test_seed_spaces_is_idempotent_and_general_is_company(db):
+    from documents import service
+    service.seed_spaces(db)
+    service.seed_spaces(db)
+    rows = service.list_spaces(db)
+    assert [(sp.slug, sp.visibility, sp.is_active, n) for sp, n in rows] == [("general", "company", True, 0)]
+    assert service.general_space(db).slug == "general"
+
+
+def test_seed_spaces_backfills_null_rows(db):
+    from documents import service
+    from documents.models import Document
+    cat = service.resolve_category(db, category="ART")
+    doc, _ = service.create_document(db, title="Old", html=HTML, category=cat)
+    doc.space_id = None
+    db.commit()
+    service.seed_spaces(db)
+    db.expire_all()
+    assert db.get(Document, doc.id).space_id == service.general_space(db).id
+
+
+def test_resolve_space_by_slug_id_and_default(db):
+    from documents import service
+    from documents.errors import NotFoundError
+    general = service.general_space(db)
+    assert service.resolve_space(db).id == general.id
+    assert service.resolve_space(db, space=" General ").id == general.id
+    assert service.resolve_space(db, space_id=general.id).id == general.id
+    with pytest.raises(NotFoundError):
+        service.resolve_space(db, space="nope")

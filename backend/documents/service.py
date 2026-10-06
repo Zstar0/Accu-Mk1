@@ -19,7 +19,8 @@ from sqlalchemy import and_, case, func, or_, select
 from sqlalchemy.orm import Session, lazyload
 
 from documents.errors import BadRequestError, ConflictError, NotFoundError
-from documents.models import Document, DocumentCategory, DocumentCodeCounter
+from documents.models import (Document, DocumentCategory, DocumentCodeCounter, DocumentSpace,
+                              DocumentSpaceGrant)  # noqa: F401
 from documents.storage import get_storage
 
 PREFIX_RE = re.compile(r"^[A-Z0-9]{2,10}$")
@@ -27,6 +28,9 @@ CODE_RE = re.compile(r"^[A-Z0-9]+-[A-Z0-9-]+$")
 MAX_BYTES = 16 * 1024 * 1024
 STATUSES = ("draft", "active", "retired")
 SORTS = ("updated_at", "title", "code", "effective_date")
+GENERAL_SLUG = "general"
+SPACE_SLUG_RE = re.compile(r"^[a-z0-9][a-z0-9-]{0,59}$")
+SPACE_VISIBILITIES = ("company", "restricted")
 
 # (name, code_prefix, description, sort_order) — seeded idempotently at boot.
 _SEED_CATEGORIES = (
@@ -160,6 +164,84 @@ def resolve_category(db: Session, *, category: Optional[str] = None,
     if not cat.active:
         raise BadRequestError(f"category {cat.name!r} is inactive")
     return cat
+
+
+# --- spaces (spec 2026-10-06 section 4) ------------------------------------------------
+
+def seed_spaces(db: Session) -> None:
+    """Idempotent: upsert General, then backfill any document row without a space.
+    Runs at every boot; a no-op after the first."""
+    general = db.execute(select(DocumentSpace).where(DocumentSpace.slug == GENERAL_SLUG)
+                         ).scalar_one_or_none()
+    if general is None:
+        general = DocumentSpace(slug=GENERAL_SLUG, name="General",
+                                description="Documents every login can read", visibility="company",
+                                sort_order=0)
+        db.add(general)
+        db.flush()
+    db.execute(Document.__table__.update().where(Document.space_id.is_(None))
+               .values(space_id=general.id))
+    db.commit()
+
+
+def general_space(db: Session) -> DocumentSpace:
+    sp = db.execute(select(DocumentSpace).where(DocumentSpace.slug == GENERAL_SLUG)).scalar_one_or_none()
+    if sp is None:
+        seed_spaces(db)
+        sp = db.execute(select(DocumentSpace).where(DocumentSpace.slug == GENERAL_SLUG)).scalar_one()
+    return sp
+
+
+def _clean_slug(slug: str) -> str:
+    slug = (slug or "").strip().lower()
+    if not SPACE_SLUG_RE.match(slug):
+        raise BadRequestError("slug must be 1-60 chars of a-z, 0-9 and '-', starting with a letter or digit")
+    return slug
+
+
+def get_space(db: Session, space_id: int) -> DocumentSpace:
+    sp = db.get(DocumentSpace, space_id)
+    if sp is None:
+        raise NotFoundError(f"space {space_id} not found")
+    return sp
+
+
+def get_space_by_slug(db: Session, slug: str) -> DocumentSpace:
+    sp = db.execute(select(DocumentSpace).where(DocumentSpace.slug == (slug or "").strip().lower())
+                    ).scalar_one_or_none()
+    if sp is None:
+        raise NotFoundError(f"space {slug!r} not found")
+    return sp
+
+
+def resolve_space(db: Session, *, space: Optional[str] = None,
+                  space_id: Optional[int] = None) -> DocumentSpace:
+    """Slug or id; neither means General."""
+    if space_id is not None:
+        return get_space(db, int(space_id))
+    if space and space.strip():
+        return get_space_by_slug(db, space)
+    return general_space(db)
+
+
+def _space_counts(db: Session) -> dict[int, int]:
+    """Distinct codes per space whose rows are draft or active (what the default list
+    shows). A code with only retired rows does not count."""
+    rows = db.execute(select(Document.space_id, func.count(func.distinct(Document.code)))
+                      .where(Document.status.in_(("draft", "active")))
+                      .group_by(Document.space_id)).all()
+    return {sid: n for sid, n in rows}
+
+
+def list_spaces(db: Session, include_inactive: bool = False) -> list[tuple[DocumentSpace, int]]:
+    stmt = select(DocumentSpace)
+    if not include_inactive:
+        stmt = stmt.where(DocumentSpace.is_active.is_(True))
+    rows = db.execute(stmt.order_by(DocumentSpace.sort_order, func.lower(DocumentSpace.name))).scalars().all()
+    counts = _space_counts(db)
+    # General first regardless of sort_order (spec 9.1).
+    rows = sorted(rows, key=lambda sp: (0 if sp.slug == GENERAL_SLUG else 1))
+    return [(sp, counts.get(sp.id, 0)) for sp in rows]
 
 
 # --- code minting --------------------------------------------------------------
@@ -302,7 +384,8 @@ def create_document(db: Session, *, title: str, html, category: Optional[Documen
                     author: Optional[str] = None, source_session: Optional[str] = None,
                     effective_date: Optional[date] = None, activate: bool = True,
                     user_id: Optional[int] = None,
-                    co_author: Optional[str] = None) -> tuple[Document, bool]:
+                    co_author: Optional[str] = None,
+                    space: Optional[DocumentSpace] = None) -> tuple[Document, bool]:
     """Create revision 1 of a new code, or the next revision of an existing one.
     Identical bytes on an existing code => metadata patch, no new row (§5.5)."""
     title = (title or "").strip()
@@ -374,7 +457,8 @@ def create_document(db: Session, *, title: str, html, category: Optional[Documen
 
     key = get_storage().save(code, revision, data)
     doc = Document(code=code, revision=revision, title=title, description=description,
-                   category_id=cat.id, status="draft", effective_date=effective_date,
+                   category_id=cat.id, space_id=(space or general_space(db)).id,
+                   status="draft", effective_date=effective_date,
                    supersedes_id=supersedes_id, author=author, updated_by=author,
                    co_author=co_author,
                    source_session=source_session,
