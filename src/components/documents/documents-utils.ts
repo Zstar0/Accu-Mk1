@@ -10,6 +10,7 @@ export type DocTheme = 'dark' | 'light'
 export interface DocumentListParams {
   q?: string
   categoryId?: number | null
+  spaceId?: number | null
   statuses?: DocumentStatus[]
   sort?: DocumentSort
   page?: number
@@ -30,6 +31,7 @@ export function buildDocumentListQuery(p: DocumentListParams): string {
   const q = p.q?.trim()
   if (q) params.set('q', q)
   if (p.categoryId != null) params.set('category_id', String(p.categoryId))
+  if (p.spaceId != null) params.set('space_id', String(p.spaceId))
   for (const s of p.statuses ?? DEFAULT_STATUSES) params.append('status', s)
   params.set('sort', p.sort ?? 'updated_at')
   params.set('page', String(p.page ?? 1))
