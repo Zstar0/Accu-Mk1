@@ -6,6 +6,7 @@ import os
 import re
 import secrets
 from dataclasses import dataclass
+from types import SimpleNamespace
 from typing import Dict, List, Optional
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Query, Response, status
@@ -15,7 +16,7 @@ from sqlalchemy.orm import Session
 
 from auth import get_current_user, require_admin, require_internal_service_token
 from database import get_db
-from documents import service
+from documents import access, service
 from documents.errors import BadRequestError, ConflictError, NotFoundError
 from documents.models import Document, DocumentCategory, DocumentSpace
 from documents.schemas import (CategoryCreate, CategoryOut, CategoryUpdate, DocumentCreate,
@@ -88,6 +89,14 @@ def agent_may_write(writer, space) -> bool:
     return True
 
 
+def _agent_may_see(writer, doc: Document) -> bool:
+    """A hidden document must be 404 to an agent whose allow-list excludes its space."""
+    if not isinstance(writer, AgentWriter):
+        return True
+    slug = doc.space.slug if doc.space is not None else "general"
+    return slug in writer.spaces
+
+
 def require_document_writer(
     x_service_token: Optional[str] = Header(None),
     token: Optional[str] = Depends(_optional_bearer),
@@ -116,6 +125,24 @@ def require_document_admin_writer(writer=Depends(require_document_writer)):
         raise HTTPException(status.HTTP_403_FORBIDDEN,
                             "agent tokens cannot delete documents or manage categories")
     return writer
+
+
+def _reader_for(writer):
+    """The identity the READ gate uses on a write route. Admin bearer: that user.
+    Agent token or internal token: an unrestricted pseudo-reader (their allow-list,
+    not their membership, governs writes), so the gate reduces to existence."""
+    if writer is None or isinstance(writer, AgentWriter):
+        return SimpleNamespace(id=0, role="admin", is_active=True)
+    return writer
+
+
+def _gate_write(db, writer, doc_id: int) -> Document:
+    """Load the document and 404 (same text as a missing id) if the writer cannot see it."""
+    doc = service.get_document(db, doc_id)
+    if not _agent_may_see(writer, doc):
+        raise NotFoundError(f"document {doc.id} not found")
+    access.require_view(db, _reader_for(writer), doc)
+    return doc
 
 
 def _audit(writer, action: str, doc: Document) -> None:
@@ -218,11 +245,13 @@ def delete_category(category_id: int, db: Session = Depends(get_db),
 def list_documents(q: Optional[str] = None, category_id: Optional[int] = None,
                    statuses: List[str] = Query(default=["draft", "active"], alias="status"),
                    sort: str = "updated_at", page: int = 1, page_size: int = 50,
+                   space_id: Optional[int] = None,
                    db: Session = Depends(get_db), user=Depends(get_current_user)):
     try:
         rows, total = service.list_documents(db, q=q, category_id=category_id,
                                              statuses=tuple(statuses), sort=sort,
-                                             page=page, page_size=page_size)
+                                             page=page, page_size=page_size, space_id=space_id,
+                                             visible_spaces=access.visible_space_ids(db, user))
     except Exception as e:
         raise _http(e)
     return DocumentListOut(items=[_doc_out(d, n) for d, n in rows], total=total,
@@ -233,6 +262,7 @@ def list_documents(q: Optional[str] = None, category_id: Optional[int] = None,
 def get_document(doc_id: int, db: Session = Depends(get_db), user=Depends(get_current_user)):
     try:
         doc = service.get_document(db, doc_id)
+        access.require_view(db, user, doc)
         revisions = service.get_revisions(db, doc.code)
     except Exception as e:
         raise _http(e)
@@ -246,6 +276,7 @@ def get_document_content(doc_id: int, db: Session = Depends(get_db),
                          user=Depends(get_current_user)):
     try:
         doc = service.get_document(db, doc_id)
+        access.require_view(db, user, doc)
         data = service.read_content(doc)
     except Exception as e:
         raise _http(e)
@@ -266,12 +297,25 @@ def create_document(req: DocumentCreate, response: Response, db: Session = Depen
         if req.category_id is not None or req.category:
             cat = service.resolve_category(db, category=req.category,
                                            category_id=req.category_id)
+        space = None
+        if req.space_id is not None or req.space:
+            space = service.resolve_space(db, space=req.space, space_id=req.space_id)
+        if req.code:
+            latest = service.latest_revision(db, req.code)
+            if latest is not None and (not _agent_may_see(writer, latest) or not access.can_view_document(
+                    db, _reader_for(writer), latest)):
+                raise NotFoundError(f"document {latest.id} not found")
+        else:
+            target = space if space is not None else service.general_space(db)
+            if not agent_may_write(writer, target):
+                raise BadRequestError(f"space {target.slug!r} is not allowed for this agent")
         doc, created = service.create_document(
             db, title=req.title, html=req.html, category=cat, description=req.description,
             code=req.code, author=req.author, source_session=req.source_session,
             effective_date=req.effective_date, activate=req.activate,
             user_id=getattr(writer, "id", None),
-            co_author=writer.name if isinstance(writer, AgentWriter) else None)
+            co_author=writer.name if isinstance(writer, AgentWriter) else None,
+            space=space)
         n = service.revision_count(db, doc.code)
     except Exception as e:
         raise _http(e)
@@ -286,7 +330,17 @@ def create_document(req: DocumentCreate, response: Response, db: Session = Depen
 def patch_document(doc_id: int, req: DocumentPatch, db: Session = Depends(get_db),
                    writer=Depends(require_document_writer)):
     try:
+        doc = _gate_write(db, writer, doc_id)
         patch = req.model_dump(exclude_unset=True)
+        move_to = patch.pop("space_id", None)
+        if move_to is not None:
+            if writer is None or isinstance(writer, AgentWriter):
+                raise HTTPException(status.HTTP_403_FORBIDDEN,
+                                    "only an admin login can move a document between spaces")
+            service.move_document_space(db, doc.code, int(move_to), updated_by=writer.email)
+            if not patch:
+                doc = service.get_document(db, doc_id)
+                return _doc_out(doc, service.revision_count(db, doc.code))
         # The actor comes from the credential, never from the request body alone:
         # an admin is their login; an agent is "<who it acted for> via <agent>".
         if isinstance(writer, AgentWriter):
@@ -306,6 +360,7 @@ def patch_document(doc_id: int, req: DocumentPatch, db: Session = Depends(get_db
 def activate_document(doc_id: int, db: Session = Depends(get_db),
                       writer=Depends(require_document_writer)):
     try:
+        _gate_write(db, writer, doc_id)
         doc = service.activate_document(db, doc_id)
         n = service.revision_count(db, doc.code)
     except Exception as e:
@@ -324,6 +379,7 @@ def delete_document(doc_id: int,
     `code` and `revision` are a required match-check: an agent that guessed the
     id wrong fails closed here instead of destroying a real document."""
     try:
+        _gate_write(db, writer, doc_id)
         return service.delete_document(db, doc_id, expect_code=code,
                                        expect_revision=revision)
     except Exception as e:
@@ -334,6 +390,7 @@ def delete_document(doc_id: int,
 def retire_document(doc_id: int, db: Session = Depends(get_db),
                     writer=Depends(require_document_writer)):
     try:
+        _gate_write(db, writer, doc_id)
         doc = service.retire_document(db, doc_id)
         n = service.revision_count(db, doc.code)
     except Exception as e:

@@ -360,3 +360,130 @@ def test_doc_out_carries_space_fields(client):
     d = _publish(client).json()
     assert (d["space_slug"], d["space_name"]) == ("general", "General")
     assert d["space_id"] is not None
+
+
+# --- spaces: route gates (spec 2026-10-06 sections 5, 8.2) --------------------------------
+
+def _restricted_world(client):
+    """A restricted space 'leadership' granted to group 'leaders'; user 10 is a member,
+    the fixture's default user (42) is an outsider. Returns (space, secret_doc_json)."""
+    from documents.models import DocumentSpace, DocumentSpaceGrant
+    from groups.models import UserGroup, UserGroupMember
+    db = client.db
+    g = UserGroup(slug="leaders", name="Leaders")
+    sp = DocumentSpace(slug="leadership", name="Leadership", visibility="restricted")
+    db.add_all([g, sp])
+    db.flush()
+    db.add_all([UserGroupMember(group_id=g.id, user_id=10),
+                DocumentSpaceGrant(space_id=sp.id, group_id=g.id)])
+    db.commit()
+    _as_admin(client)
+    secret = _publish(client, title="Q4 plan", space="leadership").json()
+    assert secret["space_slug"] == "leadership"
+    return sp, secret
+
+
+def _read_as(client, user_id, role="standard"):
+    from main import app
+    from auth import get_current_user
+    app.dependency_overrides[get_current_user] = lambda: SimpleNamespace(
+        id=user_id, role=role, email=f"u{user_id}@x.t", is_active=True)
+
+
+def test_hidden_document_is_404_identical_to_missing_on_every_read(client):
+    sp, secret = _restricted_world(client)
+    missing = client.get("/api/documents/999999")
+    for path in (f"/api/documents/{secret['id']}", f"/api/documents/{secret['id']}/content"):
+        r = client.get(path)
+        assert r.status_code == 404, path
+    assert client.get(f"/api/documents/{secret['id']}").json() == \
+        {"detail": f"document {secret['id']} not found"}
+    assert missing.json() == {"detail": "document 999999 not found"}
+    lst = client.get("/api/documents").json()
+    assert all(i["id"] != secret["id"] for i in lst["items"]) and lst["total"] == 0
+    assert client.get("/api/documents?q=Q4").json()["total"] == 0
+    _read_as(client, 10)
+    assert client.get(f"/api/documents/{secret['id']}").status_code == 200
+    assert client.get("/api/documents").json()["total"] == 1
+    _read_as(client, 1, "admin")
+    assert client.get(f"/api/documents/{secret['id']}/content").status_code == 200
+
+
+def test_list_for_hidden_space_is_empty(client):
+    """Review Focus 5: a direct space filter the caller cannot see is an empty list, not an error."""
+    sp, secret = _restricted_world(client)
+    r = client.get(f"/api/documents?space_id={sp.id}")
+    assert r.status_code == 200 and r.json()["total"] == 0 and r.json()["items"] == []
+    assert client.get("/api/documents?space_id=424242").json()["total"] == 0
+
+
+def test_writes_on_a_hidden_document_are_404(client):
+    """A standard member of nothing cannot even learn the id exists through a write."""
+    sp, secret = _restricted_world(client)
+    from main import app
+    from documents.routes import require_document_writer
+    # writer = a non-admin "admin" override would be wrong; use the internal token path
+    # with a reader that cannot see the doc: the gate runs on the READ identity for
+    # bearer writers, so simulate an admin bearer that IS allowed, then an agent token
+    # whose allow-list excludes the space.
+    app.dependency_overrides.pop(require_document_writer, None)
+    with patch.dict(os.environ, {"MK1_DOCUMENT_AGENT_TOKENS": "bot:" + "b" * 40}):
+        h = {"X-Service-Token": "b" * 40}
+        assert client.post(f"/api/documents/{secret['id']}/retire", headers=h).status_code == 404
+        assert client.patch(f"/api/documents/{secret['id']}", json={"title": "x"}, headers=h).status_code == 404
+        r = client.post("/api/documents", json={"code": secret["code"], "html": HTML + "<!--2-->",
+                                                "category": "ART"}, headers=h)
+        assert r.status_code == 404
+
+
+def test_agent_write_outside_allowlist(client):
+    """Review Focus 4: a new document into a space not on the list is 400 naming only the slug."""
+    from main import app
+    from documents.routes import require_document_writer
+    app.dependency_overrides.pop(require_document_writer, None)
+    with patch.dict(os.environ, {"MK1_DOCUMENT_AGENT_TOKENS": "bot:" + "b" * 40 + ":general"}):
+        h = {"X-Service-Token": "b" * 40}
+        from documents.models import DocumentSpace
+        client.db.add(DocumentSpace(slug="accounting", name="Accounting", visibility="restricted"))
+        client.db.commit()
+        r = client.post("/api/documents", json={"title": "Ledger", "html": HTML, "category": "ART",
+                                                "author": "F", "space": "accounting"}, headers=h)
+        assert r.status_code == 400
+        assert r.json()["detail"] == "space 'accounting' is not allowed for this agent"
+        ok = client.post("/api/documents", json={"title": "Note", "html": HTML, "category": "ART",
+                                                 "author": "F"}, headers=h)
+        assert ok.status_code == 201 and ok.json()["space_slug"] == "general"
+
+
+def test_admin_moves_a_code_and_agents_cannot(client):
+    sp, secret = _restricted_world(client)
+    from documents.models import DocumentSpace
+    lab = DocumentSpace(slug="lab", name="Lab")
+    client.db.add(lab)
+    client.db.commit()
+    _read_as(client, 1, "admin")
+    _as_admin(client)
+    # a second revision so the move has to carry two rows
+    client.post("/api/documents", json={"code": secret["code"], "html": HTML + "<!--2-->", "category": "ART"})
+    r = client.patch(f"/api/documents/{secret['id']}", json={"space_id": lab.id})
+    assert r.status_code == 200 and r.json()["space_slug"] == "lab"
+    detail = client.get(f"/api/documents/{secret['id']}").json()
+    assert {rev["space_slug"] for rev in detail["revisions"]} == {"lab"}
+    from main import app
+    from documents.routes import require_document_writer
+    app.dependency_overrides.pop(require_document_writer, None)
+    with patch.dict(os.environ, {"MK1_DOCUMENT_AGENT_TOKENS": "bot:" + "b" * 40 + ":lab"}):
+        r = client.patch(f"/api/documents/{secret['id']}", json={"space_id": sp.id},
+                         headers={"X-Service-Token": "b" * 40})
+        assert r.status_code == 403
+
+
+def test_publish_into_space_by_slug_and_id(client):
+    _as_admin(client)
+    from documents.models import DocumentSpace
+    lab = DocumentSpace(slug="lab", name="Lab")
+    client.db.add(lab)
+    client.db.commit()
+    assert _publish(client, space="lab").json()["space_slug"] == "lab"
+    assert _publish(client, html=HTML + "<!--x-->", space_id=lab.id).json()["space_slug"] == "lab"
+    assert _publish(client, html=HTML + "<!--y-->", space="nope").status_code == 404
