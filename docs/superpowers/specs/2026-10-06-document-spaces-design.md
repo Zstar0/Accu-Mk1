@@ -275,3 +275,7 @@ Follow-ons, not in this spec:
 - Restricted spaces the caller is not granted are absent from the grid, not shown locked.
 - Space administration lives in Settings, Documents pane, above Categories.
 - Sequencing after the annotations chain.
+
+## 15. Amendments during implementation (2026-10-06)
+
+- Section 9.4 said the selected space slug rides the hash and not the store. Every deep link in this app round-trips through `hash-navigation.ts` and a store field, so the slug lives in `ui-store.documentsSpaceSlug` with `navigateToDocumentSpace(slug)`. `?id=` wins over `?space=` when both are present.

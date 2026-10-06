@@ -120,6 +120,7 @@ interface UIState {
   // customerDetailTargetId; generic navigateTo clears it so the sidebar
   // entry always lands on the list.
   documentViewerTargetId: number | null
+  documentsSpaceSlug: string | null
   // Planning boards (slice 3): sticky like documentViewerTargetId, cleared by
   // the generic navigateTo. pendingBoardNode is consume-once: the canvas
   // reads it via consumePendingBoardNode() to focus/select a node on arrival.
@@ -169,6 +170,7 @@ interface UIState {
   navigateToPeptideRequest: (requestId: string) => void
   navigateToCustomer: (id: number) => void
   navigateToDocument: (id: number) => void
+  navigateToDocumentSpace: (slug: string | null) => void
   clearDocumentViewer: () => void
   navigateToBoards: () => void
   navigateToBoard: (slug: string) => void
@@ -286,6 +288,7 @@ export const useUIStore = create<UIState>()(
       peptideRequestTargetId: null,
       customerDetailTargetId: null,
       documentViewerTargetId: null,
+      documentsSpaceSlug: null,
       boardTargetSlug: null,
       pendingBoardNode: null,
       customerListPage: 0,
@@ -446,6 +449,18 @@ export const useUIStore = create<UIState>()(
 
       clearDocumentViewer: () =>
         set({ documentViewerTargetId: null }, undefined, 'clearDocumentViewer'),
+      navigateToDocumentSpace: slug =>
+        set(
+          state => ({
+            activeSection: 'reports',
+            activeSubSection: 'documents',
+            documentsSpaceSlug: slug,
+            documentViewerTargetId: null,
+            navigationKey: state.navigationKey + 1,
+          }),
+          undefined,
+          'navigateToDocumentSpace'
+        ),
 
       navigateToBoards: () =>
         set(
