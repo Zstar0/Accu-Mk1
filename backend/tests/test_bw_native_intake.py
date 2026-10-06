@@ -91,6 +91,42 @@ def test_senaite_born_bw_parent_with_native_key_gets_no_native_placeholders(db):
     assert stats["created"] == 0 and _ordered(db, p) == []
 
 
+@pytest.mark.parametrize("title", [None, "Peptide"])
+def test_bw_placeholders_key_on_ordered_profile_not_title(db, caplog, title):
+    """Handler ruling: native BW key in the ordered services decides, not the title."""
+    _catalog(db)
+    p = LimsSample(sample_id="BW-1020", external_lims_system="mk1", sample_type_title=title,
+                   analytes=json.dumps([{"name": "Benzyl Alcohol", "declared_quantity": "30"}]))
+    db.add(p)
+    db.commit()
+    with caplog.at_level(logging.ERROR):
+        stats = seed_parent_placeholders(db, parent=p,
+                                         services={"bacteriostatic-water-panel": True})
+    assert stats["created"] == 3
+    assert sorted((r.keyword, r.slot) for r in _ordered(db, p)) == [
+        ("BENZYL-ALCOHOL-BW", None), ("FILL-VOLUME-BW", None), ("PH-BW", None)]
+    assert not any("native_placeholder_no_analyte_slots" in r.message for r in caplog.records)
+    assert db.execute(select(FlagFlag).where(FlagFlag.entity_id == str(p.id))).scalars().all() == []
+
+
+def test_bw_titled_parent_without_native_key_resolves_slots(db):
+    """A parent titled 'Bacteriostatic Water' that did not order the BW panel is
+    an ordinary peptide order: slot-aware trio."""
+    from catalog.hplc_native_seed import seed_hplc_native_catalog
+    from models import AnalysisProfile, Peptide
+    seed_hplc_native_catalog(db)
+    db.query(AnalysisProfile).filter_by(key="hplc-purity-identity").one().active = True
+    db.add(Peptide(name="BPC-157", abbreviation="BPC157"))
+    p = LimsSample(sample_id="P-5005", external_lims_system="mk1",
+                   sample_type_title="Bacteriostatic Water",
+                   analytes=json.dumps([{"name": "BPC-157 - Identity (HPLC)"}]))
+    db.add(p)
+    db.commit()
+    seed_parent_placeholders(db, parent=p, services={"hplc-purity-identity": True})
+    assert sorted((r.keyword, r.slot) for r in _ordered(db, p)) == [
+        ("HPLC-IDENTITY", 1), ("HPLC-PURITY", 1), ("HPLC-QUANTITY", 1)]
+
+
 def test_native_peptide_without_title_still_resolves_slots(db):
     """The gate is BW-exclusion, not peptide-only: a native row with a NULL
     sample_type_title (test_apply_retest_spec._retest shape) still gets the

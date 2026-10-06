@@ -135,3 +135,30 @@ def test_native_peptide_vial_still_uses_the_trio_path(db, monkeypatch):
     seeder.seed_analyses_for_vial(db, sub_sample=v, role="hplc",
                                   wp_services={"hplc-purity-identity": True}, commit=False)
     assert called == ["trio"]
+
+
+@pytest.mark.parametrize("title", [None, "Peptide"])
+def test_bw_routing_keys_on_ordered_profile_not_sample_type_title(db, monkeypatch, title):
+    """Handler ruling: the native BW key in the ordered services decides, the title does not."""
+    from lims_analyses import hplc_native, seeder
+    _catalog(db)
+    called = []
+    monkeypatch.setattr(hplc_native, "seed_native_hplc_rows", lambda *a, **k: called.append("trio") or [])
+    p = _parent(db, system="mk1", sample_id="BW-1010", title=title)
+    v = _vial(db, p)
+    rows = seeder.seed_analyses_for_vial(db, sub_sample=v, role="hplc", wp_services=NATIVE_WP,
+                                         commit=False)
+    assert called == []
+    assert sorted(r.keyword for r in rows) == ["BENZYL-ALCOHOL-BW", "FILL-VOLUME-BW", "PH-BW"]
+
+
+def test_bw_titled_parent_without_native_key_takes_the_trio_path(db, monkeypatch):
+    from lims_analyses import hplc_native, seeder
+    _catalog(db)
+    called = []
+    monkeypatch.setattr(hplc_native, "seed_native_hplc_rows", lambda *a, **k: called.append("trio") or [])
+    p = _parent(db, system="mk1", sample_id="BW-1011", title="Bacteriostatic Water")
+    v = _vial(db, p)
+    rows = seeder.seed_analyses_for_vial(db, sub_sample=v, role="hplc",
+                                         wp_services={"hplc-purity-identity": True}, commit=False)
+    assert called == ["trio"] and rows == []

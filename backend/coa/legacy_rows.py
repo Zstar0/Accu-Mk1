@@ -115,7 +115,7 @@ def _page_one_archetype(r, parent):
     outside the HPLC and Bac Water shims, e.g. endotoxin/PCR/heavy metals,
     which belong to native_sections). Native BW rows ride only on a
     native-born parent (the seeder's own predicate, seeder.py is_native_born
-    + is_bw_sample): on a SENAITE-born parent the shadow PH-DETERM etc. are
+    + the ordered native BW profile key): on a SENAITE-born parent the shadow PH-DETERM etc. are
     the certified lines and a native twin would print them twice."""
     if is_native_hplc_row(r):
         return LEGACY_HPLC_ARCHETYPE

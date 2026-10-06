@@ -782,10 +782,10 @@ def seed_analyses_for_vial(
 
     # ── HPLC ──────────────────────────────────────────────────────────────────
     if role == "hplc":
-        from catalog.bw_keys import is_bw_sample
+        from catalog.bw_keys import NATIVE_BW_KEY
         from lims_analyses import hplc_native
         parent = sub_sample.parent_sample if sub_sample.parent_sample_pk else None
-        if parent is not None and hplc_native.is_native_born(parent) and is_bw_sample(parent):
+        if parent is not None and hplc_native.is_native_born(parent) and (wp_services or {}).get(NATIVE_BW_KEY) is True:
             # Native-born Bac Water (spec 2026-10-05 MB4, as ruled in the
             # plan): the panel is seeded HERE on the vial and promoted like
             # every other native family. A parent-tier 'ordered' placeholder

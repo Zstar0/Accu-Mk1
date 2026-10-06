@@ -1,4 +1,4 @@
-"""The Bac Water primary's order key(s), native keywords, and sample-type test.
+"""The Bac Water primary's order key(s), and native keywords.
 
 `bac_water_panel` is the legacy WordPress wire key (SENAITE-routed by the
 Integration Service). `bacteriostatic-water-panel` is the native profile key
@@ -13,10 +13,6 @@ coa/bw_shim all import from here, so it must never pull in models or coa.
 LEGACY_BW_KEY = "bac_water_panel"
 NATIVE_BW_KEY = "bacteriostatic-water-panel"
 BW_PRIMARY_KEYS: frozenset[str] = frozenset({LEGACY_BW_KEY, NATIVE_BW_KEY})
-
-# lims_samples.sample_type_title of a Bac Water sample. Load-bearing: the
-# endotoxin matrix tier and COABuilder's GenericAssayEngine key on it.
-BW_SAMPLE_TYPE_TITLE = "Bacteriostatic Water"
 
 # Native (origin=mk1) panel keyword -> the SENAITE keyword COABuilder's
 # GenericAssayEngine and baked_specs read (spec R2). coa/bw_shim re-exports.
@@ -41,9 +37,3 @@ def bw_primary_count(entitlement: dict | None) -> int:
     """
     entitlement = entitlement or {}
     return max((int(entitlement.get(k, 0) or 0) for k in BW_PRIMARY_KEYS), default=0)
-
-
-def is_bw_sample(sample) -> bool:
-    """True when the sample's type title is Bacteriostatic Water."""
-    title = (getattr(sample, "sample_type_title", None) or "").strip().lower()
-    return title == BW_SAMPLE_TYPE_TITLE.lower()

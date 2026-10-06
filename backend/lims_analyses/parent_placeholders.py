@@ -60,7 +60,7 @@ def seed_parent_placeholders(
     to the archetype gate here would reintroduce the exact invisibility this
     feature exists to remove.
     """
-    from catalog.bw_keys import is_bw_sample
+    from catalog.bw_keys import NATIVE_BW_KEY
     from coa.bw_shim import LEGACY_BW_ARCHETYPE
     from models import LimsAnalysis
     from coa.native_sections import _ordered_native_profiles
@@ -79,10 +79,11 @@ def seed_parent_placeholders(
     # Bac Water parent (spec 2026-10-05 MB3) carries "Benzyl Alcohol" as its
     # analyte but its panel is slot-less, so it never resolves slots and never
     # raises the unresolved-analyte flag (which would block its COA). Gated by
-    # BW exclusion, not a peptide allow-list: native rows with a NULL
+    # the ORDERED profile key (never the sample type title), and by BW
+    # exclusion, not a peptide allow-list: native rows with a NULL
     # sample_type_title (retest rows) must keep resolving slots.
     native_slots = None
-    if is_native_born(parent) and not is_bw_sample(parent):
+    if is_native_born(parent) and (services or {}).get(NATIVE_BW_KEY) is not True:
         native_slots = resolve_slot_peptides(db, parent)
         if not native_slots:
             log.error("registry.native_placeholder_no_analyte_slots sample_id=%s", parent.sample_id)

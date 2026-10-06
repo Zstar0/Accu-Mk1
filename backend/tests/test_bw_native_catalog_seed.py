@@ -37,8 +37,7 @@ def _dept(db):
 def test_keys_module_contract():
     from catalog.bw_keys import (BW_NATIVE_KEYWORDS, BW_PRIMARY_KEYS, LEGACY_BW_KEY,
                                  NATIVE_BW_KEY, NATIVE_TO_LEGACY_KEYWORD, bw_primary_count,
-                                 bw_primary_selected, is_bw_sample)
-    from models import LimsSample
+                                 bw_primary_selected)
     assert LEGACY_BW_KEY == "bac_water_panel" and NATIVE_BW_KEY == "bacteriostatic-water-panel"
     assert BW_PRIMARY_KEYS == frozenset({"bac_water_panel", "bacteriostatic-water-panel"})
     assert NATIVE_TO_LEGACY_KEYWORD == {"PH-BW": "PH-DETERM",
@@ -49,10 +48,6 @@ def test_keys_module_contract():
     assert bw_primary_selected({"bac_water_panel": True}) is True
     assert bw_primary_selected({"hplcpurity_identity": True}) is False
     assert bw_primary_count({"bacteriostatic-water-panel": 3}) == 3
-    assert is_bw_sample(LimsSample(sample_type_title="Bacteriostatic Water")) is True
-    assert is_bw_sample(LimsSample(sample_type_title=" bacteriostatic water ")) is True
-    assert is_bw_sample(LimsSample(sample_type_title="Peptide")) is False
-    assert is_bw_sample(LimsSample(sample_type_title=None)) is False
 
 
 def test_shim_reexports_one_source_of_truth():
