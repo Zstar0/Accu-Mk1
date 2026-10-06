@@ -18,11 +18,17 @@ WC_ORDERS_SQL = """
     FROM wc_orders
     WHERE date_paid_gmt IS NOT NULL AND status <> ALL(%s)
 """
+# Newest submission per order wins (order_id is not unique in order_submissions).
 SUBMISSIONS_SQL = """
-    SELECT CASE WHEN order_id ~ '^[0-9]+$' THEN order_id::bigint END, payload->'samples', COALESCE(is_retest, false),
-           retest_of_order_id, COALESCE(is_transfer, false), payload->'billing'
-    FROM order_submissions
-    WHERE order_id ~ '^[0-9]+$'
+    SELECT DISTINCT ON (oid) oid, samples, is_retest, retest_of_order_id, is_transfer, billing
+    FROM (
+        SELECT CASE WHEN order_id ~ '^[0-9]+$' THEN order_id::bigint END AS oid, payload->'samples' AS samples,
+               COALESCE(is_retest, false) AS is_retest, retest_of_order_id,
+               COALESCE(is_transfer, false) AS is_transfer, payload->'billing' AS billing, created_at, id
+        FROM order_submissions
+    ) s
+    WHERE oid IS NOT NULL
+    ORDER BY oid, created_at DESC, id DESC
 """
 CUSTOMERS_SQL = "SELECT id, email, first_name, last_name, company_name FROM wc_customers WHERE deleted_at IS NULL"
 # Published PRIMARY COAs only (same rule as Analyte Trends): one row per COA.

@@ -77,3 +77,11 @@ def test_sla_records_map_to_orders_and_missing_sla_is_none() -> None:
 def test_empty_inputs() -> None:
     ds = build([])
     assert ds.orders == () and ds.customers == {}
+
+
+def test_duplicate_submissions_last_row_wins() -> None:
+    # Contract: sources.SUBMISSIONS_SQL emits one row per order (newest last/only);
+    # if duplicates reach build_dataset anyway, the LAST one wins.
+    ds = build([order_row(1)], [sub_row(1, [SAMPLE], is_transfer=True), sub_row(1, [SAMPLE, SAMPLE])])
+    (o,) = ds.orders
+    assert o.is_testing and o.samples == 2
