@@ -6507,56 +6507,52 @@ export async function createWorksheetFromDrop(
 
 // ── Reports API ─────────────────────────────────────────────────
 
-export interface ReportsSummary {
-  total_peptides: number
-  total_coas: number
-  conforming: number
-  non_conforming: number
+export interface AnalyteTrendTest {
+  name: string
+  value: number | null
+  unit: string
+  ok: boolean | null
+  spec: string | null
 }
 
-export interface PeptideCard {
-  analyte_name: string
-  is_blend: boolean
-  total_coas: number
-  additional_coas: number
-  conforming: number
-  non_conforming: number
-  most_recent_code: string | null
-  most_recent_sample: string | null
-  most_recent_status: string | null
-  most_recent_date: string | null
-  most_recent_lot: string | null
-}
-
-export interface ReportsDashboard {
-  summary: ReportsSummary
-  peptides: PeptideCard[]
-  blends: PeptideCard[]
-}
-
-export interface PurityTrendPoint {
-  date: string
-  purity_percent: number
+/** One published PRIMARY COA (Additional copies and superseded COAs excluded). */
+export interface AnalyteTrendCoa {
+  code: string
   sample_id: string
-  verification_code: string
-  conforms: boolean | null
+  /** ISO timestamp (UTC). Format in the lab zone, never by slicing the string. */
+  published_at: string | null
+  product: string
+  is_blend: boolean
+  matrix: string | null
+  lot: string | null
+  /** COA verdict: PASSED / FAILED. */
+  overall: string
+  purity: number | null
+  purity_ok: boolean | null
+  purity_spec: string | null
+  identity_ok: boolean | null
+  /** Measured mass, mg. */
+  qty: number | null
+  /** Declared mass from the order, mg (null when unknown). */
+  qty_declared: number | null
+  /** null = not tested. */
+  endo: boolean | null
+  sterility: boolean | null
+  hm: boolean | null
+  /** Non-peptide matrices (bac water): one entry per assay. */
+  tests: AnalyteTrendTest[]
 }
 
-export async function getReportsDashboard(): Promise<ReportsDashboard> {
-  const response = await fetch(`${API_BASE_URL()}/reports/dashboard`, {
+export interface AnalyteTrendsResponse {
+  tz: string
+  coas: AnalyteTrendCoa[]
+}
+
+export async function getAnalyteTrends(): Promise<AnalyteTrendsResponse> {
+  const response = await fetch(`${API_BASE_URL()}/reports/analyte-trends`, {
     headers: getBearerHeaders(),
   })
-  if (!response.ok) throw new Error(`Reports dashboard failed: ${response.status}`)
-  return response.json()
-}
-
-export async function getReportsPurityTrend(analyteName: string, isBlend = false): Promise<PurityTrendPoint[]> {
-  const params = isBlend ? '?is_blend=true' : ''
-  const response = await fetch(
-    `${API_BASE_URL()}/reports/purity-trend/${encodeURIComponent(analyteName)}${params}`,
-    { headers: getBearerHeaders() }
-  )
-  if (!response.ok) throw new Error(`Purity trend failed: ${response.status}`)
+  if (!response.ok) throw new Error(`Analyte trends failed: ${response.status}`)
   return response.json()
 }
 
@@ -7103,6 +7099,10 @@ export interface RetestForwardLink {
   sample_id: string
   order_id: number | null
   created_at: string | null
+  status?: string | null
+  retest?: string[] | null
+  add?: string[] | null
+  carry?: string[] | null
 }
 
 export interface SampleRetestInfo {
@@ -7116,6 +7116,9 @@ export interface SampleRetestInfo {
   retest_created_at: string | null
   // Samples that are retests of THIS one (chain-forward, may be empty).
   retested_as: RetestForwardLink[]
+  retest?: string[] | null
+  add?: string[] | null
+  carry?: string[] | null
 }
 
 export async function getSampleRetestInfo(sampleId: string): Promise<SampleRetestInfo> {
@@ -7124,6 +7127,119 @@ export async function getSampleRetestInfo(sampleId: string): Promise<SampleRetes
     { headers: getAuthHeaders() }
   )
   if (!response.ok) throw new Error(`Sample retest-info failed: ${response.status}`)
+  return response.json()
+}
+
+export const HPLC_PROFILE_KEYS = ['hplcpurity_identity', 'hplc-purity-identity'] as const
+
+export interface RetestOptionProfile { key: string; name: string; carry_eligible: boolean; state: string | null; verified_at: string | null; state_label: string }
+export interface RetestOptionAddon { key: string; name: string; wp_type: string | null; price: number | null; vials: number | null; sellable: boolean }
+export interface RetestContextOrderLine { key: string; label: string; price: number }
+export interface RetestContextOrder {
+  number: string
+  placed_at: string
+  customer_name: string
+  customer_email: string
+  total: number
+  currency: string
+  status: string
+  lines: RetestContextOrderLine[]
+}
+export interface PendingRetestOrder {
+  order_id: number
+  order_number: string
+  status: string
+  total: number
+  currency: string
+  created_at: string
+  payment_url: string
+}
+/** WP `retest_orders` (newest first), joined to the Mk1 sample minted from each. */
+export interface RetestOrder {
+  order_id: number
+  order_number: string
+  status: string
+  total: number
+  currency: string
+  created_at: string
+  paid_at: string | null
+  payment_url: string | null
+  kind: 'retest' | 'addon'
+  sample_id: string | null
+  sample_status: string | null
+  /** Add-on order that adds services to THIS sample (no new sample minted). */
+  same_sample?: boolean
+  /** True once the same-sample add-on's services have reached the sample. */
+  applied?: boolean
+}
+export interface RetestContext {
+  order: RetestContextOrder | null
+  retest_fee: { price: number | null } | null
+  pending_orders: PendingRetestOrder[]
+  orders?: RetestOrder[]
+}
+export interface RetestOptions {
+  sample_id: string
+  status: string | null
+  order_number: string | null
+  profiles: RetestOptionProfile[]
+  addons: RetestOptionAddon[]
+  variance: { point_price: number | null; allowed: boolean }
+  prices_available: boolean
+  context?: RetestContext | null
+  /** False while the original is in progress: Add services then adds to this same sample. Missing = true. */
+  original_published?: boolean
+}
+export interface RetestRequestBody {
+  retest: string[]
+  carry: string[]
+  drop?: string[]
+  add: { profiles: string[]; variance_points: number; additional_vials: number } | null
+  auto_checkin: boolean
+  fee: 'paid' | 'free'
+  reason: string
+}
+export interface RetestCreated { order_id?: number; order_number?: string; status?: string; payment_url?: string | null }
+
+export function getRetestOptions(sampleId: string): Promise<RetestOptions> {
+  return apiFetch<RetestOptions>(`/api/samples/${encodeURIComponent(sampleId)}/retest-options`)
+}
+
+export async function createRetest(sampleId: string, body: RetestRequestBody): Promise<RetestCreated> {
+  const response = await fetch(`${API_BASE_URL()}/api/samples/${encodeURIComponent(sampleId)}/retest`, {
+    method: 'POST',
+    headers: getBearerHeaders('application/json'),
+    body: JSON.stringify(body),
+  })
+  if (!response.ok) {
+    const err = await response.json().catch(() => null)
+    const detail = err?.detail
+    throw new Error((typeof detail === 'string' ? detail : detail?.message) || `Retest request failed: ${response.status}`)
+  }
+  return response.json()
+}
+
+/** Same-sample add-on (original not yet published): services are added to this sample when paid or waived. */
+export interface AddonOrderBody {
+  profiles: string[]
+  variance_points: number
+  additional_vials: number
+  fee: 'paid' | 'free'
+  reason: string
+}
+export interface AddonOrderCreated { order_id: number; order_number: string; status: 'pending' | 'completed'; payment_url: string | null; total: number }
+
+export async function createAddonOrder(sampleId: string, body: AddonOrderBody): Promise<AddonOrderCreated> {
+  const response = await fetch(`${API_BASE_URL()}/api/samples/${encodeURIComponent(sampleId)}/addon-order`, {
+    method: 'POST',
+    headers: getBearerHeaders('application/json'),
+    body: JSON.stringify(body),
+  })
+  if (!response.ok) {
+    const err = await response.json().catch(() => null)
+    const detail = err?.detail
+    throw new Error((typeof detail === 'string' ? detail : detail?.message) || `Add-on order request failed: ${response.status}`)
+  }
   return response.json()
 }
 
@@ -7379,7 +7495,7 @@ export interface ParentPromotionInfo {
   result_value?: string | null
   promoted_at: string
   promoted_by_email?: string | null
-  sources: { sample_id?: string | null; contribution_kind: string }[]
+  sources: { sample_id?: string | null; contribution_kind: string; parent_sample_id?: string | null }[]
 }
 
 /**

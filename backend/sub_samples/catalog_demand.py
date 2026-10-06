@@ -186,7 +186,10 @@ def _resolve_from_snapshot(snapshot: dict) -> dict:
     below reproduces it precisely ("null sorts last").
     """
     result = {b: RoleFulfillment() for b in _LEGACY_BUCKETS}
-    profiles = snapshot.get("profiles") or []
+    # Entries appended by the same-sample add-on apply (source="addon_apply")
+    # may be non-role profiles; those were never role demand.
+    profiles = [p for p in (snapshot.get("profiles") or [])
+                if p.get("fulfillment_role") and p.get("fulfillment_dim", "role") == "role"]
 
     anchors = [p for p in profiles if not p.get("ride_host_roles")]
     riders = [p for p in profiles if p.get("ride_host_roles")]

@@ -23,6 +23,21 @@ logger = logging.getLogger(__name__)
 _DEAD_STATES = ("rejected", "retracted")
 
 
+def _retest_demand_only(parent: LimsSample, services: Optional[dict]) -> Optional[dict]:
+    """A native retest seeds its DEMAND only (retest + add, plus the variance
+    bucket). Once apply_retest_spec has stamped catalog_snapshot["retest"], a
+    late caller holding the full order dict (the registration fallback) must
+    not re-mint carried profiles' placeholders. No block: unchanged."""
+    rider = (parent.catalog_snapshot or {}).get("retest")
+    if not isinstance(rider, dict) or services is None:
+        return services
+    add = rider.get("add") or {}
+    keep = set(rider.get("retest") or []) | set(add.get("profiles") or [])
+    if (add.get("variance_points") or 0) > 0:
+        keep |= {"variance", "samplevariance"}   # the variance wire keys
+    return {k: v for k, v in services.items() if k in keep}
+
+
 def seed_parent_from_services(db, *, parent: LimsSample, services: Optional[dict],
                               package, source: str) -> dict:
     """Mint pending parent-tier rows for the parent's ordered native services
@@ -37,6 +52,7 @@ def seed_parent_from_services(db, *, parent: LimsSample, services: Optional[dict
     # catalog.snapshot.compute_catalog_snapshot reach every caller of this seed.
     from catalog.snapshot import compute_catalog_snapshot
 
+    services = _retest_demand_only(parent, services)
     raw = _apply_variance_override(
         parent.sample_id, {"services": dict(services or {}), "package": package}
     ) or {}
@@ -47,9 +63,12 @@ def seed_parent_from_services(db, *, parent: LimsSample, services: Optional[dict
     # snapshot failure never undoes the seed above (bench visibility is the
     # load-bearing guarantee); catalog_snapshot stays NULL and the next
     # caller retries.
-    if parent.catalog_snapshot is None:
+    # A dict without "profiles" is not a freeze: the same-sample add-on route
+    # may store `addon_orders` on a sample registered before any stamp.
+    if "profiles" not in (parent.catalog_snapshot or {}):
         try:
-            parent.catalog_snapshot = compute_catalog_snapshot(db, services, package)
+            parent.catalog_snapshot = {**(parent.catalog_snapshot or {}),
+                                       **compute_catalog_snapshot(db, services, package)}
         except Exception as snapshot_err:  # noqa: BLE001
             logger.warning("catalog_snapshot.stamp_failed source=%s sample_id=%s err=%s",
                            source, parent.sample_id, snapshot_err)

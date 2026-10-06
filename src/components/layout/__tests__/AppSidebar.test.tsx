@@ -212,7 +212,7 @@ describe('AppSidebar — Customers entry (Phase 29-03)', () => {
       subMenu.querySelectorAll('[data-sidebar="menu-sub-button"]')
     ).map(el => el.textContent?.replace(/\d+/g, '').trim() ?? '')
     expect(labels).toEqual([
-      'Dashboard',
+      'Analyte Trends',
       'Check-In Times',
       'Ready to Publish',
       'Scheduled Publishes',

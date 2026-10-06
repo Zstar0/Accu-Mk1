@@ -25,6 +25,91 @@
 - **Deep links.** A flag on a board item now opens the board with that item selected and centred (`?node=` in the hash, one-shot).
 - Not yet: rollup badges on frames, moving an item back out of a frame, the attention dock, zoom-level rendering, Cmd+K jump, auto-layout, widgets (slices 4 and 5).
 
+## v1.32.2 - 2026-10-05
+
+### Fixed
+- A SENAITE-born sample with a retested line (e.g. bac water) no longer sticks at Ready to verify after it is verified and published. The workflow engine now ignores the old retested copy of a line and uses the furthest-along live copy.
+
+## v1.32.1 - 2026-10-05
+
+### Changed
+- Analyte Trends: the quantity band is now ±20% (was ±10%, which marked about half of all COAs as outside it). Colouring only; no pass/fail verdicts change.
+
+## v1.32.0 - 2026-10-05
+
+### Added
+- Reports > Analyte Trends replaces the Reports Dashboard. Each product shows failed/tested for Purity, Identity, Endotoxin, Sterility, Heavy Metals and bac water assays, the median measured-vs-declared quantity, last-90-days vs prior-90-days trend arrows, and a Rising failures panel.
+- The product page charts results on a real time axis in lab time, lists every result from the hovered day, highlights a COA's table row when its point is clicked, shows why each COA failed, and charts each bac water assay.
+
+### Fixed
+- The list and the product page now count the same published primary COAs. Additional COA copies and superseded COAs no longer inflate the counts, and a COA that failed endotoxin, sterility or identity no longer shows as conforming on the product page.
+- Chart dates no longer show the previous day.
+
+### Removed
+- The card view and the Additional column on the reports list.
+
+## v1.31.2 - 2026-10-02
+
+### Fixed
+- Native-born samples (no SENAITE UID) now get an SLA: the Customer Orders SLA column no longer reads "Awaiting sample" for a received native-born sample, and the Sample Details header shows its SLA. Both hooks key `/sla/status` on the sample UID, falling back to the sample id.
+- An order whose samples are all published except cancelled/invalid/rejected ones now reads met instead of "Awaiting sample". Withdrawn samples are ignored by the order SLA verdict and never get an SLA clock.
+
+## v1.31.1 - 2026-09-30
+
+### Changed
+- The "When you press Create" block now always says whether an email goes out: a waived order sends WooCommerce's order confirmation at once; a charged retest or new-sample add-on order sends the customer an invoice with the payment link; a charged same-sample add-on order sends nothing until the customer pays (copy the link from the Orders tab).
+
+## v1.31.0 - 2026-09-29
+
+### Changed
+- **Add services now follows the same-sample rule.** While the original sample is in progress (not yet published), the Add services tab says "P-x is in progress: the selected services are added to this sample once the order is paid (or at once if waived).", Create reads "Add services to P-x", and it calls the new `POST /api/samples/{id}/addon-order` with `{profiles, variance_points, additional_vials, fee, reason}`: a WooCommerce add-on order against the original order, applied to the same sample on payment or waiver. No new sample, nothing carried or dropped, no "New sample:" line; the summary lists the add-on lines only and Billing Charged / Waived still applies. Once the original is published the tab keeps the old path (a new sample with the existing results carried) and Create reads "Create add-on order (new sample)". `retest-options` sends `original_published`; when it is missing the published path is used.
+- The Orders tab shows same-sample add-on orders as "same sample" in the Sample column, then "applied" once the services reach the sample.
+- **"When you press Create" in the Summary.** Replaces the one-line "New sample: ..." sentence with a block built from the same state as the request: the WooCommerce order it creates (customer, original order, amount or waived amount), what happens once paid or at once when waived (new sample with re-tested / carried / dropped profiles and variance, or services added to this same sample with the extra vials needed), whether the original sample changes, and whether the customer gets a payment email.
+
+### Fixed
+- The analysis hover's "Captured" time on Mk1-native rows showed the UTC clock as local time. Display-only fix: a `captured` value with no zone marker is read as UTC and rendered in the lab's time zone (America/Los_Angeles); the wire format is unchanged because COA readers consume it.
+
+## v1.30.1 - 2026-09-29
+
+### Changed
+- **Retest overlay: one Billing choice per order.** The Re-test tab's "Retest fee" radio is replaced by a **Billing** radio (Charged / Waived (whole order free)) shown on both the Re-test and Add services tabs. Waived sends `fee: "free"` from either tab and WordPress zeroes every line (retest fee, variance, add-ons, extra vials), so the order completes at once and the new sample is minted immediately. The summary shows each line as "$0.00 (waived $list)" and the Total as "$0.00 (waived)"; missing prices no longer block Create when Waived. The free-order toast now reads "Order completed; the new sample is being created now."
+
+### Fixed
+- Received and sampled times on Mk1-native samples showed the UTC clock as local time; the registry now marks them UTC and the sample page renders every timestamp in the lab's time zone (America/Los_Angeles).
+
+## v1.30.0 - 2026-09-29
+
+### Retest overlay v2 (#263)
+- **Two jobs, two tabs.** Actions > Retest now opens on **Re-test** (every profile row with Re-test and Carry results boxes; a row with neither is dropped from the new sample and the "New sample:" line says so) or **Add services** (every catalog service the sample lacks, priced from WordPress, unsellable ones marked "not sold post-order"; add-ons are always billed). Fixed titles per tab; Create reads "Create retest order" or "Create add-on order" and shows why it is disabled.
+- **Itemised summary** replaces the Delta: retest fee (Charged / Waived, Re-test tab only), each add-on, variance at points minus one like the shop, extra vials under More options, and a Total.
+- **Orders tab** lists every retest and add-on order for the sample with kind, date, total, status, the minted sample or a Copy link / Open for unpaid ones; an amber line above the tabs names unpaid orders. The order card shows only ordered lines with shop labels. Overlay widened to 760 px (the previous width class never applied).
+- Backend: the retest spec gains `drop[]` (profiles omitted from re-test and carry are dropped, recorded, and named in a warning event, no longer a 400); `retest-options` lists add-ons from the whole active catalog with `sellable`, legacy alias profiles excluded, and profiles carry `verified_at` / `state_label`; `retest-info` and activity labels carry the drop list.
+- Requires WordPress theme 2.59.0 (ordered-only context lines, `retest_orders`, Sterility USP-71 and Fentanyl as post-order add-ons).
+
+## v1.29.1 - 2026-09-28
+
+### Fixed
+- **Retest overlay showed "price unavailable" for endotoxin and PCR add-ons.** WordPress keys add-on prices by its add-on type key, which became the native LIMS key in theme 2.57.1; the overlay still looked prices up by the old short type. The lookup now tries the native key first (heavy metals was unaffected because its key never changed).
+
+## v1.29.0 - 2026-09-28
+
+### Mk1-native retest
+- **Retest from the sample page.** Actions > Retest on any sample opens the retest overlay: choose which of the original profiles to retest and which to carry, add services (endotoxin, sterility PCR, heavy metals, variance points) priced from WordPress, pick Paid or Free and Auto check-in, give a reason. Create makes the WooCommerce retest order through the Integration Service; a paid order waits for payment, a free one completes at once. (#253, #255)
+- **Customer and pricing block.** The overlay shows the original order (number, customer, total, lines) with the live retest fee, add-on prices and variance point price, and lists pending retest orders for the sample with a copyable payment link. The Create toast keeps the link for 15 seconds. (#255, #259)
+- **Carried results, not clones.** When the retest order is paid, the new sample carries the non-retested results as verified parent rows linked to the original vials (`Carried from P-xxxx-Sxx` chips); retested profiles get `Retesting` chips and added services `Added` chips. The original sample and its COA are untouched; parent retest of a carried row is refused with a pointer to a new retest. Activity events record carries and the spec. (#253)
+- **Retest info both ways.** `Retested as` on the original and the RETEST banner on the new sample now come from Mk1 first (spec, order, source), with the Integration Service as fallback. (#253)
+
+### Fixed
+- **Parent retest of a vial-less placeholder stranded a hidden row (P-3016).** The workflow engine now ranks parent lines deterministically per keyword and refuses a parent retest whose source is a parent-hosted row, pointing at adding a vial instead. (#252)
+
+### Testing
+- Playwright end-to-end suite revived against devbox stacks (`e2e/README.md`), with a spec for the retest overlay. (#257)
+
+## v1.28.1 - 2026-09-28
+
+### Fixed
+- **Inline field edits on native-born samples failed with "Not Found" (P-5178).** Every pencil-edit on the sample-details page (Client Lot, Declared Qty, Client Sample ID, Date Sampled, the COA Info fields) posted to the SENAITE field-update route keyed by SENAITE uid; a native-born parent has no uid, so the request returned 404 before any write. The route now resolves a native-born parent by its sample id and writes the Accu-Mk1 registry row directly, logging the change to the activity feed. Fields the row cannot store fail closed, and analyte peptides still go through Relabel or Replace. SENAITE-born samples are unchanged. (#260)
+
 ## v1.28.0 - 2026-09-23
 
 ### Worksheets 2.0: rapid sterility PCR plate builder

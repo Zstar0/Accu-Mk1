@@ -30,8 +30,18 @@ def test_dates_render_iso():
     row = _row(date_received=datetime(2026, 3, 8, 3, 42, 17),
                date_sampled=datetime(2026, 3, 7, 8, 0, 0))
     out = registry_row_to_display(row)
-    assert out["date_received"] == "2026-03-08T03:42:17"
-    assert out["date_sampled"] == "2026-03-07T08:00:00"
+    assert out["date_received"] == "2026-03-08T03:42:17Z"
+    assert out["date_sampled"] == "2026-03-07T08:00:00Z"
+
+
+def test_iso_utc_marks_naive_converts_aware():
+    from datetime import timedelta, timezone
+    from sub_samples.registry_read import _iso_utc
+    assert _iso_utc(None) is None
+    # Naive = UTC by convention: marked, never shifted.
+    assert _iso_utc(datetime(2026, 9, 20, 3, 13, 27, 540168)) == "2026-09-20T03:13:27.540168Z"
+    pdt = timezone(timedelta(hours=-7))
+    assert _iso_utc(datetime(2026, 9, 19, 20, 13, 27, tzinfo=pdt)) == "2026-09-20T03:13:27Z"
 
 
 def test_declared_weight_parses_float_else_omitted():

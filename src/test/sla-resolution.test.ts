@@ -21,6 +21,8 @@ import {
   resolveSampleTiersByGroup,
   classifySampleColor,
   aggregateOrderSlaVerdict,
+  isSlaWithdrawn,
+  slaSampleKey,
   NO_GROUP_KEY,
   profileBucketKey,
   type SampleSlaInputs,
@@ -1422,5 +1424,49 @@ describe('resolveSampleTiersByGroup', () => {
     expect(m.get(10)?.reason.tierSource).toBe('group')
     expect(m.get(11)?.tier).toBe(STER_TIER)
     expect(m.get(11)?.reason.tierSource).toBe('group')
+  })
+})
+
+describe('withdrawn samples and native-born keys', () => {
+  const t = tier(50, 'Std', 100, 20)
+
+  it('all published plus one cancelled -> met (the cancelled sample is ignored)', () => {
+    const v = aggregateOrderSlaVerdict([
+      { senaiteId: 'a', tier: t, lookup: lookup(null, 'published', []), status: null, color: null },
+      { senaiteId: 'b', tier: t, lookup: lookup(null, 'cancelled', []), status: null, color: null },
+    ])
+    expect(v.color).toBe('met')
+  })
+
+  it('a withdrawn sample never drives the verdict, even with a red status', () => {
+    const v = aggregateOrderSlaVerdict([
+      {
+        senaiteId: 'dead',
+        tier: t,
+        lookup: lookup('2026-01-01', 'invalid', []),
+        status: { target_minutes: 100, elapsed_minutes: 500, remaining_minutes: -400, breached: true },
+        color: 'red' as const,
+      },
+      {
+        senaiteId: 'live',
+        tier: t,
+        lookup: lookup('2026-01-01', 'sample_received', []),
+        status: { target_minutes: 100, elapsed_minutes: 10, remaining_minutes: 90, breached: false },
+        color: 'green' as const,
+      },
+    ])
+    expect(v.color).toBe('green')
+    expect(v.drivingSampleId).toBe('live')
+  })
+
+  it('isSlaWithdrawn covers cancelled/invalid/rejected only', () => {
+    expect(['cancelled', 'invalid', 'rejected'].every(isSlaWithdrawn)).toBe(true)
+    expect(isSlaWithdrawn('sample_received')).toBe(false)
+    expect(isSlaWithdrawn(null)).toBe(false)
+  })
+
+  it('slaSampleKey falls back to the sample id when there is no UID (native-born)', () => {
+    expect(slaSampleKey({ sample_uid: 'uid-1', sample_id: 'P-1' })).toBe('uid-1')
+    expect(slaSampleKey({ sample_uid: null, sample_id: 'P-5028' } as never)).toBe('P-5028')
   })
 })
