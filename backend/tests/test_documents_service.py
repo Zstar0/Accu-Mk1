@@ -756,3 +756,25 @@ def test_resolve_space_by_slug_id_and_default(db):
     assert service.resolve_space(db, space_id=general.id).id == general.id
     with pytest.raises(NotFoundError):
         service.resolve_space(db, space="nope")
+
+
+def test_ensure_documents_space_column_is_idempotent_on_a_pre_space_table():
+    """Simulates an existing deployment: `documents` exists WITHOUT space_id. The boot
+    helper adds the column and index once, and a second boot changes nothing."""
+    from sqlalchemy import create_engine, inspect, text
+    from sqlalchemy.pool import StaticPool
+    from database import _ensure_documents_space_column
+    import documents.models  # noqa: F401
+    from documents.models import DocumentSpace
+    engine = create_engine("sqlite:///:memory:", connect_args={"check_same_thread": False},
+                           poolclass=StaticPool)
+    DocumentSpace.__table__.create(engine)
+    with engine.begin() as c:
+        c.execute(text("CREATE TABLE documents (id INTEGER PRIMARY KEY, code VARCHAR(30))"))
+    assert "space_id" not in {col["name"] for col in inspect(engine).get_columns("documents")}
+    _ensure_documents_space_column(engine)
+    _ensure_documents_space_column(engine)
+    cols = {col["name"] for col in inspect(engine).get_columns("documents")}
+    assert "space_id" in cols
+    names = {ix["name"] for ix in inspect(engine).get_indexes("documents")}
+    assert "ix_documents_space_id" in names
