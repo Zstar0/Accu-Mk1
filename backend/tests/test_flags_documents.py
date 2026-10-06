@@ -199,3 +199,27 @@ def test_document_seams_follow_the_space(db):
     assert spec.audience(db, public.code) is None
     assert spec.audience(db, secret.code) == {"groups": [g.id]}
     assert spec.audience(db, "ART-9999") == {"groups": []}
+
+
+def test_a_document_thread_follows_the_space_end_to_end(db):
+    """Important 3: the real flag service, not the closures. A thread on a restricted
+    document lists for a member only, and an outsider cannot be assigned to it."""
+    from flags import service
+    from flags.errors import BadRequestError
+    from models import User
+    for u in (ADMIN_U, MEMBER_U, OUTSIDER_U):
+        db.add(User(id=u.id, email=u.email, hashed_password="x", role=u.role, is_active=True))
+    db.commit()
+    g, sp, secret, public = _restricted(db)
+    flag = service.create_flag(db, user=MEMBER_U, entity_type="document", entity_id=secret.code,
+                               type="doc_review", title="Q4 numbers do not add up")
+    db.commit()
+
+    def ids(who):
+        return [f.id for f in service.list_flags(db, user_id=who.id, tab="all_open", user=who)]
+    assert flag.id in ids(MEMBER_U)
+    assert flag.id in ids(ADMIN_U)
+    assert flag.id not in ids(OUTSIDER_U)
+    with pytest.raises(BadRequestError, match="cannot see this flag"):
+        service.assign(db, user=MEMBER_U, flag_id=flag.id, assignee_id=OUTSIDER_U.id)
+    assert service.assign(db, user=MEMBER_U, flag_id=flag.id, assignee_id=MEMBER_U.id).assignee_id == MEMBER_U.id
