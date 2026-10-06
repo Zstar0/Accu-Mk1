@@ -39,7 +39,7 @@ export function RetitleDialog({ doc, open, onOpenChange }: RetitleDialogProps) {
   const [categoryId, setCategoryId] = useState(String(doc.category_id))
   const [effective, setEffective] = useState(doc.effective_date ?? '')
   const [spaceId, setSpaceId] = useState(String(doc.space_id ?? ''))
-  const spaces = useDocumentSpaces(false)
+  const spaces = useDocumentSpaces(true)
   const categories = useDocumentCategories(false)
   const patch = usePatchDocument()
 

@@ -1,4 +1,4 @@
-import { render, screen, fireEvent } from '@testing-library/react'
+import { render, screen, fireEvent, act } from '@testing-library/react'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import type { DocumentSpace } from '@/lib/api-documents'
 
@@ -16,9 +16,16 @@ const general: DocumentSpace = {
   updated_at: '2026-10-06T00:00:00Z',
 }
 
+const leadership: DocumentSpace = {
+  ...general,
+  id: 2,
+  slug: 'leadership',
+  name: 'Leadership',
+}
+
 const useDocuments = vi.fn()
 vi.mock('@/services/documents', () => ({
-  useDocumentSpaces: () => ({ data: [general], isLoading: false }),
+  useDocumentSpaces: () => ({ data: [general, leadership], isLoading: false }),
   useDocumentCategories: () => ({ data: [] }),
   useDocuments: (p: unknown) => useDocuments(p),
 }))
@@ -75,6 +82,25 @@ describe('DocumentsPage', () => {
     ).toBeInTheDocument()
     expect(useDocuments).toHaveBeenLastCalledWith(
       expect.objectContaining({ spaceId: -1 })
+    )
+  })
+
+  it('remounts the list on a direct space switch, resetting filters', async () => {
+    useUIStore.setState({
+      documentsSpaceSlug: 'general',
+      documentViewerTargetId: null,
+    })
+    render(<DocumentsPage />)
+    const input = await screen.findByPlaceholderText(/Search code/)
+    fireEvent.change(input, { target: { value: 'abc' } })
+    expect(input).toHaveValue('abc')
+    act(() => useUIStore.setState({ documentsSpaceSlug: 'leadership' }))
+    expect(
+      await screen.findByRole('heading', { name: 'Documents / Leadership' })
+    ).toBeInTheDocument()
+    expect(screen.getByPlaceholderText(/Search code/)).toHaveValue('')
+    expect(useDocuments).toHaveBeenLastCalledWith(
+      expect.objectContaining({ spaceId: 2 })
     )
   })
 })

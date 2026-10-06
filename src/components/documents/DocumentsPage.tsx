@@ -72,7 +72,11 @@ export function DocumentsPage() {
   const targetId = useUIStore(s => s.documentViewerTargetId)
   const spaceSlug = useUIStore(s => s.documentsSpaceSlug)
   if (targetId != null) return <DocumentViewer id={targetId} />
-  return spaceSlug ? <DocumentsList spaceSlug={spaceSlug} /> : <SpacesLanding />
+  return spaceSlug ? (
+    <DocumentsList key={spaceSlug} spaceSlug={spaceSlug} />
+  ) : (
+    <SpacesLanding />
+  )
 }
 
 function SpacesLanding() {
@@ -384,9 +388,9 @@ function DocumentsList({ spaceSlug }: { spaceSlug: string }) {
         </span>
       </div>
 
-      {error ? (
+      {error || spaces.error ? (
         <p className="text-sm text-destructive">
-          Could not load documents: {error.message}
+          Could not load documents: {(error ?? spaces.error)?.message}
         </p>
       ) : isLoading || spaces.isLoading ? (
         <div className="flex items-center justify-center py-12">
