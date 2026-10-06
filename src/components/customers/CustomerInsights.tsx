@@ -385,27 +385,18 @@ export function CustomerInsights({
                 </thead>
                 <tbody>
                   {risk.data?.rows.map(r => {
-                    // Guest (email:) rows are not openable until key-based detail lands.
-                    const openable = r.key.startsWith('wc:')
+                    // Every row opens: wc: keys get the full detail, guest
+                    // email: keys the Dashboard-only detail.
                     return (
                       <Tooltip key={r.key}>
                         <TooltipTrigger asChild>
                           <tr
-                            className={cn(
-                              'border-t border-border/20 hover:bg-muted/30',
-                              openable && 'cursor-pointer'
-                            )}
-                            tabIndex={openable ? 0 : undefined}
-                            onClick={
-                              openable ? () => onOpenCustomer(r.key) : undefined
-                            }
-                            onKeyDown={
-                              openable
-                                ? e => {
-                                    if (e.key === 'Enter') onOpenCustomer(r.key)
-                                  }
-                                : undefined
-                            }
+                            className="cursor-pointer border-t border-border/20 hover:bg-muted/30"
+                            tabIndex={0}
+                            onClick={() => onOpenCustomer(r.key)}
+                            onKeyDown={e => {
+                              if (e.key === 'Enter') onOpenCustomer(r.key)
+                            }}
                           >
                             <td className="py-1.5 font-medium">{r.name}</td>
                             <td className="text-right">

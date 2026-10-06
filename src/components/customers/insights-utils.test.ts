@@ -5,6 +5,7 @@ import {
   fmtMoney,
   fmtPct,
   fmtPoints,
+  normOrderNumber,
 } from './insights-utils'
 
 describe('insights utils', () => {
@@ -30,5 +31,12 @@ describe('insights utils', () => {
     expect(cohortTint(null)).toBe('')
     expect(cohortTint(0.13)).toContain('red')
     expect(cohortTint(0.39)).toContain('emerald')
+  })
+})
+
+describe('normOrderNumber', () => {
+  it('drops WP- / # prefixes and whitespace', () => {
+    for (const raw of ['WP-8642', 'wp-8642', '#8642', ' 8642 ', 8642])
+      expect(normOrderNumber(raw)).toBe('8642')
   })
 })

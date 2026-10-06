@@ -33,6 +33,7 @@ vi.mock('@/store/ui-store', () => {
       | 'customer-detail'
       | string,
     customerDetailTargetId: null as number | null,
+    customerDetailKey: null as string | null,
     customerListPage: 0,
     customerSearchTerm: '',
     hideTestAccounts: true,
@@ -47,6 +48,7 @@ vi.mock('@/store/ui-store', () => {
       lot: '',
     },
     navigateToCustomer: vi.fn(),
+    navigateToCustomerKey: vi.fn(),
     navigateToCustomers: vi.fn(),
     setCustomerListPage: vi.fn(),
     setHideTestAccounts: vi.fn(),
@@ -84,6 +86,7 @@ vi.mock('@/lib/api', async () => {
       page_size: 200,
     }),
     getExplorerOrdersByCustomer: vi.fn(),
+    getCustomerDossier: vi.fn(),
   }
 })
 
@@ -104,9 +107,11 @@ vi.mock('@/components/explorer/OrderRow', () => ({
       order: { id: string; order_id: string }
       defaultExpanded?: boolean
       highlightSampleId?: string
+      money?: { net: string }
     }) => (
       <tr
         data-testid="order-row"
+        data-money-net={props.money?.net ?? ''}
         data-order-id={props.order.id}
         data-order-number={props.order.order_id}
         data-expanded={props.defaultExpanded ? 'true' : 'false'}
@@ -143,6 +148,7 @@ vi.mock('@/components/explorer/senaite-queue', () => ({
 }))
 
 const {
+  getCustomerDossier,
   getCustomerList,
   getExplorerStatus,
   getExplorerCustomers,
@@ -158,6 +164,7 @@ const { CustomerStatusPage } = await import('@/components/CustomerStatusPage')
 const mockState = (useUIStore as any).__state as {
   activeSubSection: string
   customerDetailTargetId: number | null
+  customerDetailKey: string | null
   customerListPage: number
   customerSearchTerm: string
   hideTestAccounts: boolean
@@ -169,6 +176,7 @@ const mockState = (useUIStore as any).__state as {
     lot: string
   }
   navigateToCustomer: ReturnType<typeof vi.fn>
+  navigateToCustomerKey: ReturnType<typeof vi.fn>
   navigateToCustomers: ReturnType<typeof vi.fn>
   setCustomerListPage: ReturnType<typeof vi.fn>
   setHideTestAccounts: ReturnType<typeof vi.fn>
@@ -222,12 +230,14 @@ const FIVE_CUSTOMERS_PLUS_GUEST: ExplorerCustomer[] = [
 function resetState() {
   mockState.activeSubSection = 'customers'
   mockState.customerDetailTargetId = null
+  mockState.customerDetailKey = null
   mockState.customerListPage = 0
   mockState.customerSearchTerm = ''
   mockState.hideTestAccounts = true
   mockState.customerDetailTab = 'orders'
   mockState.customerOrderSearch = { order_number: '', sample_id: '', analyte: '', lot: '' }
   mockState.navigateToCustomer.mockReset()
+  mockState.navigateToCustomerKey.mockReset()
   mockState.navigateToCustomers.mockReset()
   mockState.setCustomerListPage.mockReset()
   mockState.setHideTestAccounts.mockReset()
@@ -237,6 +247,10 @@ function resetState() {
   mockState.setCustomerOrderSearchReset.mockReset()
   mockState.navigateTo.mockReset()
   mockState.navigateToSample.mockReset()
+  // Dossier stays pending unless a test resolves it (Dashboard loading state).
+  vi.mocked(getCustomerDossier)
+    .mockReset()
+    .mockImplementation(() => new Promise(() => undefined))
 }
 
 // findCustomersTable returns the table whose first row contains "Display Name".
@@ -373,7 +387,7 @@ describe('CustomerStatusPage — list view', () => {
     expect(mockState.navigateToCustomer).toHaveBeenCalledWith(1)
   })
 
-  it('guest rows are tabIndex=-1, non-clickable, and show "— (Guest)"', async () => {
+  it('guest rows open the email: key detail on click', async () => {
     render(<CustomerStatusPage />, { wrapper })
 
     // Wait for the guest row's display value
@@ -381,9 +395,11 @@ describe('CustomerStatusPage — list view', () => {
     expect(guestCell).toBeInTheDocument()
     const row = guestCell.closest('tr')
     if (!row) throw new Error('Guest row not found')
-    expect(row.getAttribute('tabindex')).toBe('-1')
+    expect(row.getAttribute('tabindex')).toBe('0')
     fireEvent.click(row)
-    // Guest customers don't dispatch navigation
+    expect(mockState.navigateToCustomerKey).toHaveBeenCalledWith(
+      'email:guest@example.com'
+    )
     expect(mockState.navigateToCustomer).not.toHaveBeenCalled()
   })
 
@@ -698,14 +714,64 @@ describe('CustomerStatusPage — detail view', () => {
     expect(vi.mocked(getExplorerOrdersByCustomer).mock.calls[0]?.[0]).toBe(42)
   })
 
-  it('does NOT call getExplorerOrdersByCustomer when targetId is null', async () => {
+  it('with neither a target id nor a key, falls back to the list and never fetches orders', async () => {
     mockState.customerDetailTargetId = null
     renderDetailWithCache(null)
 
-    // Wait for status to settle so the enabled gate has had a chance to fire
-    await screen.findByText('← Back to Customers')
+    // Wait for the list's empty state so any enabled gate has had a chance to fire
+    await screen.findByText('No customers found')
 
+    expect(screen.queryByText('← Back to Customers')).not.toBeInTheDocument()
     expect(getExplorerOrdersByCustomer).not.toHaveBeenCalled()
+  })
+
+  it('guest key detail: dossier header, Dashboard only, no explorer orders fetch', async () => {
+    mockState.customerDetailTargetId = null
+    mockState.customerDetailKey = 'email:guest@example.com'
+    vi.mocked(getCustomerDossier).mockResolvedValue(null)
+    renderDetailWithCache(null)
+
+    expect(await screen.findByText('Guest checkout')).toBeInTheDocument()
+    expect(
+      await screen.findByText('No paid orders for this customer yet')
+    ).toBeInTheDocument()
+    expect(screen.queryByRole('tablist')).not.toBeInTheDocument()
+    expect(getCustomerDossier).toHaveBeenCalledWith('email:guest@example.com')
+    expect(getExplorerOrdersByCustomer).not.toHaveBeenCalled()
+  })
+
+  it('Orders tab: Total/Discount/Coupon headers, money joined on the normalized order number', async () => {
+    vi.mocked(getExplorerOrdersByCustomer).mockResolvedValue([
+      makeOrder({ order_number: 'WP-3001' }),
+    ])
+    vi.mocked(getCustomerDossier).mockResolvedValue({
+      orders: [
+        {
+          customer_key: 'wc:42',
+          order_id: 3001,
+          order_number: '3001',
+          paid_at: '2026-05-03T10:00:00Z',
+          net: '125.00',
+          discount: '0.00',
+          coupons: [],
+          categories: ['testing'],
+          samples: 2,
+          tests: ['HPLC'],
+        },
+      ],
+    } as unknown as Awaited<ReturnType<typeof getCustomerDossier>>)
+    renderDetailWithCache(makeCustomer({ customer_id: 42 }))
+
+    expect(await screen.findByText('Total')).toBeInTheDocument()
+    expect(screen.getByText('Discount')).toBeInTheDocument()
+    expect(screen.getByText('Coupon')).toBeInTheDocument()
+    await waitFor(() =>
+      expect(screen.getByTestId('order-row')).toHaveAttribute(
+        'data-money-net',
+        '125.00'
+      )
+    )
+    expect(getCustomerDossier).toHaveBeenCalledWith('wc:42')
   })
 
   // --- Header card rendering (cache-read data source) ---
@@ -1092,15 +1158,15 @@ describe('CustomerStatusPage — accessibility contract', () => {
     expect(carolRow.getAttribute('tabindex')).toBe('0')
   })
 
-  // --- Keyboard contract: tabIndex={-1} on guest rows ---
-  it('guest customer rows carry tabIndex="-1"', async () => {
+  // --- Keyboard contract: guest rows are focusable too (Task 8 key detail) ---
+  it('guest customer rows carry tabIndex="0"', async () => {
     render(<CustomerStatusPage />, { wrapper })
 
     const guestCell = await screen.findByText('— (Guest)')
     const guestRow = guestCell.closest('tr')
     if (!guestRow) throw new Error('guest row not found')
 
-    expect(guestRow.getAttribute('tabindex')).toBe('-1')
+    expect(guestRow.getAttribute('tabindex')).toBe('0')
   })
 
   // --- Keyboard contract: Enter activates navigation on registered rows ---
@@ -1127,8 +1193,8 @@ describe('CustomerStatusPage — accessibility contract', () => {
     expect(mockState.navigateToCustomer).toHaveBeenCalledWith(1)
   })
 
-  // --- Keyboard contract: guest rows have no Enter/Space handler ---
-  it('pressing Enter on a guest row does NOT dispatch navigateToCustomer', async () => {
+  // --- Keyboard contract: Enter/Space on a guest row opens the key detail ---
+  it('pressing Enter/Space on a guest row dispatches navigateToCustomerKey, not navigateToCustomer', async () => {
     render(<CustomerStatusPage />, { wrapper })
 
     const guestCell = await screen.findByText('— (Guest)')
@@ -1137,6 +1203,10 @@ describe('CustomerStatusPage — accessibility contract', () => {
 
     fireEvent.keyDown(guestRow, { key: 'Enter' })
     fireEvent.keyDown(guestRow, { key: ' ' })
+    expect(mockState.navigateToCustomerKey).toHaveBeenCalledTimes(2)
+    expect(mockState.navigateToCustomerKey).toHaveBeenCalledWith(
+      'email:guest@example.com'
+    )
     expect(mockState.navigateToCustomer).not.toHaveBeenCalled()
   })
 
@@ -1155,8 +1225,8 @@ describe('CustomerStatusPage — accessibility contract', () => {
     expect(cls).toContain('focus-visible:outline-none')
   })
 
-  // --- Focus-ring contract: guest rows do NOT carry focus-ring tokens ---
-  it('guest customer rows do NOT carry focus-ring tokens (non-focusable)', async () => {
+  // --- Focus-ring contract: guest rows are focusable, so they carry the ring ---
+  it('guest customer rows carry the focus-ring tokens', async () => {
     render(<CustomerStatusPage />, { wrapper })
 
     const guestCell = await screen.findByText('— (Guest)')
@@ -1164,9 +1234,8 @@ describe('CustomerStatusPage — accessibility contract', () => {
     if (!guestRow) throw new Error('guest row not found')
 
     const cls = guestRow.className
-    // Guest rows get `cursor-default` — no focus-ring tokens.
-    expect(cls).not.toContain('focus-visible:ring-2')
-    expect(cls).not.toContain('focus-visible:ring-primary')
+    expect(cls).toContain('focus-visible:ring-2')
+    expect(cls).toContain('focus-visible:ring-primary')
   })
 })
 
@@ -1177,7 +1246,7 @@ describe('CustomerStatusPage — accessibility contract', () => {
 //   - Header card stays persistent (rendered before the tab list)
 //   - Two tabs: "Customer Orders" (default-active) and "Dashboard"
 //   - Clicking the Dashboard trigger dispatches setCustomerDetailTab('dashboard')
-//   - Dashboard tab body renders the Coming Soon placeholder card
+//   - Dashboard tab body renders CustomerDashboard (dossier-driven)
 // No behavior change to orders rendering (Phase 29 detail-view tests still pass).
 describe('CustomerStatusPage — detail view tabs (Phase 30)', () => {
   beforeEach(() => {
@@ -1249,11 +1318,14 @@ describe('CustomerStatusPage — detail view tabs (Phase 30)', () => {
     expect(mockState.setCustomerDetailTab).toHaveBeenCalledWith('dashboard')
   })
 
-  it('Dashboard tab renders Coming Soon placeholder', async () => {
+  it('Dashboard tab renders the customer dashboard (loading while the dossier is pending)', async () => {
     mockState.customerDetailTab = 'dashboard'
     renderDetailWithCache(makeCustomer({ customer_id: 42 }))
 
-    expect(await screen.findByText(/Coming soon/i)).toBeInTheDocument()
+    expect(
+      await screen.findByText('Loading customer dashboard')
+    ).toBeInTheDocument()
+    expect(getCustomerDossier).toHaveBeenCalledWith('wc:42')
   })
 })
 

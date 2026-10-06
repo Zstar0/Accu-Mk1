@@ -1,3 +1,5 @@
+import { getCustomerDossier } from '@/lib/api'
+
 export function fmtMoney(s: string | null | undefined): string {
   const n = Number(s ?? 0)
   if (n >= 1_000_000) return `$${(n / 1_000_000).toFixed(2)}M`
@@ -56,3 +58,18 @@ export function cohortTint(share: number | null): string {
   if (share >= 0.25) return 'bg-emerald-500/40'
   return 'bg-emerald-500/30'
 }
+
+/** Mirrors backend norm_order_number: "WP-8642" / "#8642" / " 8642 " -> "8642". */
+export const normOrderNumber = (v: string | number): string =>
+  String(v)
+    .trim()
+    .replace(/^(wp-|#)/i, '')
+    .trim()
+
+/** One query for a customer dossier so the Dashboard, the Orders-tab money
+ *  cells and the guest header share a single fetch. */
+export const dossierQuery = (key: string) => ({
+  queryKey: ['customers', 'dossier', key],
+  queryFn: () => getCustomerDossier(key),
+  staleTime: 60_000,
+})

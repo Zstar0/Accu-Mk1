@@ -19,7 +19,7 @@ export function AccuMarkTools() {
   const activeSubSection = useUIStore(
     state => state.activeSubSection
   ) as AccuMarkToolsSubSection
-  const navigateToCustomer = useUIStore(state => state.navigateToCustomer)
+  const navigateToCustomerKey = useUIStore(state => state.navigateToCustomerKey)
 
   switch (activeSubSection) {
     case 'coa-explorer':
@@ -32,12 +32,9 @@ export function AccuMarkTools() {
       return <VialStatusPage />
     case 'customer-insights':
       return (
-        <CustomerInsights
-          onOpenCustomer={key => {
-            // wc:<id> keys only; guest rows are not openable until Task 8.
-            if (key.startsWith('wc:')) navigateToCustomer(Number(key.slice(3)))
-          }}
-        />
+        // wc:<id> keys route through the numeric id flow inside the store;
+        // guest email: keys open the Dashboard-only detail.
+        <CustomerInsights onOpenCustomer={navigateToCustomerKey} />
       )
     case 'customers':
     case 'customer-detail':

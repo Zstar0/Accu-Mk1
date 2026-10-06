@@ -9030,3 +9030,69 @@ export const getCustomerList = (p: {
   page?: number
   page_size?: number
 }) => getReport<CustomerListResponse>('/reports/customers/list', p)
+
+/** One paid order as /reports/customers/orders and the dossier return it. */
+export interface InsightOrderRow {
+  customer_key: string
+  order_id: number
+  order_number: string
+  paid_at: string
+  net: string
+  discount: string
+  coupons: string[]
+  categories: string[]
+  samples: number
+  tests: string[]
+}
+/** Mirrors backend DossierResponse field-for-field. */
+export interface CustomerDossier {
+  tz: string
+  synced_at: string | null
+  identity: {
+    key: string
+    name: string
+    email: string | null
+    company: string | null
+    wc_id: number | null
+    since: string
+  }
+  kpis: {
+    lifetime: string
+    rank: number
+    customers: number
+    orders: number
+    avg_order: string
+    samples: number
+    samples_per_order: number
+    usual_gap_days: number | null
+    gap_iqr: number[] | null
+    nonconforming_rate: number | null
+    lab_nonconforming_rate: number | null
+    on_time_rate: number | null
+    lab_on_time_rate: number | null
+  }
+  status: string
+  days_since_last: number | null
+  overdue: number
+  spend_delta_pct: number | null
+  monthly: { month: string; spend: string; samples: number }[]
+  order_dates: string[]
+  test_mix: { test: string; share: number; all_share: number }[]
+  analytes: { product: string; coas: number; pass_rate: number }[]
+  recent: {
+    order_number: string
+    paid_at: string
+    coas: number
+    failed: number
+    sla: 'late' | 'on_time' | null
+  }[]
+  orders: InsightOrderRow[]
+}
+/** Resolves null when the customer has no paid orders (backend 404). */
+export const getCustomerDossier = (key: string) =>
+  getReport<CustomerDossier>(
+    `/reports/customers/${encodeURIComponent(key)}`
+  ).catch((e: unknown) => {
+    if (e instanceof Error && e.message.endsWith(': 404')) return null
+    throw e
+  })
