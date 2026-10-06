@@ -5,4 +5,5 @@ export const COA_ARCHETYPE_OPTIONS = [
   { value: 'none', label: 'Not reported' },
   { value: 'limit_table', label: 'Limit table' },
   { value: 'legacy_hplc', label: 'Legacy (HPLC page 1)' },
+  { value: 'legacy_bw', label: 'Legacy (Bac Water page 1)' },
 ] as const
