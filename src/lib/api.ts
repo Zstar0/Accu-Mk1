@@ -9022,6 +9022,19 @@ export const getCustomerAtRisk = () =>
   getReport<{ tz: string; synced_at: string | null; rows: AtRiskRow[] }>(
     '/reports/customers/at-risk'
   )
+export interface ChurnBucket {
+  signal: 'sla' | 'conformance' | 'retest'
+  group: 'on_time' | 'late' | 'all_pass' | 'any_fail' | 'no_retest' | 'retest'
+  orders: number
+  returned: number | null
+}
+export const getCustomerChurnSignals = () =>
+  getReport<{
+    tz: string
+    synced_at: string | null
+    window_days: number
+    buckets: ChurnBucket[]
+  }>('/reports/customers/churn-signals')
 export const getCustomerList = (p: {
   period: InsightsPeriod
   search?: string

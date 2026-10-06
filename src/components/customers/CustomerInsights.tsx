@@ -13,6 +13,7 @@ import {
 import { cn } from '@/lib/utils'
 import {
   getCustomerAtRisk,
+  getCustomerChurnSignals,
   getCustomerCohorts,
   getCustomerSummary,
   type InsightsPeriod,
@@ -45,6 +46,14 @@ const FIRST_ORDER_LABEL: Record<string, string> = {
   other_coupon: 'Other coupon',
   full_price: 'Full price',
   with_addon: 'With an add-on',
+}
+const CHURN_LABEL: Record<string, string> = {
+  on_time: 'COA on time',
+  late: 'COA late (SLA missed)',
+  all_pass: 'All COAs conforming',
+  any_fail: 'Got a non-conforming COA',
+  no_retest: 'No retest',
+  retest: 'Needed a retest',
 }
 const CARD = 'rounded-lg border border-border/50 bg-card/30 p-3'
 
@@ -129,6 +138,11 @@ export function CustomerInsights({
   const risk = useQuery({
     queryKey: ['customers', 'at-risk'],
     queryFn: getCustomerAtRisk,
+    staleTime: 60_000,
+  })
+  const churn = useQuery({
+    queryKey: ['customers', 'churn-signals'],
+    queryFn: getCustomerChurnSignals,
     staleTime: 60_000,
   })
   const s = summary.data
@@ -532,6 +546,45 @@ export function CustomerInsights({
               </div>
             </section>
           </div>
+          <section className={CARD}>
+            <h2 className="text-sm font-medium">Why do customers stop?</h2>
+            <p className="mb-2 text-[11px] text-muted-foreground">
+              Correlation, not proof. Share who ordered again within 60 days.
+            </p>
+            {churn.error ? (
+              <SectionError
+                label="churn signals"
+                onRetry={() => churn.refetch()}
+              />
+            ) : (
+              <div className="flex flex-col gap-1.5 text-xs tabular-nums">
+                {churn.data?.buckets.map(b => (
+                  <div
+                    key={`${b.signal}-${b.group}`}
+                    className="flex items-center gap-2"
+                  >
+                    <span className="w-48 shrink-0">
+                      {CHURN_LABEL[b.group] ?? b.group}
+                    </span>
+                    <div className="h-2 flex-1 rounded bg-muted">
+                      <div
+                        className="h-2 rounded bg-emerald-400"
+                        style={{
+                          width: `${Math.round((b.returned ?? 0) * 100)}%`,
+                        }}
+                      />
+                    </div>
+                    <span className="w-10 text-right font-medium">
+                      {fmtPct(b.returned, 0)}
+                    </span>
+                    <span className="w-16 text-right text-muted-foreground">
+                      n = {b.orders}
+                    </span>
+                  </div>
+                ))}
+              </div>
+            )}
+          </section>
         </>
       )}
     </div>

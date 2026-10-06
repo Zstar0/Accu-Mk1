@@ -13,6 +13,7 @@ vi.mock('@/lib/api', async () => {
     getCustomerSummary: vi.fn(),
     getCustomerCohorts: vi.fn(),
     getCustomerAtRisk: vi.fn(),
+    getCustomerChurnSignals: vi.fn(),
   }
 })
 vi.mock('recharts', async importOriginal => {
@@ -86,6 +87,15 @@ function setup(riskFails = false) {
       },
     ],
   })
+  vi.mocked(api.getCustomerChurnSignals).mockResolvedValue({
+    tz: 'America/Los_Angeles',
+    synced_at: null,
+    window_days: 60,
+    buckets: [
+      { signal: 'conformance', group: 'all_pass', orders: 120, returned: 0.61 },
+      { signal: 'conformance', group: 'any_fail', orders: 14, returned: 0.36 },
+    ],
+  })
   if (riskFails)
     vi.mocked(api.getCustomerAtRisk).mockRejectedValue(new Error('boom'))
   const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } })
@@ -107,6 +117,11 @@ describe('CustomerInsights', () => {
     ).toBeInTheDocument()
     expect(screen.getByText('5.2× gap')).toBeInTheDocument()
     expect(screen.getByText(/orders synced/i)).toBeInTheDocument()
+    expect(
+      await screen.findByText('Got a non-conforming COA')
+    ).toBeInTheDocument()
+    expect(screen.getByText('n = 14')).toBeInTheDocument()
+    expect(screen.getByText(/Correlation, not proof/)).toBeInTheDocument()
   })
 
   it('shows an error with Retry, and no overdue badge, when at-risk fails', async () => {
