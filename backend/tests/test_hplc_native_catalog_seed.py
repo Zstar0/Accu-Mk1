@@ -214,6 +214,7 @@ def test_init_db_calls_hplc_native_seed_between_vial_roles_and_specs(monkeypatch
     monkeypatch.setattr(database, "_run_migrations", _rec("migrations"))
     monkeypatch.setattr(database.Base.metadata, "create_all", _rec("create_all"))
     monkeypatch.setattr(database, "_seed_federal_holidays_window", _rec("holidays"))
+    monkeypatch.setattr(database, "_ensure_documents_space_column", _rec("documents_space_column"))
     # init_db also opens a fresh SessionLocal() around every seeder call; stub
     # it too so no stubbed seeder (or the try/except plumbing around it) ever
     # touches a real database connection.
