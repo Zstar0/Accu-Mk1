@@ -483,7 +483,9 @@ export function CustomerInsights({
 
           <div className="grid gap-3 lg:grid-cols-3">
             <section className={CARD}>
-              <h2 className="text-sm font-medium">First order → comes back?</h2>
+              <h2 className="text-sm font-medium">
+                First order → comes back? (all time)
+              </h2>
               <table className="mt-2 w-full text-sm tabular-nums">
                 <tbody>
                   {s.first_order.map(f => (
@@ -503,7 +505,9 @@ export function CustomerInsights({
               </table>
             </section>
             <section className={CARD}>
-              <h2 className="text-sm font-medium">Add-on attach rate</h2>
+              <h2 className="text-sm font-medium">
+                Add-on attach rate (all time)
+              </h2>
               <table className="mt-2 w-full text-sm tabular-nums">
                 <thead>
                   <tr className="text-[11px] text-muted-foreground">
@@ -524,7 +528,7 @@ export function CustomerInsights({
               </table>
             </section>
             <section className={cn(CARD, 'text-sm')}>
-              <h2 className="font-medium">Revenue concentration</h2>
+              <h2 className="font-medium">Revenue concentration (all time)</h2>
               <div className="mt-2 flex justify-between">
                 <span>Top 10 customers</span>
                 <b>{fmtPct(s.concentration.top10_share, 0)}</b>

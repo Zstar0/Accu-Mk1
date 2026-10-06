@@ -122,6 +122,12 @@ describe('CustomerInsights', () => {
     ).toBeInTheDocument()
     expect(screen.getByText('n = 14')).toBeInTheDocument()
     expect(screen.getByText(/Correlation, not proof/)).toBeInTheDocument()
+    for (const h of [
+      'First order → comes back? (all time)',
+      'Add-on attach rate (all time)',
+      'Revenue concentration (all time)',
+    ])
+      expect(screen.getByRole('heading', { name: h })).toBeInTheDocument()
   })
 
   it('shows an error with Retry, and no overdue badge, when at-risk fails', async () => {

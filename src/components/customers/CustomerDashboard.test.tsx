@@ -99,10 +99,13 @@ describe('CustomerDashboard', () => {
     const onOpenAnalyte = setup(dossier())
     expect(
       await screen.findByText(
-        /No order in 45 days · usually orders every 9 days · 5.2× overdue/
+        /No testing order in 45 days · usually orders every 9 days · 5.2× overdue/
       )
     ).toBeInTheDocument()
     expect(screen.getByText('$96,110')).toBeInTheDocument()
+    expect(
+      screen.getByText('Days since last testing order')
+    ).toBeInTheDocument()
     expect(screen.getByText(/#3 of 782/)).toBeInTheDocument()
     const row = screen
       .getByRole('button', { name: 'Retatrutide' })

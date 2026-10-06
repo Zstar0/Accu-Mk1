@@ -173,7 +173,7 @@ export function CustomerDashboard({
       timeZone: d.tz,
     })
   const banner = [
-    `No order in ${Math.round(d.days_since_last ?? 0)} days`,
+    `No testing order in ${Math.round(d.days_since_last ?? 0)} days`,
     k.usual_gap_days != null && `usually orders every ${k.usual_gap_days} days`,
     `${d.overdue}× overdue`,
     d.spend_delta_pct != null &&
@@ -322,7 +322,7 @@ export function CustomerDashboard({
             </div>
             <div className="flex justify-between">
               <span className="text-muted-foreground">
-                Days since last order
+                Days since last testing order
               </span>
               <b>
                 {d.days_since_last == null
