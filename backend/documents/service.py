@@ -505,6 +505,12 @@ def latest_revision(db: Session, code: str) -> Optional[Document]:
 def move_document_space(db: Session, code: str, space_id: int, *, updated_by: Optional[str]) -> list[Document]:
     """Move EVERY revision of a code to another space in one transaction (spec 4.3)."""
     space = get_space(db, int(space_id))
+    code = _clean_code(code)
+    # Take the same row lock create_document holds while it inserts revision r+1, so
+    # a concurrent push either lands before this read (and is moved) or waits until
+    # the move commits (and inherits the new space). Without it the newest revision
+    # could be left behind in the old, possibly more visible, space.
+    _latest(db, code, for_update=True)
     rows = get_revisions(db, code)
     if not rows:
         raise NotFoundError(f"document {code!r} not found")
@@ -658,7 +664,12 @@ def list_documents(db: Session, *, q: Optional[str] = None, category_id: Optiona
     if category_id is not None:
         stmt = stmt.where(Document.category_id == category_id)
     if space_id is not None:
-        stmt = stmt.where(Document.space_id == int(space_id))
+        space_id = int(space_id)
+        if space_id == general_space(db).id:
+            # NULL reads as General everywhere (spec 4.4).
+            stmt = stmt.where(or_(Document.space_id == space_id, Document.space_id.is_(None)))
+        else:
+            stmt = stmt.where(Document.space_id == space_id)
     if visible_spaces is not None:
         # NULL = General = company (spec 4.4), so it is always inside a visibility filter.
         stmt = stmt.where(or_(Document.space_id.in_(visible_spaces), Document.space_id.is_(None)))

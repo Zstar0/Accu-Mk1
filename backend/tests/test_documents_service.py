@@ -871,3 +871,17 @@ def test_list_includes_null_space_rows(db):
     visible = select(DocumentSpace.id).where(DocumentSpace.visibility == "company")
     rows, total = service.list_documents(db, visible_spaces=visible)
     assert total == 1 and rows[0][0].id == d.id
+
+
+def test_list_space_filter_general_includes_null_rows(db):
+    from documents import service
+    from documents.models import Document
+    cat = service.resolve_category(db, category="ART")
+    lab = _space(db, "lab")
+    d, _ = service.create_document(db, title="Old", html=HTML, category=cat)
+    db.execute(Document.__table__.update().where(Document.id == d.id).values(space_id=None))
+    db.commit()
+    rows, total = service.list_documents(db, space_id=service.general_space(db).id)
+    assert total == 1 and rows[0][0].id == d.id
+    rows, total = service.list_documents(db, space_id=lab.id)
+    assert total == 0
