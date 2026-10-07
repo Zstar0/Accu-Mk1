@@ -121,6 +121,31 @@ export function patchDocument(
   })
 }
 
+/** Admin-only in-place content replace for a DRAFT (spec 2026-10-03 §10.3). */
+export function replaceDraftContent(
+  id: number,
+  html: string,
+  expectedSha256?: string
+): Promise<DocumentRow> {
+  // expected_sha256: the server 409s when the draft changed since it was opened.
+  return apiFetch<DocumentRow>(`/api/documents/${id}/content`, {
+    method: 'PUT',
+    body: JSON.stringify({ html, expected_sha256: expectedSha256 }),
+  })
+}
+
+/** The next revision of `code` as a DRAFT; title and description are inherited. */
+export function createDocumentRevision(
+  code: string,
+  html: string,
+  author?: string
+): Promise<DocumentRow> {
+  return apiFetch<DocumentRow>('/api/documents', {
+    method: 'POST',
+    body: JSON.stringify({ code, html, activate: false, author }),
+  })
+}
+
 export function activateDocument(id: number): Promise<DocumentRow> {
   return apiFetch<DocumentRow>(`/api/documents/${id}/activate`, {
     method: 'POST',

@@ -3,7 +3,10 @@
  * the injection block, the bridge script tag, the theme stamp, and the editable
  * attribute. The bridge strips its own overlay nodes and minted heading ids;
  * both sides strip so a miss on one side cannot leak viewer markup into a revision.
+ * It also restores any author CSP `<meta>` the viewer neutralized for display.
  */
+import { META_CSP_PLACEHOLDER, META_CSP_RE } from '@/vendor/plannotator/srcdoc'
+
 export const INJECT_OPEN = '<!--pn-inject-->'
 export const INJECT_CLOSE = '<!--/pn-inject-->'
 const BRIDGE_SCRIPT_TAG =
@@ -38,5 +41,26 @@ export function stripViewerInjection(html: string, original: string): string {
   })
   // Only the <body> start tag: the sole element the viewer makes editable.
   out = out.replace(BODY_TAG, tag => tag.replace(CONTENTEDITABLE_ATTR, ''))
+  // Every placeholder in the output, in document order, is either an author
+  // CSP tag the viewer swapped out or an author's own literal placeholder
+  // text; both come back from the original bytes, and a placeholder with no
+  // original left is dropped. Split, not a replace string, so `$&` in an
+  // author policy is never expanded.
+  const restore = cspRestoreList(original)
   return out
+    .split(META_CSP_PLACEHOLDER)
+    .reduce((acc, part, k) => acc + (restore[k - 1] ?? '') + part)
+}
+
+function cspRestoreList(original: string): string[] {
+  const found: [number, string][] = [...original.matchAll(META_CSP_RE)].map(
+    m => [m.index, m[0]]
+  )
+  for (
+    let at = original.indexOf(META_CSP_PLACEHOLDER);
+    at !== -1;
+    at = original.indexOf(META_CSP_PLACEHOLDER, at + 1)
+  )
+    found.push([at, META_CSP_PLACEHOLDER])
+  return found.sort((a, b) => a[0] - b[0]).map(f => f[1])
 }

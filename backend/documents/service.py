@@ -557,3 +557,43 @@ def list_documents(db: Session, *, q: Optional[str] = None, category_id: Optiona
 
 def read_content(doc: Document) -> bytes:
     return get_storage().fetch(doc.storage_key)
+
+
+def replace_draft_content(db: Session, doc_id: int, *, html, updated_by: Optional[str],
+                          expected_sha256: Optional[str] = None) -> tuple[Document, bool]:
+    """In-place content replace for a DRAFT only (spec §10.3). Anything that was
+    ever active is immutable: an edit to it is a new revision through
+    create_document. Blob ordering mirrors delete_document: write the new
+    bytes, commit the row, THEN best-effort delete the old blob, so a failed
+    delete leaves an orphan and never a row pointing at missing bytes."""
+    doc = get_document(db, doc_id)
+    if doc.status != "draft":
+        raise ConflictError(
+            f"only a draft takes in-place content (this revision is {doc.status}); "
+            f"save it as a new revision instead")
+    dependent = db.execute(
+        select(Document.id).where(Document.supersedes_id == doc.id).limit(1)
+    ).scalar_one_or_none()
+    if dependent is not None:
+        raise ConflictError(f"revision {doc.id} is superseded by {dependent}; edit that one")
+    data = validate_html(html)
+    sha = hashlib.sha256(data).hexdigest()
+    if sha == doc.content_sha256:
+        return doc, False  # before the hash check: a retried PUT that already landed is a 200
+    if expected_sha256 is not None and expected_sha256 != doc.content_sha256:
+        raise ConflictError("this draft changed since you opened it; reload and edit again")
+    old_key = doc.storage_key
+    doc.storage_key = get_storage().save(doc.code, doc.revision, data)
+    doc.size_bytes = len(data)
+    doc.content_sha256 = sha
+    if updated_by:
+        doc.updated_by = updated_by
+    doc.updated_at = datetime.utcnow()
+    db.commit()
+    db.refresh(doc)
+    if old_key != doc.storage_key:
+        try:
+            get_storage().delete(old_key)
+        except Exception as e:  # noqa: BLE001
+            logging.getLogger(__name__).warning("documents blob orphaned key=%s err=%s", old_key, e)
+    return doc, True

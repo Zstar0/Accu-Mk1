@@ -9,6 +9,7 @@ import {
 import {
   ArrowLeft,
   Download,
+  FilePenLine,
   Loader2,
   MessageSquareText,
   MousePointerClick,
@@ -26,9 +27,16 @@ import {
 } from '@/components/ui/select'
 import { useTheme } from '@/hooks/use-theme'
 import { useAuthStore } from '@/store/auth-store'
+import { displayName } from '@/lib/user-display'
 import { useUIStore } from '@/store/ui-store'
 import { EntityFlagButton } from '@/components/flags/EntityFlagButton'
-import { useDocument, useDocumentContent } from '@/services/documents'
+import {
+  useCreateRevision,
+  useDocument,
+  documentKeys,
+  useDocumentContent,
+  useReplaceDraftContent,
+} from '@/services/documents'
 import {
   DOC_STATUS_LABEL,
   documentDownloadName,
@@ -36,6 +44,7 @@ import {
   resolveDocTheme,
 } from '@/components/documents/documents-utils'
 import { RetitleDialog } from '@/components/documents/RetitleDialog'
+import { useQueryClient } from '@tanstack/react-query'
 import { toast } from 'sonner'
 import { ToggleGroup, ToggleGroupItem } from '@/components/ui/toggle-group'
 import {
@@ -53,6 +62,7 @@ import {
   useCommentLabels,
   useCreateComment,
   useDocumentComments,
+  useSetCommentStatus,
 } from '@/services/document-comments'
 import {
   buildViewerSrcDoc,
@@ -70,6 +80,8 @@ import {
   type ComposerMode,
 } from './annotations/CommentComposer'
 import { CommentsPanel } from './annotations/CommentsPanel'
+import { EditModeBar } from './annotations/EditModeBar'
+import { stripViewerInjection } from './annotations/stripViewerInjection'
 
 /**
  * Renders one revision inside a sandboxed frame (spec §8.3). `srcdoc` +
@@ -97,17 +109,31 @@ export function usePrefersDark(): boolean {
   )
 }
 
+const SCRIPT_SAVE_CONFIRM =
+  'This document runs scripts; the saved copy captures the rendered page, including anything the scripts built. Save anyway?'
+
 export function DocumentViewer({ id }: { id: number }) {
   const clear = useUIStore(s => s.clearDocumentViewer)
   const navigateToDocument = useUIStore(s => s.navigateToDocument)
   const isAdmin = useAuthStore(s => s.user?.role === 'admin')
   const { theme } = useTheme()
-  const [editing, setEditing] = useState(false)
+  const [retitling, setRetitling] = useState(false)
 
   const detail = useDocument(id)
-  const content = useDocumentContent(id)
+  // Edit mode freezes the content hash next to the theme: the PUT carries the
+  // hash of the bytes the admin opened, and a detail refetch mid-edit cannot
+  // swap (and remount) the frame.
+  const [frozenSha, setFrozenSha] = useState<string | null>(null)
+  const content = useDocumentContent(
+    id,
+    frozenSha ?? detail.data?.content_sha256
+  )
 
   const mode = resolveDocTheme(theme, usePrefersDark())
+  // Edit mode freezes the frame's theme: a flip would rebuild srcDoc and
+  // reload the frame, discarding unsaved edits.
+  const [frozenMode, setFrozenMode] = useState<typeof mode | null>(null)
+  const frameMode = frozenMode ?? mode
   const doc = detail.data
   const user = useAuthStore(s => s.user)
   const iframeRef = useRef<HTMLIFrameElement>(null)
@@ -150,9 +176,9 @@ export function DocumentViewer({ id }: { id: number }) {
   const srcDoc = useMemo(
     () =>
       content.data
-        ? buildViewerSrcDoc(content.data, mode, readThemeTokens())
+        ? buildViewerSrcDoc(content.data, frameMode, readThemeTokens())
         : '',
-    [content.data, mode]
+    [content.data, frameMode]
   )
 
   // Only OPEN comments carry marks; resolved ones stay in the panel under the filter.
@@ -179,12 +205,108 @@ export function DocumentViewer({ id }: { id: number }) {
     [comments]
   )
 
+  const [editMode, setEditMode] = useState(false)
+  const [saving, setSaving] = useState(false)
+  // Set once a new revision exists and until the viewer has moved to it, so
+  // nobody re-enters edit mode on the revision being left.
+  const [navigating, setNavigating] = useState(false)
+  const scriptsConfirmed = useRef(false)
+  // Bumped per edit session; a save that resolves after the admin cancelled
+  // and started again must not touch the newer session.
+  const editGen = useRef(0)
+  const [frameKey, setFrameKey] = useState(0)
+  // The parent saves only what it asked for: a document's own scripts can
+  // post a forged `serialized` message from inside the sandbox.
+  const saveRequest = useRef<
+    null | { kind: 'save' } | { kind: 'apply'; id: number }
+  >(null)
+  const inFlight = useRef(false)
+  const queryClient = useQueryClient()
+  const replaceContent = useReplaceDraftContent()
+  const createRevision = useCreateRevision()
+  const setCommentStatus = useSetCommentStatus(id)
+
+  // A new revision is minted on top of the code's LATEST row, so editing an
+  // older one would fork the chain. Highest revision number wins, then id.
+  const latestId = doc?.revisions.length
+    ? doc.revisions.reduce((a, r) =>
+        r.revision > a.revision || (r.revision === a.revision && r.id > a.id)
+          ? r
+          : a
+      ).id
+    : doc?.id
+  const isLatest = !doc || latestId === doc.id
+  const editBlocked = !isLatest
+    ? 'A newer revision exists; edit that one'
+    : navigating
+      ? 'Opening the new revision'
+      : undefined
+
+  const guardLeave = () => !editMode || window.confirm('Discard unsaved edits?')
+  useEffect(() => {
+    if (!editMode) return
+    const onUnload = (e: BeforeUnloadEvent) => {
+      e.preventDefault()
+      e.returnValue = ''
+    }
+    window.addEventListener('beforeunload', onUnload)
+    return () => window.removeEventListener('beforeunload', onUnload)
+  }, [editMode])
+
+  const saveSerialized = async (
+    html: string
+  ): Promise<{ ok: boolean; createdId?: number }> => {
+    if (!doc || !content.data) {
+      inFlight.current = false
+      setSaving(false)
+      return { ok: false }
+    }
+    const clean = stripViewerInjection(html, content.data)
+    const gen = editGen.current
+    const stale = () => gen !== editGen.current
+    try {
+      if (doc.status === 'draft') {
+        const row = await replaceContent.mutateAsync({
+          id: doc.id,
+          html: clean,
+          expectedSha256: frozenSha ?? doc.content_sha256,
+        })
+        if (stale()) return { ok: false }
+        exitEdit()
+        queryClient.setQueryData(
+          documentKeys.content(doc.id, row.content_sha256),
+          clean
+        )
+        setFrameKey(k => k + 1)
+      } else {
+        const created = await createRevision.mutateAsync({
+          code: doc.code,
+          html: clean,
+          author: user ? displayName(user) : undefined,
+        })
+        if (stale()) return { ok: false }
+        setNavigating(true)
+        exitEdit()
+        return { ok: true, createdId: created.id }
+      }
+      return { ok: true }
+    } catch {
+      return { ok: false }
+    } finally {
+      // A stale save's flags belong to the newer session; leave them.
+      if (!stale()) {
+        inFlight.current = false
+        setSaving(false)
+      }
+    }
+  }
+
   const bridge = useDocumentBridge({
     iframeRef,
-    documentKey: `${id}:${mode}`,
+    documentKey: `${id}:${frameMode}:${frameKey}`,
     comments: bridgeComments,
     inputMethod,
-    annotateActive: true,
+    annotateActive: !editMode,
     onSelection: s => {
       setSelection(s)
       // A global composer keeps its draft when the frame clears its selection.
@@ -195,7 +317,91 @@ export function DocumentViewer({ id }: { id: number }) {
       setSelectedId(markId)
       setPanelOpen(true)
     },
+    onSerialized: (html, appliedId) => {
+      const request = saveRequest.current
+      saveRequest.current = null
+      if (!request) {
+        console.warn('ignored unsolicited serialized message')
+        return
+      }
+      // Resolve BEFORE navigating, so the new revision's first comments
+      // fetch cannot read pre-resolve state.
+      void saveSerialized(html).then(async r => {
+        if (!r.ok) return
+        if (
+          request.kind === 'apply' &&
+          appliedId &&
+          String(request.id) === appliedId
+        ) {
+          try {
+            await setCommentStatus.mutateAsync({
+              id: request.id,
+              status: 'resolved',
+            })
+          } catch {
+            /* the hook already toasts */
+          }
+        }
+        if (r.createdId != null) {
+          navigateToDocument(r.createdId)
+          setNavigating(false)
+        }
+      })
+    },
+    onApplyFailed: failedId => {
+      // Honour it only for the apply we asked for; a document script can
+      // forge this message too.
+      const request = saveRequest.current
+      if (request?.kind !== 'apply' || String(request.id) !== failedId) {
+        console.warn('ignored unsolicited apply-failed message')
+        return
+      }
+      saveRequest.current = null
+      inFlight.current = false
+      setSaving(false)
+      toast.error('That suggestion lost its place in this revision')
+    },
   })
+
+  const enterEdit = () => {
+    editGen.current += 1
+    // Anything still pending belongs to the previous session.
+    saveRequest.current = null
+    inFlight.current = false
+    setSaving(false)
+    setFrozenMode(mode)
+    setFrozenSha(doc?.content_sha256 ?? null)
+    scriptsConfirmed.current = false
+    setEditMode(true)
+    setSelection(null)
+    setComposer(null)
+    bridge.setEditMode(true)
+  }
+  // Also the escape hatch for a frame that never answers `serialize`.
+  function exitEdit() {
+    saveRequest.current = null
+    inFlight.current = false
+    setSaving(false)
+    setFrozenMode(null)
+    setFrozenSha(null)
+    scriptsConfirmed.current = false
+    setEditMode(false)
+    bridge.setEditMode(false)
+  }
+  // Serialize captures the rendered page, including DOM the document's own
+  // scripts built; say so once per edit session (each Apply outside edit
+  // mode is its own session).
+  const confirmScripts = () => {
+    if (scriptsConfirmed.current || !/<script\b/i.test(content.data ?? ''))
+      return true
+    if (!window.confirm(SCRIPT_SAVE_CONFIRM)) return false
+    if (editMode) scriptsConfirmed.current = true
+    return true
+  }
+  const cancelEdit = () => {
+    exitEdit()
+    setFrameKey(k => k + 1)
+  }
 
   // The iframe is the stage's first child, so frame coords are stage coords.
   const stageRect = selection?.rect ?? null
@@ -271,6 +477,16 @@ export function DocumentViewer({ id }: { id: number }) {
       onNavigateHeading={bridge.scrollToFragment}
       me={user ? { id: user.id } : null}
       isAdmin={isAdmin}
+      applyBlocked={editBlocked}
+      onApply={c => {
+        if (!c.suggested_text || editBlocked) return
+        if (inFlight.current || saveRequest.current) return
+        if (!confirmScripts()) return
+        inFlight.current = true
+        setSaving(true)
+        saveRequest.current = { kind: 'apply', id: c.id }
+        bridge.applyReplacement(String(c.id), c.suggested_text)
+      }}
     />
   )
 
@@ -291,7 +507,13 @@ export function DocumentViewer({ id }: { id: number }) {
   return (
     <div className="flex h-full flex-col">
       <div className="flex flex-wrap items-center gap-2 border-b px-4 py-2">
-        <Button variant="ghost" size="sm" onClick={clear}>
+        <Button
+          variant="ghost"
+          size="sm"
+          onClick={() => {
+            if (guardLeave()) clear()
+          }}
+        >
           <ArrowLeft className="mr-1 h-4 w-4" />
           Documents
         </Button>
@@ -353,7 +575,9 @@ export function DocumentViewer({ id }: { id: number }) {
               {doc.revisions.length > 1 && (
                 <Select
                   value={String(doc.id)}
-                  onValueChange={v => navigateToDocument(Number(v))}
+                  onValueChange={v => {
+                    if (guardLeave()) navigateToDocument(Number(v))
+                  }}
                 >
                   <SelectTrigger
                     id="document-revision"
@@ -384,7 +608,32 @@ export function DocumentViewer({ id }: { id: number }) {
                 <Button
                   variant="outline"
                   size="sm"
-                  onClick={() => setEditing(true)}
+                  disabled={
+                    bridge.status !== 'ready' || editMode || !!editBlocked
+                  }
+                  title={editBlocked}
+                  onClick={enterEdit}
+                >
+                  <FilePenLine className="mr-1 h-4 w-4" />
+                  Edit
+                </Button>
+              )}
+              {isAdmin && !isLatest && latestId != null && (
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  onClick={() => {
+                    if (guardLeave()) navigateToDocument(latestId)
+                  }}
+                >
+                  Newest revision
+                </Button>
+              )}
+              {isAdmin && (
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => setRetitling(true)}
                 >
                   <Pencil className="mr-1 h-4 w-4" />
                   Edit details
@@ -394,6 +643,21 @@ export function DocumentViewer({ id }: { id: number }) {
           </>
         )}
       </div>
+
+      {editMode && (
+        <EditModeBar
+          saving={saving}
+          onSave={() => {
+            if (inFlight.current || saveRequest.current) return
+            if (!confirmScripts()) return
+            inFlight.current = true
+            setSaving(true)
+            saveRequest.current = { kind: 'save' }
+            bridge.serialize()
+          }}
+          onCancel={cancelEdit}
+        />
+      )}
 
       {(detail.error || content.error) && (
         <p className="px-4 py-3 text-sm text-destructive">
@@ -438,6 +702,7 @@ export function DocumentViewer({ id }: { id: number }) {
                 )}
                 <div className="relative min-h-0 flex-1">
                   <iframe
+                    key={frameKey}
                     ref={iframeRef}
                     title={doc?.title ?? `Document ${id}`}
                     sandbox="allow-scripts"
@@ -517,7 +782,7 @@ export function DocumentViewer({ id }: { id: number }) {
       )}
 
       {doc && (
-        <RetitleDialog doc={doc} open={editing} onOpenChange={setEditing} />
+        <RetitleDialog doc={doc} open={retitling} onOpenChange={setRetitling} />
       )}
     </div>
   )

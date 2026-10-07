@@ -18,7 +18,8 @@ from database import get_db
 from documents import comments, service
 from documents.errors import BadRequestError, ConflictError, ForbiddenError, NotFoundError
 from documents.models import Document, DocumentCategory
-from documents.schemas import (CategoryCreate, CategoryOut, CategoryUpdate, DocumentCreate,
+from documents.schemas import (CategoryCreate, CategoryOut, CategoryUpdate, DocumentContentReplace,
+                               DocumentCreate,
                                DocumentDetail, DocumentListOut, DocumentOut, DocumentPatch)
 from documents.storage import DocumentNotFound
 
@@ -97,6 +98,21 @@ def require_document_admin_writer(writer=Depends(require_document_writer)):
         raise HTTPException(status.HTTP_403_FORBIDDEN,
                             "agent tokens cannot delete documents or manage categories")
     return writer
+
+
+def require_document_admin_user(
+    x_service_token: Optional[str] = Header(None),
+    token: Optional[str] = Depends(_optional_bearer),
+    db: Session = Depends(get_db),
+):
+    """Content edits are a human path (spec §10): an admin LOGIN only. Agents
+    revise through POST /documents; the service token has no author."""
+    if x_service_token is not None:
+        raise HTTPException(status.HTTP_403_FORBIDDEN,
+                            "content edits need an admin login, not a service or agent token")
+    if not token:
+        raise HTTPException(status.HTTP_401_UNAUTHORIZED, "authentication required")
+    return require_admin(get_current_user(token=token, db=db))
 
 
 def _audit(writer, action: str, doc: Document) -> None:
@@ -213,8 +229,9 @@ def get_document(doc_id: int, db: Session = Depends(get_db), user=Depends(get_cu
     except Exception as e:
         raise _http(e)
     n = len(revisions)
-    out = _doc_out(doc, n, counts.get(doc.code, 0))
-    return DocumentDetail(**out.model_dump(), revisions=[_doc_out(r, n) for r in revisions])
+    open_n = counts.get(doc.code, 0)  # comments live on the code, so every revision shares it
+    out = _doc_out(doc, n, open_n)
+    return DocumentDetail(**out.model_dump(), revisions=[_doc_out(r, n, open_n) for r in revisions])
 
 
 @router.get("/documents/{doc_id}/content")
@@ -287,6 +304,23 @@ def activate_document(doc_id: int, db: Session = Depends(get_db),
     except Exception as e:
         raise _http(e)
     _audit(writer, "activate", doc)
+    return _doc_out(doc, n)
+
+
+@router.put("/documents/{doc_id}/content", response_model=DocumentOut)
+def replace_document_content(doc_id: int, req: DocumentContentReplace,
+                             db: Session = Depends(get_db),
+                             admin=Depends(require_document_admin_user)):
+    try:
+        doc, changed = service.replace_draft_content(db, doc_id, html=req.html,
+                                                     updated_by=admin.email,
+                                                     expected_sha256=req.expected_sha256)
+        n = service.revision_count(db, doc.code)
+    except Exception as e:
+        raise _http(e)
+    if changed:
+        logger.info("documents.content_replaced id=%s code=%s r%s by=%s", doc.id, doc.code,
+                    doc.revision, admin.email)
     return _doc_out(doc, n)
 
 

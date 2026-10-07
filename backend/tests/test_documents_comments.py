@@ -157,6 +157,15 @@ def test_open_comment_count_rides_document_detail_and_list(client):
     items = client.get("/api/documents").json()["items"]
     assert [i["open_comment_count"] for i in items if i["code"] == doc["code"]] == [2]
 
+
+def test_nested_revisions_carry_the_codes_open_comment_count(client):
+    doc = publish(client)
+    publish(client, code=doc["code"], html=HTML.replace("Audit", "draft"), activate=False)
+    comment(client, doc["id"])
+    detail = client.get(f"/api/documents/{doc['id']}").json()
+    assert detail["open_comment_count"] == 1
+    assert [r["open_comment_count"] for r in detail["revisions"]] == [1, 1]
+
 def test_discarding_a_draft_takes_its_comments(client):
     r1 = publish(client)
     draft = publish(client, code=r1["code"], html=HTML.replace("Audit", "draft"), activate=False)

@@ -44,6 +44,8 @@ vi.mock('@/services/documents', () => ({
   }),
   useDocumentCategories: () => ({ data: [] }), // RetitleDialog
   usePatchDocument: () => ({ mutate: vi.fn(), isPending: false }),
+  useReplaceDraftContent: () => ({ mutateAsync: vi.fn() }),
+  useCreateRevision: () => ({ mutateAsync: vi.fn() }),
   documentKeys: {
     detail: (id: number) => ['documents', 'detail', id],
     lists: ['documents', 'list'],

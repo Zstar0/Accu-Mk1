@@ -31,6 +31,14 @@ export function SelectionToolbar({
 }: Props) {
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
+      // Typing into any field (a reply box, a dialog) is never a shortcut.
+      if (
+        e.target instanceof Element &&
+        e.target.closest(
+          'input, textarea, select, [contenteditable]:not([contenteditable="false"])'
+        )
+      )
+        return
       if (e.ctrlKey || e.metaKey || e.altKey) return
       if (!/^[0-9]$/.test(e.key)) return
       const i = e.key === '0' ? 9 : Number(e.key) - 1
