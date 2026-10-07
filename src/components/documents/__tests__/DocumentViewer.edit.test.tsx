@@ -32,6 +32,7 @@ vi.mock('@/hooks/use-theme', () => ({
 }))
 
 vi.mock('@/services/documents', () => ({
+  useDocumentSpaces: () => ({ data: [], isLoading: false }),
   useDocument: () => ({
     data: {
       id: viewedId,

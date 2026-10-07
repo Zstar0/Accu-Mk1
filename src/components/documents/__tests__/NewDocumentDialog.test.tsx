@@ -8,6 +8,7 @@ const openForEditing = vi.hoisted(() => vi.fn())
 const navigate = vi.hoisted(() => vi.fn())
 
 vi.mock('@/services/documents', () => ({
+  useDocumentSpaces: () => ({ data: [], isLoading: false }),
   useDocumentCategories: () => ({
     data: [
       { id: 3, name: 'Artifacts', code_prefix: 'ART', active: true },
