@@ -37,10 +37,10 @@ vi.mock('@/store/ui-store', () => ({
     }),
 }))
 
-function renderDialog(onOpenChange = vi.fn()) {
+function renderDialog(onOpenChange = vi.fn(), space?: string) {
   render(
     <QueryClientProvider client={new QueryClient()}>
-      <NewDocumentDialog open onOpenChange={onOpenChange} />
+      <NewDocumentDialog open onOpenChange={onOpenChange} space={space} />
     </QueryClientProvider>
   )
   return onOpenChange
@@ -137,5 +137,15 @@ describe('NewDocumentDialog', () => {
     const body = createMutate.mock.calls[0]?.[0] as Record<string, unknown>
     expect(body.description).toBe('why')
     expect(body.effective_date).toBe('2026-10-05')
+    expect('space' in body).toBe(false)
+  })
+
+  it('publishes into the space being browsed', async () => {
+    renderDialog(vi.fn(), 'leadership')
+    fireEvent.change(screen.getByLabelText('Title'), { target: { value: 'T' } })
+    fireEvent.click(createButton())
+    await waitFor(() => expect(createMutate).toHaveBeenCalledTimes(1))
+    const body = createMutate.mock.calls[0]?.[0] as Record<string, unknown>
+    expect(body.space).toBe('leadership')
   })
 })

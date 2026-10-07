@@ -286,6 +286,8 @@ export interface DocumentCreate {
   description?: string | null
   effective_date?: string | null
   author?: string
+  /** Space slug; omitted = General. */
+  space?: string
 }
 
 /** A brand-new controlled document, born as a DRAFT; the server mints the code. */

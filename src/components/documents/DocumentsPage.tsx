@@ -350,7 +350,11 @@ function DocumentsList({ spaceSlug }: { spaceSlug: string }) {
         </div>
       </div>
       {isAdmin && (
-        <NewDocumentDialog open={newOpen} onOpenChange={setNewOpen} />
+        <NewDocumentDialog
+          open={newOpen}
+          onOpenChange={setNewOpen}
+          space={spaceSlug}
+        />
       )}
 
       <div className="flex flex-wrap items-center gap-2">
