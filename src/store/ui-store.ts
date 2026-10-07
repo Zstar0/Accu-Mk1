@@ -124,6 +124,9 @@ interface UIState {
   // customerDetailTargetId; generic navigateTo clears it so the sidebar
   // entry always lands on the list.
   documentViewerTargetId: number | null
+  // One-shot: the viewer enters edit mode on arrival (New document dialog).
+  // Consumed by the viewer; any other navigation drops it.
+  documentViewerEditRequested: boolean
   // Planning boards (slice 3): sticky like documentViewerTargetId, cleared by
   // the generic navigateTo. pendingBoardNode is consume-once: the canvas
   // reads it via consumePendingBoardNode() to focus/select a node on arrival.
@@ -177,6 +180,8 @@ interface UIState {
    *  sets customerDetailKey. */
   navigateToCustomerKey: (key: string) => void
   navigateToDocument: (id: number) => void
+  openDocumentForEditing: (id: number) => void
+  consumeDocumentEditRequest: () => void
   clearDocumentViewer: () => void
   navigateToBoards: () => void
   navigateToBoard: (slug: string) => void
@@ -295,6 +300,7 @@ export const useUIStore = create<UIState>()(
       customerDetailTargetId: null,
       customerDetailKey: null,
       documentViewerTargetId: null,
+      documentViewerEditRequested: false,
       boardTargetSlug: null,
       pendingBoardNode: null,
       customerListPage: 0,
@@ -386,6 +392,7 @@ export const useUIStore = create<UIState>()(
             activeSection: section,
             activeSubSection: subSection,
             documentViewerTargetId: null,
+            documentViewerEditRequested: false,
             boardTargetSlug: null,
             navigationKey: state.navigationKey + 1,
           }),
@@ -447,14 +454,39 @@ export const useUIStore = create<UIState>()(
             activeSection: 'reports',
             activeSubSection: 'documents',
             documentViewerTargetId: id,
+            documentViewerEditRequested: false,
             navigationKey: state.navigationKey + 1,
           }),
           undefined,
           'navigateToDocument'
         ),
 
+      openDocumentForEditing: id =>
+        set(
+          state => ({
+            activeSection: 'reports',
+            activeSubSection: 'documents',
+            documentViewerTargetId: id,
+            documentViewerEditRequested: true,
+            navigationKey: state.navigationKey + 1,
+          }),
+          undefined,
+          'openDocumentForEditing'
+        ),
+
+      consumeDocumentEditRequest: () =>
+        set(
+          { documentViewerEditRequested: false },
+          undefined,
+          'consumeDocumentEditRequest'
+        ),
+
       clearDocumentViewer: () =>
-        set({ documentViewerTargetId: null }, undefined, 'clearDocumentViewer'),
+        set(
+          { documentViewerTargetId: null, documentViewerEditRequested: false },
+          undefined,
+          'clearDocumentViewer'
+        ),
 
       navigateToBoards: () =>
         set(

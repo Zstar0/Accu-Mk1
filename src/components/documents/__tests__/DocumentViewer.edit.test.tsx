@@ -14,6 +14,8 @@ const createRev = vi.hoisted(() => vi.fn())
 const navigate = vi.hoisted(() => vi.fn())
 const clear = vi.hoisted(() => vi.fn())
 const setStatus = vi.hoisted(() => vi.fn())
+const consumeEdit = vi.hoisted(() => vi.fn())
+const editReq = vi.hoisted(() => ({ value: false }))
 const toastError = vi.hoisted(() => vi.fn())
 let docStatus = 'draft'
 let viewedId = 10
@@ -124,7 +126,12 @@ vi.mock('@/store/auth-store', () => ({
 }))
 vi.mock('@/store/ui-store', () => ({
   useUIStore: (sel: (s: unknown) => unknown) =>
-    sel({ clearDocumentViewer: clear, navigateToDocument: navigate }),
+    sel({
+      clearDocumentViewer: clear,
+      navigateToDocument: navigate,
+      documentViewerEditRequested: editReq.value,
+      consumeDocumentEditRequest: consumeEdit,
+    }),
 }))
 
 function frameSays(data: unknown) {
@@ -168,12 +175,23 @@ describe('DocumentViewer edit mode', { timeout: 20_000 }, () => {
     clear.mockReset()
     setStatus.mockReset().mockResolvedValue({})
     toastError.mockReset()
+    consumeEdit.mockReset()
+    editReq.value = false
     docStatus = 'draft'
     viewedId = 10
     contentHtml = '<html><head></head><body><p>hi</p></body></html>'
     themeValue = 'light'
     docSha = 'sha-10'
     contentCalls = []
+  })
+
+  it('a pending open-in-edit request enters edit mode once the bridge is ready, then is consumed', async () => {
+    editReq.value = true
+    await renderViewer({ waitEnabled: false })
+    await waitFor(() =>
+      expect(screen.getByText('Editing · unsaved')).toBeInTheDocument()
+    )
+    expect(consumeEdit).toHaveBeenCalledTimes(1)
   })
 
   it('Save on a draft PUTs the stripped html in place', async () => {

@@ -115,6 +115,9 @@ const SCRIPT_SAVE_CONFIRM =
 export function DocumentViewer({ id }: { id: number }) {
   const clear = useUIStore(s => s.clearDocumentViewer)
   const navigateToDocument = useUIStore(s => s.navigateToDocument)
+  const editRequested = useUIStore(s => s.documentViewerEditRequested)
+  const consumeEditRequest = useUIStore(s => s.consumeDocumentEditRequest)
+  const editRequestHandled = useRef(false)
   const isAdmin = useAuthStore(s => s.user?.role === 'admin')
   const { theme } = useTheme()
   const [retitling, setRetitling] = useState(false)
@@ -388,6 +391,18 @@ export function DocumentViewer({ id }: { id: number }) {
     setEditMode(false)
     bridge.setEditMode(false)
   }
+  // The New document dialog asks for edit mode on arrival. One shot: consumed
+  // once the frame is ready, whether or not this user may edit here.
+  useEffect(() => {
+    if (!editRequested) {
+      editRequestHandled.current = false
+      return
+    }
+    if (editRequestHandled.current || !doc || bridge.status !== 'ready') return
+    editRequestHandled.current = true
+    consumeEditRequest()
+    if (isAdmin && !editMode && !editBlocked) enterEdit()
+  })
   // Serialize captures the rendered page, including DOM the document's own
   // scripts built; say so once per edit session (each Apply outside edit
   // mode is its own session).

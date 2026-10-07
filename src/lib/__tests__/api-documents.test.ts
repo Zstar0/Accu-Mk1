@@ -27,3 +27,31 @@ describe('api-documents replaceDraftContent', () => {
     })
   })
 })
+
+describe('api-documents createDocument', () => {
+  beforeEach(() => apiFetch.mockReset().mockResolvedValue({ id: 7 }))
+
+  it('POSTs a new DRAFT with the fields the dialog collects', async () => {
+    const { createDocument } = await import('@/lib/api-documents')
+    await createDocument({
+      title: 'T',
+      html: '<p>x</p>',
+      category_id: 3,
+      description: null,
+      effective_date: null,
+      author: 'Forrest P',
+    })
+    expect(apiFetch).toHaveBeenCalledWith('/api/documents', {
+      method: 'POST',
+      body: JSON.stringify({
+        title: 'T',
+        html: '<p>x</p>',
+        category_id: 3,
+        description: null,
+        effective_date: null,
+        author: 'Forrest P',
+        activate: false,
+      }),
+    })
+  })
+})

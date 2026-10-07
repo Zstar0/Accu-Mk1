@@ -8,6 +8,7 @@ import {
   useQueryClient,
 } from '@tanstack/react-query'
 import { toast } from 'sonner'
+import type { DocumentCreate } from '@/lib/api-documents'
 import {
   createDocumentCategory,
   createDocumentRevision,
@@ -23,6 +24,7 @@ import {
   type DocumentCategoryUpdate,
   type DocumentDetail,
   type DocumentPatch,
+  createDocument,
 } from '@/lib/api-documents'
 import type { DocumentListParams } from '@/components/documents/documents-utils'
 
@@ -106,6 +108,18 @@ export function useReplaceDraftContent() {
       qc.invalidateQueries({ queryKey: documentKeys.detail(id) })
       qc.invalidateQueries({ queryKey: documentKeys.lists })
       toast.success('Draft updated')
+    },
+    onError: (e: Error) => toast.error(e.message),
+  })
+}
+
+export function useCreateDocument() {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: (body: DocumentCreate) => createDocument(body),
+    onSuccess: row => {
+      qc.invalidateQueries({ queryKey: documentKeys.lists })
+      toast.success(`Created ${row.code} as a draft`)
     },
     onError: (e: Error) => toast.error(e.message),
   })
