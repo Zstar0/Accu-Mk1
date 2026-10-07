@@ -13,6 +13,7 @@ export type ActiveSection =
   | 'peptide-requests'
   | 'admin-clickup-users'
   | 'settings'
+  | 'boards'
 
 // Sub-sections within each main section
 export type DashboardSubSection = 'orders' | 'analytics'
@@ -46,6 +47,7 @@ export type AccuMarkToolsSubSection =
   | 'order-explorer'
   | 'order-status'
   | 'customers'
+  | 'customer-insights'
   | 'customer-detail'
   | 'coa-explorer'
   | 'chromatographs'
@@ -63,6 +65,7 @@ export type ReportsSubSection =
   | 'sync-debug'
 export type AccountSubSection = 'profile' | 'user-management'
 export type PeptideRequestsSubSection = 'list' | 'detail'
+export type BoardsSubSection = 'overview' | 'board'
 // Settings panes double as subsections so #settings/<pane> round-trips through
 // the same hash-navigation as every other section.
 export type SettingsSubSection =
@@ -74,6 +77,7 @@ export type SettingsSubSection =
   | 'priorities'
   | 'businessHours'
   | 'flags'
+  | 'groups'
   | 'documents'
   | 'checkIn'
   | 'workflow'
@@ -89,6 +93,7 @@ export type ActiveSubSection =
   | AccountSubSection
   | PeptideRequestsSubSection
   | SettingsSubSection
+  | BoardsSubSection
 
 interface UIState {
   leftSidebarVisible: boolean
@@ -112,6 +117,9 @@ interface UIState {
   analysisServiceTargetId: number | null
   peptideRequestTargetId: string | null
   customerDetailTargetId: number | null
+  // Customer Insights key-based detail for guests ("email:<addr>"). Exactly one
+  // of customerDetailTargetId / customerDetailKey is set while on detail.
+  customerDetailKey: string | null
   // Documents library viewer target (#reports/documents?id=N). Sticky like
   // customerDetailTargetId; generic navigateTo clears it so the sidebar
   // entry always lands on the list.
@@ -119,6 +127,11 @@ interface UIState {
   // One-shot: the viewer enters edit mode on arrival (New document dialog).
   // Consumed by the viewer; any other navigation drops it.
   documentViewerEditRequested: boolean
+  // Planning boards (slice 3): sticky like documentViewerTargetId, cleared by
+  // the generic navigateTo. pendingBoardNode is consume-once: the canvas
+  // reads it via consumePendingBoardNode() to focus/select a node on arrival.
+  boardTargetSlug: string | null
+  pendingBoardNode: string | null
   customerListPage: number
   customerSearchTerm: string
   hideTestAccounts: boolean
@@ -162,10 +175,19 @@ interface UIState {
   navigateToAnalysisService: (serviceId: number) => void
   navigateToPeptideRequest: (requestId: string) => void
   navigateToCustomer: (id: number) => void
+  /** Open a customer by insights key on the Dashboard tab. "wc:<id>" keys
+   *  route through the numeric id flow; anything else (guest "email:")
+   *  sets customerDetailKey. */
+  navigateToCustomerKey: (key: string) => void
   navigateToDocument: (id: number) => void
   openDocumentForEditing: (id: number) => void
   consumeDocumentEditRequest: () => void
   clearDocumentViewer: () => void
+  navigateToBoards: () => void
+  navigateToBoard: (slug: string) => void
+  navigateToBoardNode: (slug: string, nodeId: string) => void
+  setPendingBoardNode: (nodeId: string | null) => void
+  consumePendingBoardNode: () => string | null
   navigateToCustomers: () => void
   /** Order Status with ONLY the Order ID text filter set (other text axes
    *  cleared by the page so the result is unambiguous). */
@@ -276,8 +298,11 @@ export const useUIStore = create<UIState>()(
       analysisServiceTargetId: null,
       peptideRequestTargetId: null,
       customerDetailTargetId: null,
+      customerDetailKey: null,
       documentViewerTargetId: null,
       documentViewerEditRequested: false,
+      boardTargetSlug: null,
+      pendingBoardNode: null,
       customerListPage: 0,
       customerSearchTerm: '',
       hideTestAccounts: true,
@@ -368,6 +393,7 @@ export const useUIStore = create<UIState>()(
             activeSubSection: subSection,
             documentViewerTargetId: null,
             documentViewerEditRequested: false,
+            boardTargetSlug: null,
             navigationKey: state.navigationKey + 1,
           }),
           undefined,
@@ -462,6 +488,55 @@ export const useUIStore = create<UIState>()(
           'clearDocumentViewer'
         ),
 
+      navigateToBoards: () =>
+        set(
+          state => ({
+            activeSection: 'boards',
+            activeSubSection: 'overview',
+            boardTargetSlug: null,
+            pendingBoardNode: null,
+            navigationKey: state.navigationKey + 1,
+          }),
+          undefined,
+          'navigateToBoards'
+        ),
+
+      navigateToBoard: slug =>
+        set(
+          state => ({
+            activeSection: 'boards',
+            activeSubSection: 'board',
+            boardTargetSlug: slug,
+            pendingBoardNode: null,
+            navigationKey: state.navigationKey + 1,
+          }),
+          undefined,
+          'navigateToBoard'
+        ),
+
+      navigateToBoardNode: (slug, nodeId) =>
+        set(
+          state => ({
+            activeSection: 'boards',
+            activeSubSection: 'board',
+            boardTargetSlug: slug,
+            pendingBoardNode: nodeId,
+            navigationKey: state.navigationKey + 1,
+          }),
+          undefined,
+          'navigateToBoardNode'
+        ),
+
+      setPendingBoardNode: nodeId =>
+        set({ pendingBoardNode: nodeId }, undefined, 'setPendingBoardNode'),
+
+      consumePendingBoardNode: () => {
+        const id = get().pendingBoardNode
+        if (id != null)
+          set({ pendingBoardNode: null }, undefined, 'consumePendingBoardNode')
+        return id
+      },
+
       navigateToSamplePrep: prepId =>
         set(
           state => ({
@@ -539,11 +614,29 @@ export const useUIStore = create<UIState>()(
             activeSection: 'accumark-tools',
             activeSubSection: 'customer-detail',
             customerDetailTargetId: id,
+            customerDetailKey: null,
             navigationKey: state.navigationKey + 1,
           }),
           undefined,
           'navigateToCustomer'
         ),
+
+      navigateToCustomerKey: key => {
+        const wcId = key.startsWith('wc:') ? Number(key.slice(3)) : NaN
+        const isWc = Number.isInteger(wcId) && wcId > 0
+        set(
+          state => ({
+            activeSection: 'accumark-tools',
+            activeSubSection: 'customer-detail',
+            customerDetailTargetId: isWc ? wcId : null,
+            customerDetailKey: isWc ? null : key,
+            customerDetailTab: 'dashboard',
+            navigationKey: state.navigationKey + 1,
+          }),
+          undefined,
+          'navigateToCustomerKey'
+        )
+      },
 
       // Back-nav from detail view (D-11). Explicitly clears customerDetailTargetId
       // but PRESERVES customerListPage + customerSearchTerm so the user returns
@@ -554,6 +647,7 @@ export const useUIStore = create<UIState>()(
             activeSection: 'accumark-tools',
             activeSubSection: 'customers',
             customerDetailTargetId: null,
+            customerDetailKey: null,
             // Phase 30 (T-30-03): reset customer-detail page state when going
             // back to the list so search/tab state never leaks between
             // customer drill-throughs.

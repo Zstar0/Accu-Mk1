@@ -96,7 +96,8 @@ import { stripViewerInjection } from './annotations/stripViewerInjection'
 /** Live `prefers-color-scheme` so the frame re-stamps when the OS flips while
  *  Mk1 is on 'system'. Server snapshot is `false` — nothing renders this on a
  *  server, it just keeps useSyncExternalStore honest. */
-function usePrefersDark(): boolean {
+// eslint-disable-next-line react-refresh/only-export-components
+export function usePrefersDark(): boolean {
   return useSyncExternalStore(
     cb => {
       const mq = window.matchMedia('(prefers-color-scheme: dark)')

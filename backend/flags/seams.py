@@ -55,6 +55,21 @@ class EntitySpec:
     # resolves to None is refused. Off for the legacy types, which accept ids the
     # registry cannot resolve.
     must_exist: bool = False
+    # --- visibility seams (planning boards, spec 2026-09-26 §6.2, §14) ---------------
+    # can_raise(db, user, entity_id): db-aware replacement for can_flag. When set,
+    # create_flag consults it INSTEAD of can_flag. May raise BadRequestError to answer 400.
+    can_raise: Optional[Callable[[Session, object, str], bool]] = None
+    # can_view(db, user, entity_id): point visibility check. Unset = visible to all staff.
+    can_view: Optional[Callable[[Session, object, str], bool]] = None
+    # visible_entity_ids(db, user): a Select of the entity_ids (as strings) of this type the
+    # user may see, or None meaning "all". Lets list queries stay in SQL.
+    visible_entity_ids: Optional[Callable[[Session, object], Optional[object]]] = None
+    # search_scoped(db, user, q): typeahead that needs the user; preferred over `search`.
+    search_scoped: Optional[Callable[[Session, object, str], list]] = None
+    # audience(db, entity_id) -> Optional[dict]: who may receive LIVE events about flags on
+    # this entity. None = every staff login; {"groups": [ids]} = members of those groups plus
+    # admins. Stamped by the producer (service._audit) so the bus never touches the db.
+    audience: Optional[Callable[[Session, str], Optional[dict]]] = None
 
 
 _REGISTRY: dict[str, EntitySpec] = {}
@@ -62,12 +77,18 @@ _REGISTRY: dict[str, EntitySpec] = {}
 
 def register_entity(entity_type: str, *, label, deep_link, can_flag,
                     context=None, contexts=None, descendants=None, state=None,
-                    search=None, snapshot=None, must_exist=False) -> None:
+                    search=None, snapshot=None, must_exist=False,
+                    can_raise=None, can_view=None, visible_entity_ids=None,
+                    search_scoped=None, audience=None) -> None:
     _REGISTRY[entity_type] = EntitySpec(entity_type, label, deep_link, can_flag,
                                         context=context, contexts=contexts,
                                         descendants=descendants,
                                         state=state, search=search,
-                                        snapshot=snapshot, must_exist=must_exist)
+                                        snapshot=snapshot, must_exist=must_exist,
+                                        can_raise=can_raise, can_view=can_view,
+                                        visible_entity_ids=visible_entity_ids,
+                                        search_scoped=search_scoped,
+                                        audience=audience)
 
 
 def is_registered(entity_type: str) -> bool:
@@ -170,20 +191,111 @@ def resolve_state(db: Session, entity_type: str, entity_id: str) -> Optional[str
         return None
 
 
-def resolve_entity_search(db: Session, entity_type: str, q: str) -> list:
+def resolve_entity_search(db: Session, entity_type: str, q: str, user=None) -> list:
     """Typeahead hits for a registered entity type, as
-    `[{"entity_id": str, "label": str}, …]`. Returns [] for an unregistered
-    type, a type with no `search` resolver, or on resolver error — never raises
-    into a request (mirrors resolve_context/resolve_state; a picker with no
-    results is fine, a 500 is not)."""
+    `[{"entity_id": str, "label": str}, …]`. A type with `search_scoped` is searched with
+    the user (no user -> []); otherwise the legacy `search(db, q)` runs. Returns [] for an
+    unregistered type, no resolver, or resolver error : never raises into a request."""
     spec = _REGISTRY.get(entity_type)
-    if spec is None or spec.search is None:
+    if spec is None:
         return []
     try:
-        rows = spec.search(db, str(q))
-    except Exception:  # noqa: BLE001 — search is best-effort decoration
+        if spec.search_scoped is not None:
+            if user is None:
+                return []
+            rows = spec.search_scoped(db, user, str(q))
+        elif spec.search is not None:
+            rows = spec.search(db, str(q))
+        else:
+            return []
+    except Exception:  # noqa: BLE001 : search is best-effort decoration
         return []
     return list(rows or [])
+
+
+def can_view_entity(db: Session, user, entity_type: str, entity_id) -> bool:
+    """Point visibility check. Types without `can_view` are visible to all staff. A raising
+    closure hides the entity (fail closed), never shows it."""
+    spec = _REGISTRY.get(entity_type)
+    if spec is None or spec.can_view is None:
+        return True
+    try:
+        return bool(spec.can_view(db, user, str(entity_id)))
+    except Exception:  # noqa: BLE001
+        return False
+
+
+def is_view_scoped(entity_type) -> bool:
+    """True when the registered type scopes visibility (has a can_view seam). Legacy types
+    and unregistered names are unscoped: every staff login may see them."""
+    spec = _REGISTRY.get(entity_type) if entity_type else None
+    return spec is not None and spec.can_view is not None
+
+
+def visibility_clause(db: Session, user):
+    """SQL predicate over FlagFlag: for every registered type that scopes visibility,
+    (entity_type IS NULL) OR (entity_type != T) OR (entity_id IN <visible ids>). Types
+    without the seam add nothing; unanchored general tasks always pass. A closure that
+    raises hides that whole type (fail closed). Slice 2 adds this to every list query."""
+    from sqlalchemy import and_, or_, true
+    from flags.models import FlagFlag
+    clauses = []
+    for spec in list(_REGISTRY.values()):
+        if spec.visible_entity_ids is None:
+            continue
+        not_this_type = or_(FlagFlag.entity_type.is_(None), FlagFlag.entity_type != spec.entity_type)
+        try:
+            sub = spec.visible_entity_ids(db, user)
+        except Exception:  # noqa: BLE001
+            clauses.append(not_this_type)
+            continue
+        if sub is None:
+            continue
+        clauses.append(or_(not_this_type, FlagFlag.entity_id.in_(sub)))
+    return and_(*clauses) if clauses else true()
+
+
+def resolve_audience(db: Session, entity_type, entity_id) -> Optional[dict]:
+    """Live-event audience for a flag on (entity_type, entity_id). None = everyone.
+    Unset seam = everyone (legacy types). A raising closure fails closed: {"groups": []}
+    (admins only)."""
+    spec = _REGISTRY.get(entity_type) if entity_type else None
+    if spec is None or spec.audience is None:
+        return None
+    try:
+        return spec.audience(db, str(entity_id))
+    except Exception:  # noqa: BLE001
+        return {"groups": []}
+
+
+def load_user(db: Session, user_id):
+    """Default Mk1 provider: id -> User row or None. Same lazy host import as resolve_user;
+    the core needs a user OBJECT to ask can_view about a target (assignee, watcher, mention)."""
+    if db is None or user_id is None:
+        return None
+    from models import User
+    return db.get(User, int(user_id))
+
+
+_MEMBERSHIP_RESOLVER = None
+
+
+def set_membership_resolver(fn) -> None:
+    """Host hook: fn(db, user) -> (frozenset[group_id], is_admin). The SSE stream route
+    calls resolve_membership once per connection."""
+    global _MEMBERSHIP_RESOLVER
+    _MEMBERSHIP_RESOLVER = fn
+
+
+def resolve_membership(db: Session, user) -> tuple[frozenset, bool]:
+    active = bool(getattr(user, "is_active", True))
+    if _MEMBERSHIP_RESOLVER is None:
+        return frozenset(), active and getattr(user, "role", None) == "admin"
+    try:
+        gids, adm = _MEMBERSHIP_RESOLVER(db, user)
+        return frozenset(gids), bool(adm) and active
+    except Exception:  # noqa: BLE001
+        return frozenset(), False
 
 
 def resolve_descendants(db: Session, entity_type: str, entity_id: str) -> list:
@@ -692,3 +804,10 @@ def register_mk1_entities() -> None:
                     search=_document_search,
                     snapshot=_document_snapshot,
                     must_exist=True)
+
+    # --- planning boards (2026-09-26): closures live in boards.flag_entity -----------
+    from boards.flag_entity import register_board_node
+    register_board_node()
+
+    from groups.access import is_admin, user_group_ids
+    set_membership_resolver(lambda db, user: (user_group_ids(db, user), is_admin(user)))
