@@ -178,3 +178,11 @@ def test_line_subtotal_parsed_when_mirrored() -> None:
              {"name": "HPLC", "product_id": 1, "qty": 1, "total": "100", "category": "testing"}]
     (o,) = build([order_row(1, total="270.00", items=items)]).orders
     assert [ln.subtotal for ln in o.lines] == [Decimal("200.00"), None]
+
+
+def test_sla_records_kept_per_order_for_turnaround() -> None:
+    rec = {"order": "WP-1", "state": "delivered", "bh": 30.0, "target": 24.0, "late": True,
+           "family_bh": {"hplc": 6.0}, "family_target": {"hplc": 24.0}}
+    ds = build([order_row(1)], sla=[rec, {**rec, "state": "cancelled"}])
+    (r,) = ds.sla
+    assert r.order_number == "1" and r.late and r.family_bh == {"hplc": 6.0}

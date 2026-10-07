@@ -312,6 +312,35 @@ class CouponUse(BaseModel):
     last_used: str
 
 
+class SlaSummary(BaseModel):
+    delivered: int
+    late: int
+    on_time_rate: Optional[float] = None
+    median_bh: Optional[float] = None
+    open: int
+    open_past_target: int
+    staged: int = 0
+    bench_median_bh: Optional[float] = None
+    lag_median_bh: Optional[float] = None
+
+
+class SlaFamily(BaseModel):
+    key: str
+    name: str
+    samples: int
+    median_bh: Optional[float] = None
+    over_target_rate: Optional[float] = None
+    lab_median_bh: Optional[float] = None
+    lab_over_target_rate: Optional[float] = None
+    held_up: int
+
+
+class SlaSection(BaseModel):
+    customer: SlaSummary
+    lab: SlaSummary
+    families: list[SlaFamily]
+
+
 class RecentOrder(BaseModel):
     order_number: str
     paid_at: str
@@ -334,6 +363,7 @@ class DossierResponse(Meta):
     test_prices: list[CustomerProductPrice]
     free_tests: int = 0
     coupons: list[CouponUse]
+    sla: Optional[SlaSection] = None
     recent: list[RecentOrder]
     orders: list[OrderRow]
 
@@ -380,10 +410,13 @@ def customers_changes(since: datetime, db: Session = Depends(get_db), _u=Depends
 
 # Declared LAST: FastAPI matches in order, so every fixed path above wins over the key.
 @router.get("/{customer_key}", response_model=DossierResponse)
-def customer_dossier(customer_key: str, db: Session = Depends(get_db), _u=Depends(get_current_user)):
+def customer_dossier(customer_key: str,
+                     sla_from: Optional[date] = Query(None, description="Turnaround: received on/after (lab day)"),
+                     sla_to: Optional[date] = Query(None, description="Turnaround: received on/before (lab day)"),
+                     db: Session = Depends(get_db), _u=Depends(get_current_user)):
     ds, _lo, hi, tz, meta = _ctx(db, "all", None, None, False)
     d = metrics.dossier(ds, customer_key.strip().lower() if customer_key.startswith("email:") else customer_key,
-                        end=hi, tz=tz)
+                        end=hi, tz=tz, sla_from=sla_from, sla_to=sla_to)
     if d is None:
         raise HTTPException(status_code=404, detail="customer not found")
     return {**meta, **d}

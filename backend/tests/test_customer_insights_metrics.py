@@ -302,3 +302,51 @@ def test_list_price_and_discount_pct_from_line_subtotals() -> None:
     assert row["units"] == 5 and row["avg_price"] == "150.00" and row["free_units"] == 1
     assert row["list_price"] == "200.00"          # 800 list over the 4 paid units that carry a subtotal
     assert row["discount_pct"] == 0.125           # paid 700 vs list 800 on those same units
+
+
+def test_sla_section_customer_vs_lab_by_test_family() -> None:
+    from customer_insights.dataset import SlaRec
+
+    def rec(num, bh, late, fams, state="delivered"):
+        return SlaRec(num, state, bh, 24.0, late, fams, {f: 24.0 for f in fams})
+
+    sla = (
+        rec("10", 30.0, True, {"hplc": 8.0, "endo": 28.0}),   # mine, late, endotoxin finished last
+        rec("11", 12.0, False, {"hplc": 10.0}),                # mine, on time, single family
+        rec("12", 5.0, False, {"hplc": 4.0}, state="open"),    # mine, open
+        rec("20", 20.0, False, {"hplc": 6.0, "endo": 18.0}),   # someone else
+    )
+    data = replace(ds([o("wc:1", 0, oid=10, number="10"), o("wc:1", 5, oid=11, number="11"),
+                       o("wc:2", 1, oid=20, number="20")]), sla=sla)
+    s = metrics.sla_section(data, {"10", "11", "12"})
+    c, lab = s["customer"], s["lab"]
+    assert (c["delivered"], c["late"], c["on_time_rate"], c["open"]) == (2, 1, 0.5, 1)
+    assert c["median_bh"] == 21.0 and lab["median_bh"] == 20.0
+    assert c["bench_median_bh"] == 19.0      # last family verified: 28 and 10
+    assert c["staged"] == 2
+    assert c["lag_median_bh"] == 2.0         # published minus last verified: 2 and 2
+    endo = next(f for f in s["families"] if f["key"] == "endo")
+    assert endo == {"key": "endo", "name": "Endotoxin", "samples": 1, "median_bh": 28.0,
+                    "over_target_rate": 1.0, "lab_median_bh": 23.0, "lab_over_target_rate": 0.5,
+                    "held_up": 1}
+    hplc = next(f for f in s["families"] if f["key"] == "hplc")
+    assert hplc["samples"] == 2 and hplc["held_up"] == 0
+    assert metrics.sla_section(replace(data, sla=()), {"10"}) is None
+    # A family re-verified after publish (retest) is capped at the publish time.
+    re = metrics.sla_profile([rec("30", 20.0, False, {"hplc": 35.0})])
+    assert re["bench_median_bh"] == 20.0 and re["lag_median_bh"] == 0.0
+    assert re["families"]["hplc"]["median_bh"] == 20.0
+
+
+def test_sla_section_received_window() -> None:
+    from datetime import date
+
+    from customer_insights.dataset import SlaRec
+
+    aug = SlaRec("10", "delivered", 30.0, 24.0, True, {"hplc": 28.0}, {"hplc": 24.0}, date(2026, 8, 20))
+    sep = SlaRec("11", "delivered", 10.0, 24.0, False, {"hplc": 9.0}, {"hplc": 24.0}, date(2026, 9, 10))
+    data = replace(ds([o("wc:1", 0, oid=10, number="10"), o("wc:1", 5, oid=11, number="11")]), sla=(aug, sep))
+    whole = metrics.sla_section(data, {"10", "11"})
+    assert whole["customer"]["delivered"] == 2
+    sept = metrics.sla_section(data, {"10", "11"}, received_from=date(2026, 9, 1), received_to=date(2026, 9, 30))
+    assert (sept["customer"]["delivered"], sept["customer"]["late"], sept["lab"]["delivered"]) == (1, 0, 1)

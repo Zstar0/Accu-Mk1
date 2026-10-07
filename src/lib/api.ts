@@ -6886,6 +6886,10 @@ export interface SlaPerfQuery {
   order?: string
   departments?: string[]
   families?: string[]
+  /** Received on/after, lab day YYYY-MM-DD. */
+  from?: string
+  /** Received on/before, lab day YYYY-MM-DD. */
+  to?: string
 }
 
 export async function getSlaPerformance(
@@ -6899,6 +6903,8 @@ export async function getSlaPerformance(
   if (order) qs.set('order', order)
   for (const d of query.departments ?? []) qs.append('department', d)
   for (const f of query.families ?? []) qs.append('family', f)
+  if (query.from) qs.set('from', query.from)
+  if (query.to) qs.set('to', query.to)
   const suffix = qs.toString() ? `?${qs.toString()}` : ''
   const response = await fetch(
     `${API_BASE_URL()}/reports/sla-performance${suffix}`,
@@ -9120,6 +9126,12 @@ export interface CustomerDossier {
     terms: string | null
     last_used: string
   }[]
+  /** Turnaround vs the lab, all time, business hours. Null when SLA data is unavailable. */
+  sla: {
+    customer: SlaSummary
+    lab: SlaSummary
+    families: SlaFamilyRow[]
+  } | null
   recent: {
     order_number: string
     paid_at: string
@@ -9129,11 +9141,40 @@ export interface CustomerDossier {
   }[]
   orders: InsightOrderRow[]
 }
+export interface SlaSummary {
+  delivered: number
+  late: number
+  on_time_rate: number | null
+  median_bh: number | null
+  open: number
+  open_past_target: number
+  /** Delivered samples with verification times: the base for bench / lag. */
+  staged: number
+  /** Receipt -> last test verified. */
+  bench_median_bh: number | null
+  /** Last test verified -> COA published. */
+  lag_median_bh: number | null
+}
+export interface SlaFamilyRow {
+  key: string
+  name: string
+  samples: number
+  median_bh: number | null
+  over_target_rate: number | null
+  lab_median_bh: number | null
+  lab_over_target_rate: number | null
+  /** Late multi-test samples where this test finished last. */
+  held_up: number
+}
 /** Resolves null when the customer has no paid orders (backend 404). */
-export const getCustomerDossier = (key: string) =>
-  getReport<CustomerDossier>(
-    `/reports/customers/${encodeURIComponent(key)}`
-  ).catch((e: unknown) => {
+export const getCustomerDossier = (
+  key: string,
+  sla: { from?: string; to?: string } = {}
+) =>
+  getReport<CustomerDossier>(`/reports/customers/${encodeURIComponent(key)}`, {
+    sla_from: sla.from,
+    sla_to: sla.to,
+  }).catch((e: unknown) => {
     if (e instanceof Error && e.message.endsWith(': 404')) return null
     throw e
   })

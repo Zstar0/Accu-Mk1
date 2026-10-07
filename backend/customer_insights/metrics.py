@@ -5,12 +5,13 @@ from __future__ import annotations
 import statistics
 from collections import Counter, defaultdict
 from dataclasses import replace
-from datetime import datetime, timedelta
+from datetime import date, datetime, timedelta
 from decimal import Decimal
 from typing import Any
 
 from customer_insights import rules
-from customer_insights.dataset import Dataset, Order
+from customer_insights.dataset import Dataset, Order, SlaRec
+from throughput import FAMILY_NAMES
 
 ZERO = Decimal("0.00")
 ADDON_TESTS = ("Endotoxin", "Sterility", "Heavy metals", "Variance")
@@ -281,11 +282,85 @@ def coupon_use(orders: list[Order]) -> list[dict[str, Any]]:
     return sorted(({**a, "discount": money(a["discount"])} for a in agg.values()), key=lambda a: -a["orders"])
 
 
+def _med(vals: list[float]) -> float | None:
+    return round(statistics.median(vals), 1) if vals else None
+
+
+def sla_profile(recs: list[SlaRec]) -> dict[str, Any]:
+    """Turnaround facts for a set of samples: overall, per test family, bench vs publish lag,
+    and which family finished last on the late ones (the one that held them up)."""
+    delivered = [r for r in recs if r.state == "delivered"]
+    open_ = [r for r in recs if r.state == "open"]
+    fam: dict[str, list[tuple[float, float]]] = defaultdict(list)
+    held: Counter = Counter()
+    bench, lag = [], []
+    for r in delivered:
+        # A re-verification after the COA went out (retest) is not bench time for this
+        # delivery: cap each family at the publish time.
+        times = {f: min(b, r.bh) for f, b in r.family_bh.items()}
+        for f, b in times.items():
+            fam[f].append((b, r.family_target.get(f, r.target)))
+        if times:
+            done = max(times.values())  # last family verified = end of bench work
+            bench.append(done)
+            lag.append(r.bh - done)  # verified -> COA published
+        # Same rule as sla_perf.gating_family: only multi-family samples attribute a holdup.
+        if r.late and len(r.family_bh) >= 2:
+            held[max(r.family_bh, key=lambda f: r.family_bh[f])] += 1
+    return {
+        "delivered": len(delivered),
+        "late": sum(r.late for r in delivered),
+        "on_time_rate": _rate(sum(not r.late for r in delivered), len(delivered)),
+        "median_bh": _med([r.bh for r in delivered]),
+        "open": len(open_),
+        "open_past_target": sum(r.late for r in open_),
+        "staged": len(bench),  # delivered samples with verification times (bench/lag base)
+        "bench_median_bh": _med(bench),
+        "lag_median_bh": _med(lag),
+        "families": {f: {"n": len(v), "median_bh": _med([b for b, _ in v]),
+                         "over_target_rate": _rate(sum(b > t for b, t in v), len(v))}
+                     for f, v in fam.items()},
+        "held_up": dict(held),
+    }
+
+
+def sla_section(ds: Dataset, numbers: set[str], *, received_from: date | None = None,
+                received_to: date | None = None) -> dict[str, Any] | None:
+    """Customer vs lab turnaround for samples received in the window (lab days, inclusive;
+    open ends = all time). None when SLA records are unavailable."""
+    if not ds.sla:
+        return None
+
+    def inside(r: SlaRec) -> bool:
+        d = r.recv_day
+        return not ((received_from and (d is None or d < received_from))
+                    or (received_to and (d is None or d > received_to)))
+
+    recs = [r for r in ds.sla if inside(r)]
+    mine = sla_profile([r for r in recs if r.order_number in numbers])
+    lab = sla_profile(recs)
+    keys = sorted(set(mine["families"]) | set(mine["held_up"]),
+                  key=lambda f: -mine["families"].get(f, {}).get("n", 0))
+    families = [{
+        "key": f, "name": FAMILY_NAMES.get(f, f),
+        "samples": mine["families"].get(f, {}).get("n", 0),
+        "median_bh": mine["families"].get(f, {}).get("median_bh"),
+        "over_target_rate": mine["families"].get(f, {}).get("over_target_rate"),
+        "lab_median_bh": lab["families"].get(f, {}).get("median_bh"),
+        "lab_over_target_rate": lab["families"].get(f, {}).get("over_target_rate"),
+        "held_up": mine["held_up"].get(f, 0),
+    } for f in keys]
+    pick = ("delivered", "late", "on_time_rate", "median_bh", "open", "open_past_target",
+            "staged", "bench_median_bh", "lag_median_bh")
+    return {"customer": {k: mine[k] for k in pick}, "lab": {k: lab[k] for k in pick}, "families": families}
+
+
 def _rate(num: int, den: int) -> float | None:
     return round(num / den, 4) if den else None
 
 
-def dossier(ds: Dataset, key: str, *, end: datetime, tz: str) -> dict[str, Any] | None:
+def dossier(ds: Dataset, key: str, *, end: datetime, tz: str, sla_from: date | None = None,
+            sla_to: date | None = None) -> dict[str, Any] | None:
     by = _by_customer(ds, end)
     orders = by.get(key)
     if not orders:
@@ -363,6 +438,8 @@ def dossier(ds: Dataset, key: str, *, end: datetime, tz: str) -> dict[str, Any] 
         "test_prices": test_prices,
         "free_tests": sum(r["free_units"] for r in test_prices),
         "coupons": coupon_use(priced),
+        "sla": sla_section(ds, numbers | {x.order_number for x in ds.free_orders if x.customer_key == key},
+                           received_from=sla_from, received_to=sla_to),
         "recent": [recent_row(x) for x in sorted(orders, key=lambda x: x.paid_at, reverse=True)[:6]],
         "orders": order_rows(replace(ds, orders=tuple(orders)), start=None, end=end),
     }
