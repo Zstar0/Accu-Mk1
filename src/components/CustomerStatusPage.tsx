@@ -48,6 +48,8 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import {
   AlertCircle,
+  ArrowDown,
+  ArrowUp,
   ChevronLeft,
   ChevronRight,
   FlaskConical,
@@ -85,6 +87,15 @@ import {
   STATUS_LABEL,
 } from '@/components/customers/insights-utils'
 import { CustomerDashboard } from '@/components/customers/CustomerDashboard'
+import {
+  NO_INSIGHT,
+  UNASSIGNED,
+  customerKey,
+  sortAndFilter,
+  type ListFilters,
+  type ListSort,
+  type SortKey,
+} from '@/components/customers/customer-list'
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert'
 import { Button } from '@/components/ui/button'
 import {
@@ -97,6 +108,7 @@ import {
 import { Checkbox } from '@/components/ui/checkbox'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
+import { NativeSelect, NativeSelectOption } from '@/components/ui/native-select'
 import { Skeleton } from '@/components/ui/skeleton'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { formatDate } from '@/components/explorer/helpers'
@@ -109,6 +121,8 @@ import { buildProductsBySampleId } from '@/lib/product-chips'
 import { useProductColorClasses } from '@/components/senaite/ProductChip'
 
 const PER_PAGE = 50
+const FETCH_PAGE = 200 // IS caps /explorer/customers at limit=200
+const DEFAULT_SORT: ListSort = { key: 'most_recent_order_at', dir: 'desc' }
 
 /**
  * List view — the full Phase 29 customers list implementation.
@@ -133,6 +147,8 @@ function CustomerListView() {
   // --- Local UI state ---
   const [envName, setEnvName] = useState(() => getActiveEnvironmentName())
   const [localInput, setLocalInput] = useState(customerSearchTerm)
+  const [sort, setSort] = useState<ListSort>(DEFAULT_SORT)
+  const [filters, setFilters] = useState<ListFilters>({ status: '', rep: '' })
   // Table scroll container — UI-SPEC L313 requires scroll-to-top on page change
   const tableScrollRef = useRef<HTMLDivElement>(null)
 
@@ -172,21 +188,35 @@ function CustomerListView() {
     queryKey: [
       'explorer',
       'customers',
+      'all',
       customerSearchTerm,
-      customerListPage,
       hideTestAccounts,
       envName,
     ],
     // !hideTestAccounts is the mandatory inversion — store field is UI-positive
     // ("hide them by default"), backend param is `include_test_emails` (the
-    // negation).
-    queryFn: () =>
-      getExplorerCustomers(
-        customerSearchTerm || undefined,
-        customerListPage,
-        PER_PAGE,
-        !hideTestAccounts
-      ),
+    // negation). Every matching row is loaded (the backend still owns search
+    // and test-account exclusion, T-29-03) so sort and filter work across the
+    // whole list, not one page.
+    queryFn: async (): Promise<ExplorerCustomersResponse> => {
+      const fetchPage = (page: number) =>
+        getExplorerCustomers(
+          customerSearchTerm || undefined,
+          page,
+          FETCH_PAGE,
+          !hideTestAccounts
+        )
+      const first = await fetchPage(0)
+      const total = first.total_count ?? first.customers.length
+      const pages = Math.ceil(total / FETCH_PAGE)
+      const rest = await Promise.all(
+        Array.from({ length: Math.max(0, pages - 1) }, (_, i) =>
+          fetchPage(i + 1)
+        )
+      )
+      const customers = [first, ...rest].flatMap(r => r.customers)
+      return { customers, total_count: customers.length }
+    },
     enabled: status?.connected === true,
     staleTime: 60_000,
   })
@@ -211,9 +241,30 @@ function CustomerListView() {
     enabled: status?.connected === true,
     staleTime: 60_000,
   })
-  const insightByKey = new Map((insightRows ?? []).map(r => [r.key, r] as const))
-
-  // --- Derived (no client-side filter — D-07, T-29-03) ---
+  // --- Derived. Search + test-account exclusion stay server-side (D-07,
+  // T-29-03); sort and the insight filters (status, rep) apply on top. ---
+  const listRows = useMemo(() => {
+    const byKey = new Map((insightRows ?? []).map(r => [r.key, r] as const))
+    const joined = (customersData?.customers ?? []).map(customer => ({
+      customer,
+      insight: byKey.get(customerKey(customer)),
+    }))
+    return sortAndFilter(joined, sort, filters)
+  }, [customersData, insightRows, sort, filters])
+  const repOptions = useMemo(
+    () =>
+      [
+        ...new Set(
+          (insightRows ?? []).map(r => r.rep).filter((r): r is string => !!r)
+        ),
+      ].sort(),
+    [insightRows]
+  )
+  const filtering = filters.status !== '' || filters.rep !== ''
+  const pageRows = listRows.slice(
+    customerListPage * PER_PAGE,
+    (customerListPage + 1) * PER_PAGE
+  )
   const customers = customersData?.customers ?? []
   const isConnected = status?.connected === true
   const hasError = customersError != null
@@ -221,13 +272,41 @@ function CustomerListView() {
   // Subtitle copy — D-21. total_count is unconditionally returned by the
   // backend in practice, but the fallback honors the optional contract.
   let subtitle: string
-  if (customersData?.total_count !== undefined) {
-    subtitle = customerSearchTerm
-      ? `${customersData.total_count} customers matching "${customerSearchTerm}"`
-      : `${customersData.total_count} customers`
+  if (filtering) {
+    subtitle = `${listRows.length} of ${customers.length} customers match the filters`
   } else {
-    subtitle = `${customers.length} customers on this page`
+    subtitle = customerSearchTerm
+      ? `${customers.length} customers matching "${customerSearchTerm}"`
+      : `${customers.length} customers`
   }
+
+  const toggleSort = (key: SortKey) => {
+    setSort(prev =>
+      prev.key === key
+        ? { key, dir: prev.dir === 'asc' ? 'desc' : 'asc' }
+        : {
+            key,
+            dir:
+              key === 'name' || key === 'email' || key === 'rep'
+                ? 'asc'
+                : 'desc',
+          }
+    )
+    setCustomerListPage(0)
+  }
+  const setFilter = (patch: Partial<ListFilters>) => {
+    setFilters(prev => ({ ...prev, ...patch }))
+    setCustomerListPage(0)
+  }
+  const th = (label: string, key: SortKey, right = false) => (
+    <SortHeader
+      label={label}
+      sortKey={key}
+      sort={sort}
+      onSort={toggleSort}
+      right={right}
+    />
+  )
 
   // Page navigation — sets the new page index and smoothly scrolls the table
   // container back to the top so the user sees row 1 of the new page without
@@ -289,6 +368,45 @@ function CustomerListView() {
             </Button>
           )}
         </div>
+        <NativeSelect
+          aria-label="Filter by status"
+          value={filters.status}
+          onChange={e => setFilter({ status: e.target.value })}
+          className="w-40"
+        >
+          <NativeSelectOption value="">All statuses</NativeSelectOption>
+          {Object.entries(STATUS_LABEL).map(([k, label]) => (
+            <NativeSelectOption key={k} value={k}>
+              {label}
+            </NativeSelectOption>
+          ))}
+          <NativeSelectOption value={NO_INSIGHT}>
+            No paid orders
+          </NativeSelectOption>
+        </NativeSelect>
+        <NativeSelect
+          aria-label="Filter by rep"
+          value={filters.rep}
+          onChange={e => setFilter({ rep: e.target.value })}
+          className="w-44"
+        >
+          <NativeSelectOption value="">All reps</NativeSelectOption>
+          {repOptions.map(r => (
+            <NativeSelectOption key={r} value={r}>
+              {r}
+            </NativeSelectOption>
+          ))}
+          <NativeSelectOption value={UNASSIGNED}>Unassigned</NativeSelectOption>
+        </NativeSelect>
+        {filtering && (
+          <Button
+            variant="ghost"
+            size="sm"
+            onClick={() => setFilter({ status: '', rep: '' })}
+          >
+            Clear filters
+          </Button>
+        )}
         <label className="flex items-center gap-2 text-sm text-muted-foreground whitespace-nowrap cursor-pointer ml-auto">
           <Checkbox
             checked={hideTestAccounts}
@@ -339,48 +457,22 @@ function CustomerListView() {
             <table className="w-full text-sm">
               <thead className="sticky top-0 z-10 bg-card border-b">
                 <tr className="text-left">
-                  <th className="py-2 px-3 text-xs font-semibold uppercase text-muted-foreground whitespace-nowrap">
-                    Display Name
-                  </th>
-                  <th className="py-2 px-3 text-xs font-semibold uppercase text-muted-foreground whitespace-nowrap">
-                    Email
-                  </th>
-                  <th className="py-2 px-3 text-xs font-semibold uppercase text-muted-foreground whitespace-nowrap text-right">
-                    Total Orders
-                  </th>
-                  <th className="py-2 px-3 text-xs font-semibold uppercase text-muted-foreground whitespace-nowrap text-right">
-                    Outstanding
-                  </th>
-                  <th className="py-2 px-3 text-xs font-semibold uppercase text-muted-foreground whitespace-nowrap text-right">
-                    Total COAs
-                  </th>
-                  <th className="py-2 px-3 text-xs font-semibold uppercase text-muted-foreground whitespace-nowrap">
-                    Most Recent
-                  </th>
-                  <th className="py-2 px-3 text-xs font-semibold uppercase text-muted-foreground whitespace-nowrap text-right">
-                    Spend (90d)
-                  </th>
-                  <th className="py-2 px-3 text-xs font-semibold uppercase text-muted-foreground whitespace-nowrap text-right">
-                    Δ
-                  </th>
-                  <th className="py-2 px-3 text-xs font-semibold uppercase text-muted-foreground whitespace-nowrap text-right">
-                    Lifetime
-                  </th>
-                  <th className="py-2 px-3 text-xs font-semibold uppercase text-muted-foreground whitespace-nowrap text-right">
-                    Samples
-                  </th>
-                  <th className="py-2 px-3 text-xs font-semibold uppercase text-muted-foreground whitespace-nowrap text-right">
-                    Usual gap
-                  </th>
+                  {th('Display Name', 'name')}
+                  {th('Email', 'email')}
+                  {th('Total Orders', 'total_orders', true)}
+                  {th('Outstanding', 'outstanding_orders', true)}
+                  {th('Total COAs', 'total_coas', true)}
+                  {th('Most Recent', 'most_recent_order_at')}
+                  {th('Spend (90d)', 'period_spend', true)}
+                  {th('Δ', 'delta_pct', true)}
+                  {th('Lifetime', 'lifetime', true)}
+                  {th('Samples', 'samples', true)}
+                  {th('Usual gap', 'usual_gap_days', true)}
                   <th className="py-2 px-3 text-xs font-semibold uppercase text-muted-foreground whitespace-nowrap">
                     Top tests
                   </th>
-                  <th className="py-2 px-3 text-xs font-semibold uppercase text-muted-foreground whitespace-nowrap">
-                    Rep
-                  </th>
-                  <th className="py-2 px-3 text-xs font-semibold uppercase text-muted-foreground whitespace-nowrap">
-                    Status
-                  </th>
+                  {th('Rep', 'rep')}
+                  {th('Status', 'status')}
                 </tr>
               </thead>
               <tbody className="divide-y divide-border/50">
@@ -406,7 +498,7 @@ function CustomerListView() {
                 {isConnected &&
                   !customersLoading &&
                   !hasError &&
-                  customers.length === 0 && (
+                  pageRows.length === 0 && (
                     <tr>
                       <td colSpan={14} className="py-16">
                         <div className="flex flex-col items-center text-center">
@@ -415,22 +507,24 @@ function CustomerListView() {
                             No customers found
                           </p>
                           <p className="text-xs text-muted-foreground mt-1">
-                            {customerSearchTerm
-                              ? `No customers match "${customerSearchTerm}". Try a different search.`
-                              : 'No customer records available yet.'}
+                            {filtering
+                              ? 'No customers match these filters.'
+                              : customerSearchTerm
+                                ? `No customers match "${customerSearchTerm}". Try a different search.`
+                                : 'No customer records available yet.'}
                           </p>
                         </div>
                       </td>
                     </tr>
                   )}
 
-                {/* Data rows — NO Array.filter over `customers` (T-29-03).
-                    The backend owns search + include_test_emails. */}
+                {/* Data rows. The backend owns search + include_test_emails
+                    (T-29-03); sortAndFilter only orders rows and applies the
+                    insight filters the user picked. */}
                 {isConnected &&
                   !customersLoading &&
                   !hasError &&
-                  customers.length > 0 &&
-                  customers.map(customer => (
+                  pageRows.map(({ customer, insight }) => (
                     <CustomerRow
                       key={
                         customer.customer_id !== null
@@ -438,11 +532,7 @@ function CustomerListView() {
                           : `g-${customer.email}`
                       }
                       customer={customer}
-                      insight={insightByKey.get(
-                        customer.customer_id !== null
-                          ? `wc:${customer.customer_id}`
-                          : `email:${customer.email.toLowerCase()}`
-                      )}
+                      insight={insight}
                       onNavigate={navigateToCustomer}
                       onNavigateKey={navigateToCustomerKey}
                     />
@@ -459,8 +549,8 @@ function CustomerListView() {
           Next. Page change scrolls the table container to top (UI-SPEC L313). */}
       <div className="flex items-center justify-between mt-3">
         <span className="text-sm text-muted-foreground">
-          {customersData?.total_count !== undefined && customers.length > 0
-            ? `${customerListPage * PER_PAGE + 1}–${customerListPage * PER_PAGE + customers.length} of ${customersData.total_count}`
+          {pageRows.length > 0
+            ? `${customerListPage * PER_PAGE + 1}–${customerListPage * PER_PAGE + pageRows.length} of ${listRows.length}`
             : `Page ${customerListPage + 1}`}
         </span>
         <div className="flex items-center gap-2">
@@ -481,7 +571,10 @@ function CustomerListView() {
             variant="outline"
             size="sm"
             onClick={() => goToPage(customerListPage + 1)}
-            disabled={customers.length < PER_PAGE || customersLoading}
+            disabled={
+              (customerListPage + 1) * PER_PAGE >= listRows.length ||
+              customersLoading
+            }
             aria-label="Next page"
           >
             Next
@@ -490,6 +583,47 @@ function CustomerListView() {
         </div>
       </div>
     </div>
+  )
+}
+
+/** Clickable column header: click sorts, click again flips direction. */
+function SortHeader({
+  label,
+  sortKey,
+  sort,
+  onSort,
+  right = false,
+}: {
+  label: string
+  sortKey: SortKey
+  sort: ListSort
+  onSort: (key: SortKey) => void
+  right?: boolean
+}) {
+  const active = sort.key === sortKey
+  const Icon = sort.dir === 'asc' ? ArrowUp : ArrowDown
+  return (
+    <th
+      className={cn(
+        'py-2 px-3 text-xs font-semibold uppercase text-muted-foreground whitespace-nowrap',
+        right && 'text-right'
+      )}
+      aria-sort={
+        active ? (sort.dir === 'asc' ? 'ascending' : 'descending') : 'none'
+      }
+    >
+      <button
+        type="button"
+        onClick={() => onSort(sortKey)}
+        className={cn(
+          'inline-flex items-center gap-1 uppercase hover:text-foreground',
+          active && 'text-foreground'
+        )}
+      >
+        {label}
+        {active && <Icon className="h-3 w-3" />}
+      </button>
+    </th>
   )
 }
 
