@@ -190,6 +190,16 @@ def init_db():
             upgrade_hplc_native_catalog(_db)
     except Exception as e:  # never block startup
         log.warning("catalog_hplc_native_catalog_upgrade_skipped err=%s", e)
+    # Bac Water native family (spec 2026-10-05, MB1): three services + the
+    # INACTIVE bacteriostatic-water-panel profile + wildcard specs. After
+    # backfill_departments (it needs the Analytical department), before
+    # service_spec_seed for symmetry with the HPLC seed.
+    try:
+        from catalog.bw_native_seed import seed_bw_native_catalog
+        with SessionLocal() as _db:
+            seed_bw_native_catalog(_db)
+    except Exception as e:  # never block startup
+        log.warning("catalog_bw_native_seed_skipped err=%s", e)
     try:
         from catalog.service_spec_seed import seed_service_specs
         with SessionLocal() as _db:
@@ -205,6 +215,15 @@ def init_db():
             verify_demand_catalog(_s)
     except Exception as e:  # never block startup
         log.warning("demand_catalog_verify_skipped err=%s", e)
+
+    # Customer-id counters (P/PB/BW) must stay above SENAITE's max while the
+    # legacy drain runs. ERROR per violation inside; never blocks startup.
+    try:
+        from sub_samples.native_id import customer_id_headroom_violations
+        with SessionLocal() as _s:
+            customer_id_headroom_violations(_s)
+    except Exception as e:  # never block startup
+        log.warning("customer_id_headroom_check_skipped err=%s", e)
 
 
 def _run_migrations():
@@ -2499,6 +2518,14 @@ def _run_migrations():
         INSERT INTO lims_native_id_sequences (prefix, next_value)
         SELECT 'PB', 1000
         WHERE NOT EXISTS (SELECT 1 FROM lims_native_id_sequences WHERE prefix = 'PB')
+        """,
+        # Bac Water native-born (spec 2026-10-05, R3): customer-facing BW-NNNN
+        # counter seeded ONCE at 1000, above SENAITE's prod max (BW-0135 on
+        # 2026-10-05). Guarded: never resets an existing counter.
+        """
+        INSERT INTO lims_native_id_sequences (prefix, next_value)
+        SELECT 'BW', 1000
+        WHERE NOT EXISTS (SELECT 1 FROM lims_native_id_sequences WHERE prefix = 'BW')
         """,
         # HPLC-native slice 6 (M8): links a retest's sample row back to the
         # original Mk1 row it was retested from (from signal meta

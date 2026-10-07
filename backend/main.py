@@ -3175,9 +3175,11 @@ _RIDE_HOST_FORBIDDEN = {"endo", "ster", "xtra"}
 # the route edge rather than a DB CHECK constraint so a new archetype is a
 # one-line addition here. legacy_hplc is owned by coa/hplc_shim.py (slice 8)
 # so the seed, legacy_rows, native_sections and this route share one literal.
+from coa.bw_shim import LEGACY_BW_ARCHETYPE
 from coa.hplc_shim import LEGACY_HPLC_ARCHETYPE
 
-COA_ARCHETYPES = {"limit_table", LEGACY_HPLC_ARCHETYPE}
+# legacy_bw (MB5) is owned by coa/bw_shim.py on the same terms as legacy_hplc.
+COA_ARCHETYPES = {"limit_table", LEGACY_HPLC_ARCHETYPE, LEGACY_BW_ARCHETYPE}
 
 # S9 Task 2: the POST/PATCH route guard that reserved hplc/endo/ster for the
 # five legacy-key profiles retired WITH Task 1's flip (its only justification
