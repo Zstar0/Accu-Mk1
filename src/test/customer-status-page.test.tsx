@@ -348,8 +348,65 @@ describe('CustomerStatusPage — list view', () => {
     })
     render(<CustomerStatusPage />, { wrapper })
     expect(await screen.findByText('$4,321')).toBeInTheDocument()
-    expect(screen.getByText('Growing')).toBeInTheDocument()
-    expect(screen.getByText('Scott')).toBeInTheDocument()
+    // Scope to the row: 'Growing' / 'Scott' are also filter <option>s now.
+    const alice = screen.getByText('Alice A').closest('tr')
+    expect(alice).toHaveTextContent('Growing')
+    expect(alice).toHaveTextContent('Scott')
+  })
+
+  it('filters by rep and status, sorts by a header click, across all rows', async () => {
+    const insight = (
+      key: string,
+      spend: string,
+      status: string,
+      rep: string | null
+    ) => ({
+      key,
+      name: key,
+      email: null,
+      company: null,
+      rep,
+      period_spend: spend,
+      prior_spend: '0.00',
+      delta_pct: null,
+      lifetime: spend,
+      orders: 1,
+      samples: 1,
+      usual_gap_days: null,
+      last_order_at: null,
+      top_tests: [],
+      status,
+      monthly: [],
+    })
+    vi.mocked(getCustomerList).mockResolvedValue({
+      tz: 'UTC',
+      synced_at: null,
+      rows: [
+        insight('wc:1', '100.00', 'growing', 'Scott'),
+        insight('wc:2', '900.00', 'at_risk', 'Scott'),
+      ],
+      total: 2,
+      page: 1,
+      page_size: 200,
+    })
+    render(<CustomerStatusPage />, { wrapper })
+    await screen.findByText('Alice A')
+    fireEvent.change(screen.getByLabelText('Filter by rep'), {
+      target: { value: 'Scott' },
+    })
+    const bodyRows = () =>
+      within(findCustomersTable()).getAllByRole('row').slice(1)
+    expect(bodyRows()).toHaveLength(2)
+    fireEvent.click(screen.getByRole('button', { name: /Spend \(90d\)/ }))
+    expect(bodyRows()[0]).toHaveTextContent('$900')
+    fireEvent.change(screen.getByLabelText('Filter by status'), {
+      target: { value: 'growing' },
+    })
+    expect(bodyRows()).toHaveLength(1)
+    expect(bodyRows()[0]).toHaveTextContent('$100')
+    expect(
+      screen.getByText(/1 of \d+ customers match the filters/)
+    ).toBeInTheDocument()
   })
 
   it('shows a muted note when the insight query fails', async () => {
