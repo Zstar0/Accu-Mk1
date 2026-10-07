@@ -71,9 +71,11 @@ function dossier(over: Partial<CustomerDossier['kpis']> = {}): CustomerDossier {
         avg_price: '127.50',
         revenue: '5100.00',
         customers: 1,
+        free_units: 1,
         lab_avg_price: '150.00',
       },
     ],
+    free_tests: 1,
     coupons: [
       {
         code: 'ac15',
@@ -141,6 +143,7 @@ describe('CustomerDashboard', () => {
     expect(price).toHaveTextContent('$127.50')
     expect(price).toHaveTextContent('-15%')
     expect(price).toHaveTextContent('$150.00')
+    expect(screen.getByText('1 free')).toBeInTheDocument()
     const coupon = screen.getByText('ac15').closest('tr')
     expect(coupon).toHaveTextContent('15%')
     expect(coupon).toHaveTextContent('$612')

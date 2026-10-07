@@ -487,7 +487,15 @@ export function CustomerDashboard({
         <section className={CARD}>
           <h2 className="text-sm font-medium">What they pay</h2>
           <p className="mb-2 text-[11px] text-muted-foreground">
-            Average price per unit after coupons, all time · vs all customers
+            Average price per paid unit after coupons, all time · vs all
+            customers
+            {d.free_tests > 0 && (
+              <>
+                {' · '}
+                <b className="text-foreground">{d.free_tests} free</b> (100%
+                coupon, not averaged)
+              </>
+            )}
           </p>
           {d.test_prices.length === 0 ? (
             <p className="text-sm text-muted-foreground">No paid line items</p>
@@ -497,6 +505,7 @@ export function CustomerDashboard({
                 <tr className="text-[11px] uppercase tracking-wider text-muted-foreground">
                   <th className="py-1 text-left font-medium">Product</th>
                   <th className="text-right font-medium">Units</th>
+                  <th className="text-right font-medium">Free</th>
                   <th className="text-right font-medium">They pay</th>
                   <th className="text-right font-medium">Lab avg</th>
                 </tr>
@@ -504,11 +513,15 @@ export function CustomerDashboard({
               <tbody>
                 {d.test_prices.map(p => {
                   const lab = p.lab_avg_price ? Number(p.lab_avg_price) : 0
-                  const delta = lab ? Number(p.avg_price) / lab - 1 : null
+                  const delta =
+                    lab && p.avg_price ? Number(p.avg_price) / lab - 1 : null
                   return (
                     <tr key={p.product} className="border-t border-border/20">
                       <td className="py-1">{p.product}</td>
                       <td className="text-right">{p.units}</td>
+                      <td className="text-right text-muted-foreground">
+                        {p.free_units || ''}
+                      </td>
                       <td className="text-right font-medium">
                         {fmtPrice(p.avg_price)}
                         {delta != null && Math.abs(delta) >= 0.05 && (

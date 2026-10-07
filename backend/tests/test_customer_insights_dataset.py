@@ -37,7 +37,7 @@ def test_service_label() -> None:
 
 def test_testing_order_net_and_tests() -> None:
     ds = build([order_row(1, refund="25.00")], [sub_row(1, [SAMPLE, SAMPLE])],
-               customers=[(1188, "ops@h.example", "Ops", "Team", "Halcyon", "none")])
+               customers=[(1188, "ops@h.example", "Ops", "Team", "Halcyon", "none", None)])
     (o,) = ds.orders
     assert o.customer_key == "wc:1188" and o.is_testing and o.samples == 2
     assert o.net == Decimal("75.00")
@@ -129,9 +129,9 @@ def test_lines_coupons_and_rep() -> None:
          order_row(2, items=renamed, coupons=["solo"], discount="20.00"),
          order_row(3, customer_id=1557, items=renamed, coupons=["ghost"],
                    coupon_lines=[{"code": "ghost", "discount": "102", "type": "percent", "amount": 15}])],
-        customers=[(1188, "ops@h.example", "Ops", "Team", None, "1557"),
-                   (1557, "scott@lab.example", "Scott", None, None, "none"),
-                   (77, "x@y.example", "X", None, None, "999")])
+        customers=[(1188, "ops@h.example", "Ops", "Team", None, "1557", None),
+                   (1557, "scott@lab.example", "Scott", None, None, "none", None),
+                   (77, "x@y.example", "X", None, None, "999", None)])
     o1, o2, o3 = ds.orders
     assert [(ln.product, ln.qty, ln.total) for ln in o1.lines] == [
         ("HPLC Identity, Purity & Quantity", 2, Decimal("300.00")),
@@ -156,3 +156,18 @@ def test_coupon_covered_zero_orders_are_free_not_revenue() -> None:
     assert ds.orders == ()
     (f,) = ds.free_orders
     assert f.order_id == 1 and f.coupon_lines[0].discount == Decimal("250.00")
+
+
+def test_rep_prefers_commissions_history_then_salesking() -> None:
+    from customer_insights.dataset import current_agent
+    hist = '[{"agent_id":1557,"from":"2026-07-01"},{"agent_id":0,"from":"2099-01-01"}]'
+    assert current_agent(hist, "2026-10-06") == "1557"
+    assert current_agent(hist, "2099-02-01") is None          # 0 = unassigned from then on
+    assert current_agent([{"agent_id": 1557, "from": "2099-01-01"}], "2026-10-06") is None  # future only
+    assert current_agent("not json", "2026-10-06") is None
+    ds = build([order_row(1)], customers=[
+        (1, "a@x", "A", None, None, "none", hist),        # history only
+        (2, "b@x", "B", None, None, "1557", None),        # SalesKing only
+        (3, "c@x", "C", None, None, "none", "[]"),        # neither
+        (1557, "s@x", "Scott", None, None, "none", None)])
+    assert [ds.customers[k].rep for k in ("wc:1", "wc:2", "wc:3")] == ["Scott", "Scott", None]

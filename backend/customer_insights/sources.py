@@ -32,14 +32,19 @@ SUBMISSIONS_SQL = """
     WHERE oid IS NOT NULL
     ORDER BY oid, created_at DESC, id DESC
 """
-# rep_id = SalesKing `salesking_assigned_agent` user meta (an agent's WP user id, or "none").
+# Rep sources, both user meta mirrored in wc_customers.meta_data:
+#   agent_history = accumark-commissions `accumark_agent_history` (canonical; JSON [{agent_id, from}])
+#   rep_id        = SalesKing `salesking_assigned_agent` (an agent's WP user id, or "none"; fallback)
 # ponytail: the customer reconcile skips rows whose WC date_modified did not move, and SalesKing
 # reassignments do not bump it, so reps drift until a customer backfill; fix in IS if it bites.
 CUSTOMERS_SQL = """
     SELECT id, email, first_name, last_name, company_name,
            (SELECT m->>'value' FROM jsonb_array_elements(
                 CASE WHEN jsonb_typeof(meta_data) = 'array' THEN meta_data ELSE '[]'::jsonb END) m
-            WHERE m->>'key' = 'salesking_assigned_agent' LIMIT 1) AS rep_id
+            WHERE m->>'key' = 'salesking_assigned_agent' LIMIT 1) AS rep_id,
+           (SELECT m->'value' FROM jsonb_array_elements(
+                CASE WHEN jsonb_typeof(meta_data) = 'array' THEN meta_data ELSE '[]'::jsonb END) m
+            WHERE m->>'key' = 'accumark_agent_history' LIMIT 1) AS agent_history
     FROM wc_customers WHERE deleted_at IS NULL
 """
 # Published PRIMARY COAs only (same rule as Analyte Trends): one row per COA.

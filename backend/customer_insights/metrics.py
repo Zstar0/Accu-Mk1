@@ -236,20 +236,27 @@ def order_rows(ds: Dataset, *, start: datetime | None, end: datetime) -> list[di
 
 
 def product_prices(orders: list[Order]) -> list[dict[str, Any]]:
-    """Avg price actually paid per unit (post-coupon line total / qty), by product.
+    """Avg price actually paid per paid unit (post-coupon line total / qty), by product.
+
+    Free units ($0 lines, e.g. a 100% coupon) are counted in free_units, not averaged.
 
     ponytail: refunds are order-level only, so a partially refunded order keeps full line prices.
     """
-    agg: dict[str, list] = defaultdict(lambda: [0, ZERO, set()])
+    agg: dict[str, list] = defaultdict(lambda: [0, ZERO, set(), 0])
     for x in orders:
         for ln in x.lines:
-            if ln.qty > 0:
-                a = agg[ln.product]
-                a[0] += ln.qty
-                a[1] += ln.total
-                a[2].add(x.customer_key)
-    rows = [{"product": p, "units": u, "avg_price": money(t / u), "revenue": money(t), "customers": len(c)}
-            for p, (u, t, c) in agg.items()]
+            if ln.qty <= 0:
+                continue
+            a = agg[ln.product]
+            a[2].add(x.customer_key)
+            if ln.total <= 0:  # free (100% coupon): counted, never averaged in as $0
+                a[3] += ln.qty
+                continue
+            a[0] += ln.qty
+            a[1] += ln.total
+    rows = [{"product": p, "units": u, "avg_price": money(t / u) if u else None, "revenue": money(t),
+             "customers": len(c), "free_units": f}
+            for p, (u, t, c, f) in agg.items()]
     return sorted(rows, key=lambda r: -Decimal(r["revenue"]))
 
 
@@ -308,6 +315,7 @@ def dossier(ds: Dataset, key: str, *, end: datetime, tz: str) -> dict[str, Any] 
     risk = rules.is_at_risk(dates, end)
     lab_prices = {r["product"]: r["avg_price"] for r in product_prices(_window(ds, None, end, free=True))}
     priced = orders + [x for x in ds.free_orders if x.customer_key == key and x.paid_at <= end]
+    test_prices = [{**r, "lab_avg_price": lab_prices.get(r["product"])} for r in product_prices(priced)]
 
     def recent_row(x: Order) -> dict[str, Any]:
         cs = [y for y in mine if y.order_number == x.order_number]
@@ -343,7 +351,8 @@ def dossier(ds: Dataset, key: str, *, end: datetime, tz: str) -> dict[str, Any] 
                      for t, n in sorted(tests.items(), key=lambda kv: -kv[1])],
         "analytes": sorted(({"product": p, "coas": len(v), "pass_rate": round(sum(v) / len(v), 4)}
                             for p, v in products.items()), key=lambda r: -r["coas"])[:8],
-        "test_prices": [{**r, "lab_avg_price": lab_prices.get(r["product"])} for r in product_prices(priced)],
+        "test_prices": test_prices,
+        "free_tests": sum(r["free_units"] for r in test_prices),
         "coupons": coupon_use(priced),
         "recent": [recent_row(x) for x in sorted(orders, key=lambda x: x.paid_at, reverse=True)[:6]],
         "orders": order_rows(replace(ds, orders=tuple(orders)), start=None, end=end),

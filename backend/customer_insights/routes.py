@@ -81,10 +81,11 @@ class FirstOrder(BaseModel):
 
 class ProductPrice(BaseModel):
     product: str
-    units: int
-    avg_price: str
+    units: int  # paid units
+    avg_price: Optional[str] = None  # None when every unit was free
     revenue: str
     customers: int
+    free_units: int = 0
 
 
 class Meta(BaseModel):
@@ -329,6 +330,7 @@ class DossierResponse(Meta):
     test_mix: list[TestShare]
     analytes: list[AnalyteRate]
     test_prices: list[CustomerProductPrice]
+    free_tests: int = 0
     coupons: list[CouponUse]
     recent: list[RecentOrder]
     orders: list[OrderRow]

@@ -555,7 +555,7 @@ export function CustomerInsights({
             <h2 className="text-sm font-medium">Average price by product</h2>
             <p className="mb-2 text-[11px] text-muted-foreground">
               What customers actually paid per unit in this period, after
-              coupons
+              coupons. Free units (100% coupons) are counted, not averaged.
             </p>
             {s.product_prices.length === 0 ? (
               <p className="py-4 text-center text-sm text-muted-foreground">
@@ -568,6 +568,7 @@ export function CustomerInsights({
                     <th className="py-1 text-left font-medium">Product</th>
                     <th className="text-right font-medium">Avg price</th>
                     <th className="text-right font-medium">Units</th>
+                    <th className="text-right font-medium">Free</th>
                     <th className="text-right font-medium">Revenue</th>
                     <th className="text-right font-medium">Customers</th>
                   </tr>
@@ -580,6 +581,9 @@ export function CustomerInsights({
                         {fmtPrice(p.avg_price)}
                       </td>
                       <td className="text-right">{p.units}</td>
+                      <td className="text-right text-muted-foreground">
+                        {p.free_units || ''}
+                      </td>
                       <td className="text-right">{fmtMoney(p.revenue)}</td>
                       <td className="text-right text-muted-foreground">
                         {p.customers}

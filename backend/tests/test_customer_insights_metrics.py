@@ -253,12 +253,13 @@ def test_product_prices_and_coupon_use() -> None:
     end = T0 + timedelta(days=30)
     prices = metrics.summary(data, start=T0 - timedelta(days=1), end=end, tz=TZ)["product_prices"]
     assert prices == [
-        {"product": "HPLC", "units": 4, "avg_price": "155.00", "revenue": "620.00", "customers": 2},
-        {"product": "Endotoxin", "units": 1, "avg_price": "100.00", "revenue": "100.00", "customers": 1},
+        {"product": "HPLC", "units": 4, "avg_price": "155.00", "revenue": "620.00", "customers": 2, "free_units": 0},
+        {"product": "Endotoxin", "units": 1, "avg_price": "100.00", "revenue": "100.00", "customers": 1,
+         "free_units": 0},
     ]  # qty 0 lines skipped
     d = metrics.dossier(data, "wc:1", end=end, tz=TZ)
     assert d["test_prices"][0] == {"product": "HPLC", "units": 3, "avg_price": "140.00", "revenue": "420.00",
-                                   "customers": 1, "lab_avg_price": "155.00"}
+                                   "customers": 1, "free_units": 0, "lab_avg_price": "155.00"}
     assert d["coupons"] == [
         {"code": "ac15", "orders": 2, "discount": "60.00", "terms": "20%", "last_used": b.paid_at.isoformat()},
         {"code": "sc5", "orders": 1, "discount": "5.00", "terms": None, "last_used": b.paid_at.isoformat()},
@@ -273,10 +274,17 @@ def test_free_coupon_orders_count_for_pricing_and_coupons_not_revenue() -> None:
     end = T0 + timedelta(days=30)
     out = metrics.summary(data, start=T0 - timedelta(days=1), end=end, tz=TZ)
     assert out["kpis"]["revenue"]["value"] == "300.00" and out["kpis"]["paid_orders"]["value"] == 1
-    assert out["product_prices"][0] == {"product": "HPLC", "units": 2, "avg_price": "150.00",
-                                        "revenue": "300.00", "customers": 1}
+    # The free unit is counted, never averaged in as $0.
+    assert out["product_prices"][0] == {"product": "HPLC", "units": 1, "avg_price": "300.00",
+                                        "revenue": "300.00", "customers": 1, "free_units": 1}
     d = metrics.dossier(data, "wc:1", end=end, tz=TZ)
     assert d["kpis"]["orders"] == 1
     assert [c["code"] for c in d["coupons"]] == ["first-one-on-us"]
-    assert d["test_prices"][0]["avg_price"] == "150.00"
+    assert d["test_prices"][0]["avg_price"] == "300.00" and d["free_tests"] == 1
     assert metrics.scope(data, exclude_launch=False).free_orders == (free,)
+
+
+def test_all_free_product_has_no_average() -> None:
+    x = replace(o("wc:1", 0, oid=1), lines=(Line("Endotoxin", 2, Decimal("0.00")),))
+    (row,) = metrics.product_prices([x])
+    assert row["avg_price"] is None and row["units"] == 0 and row["free_units"] == 2

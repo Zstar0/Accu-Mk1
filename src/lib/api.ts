@@ -8957,10 +8957,12 @@ export interface CustomerSummary {
 /** Avg price actually paid per unit (post-coupon line total / qty). */
 export interface ProductPrice {
   product: string
+  /** Paid units; free ($0, e.g. 100% coupon) units are in free_units, never averaged. */
   units: number
-  avg_price: string
+  avg_price: string | null
   revenue: string
   customers: number
+  free_units: number
 }
 export interface CustomerCohorts {
   tz: string
@@ -9104,6 +9106,7 @@ export interface CustomerDossier {
   test_mix: { test: string; share: number; all_share: number }[]
   analytes: { product: string; coas: number; pass_rate: number }[]
   test_prices: (ProductPrice & { lab_avg_price: string | null })[]
+  free_tests: number
   coupons: {
     code: string
     orders: number

@@ -2,9 +2,10 @@
 """In-memory Customer Insights dataset assembled from raw rows (pure; no I/O)."""
 from __future__ import annotations
 
+import json
 from collections import Counter, defaultdict
 from dataclasses import dataclass, replace
-from datetime import datetime
+from datetime import datetime, timezone
 from decimal import Decimal
 from typing import Any, Iterable
 
@@ -142,6 +143,20 @@ def _lines(items: list[dict], labels: dict[int, str]) -> tuple[Line, ...]:
     return tuple(out)
 
 
+def current_agent(history: Any, today: str) -> str | None:
+    """accumark-commissions resolve(): latest {agent_id, from} with from <= today; 0 = none."""
+    if isinstance(history, str):
+        try:
+            history = json.loads(history)
+        except ValueError:
+            return None
+    agent = 0
+    for e in sorted((e for e in history or [] if isinstance(e, dict)), key=lambda e: str(e.get("from"))):
+        if str(e.get("from")) <= today and str(e.get("agent_id", "")).isdigit():
+            agent = int(e["agent_id"])
+    return str(agent) if agent else None
+
+
 def _terms(c: dict) -> str | None:
     amount = c.get("amount")
     if amount in (None, ""):
@@ -180,11 +195,13 @@ def build_dataset(
     labels = _product_labels(order_rows)
     customers: dict[str, Customer] = {}
     rep_ids: dict[str, str] = {}
-    for cid, email, first, last, company, rep_id in customer_rows:
+    today = datetime.now(timezone.utc).strftime("%Y-%m-%d")  # ponytail: UTC date, WP uses site-local
+    for cid, email, first, last, company, rep_id, history in customer_rows:
         key = f"wc:{int(cid)}"
         customers[key] = Customer(key, _name(first, last, email or key), email, company or None, int(cid))
-        if rep_id and str(rep_id).isdigit():  # SalesKing stores "none" when unassigned
-            rep_ids[key] = str(rep_id)
+        agent = current_agent(history, today) or (str(rep_id) if rep_id and str(rep_id).isdigit() else None)
+        if agent:
+            rep_ids[key] = agent
     for key, rep_id in rep_ids.items():
         agent = customers.get(f"wc:{rep_id}")
         customers[key] = replace(customers[key], rep=agent.name if agent else f"Agent #{rep_id}")

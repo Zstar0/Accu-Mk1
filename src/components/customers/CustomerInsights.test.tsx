@@ -61,6 +61,7 @@ function setup(riskFails = false) {
         avg_price: '117.09',
         revenue: '18734.40',
         customers: 52,
+        free_units: 3,
       },
     ],
     first_order: [{ kind: 'accutry50', customers: 273, repeat_rate: 0.14 }],
