@@ -20,10 +20,21 @@ TREND_PRIOR_FLOOR = Decimal("500")
 MATURITY_DAYS = 60
 CHURN_WINDOW_DAYS = 60
 UNPAID_STATUSES = frozenset({"pending", "failed", "cancelled", "refunded", "checkout-draft", "deleted", "trash"})
-# Filled from prod during Task 12 (read-only lookup): the two $0 internal Jan accounts
-# and the five Feb launch accounts from the 2026-10-02 retention analysis.
-INTERNAL_CUSTOMER_KEYS: frozenset[str] = frozenset()
-LAUNCH_ACCOUNT_KEYS: frozenset[str] = frozenset()
+# Read-only prod WooCommerce lookup 2026-10-06, confirmed by the Handler.
+# Internal: $0-only staff/partner accounts (the 2026-10-02 analysis's two Jan accounts plus two more).
+# wc:1544 (Forrest) is excluded via test_accounts.TEST_EMAILS instead.
+INTERNAL_CUSTOMER_KEYS: frozenset[str] = frozenset({
+    "wc:1541",  # Harmony Fried (Jan, $0)
+    "wc:1545",  # Anthony Burke, Valence (Jan, $0)
+    "wc:1540",  # Levi Fried, Valence (Feb, $0)
+    "wc:1714",  # results@accumarklabs.com ($0)
+})
+# Feb 2026 launch accounts; hidden only when exclude_launch_accounts is on (cohort views by default).
+LAUNCH_ACCOUNT_KEYS: frozenset[str] = frozenset({
+    "wc:1550",  # Mark Wilson, Platinum/Kold
+    "wc:1551",  # Kyle Robertson
+    "wc:1552",  # Walt Moscoso, Rapid
+})
 PERIOD_DAYS = {"30d": 30, "90d": 90, "6m": 182, "1y": 365}
 
 
