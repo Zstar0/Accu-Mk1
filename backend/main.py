@@ -10288,7 +10288,10 @@ async def reports_analyte_trends(
                 rows = cur.fetchall()
     except Exception as e:
         raise HTTPException(status_code=503, detail=f"Reports database error: {e}")
-    return AnalyteTrendsResponse(tz=_sp.lab_tz(db), coas=build_coa_records(rows))
+    # Same test-order rule as the SLA / throughput reports (billing email + test clients).
+    test_ids = _test_order_senaite_ids()
+    coas = [c for c in build_coa_records(rows) if c["sample_id"] not in test_ids]
+    return AnalyteTrendsResponse(tz=_sp.lab_tz(db), coas=coas)
 
 
 class CheckInRecord(BaseModel):
@@ -10499,8 +10502,7 @@ async def reports_turnaround(
         )
         SELECT m.sample_id, os.created_at AS ordered_at,
                m.received_at, m.submitted_at, m.verified_at, m.published_at,
-               (LOWER(os.payload->'billing'->>'email') IN
-                  ('forrestp@outlook.com', 'forrest@valenceanalytical.com')) AS is_test_order
+               (LOWER(os.payload->'billing'->>'email') = ANY(%s)) AS is_test_order
         FROM m
         LEFT JOIN order_submissions os ON os.id = m.order_id
     """
@@ -10517,7 +10519,7 @@ async def reports_turnaround(
     try:
         with get_integration_db() as conn:
             with conn.cursor() as cur:
-                cur.execute(sql)
+                cur.execute(sql, (sorted(TEST_EMAILS),))
                 rows = cur.fetchall()
     except Exception as e:
         raise HTTPException(status_code=503, detail=f"Reports database error: {e}")
