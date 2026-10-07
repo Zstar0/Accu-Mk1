@@ -394,7 +394,9 @@ def upsert_sample_from_signal(db: Session, sample_id: Optional[str],
     born_native = not sample_id
     if born_native:
         from sub_samples.native_id import mint_customer_sample_id
-        sample_id = mint_customer_sample_id(db, sample_type_title)
+        sample_id = mint_customer_sample_id(
+            db, sample_type_title,
+            ordered_service_keys=meta.get("OrderedServiceKeys"))
     native_id_value = mint_native_id(
         db, senaite_sample_id=sample_id, sample_type_title=sample_type_title,
     )

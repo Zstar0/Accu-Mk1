@@ -171,6 +171,17 @@ def test_headroom_errors_when_senaite_reaches_counter(db, caplog):
     assert any("native_id.counter_headroom" in r.message for r in caplog.records)
 
 
+def test_headroom_still_covers_bw_without_title_map(db):
+    from sub_samples.native_id import customer_id_headroom_violations
+    db.add_all([LimsNativeIdSequence(prefix="P", next_value=5000),
+                LimsNativeIdSequence(prefix="PB", next_value=1000),
+                LimsNativeIdSequence(prefix="BW", next_value=1000),
+                LimsSample(sample_id="BW-1500", external_lims_system="senaite")])
+    db.commit()
+    out = customer_id_headroom_violations(db)
+    assert len(out) == 1 and out[0].startswith("BW ")
+
+
 def test_init_db_runs_headroom_check():
     import database
     assert "customer_id_headroom_violations" in inspect.getsource(database.init_db)
