@@ -39,6 +39,7 @@ from sqlalchemy import select, desc, delete, update, func, extract, and_, or_
 from sqlalchemy.exc import IntegrityError
 
 from database import get_db, init_db
+from test_accounts import TEST_EMAILS
 from sla_engine import BusinessSchedule, compute_business_minutes, compute_business_deadline, sla_status_dict
 from throughput import (
     SERIES_START as THROUGHPUT_SERIES_START,
@@ -123,6 +124,7 @@ from slack_notify.routes import router as slack_prefs_router
 from slack_notify.interactions import router as slack_interactions_router
 from workflow.routes import router as workflow_router
 from priority.routes import router as priority_router
+from customer_insights.routes import router as customer_insights_router
 from workflow.cancel_routes import router as cancel_router
 from conformance.routes import router as conformance_router
 from documents.routes import router as documents_router
@@ -621,6 +623,7 @@ app.include_router(slack_prefs_router)
 app.include_router(slack_interactions_router)
 app.include_router(workflow_router)
 app.include_router(priority_router)
+app.include_router(customer_insights_router)
 app.include_router(cancel_router)
 app.include_router(conformance_router)
 app.include_router(documents_router)
@@ -10328,7 +10331,6 @@ def _test_order_senaite_ids() -> set[str]:
     every Mk1 sample registered under a test client (no order needed). Each
     leg degrades to an empty set on failure — nothing flagged as test.
     """
-    TEST_EMAILS = {"forrestp@outlook.com", "forrest@valenceanalytical.com"}
     test_ids: set[str] = set()
 
     try:
@@ -11060,6 +11062,17 @@ def _sla_perf_rows(db: Session) -> tuple[dict, bool]:
         _sla_perf_rows_cache.clear()
         _sla_perf_rows_cache.update({"at": now, "coas": coas, "inputs": inputs, "test_ids": test_ids})
         return _sla_perf_rows_cache, False
+
+
+def sla_sample_records(db: Session, now: datetime) -> list[dict]:
+    """Per-sample SLA records for Customer Insights (delivered + late, keyed by order number)."""
+    import sla_perf
+
+    rows, _stale = _sla_perf_rows(db)
+    if now.tzinfo is not None:  # the engine works in naive UTC, as /reports/sla-performance passes it
+        now = now.astimezone(timezone.utc).replace(tzinfo=None)
+    return sla_perf.sample_records(**rows["inputs"], coas=rows["coas"], now=now,
+                                   excluded_sample_ids=rows["test_ids"])
 
 
 def _load_tiered_profiles(db: Session) -> list[tuple[int, str, int, frozenset]]:
@@ -22766,7 +22779,6 @@ async def get_worksheets_inbox(
     # Step 1b: Filter to only samples linked to tracked orders in integration DB.
     # (Order-level priority is NOT copied out of the order payload any more —
     # it reaches each row through the resolver chain; spec §4.)
-    TEST_EMAILS = ["forrestp@outlook.com", "forrest@valenceanalytical.com"]
     try:
         from integration_db import get_integration_db
         from psycopg2.extras import RealDictCursor

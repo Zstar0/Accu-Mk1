@@ -16,6 +16,11 @@
  *                                  replaces ONLY this function's body with the
  *                                  real header + orders table.
  *
+ *   2b. GuestCustomerDetailView: guest ("email:" key) detail: header from
+ *                                  the insights dossier + Dashboard only (the
+ *                                  explorer Orders tab needs a WC id).
+ *                                  CustomerDetailRouter picks id vs key.
+ *
  *   3. CustomerStatusPage        — exported router. Exactly ONE hook call
  *                                  (useUIStore for activeSubSection) followed by
  *                                  ONE ternary return. Nothing else. This shape
@@ -55,10 +60,12 @@ import {
 
 import { cn } from '@/lib/utils'
 import {
+  getCustomerList,
   getExplorerCustomerById,
   getExplorerCustomers,
   getExplorerOrdersByCustomer,
   getExplorerStatus,
+  type CustomerRow as InsightRow,
   type ExplorerCustomer,
   type ExplorerCustomersResponse,
   type ExplorerOrder,
@@ -70,6 +77,14 @@ import {
   getWordpressUrl,
 } from '@/lib/api-profiles'
 import { useUIStore } from '@/store/ui-store'
+import {
+  dossierQuery,
+  fmtDelta,
+  fmtMoney,
+  STATUS_CLASS,
+  STATUS_LABEL,
+} from '@/components/customers/insights-utils'
+import { CustomerDashboard } from '@/components/customers/CustomerDashboard'
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert'
 import { Button } from '@/components/ui/button'
 import {
@@ -113,6 +128,7 @@ function CustomerListView() {
     state => state.setSearchAndResetPage
   )
   const navigateToCustomer = useUIStore(state => state.navigateToCustomer)
+  const navigateToCustomerKey = useUIStore(state => state.navigateToCustomerKey)
 
   // --- Local UI state ---
   const [envName, setEnvName] = useState(() => getActiveEnvironmentName())
@@ -174,6 +190,28 @@ function CustomerListView() {
     enabled: status?.connected === true,
     staleTime: 60_000,
   })
+
+  // Insight columns (Customer Insights). Every customer's 90d row is paged in
+  // (200 per call) and joined to the explorer rows by customer key, so rows
+  // are never missing just because the explorer sorts by recency.
+  const { data: insightRows, isError: insightError } = useQuery({
+    queryKey: ['customers', 'list', '90d', envName],
+    queryFn: async () => {
+      const all: InsightRow[] = []
+      for (let page = 1; ; page++) {
+        const res = await getCustomerList({
+          period: '90d',
+          page_size: 200,
+          page,
+        })
+        all.push(...res.rows)
+        if (res.rows.length === 0 || all.length >= res.total) return all
+      }
+    },
+    enabled: status?.connected === true,
+    staleTime: 60_000,
+  })
+  const insightByKey = new Map((insightRows ?? []).map(r => [r.key, r] as const))
 
   // --- Derived (no client-side filter — D-07, T-29-03) ---
   const customers = customersData?.customers ?? []
@@ -288,6 +326,12 @@ function CustomerListView() {
         </Alert>
       )}
 
+      {insightError && (
+        <p className="text-xs text-muted-foreground">
+          Spend insights unavailable
+        </p>
+      )}
+
       {/* Customers card */}
       <Card>
         <CardContent className="p-0">
@@ -313,6 +357,30 @@ function CustomerListView() {
                   <th className="py-2 px-3 text-xs font-semibold uppercase text-muted-foreground whitespace-nowrap">
                     Most Recent
                   </th>
+                  <th className="py-2 px-3 text-xs font-semibold uppercase text-muted-foreground whitespace-nowrap text-right">
+                    Spend (90d)
+                  </th>
+                  <th className="py-2 px-3 text-xs font-semibold uppercase text-muted-foreground whitespace-nowrap text-right">
+                    Δ
+                  </th>
+                  <th className="py-2 px-3 text-xs font-semibold uppercase text-muted-foreground whitespace-nowrap text-right">
+                    Lifetime
+                  </th>
+                  <th className="py-2 px-3 text-xs font-semibold uppercase text-muted-foreground whitespace-nowrap text-right">
+                    Samples
+                  </th>
+                  <th className="py-2 px-3 text-xs font-semibold uppercase text-muted-foreground whitespace-nowrap text-right">
+                    Usual gap
+                  </th>
+                  <th className="py-2 px-3 text-xs font-semibold uppercase text-muted-foreground whitespace-nowrap">
+                    Top tests
+                  </th>
+                  <th className="py-2 px-3 text-xs font-semibold uppercase text-muted-foreground whitespace-nowrap">
+                    Rep
+                  </th>
+                  <th className="py-2 px-3 text-xs font-semibold uppercase text-muted-foreground whitespace-nowrap">
+                    Status
+                  </th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-border/50">
@@ -326,7 +394,7 @@ function CustomerListView() {
                   !hasError &&
                   Array.from({ length: 8 }).map((_, i) => (
                     <tr key={`skeleton-${i}`} data-testid="customer-row-skeleton">
-                      {Array.from({ length: 6 }).map((__, j) => (
+                      {Array.from({ length: 13 }).map((__, j) => (
                         <td key={j} className="py-3 px-3">
                           <Skeleton className="h-4 w-full" />
                         </td>
@@ -340,7 +408,7 @@ function CustomerListView() {
                   !hasError &&
                   customers.length === 0 && (
                     <tr>
-                      <td colSpan={6} className="py-16">
+                      <td colSpan={14} className="py-16">
                         <div className="flex flex-col items-center text-center">
                           <Users className="h-8 w-8 text-muted-foreground/40 mb-2" />
                           <p className="text-sm font-medium text-muted-foreground">
@@ -370,7 +438,13 @@ function CustomerListView() {
                           : `g-${customer.email}`
                       }
                       customer={customer}
+                      insight={insightByKey.get(
+                        customer.customer_id !== null
+                          ? `wc:${customer.customer_id}`
+                          : `email:${customer.email.toLowerCase()}`
+                      )}
                       onNavigate={navigateToCustomer}
+                      onNavigateKey={navigateToCustomerKey}
                     />
                   ))}
               </tbody>
@@ -423,37 +497,37 @@ function CustomerListView() {
  * One customer row. Extracted into its own component so the row's keyboard
  * handler closure captures one customer (avoiding the per-row recreation that
  * React Compiler would otherwise have to memoize). Guests (customer_id === null)
- * are non-keyboard-focusable, non-clickable, and labeled "— (Guest)".
+ * are labeled as Guest and open the key-based (email:) Dashboard-only detail.
  */
 function CustomerRow({
   customer,
+  insight,
   onNavigate,
+  onNavigateKey,
 }: {
   customer: ExplorerCustomer
+  insight?: InsightRow
   onNavigate: (id: number) => void
+  onNavigateKey: (key: string) => void
 }) {
   const customerId = customer.customer_id
   const isRegistered = customerId !== null
+  const open = () =>
+    customerId !== null
+      ? onNavigate(customerId)
+      : onNavigateKey(`email:${customer.email.toLowerCase()}`)
 
   return (
     <tr
-      tabIndex={isRegistered ? 0 : -1}
-      onClick={isRegistered ? () => onNavigate(customerId) : undefined}
-      onKeyDown={
-        isRegistered
-          ? e => {
-              if (e.key === 'Enter' || e.key === ' ') {
-                e.preventDefault()
-                onNavigate(customerId)
-              }
-            }
-          : undefined
-      }
-      className={cn(
-        isRegistered
-          ? 'cursor-pointer hover:bg-muted/30 focus-visible:ring-2 focus-visible:ring-primary focus-visible:ring-offset-2 focus-visible:outline-none'
-          : 'cursor-default'
-      )}
+      tabIndex={0}
+      onClick={open}
+      onKeyDown={e => {
+        if (e.key === 'Enter' || e.key === ' ') {
+          e.preventDefault()
+          open()
+        }
+      }}
+      className="cursor-pointer hover:bg-muted/30 focus-visible:ring-2 focus-visible:ring-primary focus-visible:ring-offset-2 focus-visible:outline-none"
     >
       <td className="py-3 px-3">
         {isRegistered ? (
@@ -480,7 +554,66 @@ function CustomerRow({
       <td className="py-3 px-3 text-sm text-muted-foreground">
         {formatDate(customer.most_recent_order_at)}
       </td>
+      <InsightCells insight={insight} />
     </tr>
+  )
+}
+
+/** Customer Insights cells for one list row; dashes when no insight matched. */
+function InsightCells({ insight }: { insight?: InsightRow }) {
+  if (!insight) {
+    return (
+      <>
+        {Array.from({ length: 8 }).map((_, i) => (
+          <td key={i} className="py-3 px-3 text-sm text-muted-foreground">
+            -
+          </td>
+        ))}
+      </>
+    )
+  }
+  const delta = fmtDelta(insight.delta_pct)
+  return (
+    <>
+      <td className="py-3 px-3 text-sm text-right tabular-nums">
+        {fmtMoney(insight.period_spend)}
+      </td>
+      <td
+        className={cn(
+          'py-3 px-3 text-sm text-right tabular-nums',
+          delta.tone === 'up' && 'text-emerald-600 dark:text-emerald-400',
+          delta.tone === 'down' && 'text-red-600 dark:text-red-400',
+          delta.tone === 'flat' && 'text-muted-foreground'
+        )}
+      >
+        {delta.text}
+      </td>
+      <td className="py-3 px-3 text-sm text-right tabular-nums">
+        {fmtMoney(insight.lifetime)}
+      </td>
+      <td className="py-3 px-3 text-sm text-right tabular-nums">
+        {insight.samples}
+      </td>
+      <td className="py-3 px-3 text-sm text-right tabular-nums text-muted-foreground">
+        {insight.usual_gap_days == null ? 'n/a' : `${insight.usual_gap_days} d`}
+      </td>
+      <td className="py-3 px-3 text-sm text-muted-foreground">
+        {insight.top_tests.join(', ') || '-'}
+      </td>
+      <td className="py-3 px-3 text-sm text-muted-foreground whitespace-nowrap">
+        {insight.rep ?? '-'}
+      </td>
+      <td className="py-3 px-3 text-sm">
+        <span
+          className={cn(
+            'rounded-full px-2 py-0.5 text-xs font-medium whitespace-nowrap',
+            STATUS_CLASS[insight.status]
+          )}
+        >
+          {STATUS_LABEL[insight.status] ?? insight.status}
+        </span>
+      </td>
+    </>
   )
 }
 
@@ -517,6 +650,7 @@ function CustomerDetailView() {
   // Phase 30 — Task 6: detail-view tab selection
   const customerDetailTab = useUIStore(state => state.customerDetailTab)
   const setCustomerDetailTab = useUIStore(state => state.setCustomerDetailTab)
+  const navigateTo = useUIStore(state => state.navigateTo)
   // UX revision: per-customer order search uses FOUR independent axes
   // (order_number, sample_id, analyte, lot) that are AND-combined server-side.
   // - `customerOrderSearch` is the committed (post-debounce) state per axis.
@@ -780,7 +914,7 @@ function CustomerDetailView() {
       </Card>
 
       {/* Phase 30 — Task 6: Tabs wrap everything below the header card.
-          Customer Orders is the default. Dashboard is a placeholder. */}
+          Customer Orders is the default; Dashboard is the insights dossier. */}
       <Tabs
         value={customerDetailTab}
         onValueChange={v =>
@@ -804,10 +938,14 @@ function CustomerDetailView() {
             customerOrderSearch={customerOrderSearch}
             setCustomerOrderSearchField={setCustomerOrderSearchField}
             setCustomerOrderSearchReset={setCustomerOrderSearchReset}
+            customerKey={`wc:${customerDetailTargetId}`}
           />
         </TabsContent>
         <TabsContent value="dashboard" className="mt-4">
-          <CustomerDashboardPlaceholder />
+          <CustomerDashboard
+            customerKey={`wc:${customerDetailTargetId}`}
+            onOpenAnalyte={() => navigateTo('reports', 'dashboard')}
+          />
         </TabsContent>
       </Tabs>
     </div>
@@ -859,6 +997,7 @@ function CustomerOrdersTab({
   customerOrderSearch,
   setCustomerOrderSearchField,
   setCustomerOrderSearchReset,
+  customerKey,
 }: {
   orders: ExplorerOrder[]
   ordersLoading: boolean
@@ -885,7 +1024,19 @@ function CustomerOrdersTab({
     value: string
   ) => void
   setCustomerOrderSearchReset: () => void
+  customerKey: string
 }) {
+  // Total / Discount / Coupon cells come from the insights dossier (same
+  // query key as the Dashboard tab: one fetch). Errors or a 404 leave the
+  // cells as "-"; the orders table itself never depends on it. Joined on the
+  // WC order id (ExplorerOrder.order_id is the WP post id, as OrderRow's
+  // edit link shows; the dossier's order_id is wc_orders.id): order NUMBER
+  // formats differ across sources.
+  const dossier = useQuery(dossierQuery(customerKey))
+  const moneyByOrder = new Map(
+    (dossier.data?.orders ?? []).map(o => [String(o.order_id), o])
+  )
+
   // One local state slot per axis. Seed from the committed store value so a
   // remount / back-nav doesn't blow away the in-flight search term.
   const [orderNumberInput, setOrderNumberInput] = useState(
@@ -1201,6 +1352,15 @@ function CustomerOrdersTab({
                     <th className="py-2 px-3 font-medium whitespace-nowrap">
                       Created
                     </th>
+                    <th className="py-2 px-3 font-medium whitespace-nowrap text-right">
+                      Total
+                    </th>
+                    <th className="py-2 px-3 font-medium whitespace-nowrap text-right">
+                      Discount
+                    </th>
+                    <th className="py-2 px-3 font-medium whitespace-nowrap">
+                      Coupon
+                    </th>
                     <th className="py-2 px-3 font-medium whitespace-nowrap">
                       Timing
                     </th>
@@ -1222,6 +1382,7 @@ function CustomerOrdersTab({
                       highlightSampleId={highlightSampleId}
                       highlightLot={highlightLot}
                       showFinance
+                      money={moneyByOrder.get(String(order.order_id))}
                       slaVerdict={orderSla.verdictByOrderId.get(order.order_id)}
                       sampleSlaStatusesMap={orderSla.sampleStatusesBySampleId}
                       productsBySampleId={productsBySampleId}
@@ -1239,22 +1400,68 @@ function CustomerOrdersTab({
 }
 
 /**
- * Phase 30 — Task 6: Dashboard tab placeholder.
- *
- * One-line "Coming soon" card. Phase 30 ships this empty; future phases will
- * replace its body with real per-customer analytics (revenue, orders/day,
- * average turnaround).
+ * Guest (email: key) detail: no WC id, so no explorer Orders tab. Header and
+ * Dashboard read the insights dossier (one shared query).
  */
-function CustomerDashboardPlaceholder() {
+function GuestCustomerDetailView({ customerKey }: { customerKey: string }) {
+  const navigateToCustomers = useUIStore(state => state.navigateToCustomers)
+  const navigateTo = useUIStore(state => state.navigateTo)
+  const { data } = useQuery(dossierQuery(customerKey))
+  const email = customerKey.slice('email:'.length)
+  const name = data?.identity.name ?? email
   return (
-    <Card>
-      <CardContent className="py-12 text-center">
-        <p className="text-sm text-muted-foreground">
-          Coming soon — customer analytics (revenue, orders/day, average turnaround).
-        </p>
-      </CardContent>
-    </Card>
+    <div className="flex flex-col gap-4 p-4">
+      <div>
+        <button
+          type="button"
+          className="text-sm text-primary hover:underline mb-4"
+          onClick={() => navigateToCustomers()}
+        >
+          ← Back to Customers
+        </button>
+      </div>
+      <Card className="py-0">
+        <CardContent className="flex flex-wrap items-center gap-x-2 gap-y-1 px-4 py-2">
+          <div className="flex h-7 w-7 items-center justify-center rounded-full bg-primary/10 shrink-0">
+            <User className="h-3.5 w-3.5 text-primary" />
+          </div>
+          <span className="text-sm font-semibold truncate">{name}</span>
+          {name !== email && (
+            <span className="text-xs text-muted-foreground">{email}</span>
+          )}
+          {data?.identity.company && (
+            <span className="text-xs text-muted-foreground italic">
+              {data.identity.company}
+            </span>
+          )}
+          <span className="rounded-full bg-muted px-2 py-0.5 text-xs text-muted-foreground">
+            Guest checkout
+          </span>
+        </CardContent>
+      </Card>
+      <CustomerDashboard
+        customerKey={customerKey}
+        onOpenAnalyte={() => navigateTo('reports', 'dashboard')}
+      />
+    </div>
   )
+}
+
+/**
+ * Detail router: numeric WC id -> full detail; guest key -> Dashboard-only
+ * view; neither (e.g. a refreshed guest URL, which carries no id because
+ * emails stay out of the hash) -> the list.
+ */
+function CustomerDetailRouter() {
+  const customerDetailTargetId = useUIStore(
+    state => state.customerDetailTargetId
+  )
+  const customerDetailKey = useUIStore(state => state.customerDetailKey)
+  if (customerDetailTargetId !== null) return <CustomerDetailView />
+  if (customerDetailKey) {
+    return <GuestCustomerDetailView customerKey={customerDetailKey} />
+  }
+  return <CustomerListView />
 }
 
 /**
@@ -1266,7 +1473,7 @@ function CustomerDashboardPlaceholder() {
 export function CustomerStatusPage() {
   const activeSubSection = useUIStore(state => state.activeSubSection)
   return activeSubSection === 'customer-detail' ? (
-    <CustomerDetailView />
+    <CustomerDetailRouter />
   ) : (
     <CustomerListView />
   )
