@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+## v1.35.2 - 2026-10-07
+
+### Fixed
+- Check-In Times counts samples received (lims_samples.date_received, same as Lab Throughput) instead of worksheet vials; test-order flag now matches.
+
 ## v1.35.1 - 2026-10-07
 
 ### Fixed
