@@ -86,6 +86,8 @@ class ProductPrice(BaseModel):
     revenue: str
     customers: int
     free_units: int = 0
+    list_price: Optional[str] = None  # avg pre-coupon list price per paid unit
+    discount_pct: Optional[float] = None  # 1 - paid / list over the same units
 
 
 class Meta(BaseModel):

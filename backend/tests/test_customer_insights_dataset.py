@@ -171,3 +171,10 @@ def test_rep_prefers_commissions_history_then_salesking() -> None:
         (3, "c@x", "C", None, None, "none", "[]"),        # neither
         (1557, "s@x", "Scott", None, None, "none", None)])
     assert [ds.customers[k].rep for k in ("wc:1", "wc:2", "wc:3")] == ["Scott", "Scott", None]
+
+
+def test_line_subtotal_parsed_when_mirrored() -> None:
+    items = [{"name": "HPLC", "product_id": 1, "qty": 2, "total": "170", "subtotal": "200", "category": "testing"},
+             {"name": "HPLC", "product_id": 1, "qty": 1, "total": "100", "category": "testing"}]
+    (o,) = build([order_row(1, total="270.00", items=items)]).orders
+    assert [ln.subtotal for ln in o.lines] == [Decimal("200.00"), None]

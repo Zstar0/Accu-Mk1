@@ -35,6 +35,7 @@ class Line:
     product: str
     qty: int
     total: Decimal  # post-coupon line total (WC line_items[].total)
+    subtotal: Decimal | None = None  # pre-coupon list total; None on rows mirrored before IS 1.0.35
 
 
 @dataclass(frozen=True)
@@ -139,7 +140,9 @@ def _lines(items: list[dict], labels: dict[int, str]) -> tuple[Line, ...]:
             continue
         pid = int(i.get("product_id") or 0)
         product = _CATEGORY_PRODUCT.get(cat) or labels.get(pid) or i.get("name") or "Other"
-        out.append(Line(product, int(i.get("qty") or 0), Decimal(str(i.get("total") or 0)).quantize(_CENT)))
+        sub = i.get("subtotal")
+        out.append(Line(product, int(i.get("qty") or 0), Decimal(str(i.get("total") or 0)).quantize(_CENT),
+                        Decimal(str(sub)).quantize(_CENT) if sub not in (None, "") else None))
     return tuple(out)
 
 

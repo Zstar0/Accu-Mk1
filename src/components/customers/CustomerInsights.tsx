@@ -391,6 +391,7 @@ export function CustomerInsights({
                 <thead>
                   <tr className="text-[11px] uppercase tracking-wider text-muted-foreground">
                     <th className="py-1 text-left font-medium">Customer</th>
+                    <th className="text-left font-medium">Rep</th>
                     <th className="text-right font-medium">12-mo spend</th>
                     <th className="text-right font-medium">Orders</th>
                     <th className="text-right font-medium">Usual gap</th>
@@ -414,6 +415,9 @@ export function CustomerInsights({
                             }}
                           >
                             <td className="py-1.5 font-medium">{r.name}</td>
+                            <td className="text-muted-foreground">
+                              {r.rep ?? 'Unassigned'}
+                            </td>
                             <td className="text-right">
                               {fmtMoney(r.spend_12m)}
                             </td>
@@ -455,6 +459,7 @@ export function CustomerInsights({
                               {r.name}
                             </div>
                             <div>{r.email ?? 'no email'}</div>
+                            <div>Rep: {r.rep ?? 'unassigned'}</div>
                             <div>
                               Usual gap{' '}
                               {r.usual_gap_days == null
@@ -555,7 +560,8 @@ export function CustomerInsights({
             <h2 className="text-sm font-medium">Average price by product</h2>
             <p className="mb-2 text-[11px] text-muted-foreground">
               What customers actually paid per unit in this period, after
-              coupons. Free units (100% coupons) are counted, not averaged.
+              coupons, vs the list price. Free units (100% coupons) are counted,
+              not averaged.
             </p>
             {s.product_prices.length === 0 ? (
               <p className="py-4 text-center text-sm text-muted-foreground">
@@ -567,6 +573,7 @@ export function CustomerInsights({
                   <tr className="text-[11px] uppercase tracking-wider text-muted-foreground">
                     <th className="py-1 text-left font-medium">Product</th>
                     <th className="text-right font-medium">Avg price</th>
+                    <th className="text-right font-medium">List</th>
                     <th className="text-right font-medium">Units</th>
                     <th className="text-right font-medium">Free</th>
                     <th className="text-right font-medium">Revenue</th>
@@ -579,6 +586,17 @@ export function CustomerInsights({
                       <td className="py-1.5">{p.product}</td>
                       <td className="text-right font-medium">
                         {fmtPrice(p.avg_price)}
+                        {p.discount_pct != null && p.discount_pct >= 0.005 && (
+                          <span
+                            className="ml-1 rounded-full bg-amber-500/15 px-1.5 text-xs font-semibold text-amber-700 dark:text-amber-300"
+                            title="Average discount from list price on paid units"
+                          >
+                            -{fmtPct(p.discount_pct, 0)}
+                          </span>
+                        )}
+                      </td>
+                      <td className="text-right text-muted-foreground">
+                        {fmtPrice(p.list_price)}
                       </td>
                       <td className="text-right">{p.units}</td>
                       <td className="text-right text-muted-foreground">

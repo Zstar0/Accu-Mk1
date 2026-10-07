@@ -62,6 +62,8 @@ function setup(riskFails = false) {
         revenue: '18734.40',
         customers: 52,
         free_units: 3,
+        list_price: '135.00',
+        discount_pct: 0.1327,
       },
     ],
     first_order: [{ kind: 'accutry50', customers: 273, repeat_rate: 0.14 }],
@@ -81,7 +83,7 @@ function setup(riskFails = false) {
         name: 'Halcyon Research Supply',
         email: 'ops@h.example',
         company: null,
-        rep: null,
+        rep: 'Scott Joseph',
         period_spend: '12400.00',
         prior_spend: '42000.00',
         delta_pct: -0.71,
@@ -133,9 +135,13 @@ describe('CustomerInsights', () => {
     ).toBeInTheDocument()
     expect(screen.getByText('n = 14')).toBeInTheDocument()
     expect(screen.getByText(/Correlation, not proof/)).toBeInTheDocument()
-    expect(screen.getByText('Endotoxin Addon').closest('tr')).toHaveTextContent(
-      '$117.09'
-    )
+    const priceRow = screen.getByText('Endotoxin Addon').closest('tr')
+    expect(priceRow).toHaveTextContent('$117.09')
+    expect(priceRow).toHaveTextContent('-13%')
+    expect(priceRow).toHaveTextContent('$135.00')
+    expect(
+      screen.getByText('Halcyon Research Supply').closest('tr')
+    ).toHaveTextContent('Scott Joseph')
     for (const h of [
       'First order → comes back? (all time)',
       'Add-on attach rate (all time)',

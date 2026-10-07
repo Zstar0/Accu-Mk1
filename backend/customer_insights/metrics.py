@@ -239,10 +239,13 @@ def product_prices(orders: list[Order]) -> list[dict[str, Any]]:
     """Avg price actually paid per paid unit (post-coupon line total / qty), by product.
 
     Free units ($0 lines, e.g. a 100% coupon) are counted in free_units, not averaged.
+    list_price / discount_pct compare paid units to their pre-coupon list price (WC line subtotal),
+    over the paid units whose subtotal is mirrored.
 
     ponytail: refunds are order-level only, so a partially refunded order keeps full line prices.
     """
-    agg: dict[str, list] = defaultdict(lambda: [0, ZERO, set(), 0])
+    # [paid units, paid total, customers, free units, list units, list total, paid total on list lines]
+    agg: dict[str, list] = defaultdict(lambda: [0, ZERO, set(), 0, 0, ZERO, ZERO])
     for x in orders:
         for ln in x.lines:
             if ln.qty <= 0:
@@ -254,9 +257,15 @@ def product_prices(orders: list[Order]) -> list[dict[str, Any]]:
                 continue
             a[0] += ln.qty
             a[1] += ln.total
+            if ln.subtotal and ln.subtotal > 0:  # list price known (IS 1.0.35+ rows)
+                a[4] += ln.qty
+                a[5] += ln.subtotal
+                a[6] += ln.total
     rows = [{"product": p, "units": u, "avg_price": money(t / u) if u else None, "revenue": money(t),
-             "customers": len(c), "free_units": f}
-            for p, (u, t, c, f) in agg.items()]
+             "customers": len(c), "free_units": f,
+             "list_price": money(lt / lu) if lu else None,
+             "discount_pct": round(float(1 - lp / lt), 4) if lt else None}
+            for p, (u, t, c, f, lu, lt, lp) in agg.items()]
     return sorted(rows, key=lambda r: -Decimal(r["revenue"]))
 
 
