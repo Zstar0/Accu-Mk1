@@ -81,6 +81,9 @@ class Dataset:
     synced_at: datetime | None
     # Orders some submission (paid or free) retests; free retests never reach `orders`.
     retested_order_ids: frozenset[int] = frozenset()
+    # Paid $0 orders (a coupon covered everything). Kept out of revenue and repeat metrics;
+    # pricing and coupon use read them so a free test still counts as a coupon use at $0.
+    free_orders: tuple[Order, ...] = ()
 
 
 def service_label(service_key: str) -> str | None:
@@ -187,10 +190,14 @@ def build_dataset(
         customers[key] = replace(customers[key], rep=agent.name if agent else f"Agent #{rep_id}")
 
     orders: list[Order] = []
+    free_orders: list[Order] = []
     for (oid, number, cid, email, status, total, discount, refund, coupons, items, paid, cl) in order_rows:
         net = (total or Decimal(0)) - (refund or Decimal(0))
         key = customer_key(cid, email)
-        if key is None or not is_paid(status, paid) or net <= 0:
+        if key is None or not is_paid(status, paid):
+            continue
+        free = net <= 0 and not (total or 0) and not (refund or 0) and bool(coupons)
+        if net <= 0 and not free:  # fully refunded
             continue
         sub = subs.get(int(oid))
         samples = list((sub[1] if sub else None) or [])
@@ -204,7 +211,7 @@ def build_dataset(
                 (email or "").lower() or None, billing.get("company_name") or billing.get("company") or None,
                 int(cid) if cid else None,
             )
-        orders.append(Order(
+        (free_orders if free else orders).append(Order(
             order_id=int(oid), order_number=norm_order_number(number), customer_key=key, paid_at=paid,
             net=net.quantize(Decimal("0.01")), discount=(discount or Decimal(0)).quantize(Decimal("0.01")),
             coupons=tuple(c.lower() for c in coupons or []),
@@ -226,4 +233,5 @@ def build_dataset(
         delivered = frozenset(n for n, _ in recs if n)
         late = frozenset(n for n, r in recs if n and r.get("late"))
     retested = frozenset(int(r[3]) for r in subs.values() if r[2] and r[3])
-    return Dataset(customers, tuple(orders), coas, late, delivered, synced_at, retested)
+    return Dataset(customers, tuple(orders), coas, late, delivered, synced_at, retested,
+                   tuple(sorted(free_orders, key=lambda o: o.paid_at)))

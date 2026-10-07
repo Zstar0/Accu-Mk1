@@ -26,8 +26,10 @@ def scope(ds: Dataset, *, exclude_launch: bool) -> Dataset:
         return rules.is_excluded(key, exclude_launch=exclude_launch, email=c.email if c else None)
 
     keep = [o for o in ds.orders if not drop(o.customer_key)]
+    free = tuple(o for o in ds.free_orders if not drop(o.customer_key))
     keys = {o.customer_key for o in keep}
-    return replace(ds, orders=tuple(keep), customers={k: c for k, c in ds.customers.items() if k in keys})
+    return replace(ds, orders=tuple(keep), free_orders=free,
+                   customers={k: c for k, c in ds.customers.items() if k in keys})
 
 
 def _upto(ds: Dataset, end: datetime) -> list[Order]:
@@ -50,8 +52,9 @@ def _repeat_stats(ds: Dataset, end: datetime) -> tuple[float | None, float | Non
     return rate, (round(statistics.median(seconds), 1) if seconds else None)
 
 
-def _window(ds: Dataset, start: datetime | None, end: datetime) -> list[Order]:
-    return [o for o in ds.orders if (start is None or o.paid_at >= start) and o.paid_at <= end]
+def _window(ds: Dataset, start: datetime | None, end: datetime, *, free: bool = False) -> list[Order]:
+    src = ds.orders + ds.free_orders if free else ds.orders
+    return [o for o in src if (start is None or o.paid_at >= start) and o.paid_at <= end]
 
 
 def _kpis(ds: Dataset, start: datetime | None, end: datetime) -> dict[str, Any]:
@@ -133,7 +136,7 @@ def summary(ds: Dataset, *, start: datetime | None, end: datetime, tz: str) -> d
             "mean_ltv": money(total / len(ltv) if ltv else ZERO),
         },
         "attach": attach,
-        "product_prices": product_prices(_window(ds, start, end)),
+        "product_prices": product_prices(_window(ds, start, end, free=True)),
         "first_order": [{"kind": kind, "customers": len(kinds.get(kind, [])),
                          "repeat_rate": round(sum(kinds[kind]) / len(kinds[kind]), 4) if kinds.get(kind) else None}
                         for kind in ("accutry50", "other_coupon", "full_price", "with_addon")],
@@ -303,7 +306,8 @@ def dossier(ds: Dataset, key: str, *, end: datetime, tz: str) -> dict[str, Any] 
     period = _spend(orders, end - timedelta(days=90), end)
     prior = _spend(orders, end - timedelta(days=180), end - timedelta(days=90))
     risk = rules.is_at_risk(dates, end)
-    lab_prices = {r["product"]: r["avg_price"] for r in product_prices(_upto(ds, end))}
+    lab_prices = {r["product"]: r["avg_price"] for r in product_prices(_window(ds, None, end, free=True))}
+    priced = orders + [x for x in ds.free_orders if x.customer_key == key and x.paid_at <= end]
 
     def recent_row(x: Order) -> dict[str, Any]:
         cs = [y for y in mine if y.order_number == x.order_number]
@@ -339,8 +343,8 @@ def dossier(ds: Dataset, key: str, *, end: datetime, tz: str) -> dict[str, Any] 
                      for t, n in sorted(tests.items(), key=lambda kv: -kv[1])],
         "analytes": sorted(({"product": p, "coas": len(v), "pass_rate": round(sum(v) / len(v), 4)}
                             for p, v in products.items()), key=lambda r: -r["coas"])[:8],
-        "test_prices": [{**r, "lab_avg_price": lab_prices.get(r["product"])} for r in product_prices(orders)],
-        "coupons": coupon_use(orders),
+        "test_prices": [{**r, "lab_avg_price": lab_prices.get(r["product"])} for r in product_prices(priced)],
+        "coupons": coupon_use(priced),
         "recent": [recent_row(x) for x in sorted(orders, key=lambda x: x.paid_at, reverse=True)[:6]],
         "orders": order_rows(replace(ds, orders=tuple(orders)), start=None, end=end),
     }

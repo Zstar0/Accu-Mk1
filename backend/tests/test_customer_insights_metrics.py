@@ -263,3 +263,20 @@ def test_product_prices_and_coupon_use() -> None:
         {"code": "ac15", "orders": 2, "discount": "60.00", "terms": "20%", "last_used": b.paid_at.isoformat()},
         {"code": "sc5", "orders": 1, "discount": "5.00", "terms": None, "last_used": b.paid_at.isoformat()},
     ]
+
+
+def test_free_coupon_orders_count_for_pricing_and_coupons_not_revenue() -> None:
+    paid = replace(o("wc:1", 0, "300", oid=1), lines=(Line("HPLC", 1, Decimal("300.00")),))
+    free = replace(o("wc:1", 5, "0", oid=2), lines=(Line("HPLC", 1, Decimal("0.00")),),
+                   coupon_lines=(CouponLine("first-one-on-us", Decimal("250.00"), "$250.00"),))
+    data = replace(ds([paid]), free_orders=(free,))
+    end = T0 + timedelta(days=30)
+    out = metrics.summary(data, start=T0 - timedelta(days=1), end=end, tz=TZ)
+    assert out["kpis"]["revenue"]["value"] == "300.00" and out["kpis"]["paid_orders"]["value"] == 1
+    assert out["product_prices"][0] == {"product": "HPLC", "units": 2, "avg_price": "150.00",
+                                        "revenue": "300.00", "customers": 1}
+    d = metrics.dossier(data, "wc:1", end=end, tz=TZ)
+    assert d["kpis"]["orders"] == 1
+    assert [c["code"] for c in d["coupons"]] == ["first-one-on-us"]
+    assert d["test_prices"][0]["avg_price"] == "150.00"
+    assert metrics.scope(data, exclude_launch=False).free_orders == (free,)

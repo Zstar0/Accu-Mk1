@@ -146,3 +146,13 @@ def test_lines_coupons_and_rep() -> None:
     assert ds.customers["wc:1188"].rep == "Scott"
     assert ds.customers["wc:1557"].rep is None
     assert ds.customers["wc:77"].rep == "Agent #999"
+
+
+def test_coupon_covered_zero_orders_are_free_not_revenue() -> None:
+    hplc = [{"name": "HPLC", "product_id": 2853, "qty": 1, "total": "0.00", "category": "testing"}]
+    ds = build([order_row(1, total="0.00", coupons=["first-one-on-us"], discount="250.00", items=hplc),
+                order_row(2, total="0.00", items=hplc),                        # free retest, no coupon
+                order_row(3, total="100.00", refund="100.00", coupons=["x"])])  # fully refunded
+    assert ds.orders == ()
+    (f,) = ds.free_orders
+    assert f.order_id == 1 and f.coupon_lines[0].discount == Decimal("250.00")
