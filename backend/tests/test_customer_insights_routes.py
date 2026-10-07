@@ -181,3 +181,17 @@ def test_dossier_sla_section_survives_response_model(client, monkeypatch) -> Non
     assert d["sla"]["customer"]["late"] == 1 and d["sla"]["lab"]["delivered"] == 1
     ster = next(f for f in d["sla"]["families"] if f["key"] == "ster")
     assert ster["name"] == "Sterility" and ster["held_up"] == 1 and ster["over_target_rate"] == 1.0
+
+
+def test_dossier_sla_window_params(client, monkeypatch) -> None:
+    from dataclasses import replace
+    from datetime import date
+
+    from customer_insights.dataset import SlaRec
+
+    recs = (SlaRec("1", "delivered", 30.0, 24.0, True, {"hplc": 29.0}, {"hplc": 24.0}, date(2026, 8, 20)),
+            SlaRec("2", "delivered", 10.0, 24.0, False, {"hplc": 9.0}, {"hplc": 24.0}, date(2026, 9, 10)))
+    monkeypatch.setattr(sources, "load_dataset", lambda db, now: replace(DS, sla=recs))
+    d = client.get("/reports/customers/wc:1?sla_from=2026-09-01&sla_to=2026-09-30").json()
+    assert d["sla"]["customer"]["delivered"] == 1 and d["sla"]["customer"]["late"] == 0
+    assert client.get("/reports/customers/wc:1").json()["sla"]["customer"]["delivered"] == 2

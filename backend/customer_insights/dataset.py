@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 from collections import Counter, defaultdict
 from dataclasses import dataclass, replace
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 from decimal import Decimal
 from typing import Any, Iterable
 
@@ -83,6 +83,7 @@ class SlaRec:
     late: bool
     family_bh: dict[str, float]  # received -> each test family's last verification
     family_target: dict[str, float]
+    recv_day: date | None = None  # lab day received (window filter)
 
 
 @dataclass(frozen=True)
@@ -269,7 +270,7 @@ def build_dataset(
         sla = tuple(
             SlaRec(norm_order_number(r["order"]), r.get("state") or "", float(r.get("bh") or 0),
                    float(r.get("target") or 0), bool(r.get("late")), dict(r.get("family_bh") or {}),
-                   dict(r.get("family_target") or {}))
+                   dict(r.get("family_target") or {}), r.get("recv_day"))
             for r in sla_records if r.get("order") and r.get("state") in ("delivered", "open")
         )
     retested = frozenset(int(r[3]) for r in subs.values() if r[2] and r[3])

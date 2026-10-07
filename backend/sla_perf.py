@@ -320,6 +320,7 @@ def sample_records(
             "order": s.order or "",
             "status": s.status or "",
             "received": received,
+            "recv_day": recv_day,
             "recv_month": recv_day.strftime("%Y-%m"),
             "published": _naive(published) if published is not None else None,
             "pub_day": lab_day(published, tz) if published is not None else None,
@@ -357,8 +358,14 @@ def build_sla_performance(
     departments: Sequence[str] = (),
     families: Sequence[str] = (),
     profiles: Iterable[ProfileIn] = (),
+    received_from: Optional[date] = None,
+    received_to: Optional[date] = None,
 ) -> dict:
-    """Build the whole SLA performance report from already-fetched rows."""
+    """Build the whole SLA performance report from already-fetched rows.
+
+    received_from / received_to (lab days, inclusive) scope the report to samples
+    received in that window, e.g. one month.
+    """
     department_keys = tuple(k for k, _ in DEPARTMENTS)
     for d in departments:
         if d not in department_keys:
@@ -399,6 +406,10 @@ def build_sla_performance(
             continue
         if fam_set and not r["families"] & fam_set:
             continue
+        if received_from and r["recv_day"] < received_from:
+            continue
+        if received_to and r["recv_day"] > received_to:
+            continue
         scoped.append(r)
 
     delivered = [r for r in scoped if r["state"] == "delivered"]
@@ -428,6 +439,8 @@ def build_sla_performance(
             "order": order or None,
             "departments": list(departments),
             "families": list(families),
+            "received_from": received_from.isoformat() if received_from else None,
+            "received_to": received_to.isoformat() if received_to else None,
         },
         "facets": facets,
         "notes": dict(NOTES),

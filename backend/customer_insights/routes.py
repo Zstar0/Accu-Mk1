@@ -410,10 +410,13 @@ def customers_changes(since: datetime, db: Session = Depends(get_db), _u=Depends
 
 # Declared LAST: FastAPI matches in order, so every fixed path above wins over the key.
 @router.get("/{customer_key}", response_model=DossierResponse)
-def customer_dossier(customer_key: str, db: Session = Depends(get_db), _u=Depends(get_current_user)):
+def customer_dossier(customer_key: str,
+                     sla_from: Optional[date] = Query(None, description="Turnaround: received on/after (lab day)"),
+                     sla_to: Optional[date] = Query(None, description="Turnaround: received on/before (lab day)"),
+                     db: Session = Depends(get_db), _u=Depends(get_current_user)):
     ds, _lo, hi, tz, meta = _ctx(db, "all", None, None, False)
     d = metrics.dossier(ds, customer_key.strip().lower() if customer_key.startswith("email:") else customer_key,
-                        end=hi, tz=tz)
+                        end=hi, tz=tz, sla_from=sla_from, sla_to=sla_to)
     if d is None:
         raise HTTPException(status_code=404, detail="customer not found")
     return {**meta, **d}

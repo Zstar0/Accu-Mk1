@@ -6886,6 +6886,10 @@ export interface SlaPerfQuery {
   order?: string
   departments?: string[]
   families?: string[]
+  /** Received on/after, lab day YYYY-MM-DD. */
+  from?: string
+  /** Received on/before, lab day YYYY-MM-DD. */
+  to?: string
 }
 
 export async function getSlaPerformance(
@@ -6899,6 +6903,8 @@ export async function getSlaPerformance(
   if (order) qs.set('order', order)
   for (const d of query.departments ?? []) qs.append('department', d)
   for (const f of query.families ?? []) qs.append('family', f)
+  if (query.from) qs.set('from', query.from)
+  if (query.to) qs.set('to', query.to)
   const suffix = qs.toString() ? `?${qs.toString()}` : ''
   const response = await fetch(
     `${API_BASE_URL()}/reports/sla-performance${suffix}`,
@@ -9161,10 +9167,14 @@ export interface SlaFamilyRow {
   held_up: number
 }
 /** Resolves null when the customer has no paid orders (backend 404). */
-export const getCustomerDossier = (key: string) =>
-  getReport<CustomerDossier>(
-    `/reports/customers/${encodeURIComponent(key)}`
-  ).catch((e: unknown) => {
+export const getCustomerDossier = (
+  key: string,
+  sla: { from?: string; to?: string } = {}
+) =>
+  getReport<CustomerDossier>(`/reports/customers/${encodeURIComponent(key)}`, {
+    sla_from: sla.from,
+    sla_to: sla.to,
+  }).catch((e: unknown) => {
     if (e instanceof Error && e.message.endsWith(': 404')) return null
     throw e
   })

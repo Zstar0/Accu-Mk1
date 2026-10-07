@@ -10967,6 +10967,8 @@ class SlaPerfFiltersOut(BaseModel):
     order: Optional[str] = None
     departments: list[str]
     families: list[str]
+    received_from: Optional[str] = None
+    received_to: Optional[str] = None
 
 
 class SlaPerfClientFacet(BaseModel):
@@ -11190,6 +11192,8 @@ def reports_sla_performance(
     order: Optional[str] = Query(None, description="Substring of client_order_number"),
     department: list[SlaPerfDepartmentKey] = Query(default=[]),
     family: list[SlaPerfFamilyKey] = Query(default=[]),
+    received_from: Optional[date] = Query(None, alias="from", description="Received on/after (lab day)"),
+    received_to: Optional[date] = Query(None, alias="to", description="Received on/before (lab day)"),
     db: Session = Depends(get_db),
     _current_user=Depends(get_current_user),
 ):
@@ -11225,6 +11229,8 @@ def reports_sla_performance(
         order=order,
         departments=list(department),
         families=list(family),
+        received_from=received_from,
+        received_to=received_to,
     )
     report["cache"] = {"stale": stale, "age_seconds": int(max(0.0, _time.monotonic() - rows["at"]))}
     report["generated_at"] = now_utc.isoformat().replace("+00:00", "Z")

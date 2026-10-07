@@ -5,7 +5,7 @@ from __future__ import annotations
 import statistics
 from collections import Counter, defaultdict
 from dataclasses import replace
-from datetime import datetime, timedelta
+from datetime import date, datetime, timedelta
 from decimal import Decimal
 from typing import Any
 
@@ -324,12 +324,21 @@ def sla_profile(recs: list[SlaRec]) -> dict[str, Any]:
     }
 
 
-def sla_section(ds: Dataset, numbers: set[str]) -> dict[str, Any] | None:
-    """Customer vs lab turnaround, all time. None when SLA records are unavailable."""
+def sla_section(ds: Dataset, numbers: set[str], *, received_from: date | None = None,
+                received_to: date | None = None) -> dict[str, Any] | None:
+    """Customer vs lab turnaround for samples received in the window (lab days, inclusive;
+    open ends = all time). None when SLA records are unavailable."""
     if not ds.sla:
         return None
-    mine = sla_profile([r for r in ds.sla if r.order_number in numbers])
-    lab = sla_profile(list(ds.sla))
+
+    def inside(r: SlaRec) -> bool:
+        d = r.recv_day
+        return not ((received_from and (d is None or d < received_from))
+                    or (received_to and (d is None or d > received_to)))
+
+    recs = [r for r in ds.sla if inside(r)]
+    mine = sla_profile([r for r in recs if r.order_number in numbers])
+    lab = sla_profile(recs)
     keys = sorted(set(mine["families"]) | set(mine["held_up"]),
                   key=lambda f: -mine["families"].get(f, {}).get("n", 0))
     families = [{
@@ -350,7 +359,8 @@ def _rate(num: int, den: int) -> float | None:
     return round(num / den, 4) if den else None
 
 
-def dossier(ds: Dataset, key: str, *, end: datetime, tz: str) -> dict[str, Any] | None:
+def dossier(ds: Dataset, key: str, *, end: datetime, tz: str, sla_from: date | None = None,
+            sla_to: date | None = None) -> dict[str, Any] | None:
     by = _by_customer(ds, end)
     orders = by.get(key)
     if not orders:
@@ -428,7 +438,8 @@ def dossier(ds: Dataset, key: str, *, end: datetime, tz: str) -> dict[str, Any] 
         "test_prices": test_prices,
         "free_tests": sum(r["free_units"] for r in test_prices),
         "coupons": coupon_use(priced),
-        "sla": sla_section(ds, numbers | {x.order_number for x in ds.free_orders if x.customer_key == key}),
+        "sla": sla_section(ds, numbers | {x.order_number for x in ds.free_orders if x.customer_key == key},
+                           received_from=sla_from, received_to=sla_to),
         "recent": [recent_row(x) for x in sorted(orders, key=lambda x: x.paid_at, reverse=True)[:6]],
         "orders": order_rows(replace(ds, orders=tuple(orders)), start=None, end=end),
     }

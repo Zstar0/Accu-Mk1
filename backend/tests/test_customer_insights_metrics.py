@@ -336,3 +336,17 @@ def test_sla_section_customer_vs_lab_by_test_family() -> None:
     re = metrics.sla_profile([rec("30", 20.0, False, {"hplc": 35.0})])
     assert re["bench_median_bh"] == 20.0 and re["lag_median_bh"] == 0.0
     assert re["families"]["hplc"]["median_bh"] == 20.0
+
+
+def test_sla_section_received_window() -> None:
+    from datetime import date
+
+    from customer_insights.dataset import SlaRec
+
+    aug = SlaRec("10", "delivered", 30.0, 24.0, True, {"hplc": 28.0}, {"hplc": 24.0}, date(2026, 8, 20))
+    sep = SlaRec("11", "delivered", 10.0, 24.0, False, {"hplc": 9.0}, {"hplc": 24.0}, date(2026, 9, 10))
+    data = replace(ds([o("wc:1", 0, oid=10, number="10"), o("wc:1", 5, oid=11, number="11")]), sla=(aug, sep))
+    whole = metrics.sla_section(data, {"10", "11"})
+    assert whole["customer"]["delivered"] == 2
+    sept = metrics.sla_section(data, {"10", "11"}, received_from=date(2026, 9, 1), received_to=date(2026, 9, 30))
+    assert (sept["customer"]["delivered"], sept["customer"]["late"], sept["lab"]["delivered"]) == (1, 0, 1)
