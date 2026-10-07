@@ -10391,6 +10391,10 @@ def _parse_day_bound(val: Optional[str], *, end: bool) -> Optional[datetime]:
     return datetime.combine(d, _time.max if end else _time.min)
 
 
+_VIAL_SUFFIX = re.compile(r"-S\d+$")
+_PRIORITY_RANK = {"high": 1, "expedited": 2}
+
+
 @app.get("/reports/checkin-times", response_model=list[CheckInRecord])
 async def reports_checkin_times(
     from_date: Optional[str] = Query(None, alias="from"),
@@ -10398,64 +10402,49 @@ async def reports_checkin_times(
     db: Session = Depends(get_db),
     _current_user=Depends(get_current_user),
 ):
-    """Sample check-in events sourced from worksheet_items.date_received.
+    """Sample check-ins: one record per LIMS sample, by lims_samples.date_received.
 
-    Returns raw UTC timestamps (one row per sample); time-of-day bucketing is done
-    client-side in the browser's local timezone. worksheet_items holds one row per
-    (sample, analysis), so a sample with multiple analyses produces several rows
-    sharing one date_received — results are deduped by sample_uid (earliest
-    date_received kept, product labels merged). Rows with a null date_received are
-    excluded. Optional `from`/`to` are inclusive YYYY-MM-DD day bounds.
+    Same population as /reports/throughput (every sample the lab received). Until
+    1.35.2 this read worksheet_items, which only holds VIALS placed on a worksheet:
+    prod Sept 2026 = 758 vial rows vs 1,089 samples received, 642 of which never
+    reached a worksheet. Priority is the most urgent worksheet priority among the
+    sample's vials (``normal`` when none). Raw UTC timestamps; time-of-day
+    bucketing is client-side. Optional `from`/`to` are inclusive YYYY-MM-DD day
+    bounds (naive UTC, like date_received).
     """
-    stmt = select(WorksheetItem).where(WorksheetItem.date_received.is_not(None))
+    stmt = select(
+        LimsSample.id, LimsSample.sample_id, LimsSample.external_lims_uid,
+        LimsSample.date_received, LimsSample.peptide_name,
+    ).where(LimsSample.date_received.is_not(None))
     lo = _parse_day_bound(from_date, end=False)
     hi = _parse_day_bound(to_date, end=True)
     if lo is not None:
-        stmt = stmt.where(WorksheetItem.date_received >= lo)
+        stmt = stmt.where(LimsSample.date_received >= lo)
     if hi is not None:
-        stmt = stmt.where(WorksheetItem.date_received <= hi)
+        stmt = stmt.where(LimsSample.date_received <= hi)
+    samples = db.execute(stmt).all()
 
-    rows = db.execute(stmt.order_by(WorksheetItem.date_received.desc())).scalars().all()
+    priority: dict[str, str] = {}
+    for vial_id, prio in db.execute(
+        select(WorksheetItem.sample_id, WorksheetItem.priority).where(
+            WorksheetItem.priority.in_(tuple(_PRIORITY_RANK))
+        )
+    ).all():
+        parent = _VIAL_SUFFIX.sub("", vial_id or "")
+        if _PRIORITY_RANK[prio] > _PRIORITY_RANK.get(priority.get(parent, ""), 0):
+            priority[parent] = prio
 
     test_ids = _test_order_senaite_ids()
-
-    by_uid: dict[str, dict] = {}
-    for it in rows:
-        names: list[str] = []
-        if it.analyses_json:
-            try:
-                for a in json.loads(it.analyses_json):
-                    pn = (a.get("peptide_name") or "").strip()
-                    if pn and pn not in names:
-                        names.append(pn)
-            except (ValueError, TypeError):
-                pass
-        entry = by_uid.get(it.sample_uid)
-        if entry is None:
-            by_uid[it.sample_uid] = {
-                "sample_id": it.sample_id,
-                "sample_uid": it.sample_uid,
-                "date_received": it.date_received,
-                "priority": it.priority,
-                "names": names,
-            }
-        else:
-            if it.date_received < entry["date_received"]:
-                entry["date_received"] = it.date_received
-            for pn in names:
-                if pn not in entry["names"]:
-                    entry["names"].append(pn)
-
     records = [
         CheckInRecord(
-            sample_id=e["sample_id"],
-            sample_uid=e["sample_uid"],
-            date_received=e["date_received"].isoformat() + "Z",
-            product_label=", ".join(e["names"]) if e["names"] else None,
-            priority=e["priority"],
-            is_test_order=e["sample_id"] in test_ids,
+            sample_id=sid,
+            sample_uid=ext_uid or f"mk1:{pk}",
+            date_received=received.isoformat() + "Z",
+            product_label=(peptide or "").strip() or None,
+            priority=priority.get(sid, "normal"),
+            is_test_order=sid in test_ids,
         )
-        for e in by_uid.values()
+        for pk, sid, ext_uid, received, peptide in samples
     ]
     records.sort(key=lambda r: r.date_received, reverse=True)
     return records
