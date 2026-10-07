@@ -341,6 +341,24 @@ def test_hidden_document_node_renders_restricted_code_only(client):
     assert "Q4 layoffs" not in r.text
 
 
+def test_stale_version_409_masks_a_hidden_document_node(client):
+    """The 409 echoes the node as it is now; it must be the viewer's masked view."""
+    doc = _secret_document(client.db)
+    client.as_user(ADMIN)
+    made = _node(client, kind="entity", label="", entity_type="document", entity_id=doc.code)
+    client.as_user(EDITOR)  # may edit `org`, cannot see the leadership space
+    [seen] = _entity_nodes(client)
+    r = client.patch(f"/api/boards/org/nodes/{made['id']}", json={"x": 9, "version": 99})
+    assert r.status_code == 409, r.text
+    assert "Q4 layoffs" not in r.text
+    current = r.json()["detail"]["current"]
+    assert current["label"] == seen["label"] == doc.code
+    assert current["context"] == seen["context"]
+    client.as_user(ADMIN)  # a viewer who can see it still gets the full node
+    r = client.patch(f"/api/boards/org/nodes/{made['id']}", json={"x": 9, "version": 99})
+    assert r.json()["detail"]["current"]["label"] == f"{doc.code} · Q4 layoffs plan"
+
+
 def test_pinning_a_hidden_document_reads_as_missing(client):
     doc = _secret_document(client.db)
     client.as_user(EDITOR)  # may edit `org`, cannot see the leadership space
