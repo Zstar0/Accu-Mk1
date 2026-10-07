@@ -9120,6 +9120,12 @@ export interface CustomerDossier {
     terms: string | null
     last_used: string
   }[]
+  /** Turnaround vs the lab, all time, business hours. Null when SLA data is unavailable. */
+  sla: {
+    customer: SlaSummary
+    lab: SlaSummary
+    families: SlaFamilyRow[]
+  } | null
   recent: {
     order_number: string
     paid_at: string
@@ -9128,6 +9134,31 @@ export interface CustomerDossier {
     sla: 'late' | 'on_time' | null
   }[]
   orders: InsightOrderRow[]
+}
+export interface SlaSummary {
+  delivered: number
+  late: number
+  on_time_rate: number | null
+  median_bh: number | null
+  open: number
+  open_past_target: number
+  /** Delivered samples with verification times: the base for bench / lag. */
+  staged: number
+  /** Receipt -> last test verified. */
+  bench_median_bh: number | null
+  /** Last test verified -> COA published. */
+  lag_median_bh: number | null
+}
+export interface SlaFamilyRow {
+  key: string
+  name: string
+  samples: number
+  median_bh: number | null
+  over_target_rate: number | null
+  lab_median_bh: number | null
+  lab_over_target_rate: number | null
+  /** Late multi-test samples where this test finished last. */
+  held_up: number
 }
 /** Resolves null when the customer has no paid orders (backend 404). */
 export const getCustomerDossier = (key: string) =>

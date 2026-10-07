@@ -334,6 +334,9 @@ def sample_records(
             "family_target": family_target,
             "verified": fam_verified,
             "last_verified": last_verified,
+            # Business hours from receipt to each family's last verification (additive;
+            # Customer Insights reads it, the SLA report recomputes its own).
+            "family_bh": {f: round(bh(received, v), 2) for f, v in fam_verified.items()},
         })
     return records
 

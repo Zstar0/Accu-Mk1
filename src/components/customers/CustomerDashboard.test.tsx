@@ -78,6 +78,42 @@ function dossier(over: Partial<CustomerDossier['kpis']> = {}): CustomerDossier {
       },
     ],
     free_tests: 1,
+    sla: {
+      customer: {
+        delivered: 20,
+        late: 6,
+        on_time_rate: 0.7,
+        median_bh: 22,
+        open: 2,
+        open_past_target: 1,
+        staged: 18,
+        bench_median_bh: 18,
+        lag_median_bh: 3,
+      },
+      lab: {
+        delivered: 900,
+        late: 90,
+        on_time_rate: 0.9,
+        median_bh: 16,
+        open: 40,
+        open_past_target: 5,
+        staged: 850,
+        bench_median_bh: 13,
+        lag_median_bh: 2,
+      },
+      families: [
+        {
+          key: 'ster',
+          name: 'Sterility',
+          samples: 8,
+          median_bh: 30,
+          over_target_rate: 0.5,
+          lab_median_bh: 20,
+          lab_over_target_rate: 0.2,
+          held_up: 4,
+        },
+      ],
+    },
     coupons: [
       {
         code: 'ac15',
@@ -146,6 +182,11 @@ describe('CustomerDashboard', () => {
     expect(price).toHaveTextContent('-15%')
     expect(price).toHaveTextContent('$150.00')
     expect(screen.getByText('1 free')).toBeInTheDocument()
+    const ster = screen.getByText('Sterility').closest('tr')
+    expect(ster).toHaveTextContent('30 bh')
+    expect(ster).toHaveTextContent('50%')
+    expect(ster).toHaveTextContent('4')
+    expect(screen.getByText(/1 past target/)).toBeInTheDocument()
     const coupon = screen.getByText('ac15').closest('tr')
     expect(coupon).toHaveTextContent('15%')
     expect(coupon).toHaveTextContent('$612')

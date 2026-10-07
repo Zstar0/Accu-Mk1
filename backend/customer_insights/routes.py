@@ -312,6 +312,35 @@ class CouponUse(BaseModel):
     last_used: str
 
 
+class SlaSummary(BaseModel):
+    delivered: int
+    late: int
+    on_time_rate: Optional[float] = None
+    median_bh: Optional[float] = None
+    open: int
+    open_past_target: int
+    staged: int = 0
+    bench_median_bh: Optional[float] = None
+    lag_median_bh: Optional[float] = None
+
+
+class SlaFamily(BaseModel):
+    key: str
+    name: str
+    samples: int
+    median_bh: Optional[float] = None
+    over_target_rate: Optional[float] = None
+    lab_median_bh: Optional[float] = None
+    lab_over_target_rate: Optional[float] = None
+    held_up: int
+
+
+class SlaSection(BaseModel):
+    customer: SlaSummary
+    lab: SlaSummary
+    families: list[SlaFamily]
+
+
 class RecentOrder(BaseModel):
     order_number: str
     paid_at: str
@@ -334,6 +363,7 @@ class DossierResponse(Meta):
     test_prices: list[CustomerProductPrice]
     free_tests: int = 0
     coupons: list[CouponUse]
+    sla: Optional[SlaSection] = None
     recent: list[RecentOrder]
     orders: list[OrderRow]
 

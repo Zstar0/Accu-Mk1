@@ -74,6 +74,18 @@ class Coa:
 
 
 @dataclass(frozen=True)
+class SlaRec:
+    """One sample's SLA facts (from sla_perf.sample_records), business hours throughout."""
+    order_number: str
+    state: str  # delivered | open | cancelled
+    bh: float  # received -> first primary COA (or now, while open)
+    target: float
+    late: bool
+    family_bh: dict[str, float]  # received -> each test family's last verification
+    family_target: dict[str, float]
+
+
+@dataclass(frozen=True)
 class Dataset:
     customers: dict[str, Customer]
     orders: tuple[Order, ...]
@@ -86,6 +98,7 @@ class Dataset:
     # Paid $0 orders (a coupon covered everything). Kept out of revenue and repeat metrics;
     # pricing and coupon use read them so a free test still counts as a coupon use at $0.
     free_orders: tuple[Order, ...] = ()
+    sla: tuple[SlaRec, ...] = ()
 
 
 def service_label(service_key: str) -> str | None:
@@ -247,11 +260,18 @@ def build_dataset(
                  for n, s, p, st, at in coa_rows if n and norm_order_number(n))
 
     late = delivered = None
+    sla: tuple[SlaRec, ...] = ()
     if sla_records is not None:
         recs = [(norm_order_number(r["order"]), r) for r in sla_records
                 if r.get("order") and r.get("state") == "delivered"]
         delivered = frozenset(n for n, _ in recs if n)
         late = frozenset(n for n, r in recs if n and r.get("late"))
+        sla = tuple(
+            SlaRec(norm_order_number(r["order"]), r.get("state") or "", float(r.get("bh") or 0),
+                   float(r.get("target") or 0), bool(r.get("late")), dict(r.get("family_bh") or {}),
+                   dict(r.get("family_target") or {}))
+            for r in sla_records if r.get("order") and r.get("state") in ("delivered", "open")
+        )
     retested = frozenset(int(r[3]) for r in subs.values() if r[2] and r[3])
     return Dataset(customers, tuple(orders), coas, late, delivered, synced_at, retested,
-                   tuple(sorted(free_orders, key=lambda o: o.paid_at)))
+                   tuple(sorted(free_orders, key=lambda o: o.paid_at)), sla)

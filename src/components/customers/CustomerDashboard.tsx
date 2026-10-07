@@ -483,6 +483,8 @@ export function CustomerDashboard({
         </section>
       </div>
 
+      {d.sla && <TurnaroundCard sla={d.sla} />}
+
       <div className="grid gap-3 lg:grid-cols-2">
         <section className={CARD}>
           <h2 className="text-sm font-medium">What they pay</h2>
@@ -588,5 +590,103 @@ export function CustomerDashboard({
         </section>
       </div>
     </div>
+  )
+}
+
+const bh = (v: number | null) => (v == null ? 'n/a' : `${v} bh`)
+
+/** Customer vs lab turnaround, split by test type and by bench vs publish. */
+function TurnaroundCard({ sla }: { sla: NonNullable<CustomerDossier['sla']> }) {
+  const c = sla.customer
+  const lab = sla.lab
+  const stats: [string, string, string][] = [
+    ['On time', fmtPct(c.on_time_rate, 0), fmtPct(lab.on_time_rate, 0)],
+    ['Median turnaround', bh(c.median_bh), bh(lab.median_bh)],
+    [
+      'Bench (receipt to verified)',
+      bh(c.bench_median_bh),
+      bh(lab.bench_median_bh),
+    ],
+    ['Review and publish', bh(c.lag_median_bh), bh(lab.lag_median_bh)],
+  ]
+  return (
+    <section className={CARD}>
+      <h2 className="text-sm font-medium">Turnaround by test type</h2>
+      <p className="mb-2 text-[11px] text-muted-foreground">
+        All time, business hours from receipt · vs all customers · {c.delivered}{' '}
+        delivered, {c.late} late
+        {c.open > 0 &&
+          ` · ${c.open} open now${c.open_past_target ? `, ${c.open_past_target} past target` : ''}`}
+      </p>
+      <div className="mb-3 grid gap-2 sm:grid-cols-4">
+        {stats.map(([label, mine, all]) => (
+          <div key={label} className="rounded-md bg-muted/30 px-2 py-1.5">
+            <div className="text-[11px] text-muted-foreground">{label}</div>
+            <div className="tabular-nums">
+              <b>{mine}</b>{' '}
+              <span className="text-xs text-muted-foreground">(lab {all})</span>
+            </div>
+          </div>
+        ))}
+      </div>
+      {sla.families.length === 0 ? (
+        <p className="text-sm text-muted-foreground">
+          No delivered samples with verified tests yet
+        </p>
+      ) : (
+        <table className="w-full text-sm tabular-nums">
+          <thead>
+            <tr className="text-[11px] uppercase tracking-wider text-muted-foreground">
+              <th className="py-1 text-left font-medium">Test type</th>
+              <th className="text-right font-medium">Samples</th>
+              <th className="text-right font-medium">Median to verified</th>
+              <th className="text-right font-medium">Lab</th>
+              <th className="text-right font-medium">Over target</th>
+              <th className="text-right font-medium">Lab</th>
+              <th className="text-right font-medium">Held up late</th>
+            </tr>
+          </thead>
+          <tbody>
+            {sla.families.map(f => {
+              const worse =
+                f.over_target_rate != null &&
+                f.lab_over_target_rate != null &&
+                f.over_target_rate - f.lab_over_target_rate >= 0.1
+              return (
+                <tr key={f.key} className="border-t border-border/20">
+                  <td className="py-1">{f.name}</td>
+                  <td className="text-right">{f.samples}</td>
+                  <td className="text-right font-medium">{bh(f.median_bh)}</td>
+                  <td className="text-right text-muted-foreground">
+                    {bh(f.lab_median_bh)}
+                  </td>
+                  <td className="text-right">
+                    <span className={cn(worse && cn(CHIP, RED))}>
+                      {fmtPct(f.over_target_rate, 0)}
+                    </span>
+                  </td>
+                  <td className="text-right text-muted-foreground">
+                    {fmtPct(f.lab_over_target_rate, 0)}
+                  </td>
+                  <td className="text-right">
+                    {f.held_up > 0 ? (
+                      <span className={cn(CHIP, RED)}>{f.held_up}</span>
+                    ) : (
+                      ''
+                    )}
+                  </td>
+                </tr>
+              )
+            })}
+          </tbody>
+        </table>
+      )}
+      <p className="mt-2 text-[11px] text-muted-foreground">
+        Held up late: late samples with more than one test where this test was
+        verified last. Bench and review/publish use the {c.staged} delivered
+        samples with verification times; review and publish = last test verified
+        to COA published.
+      </p>
+    </section>
   )
 }
