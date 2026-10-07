@@ -2,11 +2,11 @@
 the credential, never the body."""
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 import logging
 import re
 from datetime import datetime
-from typing import Iterable, Optional
+from typing import Any, Iterable, Optional
 
 from sqlalchemy import delete, func, select
 from sqlalchemy.orm import Session
@@ -25,6 +25,10 @@ class Actor:
     agent: Optional[str]
     display: str
     is_admin: bool
+    # Read-gate identity (spec 2026-10-06 section 8.2): the login for a user actor, the
+    # space slug allow-list for an agent. Not part of equality or the hash.
+    user: Optional[Any] = field(default=None, compare=False)
+    spaces: Optional[frozenset] = field(default=None, compare=False)
 
 
 def display_name(user) -> str:
@@ -36,11 +40,11 @@ def display_name(user) -> str:
 
 def actor_from_user(user) -> Actor:
     return Actor(user_id=user.id, agent=None, display=display_name(user),
-                 is_admin=getattr(user, "role", None) == "admin")
+                 is_admin=getattr(user, "role", None) == "admin", user=user)
 
 
-def actor_from_agent(name: str) -> Actor:
-    return Actor(user_id=None, agent=name, display=name, is_admin=False)
+def actor_from_agent(name: str, spaces: Optional[frozenset] = None) -> Actor:
+    return Actor(user_id=None, agent=name, display=name, is_admin=False, spaces=spaces)
 
 
 logger = logging.getLogger(__name__)

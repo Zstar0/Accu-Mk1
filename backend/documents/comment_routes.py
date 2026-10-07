@@ -19,9 +19,11 @@ from sqlalchemy.orm import Session
 
 from auth import get_current_user, require_internal_service_token
 from database import get_db
-from documents import comment_export, comments, labels, service
+from documents import access, comment_export, comments, labels, service
 from documents.comments import Actor, actor_from_agent, actor_from_user
-from documents.routes import _http, _match_agent
+from documents.errors import NotFoundError
+from documents.models import Document
+from documents.routes import AgentWriter, _agent_may_see, _http, _match_agent
 from documents.schemas import (CommentAttachmentOut, CommentCreate, CommentIndexOut, CommentLabelOut, CommentListOut,
                                CommentOut, CommentPatch)
 
@@ -40,13 +42,49 @@ def require_comment_actor(
     if x_service_token is not None:
         agent = _match_agent(x_service_token)
         if agent is not None:
-            return actor_from_agent(agent.name)  # _match_agent returns an AgentWriter (spaces)
+            return actor_from_agent(agent.name, agent.spaces)
         require_internal_service_token(x_service_token)  # 401 when it is not that token either
         raise HTTPException(status.HTTP_403_FORBIDDEN,
                             "comments need a named author: use an agent token or a login")
     if not token:
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, "authentication required")
     return actor_from_user(get_current_user(token=token, db=db))
+
+
+# --- the space gate (spec 2026-10-06 section 8.2) ----------------------------------------
+# Hidden reads exactly like missing FOR THE RESOURCE THE ROUTE NAMES: a document route says
+# "document N not found", a comment route "comment N not found", an attachment route
+# "attachment N not found". Nothing about the hidden document is logged on these paths.
+
+def _may_see(db: Session, who, doc: Document) -> bool:
+    """`who` is a login (read routes) or an Actor (write routes). An agent actor follows its
+    slug allow-list (same rule as the document write routes); a user actor its membership."""
+    if isinstance(who, Actor):
+        if who.agent is not None:
+            return _agent_may_see(AgentWriter(who.agent, who.spaces or frozenset({"general"})), doc)
+        who = who.user  # None (no login carried) fails closed in can_view_document
+    return access.can_view_document(db, who, doc)
+
+
+def _gate_doc(db: Session, who, doc_id: int) -> Document:
+    doc = service.get_document(db, doc_id)
+    if not _may_see(db, who, doc):
+        raise NotFoundError(f"document {doc_id} not found")
+    return doc
+
+
+def _gate_code(db: Session, who, code: str, missing: str) -> None:
+    """Comments and attachments key on the CODE; the gate runs on its latest revision (every
+    revision of a code carries the same space)."""
+    doc = service.latest_revision(db, code)
+    if doc is None or not _may_see(db, who, doc):
+        raise NotFoundError(missing)
+
+
+def _gated_comment(db: Session, who, comment_id: int):
+    row = comments.get_comment(db, comment_id)
+    _gate_code(db, who, row.code, f"comment {comment_id} not found")
+    return row
 
 
 # --- literal paths FIRST (see module docstring) -----------------------------------------
@@ -61,6 +99,7 @@ def get_comment_attachment(attachment_id: int, db: Session = Depends(get_db),
                            user=Depends(get_current_user)):
     try:
         att = comments.get_attachment(db, attachment_id)
+        _gate_code(db, user, att.code, f"attachment {attachment_id} not found")
         data = comments._attachment_storage().fetch(att.storage_key)
     except Exception as e:
         from flags import seams as flag_seams
@@ -83,7 +122,8 @@ def comments_index(status_filter: str = Query("open", alias="status"),
                    limit: int = 100, db: Session = Depends(get_db), user=Depends(get_current_user)):
     try:
         return {"items": comment_export.list_index(db, status=status_filter, author_agent=author_agent,
-                                                   code_prefix=code_prefix, limit=limit)}
+                                                   code_prefix=code_prefix, limit=limit,
+                                                   visible_spaces=access.visible_space_ids(db, user))}
     except Exception as e:
         raise _http(e)
 
@@ -91,7 +131,7 @@ def comments_index(status_filter: str = Query("open", alias="status"),
 @router.get("/documents/comments/{comment_id}", response_model=CommentOut)
 def get_comment(comment_id: int, db: Session = Depends(get_db), user=Depends(get_current_user)):
     try:
-        return comments.comment_out(db, comments.get_comment(db, comment_id))
+        return comments.comment_out(db, _gated_comment(db, user, comment_id))
     except Exception as e:
         raise _http(e)
 
@@ -100,6 +140,7 @@ def get_comment(comment_id: int, db: Session = Depends(get_db), user=Depends(get
 def patch_comment(comment_id: int, req: CommentPatch, db: Session = Depends(get_db),
                   actor: Actor = Depends(require_comment_actor)):
     try:
+        _gated_comment(db, actor, comment_id)
         row = comments.patch_comment(db, comment_id, actor, body=req.body,
                                      suggested_text=req.suggested_text)
         return comments.comment_out(db, row)
@@ -111,6 +152,7 @@ def patch_comment(comment_id: int, req: CommentPatch, db: Session = Depends(get_
 def delete_comment(comment_id: int, db: Session = Depends(get_db),
                    actor: Actor = Depends(require_comment_actor)):
     try:
+        _gated_comment(db, actor, comment_id)
         comments.delete_comment(db, comment_id, actor)
     except Exception as e:
         raise _http(e)
@@ -121,6 +163,7 @@ def delete_comment(comment_id: int, db: Session = Depends(get_db),
 def resolve_comment(comment_id: int, db: Session = Depends(get_db),
                     actor: Actor = Depends(require_comment_actor)):
     try:
+        _gated_comment(db, actor, comment_id)
         return comments.comment_out(db, comments.set_status(db, comment_id, actor, "resolved"))
     except Exception as e:
         raise _http(e)
@@ -130,6 +173,7 @@ def resolve_comment(comment_id: int, db: Session = Depends(get_db),
 def reopen_comment(comment_id: int, db: Session = Depends(get_db),
                    actor: Actor = Depends(require_comment_actor)):
     try:
+        _gated_comment(db, actor, comment_id)
         return comments.comment_out(db, comments.set_status(db, comment_id, actor, "open"))
     except Exception as e:
         raise _http(e)
@@ -141,7 +185,7 @@ def reopen_comment(comment_id: int, db: Session = Depends(get_db),
 def export_comments(doc_id: int, status_filter: str = Query("open", alias="status"),
                     db: Session = Depends(get_db), user=Depends(get_current_user)):
     try:
-        doc = service.get_document(db, doc_id)
+        doc = _gate_doc(db, user, doc_id)
         text = comment_export.export_markdown(db, doc.code, status=status_filter)
     except Exception as e:
         raise _http(e)
@@ -152,7 +196,7 @@ def export_comments(doc_id: int, status_filter: str = Query("open", alias="statu
 def list_comments(doc_id: int, status_filter: str = Query("open", alias="status"),
                   db: Session = Depends(get_db), user=Depends(get_current_user)):
     try:
-        doc = service.get_document(db, doc_id)
+        doc = _gate_doc(db, user, doc_id)
         return comments.list_comments(db, doc.code, status=status_filter)
     except Exception as e:
         raise _http(e)
@@ -162,6 +206,7 @@ def list_comments(doc_id: int, status_filter: str = Query("open", alias="status"
 def create_comment(doc_id: int, req: CommentCreate, db: Session = Depends(get_db),
                    actor: Actor = Depends(require_comment_actor)):
     try:
+        _gate_doc(db, actor, doc_id)
         row = comments.create_comment(
             db, document_id=doc_id, actor=actor, kind=req.kind, body=req.body,
             anchor=req.anchor, label=req.label, suggested_text=req.suggested_text,
@@ -180,7 +225,7 @@ def add_comment_attachment(doc_id: int, file: UploadFile = File(...),
                            db: Session = Depends(get_db),
                            actor: Actor = Depends(require_comment_actor)):
     try:
-        doc = service.get_document(db, doc_id)
+        doc = _gate_doc(db, actor, doc_id)
         data = file.file.read()
         att = comments.add_attachment(db, doc=doc, actor=actor, data=data,
                                       filename=file.filename or "upload")

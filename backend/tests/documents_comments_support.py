@@ -42,6 +42,7 @@ def client(monkeypatch):
     import models  # noqa: F401
     import documents.models  # noqa: F401
     import flags.models  # noqa: F401
+    import groups.models  # noqa: F401  (document spaces grant to user groups)
     from documents import service, storage
     from documents.comments import actor_from_user
     from documents.comment_routes import require_comment_actor
@@ -61,6 +62,7 @@ def client(monkeypatch):
                         first_name=u.first_name, last_name=u.last_name))
     shared.commit()
     service.seed_categories(shared)
+    service.seed_spaces(shared)
     storage.set_storage_for_tests(storage.InMemoryDocumentStorage())
     flag_seams.set_attachment_storage_for_tests(flag_seams.InMemoryAttachmentStorage())
 
@@ -84,6 +86,7 @@ def client(monkeypatch):
     tc.db = shared
     tc.as_user = as_user
     tc.real_actor = real_actor
+    tc.read_as = lambda u: app.dependency_overrides.__setitem__(get_current_user, lambda: u)
     as_user(USER)
     yield tc
     for k, v in saved.items():

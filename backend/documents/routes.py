@@ -489,6 +489,7 @@ def replace_document_content(doc_id: int, req: DocumentContentReplace,
                              db: Session = Depends(get_db),
                              admin=Depends(require_document_admin_user)):
     try:
+        access.require_view(db, admin, service.get_document(db, doc_id))
         doc, changed = service.replace_draft_content(db, doc_id, html=req.html,
                                                      updated_by=admin.email,
                                                      expected_sha256=req.expected_sha256)
