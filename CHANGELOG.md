@@ -7,6 +7,50 @@
 - The document list, search, the document routes and the document flag threads answer 404 for a document the caller cannot see, exactly as for a missing one. Comment and attachment routes are gated when the annotations chain merges (follow-up on this PR).
 - Admins create and grant spaces in Settings > Documents, and move a document (every revision together) from Edit details. The publish skill and labmanager-mcp take a `space`; agent tokens may carry a space allow-list (`name:token:slug+slug`, absent = General only).
 
+### Document annotations
+- **Comments on documents.** Any login or named agent token can leave numbered comments and suggestions anchored to a passage, reply one level deep, label them, resolve or reopen them, attach images, and export a document's thread as Markdown. Comments live on the document code, so they follow it across revisions. A cross-document index (`GET /api/documents/comments`) serves agents and the inbox.
+- **Annotations in the viewer** (plannotator v0.27.25 vendored under `src/vendor/plannotator/`): highlight a passage to comment, see open threads in a side panel, and pin-point comments on images.
+- **Admin edit mode:** an admin can edit a draft revision in place (`PUT /api/documents/{id}/content`, admin login only), apply a suggestion with one click, and a **New document** dialog creates a draft from a blank page (opens in edit mode) or an uploaded HTML file.
+
+## v1.35.2 - 2026-10-07
+
+### Fixed
+- Check-In Times counts samples received (lims_samples.date_received, same as Lab Throughput) instead of worksheet vials; test-order flag now matches.
+
+## v1.35.1 - 2026-10-07
+
+### Fixed
+- Reports: samples registered straight into the LIMS under a test account (client = its e-mail, no order) are now excluded as test samples.
+
+## v1.35.0 - 2026-10-07
+
+### Customer Insights
+- Customer Dashboard: Turnaround by test type (on-time, median turnaround, bench vs review/publish, per test family vs the lab, which test held up late samples), with a received period / month window.
+- Customers list: sort by any column; filter by status and rep.
+
+### Reports
+- SLA Performance: received period (30D/90D/6M/1Y/All) and month picker.
+- Test accounts: levi@valenceanalytical.com and drpeptide@harmonypeptide.com added; Analyte Trends now excludes test orders; Check-In Times uses the shared list.
+
+## v1.34.1 - 2026-10-07
+
+### Customer Insights
+- At-risk customers show the account's sales rep.
+- Average price by product shows the list price and the average % off list (paid units only; needs IS 1.0.35).
+
+## v1.34.0 - 2026-10-06
+
+### Customer Insights
+- AccuMark Tools > Customer Insights: KPIs with prior-period deltas, new vs returning revenue, cohort retention, at-risk customers (overdue against their own usual re-order gap), first-order outcomes, add-on attach rate, revenue concentration, churn signals, and average price by product (post-coupon unit price; free units counted, not averaged).
+- Customer detail Dashboard tab: spend and samples by month, order rhythm, test mix and analytes vs all customers, COA and SLA experience, what they pay per product vs the lab average, coupons used (terms and savings), free tests, and sales rep (Accumark Commissions history, SalesKing fallback).
+- Customer list: insight columns including Rep.
+- `/reports/customers/*` API for the UI and agents. Reads the Integration Service `wc_orders` mirror (IS 1.0.34). Internal and Feb 2026 launch accounts configured in `customer_insights/rules.py`.
+
+## v1.33.1 - 2026-10-06
+
+### Fixed
+- The planning-board canvas and the Settings workflow graph follow dark mode: xyflow's zoom controls, minimap and dotted background no longer render as white panels.
+
 ## v1.33.0 - 2026-10-06
 
 ### Planning boards, slice 1: groups and boards backend

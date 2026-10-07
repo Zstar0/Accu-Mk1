@@ -148,6 +148,7 @@ def test_route_serializes_every_field(monkeypatch):
             purity_ok=True, unit="pH", generic=True),
     ]
     monkeypatch.setattr(main_module, "get_integration_db", lambda: _FakeConn(rows))
+    monkeypatch.setattr(main_module, "_test_order_senaite_ids", lambda: set())
     monkeypatch.setattr(scheduled_publish, "lab_tz", lambda _db: "America/Los_Angeles")
     app = main_module.app
     app.dependency_overrides[get_current_user] = lambda: MagicMock(id=1)
@@ -162,3 +163,29 @@ def test_route_serializes_every_field(monkeypatch):
     a, w = body["coas"]
     assert (a["endo"], a["hm"], a["qty_declared"], a["overall"]) == (False, True, 10.0, "FAILED")
     assert w["tests"] == [{"name": "pH Determination", "value": 5.5, "unit": "pH", "ok": True, "spec": None}]
+
+
+def test_route_excludes_test_order_samples(monkeypatch):
+    """Test accounts / test clients never reach the report (same rule as SLA performance)."""
+    from unittest.mock import MagicMock
+
+    from fastapi.testclient import TestClient
+
+    import main as main_module
+    import scheduled_publish
+    from auth import get_current_user
+    from database import get_db
+
+    rows = [row("A", "BPC-157", purity=99.0, purity_ok=True), row("T", "BPC-157", purity=98.0, purity_ok=True)]
+    monkeypatch.setattr(main_module, "get_integration_db", lambda: _FakeConn(rows))
+    monkeypatch.setattr(main_module, "_test_order_senaite_ids", lambda: {"P-T"})
+    monkeypatch.setattr(scheduled_publish, "lab_tz", lambda _db: "America/Los_Angeles")
+    app = main_module.app
+    app.dependency_overrides[get_current_user] = lambda: MagicMock(id=1)
+    app.dependency_overrides[get_db] = lambda: None
+    try:
+        body = TestClient(app).get("/reports/analyte-trends").json()
+    finally:
+        app.dependency_overrides.pop(get_current_user, None)
+        app.dependency_overrides.pop(get_db, None)
+    assert [c["sample_id"] for c in body["coas"]] == ["P-A"]

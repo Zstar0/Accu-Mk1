@@ -83,6 +83,8 @@ export interface DocumentRow {
   created_at: string
   updated_at: string
   revision_count: number
+  /** Open top-level comments on this code (spec §6.2). */
+  open_comment_count: number
 }
 
 export interface DocumentDetail extends DocumentRow {
@@ -154,6 +156,31 @@ export function patchDocument(
   return apiFetch<DocumentRow>(`/api/documents/${id}`, {
     method: 'PATCH',
     body: JSON.stringify(data),
+  })
+}
+
+/** Admin-only in-place content replace for a DRAFT (spec 2026-10-03 §10.3). */
+export function replaceDraftContent(
+  id: number,
+  html: string,
+  expectedSha256?: string
+): Promise<DocumentRow> {
+  // expected_sha256: the server 409s when the draft changed since it was opened.
+  return apiFetch<DocumentRow>(`/api/documents/${id}/content`, {
+    method: 'PUT',
+    body: JSON.stringify({ html, expected_sha256: expectedSha256 }),
+  })
+}
+
+/** The next revision of `code` as a DRAFT; title and description are inherited. */
+export function createDocumentRevision(
+  code: string,
+  html: string,
+  author?: string
+): Promise<DocumentRow> {
+  return apiFetch<DocumentRow>('/api/documents', {
+    method: 'POST',
+    body: JSON.stringify({ code, html, activate: false, author }),
   })
 }
 
@@ -251,4 +278,20 @@ export async function replaceDocumentSpaceGrants(
 
 export function deleteDocumentSpace(id: number): Promise<void> {
   return apiFetch<undefined>(`/api/document-spaces/${id}`, { method: 'DELETE' })
+}
+export interface DocumentCreate {
+  title: string
+  html: string
+  category_id: number
+  description?: string | null
+  effective_date?: string | null
+  author?: string
+}
+
+/** A brand-new controlled document, born as a DRAFT; the server mints the code. */
+export function createDocument(body: DocumentCreate): Promise<DocumentRow> {
+  return apiFetch<DocumentRow>('/api/documents', {
+    method: 'POST',
+    body: JSON.stringify({ ...body, activate: false }),
+  })
 }

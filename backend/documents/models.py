@@ -10,8 +10,9 @@ from __future__ import annotations
 from datetime import date, datetime
 from typing import Optional
 
-from sqlalchemy import (Boolean, CheckConstraint, Date, DateTime, ForeignKey, Index,
+from sqlalchemy import (Boolean, CheckConstraint, Date, DateTime, ForeignKey, Index, JSON,
                         Integer, String, Text, UniqueConstraint, text)
+from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from database import Base
@@ -90,6 +91,13 @@ class DocumentSpaceGrant(Base):
         ForeignKey("document_spaces.id", ondelete="CASCADE"), nullable=False)
     group_id: Mapped[int] = mapped_column(
         ForeignKey("user_groups.id", ondelete="CASCADE"), nullable=False)
+class DocumentCommentCounter(Base):
+    """High-water comment number per code. Bumped under row lock; never decremented, so a
+    deleted number is never handed out again."""
+    __tablename__ = "document_comment_counters"
+
+    code: Mapped[str] = mapped_column(String(30), primary_key=True)
+    next_number: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
 
 
 class Document(Base):
@@ -156,3 +164,71 @@ class Document(Base):
 
     def __repr__(self) -> str:
         return f"<Document(id={self.id}, code='{self.code}', rev={self.revision}, status='{self.status}')>"
+
+
+class DocumentComment(Base):
+    """One comment or reply on a controlled document (spec 2026-10-03 §4.1).
+    Identity is the CODE: comments outlive revisions and re-anchor by quoted
+    text at render time. `document_id` records the revision it was made on;
+    a discarded draft takes its comments with it (CASCADE)."""
+    __tablename__ = "document_comments"
+    __table_args__ = (
+        CheckConstraint("kind IN ('comment','suggestion')", name="ck_document_comments_kind"),
+        CheckConstraint("status IN ('open','resolved')", name="ck_document_comments_status"),
+        # Exactly one author: a login OR a named agent token, never both, never neither.
+        CheckConstraint("(author_user_id IS NULL) <> (author_agent IS NULL)",
+                        name="ck_document_comments_one_author"),
+        # A suggestion carries replacement text; a comment never does.
+        CheckConstraint("(kind = 'suggestion') = (suggested_text IS NOT NULL)",
+                        name="ck_document_comments_suggestion_text"),
+        Index("ix_document_comments_code_status", "code", "status"),
+        UniqueConstraint("code", "number", name="uq_document_comments_code_number"),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
+    code: Mapped[str] = mapped_column(String(30), nullable=False, index=True)
+    document_id: Mapped[int] = mapped_column(
+        ForeignKey("documents.id", ondelete="CASCADE"), nullable=False, index=True)
+    parent_id: Mapped[Optional[int]] = mapped_column(
+        ForeignKey("document_comments.id", ondelete="CASCADE"), nullable=True, index=True)
+    number: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)  # top-level only, stored, stable
+    kind: Mapped[str] = mapped_column(String(12), nullable=False, default="comment")
+    # none_as_null: a document-level comment is SQL NULL, so "anchor IS NULL" filters work
+    anchor: Mapped[Optional[dict]] = mapped_column(
+        JSONB(none_as_null=True).with_variant(JSON(none_as_null=True), "sqlite"), nullable=True)
+    label: Mapped[Optional[str]] = mapped_column(String(40), nullable=True)
+    body: Mapped[str] = mapped_column(Text, nullable=False, default="", server_default="")
+    suggested_text: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    author_user_id: Mapped[Optional[int]] = mapped_column(ForeignKey("users.id"), nullable=True)
+    author_agent: Mapped[Optional[str]] = mapped_column(String(40), nullable=True)
+    status: Mapped[str] = mapped_column(String(10), nullable=False, default="open",
+                                        server_default="open")
+    resolved_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
+    resolved_by_user_id: Mapped[Optional[int]] = mapped_column(ForeignKey("users.id"), nullable=True)
+    resolved_by_agent: Mapped[Optional[str]] = mapped_column(String(40), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow,
+                                                 onupdate=datetime.utcnow, nullable=False)
+    edited_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
+
+    def __repr__(self) -> str:
+        return f"<DocumentComment(id={self.id}, code='{self.code}', kind='{self.kind}', status='{self.status}')>"
+
+
+class DocumentCommentAttachment(Base):
+    """An image attached to a comment (spec §4.2). Same lifecycle as
+    flag_attachments: uploaded unlinked, claimed when a saved body references
+    `{attachment:ID}`, swept if still unlinked after 24h."""
+    __tablename__ = "document_comment_attachments"
+
+    id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
+    code: Mapped[str] = mapped_column(String(30), nullable=False, index=True)
+    comment_id: Mapped[Optional[int]] = mapped_column(
+        ForeignKey("document_comments.id", ondelete="CASCADE"), nullable=True, index=True)
+    uploaded_by_user_id: Mapped[Optional[int]] = mapped_column(ForeignKey("users.id"), nullable=True)
+    uploaded_by_agent: Mapped[Optional[str]] = mapped_column(String(40), nullable=True)
+    filename: Mapped[str] = mapped_column(String(255), nullable=False)
+    content_type: Mapped[str] = mapped_column(String(100), nullable=False)
+    size_bytes: Mapped[int] = mapped_column(Integer, nullable=False)
+    storage_key: Mapped[str] = mapped_column(String(500), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)

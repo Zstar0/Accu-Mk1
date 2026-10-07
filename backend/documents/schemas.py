@@ -105,6 +105,7 @@ class DocumentOut(BaseModel):
     created_at: datetime
     updated_at: datetime
     revision_count: int = 1
+    open_comment_count: int = 0
 
 
 class DocumentDetail(DocumentOut):
@@ -140,3 +141,94 @@ class DocumentPatch(BaseModel):
     space_id: Optional[int] = None  # admin bearer only; moves every revision
     effective_date: Optional[date] = None
     updated_by: Optional[str] = None
+
+
+class CommentLabelOut(BaseModel):
+    id: str
+    emoji: str
+    text: str
+    color: str
+    tip: Optional[str] = None
+
+
+class CommentCreate(BaseModel):
+    parent_id: Optional[int] = None
+    kind: str = "comment"                 # comment | suggestion
+    anchor: Optional[dict] = None         # PersistedHtmlAnchor or null (document-level)
+    label: Optional[str] = None
+    body: str = ""
+    suggested_text: Optional[str] = None
+
+
+class CommentPatch(BaseModel):
+    body: Optional[str] = None
+    suggested_text: Optional[str] = None
+
+
+class CommentAttachmentOut(BaseModel):
+    id: int
+    filename: str
+    content_type: str
+    size_bytes: int
+    created_at: datetime
+    model_config = ConfigDict(from_attributes=True)
+
+
+class CommentOut(BaseModel):
+    id: int
+    code: str
+    document_id: int
+    revision: int
+    parent_id: Optional[int] = None
+    number: Optional[int] = None          # top-level only; replies carry None
+    kind: str
+    anchor: Optional[dict] = None
+    label: Optional[str] = None
+    body: str
+    suggested_text: Optional[str] = None
+    author: str
+    author_user_id: Optional[int] = None
+    author_agent: Optional[str] = None
+    status: str
+    resolved_at: Optional[datetime] = None
+    resolved_by: Optional[str] = None
+    created_at: datetime
+    updated_at: datetime
+    edited_at: Optional[datetime] = None
+    attachments: List[CommentAttachmentOut] = Field(default_factory=list)
+    replies: List["CommentOut"] = Field(default_factory=list)
+
+
+CommentOut.model_rebuild()
+
+
+class CommentListOut(BaseModel):
+    items: List[CommentOut]
+    code: str
+    latest_revision: int
+    open_count: int
+
+
+class CommentIndexRow(BaseModel):
+    id: int
+    code: str
+    title: str
+    document_id: int
+    revision: int
+    number: Optional[int] = None
+    kind: str
+    label: Optional[str] = None
+    author: str
+    status: str
+    created_at: datetime
+    body_excerpt: str
+
+
+class CommentIndexOut(BaseModel):
+    items: List[CommentIndexRow]
+
+
+class DocumentContentReplace(BaseModel):
+    html: str
+    # Optimistic concurrency: the content_sha256 the editor opened; a mismatch is 409.
+    expected_sha256: Optional[str] = None

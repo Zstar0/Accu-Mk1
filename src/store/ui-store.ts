@@ -47,6 +47,7 @@ export type AccuMarkToolsSubSection =
   | 'order-explorer'
   | 'order-status'
   | 'customers'
+  | 'customer-insights'
   | 'customer-detail'
   | 'coa-explorer'
   | 'chromatographs'
@@ -116,11 +117,17 @@ interface UIState {
   analysisServiceTargetId: number | null
   peptideRequestTargetId: string | null
   customerDetailTargetId: number | null
+  // Customer Insights key-based detail for guests ("email:<addr>"). Exactly one
+  // of customerDetailTargetId / customerDetailKey is set while on detail.
+  customerDetailKey: string | null
   // Documents library viewer target (#reports/documents?id=N). Sticky like
   // customerDetailTargetId; generic navigateTo clears it so the sidebar
   // entry always lands on the list.
   documentViewerTargetId: number | null
   documentsSpaceSlug: string | null
+  // One-shot: the viewer enters edit mode on arrival (New document dialog).
+  // Consumed by the viewer; any other navigation drops it.
+  documentViewerEditRequested: boolean
   // Planning boards (slice 3): sticky like documentViewerTargetId, cleared by
   // the generic navigateTo. pendingBoardNode is consume-once: the canvas
   // reads it via consumePendingBoardNode() to focus/select a node on arrival.
@@ -169,8 +176,14 @@ interface UIState {
   navigateToAnalysisService: (serviceId: number) => void
   navigateToPeptideRequest: (requestId: string) => void
   navigateToCustomer: (id: number) => void
+  /** Open a customer by insights key on the Dashboard tab. "wc:<id>" keys
+   *  route through the numeric id flow; anything else (guest "email:")
+   *  sets customerDetailKey. */
+  navigateToCustomerKey: (key: string) => void
   navigateToDocument: (id: number) => void
   navigateToDocumentSpace: (slug: string | null) => void
+  openDocumentForEditing: (id: number) => void
+  consumeDocumentEditRequest: () => void
   clearDocumentViewer: () => void
   navigateToBoards: () => void
   navigateToBoard: (slug: string) => void
@@ -287,8 +300,10 @@ export const useUIStore = create<UIState>()(
       analysisServiceTargetId: null,
       peptideRequestTargetId: null,
       customerDetailTargetId: null,
+      customerDetailKey: null,
       documentViewerTargetId: null,
       documentsSpaceSlug: null,
+      documentViewerEditRequested: false,
       boardTargetSlug: null,
       pendingBoardNode: null,
       customerListPage: 0,
@@ -381,6 +396,7 @@ export const useUIStore = create<UIState>()(
             activeSubSection: subSection,
             documentViewerTargetId: null,
             documentsSpaceSlug: null,
+            documentViewerEditRequested: false,
             boardTargetSlug: null,
             navigationKey: state.navigationKey + 1,
           }),
@@ -442,14 +458,39 @@ export const useUIStore = create<UIState>()(
             activeSection: 'reports',
             activeSubSection: 'documents',
             documentViewerTargetId: id,
+            documentViewerEditRequested: false,
             navigationKey: state.navigationKey + 1,
           }),
           undefined,
           'navigateToDocument'
         ),
 
+      openDocumentForEditing: id =>
+        set(
+          state => ({
+            activeSection: 'reports',
+            activeSubSection: 'documents',
+            documentViewerTargetId: id,
+            documentViewerEditRequested: true,
+            navigationKey: state.navigationKey + 1,
+          }),
+          undefined,
+          'openDocumentForEditing'
+        ),
+
+      consumeDocumentEditRequest: () =>
+        set(
+          { documentViewerEditRequested: false },
+          undefined,
+          'consumeDocumentEditRequest'
+        ),
+
       clearDocumentViewer: () =>
-        set({ documentViewerTargetId: null }, undefined, 'clearDocumentViewer'),
+        set(
+          { documentViewerTargetId: null, documentViewerEditRequested: false },
+          undefined,
+          'clearDocumentViewer'
+        ),
       navigateToDocumentSpace: slug =>
         set(
           state => ({
@@ -457,6 +498,7 @@ export const useUIStore = create<UIState>()(
             activeSubSection: 'documents',
             documentsSpaceSlug: slug,
             documentViewerTargetId: null,
+            documentViewerEditRequested: false,
             navigationKey: state.navigationKey + 1,
           }),
           undefined,
@@ -589,11 +631,29 @@ export const useUIStore = create<UIState>()(
             activeSection: 'accumark-tools',
             activeSubSection: 'customer-detail',
             customerDetailTargetId: id,
+            customerDetailKey: null,
             navigationKey: state.navigationKey + 1,
           }),
           undefined,
           'navigateToCustomer'
         ),
+
+      navigateToCustomerKey: key => {
+        const wcId = key.startsWith('wc:') ? Number(key.slice(3)) : NaN
+        const isWc = Number.isInteger(wcId) && wcId > 0
+        set(
+          state => ({
+            activeSection: 'accumark-tools',
+            activeSubSection: 'customer-detail',
+            customerDetailTargetId: isWc ? wcId : null,
+            customerDetailKey: isWc ? null : key,
+            customerDetailTab: 'dashboard',
+            navigationKey: state.navigationKey + 1,
+          }),
+          undefined,
+          'navigateToCustomerKey'
+        )
+      },
 
       // Back-nav from detail view (D-11). Explicitly clears customerDetailTargetId
       // but PRESERVES customerListPage + customerSearchTerm so the user returns
@@ -604,6 +664,7 @@ export const useUIStore = create<UIState>()(
             activeSection: 'accumark-tools',
             activeSubSection: 'customers',
             customerDetailTargetId: null,
+            customerDetailKey: null,
             // Phase 30 (T-30-03): reset customer-detail page state when going
             // back to the list so search/tab state never leaks between
             // customer drill-throughs.

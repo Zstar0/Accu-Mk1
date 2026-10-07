@@ -3,6 +3,18 @@
  * here is unit-tested in src/lib/__tests__/documents-utils.test.ts.
  */
 
+import { BRIDGE_PROTOCOL_VERSION } from '@/vendor/plannotator/bridge-script'
+import {
+  THEME_TOKENS,
+  buildSrcdocInjection,
+  injectIntoHead,
+  resolveBridgeScriptUrl,
+} from '@/vendor/plannotator/srcdoc'
+import {
+  INJECT_CLOSE,
+  INJECT_OPEN,
+} from '@/components/documents/annotations/stripViewerInjection'
+
 export type DocumentStatus = 'draft' | 'active' | 'retired'
 export type DocumentSort = 'updated_at' | 'title' | 'code' | 'effective_date'
 export type DocTheme = 'dark' | 'light'
@@ -70,4 +82,43 @@ export function formatDocDate(iso: string | null | undefined): string {
 
 export function documentDownloadName(code: string, revision: number): string {
   return `${code}-r${revision}.html`
+}
+
+export const BRIDGE_ASSET_PATH = `/pn-bridge.v${BRIDGE_PROTOCOL_VERSION}.js`
+
+/** Mk1's theme tokens, read from the app root, for the viewer's --pn-* namespace. */
+export function readThemeTokens(): Record<string, string> {
+  const cs = getComputedStyle(document.documentElement)
+  const out: Record<string, string> = {}
+  for (const t of THEME_TOKENS) {
+    const v = cs.getPropertyValue(t).trim()
+    if (v) out[t] = v
+  }
+  return out
+}
+
+/**
+ * The frame document (spec §7.1): theme stamped, then the viewer's style +
+ * bridge <script src> spliced before </head> between markers that
+ * stripViewerInjection removes again on save. Stored bytes are never touched.
+ */
+export function buildViewerSrcDoc(
+  html: string,
+  mode: DocTheme,
+  tokens: Record<string, string>
+): string {
+  const injection = buildSrcdocInjection({
+    tokens,
+    isLight: mode === 'light',
+    hostTheme: false,
+    diffActive: false,
+    bridgeScriptUrl: resolveBridgeScriptUrl(
+      BRIDGE_ASSET_PATH,
+      document.baseURI
+    ),
+  })
+  return injectIntoHead(
+    stampDocumentTheme(html, mode),
+    `${INJECT_OPEN}${injection}${INJECT_CLOSE}`
+  )
 }
