@@ -44,7 +44,10 @@ test('insights page renders and matches the API', async ({ authedPage: page }) =
   await page.goto('/#accumark-tools/customer-insights')
   await expect(page.getByRole('heading', { name: 'Customer Insights', level: 1 })).toBeVisible({ timeout: 20_000 })
   // Stack orders are old, so 90D is empty; tie the All period to the API instead.
-  const s = await api<{ kpis: { paid_orders: { value: number }; active_customers: { value: number } } }>(
+  const s = await api<{
+    kpis: { paid_orders: { value: number }; active_customers: { value: number } }
+    product_prices: { product: string; avg_price: string }[]
+  }>(
     page,
     '/reports/customers/summary?period=all'
   )
@@ -53,6 +56,10 @@ test('insights page renders and matches the API', async ({ authedPage: page }) =
   await expect(tile(page, 'Paid orders').getByText(s.kpis.paid_orders.value.toLocaleString('en-US'), { exact: true })).toBeVisible()
   await expect(tile(page, 'Active customers').getByText(s.kpis.active_customers.value.toLocaleString('en-US'), { exact: true })).toBeVisible()
   await expect(page.locator('.recharts-wrapper').first()).toBeVisible()
+  const top = s.product_prices[0]
+  expect(top, 'stack has paid line items').toBeTruthy()
+  const priceRow = page.getByRole('row').filter({ has: page.getByText(top.product, { exact: true }) }).first()
+  await expect(priceRow).toContainText(`$${Number(top.avg_price).toFixed(2)}`)
   await shootFull(page, `${SHOTS}/01-insights.png`)
 })
 
@@ -83,6 +90,9 @@ test('customer dashboard tab opens from the at-risk list or the list', async ({ 
   }
   await expect(tile(page, 'Lifetime spend').getByText(money(d.kpis.lifetime), { exact: true })).toBeVisible()
   await expect(tile(page, 'Paid orders').getByText(String(d.kpis.orders), { exact: true })).toBeVisible()
+  await expect(page.getByRole('heading', { name: 'What they pay' })).toBeVisible()
+  await expect(page.getByRole('heading', { name: 'Coupons' })).toBeVisible()
+  await expect(page.getByText('Sales rep', { exact: true })).toBeVisible()
   await shootFull(page, `${SHOTS}/02-customer-dashboard.png`)
 })
 
