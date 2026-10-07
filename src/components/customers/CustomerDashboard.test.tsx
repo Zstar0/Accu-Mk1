@@ -72,6 +72,8 @@ function dossier(over: Partial<CustomerDossier['kpis']> = {}): CustomerDossier {
         revenue: '5100.00',
         customers: 1,
         free_units: 1,
+        list_price: '150.00',
+        discount_pct: 0.15,
         lab_avg_price: '150.00',
       },
     ],

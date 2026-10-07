@@ -8965,6 +8965,10 @@ export interface ProductPrice {
   revenue: string
   customers: number
   free_units: number
+  /** Avg pre-coupon list price per paid unit; null until list prices are mirrored. */
+  list_price: string | null
+  /** 1 - paid / list over the same units, e.g. 0.15 = 15% below list. */
+  discount_pct: number | null
 }
 export interface CustomerCohorts {
   tz: string

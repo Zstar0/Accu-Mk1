@@ -159,7 +159,8 @@ def test_changes_since_in_the_future_is_422(client) -> None:
 def test_pricing_coupon_and_rep_keys_survive_response_models(client) -> None:
     summary = client.get("/reports/customers/summary?period=all").json()
     assert summary["product_prices"][0] == {"product": "HPLC", "units": 8, "avg_price": "53.12",
-                                            "revenue": "425.00", "customers": 2, "free_units": 0}
+                                            "revenue": "425.00", "customers": 2, "free_units": 0,
+                                            "list_price": None, "discount_pct": None}
     rows = client.get("/reports/customers/list?period=all&search=scott").json()["rows"]
     assert [r["rep"] for r in rows] == ["Scott"]
     d = client.get("/reports/customers/wc:1").json()
