@@ -16,7 +16,9 @@ import {
  * document flag threads. Creates its own group, two standard users (member, outsider),
  * a restricted space and two documents, all suffixed per run. Also covers the admin
  * move from the viewer's Edit details dialog, revocation on the next request, and the
- * agent-token space allow-list through the publish script.
+ * agent-token space allow-list through the publish script, the comment, attachment
+ * and comment-index routes (scenario 5), and a board editor outside the space seeing a
+ * pinned document masked, including in a stale-version 409 (scenario 10).
  *
  * Scenario 9 needs E2E_AGENT_TOKEN, a token the stack's backend carries as
  * MK1_DOCUMENT_AGENT_TOKENS=e2e:<token>:general (General only); E2E_PYTHON optionally
@@ -34,6 +36,12 @@ const FLAG_TITLE = `Review Q4 plan (${RUN})`
 const TOKEN_KEY = 'accu_mk1_auth_token'
 const USER_KEY = 'accu_mk1_auth_user'
 const MISSING_ID = 999999999
+const BOARD_SLUG = `spaces-board-${RUN}`
+// Smallest body the attachment sniffer accepts as image/png.
+const PNG = Buffer.concat([
+  Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]),
+  Buffer.alloc(32, 0x30),
+])
 
 test.describe.configure({ mode: 'serial' })
 
@@ -105,6 +113,7 @@ let generalId = 0
 let docId = 0
 let docCode = ''
 let secondId = 0
+let secondCode = ''
 let flagId = 0
 
 async function openAs(
@@ -210,6 +219,7 @@ test('2. admin creates a restricted space, grants the group, publishes into it',
       docCode = body.code
     } else {
       secondId = body.id
+      secondCode = body.code
     }
   }
   record('2_space', {
@@ -325,6 +335,57 @@ test('5. outsider: General only; every read is a 404 like a missing id', async (
   ).json()) as { slug: string }[]
   expect(spaces.map(s => s.slug)).not.toContain(SPACE_SLUG)
 
+  // Comments and attachments on the hidden document read exactly like missing ones.
+  const a = bearer(admin)
+  const made = await request.post(
+    `${BACKEND_URL}/api/documents/${docId}/comments`,
+    { headers: a, data: { kind: 'comment', body: `E2E comment ${RUN}` } }
+  )
+  expect(made.status(), await made.text()).toBe(201)
+  const commentId = ((await made.json()) as { id: number }).id
+  const att = await request.post(
+    `${BACKEND_URL}/api/documents/${docId}/comment-attachments`,
+    {
+      headers: a,
+      multipart: {
+        file: { name: 'shot.png', mimeType: 'image/png', buffer: PNG },
+      },
+    }
+  )
+  expect(att.status(), await att.text()).toBe(201)
+  const attId = ((await att.json()) as { id: number }).id
+  const pairs: [string, number, string][] = [
+    ['/api/documents/<id>/comments', docId, 'comments'],
+    ['/api/documents/<id>/comments/export', docId, 'export'],
+    ['/api/documents/comments/<id>', commentId, 'comment'],
+    ['/api/documents/comment-attachments/<id>', attId, 'attachment'],
+  ]
+  const commentReads: Record<string, number> = {}
+  for (const [route, id, name] of pairs) {
+    const h = await request.get(
+      `${BACKEND_URL}${route.replace('<id>', String(id))}`,
+      { headers: o }
+    )
+    const m = await request.get(
+      `${BACKEND_URL}${route.replace('<id>', String(MISSING_ID))}`,
+      { headers: o }
+    )
+    expect(h.status(), `${name}: ${await h.text()}`).toBe(404)
+    expect(m.status()).toBe(404)
+    expect(await detail(h, id)).toBe(await detail(m, MISSING_ID))
+    commentReads[name] = h.status()
+  }
+  const index = await request.get(
+    `${BACKEND_URL}/api/documents/comments?status=all`,
+    { headers: o }
+  )
+  expect(index.status()).toBe(200)
+  const indexItems = (
+    (await index.json()) as { items: { document_id: number }[] }
+  ).items
+  expect(indexItems.map(i => i.document_id)).not.toContain(docId)
+  expect(await index.text()).not.toContain(DOC_TITLE)
+
   const { ctx, page } = await openAs(
     browser,
     outsiderTok,
@@ -351,6 +412,8 @@ test('5. outsider: General only; every read is a 404 like a missing id', async (
     get_content: hiddenContent.status(),
     missing_document: missing.status(),
     detail_matches_missing: true,
+    comment_routes: commentReads,
+    comment_index_has_doc: false,
     list_space_total: listBody.total,
     spaces_include_restricted: false,
     deep_link: 'not found state',
@@ -526,5 +589,89 @@ test('9. agent token: General-only allow-list refuses the restricted space', asy
       /HTTP (\d{3})/.exec(refused.stderr)?.[1] ?? NaN
     ),
     general_exit: ok.status,
+  })
+})
+
+test('10. board editor outside the space sees the pinned document masked', async ({
+  request,
+}) => {
+  // Scenario 7 moved the first document to General; the second is still restricted.
+  const h = bearer(admin)
+  const o = bearer(outsiderTok)
+  const users = (await (
+    await request.get(`${BACKEND_URL}/worksheets/users`, { headers: h })
+  ).json()) as { id: number; email: string }[]
+  const outsiderId = users.find(u => u.email === outsiderEmail)!.id
+  const g = await request.post(`${BACKEND_URL}/api/groups`, {
+    headers: h,
+    data: { slug: `board-editors-${RUN}`, name: `Board editors ${RUN}` },
+  })
+  expect(g.status(), await g.text()).toBe(201)
+  const editorsId = ((await g.json()) as { id: number }).id
+  const m = await request.put(
+    `${BACKEND_URL}/api/groups/${editorsId}/members`,
+    { headers: h, data: { user_ids: [outsiderId] } }
+  )
+  expect(m.status()).toBe(200)
+  const b = await request.post(`${BACKEND_URL}/api/boards`, {
+    headers: h,
+    data: {
+      slug: BOARD_SLUG,
+      name: `Spaces board ${RUN}`,
+      visibility: 'company',
+    },
+  })
+  expect(b.status(), await b.text()).toBe(201)
+  const gr = await request.put(
+    `${BACKEND_URL}/api/boards/${BOARD_SLUG}/grants`,
+    {
+      headers: h,
+      data: [{ group_id: editorsId, can_edit: true }],
+    }
+  )
+  expect(gr.status(), await gr.text()).toBe(200)
+  const pin = await request.post(
+    `${BACKEND_URL}/api/boards/${BOARD_SLUG}/nodes`,
+    {
+      headers: h,
+      data: { kind: 'entity', entity_type: 'document', entity_id: secondCode },
+    }
+  )
+  expect(pin.status(), await pin.text()).toBe(201)
+  const node = (await pin.json()) as { id: number; label: string }
+  expect(node.label).toContain(SECOND_TITLE)
+
+  const read = await request.get(`${BACKEND_URL}/api/boards/${BOARD_SLUG}`, {
+    headers: o,
+  })
+  expect(read.status()).toBe(200)
+  const readText = await read.text()
+  expect(readText).not.toContain(SECOND_TITLE)
+  const seen = JSON.parse(readText) as {
+    can_edit: boolean
+    nodes: { id: number; label: string; version: number }[]
+  }
+  expect(seen.can_edit).toBe(true)
+  const mine = seen.nodes.find(n => n.id === node.id)!
+  expect(mine.label).toBe(secondCode)
+
+  const stale = await request.patch(
+    `${BACKEND_URL}/api/boards/${BOARD_SLUG}/nodes/${node.id}`,
+    { headers: o, data: { x: 5, version: mine.version + 99 } }
+  )
+  expect(stale.status()).toBe(409)
+  const staleText = await stale.text()
+  expect(staleText).not.toContain(SECOND_TITLE)
+  const current = (
+    JSON.parse(staleText) as { detail: { current: { label: string } } }
+  ).detail.current
+  expect(current.label).toBe(mine.label)
+  record('10_board_mask', {
+    create_board: b.status(),
+    pin: pin.status(),
+    outsider_read: read.status(),
+    outsider_label_is_code: true,
+    stale_patch: stale.status(),
+    stale_body_has_title: false,
   })
 })

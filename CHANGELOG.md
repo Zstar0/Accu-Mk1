@@ -4,7 +4,7 @@
 
 ### Document spaces
 - **Spaces are the first level of the Documents page** and decide who can read what. A company space is readable by every login; a restricted space only by the user groups you grant. General is seeded and every existing document now lives in it.
-- The document list, search, the document routes and the document flag threads answer 404 for a document the caller cannot see, exactly as for a missing one. Comment and attachment routes are gated when the annotations chain merges (follow-up on this PR).
+- The document list, search, the document routes and the document flag threads answer 404 for a document the caller cannot see, exactly as for a missing one. Comments, attachments, the comment index and export, and in-place content edits honour the same gate.
 - Admins create and grant spaces in Settings > Documents, and move a document (every revision together) from Edit details. The publish skill and labmanager-mcp take a `space`; agent tokens may carry a space allow-list (`name:token:slug+slug`, absent = General only).
 
 ### Document annotations
