@@ -10312,14 +10312,16 @@ TEST_CLIENT_TITLES = frozenset({"valence internal 2"})
 
 
 def _test_client_sample_ids(db: Session) -> set[str]:
-    """Sample IDs whose lims_samples.client_title is an internal/test client."""
-    if not TEST_CLIENT_TITLES:
-        return set()
+    """Sample IDs whose lims_samples.client_title is an internal/test client.
+
+    A test account's e-mail also counts as a test client: samples registered
+    straight into the LIMS for that account carry its e-mail as the client title
+    and no order (prod 10-07: P-0346/P-0347/P-0476/P-0477/P-0203 for Harmony).
+    """
+    titles = sorted(TEST_CLIENT_TITLES | TEST_EMAILS)
     return {
         sid for (sid,) in db.execute(
-            select(LimsSample.sample_id).where(
-                func.lower(LimsSample.client_title).in_(sorted(TEST_CLIENT_TITLES))
-            )
+            select(LimsSample.sample_id).where(func.lower(LimsSample.client_title).in_(titles))
         ).all()
     }
 
