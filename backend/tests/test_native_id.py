@@ -126,6 +126,22 @@ def test_bw_title_without_bw_key_raises(db):
     for keys in (None, [], ["endotoxin-usp85-lal"]):
         with pytest.raises(ValueError, match="BW key"):
             mint_customer_sample_id(db, "Bacteriostatic Water", ordered_service_keys=keys)
+    bw = db.query(LimsNativeIdSequence).filter_by(prefix="BW").one()
+    assert bw.next_value == 1000
+
+
+@pytest.mark.parametrize("bad", [NATIVE_BW_KEY, "x-" + NATIVE_BW_KEY, b"x", 5, {NATIVE_BW_KEY: 1}])
+def test_ordered_service_keys_wrong_type_raises(db, bad):
+    _seed_customer_counters(db)
+    with pytest.raises(ValueError, match="OrderedServiceKeys must be a list of str"):
+        mint_customer_sample_id(db, "Peptide", ordered_service_keys=bad)
+    bw = db.query(LimsNativeIdSequence).filter_by(prefix="BW").one()
+    assert bw.next_value == 1000
+
+
+def test_non_str_entries_do_not_match_bw_key(db):
+    _seed_customer_counters(db)
+    assert mint_customer_sample_id(db, "Peptide", ordered_service_keys=[None, 3]) == "P-5000"
 
 
 def test_internal_native_id_unchanged_for_customer_ids(db):

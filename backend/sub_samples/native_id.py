@@ -20,6 +20,8 @@ from models import LimsNativeIdSequence
 
 log = logging.getLogger(__name__)
 
+# Title map is for SENAITE-free mint_native_id callers only (pinned by
+# test_native_id); the BW-born customer path keys on the profile key instead.
 _SAMPLE_TYPE_PREFIXES = {
     "peptide": "aP",
     "peptide blend": "aPB",
@@ -82,7 +84,13 @@ def mint_customer_sample_id(db: Session, sample_type_title: Optional[str],
     from models import LimsSample
     from catalog.bw_keys import NATIVE_BW_KEY
 
-    if NATIVE_BW_KEY in (ordered_service_keys or ()):
+    if ordered_service_keys is not None and not isinstance(
+            ordered_service_keys, (list, tuple, set, frozenset)):
+        raise ValueError(
+            "OrderedServiceKeys must be a list of str, "
+            f"got {type(ordered_service_keys).__name__}"
+        )
+    if any(k == NATIVE_BW_KEY for k in (ordered_service_keys or ())):
         prefix = "BW"
     else:
         key = (sample_type_title or "").strip().lower()
