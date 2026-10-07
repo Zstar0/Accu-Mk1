@@ -13,6 +13,7 @@ import {
   RefreshCw,
   TestTube,
   UserCog,
+  Map,
 } from 'lucide-react'
 import { relaunch } from '@tauri-apps/plugin-process'
 import {
@@ -44,6 +45,7 @@ import { useWizardStore } from '@/store/wizard-store'
 import { ReadyToPublishChips } from './QuickNav'
 import { useAuthStore } from '@/store/auth-store'
 import { logout } from '@/lib/auth-api'
+import { useBoardsNavVisible } from '@/services/boards'
 
 interface SubItem {
   id: ActiveSubSection
@@ -131,6 +133,11 @@ const navItems: NavItem[] = [
     ],
   },
   {
+    id: 'boards',
+    label: 'Boards',
+    icon: Map,
+  },
+  {
     id: 'accumark-tools',
     label: 'AccuMark Tools',
     icon: Wrench,
@@ -197,6 +204,7 @@ export function AppSidebar() {
   const updateReady = useUIStore(state => state.updateReady)
   const user = useAuthStore(state => state.user)
   const isAdmin = user?.role === 'admin'
+  const boardsVisible = useBoardsNavVisible()
   const [expandedSections, setExpandedSections] = useState(loadExpandedSections)
 
   const toggleSection = (sectionId: string, open: boolean) => {
@@ -224,6 +232,7 @@ export function AppSidebar() {
           <SidebarGroupContent>
             <SidebarMenu>
               {navItems.map(item => {
+                if (item.id === 'boards' && !boardsVisible) return null
                 if (item.adminOnly && !isAdmin) return null
                 const Icon = item.icon
                 const isActive = activeSection === item.id

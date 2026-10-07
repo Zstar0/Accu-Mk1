@@ -71,6 +71,10 @@ vi.mock('@/lib/auth-api', () => ({
   logout: vi.fn(),
 }))
 
+vi.mock('@/services/boards', () => ({
+  useBoardsNavVisible: () => true,
+}))
+
 vi.mock('@tauri-apps/plugin-process', () => ({
   relaunch: vi.fn(),
 }))
@@ -123,6 +127,11 @@ describe('AppSidebar — Customers entry (Phase 29-03)', () => {
     renderSidebar()
     const customersBtn = screen.getByRole('button', { name: 'Customers' })
     expect(customersBtn).toBeInTheDocument()
+  })
+
+  it('renders the Boards top-level item when useBoardsNavVisible() is true', () => {
+    renderSidebar()
+    expect(screen.getByRole('button', { name: 'Boards' })).toBeInTheDocument()
   })
 
   it('orders AccuMark Tools sub-items as Overview → Order Explorer → Order Status → Vial Status → Customers → Customer Insights → COA Explorer → Digital COA → Chromatographs', () => {

@@ -24,6 +24,7 @@ import {
   FileText,
   Tag,
   ListTodo,
+  Map,
 } from 'lucide-react'
 import type { LucideIcon } from 'lucide-react'
 import { useUIStore } from '@/store/ui-store'
@@ -46,6 +47,9 @@ const ENTITY_META: Record<string, EntityMeta> = {
   // backfilled to this slug; the chip must show a human label, never the slug.
   // Other (admin-created) kinds resolve their label FE-side via useItemKinds.
   general_task: { Icon: ListTodo, label: 'General Task', canDeepLink: false },
+  // Planning boards node (slice 3). deep_link.id is "<board slug>:<node id>",
+  // parsed by the navigateToDeepLink case below.
+  board_node: { Icon: Map, label: 'Board item', canDeepLink: true },
 }
 
 /** Entity types with a backend `state` seam (→ watchable). Mirror of the
@@ -147,6 +151,16 @@ export function navigateToDeepLink(deepLink: DeepLink): boolean {
       store.closeFlagsFlyout()
       store.navigateToDocument(Number(deepLink.id))
       return true
+    case 'board_node': {
+      const sep = deepLink.id.indexOf(':')
+      if (sep <= 0 || sep === deepLink.id.length - 1) return false
+      store.closeFlagsFlyout()
+      store.navigateToBoardNode(
+        deepLink.id.slice(0, sep),
+        deepLink.id.slice(sep + 1)
+      )
+      return true
+    }
     default:
       return false
   }
