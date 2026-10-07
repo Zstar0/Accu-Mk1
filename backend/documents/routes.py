@@ -15,8 +15,8 @@ from sqlalchemy.orm import Session
 
 from auth import get_current_user, require_admin, require_internal_service_token
 from database import get_db
-from documents import service
-from documents.errors import BadRequestError, ConflictError, NotFoundError
+from documents import comments, service
+from documents.errors import BadRequestError, ConflictError, ForbiddenError, NotFoundError
 from documents.models import Document, DocumentCategory
 from documents.schemas import (CategoryCreate, CategoryOut, CategoryUpdate, DocumentCreate,
                                DocumentDetail, DocumentListOut, DocumentOut, DocumentPatch)
@@ -108,6 +108,8 @@ def _audit(writer, action: str, doc: Document) -> None:
 def _http(e: Exception) -> HTTPException:
     if isinstance(e, NotFoundError) or isinstance(e, DocumentNotFound):
         return HTTPException(status_code=404, detail=str(e))
+    if isinstance(e, ForbiddenError):
+        return HTTPException(status_code=403, detail=str(e))
     if isinstance(e, ConflictError):
         return HTTPException(status_code=409, detail=str(e))
     if isinstance(e, BadRequestError):
@@ -129,7 +131,7 @@ def _cat_out(cat: DocumentCategory, count: int) -> CategoryOut:
     return out
 
 
-def _doc_out(doc: Document, revision_count: int) -> DocumentOut:
+def _doc_out(doc: Document, revision_count: int, open_comments: int = 0) -> DocumentOut:
     return DocumentOut(
         id=doc.id, code=doc.code, revision=doc.revision, title=doc.title,
         description=doc.description, category_id=doc.category_id,
@@ -140,7 +142,8 @@ def _doc_out(doc: Document, revision_count: int) -> DocumentOut:
         source_session=doc.source_session, created_by_user_id=doc.created_by_user_id,
         content_type=doc.content_type, size_bytes=doc.size_bytes,
         content_sha256=doc.content_sha256, created_at=doc.created_at,
-        updated_at=doc.updated_at, revision_count=revision_count)
+        updated_at=doc.updated_at, revision_count=revision_count,
+        open_comment_count=open_comments)
 
 
 # --- categories -------------------------------------------------------------------------
@@ -194,9 +197,10 @@ def list_documents(q: Optional[str] = None, category_id: Optional[int] = None,
         rows, total = service.list_documents(db, q=q, category_id=category_id,
                                              statuses=tuple(statuses), sort=sort,
                                              page=page, page_size=page_size)
+        counts = comments.open_comment_counts(db, [d.code for d, _ in rows])
     except Exception as e:
         raise _http(e)
-    return DocumentListOut(items=[_doc_out(d, n) for d, n in rows], total=total,
+    return DocumentListOut(items=[_doc_out(d, n, counts.get(d.code, 0)) for d, n in rows], total=total,
                            page=max(1, page), page_size=max(1, min(200, page_size)))
 
 
@@ -205,10 +209,11 @@ def get_document(doc_id: int, db: Session = Depends(get_db), user=Depends(get_cu
     try:
         doc = service.get_document(db, doc_id)
         revisions = service.get_revisions(db, doc.code)
+        counts = comments.open_comment_counts(db, [doc.code])
     except Exception as e:
         raise _http(e)
     n = len(revisions)
-    out = _doc_out(doc, n)
+    out = _doc_out(doc, n, counts.get(doc.code, 0))
     return DocumentDetail(**out.model_dump(), revisions=[_doc_out(r, n) for r in revisions])
 
 

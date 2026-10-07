@@ -128,6 +128,7 @@ from customer_insights.routes import router as customer_insights_router
 from workflow.cancel_routes import router as cancel_router
 from conformance.routes import router as conformance_router
 from documents.routes import router as documents_router
+from documents.comment_routes import router as document_comments_router
 from groups.routes import router as groups_router
 from boards.routes import router as boards_router
 
@@ -489,11 +490,13 @@ async def lifespan(app: FastAPI):
     # Orphaned-attachment GC — always registered (no Slack env needed); hourly is
     # plenty for a 24h TTL. Lives in flags/ (zero Slack coupling).
     from flags import attachments_gc as _attachments_gc
+    from documents import comment_attachments_gc as _comment_attachments_gc
 
     def _gc_job(now):
         db = _SessionLocal()
         try:
             _attachments_gc.gc_orphaned_attachments(db, now=now)
+            _comment_attachments_gc.gc_orphaned_comment_attachments(db, now=now)
         finally:
             db.close()
     _flag_scheduler.register("attachment_gc", interval=_timedelta(hours=1),
@@ -626,6 +629,7 @@ app.include_router(priority_router)
 app.include_router(customer_insights_router)
 app.include_router(cancel_router)
 app.include_router(conformance_router)
+app.include_router(document_comments_router)  # literal /documents/comments* paths must beat /documents/{doc_id}
 app.include_router(documents_router)
 app.include_router(groups_router)
 app.include_router(boards_router)

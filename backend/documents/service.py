@@ -453,6 +453,8 @@ def delete_document(db: Session, doc_id: int, *, expect_code: str,
         raise ConflictError(
             f"revision {doc.id} is superseded by {dependent}; retire instead")
     key, code, revision = doc.storage_key, doc.code, doc.revision
+    from documents import comments as _comments  # local: comments imports this module lazily too
+    comment_blob_keys = _comments.purge_for_document(db, doc.id)
     db.delete(doc)
     db.commit()
     # Row first, bytes second. A failed blob delete leaves an inert orphan;
@@ -462,6 +464,7 @@ def delete_document(db: Session, doc_id: int, *, expect_code: str,
     except Exception as e:
         logging.getLogger(__name__).warning(
             "documents blob orphaned key=%s err=%s", key, e)
+    _comments._delete_blobs(comment_blob_keys)
     return {"deleted": True, "code": code, "revision": revision}
 
 
