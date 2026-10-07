@@ -2,12 +2,15 @@
 """In-memory Customer Insights dataset assembled from raw rows (pure; no I/O)."""
 from __future__ import annotations
 
-from dataclasses import dataclass
+from collections import Counter, defaultdict
+from dataclasses import dataclass, replace
 from datetime import datetime
 from decimal import Decimal
 from typing import Any, Iterable
 
 from customer_insights.rules import customer_key, is_paid
+
+_CENT = Decimal("0.01")
 
 _LABELS = (
     ("hplc", "HPLC"), ("endotoxin", "Endotoxin"), ("steril", "Sterility"),
@@ -23,6 +26,21 @@ class Customer:
     email: str | None
     company: str | None
     wc_id: int | None
+    rep: str | None = None  # SalesKing assigned agent (wc_customers.meta_data), display name
+
+
+@dataclass(frozen=True)
+class Line:
+    product: str
+    qty: int
+    total: Decimal  # post-coupon line total (WC line_items[].total)
+
+
+@dataclass(frozen=True)
+class CouponLine:
+    code: str
+    discount: Decimal
+    terms: str | None  # configured value, e.g. "15%" or "$50.00"
 
 
 @dataclass(frozen=True)
@@ -40,6 +58,8 @@ class Order:
     tests: tuple[str, ...]
     is_retest: bool
     retest_of_order_id: int | None
+    lines: tuple[Line, ...] = ()
+    coupon_lines: tuple[CouponLine, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -93,6 +113,56 @@ def _name(first: str | None, last: str | None, fallback: str) -> str:
     return " ".join(p for p in (first, last) if p) or fallback
 
 
+# Categories whose line names carry per-order suffixes ("Additional COA - Order #8134 / ...").
+_CATEGORY_PRODUCT = {"additional_coa": "Additional COAs", "variance": "Variance", "retest": "Vial re-test"}
+
+
+def _product_labels(order_rows: list[tuple]) -> dict[int, str]:
+    """product_id -> its most common line name (WC renames products; old lines keep old names)."""
+    names: dict[int, Counter] = defaultdict(Counter)
+    for row in order_rows:
+        for i in row[9] or []:
+            if i.get("product_id"):
+                names[int(i["product_id"])][i.get("name") or ""] += 1
+    return {pid: c.most_common(1)[0][0] for pid, c in names.items()}
+
+
+def _lines(items: list[dict], labels: dict[int, str]) -> tuple[Line, ...]:
+    out = []
+    for i in items or []:
+        cat = i.get("category") or "testing"
+        if cat == "fee":  # prepaid draw-downs and card fees are not a product price
+            continue
+        pid = int(i.get("product_id") or 0)
+        product = _CATEGORY_PRODUCT.get(cat) or labels.get(pid) or i.get("name") or "Other"
+        out.append(Line(product, int(i.get("qty") or 0), Decimal(str(i.get("total") or 0)).quantize(_CENT)))
+    return tuple(out)
+
+
+def _terms(c: dict) -> str | None:
+    amount = c.get("amount")
+    if amount in (None, ""):
+        return None
+    if c.get("type") == "percent":
+        return f"{Decimal(str(amount)).normalize():f}%"
+    return f"${Decimal(str(amount)):.2f}"
+
+
+def _coupon_lines(raw: list[dict] | None, codes: list[str] | None, discount: Decimal) -> tuple[CouponLine, ...]:
+    raw = [c for c in raw or [] if c.get("code")]
+    if raw:
+        # The order's discount_total is the truth; coupon lines only give each code's share.
+        # (WC can keep a coupon line whose discount was never applied, e.g. after an admin edit.)
+        shares = [Decimal(str(c.get("discount") or 0)) for c in raw]
+        total = sum(shares, Decimal(0))
+        return tuple(CouponLine(c["code"].lower(), (discount * sh / total).quantize(_CENT) if total else Decimal("0.00"),
+                                _terms(c)) for c, sh in zip(raw, shares))
+    # Rows synced before IS stored coupon_lines: a lone code owns the whole discount.
+    if codes and len(codes) == 1:
+        return (CouponLine(codes[0].lower(), discount, None),)
+    return ()
+
+
 def build_dataset(
     *,
     order_rows: Iterable[tuple],
@@ -103,13 +173,21 @@ def build_dataset(
     synced_at: datetime | None,
 ) -> Dataset:
     subs = {int(r[0]): r for r in submission_rows}
+    order_rows = list(order_rows)
+    labels = _product_labels(order_rows)
     customers: dict[str, Customer] = {}
-    for cid, email, first, last, company in customer_rows:
+    rep_ids: dict[str, str] = {}
+    for cid, email, first, last, company, rep_id in customer_rows:
         key = f"wc:{int(cid)}"
         customers[key] = Customer(key, _name(first, last, email or key), email, company or None, int(cid))
+        if rep_id and str(rep_id).isdigit():  # SalesKing stores "none" when unassigned
+            rep_ids[key] = str(rep_id)
+    for key, rep_id in rep_ids.items():
+        agent = customers.get(f"wc:{rep_id}")
+        customers[key] = replace(customers[key], rep=agent.name if agent else f"Agent #{rep_id}")
 
     orders: list[Order] = []
-    for (oid, number, cid, email, status, total, discount, refund, coupons, items, paid) in order_rows:
+    for (oid, number, cid, email, status, total, discount, refund, coupons, items, paid, cl) in order_rows:
         net = (total or Decimal(0)) - (refund or Decimal(0))
         key = customer_key(cid, email)
         if key is None or not is_paid(status, paid) or net <= 0:
@@ -133,6 +211,8 @@ def build_dataset(
             categories=tuple(sorted({(i or {}).get("category", "testing") for i in items or []})),
             is_testing=is_testing, samples=len(samples) if is_testing else 0, tests=tests,
             is_retest=bool(sub[2]) if sub else False, retest_of_order_id=int(sub[3]) if sub and sub[3] else None,
+            lines=_lines(items, labels),
+            coupon_lines=_coupon_lines(cl, coupons, (discount or Decimal(0)).quantize(_CENT)),
         ))
     orders.sort(key=lambda o: o.paid_at)
 

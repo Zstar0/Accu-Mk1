@@ -133,6 +133,7 @@ def summary(ds: Dataset, *, start: datetime | None, end: datetime, tz: str) -> d
             "mean_ltv": money(total / len(ltv) if ltv else ZERO),
         },
         "attach": attach,
+        "product_prices": product_prices(_window(ds, start, end)),
         "first_order": [{"kind": kind, "customers": len(kinds.get(kind, [])),
                          "repeat_rate": round(sum(kinds[kind]) / len(kinds[kind]), 4) if kinds.get(kind) else None}
                         for kind in ("accutry50", "other_coupon", "full_price", "with_addon")],
@@ -199,7 +200,7 @@ def customer_rows(ds: Dataset, *, start: datetime | None, end: datetime, tz: str
         tests = Counter(t for x in orders for t in x.tests)
         rows.append({
             "key": key, "name": c.name if c else key, "email": c.email if c else None,
-            "company": c.company if c else None,
+            "company": c.company if c else None, "rep": c.rep if c else None,
             "period_spend": money(period), "prior_spend": money(prior),
             "delta_pct": round(float((period - prior) / prior), 4) if prior else None,
             "lifetime": money(_spend(orders, None, end)), "orders": len(orders),
@@ -229,6 +230,36 @@ def order_rows(ds: Dataset, *, start: datetime | None, end: datetime) -> list[di
         "coupons": list(x.coupons), "categories": list(x.categories), "samples": x.samples,
         "tests": sorted(set(x.tests)),
     } for x in _window(ds, start, end)]
+
+
+def product_prices(orders: list[Order]) -> list[dict[str, Any]]:
+    """Avg price actually paid per unit (post-coupon line total / qty), by product.
+
+    ponytail: refunds are order-level only, so a partially refunded order keeps full line prices.
+    """
+    agg: dict[str, list] = defaultdict(lambda: [0, ZERO, set()])
+    for x in orders:
+        for ln in x.lines:
+            if ln.qty > 0:
+                a = agg[ln.product]
+                a[0] += ln.qty
+                a[1] += ln.total
+                a[2].add(x.customer_key)
+    rows = [{"product": p, "units": u, "avg_price": money(t / u), "revenue": money(t), "customers": len(c)}
+            for p, (u, t, c) in agg.items()]
+    return sorted(rows, key=lambda r: -Decimal(r["revenue"]))
+
+
+def coupon_use(orders: list[Order]) -> list[dict[str, Any]]:
+    agg: dict[str, dict[str, Any]] = {}
+    for x in sorted(orders, key=lambda x: x.paid_at):
+        for c in x.coupon_lines:
+            a = agg.setdefault(c.code, {"code": c.code, "orders": 0, "discount": ZERO, "terms": None})
+            a["orders"] += 1
+            a["discount"] += c.discount
+            a["terms"] = c.terms or a["terms"]  # latest configured terms win
+            a["last_used"] = x.paid_at.isoformat()
+    return sorted(({**a, "discount": money(a["discount"])} for a in agg.values()), key=lambda a: -a["orders"])
 
 
 def _rate(num: int, den: int) -> float | None:
@@ -272,6 +303,7 @@ def dossier(ds: Dataset, key: str, *, end: datetime, tz: str) -> dict[str, Any] 
     period = _spend(orders, end - timedelta(days=90), end)
     prior = _spend(orders, end - timedelta(days=180), end - timedelta(days=90))
     risk = rules.is_at_risk(dates, end)
+    lab_prices = {r["product"]: r["avg_price"] for r in product_prices(_upto(ds, end))}
 
     def recent_row(x: Order) -> dict[str, Any]:
         cs = [y for y in mine if y.order_number == x.order_number]
@@ -284,6 +316,7 @@ def dossier(ds: Dataset, key: str, *, end: datetime, tz: str) -> dict[str, Any] 
     return {
         "identity": {"key": key, "name": c.name if c else key, "email": c.email if c else None,
                      "company": c.company if c else None, "wc_id": c.wc_id if c else None,
+                     "rep": c.rep if c else None,
                      "since": orders[0].paid_at.isoformat()},
         "kpis": {
             "lifetime": money(_spend(orders, None, end)), "rank": rank, "customers": len(lifetimes),
@@ -306,6 +339,8 @@ def dossier(ds: Dataset, key: str, *, end: datetime, tz: str) -> dict[str, Any] 
                      for t, n in sorted(tests.items(), key=lambda kv: -kv[1])],
         "analytes": sorted(({"product": p, "coas": len(v), "pass_rate": round(sum(v) / len(v), 4)}
                             for p, v in products.items()), key=lambda r: -r["coas"])[:8],
+        "test_prices": [{**r, "lab_avg_price": lab_prices.get(r["product"])} for r in product_prices(orders)],
+        "coupons": coupon_use(orders),
         "recent": [recent_row(x) for x in sorted(orders, key=lambda x: x.paid_at, reverse=True)[:6]],
         "orders": order_rows(replace(ds, orders=tuple(orders)), start=None, end=end),
     }

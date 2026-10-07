@@ -34,6 +34,7 @@ function dossier(over: Partial<CustomerDossier['kpis']> = {}): CustomerDossier {
       email: 'ops@h.example',
       company: 'Halcyon',
       wc_id: 1188,
+      rep: 'Scott',
       since: '2026-03-04T18:00:00Z',
     },
     kpis: {
@@ -63,6 +64,25 @@ function dossier(over: Partial<CustomerDossier['kpis']> = {}): CustomerDossier {
     order_dates: ['2026-08-12T18:00:00Z', '2026-08-21T18:00:00Z'],
     test_mix: [{ test: 'Endotoxin', share: 0.74, all_share: 0.31 }],
     analytes: [{ product: 'Retatrutide', coas: 21, pass_rate: 0.81 }],
+    test_prices: [
+      {
+        product: 'HPLC Identity, Purity & Quantity',
+        units: 40,
+        avg_price: '127.50',
+        revenue: '5100.00',
+        customers: 1,
+        lab_avg_price: '150.00',
+      },
+    ],
+    coupons: [
+      {
+        code: 'ac15',
+        orders: 3,
+        discount: '612.00',
+        terms: '15%',
+        last_used: '2026-08-21T18:00:00Z',
+      },
+    ],
     recent: [
       {
         order_number: '8642',
@@ -114,6 +134,16 @@ describe('CustomerDashboard', () => {
     expect(screen.getByText('late')).toBeInTheDocument()
     expect(screen.getByText('1 fail')).toBeInTheDocument()
     expect(screen.getByText('83%')).toBeInTheDocument()
+    expect(screen.getByText('Scott')).toBeInTheDocument()
+    const price = screen
+      .getByText('HPLC Identity, Purity & Quantity')
+      .closest('tr')
+    expect(price).toHaveTextContent('$127.50')
+    expect(price).toHaveTextContent('-15%')
+    expect(price).toHaveTextContent('$150.00')
+    const coupon = screen.getByText('ac15').closest('tr')
+    expect(coupon).toHaveTextContent('15%')
+    expect(coupon).toHaveTextContent('$612')
     await userEvent.click(screen.getByRole('button', { name: 'Retatrutide' }))
     expect(onOpenAnalyte).toHaveBeenCalledWith('Retatrutide')
     expect(api.getCustomerDossier).toHaveBeenCalledWith('wc:1188')

@@ -79,6 +79,14 @@ class FirstOrder(BaseModel):
     repeat_rate: Optional[float] = None
 
 
+class ProductPrice(BaseModel):
+    product: str
+    units: int
+    avg_price: str
+    revenue: str
+    customers: int
+
+
 class Meta(BaseModel):
     tz: str
     synced_at: Optional[str] = None
@@ -89,6 +97,7 @@ class SummaryResponse(Meta):
     revenue_by_month: list[MonthRevenue]
     concentration: Concentration
     attach: list[Attach]
+    product_prices: list[ProductPrice]
     first_order: list[FirstOrder]
 
 
@@ -113,6 +122,7 @@ class CustomerRow(BaseModel):
     name: str
     email: Optional[str] = None
     company: Optional[str] = None
+    rep: Optional[str] = None
     period_spend: str
     prior_spend: str
     delta_pct: Optional[float] = None
@@ -162,7 +172,7 @@ class OrdersResponse(Meta):
     page_size: int
 
 
-SortField = Literal["key", "name", "email", "company", "period_spend", "prior_spend", "delta_pct", "lifetime",
+SortField = Literal["key", "name", "email", "company", "rep", "period_spend", "prior_spend", "delta_pct", "lifetime",
                     "orders", "samples", "usual_gap_days", "last_order_at", "status"]
 _MONEY_FIELDS = {"period_spend", "prior_spend", "lifetime"}
 
@@ -213,7 +223,7 @@ def customers_list(period: Period = "90d", dates: tuple = Depends(_dates),
     rows = metrics.customer_rows(ds, start=lo, end=hi, tz=tz)
     q = search.strip().lower()
     if q:
-        rows = [r for r in rows if q in " ".join(str(r.get(f) or "") for f in ("name", "email", "company", "key")).lower()]
+        rows = [r for r in rows if q in " ".join(str(r.get(f) or "") for f in ("name", "email", "company", "key", "rep")).lower()]
     present = [r for r in rows if r.get(sort) is not None]
     present.sort(key=lambda r: Decimal(r[sort]) if sort in _MONEY_FIELDS else r[sort], reverse=(dir == "desc"))
     rows = present + [r for r in rows if r.get(sort) is None]  # nulls last in both directions
@@ -249,6 +259,7 @@ class Identity(BaseModel):
     email: Optional[str] = None
     company: Optional[str] = None
     wc_id: Optional[int] = None
+    rep: Optional[str] = None
     since: str
 
 
@@ -286,6 +297,18 @@ class AnalyteRate(BaseModel):
     pass_rate: float
 
 
+class CustomerProductPrice(ProductPrice):
+    lab_avg_price: Optional[str] = None
+
+
+class CouponUse(BaseModel):
+    code: str
+    orders: int
+    discount: str
+    terms: Optional[str] = None
+    last_used: str
+
+
 class RecentOrder(BaseModel):
     order_number: str
     paid_at: str
@@ -305,6 +328,8 @@ class DossierResponse(Meta):
     order_dates: list[str]
     test_mix: list[TestShare]
     analytes: list[AnalyteRate]
+    test_prices: list[CustomerProductPrice]
+    coupons: list[CouponUse]
     recent: list[RecentOrder]
     orders: list[OrderRow]
 

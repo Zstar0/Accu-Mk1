@@ -16,7 +16,7 @@ from integration_db import get_integration_db
 
 WC_ORDERS_SQL = """
     SELECT id, order_number, customer_id, billing_email, status, total, discount_total,
-           refund_total, coupon_codes, line_items, date_paid_gmt
+           refund_total, coupon_codes, line_items, date_paid_gmt, coupon_lines
     FROM wc_orders
     WHERE date_paid_gmt IS NOT NULL AND status <> ALL(%s)
 """
@@ -32,7 +32,16 @@ SUBMISSIONS_SQL = """
     WHERE oid IS NOT NULL
     ORDER BY oid, created_at DESC, id DESC
 """
-CUSTOMERS_SQL = "SELECT id, email, first_name, last_name, company_name FROM wc_customers WHERE deleted_at IS NULL"
+# rep_id = SalesKing `salesking_assigned_agent` user meta (an agent's WP user id, or "none").
+# ponytail: the customer reconcile skips rows whose WC date_modified did not move, and SalesKing
+# reassignments do not bump it, so reps drift until a customer backfill; fix in IS if it bites.
+CUSTOMERS_SQL = """
+    SELECT id, email, first_name, last_name, company_name,
+           (SELECT m->>'value' FROM jsonb_array_elements(
+                CASE WHEN jsonb_typeof(meta_data) = 'array' THEN meta_data ELSE '[]'::jsonb END) m
+            WHERE m->>'key' = 'salesking_assigned_agent' LIMIT 1) AS rep_id
+    FROM wc_customers WHERE deleted_at IS NULL
+"""
 # Published PRIMARY COAs only (same rule as Analyte Trends): one row per COA.
 COAS_SQL = """
     SELECT DISTINCT ON (r.verification_code)

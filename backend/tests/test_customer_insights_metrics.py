@@ -4,7 +4,7 @@ from dataclasses import replace
 from decimal import Decimal
 
 from customer_insights import metrics
-from customer_insights.dataset import Coa, Customer, Dataset, Order, build_dataset
+from customer_insights.dataset import Coa, CouponLine, Customer, Dataset, Line, Order, build_dataset
 
 TZ = "America/Los_Angeles"
 T0 = datetime(2026, 3, 10, 18, tzinfo=timezone.utc)
@@ -191,7 +191,7 @@ def test_scope_drops_registered_test_account_by_email() -> None:
 # --- F1: retests are paid orders, never testing orders (built through build_dataset) ---
 def _raw(oid, day, total="100.00", cid=1):
     return (oid, str(oid), cid, f"c{cid}@x.example", "completed", Decimal(total), Decimal(0), Decimal(0),
-            [], [{"category": "testing"}], T0 + timedelta(days=day))
+            [], [{"category": "testing"}], T0 + timedelta(days=day), [])
 
 
 def _sub(oid, retest_of=None):
@@ -240,3 +240,26 @@ def test_churn_retest_buckets_count_free_retests_and_skip_immature() -> None:
     assert (b[("retest", "no_retest")]["orders"], b[("retest", "no_retest")]["returned"]) == (2, 0.5)
     assert (b[("sla", "late")]["orders"], b[("sla", "late")]["returned"]) == (1, 0.0)
     assert (b[("sla", "on_time")]["orders"], b[("sla", "on_time")]["returned"]) == (1, 1.0)   # 7 is immature
+
+
+def test_product_prices_and_coupon_use() -> None:
+    hplc = Line("HPLC", 2, Decimal("270.00"))
+    a = replace(o("wc:1", 0, oid=1), lines=(hplc, Line("Endotoxin", 1, Decimal("100.00"))),
+                coupon_lines=(CouponLine("ac15", Decimal("40.00"), "15%"),))
+    b = replace(o("wc:1", 10, oid=2), lines=(Line("HPLC", 1, Decimal("150.00")),),
+                coupon_lines=(CouponLine("ac15", Decimal("20.00"), "20%"), CouponLine("sc5", Decimal("5.00"), None)))
+    c = replace(o("wc:2", 5, oid=3), lines=(Line("HPLC", 1, Decimal("200.00")), Line("Free", 0, Decimal("0"))))
+    data = ds([a, b, c])
+    end = T0 + timedelta(days=30)
+    prices = metrics.summary(data, start=T0 - timedelta(days=1), end=end, tz=TZ)["product_prices"]
+    assert prices == [
+        {"product": "HPLC", "units": 4, "avg_price": "155.00", "revenue": "620.00", "customers": 2},
+        {"product": "Endotoxin", "units": 1, "avg_price": "100.00", "revenue": "100.00", "customers": 1},
+    ]  # qty 0 lines skipped
+    d = metrics.dossier(data, "wc:1", end=end, tz=TZ)
+    assert d["test_prices"][0] == {"product": "HPLC", "units": 3, "avg_price": "140.00", "revenue": "420.00",
+                                   "customers": 1, "lab_avg_price": "155.00"}
+    assert d["coupons"] == [
+        {"code": "ac15", "orders": 2, "discount": "60.00", "terms": "20%", "last_used": b.paid_at.isoformat()},
+        {"code": "sc5", "orders": 1, "discount": "5.00", "terms": None, "last_used": b.paid_at.isoformat()},
+    ]

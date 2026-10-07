@@ -376,6 +376,9 @@ function CustomerListView() {
                     Top tests
                   </th>
                   <th className="py-2 px-3 text-xs font-semibold uppercase text-muted-foreground whitespace-nowrap">
+                    Rep
+                  </th>
+                  <th className="py-2 px-3 text-xs font-semibold uppercase text-muted-foreground whitespace-nowrap">
                     Status
                   </th>
                 </tr>
@@ -405,7 +408,7 @@ function CustomerListView() {
                   !hasError &&
                   customers.length === 0 && (
                     <tr>
-                      <td colSpan={13} className="py-16">
+                      <td colSpan={14} className="py-16">
                         <div className="flex flex-col items-center text-center">
                           <Users className="h-8 w-8 text-muted-foreground/40 mb-2" />
                           <p className="text-sm font-medium text-muted-foreground">
@@ -561,7 +564,7 @@ function InsightCells({ insight }: { insight?: InsightRow }) {
   if (!insight) {
     return (
       <>
-        {Array.from({ length: 7 }).map((_, i) => (
+        {Array.from({ length: 8 }).map((_, i) => (
           <td key={i} className="py-3 px-3 text-sm text-muted-foreground">
             -
           </td>
@@ -596,6 +599,9 @@ function InsightCells({ insight }: { insight?: InsightRow }) {
       </td>
       <td className="py-3 px-3 text-sm text-muted-foreground">
         {insight.top_tests.join(', ') || '-'}
+      </td>
+      <td className="py-3 px-3 text-sm text-muted-foreground whitespace-nowrap">
+        {insight.rep ?? '-'}
       </td>
       <td className="py-3 px-3 text-sm">
         <span

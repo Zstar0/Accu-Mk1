@@ -6,6 +6,12 @@ export function fmtMoney(s: string | null | undefined): string {
   return `$${Math.round(n).toLocaleString('en-US')}`
 }
 
+/** Unit prices keep cents ($76.50); fmtMoney rounds to whole dollars. */
+export const fmtPrice = (s: string | null | undefined): string =>
+  s == null
+    ? 'n/a'
+    : `$${Number(s).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
+
 export const fmtPct = (x: number | null | undefined, dp = 1): string =>
   x == null ? 'n/a' : `${(x * 100).toFixed(dp)}%`
 

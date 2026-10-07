@@ -8951,7 +8951,16 @@ export interface CustomerSummary {
     customers: number
   }
   attach: { test: string; new: number; returning: number }[]
+  product_prices: ProductPrice[]
   first_order: { kind: string; customers: number; repeat_rate: number | null }[]
+}
+/** Avg price actually paid per unit (post-coupon line total / qty). */
+export interface ProductPrice {
+  product: string
+  units: number
+  avg_price: string
+  revenue: string
+  customers: number
 }
 export interface CustomerCohorts {
   tz: string
@@ -8964,6 +8973,7 @@ export interface CustomerRow {
   name: string
   email: string | null
   company: string | null
+  rep: string | null
   period_spend: string
   prior_spend: string
   delta_pct: number | null
@@ -9067,6 +9077,7 @@ export interface CustomerDossier {
     email: string | null
     company: string | null
     wc_id: number | null
+    rep: string | null
     since: string
   }
   kpis: {
@@ -9092,6 +9103,14 @@ export interface CustomerDossier {
   order_dates: string[]
   test_mix: { test: string; share: number; all_share: number }[]
   analytes: { product: string; coas: number; pass_rate: number }[]
+  test_prices: (ProductPrice & { lab_avg_price: string | null })[]
+  coupons: {
+    code: string
+    orders: number
+    discount: string
+    terms: string | null
+    last_used: string
+  }[]
   recent: {
     order_number: string
     paid_at: string

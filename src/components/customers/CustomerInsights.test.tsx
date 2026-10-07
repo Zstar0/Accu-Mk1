@@ -54,6 +54,15 @@ function setup(riskFails = false) {
       customers: 782,
     },
     attach: [{ test: 'Endotoxin', new: 0.12, returning: 0.68 }],
+    product_prices: [
+      {
+        product: 'Endotoxin Addon',
+        units: 160,
+        avg_price: '117.09',
+        revenue: '18734.40',
+        customers: 52,
+      },
+    ],
     first_order: [{ kind: 'accutry50', customers: 273, repeat_rate: 0.14 }],
   })
   vi.mocked(api.getCustomerCohorts).mockResolvedValue({
@@ -71,6 +80,7 @@ function setup(riskFails = false) {
         name: 'Halcyon Research Supply',
         email: 'ops@h.example',
         company: null,
+        rep: null,
         period_spend: '12400.00',
         prior_spend: '42000.00',
         delta_pct: -0.71,
@@ -122,6 +132,9 @@ describe('CustomerInsights', () => {
     ).toBeInTheDocument()
     expect(screen.getByText('n = 14')).toBeInTheDocument()
     expect(screen.getByText(/Correlation, not proof/)).toBeInTheDocument()
+    expect(screen.getByText('Endotoxin Addon').closest('tr')).toHaveTextContent(
+      '$117.09'
+    )
     for (const h of [
       'First order → comes back? (all time)',
       'Add-on attach rate (all time)',

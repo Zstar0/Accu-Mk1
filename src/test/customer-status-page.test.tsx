@@ -314,6 +314,7 @@ describe('CustomerStatusPage — list view', () => {
       'Samples',
       'Usual gap',
       'Top tests',
+      'Rep',
       'Status',
     ])
   })
@@ -324,6 +325,7 @@ describe('CustomerStatusPage — list view', () => {
       name: 'Alice A',
       email: 'a@example.com',
       company: null,
+      rep: 'Scott',
       period_spend: '4321.00',
       prior_spend: '1000.00',
       delta_pct: 3.3,
@@ -347,6 +349,7 @@ describe('CustomerStatusPage — list view', () => {
     render(<CustomerStatusPage />, { wrapper })
     expect(await screen.findByText('$4,321')).toBeInTheDocument()
     expect(screen.getByText('Growing')).toBeInTheDocument()
+    expect(screen.getByText('Scott')).toBeInTheDocument()
   })
 
   it('shows a muted note when the insight query fails', async () => {

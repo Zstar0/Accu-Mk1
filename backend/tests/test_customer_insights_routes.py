@@ -7,7 +7,7 @@ from fastapi.testclient import TestClient
 
 from auth import get_current_user
 from customer_insights import routes, sources
-from customer_insights.dataset import Customer, Dataset, Order
+from customer_insights.dataset import CouponLine, Customer, Dataset, Line, Order
 from database import get_db
 
 NOW = datetime(2026, 10, 5, 18, tzinfo=timezone.utc)
@@ -15,11 +15,12 @@ NOW = datetime(2026, 10, 5, 18, tzinfo=timezone.utc)
 
 def _o(key, days_ago, net="100", oid=1):
     return Order(oid, str(oid), key, NOW - timedelta(days=days_ago), Decimal(net), Decimal(0),
-                 ("accutry50",), ("testing",), True, 2, ("HPLC", "Endotoxin"), False, None)
+                 ("accutry50",), ("testing",), True, 2, ("HPLC", "Endotoxin"), False, None,
+                 (Line("HPLC", 2, Decimal(net)),), (CouponLine("accutry50", Decimal("50.00"), "50%"),))
 
 
 DS = Dataset(
-    {"wc:1": Customer("wc:1", "Halcyon", "ops@h.example", "Halcyon", 1),
+    {"wc:1": Customer("wc:1", "Halcyon", "ops@h.example", "Halcyon", 1, "Scott"),
      "email:g@x.com": Customer("email:g@x.com", "Jo", "g@x.com", None, None)},
     (_o("wc:1", 200, oid=1), _o("wc:1", 190, oid=2), _o("wc:1", 180, oid=3), _o("email:g@x.com", 10, "125", oid=4)),
     (), None, None, NOW,
@@ -97,7 +98,7 @@ def test_dossier_route_nested_fields_survive(client) -> None:
     body = client.get("/reports/customers/wc:1").json()
     assert body["tz"] == "America/Los_Angeles"
     assert body["identity"] == {"key": "wc:1", "name": "Halcyon", "email": "ops@h.example",
-                                "company": "Halcyon", "wc_id": 1, "since": body["identity"]["since"]}
+                                "company": "Halcyon", "wc_id": 1, "rep": "Scott", "since": body["identity"]["since"]}
     assert body["kpis"]["gap_iqr"] == [10.0, 10.0] and body["kpis"]["usual_gap_days"] == 10.0
     assert {"lab_nonconforming_rate", "lab_on_time_rate", "samples_per_order"} <= set(body["kpis"])
     assert body["status"] == "at_risk" and body["overdue"] > 1
@@ -153,3 +154,16 @@ def test_changes_since_in_the_future_is_422(client) -> None:
     assert client.get("/reports/customers/changes?since=2026-10-06T00:00:00Z").status_code == 422
     assert client.get("/reports/customers/changes?since=2026-10-06T00:00:00").status_code == 422
     assert client.get("/reports/customers/changes?since=2026-10-05T17:00:00Z").status_code == 200
+
+
+def test_pricing_coupon_and_rep_keys_survive_response_models(client) -> None:
+    summary = client.get("/reports/customers/summary?period=all").json()
+    assert summary["product_prices"][0] == {"product": "HPLC", "units": 8, "avg_price": "53.12",
+                                            "revenue": "425.00", "customers": 2}
+    rows = client.get("/reports/customers/list?period=all&search=scott").json()["rows"]
+    assert [r["rep"] for r in rows] == ["Scott"]
+    d = client.get("/reports/customers/wc:1").json()
+    assert d["identity"]["rep"] == "Scott"
+    assert d["test_prices"][0]["lab_avg_price"] == "53.12"
+    assert d["coupons"][0] == {"code": "accutry50", "orders": 3, "discount": "150.00", "terms": "50%",
+                               "last_used": (NOW - timedelta(days=180)).isoformat()}

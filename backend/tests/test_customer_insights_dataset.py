@@ -8,11 +8,11 @@ PAID = datetime(2026, 9, 10, 15, tzinfo=timezone.utc)
 
 
 def order_row(id_, customer_id=1188, email="ops@h.example", total="100.00", refund="0.00",
-              status="completed", paid=PAID, coupons=None, items=None):
+              status="completed", paid=PAID, coupons=None, items=None, coupon_lines=None, discount="0.00"):
     # columns: id, order_number, customer_id, billing_email, status, total, discount_total,
-    #          refund_total, coupon_codes, line_items, date_paid_gmt
-    return (id_, str(id_), customer_id, email, status, Decimal(total), Decimal("0.00"),
-            Decimal(refund), coupons or [], items or [{"category": "testing"}], paid)
+    #          refund_total, coupon_codes, line_items, date_paid_gmt, coupon_lines
+    return (id_, str(id_), customer_id, email, status, Decimal(total), Decimal(discount),
+            Decimal(refund), coupons or [], items or [{"category": "testing"}], paid, coupon_lines or [])
 
 
 def sub_row(order_id, samples, is_retest=False, retest_of=None, is_transfer=False, billing=None):
@@ -37,7 +37,7 @@ def test_service_label() -> None:
 
 def test_testing_order_net_and_tests() -> None:
     ds = build([order_row(1, refund="25.00")], [sub_row(1, [SAMPLE, SAMPLE])],
-               customers=[(1188, "ops@h.example", "Ops", "Team", "Halcyon")])
+               customers=[(1188, "ops@h.example", "Ops", "Team", "Halcyon", "none")])
     (o,) = ds.orders
     assert o.customer_key == "wc:1188" and o.is_testing and o.samples == 2
     assert o.net == Decimal("75.00")
@@ -112,3 +112,37 @@ def test_retest_order_is_paid_not_testing_and_retested_ids_from_all_submissions(
     assert by_id[2].is_retest and not by_id[2].is_testing and by_id[2].samples == 0
     assert by_id[1].is_testing and by_id[3].is_testing
     assert ds.retested_order_ids == frozenset({1, 3})
+
+
+def test_lines_coupons_and_rep() -> None:
+    items = [
+        {"name": "HPLC Identity, Purity & Quantity", "product_id": 2853, "qty": 2, "total": "300.00", "category": "testing"},
+        {"name": "Sterility (PCR)", "product_id": 2856, "qty": 1, "total": "120.00", "category": "addon"},
+        {"name": "Additional COA - Order #8134 / KLOW (Lot X)", "product_id": 3061, "qty": 1, "total": "25", "category": "additional_coa"},
+        {"name": "Prepaid balance", "product_id": None, "qty": 1, "total": "-50.00", "category": "fee"},
+    ]
+    renamed = [{"name": "Rapid Sterility Screening (PCR) Addon", "product_id": 2856, "qty": 1, "total": "140", "category": "addon"}] * 2
+    ds = build(
+        [order_row(1, items=items, coupons=["AC15", "sc5"], discount="544.00", coupon_lines=[
+            {"code": "AC15", "discount": "408.00", "type": "percent", "amount": 15},
+            {"code": "sc5", "discount": "136.00", "type": "fixed_cart", "amount": "136"}]),
+         order_row(2, items=renamed, coupons=["solo"], discount="20.00"),
+         order_row(3, customer_id=1557, items=renamed, coupons=["ghost"],
+                   coupon_lines=[{"code": "ghost", "discount": "102", "type": "percent", "amount": 15}])],
+        customers=[(1188, "ops@h.example", "Ops", "Team", None, "1557"),
+                   (1557, "scott@lab.example", "Scott", None, None, "none"),
+                   (77, "x@y.example", "X", None, None, "999")])
+    o1, o2, o3 = ds.orders
+    assert [(ln.product, ln.qty, ln.total) for ln in o1.lines] == [
+        ("HPLC Identity, Purity & Quantity", 2, Decimal("300.00")),
+        ("Rapid Sterility Screening (PCR) Addon", 1, Decimal("120.00")),   # pid label = most common name
+        ("Additional COAs", 1, Decimal("25.00")),
+    ]  # fee line dropped
+    assert [(c.code, c.discount, c.terms) for c in o1.coupon_lines] == [
+        ("ac15", Decimal("408.00"), "15%"), ("sc5", Decimal("136.00"), "$136.00")]
+    assert [(c.code, c.discount, c.terms) for c in o2.coupon_lines] == [("solo", Decimal("20.00"), None)]
+    # WC kept a coupon line but the order's discount_total is 0: nothing was saved.
+    assert [(c.code, c.discount) for c in o3.coupon_lines] == [("ghost", Decimal("0.00"))]
+    assert ds.customers["wc:1188"].rep == "Scott"
+    assert ds.customers["wc:1557"].rep is None
+    assert ds.customers["wc:77"].rep == "Agent #999"

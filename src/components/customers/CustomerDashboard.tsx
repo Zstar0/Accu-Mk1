@@ -21,6 +21,7 @@ import {
   dossierQuery,
   fmtMoney,
   fmtPct,
+  fmtPrice,
   STATUS_CLASS,
   STATUS_LABEL,
 } from './insights-utils'
@@ -331,6 +332,10 @@ export function CustomerDashboard({
               </b>
             </div>
             <div className="flex justify-between">
+              <span className="text-muted-foreground">Sales rep</span>
+              <b>{d.identity.rep ?? 'Unassigned'}</b>
+            </div>
+            <div className="flex justify-between">
               <span className="text-muted-foreground">Status</span>
               <span className={cn(CHIP, STATUS_CLASS[d.status])}>
                 {STATUS_LABEL[d.status] ?? d.status}
@@ -475,6 +480,98 @@ export function CustomerDashboard({
               ))}
             </tbody>
           </table>
+        </section>
+      </div>
+
+      <div className="grid gap-3 lg:grid-cols-2">
+        <section className={CARD}>
+          <h2 className="text-sm font-medium">What they pay</h2>
+          <p className="mb-2 text-[11px] text-muted-foreground">
+            Average price per unit after coupons, all time · vs all customers
+          </p>
+          {d.test_prices.length === 0 ? (
+            <p className="text-sm text-muted-foreground">No paid line items</p>
+          ) : (
+            <table className="w-full text-sm tabular-nums">
+              <thead>
+                <tr className="text-[11px] uppercase tracking-wider text-muted-foreground">
+                  <th className="py-1 text-left font-medium">Product</th>
+                  <th className="text-right font-medium">Units</th>
+                  <th className="text-right font-medium">They pay</th>
+                  <th className="text-right font-medium">Lab avg</th>
+                </tr>
+              </thead>
+              <tbody>
+                {d.test_prices.map(p => {
+                  const lab = p.lab_avg_price ? Number(p.lab_avg_price) : 0
+                  const delta = lab ? Number(p.avg_price) / lab - 1 : null
+                  return (
+                    <tr key={p.product} className="border-t border-border/20">
+                      <td className="py-1">{p.product}</td>
+                      <td className="text-right">{p.units}</td>
+                      <td className="text-right font-medium">
+                        {fmtPrice(p.avg_price)}
+                        {delta != null && Math.abs(delta) >= 0.05 && (
+                          <span
+                            className={cn(
+                              CHIP,
+                              'ml-1',
+                              delta < 0
+                                ? 'bg-amber-500/15 text-amber-700 dark:text-amber-300'
+                                : GREEN
+                            )}
+                          >
+                            {delta > 0 ? '+' : ''}
+                            {fmtPct(delta, 0)}
+                          </span>
+                        )}
+                      </td>
+                      <td className="text-right text-muted-foreground">
+                        {fmtPrice(p.lab_avg_price)}
+                      </td>
+                    </tr>
+                  )
+                })}
+              </tbody>
+            </table>
+          )}
+        </section>
+
+        <section className={CARD}>
+          <h2 className="text-sm font-medium">Coupons</h2>
+          <p className="mb-2 text-[11px] text-muted-foreground">
+            Codes used, the code&apos;s terms, and what it saved them
+          </p>
+          {d.coupons.length === 0 ? (
+            <p className="text-sm text-muted-foreground">Never used a coupon</p>
+          ) : (
+            <table className="w-full text-sm tabular-nums">
+              <thead>
+                <tr className="text-[11px] uppercase tracking-wider text-muted-foreground">
+                  <th className="py-1 text-left font-medium">Code</th>
+                  <th className="text-right font-medium">Terms</th>
+                  <th className="text-right font-medium">Orders</th>
+                  <th className="text-right font-medium">Discount</th>
+                  <th className="text-right font-medium">Last used</th>
+                </tr>
+              </thead>
+              <tbody>
+                {d.coupons.map(c => (
+                  <tr key={c.code} className="border-t border-border/20">
+                    <td className="py-1 font-mono text-xs">{c.code}</td>
+                    <td className="text-right">{c.terms ?? 'n/a'}</td>
+                    <td className="text-right">{c.orders}</td>
+                    <td className="text-right font-medium">
+                      {fmtMoney(c.discount)}
+                    </td>
+                    <td className="text-right text-muted-foreground">
+                      {day(c.last_used)}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          )}
         </section>
       </div>
     </div>

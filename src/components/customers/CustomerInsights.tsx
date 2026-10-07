@@ -29,6 +29,7 @@ import {
   fmtDelta,
   fmtMoney,
   fmtPct,
+  fmtPrice,
   fmtPoints,
 } from './insights-utils'
 
@@ -550,6 +551,45 @@ export function CustomerInsights({
               </div>
             </section>
           </div>
+          <section className={CARD}>
+            <h2 className="text-sm font-medium">Average price by product</h2>
+            <p className="mb-2 text-[11px] text-muted-foreground">
+              What customers actually paid per unit in this period, after
+              coupons
+            </p>
+            {s.product_prices.length === 0 ? (
+              <p className="py-4 text-center text-sm text-muted-foreground">
+                No paid line items in this period
+              </p>
+            ) : (
+              <table className="w-full text-sm tabular-nums">
+                <thead>
+                  <tr className="text-[11px] uppercase tracking-wider text-muted-foreground">
+                    <th className="py-1 text-left font-medium">Product</th>
+                    <th className="text-right font-medium">Avg price</th>
+                    <th className="text-right font-medium">Units</th>
+                    <th className="text-right font-medium">Revenue</th>
+                    <th className="text-right font-medium">Customers</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {s.product_prices.map(p => (
+                    <tr key={p.product} className="border-t border-border/20">
+                      <td className="py-1.5">{p.product}</td>
+                      <td className="text-right font-medium">
+                        {fmtPrice(p.avg_price)}
+                      </td>
+                      <td className="text-right">{p.units}</td>
+                      <td className="text-right">{fmtMoney(p.revenue)}</td>
+                      <td className="text-right text-muted-foreground">
+                        {p.customers}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            )}
+          </section>
           <section className={CARD}>
             <h2 className="text-sm font-medium">Why do customers stop?</h2>
             <p className="mb-2 text-[11px] text-muted-foreground">
