@@ -1,5 +1,20 @@
-import { useMemo, useState, useSyncExternalStore } from 'react'
-import { ArrowLeft, Download, Loader2, Pencil } from 'lucide-react'
+import {
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  useSyncExternalStore,
+} from 'react'
+import {
+  ArrowLeft,
+  Download,
+  Loader2,
+  MessageSquareText,
+  MousePointerClick,
+  Pencil,
+  TextCursor,
+} from 'lucide-react'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import {
@@ -19,9 +34,42 @@ import {
   documentDownloadName,
   formatDocDate,
   resolveDocTheme,
-  stampDocumentTheme,
 } from '@/components/documents/documents-utils'
 import { RetitleDialog } from '@/components/documents/RetitleDialog'
+import { toast } from 'sonner'
+import { ToggleGroup, ToggleGroupItem } from '@/components/ui/toggle-group'
+import {
+  ResizableHandle,
+  ResizablePanel,
+  ResizablePanelGroup,
+} from '@/components/ui/resizable'
+import { Sheet, SheetContent } from '@/components/ui/sheet'
+import {
+  addDocumentCommentAttachment,
+  type CommentLabel,
+  type CommentStatusFilter,
+} from '@/lib/api-document-comments'
+import {
+  useCommentLabels,
+  useCreateComment,
+  useDocumentComments,
+} from '@/services/document-comments'
+import {
+  buildViewerSrcDoc,
+  readThemeTokens,
+} from '@/components/documents/documents-utils'
+import {
+  useDocumentBridge,
+  type BridgeComment,
+  type BridgeSelection,
+} from './annotations/useDocumentBridge'
+import { SelectionToolbar } from './annotations/SelectionToolbar'
+import { SYNTHETIC_ELEMENT_QUOTE } from './annotations/bridge-messages'
+import {
+  CommentComposer,
+  type ComposerMode,
+} from './annotations/CommentComposer'
+import { CommentsPanel } from './annotations/CommentsPanel'
 
 /**
  * Renders one revision inside a sandboxed frame (spec §8.3). `srcdoc` +
@@ -60,9 +108,170 @@ export function DocumentViewer({ id }: { id: number }) {
   const content = useDocumentContent(id)
 
   const mode = resolveDocTheme(theme, usePrefersDark())
+  const doc = detail.data
+  const user = useAuthStore(s => s.user)
+  const iframeRef = useRef<HTMLIFrameElement>(null)
+  const [inputMethod, setInputMethod] = useState<'drag' | 'pinpoint'>('drag')
+  const [filter, setFilter] = useState<CommentStatusFilter>('open')
+  // null = follow the default (open when the document has open comments)
+  const [panelPref, setPanelOpen] = useState<boolean | null>(null)
+  const [narrow, setNarrow] = useState(
+    () => window.matchMedia('(max-width: 767px)').matches
+  )
+  // Default-open only on wide screens (no Sheet over a phone on load).
+  const panelOpen =
+    panelPref ?? (!narrow && (detail.data?.open_comment_count ?? 0) > 0)
+  const [selection, setSelection] = useState<BridgeSelection | null>(null)
+  const [composer, setComposer] = useState<{
+    mode: ComposerMode
+    label: CommentLabel | null
+  } | null>(null)
+  const [selectedId, setSelectedId] = useState<string | null>(null)
+  useEffect(() => {
+    const mq = window.matchMedia('(max-width: 767px)')
+    const on = () => setNarrow(mq.matches)
+    mq.addEventListener('change', on)
+    return () => mq.removeEventListener('change', on)
+  }, [])
+
+  const commentsQ = useDocumentComments(id, 'all')
+  const labelsQ = useCommentLabels()
+  const createComment = useCreateComment(id)
+  const labels = labelsQ.data ?? []
+  const comments = useMemo(() => commentsQ.data?.items ?? [], [commentsQ.data])
+  const panelComments = useMemo(
+    () =>
+      filter === 'all' ? comments : comments.filter(c => c.status === filter),
+    [comments, filter]
+  )
+  const openCount =
+    commentsQ.data?.open_count ?? detail.data?.open_comment_count ?? 0
+
   const srcDoc = useMemo(
-    () => (content.data ? stampDocumentTheme(content.data, mode) : ''),
+    () =>
+      content.data
+        ? buildViewerSrcDoc(content.data, mode, readThemeTokens())
+        : '',
     [content.data, mode]
+  )
+
+  // Only OPEN comments carry marks; resolved ones stay in the panel under the filter.
+  const bridgeComments = useMemo<BridgeComment[]>(
+    () =>
+      comments.flatMap(c => {
+        const anchor = c.anchor
+        const number = c.number
+        if (c.status !== 'open' || !anchor || number == null) return []
+        const additional = (anchor.htmlAdditionalTargets ?? []).flatMap(t =>
+          t.anchor ? [t.anchor] : []
+        )
+        return [
+          {
+            id: String(c.id),
+            type: c.kind === 'suggestion' ? 'deletion' : 'comment',
+            originalText: anchor.originalText,
+            anchor: anchor.htmlAnchor ?? null,
+            additionalAnchors: additional.length ? additional : null,
+            number,
+          } satisfies BridgeComment,
+        ]
+      }),
+    [comments]
+  )
+
+  const bridge = useDocumentBridge({
+    iframeRef,
+    documentKey: `${id}:${mode}`,
+    comments: bridgeComments,
+    inputMethod,
+    annotateActive: true,
+    onSelection: s => {
+      setSelection(s)
+      // A global composer keeps its draft when the frame clears its selection.
+      if (!s) setComposer(c => (c?.mode === 'global' ? c : null))
+    },
+    onSelectionRect: r => setSelection(s => (s ? { ...s, rect: r } : s)),
+    onMarkClick: markId => {
+      setSelectedId(markId)
+      setPanelOpen(true)
+    },
+  })
+
+  // The iframe is the stage's first child, so frame coords are stage coords.
+  const stageRect = selection?.rect ?? null
+
+  const uploadImage = useCallback(
+    async (blob: Blob, name: string) =>
+      (await addDocumentCommentAttachment(id, blob, name)).id,
+    [id]
+  )
+
+  const submitComment = async (
+    v: { body: string; suggested_text?: string; label?: string | null },
+    m: ComposerMode
+  ) => {
+    const anchor =
+      m === 'global' || !selection
+        ? null
+        : {
+            originalText:
+              selection.pinpoint && SYNTHETIC_ELEMENT_QUOTE.test(selection.text)
+                ? ''
+                : selection.text,
+            htmlAnchor: selection.anchor ?? undefined,
+            elementContext: (selection.context ?? undefined) as
+              | Record<string, unknown>
+              | undefined,
+          }
+    const created = await createComment.mutateAsync({
+      kind: m === 'suggestion' ? 'suggestion' : 'comment',
+      body: v.body,
+      suggested_text: m === 'suggestion' ? v.suggested_text : undefined,
+      label: v.label ?? null,
+      anchor,
+    })
+    if (anchor)
+      bridge.createMark(
+        String(created.id),
+        m === 'suggestion' ? 'deletion' : 'comment'
+      )
+    bridge.cancelSelection()
+    setComposer(null)
+    setSelection(null)
+    setPanelOpen(true)
+  }
+  const quickLabel = async (label: CommentLabel) => {
+    if (createComment.isPending) return
+    try {
+      await submitComment({ body: '', label: label.id }, 'comment')
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : 'Could not add the comment')
+    }
+  }
+
+  const panel = doc && (
+    <CommentsPanel
+      docId={id}
+      currentRevision={doc.revision}
+      comments={panelComments}
+      labels={labels}
+      filter={filter}
+      onFilterChange={setFilter}
+      unanchoredIds={bridge.unanchoredIds}
+      selectedId={selectedId}
+      onSelect={markId => {
+        setSelectedId(markId)
+        bridge.scrollTo(markId)
+      }}
+      onGlobalComment={() => {
+        setSelection(null)
+        setComposer({ mode: 'global', label: null })
+      }}
+      headings={bridge.headings}
+      onNavigateHeading={bridge.scrollToFragment}
+      me={user ? { id: user.id } : null}
+      isAdmin={isAdmin}
+    />
   )
 
   const download = () => {
@@ -78,8 +287,6 @@ export function DocumentViewer({ id }: { id: number }) {
     a.remove()
     setTimeout(() => URL.revokeObjectURL(url), 60_000)
   }
-
-  const doc = detail.data
 
   return (
     <div className="flex h-full flex-col">
@@ -116,6 +323,30 @@ export function DocumentViewer({ id }: { id: number }) {
                 : ''}
             </span>
             <div className="ml-auto flex items-center gap-2">
+              <ToggleGroup
+                type="single"
+                value={inputMethod}
+                onValueChange={v =>
+                  v && setInputMethod(v as 'drag' | 'pinpoint')
+                }
+                aria-label="Annotation mode"
+                size="sm"
+              >
+                <ToggleGroupItem value="drag" aria-label="Select">
+                  <TextCursor className="h-4 w-4" />
+                </ToggleGroupItem>
+                <ToggleGroupItem value="pinpoint" aria-label="Pinpoint">
+                  <MousePointerClick className="h-4 w-4" />
+                </ToggleGroupItem>
+              </ToggleGroup>
+              <Button
+                variant={panelOpen ? 'secondary' : 'outline'}
+                size="sm"
+                onClick={() => setPanelOpen(!panelOpen)}
+              >
+                <MessageSquareText className="mr-1 h-4 w-4" />
+                Comments ({openCount})
+              </Button>
               {/* Threads anchor on the CODE, so they follow the document
                   across revisions. */}
               <EntityFlagButton entityType="document" entityId={doc.code} />
@@ -180,12 +411,109 @@ export function DocumentViewer({ id }: { id: number }) {
           <Loader2 className="h-5 w-5 animate-spin text-muted-foreground" />
         </div>
       ) : content.error ? null : (
-        <iframe
-          title={doc?.title ?? `Document ${id}`}
-          sandbox="allow-scripts"
-          srcDoc={srcDoc}
-          className="min-h-0 w-full flex-1 border-0 bg-background"
-        />
+        <>
+          <ResizablePanelGroup
+            direction="horizontal"
+            className="min-h-0 flex-1"
+          >
+            <ResizablePanel
+              id="document-frame"
+              order={1}
+              defaultSize={72}
+              minSize={40}
+            >
+              <div className="flex h-full flex-col overflow-y-auto">
+                {bridge.status === 'unavailable' && (
+                  <p
+                    role="status"
+                    className="border-b bg-muted px-3 py-1 text-xs text-muted-foreground"
+                  >
+                    Annotation tools did not load
+                    {bridge.unavailable?.kind === 'version-mismatch'
+                      ? ` (bridge version ${bridge.unavailable.reported ?? 'none'})`
+                      : ''}
+                    . The document is shown read-only; global comments still
+                    work.
+                  </p>
+                )}
+                <div className="relative min-h-0 flex-1">
+                  <iframe
+                    ref={iframeRef}
+                    title={doc?.title ?? `Document ${id}`}
+                    sandbox="allow-scripts"
+                    srcDoc={srcDoc}
+                    className="block w-full border-0 bg-background"
+                    style={{
+                      height:
+                        bridge.status === 'ready' ? bridge.height : '100%',
+                    }}
+                  />
+                  {selection &&
+                    !composer &&
+                    bridge.status === 'ready' &&
+                    stageRect && (
+                      <SelectionToolbar
+                        rect={stageRect}
+                        labels={labels}
+                        onComment={() =>
+                          setComposer({ mode: 'comment', label: null })
+                        }
+                        onSuggest={() =>
+                          setComposer({ mode: 'suggestion', label: null })
+                        }
+                        onLabel={quickLabel}
+                        onThumbsUp={() => {
+                          const l = labels.find(x => x.id === 'nice-work')
+                          if (l) quickLabel(l)
+                        }}
+                      />
+                    )}
+                  {composer && (
+                    <CommentComposer
+                      open
+                      rect={composer.mode === 'global' ? null : stageRect}
+                      mode={composer.mode}
+                      quote={
+                        composer.mode === 'global'
+                          ? ''
+                          : (selection?.text ?? '')
+                      }
+                      labels={labels}
+                      initialLabel={composer.label}
+                      onSubmit={v => submitComment(v, composer.mode)}
+                      onCancel={() => {
+                        setComposer(null)
+                        setSelection(null)
+                        bridge.cancelSelection()
+                      }}
+                      uploadImage={uploadImage}
+                    />
+                  )}
+                </div>
+              </div>
+            </ResizablePanel>
+            {panelOpen && !narrow && (
+              <>
+                <ResizableHandle withHandle />
+                <ResizablePanel
+                  id="document-comments"
+                  order={2}
+                  defaultSize={28}
+                  minSize={20}
+                >
+                  {panel}
+                </ResizablePanel>
+              </>
+            )}
+          </ResizablePanelGroup>
+          {narrow && (
+            <Sheet open={panelOpen} onOpenChange={setPanelOpen}>
+              <SheetContent side="right" className="w-[92vw] p-0">
+                {panel}
+              </SheetContent>
+            </Sheet>
+          )}
+        </>
       )}
 
       {doc && (

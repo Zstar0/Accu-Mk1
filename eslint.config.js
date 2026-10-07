@@ -98,6 +98,7 @@ export default tseslint.config(
     ignores: [
       'dist/**',
       'node_modules/**',
+      'src/vendor/**', // vendored MIT code, see src/vendor/plannotator/VENDORED.md
       'src-tauri/target/**',
       'src-tauri/gen/**',
       '*.config.js',

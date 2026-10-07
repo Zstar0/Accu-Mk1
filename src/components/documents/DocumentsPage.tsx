@@ -1,7 +1,12 @@
 import { useEffect, useMemo, useState } from 'react'
 import type { ColumnDef } from '@tanstack/react-table'
 import { useQuery } from '@tanstack/react-query'
-import { FileText, Loader2, MessageSquare } from 'lucide-react'
+import {
+  FileText,
+  Loader2,
+  MessageSquare,
+  MessageSquareText,
+} from 'lucide-react'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { DataTable } from '@/components/ui/data-table'
@@ -206,6 +211,25 @@ function DocumentsList() {
               <MessageSquare className="h-3 w-3" />
               {n}
             </button>
+          )
+        },
+      },
+      {
+        id: 'comments',
+        header: 'Comments',
+        size: 90,
+        enableSorting: false,
+        cell: ({ row }) => {
+          const n = row.original.open_comment_count
+          if (!n) return null
+          return (
+            <span
+              className="inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-xs font-medium"
+              aria-label={`${n} open comment${n === 1 ? '' : 's'} on ${row.original.code}`}
+            >
+              <MessageSquareText className="h-3 w-3" />
+              {n}
+            </span>
           )
         },
       },

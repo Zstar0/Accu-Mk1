@@ -4,6 +4,7 @@
   "project": ["src/**/*.{ts,tsx}"],
   "ignore": [
     "src/components/ui/**",
+    "src/vendor/**",
     "src/test/**",
     "**/index.ts",
     "src/lib/platform-strings.ts"
