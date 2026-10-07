@@ -69,13 +69,13 @@ def _dispatch(db, user, action_id: str, flag_id: int) -> str:
     from flags.errors import PermissionDeniedError
     try:
         if action_id == "flag_assign_me":
-            flag = service.get_flag(db, flag_id)
+            flag = service.get_visible_flag(db, user, flag_id)
             if flag.assignee_id == user.id:
                 return "Already assigned to you."
             service.assign(db, user=user, flag_id=flag_id, assignee_id=user.id)
             return "Assigned to you."
         if action_id == "flag_mark_read":
-            service.mark_read(db, user_id=user.id, flag_id=flag_id)
+            service.mark_read(db, user_id=user.id, flag_id=flag_id, user=user)
             return "Marked as read."
         if action_id == "flag_resolve":
             service.change_status(db, user=user, flag_id=flag_id, to_status="resolved")

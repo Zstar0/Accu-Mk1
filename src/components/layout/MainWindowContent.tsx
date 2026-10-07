@@ -21,7 +21,7 @@ import { ReceiveSample } from '@/components/intake/ReceiveSample'
 import { ActiveBoxesPage } from '@/components/intake/ActiveBoxesPage'
 import { UserManagement } from '@/components/auth/UserManagement'
 import { ProfilePage } from '@/components/auth/ProfilePage'
-import { ReportsDashboard } from '@/components/reports/ReportsDashboard'
+import { AnalyteTrends } from '@/components/reports/AnalyteTrends'
 import { DocumentsPage } from '@/components/documents/DocumentsPage'
 import { ReportsSyncDebug } from '@/components/reports/ReportsSyncDebug'
 import { CheckInTimesReport } from '@/components/reports/CheckInTimesReport'
@@ -34,6 +34,8 @@ import { PeptideRequestsList } from '@/pages/PeptideRequestsList'
 import { PeptideRequestDetail } from '@/pages/PeptideRequestDetail'
 import { AdminClickupUsers } from '@/pages/AdminClickupUsers'
 import { SettingsPage } from '@/components/preferences/SettingsPage'
+import { BoardsPage } from '@/components/boards/BoardsPage'
+import { BoardPage } from '@/components/boards/BoardPage'
 import { useUIStore } from '@/store/ui-store'
 import { useAuthStore } from '@/store/auth-store'
 
@@ -49,6 +51,7 @@ export function MainWindowContent({
   const activeSection = useUIStore(state => state.activeSection)
   const activeSubSection = useUIStore(state => state.activeSubSection)
   const navigationKey = useUIStore(state => state.navigationKey)
+  const boardTargetSlug = useUIStore(state => state.boardTargetSlug)
   const isAdmin = useAuthStore(state => state.user?.role === 'admin')
 
   // Render section content based on active section
@@ -91,7 +94,7 @@ export function MainWindowContent({
         if (activeSubSection === 'sla-performance')
           return <SlaPerformanceReport />
         if (activeSubSection === 'bottlenecks') return <TurnaroundReport />
-        return <ReportsDashboard />
+        return <AnalyteTrends />
       case 'accumark-tools':
         if (activeSubSection === 'chromatographs')
           return <ChromatographViewer />
@@ -108,6 +111,10 @@ export function MainWindowContent({
         return <AdminClickupUsers />
       case 'settings':
         return <SettingsPage />
+      case 'boards':
+        if (activeSubSection === 'board' && boardTargetSlug)
+          return <BoardPage key={boardTargetSlug} slug={boardTargetSlug} />
+        return <BoardsPage />
       default:
         return null
     }

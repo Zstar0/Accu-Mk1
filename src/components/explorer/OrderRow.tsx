@@ -14,6 +14,7 @@ import { FlagIndicator } from '@/components/flags/FlagIndicator'
 import { PriorityGlyph } from '@/components/common/PriorityGlyph'
 import { PrioritySelect } from '@/components/common/PrioritySelect'
 import { OrderFinancePanel } from './OrderFinancePanel'
+import { fmtMoney } from '@/components/customers/insights-utils'
 import { OrderSlaCell } from './OrderSlaCell'
 import { SampleCard } from './SampleCard'
 import {
@@ -44,6 +45,7 @@ export function OrderRow({
   highlightSampleId,
   highlightLot,
   showFinance,
+  money,
   slaVerdict,
   sampleSlaStatusesMap,
   showPriorityControl,
@@ -88,6 +90,10 @@ export function OrderRow({
   // cell that toggles a live WooCommerce finance disclosure row beneath this one.
   // Off by default so the shared /explorer OrderStatusPage view is unchanged.
   showFinance?: boolean
+  // Customer Insights money for this order (Total / Discount / Coupon cells).
+  // Rendered only with showFinance; undefined renders "-" (dossier not loaded
+  // or the order is not a paid WC order).
+  money?: { net: string; discount: string; coupons: string[] }
   // D2: order-aggregated SLA verdict. Undefined means "loading" (the cell renders
   // a muted loading dot). The parent passes verdicts from useOrderSlaStatuses.
   slaVerdict?: OrderSlaVerdict
@@ -300,6 +306,19 @@ export function OrderRow({
         <td className="py-3 px-3 whitespace-nowrap text-sm text-muted-foreground">
           {formatDate(order.created_at)}
         </td>
+        {showFinance && (
+          <>
+            <td className="py-3 px-3 whitespace-nowrap text-sm text-right tabular-nums">
+              {money ? fmtMoney(money.net) : '-'}
+            </td>
+            <td className="py-3 px-3 whitespace-nowrap text-sm text-right tabular-nums text-muted-foreground">
+              {money ? fmtMoney(money.discount) : '-'}
+            </td>
+            <td className="py-3 px-3 whitespace-nowrap text-sm text-muted-foreground">
+              {money?.coupons.join(', ') || '-'}
+            </td>
+          </>
+        )}
         <td className="py-3 px-3 whitespace-nowrap align-top">
           <div className="flex flex-col gap-0.5 text-xs">
             <span
@@ -414,7 +433,7 @@ export function OrderRow({
       </tr>
       {showFinance && financeExpanded && (
         <tr data-testid="order-finance-row" className="bg-muted/20">
-          <td colSpan={7} className="p-0">
+          <td colSpan={10} className="p-0">
             <OrderFinancePanel
               orderId={order.order_id}
               enabled={financeExpanded}

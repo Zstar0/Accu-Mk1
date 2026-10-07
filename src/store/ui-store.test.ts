@@ -111,6 +111,30 @@ describe('UIStore customer actions', () => {
     expect(state.navigationKey).toBe(before + 1)
   })
 
+  it('navigateToCustomerKey: email keys set customerDetailKey, wc keys use the id flow, back-nav clears both', () => {
+    useUIStore.getState().navigateToCustomerKey('email:g@x.com')
+    let state = useUIStore.getState()
+    expect(state.activeSubSection).toBe('customer-detail')
+    expect(state.customerDetailKey).toBe('email:g@x.com')
+    expect(state.customerDetailTargetId).toBeNull()
+    expect(state.customerDetailTab).toBe('dashboard')
+
+    useUIStore.getState().navigateToCustomerKey('wc:1188')
+    state = useUIStore.getState()
+    expect(state.customerDetailTargetId).toBe(1188)
+    expect(state.customerDetailKey).toBeNull()
+
+    useUIStore.getState().navigateToCustomerKey('email:g@x.com')
+    useUIStore.getState().navigateToCustomer(7)
+    expect(useUIStore.getState().customerDetailKey).toBeNull()
+
+    useUIStore.getState().navigateToCustomerKey('email:g@x.com')
+    useUIStore.getState().navigateToCustomers()
+    state = useUIStore.getState()
+    expect(state.customerDetailKey).toBeNull()
+    expect(state.customerDetailTargetId).toBeNull()
+  })
+
   it('setSearchAndResetPage atomically updates search term and resets page to 0', () => {
     useUIStore.setState({
       customerListPage: 5,

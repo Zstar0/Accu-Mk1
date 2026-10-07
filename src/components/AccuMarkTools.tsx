@@ -5,6 +5,7 @@ import { OrderStatusPage } from '@/components/OrderStatusPage'
 import { CustomerStatusPage } from '@/components/CustomerStatusPage'
 import { COAExplorer } from '@/components/COAExplorer'
 import { DigitalCOA } from '@/components/DigitalCOA'
+import { CustomerInsights } from '@/components/customers/CustomerInsights'
 import { VialStatusPage } from '@/components/vial-board/VialStatusPage'
 
 /**
@@ -18,6 +19,7 @@ export function AccuMarkTools() {
   const activeSubSection = useUIStore(
     state => state.activeSubSection
   ) as AccuMarkToolsSubSection
+  const navigateToCustomerKey = useUIStore(state => state.navigateToCustomerKey)
 
   switch (activeSubSection) {
     case 'coa-explorer':
@@ -28,6 +30,12 @@ export function AccuMarkTools() {
       return <OrderStatusPage />
     case 'vial-status':
       return <VialStatusPage />
+    case 'customer-insights':
+      return (
+        // wc:<id> keys route through the numeric id flow inside the store;
+        // guest email: keys open the Dashboard-only detail.
+        <CustomerInsights onOpenCustomer={navigateToCustomerKey} />
+      )
     case 'customers':
     case 'customer-detail':
       return <CustomerStatusPage />

@@ -194,7 +194,7 @@ def _stats(rows: Sequence[dict]) -> dict:
     }
 
 
-def build_sla_performance(
+def sample_records(
     *,
     samples: Iterable[SampleIn],
     analyses: Iterable[AnalysisIn],
@@ -205,21 +205,13 @@ def build_sla_performance(
     holidays: frozenset,
     now: datetime,
     excluded_sample_ids: frozenset = frozenset(),
-    client: Optional[str] = None,
-    order: Optional[str] = None,
-    departments: Sequence[str] = (),
-    families: Sequence[str] = (),
     profiles: Iterable[ProfileIn] = (),
-) -> dict:
-    """Build the whole SLA performance report from already-fetched rows."""
-    department_keys = tuple(k for k, _ in DEPARTMENTS)
-    for d in departments:
-        if d not in department_keys:
-            raise ValueError("unknown department: %s" % d)
-    for f in families:
-        if f not in FAMILY_NAMES:
-            raise ValueError("unknown family: %s" % f)
+) -> list[dict]:
+    """Per-sample SLA records (one dict per sample in the series window).
 
+    Extracted verbatim from build_sla_performance so Customer Insights can read
+    per-sample delivered/late without re-deriving the SLA rules.
+    """
     tz = schedule.timezone
 
     def bh(start: datetime, end: datetime) -> float:
@@ -328,6 +320,7 @@ def build_sla_performance(
             "order": s.order or "",
             "status": s.status or "",
             "received": received,
+            "recv_day": recv_day,
             "recv_month": recv_day.strftime("%Y-%m"),
             "published": _naive(published) if published is not None else None,
             "pub_day": lab_day(published, tz) if published is not None else None,
@@ -342,7 +335,59 @@ def build_sla_performance(
             "family_target": family_target,
             "verified": fam_verified,
             "last_verified": last_verified,
+            # Business hours from receipt to each family's last verification (additive;
+            # Customer Insights reads it, the SLA report recomputes its own).
+            "family_bh": {f: round(bh(received, v), 2) for f, v in fam_verified.items()},
         })
+    return records
+
+
+def build_sla_performance(
+    *,
+    samples: Iterable[SampleIn],
+    analyses: Iterable[AnalysisIn],
+    coas: Iterable[CoaIn],
+    tiers: Iterable[TierIn],
+    groups: Iterable[GroupIn],
+    schedule: BusinessSchedule,
+    holidays: frozenset,
+    now: datetime,
+    excluded_sample_ids: frozenset = frozenset(),
+    client: Optional[str] = None,
+    order: Optional[str] = None,
+    departments: Sequence[str] = (),
+    families: Sequence[str] = (),
+    profiles: Iterable[ProfileIn] = (),
+    received_from: Optional[date] = None,
+    received_to: Optional[date] = None,
+) -> dict:
+    """Build the whole SLA performance report from already-fetched rows.
+
+    received_from / received_to (lab days, inclusive) scope the report to samples
+    received in that window, e.g. one month.
+    """
+    department_keys = tuple(k for k, _ in DEPARTMENTS)
+    for d in departments:
+        if d not in department_keys:
+            raise ValueError("unknown department: %s" % d)
+    for f in families:
+        if f not in FAMILY_NAMES:
+            raise ValueError("unknown family: %s" % f)
+
+    tiers = list(tiers)  # read twice: here and inside sample_records
+    records = sample_records(samples=samples, analyses=analyses, coas=coas, tiers=tiers, groups=groups,
+                             schedule=schedule, holidays=holidays, now=now,
+                             excluded_sample_ids=excluded_sample_ids, profiles=profiles)
+
+    # Recomputed exactly as sample_records does; the report sections below need them.
+    tz = schedule.timezone
+
+    def bh(start: datetime, end: datetime) -> float:
+        return compute_business_minutes(start, end, schedule, holidays.__contains__) / 60.0
+
+    tier_by_id = {t.id: t for t in tiers}
+    default_tier = next((t for t in tier_by_id.values() if t.is_default), None)
+    today = lab_day(now, tz) or now.date()
 
     facets = _facets(records)
 
@@ -360,6 +405,10 @@ def build_sla_performance(
         if dept_set and not {DEPARTMENT_OF_FAMILY.get(f) for f in r["families"]} & dept_set:
             continue
         if fam_set and not r["families"] & fam_set:
+            continue
+        if received_from and r["recv_day"] < received_from:
+            continue
+        if received_to and r["recv_day"] > received_to:
             continue
         scoped.append(r)
 
@@ -390,6 +439,8 @@ def build_sla_performance(
             "order": order or None,
             "departments": list(departments),
             "families": list(families),
+            "received_from": received_from.isoformat() if received_from else None,
+            "received_to": received_to.isoformat() if received_to else None,
         },
         "facets": facets,
         "notes": dict(NOTES),
