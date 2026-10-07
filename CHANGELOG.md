@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+## v1.35.1 - 2026-10-07
+
+### Fixed
+- Reports: samples registered straight into the LIMS under a test account (client = its e-mail, no order) are now excluded as test samples.
+
 ## v1.35.0 - 2026-10-07
 
 ### Customer Insights
