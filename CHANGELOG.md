@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+## v1.34.1 - 2026-10-07
+
+### Customer Insights
+- At-risk customers show the account's sales rep.
+- Average price by product shows the list price and the average % off list (paid units only; needs IS 1.0.35).
+
 ## v1.34.0 - 2026-10-06
 
 ### Customer Insights
