@@ -116,6 +116,7 @@ def _audit(db, flag, actor_id, event_type, *, from_value=None, to_value=None, de
         "from_value": from_value, "to_value": to_value, "details": details or {},
         "event_id": None,                 # filled in post-commit from row.id
         "flag": _flag_summary(flag),
+        "audience": seams.resolve_audience(db, flag.entity_type, flag.entity_id),
     }))
 
 
@@ -198,11 +199,16 @@ def create_flag(db: Session, *, user, entity_type, entity_id, type, title,
     # seam (and no entity_id) to authorize against.
     if entity_type is not None and not is_virtual_kind:
         spec = seams.get_entity_spec(entity_type)
-        if not spec.can_flag(user, str(entity_id)):
+        # can_raise (db-aware, planning boards) wins over the legacy can_flag when defined.
+        # It may raise BadRequestError itself (e.g. "flag the underlying entity instead").
+        allowed = (spec.can_raise(db, user, str(entity_id)) if spec.can_raise is not None
+                   else spec.can_flag(user, str(entity_id)))
+        if not allowed:
             raise PermissionDeniedError(f"not allowed to flag {entity_type} {entity_id}")
         # Opt-in per entity type: a typo'd id would otherwise open a thread nobody can see.
         if spec.must_exist and seams.resolve_context(db, entity_type, str(entity_id)) is None:
             raise BadRequestError(f"{entity_type} {entity_id!r} not found")
+        _require_target_can_view(db, entity_type, entity_id, assignee_id, "assignment")
     # Enforces "general task ⇒ global type": is_allowed_for_entity returns True
     # for entity_type=None only when the type's entity_types list is empty.
     if not types_service.is_allowed_for_entity(db, type, entity_type):
@@ -244,6 +250,28 @@ def get_flag(db: Session, flag_id: int) -> FlagFlag:
     return flag
 
 
+def get_visible_flag(db: Session, user, flag_id: int) -> FlagFlag:
+    """The point-read gate (spec §6.3). Same NotFoundError text as a missing flag, so a
+    caller cannot tell "hidden" from "absent". Unanchored flags are visible to all staff."""
+    flag = get_flag(db, flag_id)
+    if flag.entity_type is not None and not seams.can_view_entity(
+            db, user, flag.entity_type, flag.entity_id):
+        raise NotFoundError(f"flag {flag_id} not found")
+    return flag
+
+
+def _require_target_can_view(db: Session, entity_type, entity_id, target_user_id, what: str) -> None:
+    """Target guard (spec §6.3): never pull a user into a flag they cannot see. Unanchored
+    flags and legacy anchors have no visibility scope, so they take any user."""
+    if entity_type is None or target_user_id is None:
+        return
+    if not seams.is_view_scoped(entity_type):
+        return  # legacy anchors take any user
+    target = seams.load_user(db, target_user_id)
+    if target is None or not seams.can_view_entity(db, target, entity_type, str(entity_id)):
+        raise BadRequestError(f"user {target_user_id} cannot see this flag; {what} refused")
+
+
 def _valid_user_ids(db: Session, ids) -> list[int]:
     """Existing user ids only, order-preserving + deduped."""
     from models import User
@@ -266,8 +294,8 @@ def _relevant_flag_ids(user_id: int):
 
 def list_flags(db: Session, *, user_id: int, tab: str, status: Optional[str] = None,
                entity_type: Optional[str] = None, entity_id: Optional[str] = None,
-               include_descendants: bool = False) -> list[FlagFlag]:
-    stmt = select(FlagFlag).order_by(FlagFlag.updated_at.desc())
+               include_descendants: bool = False, user=None) -> list[FlagFlag]:
+    stmt = select(FlagFlag).where(seams.visibility_clause(db, user)).order_by(FlagFlag.updated_at.desc())
     open_states = catalog.OPEN_STATES
     if tab == "assigned":
         stmt = stmt.where(FlagFlag.assignee_id == user_id, FlagFlag.status.in_(open_states))
@@ -283,6 +311,10 @@ def list_flags(db: Session, *, user_id: int, tab: str, status: Optional[str] = N
     if status:
         stmt = stmt.where(FlagFlag.status == status)
     if entity_type and entity_id:
+        if not seams.can_view_entity(db, user, entity_type, str(entity_id)):
+            # A hidden anchor answers like a missing one: no direct flags and no
+            # roll-up of what sits on it (spec §6.3).
+            return []
         # The matched set is the entity itself plus — when rolling up — its
         # registry-resolved descendants (a sample's vials). The hierarchy lives
         # entirely behind `resolve_descendants`; this stays entity-agnostic.
@@ -315,7 +347,7 @@ def _decode_cursor(cursor: str) -> tuple[datetime, int]:
 
 
 def list_activity(db: Session, *, user_id: int, cursor: Optional[str] = None,
-                  limit: int = 25) -> tuple[list[FlagEvent], Optional[str]]:
+                  limit: int = 25, user=None) -> tuple[list[FlagEvent], Optional[str]]:
     """Newest-first feed of flag events relevant to `user_id`: events on flags
     they're the assignee/creator/watcher of, unioned with their own actions.
     Keyset paginated on (created_at, id); returns (rows, next_cursor)."""
@@ -324,6 +356,7 @@ def list_activity(db: Session, *, user_id: int, cursor: Optional[str] = None,
         FlagEvent.actor_id == user_id,
         FlagEvent.flag_id.in_(_relevant_flag_ids(user_id)),
     ))
+    stmt = stmt.where(FlagEvent.flag_id.in_(select(FlagFlag.id).where(seams.visibility_clause(db, user))))
     if cursor:
         c_ts, c_id = _decode_cursor(cursor)
         stmt = stmt.where(or_(
@@ -369,13 +402,14 @@ def compute_relevance(db: Session, events: list[FlagEvent], *,
     return out
 
 
-def list_unread(db: Session, *, user_id: int) -> list[FlagFlag]:
+def list_unread(db: Session, *, user_id: int, user=None) -> list[FlagFlag]:
     """Flags relevant to the user that changed since they last read them
     (never-read counts as unread), newest-updated first."""
     stmt = (select(FlagFlag)
             .outerjoin(FlagRead, and_(FlagRead.flag_id == FlagFlag.id,
                                       FlagRead.user_id == user_id))
             .where(FlagFlag.id.in_(_relevant_flag_ids(user_id)))
+            .where(seams.visibility_clause(db, user))
             .where(or_(FlagRead.last_read_at.is_(None),
                        FlagFlag.updated_at > FlagRead.last_read_at))
             .order_by(FlagFlag.updated_at.desc()))
@@ -433,7 +467,7 @@ def _like_pattern(q: str) -> str:
     return f"%{esc}%"
 
 
-def search_flags(db: Session, *, q: str, limit: int = 50) -> list[SearchHit]:
+def search_flags(db: Session, *, q: str, limit: int = 50, user=None) -> list[SearchHit]:
     """Flags whose title OR any comment body contains `q` (case-insensitive
     substring). Portable ILIKE: a pg_trgm GIN index accelerates it on Postgres,
     and the identical query degrades to a `lower() LIKE` seqscan on SQLite / when
@@ -443,6 +477,7 @@ def search_flags(db: Session, *, q: str, limit: int = 50) -> list[SearchHit]:
         return []
     limit = max(1, min(limit, 100))
     pattern = _like_pattern(q)
+    visible = select(FlagFlag.id).where(seams.visibility_clause(db, user))
 
     # Comment matches: the first matching comment per flag drives its snippet.
     # Bounded scan (limit*4) — enough matching comments to still cover `limit`
@@ -450,6 +485,7 @@ def search_flags(db: Session, *, q: str, limit: int = 50) -> list[SearchHit]:
     comment_rows = db.execute(
         select(FlagComment.flag_id, FlagComment.body)
         .where(FlagComment.body.ilike(pattern, escape="\\"))
+        .where(FlagComment.flag_id.in_(visible))
         .order_by(FlagComment.flag_id.desc(), FlagComment.id.asc())
         .limit(limit * 4)
     ).all()
@@ -462,6 +498,7 @@ def search_flags(db: Session, *, q: str, limit: int = 50) -> list[SearchHit]:
         fid for (fid,) in db.execute(
             select(FlagFlag.id)
             .where(FlagFlag.title.ilike(pattern, escape="\\"))
+            .where(seams.visibility_clause(db, user))
             .order_by(FlagFlag.id.desc())
             .limit(limit)
         ).all()
@@ -492,8 +529,8 @@ def search_flags(db: Session, *, q: str, limit: int = 50) -> list[SearchHit]:
     return hits
 
 
-def mark_read(db: Session, *, user_id: int, flag_id: int) -> None:
-    get_flag(db, flag_id)  # 404 if the flag doesn't exist
+def mark_read(db: Session, *, user_id: int, flag_id: int, user=None) -> None:
+    get_visible_flag(db, user, flag_id)  # 404 if missing OR hidden
     row = db.execute(select(FlagRead).where(
         FlagRead.user_id == user_id, FlagRead.flag_id == flag_id)).scalar_one_or_none()
     if row is None:
@@ -503,7 +540,7 @@ def mark_read(db: Session, *, user_id: int, flag_id: int) -> None:
     db.commit()
 
 
-def summary(db: Session, *, user_id: int) -> dict:
+def summary(db: Session, *, user_id: int, user=None) -> dict:
     # Header-button counts are personal: both the total and the per-type
     # breakdown are scoped to flags assigned to ME (open only). by_type drives
     # the colored chips on FlagsHeaderButton, so it must not leak other users'
@@ -511,6 +548,7 @@ def summary(db: Session, *, user_id: int) -> dict:
     open_states = catalog.OPEN_STATES
     assigned = db.execute(
         select(FlagFlag).where(FlagFlag.assignee_id == user_id, FlagFlag.status.in_(open_states))
+        .where(seams.visibility_clause(db, user))
     ).scalars().all()
     by_type: dict[str, int] = {}
     for f in assigned:
@@ -520,13 +558,15 @@ def summary(db: Session, *, user_id: int) -> dict:
 
 def add_comment(db: Session, *, user, flag_id, body, mention_ids=None,
                 event_details=None) -> FlagComment:
-    flag = get_flag(db, flag_id)
+    flag = get_visible_flag(db, user, flag_id)
     if not permissions.can(user, "comment", flag):
         raise PermissionDeniedError("not allowed to comment")
     if not body or not body.strip():
         raise BadRequestError("comment body required")
     actor_id = getattr(user, "id", None)
     valid = _valid_user_ids(db, mention_ids or [])
+    for uid in valid:
+        _require_target_can_view(db, flag.entity_type, flag.entity_id, uid, "mention")
     c = FlagComment(flag_id=flag.id, author_id=actor_id, body=body.strip(),
                     mentions=valid or None)
     db.add(c)
@@ -556,9 +596,10 @@ def add_comment(db: Session, *, user, flag_id, body, mention_ids=None,
 
 
 def assign(db: Session, *, user, flag_id, assignee_id) -> FlagFlag:
-    flag = get_flag(db, flag_id)
+    flag = get_visible_flag(db, user, flag_id)
     if not permissions.can(user, "assign", flag):
         raise PermissionDeniedError("not allowed to assign")
+    _require_target_can_view(db, flag.entity_type, flag.entity_id, assignee_id, "assignment")
     actor_id = getattr(user, "id", None)
     prev = flag.assignee_id
     flag.assignee_id = assignee_id
@@ -579,9 +620,10 @@ def assign(db: Session, *, user, flag_id, assignee_id) -> FlagFlag:
 
 
 def add_watcher(db: Session, *, user, flag_id, user_id) -> FlagParticipant:
-    flag = get_flag(db, flag_id)
+    flag = get_visible_flag(db, user, flag_id)
     if not permissions.can(user, "watch", flag):
         raise PermissionDeniedError("not allowed to watch")
+    _require_target_can_view(db, flag.entity_type, flag.entity_id, user_id, "watching")
     existing = db.execute(
         select(FlagParticipant).where(FlagParticipant.flag_id == flag.id,
                                       FlagParticipant.user_id == user_id)
@@ -598,7 +640,7 @@ def add_watcher(db: Session, *, user, flag_id, user_id) -> FlagParticipant:
 
 
 def remove_watcher(db: Session, *, user, flag_id, user_id) -> None:
-    flag = get_flag(db, flag_id)
+    flag = get_visible_flag(db, user, flag_id)
     if not permissions.can(user, "watch", flag):
         raise PermissionDeniedError("not allowed")
     row = db.execute(
@@ -642,7 +684,7 @@ _EXT_FOR_CT = {"image/png": ".png", "image/jpeg": ".jpg",
 
 
 def add_attachment(db: Session, *, user, flag_id, data: bytes, filename: str) -> FlagAttachment:
-    flag = get_flag(db, flag_id)
+    flag = get_visible_flag(db, user, flag_id)
     if not permissions.can(user, "comment", flag):
         raise PermissionDeniedError("not allowed to attach")
     if not data:
@@ -666,9 +708,13 @@ def add_attachment(db: Session, *, user, flag_id, data: bytes, filename: str) ->
     return att
 
 
-def get_attachment(db: Session, attachment_id: int) -> FlagAttachment:
+def get_attachment(db: Session, attachment_id: int, *, user=None) -> FlagAttachment:
     att = db.get(FlagAttachment, attachment_id)
     if att is None:
+        raise NotFoundError(f"attachment {attachment_id} not found")
+    try:
+        get_visible_flag(db, user, att.flag_id)
+    except NotFoundError:
         raise NotFoundError(f"attachment {attachment_id} not found")
     return att
 
@@ -710,6 +756,7 @@ def _emit_reaction(db: Session, comment: FlagComment, actor_id, emoji: str, acti
         "comment_id": comment.id, "emoji": emoji, "action": action,
         "actor_id": actor_id, "from_value": None, "to_value": None,
         "details": {}, "event_id": None, "flag": _flag_summary(flag),
+        "audience": seams.resolve_audience(db, flag.entity_type, flag.entity_id),
     })
 
 
@@ -717,7 +764,11 @@ def add_reaction(db: Session, *, user, comment_id, emoji) -> list[dict]:
     if emoji not in CURATED_EMOJI:
         raise BadRequestError(f"unsupported emoji {emoji!r}")
     comment = _load_comment(db, comment_id)
-    if not permissions.can(user, "comment", get_flag(db, comment.flag_id)):
+    try:
+        flag = get_visible_flag(db, user, comment.flag_id)
+    except NotFoundError:
+        raise NotFoundError(f"comment {comment_id} not found")
+    if not permissions.can(user, "comment", flag):
         raise PermissionDeniedError("not allowed to react")
     uid = getattr(user, "id", None)
     existing = db.execute(select(FlagCommentReaction).where(
@@ -733,6 +784,10 @@ def add_reaction(db: Session, *, user, comment_id, emoji) -> list[dict]:
 
 def remove_reaction(db: Session, *, user, comment_id, emoji) -> list[dict]:
     comment = _load_comment(db, comment_id)
+    try:
+        get_visible_flag(db, user, comment.flag_id)
+    except NotFoundError:
+        raise NotFoundError(f"comment {comment_id} not found")
     uid = getattr(user, "id", None)
     row = db.execute(select(FlagCommentReaction).where(
         FlagCommentReaction.comment_id == comment_id,
@@ -762,9 +817,11 @@ def _link_attachments(db: Session, flag_id: int, comment_id: int, body: str) -> 
 def add_entity_link(db: Session, *, user, flag_id: int, entity_type: str,
                     entity_id: str) -> FlagEntityLink:
     """Attach a navigational 'related item' to a flag. NOT a rollup anchor."""
-    flag = get_flag(db, flag_id)
+    flag = get_visible_flag(db, user, flag_id)
     if not seams.is_registered(entity_type):
         raise BadRequestError(f"unknown entity_type {entity_type!r}")
+    if not seams.can_view_entity(db, user, entity_type, str(entity_id)):
+        raise NotFoundError(f"{entity_type} {entity_id!r} not found")
     dup = db.execute(select(FlagEntityLink).where(
         FlagEntityLink.flag_id == flag_id,
         FlagEntityLink.entity_type == entity_type,
@@ -783,9 +840,13 @@ def add_entity_link(db: Session, *, user, flag_id: int, entity_type: str,
 
 
 def remove_entity_link(db: Session, *, user, flag_id: int, link_id: int) -> None:
-    flag = get_flag(db, flag_id)
+    flag = get_visible_flag(db, user, flag_id)
     link = db.get(FlagEntityLink, link_id)
     if link is None or link.flag_id != flag_id:
+        raise NotFoundError(f"link {link_id} not found on flag {flag_id}")
+    # Gate the link's TARGET like add_entity_link does: a hidden target reads as
+    # missing, never as a 403 that confirms it exists.
+    if not seams.can_view_entity(db, user, link.entity_type, link.entity_id):
         raise NotFoundError(f"link {link_id} not found on flag {flag_id}")
     db.delete(link)
     _audit(db, flag, getattr(user, "id", None), "entity_link_removed",
@@ -805,8 +866,8 @@ def add_flag_link(db: Session, *, user, flag_id: int, other_id: int) -> FlagLink
     events land on BOTH flags. Symmetric — the link shows in both threads."""
     if flag_id == other_id:
         raise BadRequestError("cannot link a flag to itself")
-    flag = get_flag(db, flag_id)
-    other = get_flag(db, other_id)
+    flag = get_visible_flag(db, user, flag_id)
+    other = get_visible_flag(db, user, other_id)
     lo, hi = sorted((flag_id, other_id))
     dup = db.execute(select(FlagLink).where(
         FlagLink.flag_id == lo, FlagLink.linked_flag_id == hi)).scalar_one_or_none()
@@ -823,12 +884,15 @@ def add_flag_link(db: Session, *, user, flag_id: int, other_id: int) -> FlagLink
 
 
 def remove_flag_link(db: Session, *, user, flag_id: int, link_id: int) -> None:
-    flag = get_flag(db, flag_id)
+    flag = get_visible_flag(db, user, flag_id)
     link = db.get(FlagLink, link_id)
     if link is None or flag_id not in (link.flag_id, link.linked_flag_id):
         raise NotFoundError(f"link {link_id} not found on flag {flag_id}")
     other_id = link.linked_flag_id if link.flag_id == flag_id else link.flag_id
-    other = get_flag(db, other_id)
+    try:
+        other = get_visible_flag(db, user, other_id)
+    except NotFoundError:
+        raise NotFoundError(f"link {link_id} not found on flag {flag_id}")
     db.delete(link)
     actor = getattr(user, "id", None)
     _audit(db, flag, actor, "flag_link_removed", from_value=str(other_id))
@@ -844,7 +908,7 @@ def list_flag_links(db: Session, flag_id: int) -> list[FlagLink]:
 
 def change_status(db: Session, *, user, flag_id, to_status, commit: bool = True) -> FlagFlag:
     from flags.errors import ConflictError
-    flag = get_flag(db, flag_id)
+    flag = get_visible_flag(db, user, flag_id)
     if not permissions.can(user, "change_status", flag):
         raise PermissionDeniedError("not allowed to change status")
     if not catalog.is_legal_transition(flag.status, to_status):
@@ -869,7 +933,7 @@ def set_due(db: Session, *, user, flag_id: int,
             due_at: Optional[datetime]) -> FlagFlag:
     """Set/change/clear a flag's due date; no-op if unchanged. Same permission
     tier as status changes (assignee/creator/admin) per spec §5."""
-    flag = get_flag(db, flag_id)
+    flag = get_visible_flag(db, user, flag_id)
     if not permissions.can(user, "change_status", flag):
         raise PermissionDeniedError("not allowed to edit this flag")
     if flag.due_at == due_at:

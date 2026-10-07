@@ -212,8 +212,10 @@ for arg in "$@"; do
             echo ""
             echo "Options:"
             echo "  --dry-run      Preview what would happen without making changes"
-            echo "  --frontend     Deploy frontend only"
-            echo "  --backend      Deploy backend only"
+            echo "  --frontend     Deploy frontend only (backend keeps running; its image is"
+            echo "                 re-tagged to the new version, so /api/health still reports"
+            echo "                 the backend's build version)"
+            echo "  --backend      Deploy backend only (frontend image re-tagged the same way)"
             echo "  --skip-build   Skip local build, just pull existing images on prod"
             echo "  --skip-release Skip git tag and GitHub release creation"
             echo "  --help         Show this help"
@@ -225,6 +227,18 @@ for arg in "$@"; do
             ;;
     esac
 done
+
+# Single-service deploy: which compose service to touch, and which one to carry
+# forward unchanged (see "carry the other image forward" below).
+DEPLOY_SERVICES=""
+if [ "$DEPLOY_FRONTEND" = false ] && [ "$DEPLOY_BACKEND" = false ]; then
+    error "--frontend and --backend together deploy nothing; pass neither for a full deploy."
+    exit 1
+elif [ "$DEPLOY_BACKEND" = false ]; then
+    DEPLOY_SERVICES="frontend"; SKIPPED_SERVICE="backend"; SKIPPED_IMAGE="$BACKEND_IMAGE"
+elif [ "$DEPLOY_FRONTEND" = false ]; then
+    DEPLOY_SERVICES="backend"; SKIPPED_SERVICE="frontend"; SKIPPED_IMAGE="$FRONTEND_IMAGE"
+fi
 
 # ── Pre-flight Checks ──────────────────────────────────────
 header "Accu-Mk1 Deploy v${VERSION} (${GIT_SHA})"
@@ -311,7 +325,12 @@ if [ "$DRY_RUN" = true ]; then
     info "Would build and push:"
     [ "$DEPLOY_FRONTEND" = true ] && info "  $FRONTEND_IMAGE:$VERSION"
     [ "$DEPLOY_BACKEND" = true ]  && info "  $BACKEND_IMAGE:$VERSION"
-    info "Then pull and restart on $REMOTE_HOST"
+    if [ -n "$DEPLOY_SERVICES" ]; then
+        info "Re-tag in GHCR (no rebuild): the running $SKIPPED_SERVICE image as :$VERSION"
+        info "Then pull and restart ONLY $DEPLOY_SERVICES on $REMOTE_HOST"
+    else
+        info "Then pull and restart on $REMOTE_HOST"
+    fi
     warn "Dry run complete. No changes were made."
     exit 0
 fi
@@ -371,6 +390,28 @@ else
     info "Skipping local build (--skip-build). Will pull existing images on prod."
 fi
 
+# ── Single-service deploy: carry the other image forward ──
+# docker-compose.prod.yml tags BOTH images with one $VERSION, so a --frontend
+# or --backend deploy must make the skipped service's image exist at $VERSION
+# too, or every later `VERSION=... docker compose` (pull, up, rollback, the ops
+# commands printed below) fails with "manifest unknown". Re-tag the image that
+# is running on prod now: a registry-side manifest copy, no rebuild, no pull.
+if [ -n "$DEPLOY_SERVICES" ]; then
+    RUNNING_VERSION=$(run_ssh "cat $REMOTE_DIR/.deploy/current_version 2>/dev/null" || echo "")
+    if [ -z "$RUNNING_VERSION" ]; then
+        error "Cannot read $REMOTE_DIR/.deploy/current_version; run a full deploy instead."
+        exit 1
+    fi
+    if [ "$RUNNING_VERSION" != "$VERSION" ]; then
+        info "Re-tagging $SKIPPED_IMAGE:$RUNNING_VERSION as :$VERSION (unchanged $SKIPPED_SERVICE)..."
+        DEPLOY_FAILED_STEP="Re-tag $SKIPPED_SERVICE image"
+        docker buildx imagetools create -t "$SKIPPED_IMAGE:$VERSION" "$SKIPPED_IMAGE:$RUNNING_VERSION"
+        DEPLOY_FAILED_STEP=""
+        success "$SKIPPED_SERVICE image carried forward as $VERSION"
+        step_done "$SKIPPED_SERVICE re-tagged $RUNNING_VERSION -> $VERSION"
+    fi
+fi
+
 # ── Pre-deploy: Backup version tracking ───────────────────
 header "Deploying to Production"
 
@@ -400,14 +441,19 @@ fi
 # ── Pull & Deploy ────────────────────────────────────────
 info "Pulling images on prod..."
 DEPLOY_FAILED_STEP="Pull images on prod"
-run_ssh_retry "cd $REMOTE_DIR && VERSION=$VERSION docker compose -f docker-compose.prod.yml pull"
+run_ssh_retry "cd $REMOTE_DIR && VERSION=$VERSION docker compose -f docker-compose.prod.yml pull $DEPLOY_SERVICES"
 DEPLOY_FAILED_STEP=""
 success "Images pulled on prod"
 step_done "Images pulled on prod"
 
 info "Starting containers..."
 DEPLOY_FAILED_STEP="Start containers"
-run_ssh_retry "cd $REMOTE_DIR && VERSION=$VERSION docker compose -f docker-compose.prod.yml up -d --remove-orphans"
+if [ -n "$DEPLOY_SERVICES" ]; then
+    # --no-deps: the skipped service keeps running untouched (no restart).
+    run_ssh_retry "cd $REMOTE_DIR && VERSION=$VERSION docker compose -f docker-compose.prod.yml up -d --no-deps $DEPLOY_SERVICES"
+else
+    run_ssh_retry "cd $REMOTE_DIR && VERSION=$VERSION docker compose -f docker-compose.prod.yml up -d --remove-orphans"
+fi
 DEPLOY_FAILED_STEP=""
 success "Containers started"
 step_done "Containers started"

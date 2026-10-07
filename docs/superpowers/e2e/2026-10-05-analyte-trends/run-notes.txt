@@ -1,0 +1,15 @@
+Analyte Trends e2e, 2026-10-05
+Stack: trends (devbox 100.73.137.3, block ports 5620-5639), golden-20260911-233650, Mk1 mounted from feat/analyte-trends.
+Command: . /c/tmp/trends-e2e.env && node node_modules/@playwright/test/cli.js test e2e/analyte-trends.spec.ts --reporter=list
+Result: 3 passed.
+
+Checks:
+- list row count == distinct products in GET /reports/analyte-trends (18 products, 36 COAs)
+- drill-down for the product with most failures: list COAs == detail rows == API; non-conforming filter rows == API FAILED count
+- chart tooltip lists the hovered lab day; clicking a point highlights its table row
+- bac water renders one chart per assay
+
+Found on stack data and fixed before these screenshots:
+- PENDING add-on statuses were counted as failures (1cdc97ac)
+- older COAs carry purity/identity verdicts only as status: CONFORMS; table column is NULL (85b5f1a3)
+Stack data is dev data (e.g. declared 1123123.0 mg), so the Qty delta values here say nothing about prod.
