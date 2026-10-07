@@ -19,6 +19,7 @@ import {
   ClipboardCheck,
   GitBranch,
   FileText,
+  Users,
 } from 'lucide-react'
 import type { ComponentType } from 'react'
 import type { LucideIcon } from 'lucide-react'
@@ -31,6 +32,7 @@ import { SlaPane } from './panes/SlaPane'
 import { PrioritiesPane } from './panes/PrioritiesPane'
 import { BusinessHoursPane } from './panes/BusinessHoursPane'
 import { FlagsPane } from './panes/FlagsPane'
+import { GroupsPane } from './panes/GroupsPane'
 import { DocumentsPane } from './panes/DocumentsPane'
 import { CheckInPane } from './panes/CheckInPane'
 import { WorkflowPane } from './panes/WorkflowPane'
@@ -44,6 +46,7 @@ export type PreferencePane =
   | 'priorities'
   | 'businessHours'
   | 'flags'
+  | 'groups'
   | 'documents'
   | 'checkIn'
   | 'workflow'
@@ -72,6 +75,7 @@ export const navigationItems: readonly NavigationItem[] = [
     icon: CalendarClock,
   },
   { id: 'flags', labelKey: 'preferences.flags', icon: Flag },
+  { id: 'groups', labelKey: 'preferences.groups', icon: Users },
   { id: 'documents', labelKey: 'preferences.documents', icon: FileText },
   { id: 'checkIn', labelKey: 'preferences.checkIn', icon: ClipboardCheck },
   { id: 'workflow', labelKey: 'preferences.workflow', icon: GitBranch },
@@ -87,6 +91,7 @@ export const PANE_COMPONENTS: Record<PreferencePane, ComponentType> = {
   priorities: PrioritiesPane,
   businessHours: BusinessHoursPane,
   flags: FlagsPane,
+  groups: GroupsPane,
   documents: DocumentsPane,
   checkIn: CheckInPane,
   workflow: WorkflowPane,

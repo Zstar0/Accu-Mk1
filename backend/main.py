@@ -39,6 +39,7 @@ from sqlalchemy import select, desc, delete, update, func, extract, and_, or_
 from sqlalchemy.exc import IntegrityError
 
 from database import get_db, init_db
+from test_accounts import TEST_EMAILS
 from sla_engine import BusinessSchedule, compute_business_minutes, compute_business_deadline, sla_status_dict
 from throughput import (
     SERIES_START as THROUGHPUT_SERIES_START,
@@ -123,10 +124,13 @@ from slack_notify.routes import router as slack_prefs_router
 from slack_notify.interactions import router as slack_interactions_router
 from workflow.routes import router as workflow_router
 from priority.routes import router as priority_router
+from customer_insights.routes import router as customer_insights_router
 from workflow.cancel_routes import router as cancel_router
 from conformance.routes import router as conformance_router
 from documents.routes import router as documents_router
 from documents.comment_routes import router as document_comments_router
+from groups.routes import router as groups_router
+from boards.routes import router as boards_router
 
 import logging
 
@@ -631,10 +635,13 @@ app.include_router(slack_prefs_router)
 app.include_router(slack_interactions_router)
 app.include_router(workflow_router)
 app.include_router(priority_router)
+app.include_router(customer_insights_router)
 app.include_router(cancel_router)
 app.include_router(conformance_router)
 app.include_router(document_comments_router)  # literal /documents/comments* paths must beat /documents/{doc_id}
 app.include_router(documents_router)
+app.include_router(groups_router)
+app.include_router(boards_router)
 
 # --- Endpoints ---
 
@@ -693,6 +700,9 @@ async def update_me(
     if "last_name" in fields:
         v = (fields["last_name"] or "").strip()
         current_user.last_name = v or None
+    if "title" in fields:
+        v = (fields["title"] or "").strip()
+        current_user.title = v or None
     db.commit()
     db.refresh(current_user)
     return _user_to_read(current_user)
@@ -780,11 +790,12 @@ async def user_directory(
     """Lightweight id/email/name list for ALL users (active + inactive) so the
     FE can resolve historical analyst emails to names. Auth-only, not admin."""
     rows = db.execute(
-        select(User.id, User.email, User.first_name, User.last_name)
+        select(User.id, User.email, User.first_name, User.last_name, User.title)
         .order_by(User.email)
     ).all()
     return [
-        {"id": r.id, "email": r.email, "first_name": r.first_name, "last_name": r.last_name}
+        {"id": r.id, "email": r.email, "first_name": r.first_name, "last_name": r.last_name,
+         "title": r.title}
         for r in rows
     ]
 
@@ -848,6 +859,8 @@ async def update_user(
         user.first_name = data.first_name.strip() or None
     if data.last_name is not None:
         user.last_name = data.last_name.strip() or None
+    if data.title is not None:
+        user.title = data.title.strip() or None
 
     db.commit()
     db.refresh(user)
@@ -10238,6 +10251,62 @@ async def reports_purity_trend(
         raise HTTPException(status_code=503, detail=f"Reports database error: {e}")
 
 
+class AnalyteTrendTest(BaseModel):
+    name: str
+    value: Optional[float] = None
+    unit: str = ""
+    ok: Optional[bool] = None
+    spec: Optional[str] = None
+
+
+class AnalyteTrendCoa(BaseModel):
+    code: str
+    sample_id: str
+    published_at: Optional[str] = None
+    product: str
+    is_blend: bool
+    matrix: Optional[str] = None
+    lot: Optional[str] = None
+    overall: str
+    purity: Optional[float] = None
+    purity_ok: Optional[bool] = None
+    purity_spec: Optional[str] = None
+    identity_ok: Optional[bool] = None
+    qty: Optional[float] = None
+    qty_declared: Optional[float] = None
+    endo: Optional[bool] = None
+    sterility: Optional[bool] = None
+    hm: Optional[bool] = None
+    tests: list[AnalyteTrendTest] = []
+
+
+class AnalyteTrendsResponse(BaseModel):
+    tz: str
+    coas: list[AnalyteTrendCoa]
+
+
+@app.get("/reports/analyte-trends", response_model=AnalyteTrendsResponse)
+async def reports_analyte_trends(
+    db: Session = Depends(get_db),
+    _current_user=Depends(get_current_user),
+):
+    """Every published primary COA, one record each, for the Analyte Trends report."""
+    import scheduled_publish as _sp
+    from reports_analyte_trends import ANALYTE_TRENDS_SQL, build_coa_records
+
+    try:
+        with get_integration_db() as conn:
+            with conn.cursor() as cur:
+                cur.execute(ANALYTE_TRENDS_SQL)
+                rows = cur.fetchall()
+    except Exception as e:
+        raise HTTPException(status_code=503, detail=f"Reports database error: {e}")
+    # Same test-order rule as the SLA / throughput reports (billing email + test clients).
+    test_ids = _test_order_senaite_ids()
+    coas = [c for c in build_coa_records(rows) if c["sample_id"] not in test_ids]
+    return AnalyteTrendsResponse(tz=_sp.lab_tz(db), coas=coas)
+
+
 class CheckInRecord(BaseModel):
     sample_id: str
     sample_uid: str
@@ -10256,14 +10325,16 @@ TEST_CLIENT_TITLES = frozenset({"valence internal 2"})
 
 
 def _test_client_sample_ids(db: Session) -> set[str]:
-    """Sample IDs whose lims_samples.client_title is an internal/test client."""
-    if not TEST_CLIENT_TITLES:
-        return set()
+    """Sample IDs whose lims_samples.client_title is an internal/test client.
+
+    A test account's e-mail also counts as a test client: samples registered
+    straight into the LIMS for that account carry its e-mail as the client title
+    and no order (prod 10-07: P-0346/P-0347/P-0476/P-0477/P-0203 for Harmony).
+    """
+    titles = sorted(TEST_CLIENT_TITLES | TEST_EMAILS)
     return {
         sid for (sid,) in db.execute(
-            select(LimsSample.sample_id).where(
-                func.lower(LimsSample.client_title).in_(sorted(TEST_CLIENT_TITLES))
-            )
+            select(LimsSample.sample_id).where(func.lower(LimsSample.client_title).in_(titles))
         ).all()
     }
 
@@ -10278,7 +10349,6 @@ def _test_order_senaite_ids() -> set[str]:
     every Mk1 sample registered under a test client (no order needed). Each
     leg degrades to an empty set on failure — nothing flagged as test.
     """
-    TEST_EMAILS = {"forrestp@outlook.com", "forrest@valenceanalytical.com"}
     test_ids: set[str] = set()
 
     try:
@@ -10334,6 +10404,10 @@ def _parse_day_bound(val: Optional[str], *, end: bool) -> Optional[datetime]:
     return datetime.combine(d, _time.max if end else _time.min)
 
 
+_VIAL_SUFFIX = re.compile(r"-S\d+$")
+_PRIORITY_RANK = {"high": 1, "expedited": 2}
+
+
 @app.get("/reports/checkin-times", response_model=list[CheckInRecord])
 async def reports_checkin_times(
     from_date: Optional[str] = Query(None, alias="from"),
@@ -10341,64 +10415,49 @@ async def reports_checkin_times(
     db: Session = Depends(get_db),
     _current_user=Depends(get_current_user),
 ):
-    """Sample check-in events sourced from worksheet_items.date_received.
+    """Sample check-ins: one record per LIMS sample, by lims_samples.date_received.
 
-    Returns raw UTC timestamps (one row per sample); time-of-day bucketing is done
-    client-side in the browser's local timezone. worksheet_items holds one row per
-    (sample, analysis), so a sample with multiple analyses produces several rows
-    sharing one date_received — results are deduped by sample_uid (earliest
-    date_received kept, product labels merged). Rows with a null date_received are
-    excluded. Optional `from`/`to` are inclusive YYYY-MM-DD day bounds.
+    Same population as /reports/throughput (every sample the lab received). Until
+    1.35.2 this read worksheet_items, which only holds VIALS placed on a worksheet:
+    prod Sept 2026 = 758 vial rows vs 1,089 samples received, 642 of which never
+    reached a worksheet. Priority is the most urgent worksheet priority among the
+    sample's vials (``normal`` when none). Raw UTC timestamps; time-of-day
+    bucketing is client-side. Optional `from`/`to` are inclusive YYYY-MM-DD day
+    bounds (naive UTC, like date_received).
     """
-    stmt = select(WorksheetItem).where(WorksheetItem.date_received.is_not(None))
+    stmt = select(
+        LimsSample.id, LimsSample.sample_id, LimsSample.external_lims_uid,
+        LimsSample.date_received, LimsSample.peptide_name,
+    ).where(LimsSample.date_received.is_not(None))
     lo = _parse_day_bound(from_date, end=False)
     hi = _parse_day_bound(to_date, end=True)
     if lo is not None:
-        stmt = stmt.where(WorksheetItem.date_received >= lo)
+        stmt = stmt.where(LimsSample.date_received >= lo)
     if hi is not None:
-        stmt = stmt.where(WorksheetItem.date_received <= hi)
+        stmt = stmt.where(LimsSample.date_received <= hi)
+    samples = db.execute(stmt).all()
 
-    rows = db.execute(stmt.order_by(WorksheetItem.date_received.desc())).scalars().all()
+    priority: dict[str, str] = {}
+    for vial_id, prio in db.execute(
+        select(WorksheetItem.sample_id, WorksheetItem.priority).where(
+            WorksheetItem.priority.in_(tuple(_PRIORITY_RANK))
+        )
+    ).all():
+        parent = _VIAL_SUFFIX.sub("", vial_id or "")
+        if _PRIORITY_RANK[prio] > _PRIORITY_RANK.get(priority.get(parent, ""), 0):
+            priority[parent] = prio
 
     test_ids = _test_order_senaite_ids()
-
-    by_uid: dict[str, dict] = {}
-    for it in rows:
-        names: list[str] = []
-        if it.analyses_json:
-            try:
-                for a in json.loads(it.analyses_json):
-                    pn = (a.get("peptide_name") or "").strip()
-                    if pn and pn not in names:
-                        names.append(pn)
-            except (ValueError, TypeError):
-                pass
-        entry = by_uid.get(it.sample_uid)
-        if entry is None:
-            by_uid[it.sample_uid] = {
-                "sample_id": it.sample_id,
-                "sample_uid": it.sample_uid,
-                "date_received": it.date_received,
-                "priority": it.priority,
-                "names": names,
-            }
-        else:
-            if it.date_received < entry["date_received"]:
-                entry["date_received"] = it.date_received
-            for pn in names:
-                if pn not in entry["names"]:
-                    entry["names"].append(pn)
-
     records = [
         CheckInRecord(
-            sample_id=e["sample_id"],
-            sample_uid=e["sample_uid"],
-            date_received=e["date_received"].isoformat() + "Z",
-            product_label=", ".join(e["names"]) if e["names"] else None,
-            priority=e["priority"],
-            is_test_order=e["sample_id"] in test_ids,
+            sample_id=sid,
+            sample_uid=ext_uid or f"mk1:{pk}",
+            date_received=received.isoformat() + "Z",
+            product_label=(peptide or "").strip() or None,
+            priority=priority.get(sid, "normal"),
+            is_test_order=sid in test_ids,
         )
-        for e in by_uid.values()
+        for pk, sid, ext_uid, received, peptide in samples
     ]
     records.sort(key=lambda r: r.date_received, reverse=True)
     return records
@@ -10447,8 +10506,7 @@ async def reports_turnaround(
         )
         SELECT m.sample_id, os.created_at AS ordered_at,
                m.received_at, m.submitted_at, m.verified_at, m.published_at,
-               (LOWER(os.payload->'billing'->>'email') IN
-                  ('forrestp@outlook.com', 'forrest@valenceanalytical.com')) AS is_test_order
+               (LOWER(os.payload->'billing'->>'email') = ANY(%s)) AS is_test_order
         FROM m
         LEFT JOIN order_submissions os ON os.id = m.order_id
     """
@@ -10465,7 +10523,7 @@ async def reports_turnaround(
     try:
         with get_integration_db() as conn:
             with conn.cursor() as cur:
-                cur.execute(sql)
+                cur.execute(sql, (sorted(TEST_EMAILS),))
                 rows = cur.fetchall()
     except Exception as e:
         raise HTTPException(status_code=503, detail=f"Reports database error: {e}")
@@ -10915,6 +10973,8 @@ class SlaPerfFiltersOut(BaseModel):
     order: Optional[str] = None
     departments: list[str]
     families: list[str]
+    received_from: Optional[str] = None
+    received_to: Optional[str] = None
 
 
 class SlaPerfClientFacet(BaseModel):
@@ -11010,6 +11070,17 @@ def _sla_perf_rows(db: Session) -> tuple[dict, bool]:
         _sla_perf_rows_cache.clear()
         _sla_perf_rows_cache.update({"at": now, "coas": coas, "inputs": inputs, "test_ids": test_ids})
         return _sla_perf_rows_cache, False
+
+
+def sla_sample_records(db: Session, now: datetime) -> list[dict]:
+    """Per-sample SLA records for Customer Insights (delivered + late, keyed by order number)."""
+    import sla_perf
+
+    rows, _stale = _sla_perf_rows(db)
+    if now.tzinfo is not None:  # the engine works in naive UTC, as /reports/sla-performance passes it
+        now = now.astimezone(timezone.utc).replace(tzinfo=None)
+    return sla_perf.sample_records(**rows["inputs"], coas=rows["coas"], now=now,
+                                   excluded_sample_ids=rows["test_ids"])
 
 
 def _load_tiered_profiles(db: Session) -> list[tuple[int, str, int, frozenset]]:
@@ -11127,6 +11198,8 @@ def reports_sla_performance(
     order: Optional[str] = Query(None, description="Substring of client_order_number"),
     department: list[SlaPerfDepartmentKey] = Query(default=[]),
     family: list[SlaPerfFamilyKey] = Query(default=[]),
+    received_from: Optional[date] = Query(None, alias="from", description="Received on/after (lab day)"),
+    received_to: Optional[date] = Query(None, alias="to", description="Received on/before (lab day)"),
     db: Session = Depends(get_db),
     _current_user=Depends(get_current_user),
 ):
@@ -11162,6 +11235,8 @@ def reports_sla_performance(
         order=order,
         departments=list(department),
         families=list(family),
+        received_from=received_from,
+        received_to=received_to,
     )
     report["cache"] = {"stale": stale, "age_seconds": int(max(0.0, _time.monotonic() - rows["at"]))}
     report["generated_at"] = now_utc.isoformat().replace("+00:00", "Z")
@@ -11297,6 +11372,14 @@ def _delivered_sample_pks(db: Session, sample_pks) -> frozenset:
     return frozenset(ledger) | frozenset(events)
 
 
+def _rtp_flag_title(f) -> str:
+    """The flag title the shared ready-to-publish payload may carry. The payload is
+    cached across users, so a flag on a view-scoped anchor (a board node) is masked
+    as "Restricted" rather than filtered; its hold/ready semantics are unchanged."""
+    from flags import seams
+    return "Restricted" if seams.is_view_scoped(f.entity_type) else (f.title or "")
+
+
 def _load_ready_to_publish_inputs(db: Session) -> dict:
     """Fetch everything ``ready_to_publish.build_ready_rows`` needs.
 
@@ -11360,7 +11443,7 @@ def _load_ready_to_publish_inputs(db: Session) -> dict:
                 if f.type in ready_kinds:
                     flagged_sample_ids.add(sid)
                 flags.append(RtpFlagIn(id=f.id, sample_id=sid, type_slug=f.type, status=f.status,
-                                       title=f.title or "", created_at=f.created_at))
+                                       title=_rtp_flag_title(f), created_at=f.created_at))
 
     # A terminal status (published/cancelled) normally ends the sample's
     # eligibility — but an OPEN Ready flag is an explicit human signal that a
@@ -16735,6 +16818,7 @@ def _user_to_read(user) -> UserRead:
         senaite_configured=user.senaite_password_encrypted is not None,
         first_name=user.first_name,
         last_name=user.last_name,
+        title=user.title,
     )
 
 
@@ -22707,7 +22791,6 @@ async def get_worksheets_inbox(
     # Step 1b: Filter to only samples linked to tracked orders in integration DB.
     # (Order-level priority is NOT copied out of the order payload any more —
     # it reaches each row through the resolver chain; spec §4.)
-    TEST_EMAILS = ["forrestp@outlook.com", "forrest@valenceanalytical.com"]
     try:
         from integration_db import get_integration_db
         from psycopg2.extras import RealDictCursor
@@ -23418,7 +23501,7 @@ async def get_worksheets_users(
     from models import SlackDmPrefs
     users = db.execute(
         select(
-            User.id, User.email, User.first_name, User.last_name,
+            User.id, User.email, User.first_name, User.last_name, User.title,
             SlackDmPrefs.slack_avatar_url,
         )
         .outerjoin(SlackDmPrefs, SlackDmPrefs.user_id == User.id)
@@ -23427,7 +23510,7 @@ async def get_worksheets_users(
     ).all()
     return [
         {"id": row.id, "email": row.email, "first_name": row.first_name,
-         "last_name": row.last_name, "avatar_url": row.slack_avatar_url}
+         "last_name": row.last_name, "title": row.title, "avatar_url": row.slack_avatar_url}
         for row in users
     ]
 
