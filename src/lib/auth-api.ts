@@ -26,6 +26,7 @@ export interface UserUpdateInput {
   is_active?: boolean
   first_name?: string | null
   last_name?: string | null
+  title?: string | null
 }
 
 export interface PasswordChangeInput {
@@ -92,9 +93,11 @@ export async function fetchCurrentUser(): Promise<AuthUser> {
   return user
 }
 
-export async function updateMe(
-  data: { first_name?: string | null; last_name?: string | null }
-): Promise<AuthUser> {
+export async function updateMe(data: {
+  first_name?: string | null
+  last_name?: string | null
+  title?: string | null
+}): Promise<AuthUser> {
   const response = await fetch(`${API_BASE_URL()}/auth/me`, {
     method: 'PATCH',
     headers: getAuthHeaders(),
@@ -113,6 +116,7 @@ export interface DirectoryUser {
   email: string
   first_name?: string | null
   last_name?: string | null
+  title?: string | null
 }
 
 export async function getUserDirectory(): Promise<DirectoryUser[]> {
@@ -125,9 +129,7 @@ export async function getUserDirectory(): Promise<DirectoryUser[]> {
   return response.json()
 }
 
-export async function changePassword(
-  data: PasswordChangeInput
-): Promise<void> {
+export async function changePassword(data: PasswordChangeInput): Promise<void> {
   const response = await fetch(`${API_BASE_URL()}/auth/change-password`, {
     method: 'PUT',
     headers: getAuthHeaders(),

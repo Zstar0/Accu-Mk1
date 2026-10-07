@@ -5998,6 +5998,8 @@ export interface WorksheetUser {
   email: string
   first_name?: string | null
   last_name?: string | null
+  /** Job title, shown under the name on planning boards. */
+  title?: string | null
   /** Slack profile photo (image_72) when the user is Slack-linked; null → the
    *  FE keeps the colored-initials avatar. Shared with the worksheets UI. */
   avatar_url?: string | null
@@ -6884,6 +6886,10 @@ export interface SlaPerfQuery {
   order?: string
   departments?: string[]
   families?: string[]
+  /** Received on/after, lab day YYYY-MM-DD. */
+  from?: string
+  /** Received on/before, lab day YYYY-MM-DD. */
+  to?: string
 }
 
 export async function getSlaPerformance(
@@ -6897,6 +6903,8 @@ export async function getSlaPerformance(
   if (order) qs.set('order', order)
   for (const d of query.departments ?? []) qs.append('department', d)
   for (const f of query.families ?? []) qs.append('family', f)
+  if (query.from) qs.set('from', query.from)
+  if (query.to) qs.set('to', query.to)
   const suffix = qs.toString() ? `?${qs.toString()}` : ''
   const response = await fetch(
     `${API_BASE_URL()}/reports/sla-performance${suffix}`,
@@ -8921,3 +8929,252 @@ export async function getReadyToPublish(
     throw new Error(`Ready to publish failed: ${response.status}`)
   return response.json()
 }
+
+// ---------------------------------------------------------------------------
+// Customer Insights (/reports/customers/*)
+// ---------------------------------------------------------------------------
+
+export interface KpiPair<T> {
+  value: T
+  prior: T | null
+}
+export interface CustomerSummary {
+  tz: string
+  synced_at: string | null
+  kpis: {
+    active_customers: KpiPair<number>
+    revenue: KpiPair<string>
+    paid_orders: KpiPair<number>
+    aov: KpiPair<string>
+    repeat_rate: KpiPair<number | null>
+    median_days_to_second: KpiPair<number | null>
+  }
+  revenue_by_month: { month: string; new: string; returning: string }[]
+  concentration: {
+    top10_share: number
+    top_decile_share: number
+    repeat_share: number
+    median_ltv: string
+    mean_ltv: string
+    customers: number
+  }
+  attach: { test: string; new: number; returning: number }[]
+  product_prices: ProductPrice[]
+  first_order: { kind: string; customers: number; repeat_rate: number | null }[]
+}
+/** Avg price actually paid per unit (post-coupon line total / qty). */
+export interface ProductPrice {
+  product: string
+  /** Paid units; free ($0, e.g. 100% coupon) units are in free_units, never averaged. */
+  units: number
+  avg_price: string | null
+  revenue: string
+  customers: number
+  free_units: number
+  /** Avg pre-coupon list price per paid unit; null until list prices are mirrored. */
+  list_price: string | null
+  /** 1 - paid / list over the same units, e.g. 0.15 = 15% below list. */
+  discount_pct: number | null
+}
+export interface CustomerCohorts {
+  tz: string
+  synced_at: string | null
+  months: string[]
+  rows: { cohort: string; size: number; cells: (number | null)[] }[]
+}
+export interface CustomerRow {
+  key: string
+  name: string
+  email: string | null
+  company: string | null
+  rep: string | null
+  period_spend: string
+  prior_spend: string
+  delta_pct: number | null
+  lifetime: string
+  orders: number
+  samples: number
+  usual_gap_days: number | null
+  last_order_at: string | null
+  top_tests: string[]
+  status: string
+  monthly: { month: string; spend: string }[]
+}
+export interface AtRiskRow extends CustomerRow {
+  spend_12m: string
+  overdue: number
+}
+export interface CustomerListResponse {
+  tz: string
+  synced_at: string | null
+  rows: CustomerRow[]
+  total: number
+  page: number
+  page_size: number
+}
+export type InsightsPeriod = '30d' | '90d' | '6m' | '1y' | 'all'
+
+async function getReport<T>(
+  path: string,
+  params: Record<string, string | number | boolean | undefined> = {}
+): Promise<T> {
+  const qs = new URLSearchParams(
+    Object.entries(params)
+      .filter(([, v]) => v !== undefined && v !== '')
+      .map(([k, v]) => [k, String(v)])
+  )
+  const response = await fetch(
+    `${API_BASE_URL()}${path}${qs.size ? `?${qs}` : ''}`,
+    { headers: getBearerHeaders() }
+  )
+  if (!response.ok) throw new Error(`${path} failed: ${response.status}`)
+  return response.json()
+}
+export const getCustomerSummary = (
+  period: InsightsPeriod,
+  excludeLaunch = false
+) =>
+  getReport<CustomerSummary>('/reports/customers/summary', {
+    period,
+    exclude_launch_accounts: excludeLaunch,
+  })
+export const getCustomerCohorts = (excludeLaunch = true) =>
+  getReport<CustomerCohorts>('/reports/customers/cohorts', {
+    exclude_launch_accounts: excludeLaunch,
+  })
+export const getCustomerAtRisk = () =>
+  getReport<{ tz: string; synced_at: string | null; rows: AtRiskRow[] }>(
+    '/reports/customers/at-risk'
+  )
+export interface ChurnBucket {
+  signal: 'sla' | 'conformance' | 'retest'
+  group: 'on_time' | 'late' | 'all_pass' | 'any_fail' | 'no_retest' | 'retest'
+  orders: number
+  returned: number | null
+}
+export const getCustomerChurnSignals = () =>
+  getReport<{
+    tz: string
+    synced_at: string | null
+    window_days: number
+    buckets: ChurnBucket[]
+  }>('/reports/customers/churn-signals')
+export const getCustomerList = (p: {
+  period: InsightsPeriod
+  search?: string
+  sort?: string
+  dir?: 'asc' | 'desc'
+  page?: number
+  page_size?: number
+}) => getReport<CustomerListResponse>('/reports/customers/list', p)
+
+/** One paid order as /reports/customers/orders and the dossier return it. */
+export interface InsightOrderRow {
+  customer_key: string
+  order_id: number
+  order_number: string
+  paid_at: string
+  net: string
+  discount: string
+  coupons: string[]
+  categories: string[]
+  samples: number
+  tests: string[]
+}
+/** Mirrors backend DossierResponse field-for-field. */
+export interface CustomerDossier {
+  tz: string
+  synced_at: string | null
+  identity: {
+    key: string
+    name: string
+    email: string | null
+    company: string | null
+    wc_id: number | null
+    rep: string | null
+    since: string
+  }
+  kpis: {
+    lifetime: string
+    rank: number
+    customers: number
+    orders: number
+    avg_order: string
+    samples: number
+    samples_per_order: number
+    usual_gap_days: number | null
+    gap_iqr: number[] | null
+    nonconforming_rate: number | null
+    lab_nonconforming_rate: number | null
+    on_time_rate: number | null
+    lab_on_time_rate: number | null
+  }
+  status: string
+  days_since_last: number | null
+  overdue: number
+  spend_delta_pct: number | null
+  monthly: { month: string; spend: string; samples: number }[]
+  order_dates: string[]
+  test_mix: { test: string; share: number; all_share: number }[]
+  analytes: { product: string; coas: number; pass_rate: number }[]
+  test_prices: (ProductPrice & { lab_avg_price: string | null })[]
+  free_tests: number
+  coupons: {
+    code: string
+    orders: number
+    discount: string
+    terms: string | null
+    last_used: string
+  }[]
+  /** Turnaround vs the lab, all time, business hours. Null when SLA data is unavailable. */
+  sla: {
+    customer: SlaSummary
+    lab: SlaSummary
+    families: SlaFamilyRow[]
+  } | null
+  recent: {
+    order_number: string
+    paid_at: string
+    coas: number
+    failed: number
+    sla: 'late' | 'on_time' | null
+  }[]
+  orders: InsightOrderRow[]
+}
+export interface SlaSummary {
+  delivered: number
+  late: number
+  on_time_rate: number | null
+  median_bh: number | null
+  open: number
+  open_past_target: number
+  /** Delivered samples with verification times: the base for bench / lag. */
+  staged: number
+  /** Receipt -> last test verified. */
+  bench_median_bh: number | null
+  /** Last test verified -> COA published. */
+  lag_median_bh: number | null
+}
+export interface SlaFamilyRow {
+  key: string
+  name: string
+  samples: number
+  median_bh: number | null
+  over_target_rate: number | null
+  lab_median_bh: number | null
+  lab_over_target_rate: number | null
+  /** Late multi-test samples where this test finished last. */
+  held_up: number
+}
+/** Resolves null when the customer has no paid orders (backend 404). */
+export const getCustomerDossier = (
+  key: string,
+  sla: { from?: string; to?: string } = {}
+) =>
+  getReport<CustomerDossier>(`/reports/customers/${encodeURIComponent(key)}`, {
+    sla_from: sla.from,
+    sla_to: sla.to,
+  }).catch((e: unknown) => {
+    if (e instanceof Error && e.message.endsWith(': 404')) return null
+    throw e
+  })

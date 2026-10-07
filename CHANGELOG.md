@@ -2,6 +2,71 @@
 
 ## Unreleased
 
+## v1.35.2 - 2026-10-07
+
+### Fixed
+- Check-In Times counts samples received (lims_samples.date_received, same as Lab Throughput) instead of worksheet vials; test-order flag now matches.
+
+## v1.35.1 - 2026-10-07
+
+### Fixed
+- Reports: samples registered straight into the LIMS under a test account (client = its e-mail, no order) are now excluded as test samples.
+
+## v1.35.0 - 2026-10-07
+
+### Customer Insights
+- Customer Dashboard: Turnaround by test type (on-time, median turnaround, bench vs review/publish, per test family vs the lab, which test held up late samples), with a received period / month window.
+- Customers list: sort by any column; filter by status and rep.
+
+### Reports
+- SLA Performance: received period (30D/90D/6M/1Y/All) and month picker.
+- Test accounts: levi@valenceanalytical.com and drpeptide@harmonypeptide.com added; Analyte Trends now excludes test orders; Check-In Times uses the shared list.
+
+## v1.34.1 - 2026-10-07
+
+### Customer Insights
+- At-risk customers show the account's sales rep.
+- Average price by product shows the list price and the average % off list (paid units only; needs IS 1.0.35).
+
+## v1.34.0 - 2026-10-06
+
+### Customer Insights
+- AccuMark Tools > Customer Insights: KPIs with prior-period deltas, new vs returning revenue, cohort retention, at-risk customers (overdue against their own usual re-order gap), first-order outcomes, add-on attach rate, revenue concentration, churn signals, and average price by product (post-coupon unit price; free units counted, not averaged).
+- Customer detail Dashboard tab: spend and samples by month, order rhythm, test mix and analytes vs all customers, COA and SLA experience, what they pay per product vs the lab average, coupons used (terms and savings), free tests, and sales rep (Accumark Commissions history, SalesKing fallback).
+- Customer list: insight columns including Rep.
+- `/reports/customers/*` API for the UI and agents. Reads the Integration Service `wc_orders` mirror (IS 1.0.34). Internal and Feb 2026 launch accounts configured in `customer_insights/rules.py`.
+
+## v1.33.1 - 2026-10-06
+
+### Fixed
+- The planning-board canvas and the Settings workflow graph follow dark mode: xyflow's zoom controls, minimap and dotted background no longer render as white panels.
+
+## v1.33.0 - 2026-10-06
+
+### Planning boards, slice 1: groups and boards backend
+- **Deactivating a group suspends its board grants** (spec 4.8): members of a deactivated group lose the restricted boards and flags it granted until it is re-activated; admins are unaffected.
+- **User groups.** New `user_groups` / `user_group_members` tables, admin CRUD at `/api/groups`, a Groups pane in Settings (create, rename, deactivate, edit members; delete only when unused). Groups are the unit of access for boards and, through board nodes, for flags.
+- **Boards API.** `board_boards`, `board_grants`, `board_nodes`, `board_edges` and `/api/boards` (boards, grants, nodes with per-kind validation and optimistic versions, a positions batch that is all-or-nothing, edges, and a `for-entity` reverse lookup). Company boards are viewable by every active user and editable by granted groups; restricted boards cannot be created yet (`RESTRICTED_BOARDS_ENABLED` is off until the flag visibility slice lands). Boards a user cannot see answer 404 on every route.
+- **`board_node` is a flag entity.** Frames, notes, links and text on a board can carry flags; a node of kind `entity` refuses them with a 400 that names the real anchor. Frames roll up their children's flags through `descendants`. Deleting a node or board with open flags is refused (409).
+- **Flag registry gains visibility seams** (`can_raise`, `can_view`, `visible_entity_ids`, `search_scoped`) plus `can_view_entity` and `visibility_clause` helpers. `create_flag` consults `can_raise` when a type defines it; `/entity-search` passes the caller so scoped types can filter. No read path is filtered yet. See `docs/developer/flags-add-entity.md`.
+
+### Planning boards, slice 2: flag visibility follows the board
+- **Restricted boards are on.** A board granted to groups is visible to those groups and admins only; every board route answers 404 to anyone else.
+- **Flags follow their anchor.** Every flag read path honors the anchor's visibility: point reads (detail, comments, assign, status, due, watchers, links, attachments, reactions, read marks) answer 404 with the same text as a missing flag; hidden attachments and comment reactions answer with the child's own not-found text, so a hidden child is indistinguishable from a missing one; All open, Unread, Activity, Summary, Search and the Slack morning digest (unread and assigned/overdue counts) filter through one SQL clause; a caller that passes no user gets the fail-closed clause. The descendants roll-up of a hidden frame answers `[]`, exactly like a missing id. State-change watches are gated too: arming a watch on a hidden flag (as its thread or as a comment action's target) is a 404 with the missing-flag text, `GET /watches?flag_id=` 404s a hidden flag, and the unscoped watch list omits watches whose thread or comment target is hidden. The Ready to Publish report, whose payload is shared by every login, shows a flag on a restricted board node as "Restricted" instead of its title (the flag still holds or admits the sample). Unanchored general tasks and legacy anchors are unchanged.
+- **Nobody is pulled into a flag they cannot see.** Assigning, watching or mentioning a user who cannot view the anchor is a 400; linking a flag to a hidden entity or a hidden flag is a 404; hidden entity links render as "Restricted" and hidden flag links are dropped, and the link-added and link-removed events in the thread and the Activity feed blank the hidden target (the live stream never sends link event values). Removing a link whose other end is hidden answers 404 like a missing link.
+- **Live updates respect the audience.** The producer stamps every SSE event with an audience derived from the anchor (everyone, the board's groups plus admins, or admins only for an orphaned anchor); the stream filters per connection and never sends the audience field. Group changes apply on the next reconnect. The Slack notifier subscribes as a system listener, DMs participants only, and re-checks every recipient against a restricted anchor at send time, so someone removed from the board's groups gets no further DMs. The Slack mark-read button passes the acting user, so it keeps working for board members.
+- **Recurring templates are isolated.** A template mints as its creator (so an admin's template on a board node is allowed), and a template whose mint fails is logged and moved to its next run instead of stopping every other template. A refused watcher on a minted flag is logged instead of dropped silently.
+- New seams for other entity types: `audience`, `seams.load_user`, `seams.set_membership_resolver`. See `docs/developer/flags-add-entity.md`.
+
+### Planning boards, slice 3: the canvas
+- **Boards page.** `#boards/overview` lists every board you can see; admins create boards, share them with groups (view or edit), and delete them.
+- **The canvas.** `#boards/board?id=<slug>` opens an infinite canvas (React Flow): frames that hold other items, text, notes (markdown), links (open outside the app, never framed), people, and live entities (documents, samples, orders, worksheets) with their real labels. Drag to arrange, drop into a frame to group, connect handles to draw a relationship. Every save carries the item's version; if someone else saved first the board reloads and says so.
+- **Side panel.** Selecting an item shows its open flags (frames include what is inside them), lets editors raise a flag on it, edit notes and links, preview a document, and see which other boards carry the same entity. Viewers get the same panel read-only.
+- **Safety rails.** Deleting a board asks for confirmation (its items and connections go with it; a board with open flags cannot be deleted, and resolved flags stay in the flag history). Sharing loads the board's current groups before you change anything, so an unchanged save never revokes access.
+- **Frames.** Resize a frame from its bottom-right corner; the resize is saved. Items inside a frame keep their place inside it.
+- **Deep links.** A flag on a board item now opens the board with that item selected and centred (`?node=` in the hash, one-shot).
+- Not yet: rollup badges on frames, moving an item back out of a frame, the attention dock, zoom-level rendering, Cmd+K jump, auto-layout, widgets (slices 4 and 5).
+
 ## v1.32.2 - 2026-10-05
 
 ### Fixed

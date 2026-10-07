@@ -11,6 +11,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 from models import SlackDmPrefs
+from flags import seams
 from flags.models import FlagParticipant
 
 CATEGORIES = ("assigned", "mentioned", "raised_activity",
@@ -71,6 +72,16 @@ def plan_dms(db, event: dict) -> list[PlannedDM]:
             consider(flag.get("assignee_id"), "status_changes")
     else:
         return []   # raised / unassigned / watcher_* never DM
+
+    # Spec §6.5: recipients are re-checked against the anchor at send time, so a
+    # user who lost access (left the group) gets nothing. A missing user row drops.
+    entity_type = flag.get("entity_type")
+    if seams.is_view_scoped(entity_type):
+        entity_id = str(flag.get("entity_id"))
+        for uid in list(planned):
+            u = seams.load_user(db, uid)
+            if u is None or not seams.can_view_entity(db, u, entity_type, entity_id):
+                del planned[uid]
 
     return [PlannedDM(user_id=u, category=c) for u, c in planned.items()
             if _wants(db, u, c)]
