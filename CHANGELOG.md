@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+## v1.34.0 - 2026-10-06
+
+### Customer Insights
+- AccuMark Tools > Customer Insights: KPIs with prior-period deltas, new vs returning revenue, cohort retention, at-risk customers (overdue against their own usual re-order gap), first-order outcomes, add-on attach rate, revenue concentration, churn signals, and average price by product (post-coupon unit price; free units counted, not averaged).
+- Customer detail Dashboard tab: spend and samples by month, order rhythm, test mix and analytes vs all customers, COA and SLA experience, what they pay per product vs the lab average, coupons used (terms and savings), free tests, and sales rep (Accumark Commissions history, SalesKing fallback).
+- Customer list: insight columns including Rep.
+- `/reports/customers/*` API for the UI and agents. Reads the Integration Service `wc_orders` mirror (IS 1.0.34). Internal and Feb 2026 launch accounts configured in `customer_insights/rules.py`.
+
 ## v1.33.1 - 2026-10-06
 
 ### Fixed
