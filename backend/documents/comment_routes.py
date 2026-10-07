@@ -207,6 +207,8 @@ def create_comment(doc_id: int, req: CommentCreate, db: Session = Depends(get_db
                    actor: Actor = Depends(require_comment_actor)):
     try:
         _gate_doc(db, actor, doc_id)
+        if req.parent_id is not None:  # a hidden parent reads like a missing one
+            _gated_comment(db, actor, req.parent_id)
         row = comments.create_comment(
             db, document_id=doc_id, actor=actor, kind=req.kind, body=req.body,
             anchor=req.anchor, label=req.label, suggested_text=req.suggested_text,

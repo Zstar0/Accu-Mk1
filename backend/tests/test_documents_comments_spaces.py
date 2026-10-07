@@ -98,6 +98,16 @@ def test_outsider_writes_on_a_hidden_document_are_byte_identical_to_missing(clie
     assert client.db.get(DocumentComment, c["id"]).status == "open"
 
 
+def test_reply_to_a_hidden_comment_reads_like_a_missing_parent(client, world):
+    _as(client, USER)
+    open_id = world["open"]["id"]
+
+    def reply(parent_id):
+        return client.post(f"/api/documents/{open_id}/comments",
+                           json={"kind": "comment", "body": "re", "parent_id": parent_id})
+    _same_as_missing(reply(world["comment"]["id"]), reply(MISSING), world["comment"]["id"])
+
+
 def test_member_and_admin_still_see_everything(client, world):
     s, c, a = world["secret"], world["comment"], world["att"]
     for u in (OTHER, ADMIN):
