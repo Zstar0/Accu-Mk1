@@ -2,6 +2,16 @@
 
 ## Unreleased
 
+## v1.35.0 - 2026-10-07
+
+### Customer Insights
+- Customer Dashboard: Turnaround by test type (on-time, median turnaround, bench vs review/publish, per test family vs the lab, which test held up late samples), with a received period / month window.
+- Customers list: sort by any column; filter by status and rep.
+
+### Reports
+- SLA Performance: received period (30D/90D/6M/1Y/All) and month picker.
+- Test accounts: levi@valenceanalytical.com and drpeptide@harmonypeptide.com added; Analyte Trends now excludes test orders; Check-In Times uses the shared list.
+
 ## v1.34.1 - 2026-10-07
 
 ### Customer Insights
