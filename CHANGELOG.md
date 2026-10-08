@@ -1,5 +1,14 @@
 # Changelog
 
+## v1.37.0 - 2026-10-07
+
+### Customer CRM tab (admin)
+- **A CRM tab on the customer page** shows the customer's Close communication log (emails, calls, SMS, meetings) and account notes, newest first and grouped by day, with type chips and Load more. Click any item to read the full email thread, call notes, SMS, meeting or note.
+- The customer is matched to Close leads by their account and billing emails. Lead cards show status, owner and open opportunity value.
+- Automated order emails (subject `[Accumark Labs]:`) are hidden by default; "Show automated" brings them back.
+- Data is read live from Close and cached for 5 minutes; **Refresh** pulls the latest (once per 10 seconds). If Close is down the last copy is shown, marked stale.
+- Admin only. Needs `CLOSE_API_KEY` in the backend env; without it the tab says CRM is not configured.
+
 ## v1.36.0 - 2026-10-07
 
 ### Document spaces
