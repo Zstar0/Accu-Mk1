@@ -55,11 +55,21 @@ class PlainClient:
             if r.status_code >= 400:
                 logger.warning("support_plain.http_%s op=%s", r.status_code, op)
                 raise SupportUnavailable(f"http_{r.status_code}")
-            body = r.json()
+            try:
+                body = r.json()
+            except ValueError:  # HTML error page, empty 3xx, proxy junk
+                body = None
+            if not isinstance(body, dict):
+                logger.warning("support_plain.bad_response op=%s status=%s", op, r.status_code)
+                raise SupportUnavailable("bad_response")
             if body.get("errors"):
                 logger.warning("support_plain.graphql_errors op=%s count=%d", op, len(body["errors"]))
                 raise SupportUnavailable("graphql_errors")
-            return body.get("data") or {}
+            data = body.get("data")
+            if not isinstance(data, dict):
+                logger.warning("support_plain.bad_response op=%s status=%s", op, r.status_code)
+                raise SupportUnavailable("bad_response")
+            return data
         raise SupportUnavailable("unreachable")
 
 

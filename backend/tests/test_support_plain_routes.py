@@ -176,3 +176,24 @@ def test_integration_db_error_is_502(api, monkeypatch):
 
     monkeypatch.setattr(service, "_emails_fn", db_down)
     assert client.get("/support/customers/wc:1").status_code == 502
+
+
+class ShapelessPlain(FakePlain):
+    """Plain answers 200 with data that lacks the fields we read."""
+
+    def query(self, q, variables=None):
+        self.ops.append("shapeless")
+        return {"customerByEmail": {"id": "c_1"}} if q == queries.CUSTOMER_BY_EMAIL else {}
+
+
+def test_malformed_plain_data_falls_back_to_stale_not_500(api):
+    client, fake = api
+    client.get("/support/customers/wc:1")
+    client.get("/support/customers/wc:1/threads/th_b")
+    fake["plain"] = ShapelessPlain()
+    listing = client.get("/support/customers/wc:1?refresh=true")
+    assert listing.status_code == 200 and listing.json()["stale"] is True
+    detail = client.get("/support/customers/wc:1/threads/th_b?refresh=true")
+    assert detail.status_code == 200 and detail.json()["stale"] is True
+    service.CACHE.drop("")
+    assert client.get("/support/customers/wc:1").status_code == 502

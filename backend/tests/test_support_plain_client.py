@@ -81,3 +81,14 @@ def test_get_client_requires_key_and_reuses_one_client_per_key(monkeypatch):
     assert c.get_client() is a
     monkeypatch.setenv("PLAIN_API_KEY", "k2")
     assert c.get_client() is not a
+
+
+@pytest.mark.parametrize("resp", [
+    httpx.Response(200, text="<html>proxy error</html>"),
+    httpx.Response(200, json=[1, 2]),
+    httpx.Response(200, json={"data": None}),
+    httpx.Response(302, headers={"Location": "https://example.invalid/"}),
+])
+def test_malformed_responses_are_unavailable(resp):
+    with pytest.raises(c.SupportUnavailable):
+        _client(lambda req: resp).query(queries.WORKSPACE)

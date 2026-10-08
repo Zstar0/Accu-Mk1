@@ -1,6 +1,7 @@
 """Orchestration: customer match, thread list and conversations (all cached), refresh, stale fallback, scoping."""
 from __future__ import annotations
 
+import functools
 import logging
 import time
 from typing import Any
@@ -27,11 +28,24 @@ def _emails(customer_key: str) -> list[str] | None:
         raise SupportUnavailable("is_db") from e
 
 
+def _shape_safe(fn):
+    """Plain answering 200 with data we cannot read is an outage (stale fallback / 502), not a 500."""
+    @functools.wraps(fn)
+    def run(*args, **kwargs):
+        try:
+            return fn(*args, **kwargs)
+        except (KeyError, TypeError, AttributeError) as e:
+            logger.warning("support_plain.bad_shape fn=%s error=%s", fn.__name__, type(e).__name__)
+            raise SupportUnavailable("bad_shape") from e
+    return run
+
+
 def _workspace(client) -> str:
     ws, _ = CACHE.get_or_load("ws", float("inf"), lambda: client.query(queries.WORKSPACE)["myWorkspace"]["id"])
     return ws
 
 
+@_shape_safe
 def _load(customer_key: str, emails: list[str], *, fresh: bool = False) -> dict[str, Any]:
     client = _client_factory()
     mkey = f"m:{customer_key}"
@@ -101,6 +115,7 @@ def thread_detail(customer_key: str, thread_id: str, *, refresh: bool = False) -
         return None  # unknown or another customer's thread never reaches Plain
     key = f"d:{customer_key}:{thread_id}"
 
+    @_shape_safe
     def load() -> dict[str, Any]:
         client = _client_factory()
         nodes: list[dict] = []
