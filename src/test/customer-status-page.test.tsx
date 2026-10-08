@@ -778,8 +778,8 @@ describe('CustomerStatusPage — detail view', () => {
     const { useAuthStore } = await import('@/store/auth-store')
     const before = useAuthStore.getState().user
     try {
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
       useAuthStore.setState({
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
         user: { id: 1, email: 's@x', role: 'standard' } as any,
       })
       renderDetailWithCache(makeCustomer({ customer_id: 42 }))
@@ -787,8 +787,8 @@ describe('CustomerStatusPage — detail view', () => {
       expect(screen.queryByRole('tab', { name: 'CRM' })).toBeNull()
       expect(screen.queryByRole('tab', { name: 'Support' })).toBeNull()
       ;(await import('@testing-library/react')).cleanup()
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
       useAuthStore.setState({
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
         user: { id: 1, email: 'a@x', role: 'admin' } as any,
       })
       renderDetailWithCache(makeCustomer({ customer_id: 42 }))
