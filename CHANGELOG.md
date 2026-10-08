@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## v1.36.0 - 2026-10-07
 
 ### Document spaces
 - **Spaces are the first level of the Documents page** and decide who can read what. A company space is readable by every login; a restricted space only by the user groups you grant. General is seeded and every existing document now lives in it.
