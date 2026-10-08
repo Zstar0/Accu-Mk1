@@ -87,6 +87,8 @@ import {
   STATUS_LABEL,
 } from '@/components/customers/insights-utils'
 import { CustomerDashboard } from '@/components/customers/CustomerDashboard'
+import { CustomerCrmTab } from '@/components/customers/CustomerCrmTab'
+import { useAuthStore } from '@/store/auth-store'
 import {
   NO_INSIGHT,
   UNASSIGNED,
@@ -776,6 +778,7 @@ function InsightCells({ insight }: { insight?: InsightRow }) {
  * store action is the source of truth — see src/store/ui-store.ts:317-326.
  */
 function CustomerDetailView() {
+  const isAdminUser = useAuthStore(state => state.user)?.role === 'admin'
   // --- Store reads (selector syntax mandatory — ast-grep enforced) ---
   const customerDetailTargetId = useUIStore(
     state => state.customerDetailTargetId
@@ -1050,15 +1053,20 @@ function CustomerDetailView() {
       {/* Phase 30 — Task 6: Tabs wrap everything below the header card.
           Customer Orders is the default; Dashboard is the insights dossier. */}
       <Tabs
-        value={customerDetailTab}
+        value={
+          customerDetailTab === 'crm' && !isAdminUser
+            ? 'orders'
+            : customerDetailTab
+        }
         onValueChange={v =>
-          setCustomerDetailTab(v as 'orders' | 'dashboard')
+          setCustomerDetailTab(v as 'orders' | 'dashboard' | 'crm')
         }
         className="mt-4"
       >
         <TabsList>
           <TabsTrigger value="orders">Customer Orders</TabsTrigger>
           <TabsTrigger value="dashboard">Dashboard</TabsTrigger>
+          {isAdminUser && <TabsTrigger value="crm">CRM</TabsTrigger>}
         </TabsList>
         <TabsContent value="orders" className="mt-4">
           <CustomerOrdersTab
@@ -1081,6 +1089,11 @@ function CustomerDetailView() {
             onOpenAnalyte={() => navigateTo('reports', 'dashboard')}
           />
         </TabsContent>
+        {isAdminUser && (
+          <TabsContent value="crm" className="mt-4">
+            <CustomerCrmTab customerKey={`wc:${customerDetailTargetId}`} />
+          </TabsContent>
+        )}
       </Tabs>
     </div>
   )
@@ -1538,6 +1551,7 @@ function CustomerOrdersTab({
  * Dashboard read the insights dossier (one shared query).
  */
 function GuestCustomerDetailView({ customerKey }: { customerKey: string }) {
+  const isAdminUser = useAuthStore(state => state.user)?.role === 'admin'
   const navigateToCustomers = useUIStore(state => state.navigateToCustomers)
   const navigateTo = useUIStore(state => state.navigateTo)
   const { data } = useQuery(dossierQuery(customerKey))
@@ -1577,6 +1591,12 @@ function GuestCustomerDetailView({ customerKey }: { customerKey: string }) {
         customerKey={customerKey}
         onOpenAnalyte={() => navigateTo('reports', 'dashboard')}
       />
+      {isAdminUser && (
+        <section className="mt-4">
+          <h2 className="mb-2 text-sm font-medium">CRM</h2>
+          <CustomerCrmTab customerKey={customerKey} />
+        </section>
+      )}
     </div>
   )
 }
