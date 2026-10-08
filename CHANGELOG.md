@@ -1,5 +1,13 @@
 # Changelog
 
+## v1.38.0 - 2026-10-08
+
+### Customer Support tab (admin)
+- **A Support tab on the customer page**, next to CRM, lists the customer's Plain support tickets: status (Open, Snoozed, Done) with filter chips, priority, labels, assignee, last update and a preview. A red **Waiting on us** badge shows how long the customer has been waiting for a reply.
+- Click a ticket to read the whole conversation: emails, website contact-form messages, chat and Slack, plus the team's **internal notes and internal discussions** on an amber card marked Internal. Status, label and assignment changes show as one-line markers. "Open in Plain" jumps to the ticket.
+- Read live from Plain and cached for 5 minutes; **Refresh** pulls the latest (once per 10 seconds). If Plain is down the last copy is shown, marked stale.
+- Admin only. Needs `PLAIN_API_KEY` in the backend env; without it the tab says Support is not configured.
+
 ## v1.37.0 - 2026-10-07
 
 ### Customer CRM tab (admin)
