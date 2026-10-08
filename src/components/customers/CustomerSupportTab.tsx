@@ -116,8 +116,8 @@ export function CustomerSupportTab({ customerKey }: { customerKey: string }) {
     <div className="flex flex-col gap-3">
       <div className="flex flex-wrap items-center gap-2 text-sm">
         <span>
-          {all} tickets � {d.counts.open} open � {d.counts.waiting} waiting on
-          us � last contact {date(d.last_contact_at)}
+          {all} tickets · {d.counts.open} open · {d.counts.waiting} waiting on
+          us · last contact {date(d.last_contact_at)}
         </span>
         {d.oldest_waiting_since && (
           <span className="rounded-full bg-red-500/15 px-2 text-xs font-medium text-red-600 dark:text-red-400">
@@ -218,8 +218,8 @@ export function CustomerSupportTab({ customerKey }: { customerKey: string }) {
               ))}
             </span>
             <span className="block truncate text-xs text-muted-foreground">
-              {t.assignee ?? 'Unassigned'} � {relative(t.updated_at)}
-              {t.preview ? ` � ${t.preview}` : ''}
+              {t.assignee ?? 'Unassigned'} · {relative(t.updated_at)}
+              {t.preview ? ` · ${t.preview}` : ''}
             </span>
           </button>
         ))}

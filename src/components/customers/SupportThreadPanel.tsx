@@ -43,12 +43,12 @@ export function SupportThreadPanel({
       <SheetContent className="w-full overflow-y-auto sm:max-w-xl">
         <SheetHeader>
           <SheetTitle>
-            {thread?.ref} � {thread?.title}
+            {thread?.ref} · {thread?.title}
           </SheetTitle>
           <SheetDescription>
             {thread?.status}
-            {thread?.labels.length ? ` � ${thread.labels.join(', ')}` : ''}
-            {' � '}
+            {thread?.labels.length ? ` · ${thread.labels.join(', ')}` : ''}
+            {' · '}
             {thread && (
               <a
                 className="text-sky-500 hover:underline"
@@ -82,7 +82,7 @@ export function SupportThreadPanel({
                   key={e.id}
                   className="text-center text-xs text-muted-foreground"
                 >
-                  {e.text} � {when(e.at)}
+                  {e.text} · {when(e.at)}
                 </div>
               ) : (
                 <div

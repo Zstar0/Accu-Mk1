@@ -71,7 +71,7 @@ describe('CustomerSupportTab', () => {
   it('renders the summary, waiting badge and rows newest first', async () => {
     setup()
     expect(
-      await screen.findByText(/2 tickets � 1 open � 1 waiting on us/)
+      await screen.findByText(/2 tickets · 1 open · 1 waiting on us/)
     ).toBeInTheDocument()
     expect(screen.getByText(/Waiting on us 2h/)).toBeInTheDocument()
     const rows = screen.getAllByRole('button', { name: /T-482|T-100/ })
@@ -153,6 +153,10 @@ describe('CustomerSupportTab', () => {
         .closest('[data-internal="true"]')
     ).not.toBeNull()
     expect(within(panel).getByText(/Marked done by Lauren/)).toBeInTheDocument()
+    expect(panel.textContent).not.toContain(String.fromCharCode(0xfffd))
+    expect(
+      within(panel).getByText(/Marked done by Lauren · /)
+    ).toBeInTheDocument()
     expect(
       within(panel).getByRole('link', { name: /Open in Plain/ })
     ).toHaveAttribute('href', open.plain_url)
