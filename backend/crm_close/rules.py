@@ -2,8 +2,11 @@
 import re
 
 KEPT_TYPES = {"Email": "email", "Call": "call", "SMS": "sms", "Meeting": "meeting", "Note": "note"}
-AUTOMATED_SUBJECT = re.compile(r"^\[Accumark Labs\]: You've got a new order", re.I)
-# Senders seen sending only system mail. Filled from live data (plan Task 6); lowercase.
+# WooCommerce admin notifications all carry this prefix (new order, failed, cancelled...).
+# Replies start with "Re:" and stay visible. Live data 2026-10-07.
+AUTOMATED_SUBJECT = re.compile(r"^\[Accumark Labs\]:", re.I)
+# Senders that ONLY send system mail (lowercase). Empty on purpose: the order mails come from
+# info@accumarklabs.com, which is also the shared inbox people reply from.
 AUTOMATED_SENDERS: frozenset[str] = frozenset()
 PLAIN_URL = re.compile(r"https://app\.plain\.com/\S*?/thread/[A-Za-z0-9_]+/?")
 

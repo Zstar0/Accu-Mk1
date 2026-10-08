@@ -76,3 +76,11 @@ def test_email_detail_includes_thread_oldest_first():
     assert d["type"] == "email" and d["id"] == "a2"
     assert [m["body"] for m in d["messages"]] == ["first", "second"]
     assert d["messages"][1]["direction"] == "outbound"
+
+
+def test_every_woocommerce_admin_notification_is_automated_but_replies_are_not():
+    """Live data 2026-10-07: '[Accumark Labs]: Order #3010 has failed' is system mail too."""
+    for subject in ("[Accumark Labs]: Order #3010 has failed", "[Accumark Labs]: Order #3174 has been cancelled"):
+        assert timeline.normalize(email(subject=subject), LEADS)["automated"] is True
+    for subject in ("Re: [Accumark Labs]: Order #3010 has failed", "Re: Accumark Labs", "TB500 Mismatch"):
+        assert timeline.normalize(email(subject=subject), LEADS)["automated"] is False
