@@ -80,7 +80,10 @@ export class CrmError extends Error {
   }
 }
 
-async function crmFetch<T>(path: string, qs: URLSearchParams): Promise<T> {
+export async function crmFetch<T>(
+  path: string,
+  qs: URLSearchParams
+): Promise<T> {
   const suffix = qs.toString() ? `?${qs}` : ''
   const r = await fetch(`${API_BASE_URL()}${path}${suffix}`, {
     headers: getBearerHeaders(),
