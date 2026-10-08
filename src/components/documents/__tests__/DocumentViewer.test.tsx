@@ -18,6 +18,7 @@ const h = vi.hoisted(() => ({
 vi.mock('sonner', () => ({ toast: { error: h.toastError, success: vi.fn() } }))
 
 vi.mock('@/services/documents', () => ({
+  useDocumentSpaces: () => ({ data: [], isLoading: false }),
   useDocument: () => ({
     data: {
       id: 10,

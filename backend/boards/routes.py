@@ -85,9 +85,11 @@ def put_grants(slug: str, body: List[GrantIn], db: Session = Depends(get_db),
         raise http_error(e)
 
 
-def _stale(e: "service.StaleVersionError") -> HTTPException:
-    detail = {"message": str(e), "stale_ids": e.stale_ids,
-              "current": NodeOut.model_validate(e.current).model_dump(mode="json") if e.current is not None else None}
+def _stale(db: Session, user, e: "service.StaleVersionError") -> HTTPException:
+    """`current` goes through the viewer-aware _node_out so a pinned document the caller
+    cannot see is masked here exactly as on GET (spec 2026-10-06 section 9.3)."""
+    current = service._node_out(db, user, e.current).model_dump(mode="json") if e.current is not None else None
+    detail = {"message": str(e), "stale_ids": e.stale_ids, "current": current}
     return HTTPException(status_code=409, detail=detail)
 
 
@@ -108,7 +110,7 @@ def patch_positions(slug: str, body: List[PositionItem], db: Session = Depends(g
         return service.patch_positions(db, user, slug, body)
     except service.StaleVersionError as e:
         db.rollback()
-        raise _stale(e)
+        raise _stale(db, user, e)
     except Exception as e:
         db.rollback()
         raise http_error(e)
@@ -123,7 +125,7 @@ def patch_node(slug: str, node_id: int, body: NodePatch, db: Session = Depends(g
         return service.patch_node(db, user, slug, node_id, version=version, **fields)
     except service.StaleVersionError as e:
         db.rollback()
-        raise _stale(e)
+        raise _stale(db, user, e)
     except Exception as e:
         db.rollback()
         raise http_error(e)

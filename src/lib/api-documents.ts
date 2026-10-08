@@ -21,6 +21,39 @@ export interface DocumentCategory {
   updated_at: string
 }
 
+export type DocumentSpaceVisibility = 'company' | 'restricted'
+
+export interface DocumentSpace {
+  id: number
+  slug: string
+  name: string
+  description: string | null
+  visibility: DocumentSpaceVisibility
+  is_active: boolean
+  sort_order: number
+  document_count: number
+  /** True for admins (bearer) or for an agent token's allow-list. */
+  can_write: boolean
+  created_at: string
+  updated_at: string
+}
+
+export interface DocumentSpaceCreate {
+  slug: string
+  name: string
+  description?: string | null
+  visibility?: DocumentSpaceVisibility
+  sort_order?: number
+}
+
+export interface DocumentSpaceUpdate {
+  name?: string
+  description?: string | null
+  visibility?: DocumentSpaceVisibility
+  is_active?: boolean
+  sort_order?: number
+}
+
 export interface DocumentRow {
   id: number
   code: string
@@ -30,6 +63,9 @@ export interface DocumentRow {
   category_id: number
   category_name: string
   category_prefix: string
+  space_id: number | null
+  space_slug: string
+  space_name: string
   status: DocumentStatus
   effective_date: string | null
   activated_at: string | null
@@ -66,6 +102,8 @@ export interface DocumentPatch {
   title?: string
   description?: string | null
   category_id?: number
+  /** Admin only. Moves every revision of the code. */
+  space_id?: number
   effective_date?: string | null
 }
 
@@ -193,6 +231,54 @@ export function deleteDocumentCategory(id: number): Promise<void> {
   })
 }
 
+export function listDocumentSpaces(
+  includeInactive = false
+): Promise<DocumentSpace[]> {
+  return apiFetch<DocumentSpace[]>(
+    `/api/document-spaces${includeInactive ? '?include_inactive=true' : ''}`
+  )
+}
+
+export function createDocumentSpace(
+  data: DocumentSpaceCreate
+): Promise<DocumentSpace> {
+  return apiFetch<DocumentSpace>('/api/document-spaces', {
+    method: 'POST',
+    body: JSON.stringify(data),
+  })
+}
+
+export function updateDocumentSpace(
+  id: number,
+  data: DocumentSpaceUpdate
+): Promise<DocumentSpace> {
+  return apiFetch<DocumentSpace>(`/api/document-spaces/${id}`, {
+    method: 'PUT',
+    body: JSON.stringify(data),
+  })
+}
+
+export async function getDocumentSpaceGrants(id: number): Promise<number[]> {
+  const out = await apiFetch<{ space_id: number; group_ids: number[] }>(
+    `/api/document-spaces/${id}/grants`
+  )
+  return out.group_ids
+}
+
+export async function replaceDocumentSpaceGrants(
+  id: number,
+  groupIds: number[]
+): Promise<number[]> {
+  const out = await apiFetch<{ space_id: number; group_ids: number[] }>(
+    `/api/document-spaces/${id}/grants`,
+    { method: 'PUT', body: JSON.stringify({ group_ids: groupIds }) }
+  )
+  return out.group_ids
+}
+
+export function deleteDocumentSpace(id: number): Promise<void> {
+  return apiFetch<undefined>(`/api/document-spaces/${id}`, { method: 'DELETE' })
+}
 export interface DocumentCreate {
   title: string
   html: string
@@ -200,6 +286,8 @@ export interface DocumentCreate {
   description?: string | null
   effective_date?: string | null
   author?: string
+  /** Space slug; omitted = General. */
+  space?: string
 }
 
 /** A brand-new controlled document, born as a DRAFT; the server mints the code. */

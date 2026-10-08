@@ -2,6 +2,16 @@
 
 ## Unreleased
 
+### Document spaces
+- **Spaces are the first level of the Documents page** and decide who can read what. A company space is readable by every login; a restricted space only by the user groups you grant. General is seeded and every existing document now lives in it.
+- The document list, search, the document routes and the document flag threads answer 404 for a document the caller cannot see, exactly as for a missing one. Comments, attachments, the comment index and export, and in-place content edits honour the same gate.
+- Admins create and grant spaces in Settings > Documents, and move a document (every revision together) from Edit details. The publish skill and labmanager-mcp take a `space`; agent tokens may carry a space allow-list (`name:token:slug+slug`, absent = General only).
+
+### Document annotations
+- **Comments on documents.** Any login or named agent token can leave numbered comments and suggestions anchored to a passage, reply one level deep, label them, resolve or reopen them, attach images, and export a document's thread as Markdown. Comments live on the document code, so they follow it across revisions. A cross-document index (`GET /api/documents/comments`) serves agents and the inbox.
+- **Annotations in the viewer** (plannotator v0.27.25 vendored under `src/vendor/plannotator/`): highlight a passage to comment, see open threads in a side panel, and pin-point comments on images.
+- **Admin edit mode:** an admin can edit a draft revision in place (`PUT /api/documents/{id}/content`, admin login only), apply a suggestion with one click, and a **New document** dialog creates a draft from a blank page (opens in edit mode) or an uploaded HTML file.
+
 ## v1.35.2 - 2026-10-07
 
 ### Fixed

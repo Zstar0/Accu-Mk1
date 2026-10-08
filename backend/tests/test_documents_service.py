@@ -9,6 +9,9 @@ from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import StaticPool
 
+HTML = ("<!doctype html><html><head><title>t</title><style>/* accumark-docs v1 */</style>"
+        "</head><body><p>hi</p></body></html>")
+
 
 @pytest.fixture
 def db():
@@ -719,3 +722,220 @@ def test_a_new_document_still_requires_a_title(db):
     from documents.errors import BadRequestError
     with pytest.raises(BadRequestError, match="title is required"):
         service.create_document(db, title="", html=HTML, category=_art(db))
+
+
+# --- spaces (spec 2026-10-06 section 4) --------------------------------------------------
+
+def test_seed_spaces_is_idempotent_and_general_is_company(db):
+    from documents import service
+    service.seed_spaces(db)
+    service.seed_spaces(db)
+    rows = service.list_spaces(db)
+    assert [(sp.slug, sp.visibility, sp.is_active, n) for sp, n in rows] == [("general", "company", True, 0)]
+    assert service.general_space(db).slug == "general"
+
+
+def test_seed_spaces_backfills_null_rows(db):
+    from documents import service
+    from documents.models import Document
+    cat = service.resolve_category(db, category="ART")
+    doc, _ = service.create_document(db, title="Old", html=HTML, category=cat)
+    doc.space_id = None
+    db.commit()
+    service.seed_spaces(db)
+    db.expire_all()
+    assert db.get(Document, doc.id).space_id == service.general_space(db).id
+
+
+def test_resolve_space_by_slug_id_and_default(db):
+    from documents import service
+    from documents.errors import NotFoundError
+    general = service.general_space(db)
+    assert service.resolve_space(db).id == general.id
+    assert service.resolve_space(db, space=" General ").id == general.id
+    assert service.resolve_space(db, space_id=general.id).id == general.id
+    with pytest.raises(NotFoundError):
+        service.resolve_space(db, space="nope")
+
+
+def test_ensure_documents_space_column_is_idempotent_on_a_pre_space_table():
+    """Simulates an existing deployment: `documents` exists WITHOUT space_id. The boot
+    helper adds the column and index once, and a second boot changes nothing."""
+    from sqlalchemy import create_engine, inspect, text
+    from sqlalchemy.pool import StaticPool
+    from database import _ensure_documents_space_column
+    import documents.models  # noqa: F401
+    from documents.models import DocumentSpace
+    engine = create_engine("sqlite:///:memory:", connect_args={"check_same_thread": False},
+                           poolclass=StaticPool)
+    DocumentSpace.__table__.create(engine)
+    with engine.begin() as c:
+        c.execute(text("CREATE TABLE documents (id INTEGER PRIMARY KEY, code VARCHAR(30))"))
+    assert "space_id" not in {col["name"] for col in inspect(engine).get_columns("documents")}
+    _ensure_documents_space_column(engine)
+    _ensure_documents_space_column(engine)
+    cols = {col["name"] for col in inspect(engine).get_columns("documents")}
+    assert "space_id" in cols
+    names = {ix["name"] for ix in inspect(engine).get_indexes("documents")}
+    assert "ix_documents_space_id" in names
+
+
+def _space(db, slug, visibility="company"):
+    from documents.models import DocumentSpace
+    sp = DocumentSpace(slug=slug, name=slug.title(), visibility=visibility)
+    db.add(sp)
+    db.commit()
+    return sp
+
+
+def test_new_document_defaults_to_general_and_revision_inherits(db):
+    from documents import service
+    cat = service.resolve_category(db, category="ART")
+    lab = _space(db, "lab")
+    d1, _ = service.create_document(db, title="A", html=HTML, category=cat)
+    assert d1.space_id == service.general_space(db).id
+    d2, _ = service.create_document(db, title="B", html=HTML + "<!--b-->", category=cat, space=lab)
+    assert d2.space_id == lab.id
+    d2r2, created = service.create_document(db, code=d2.code, html=HTML + "<!--b2-->", category=cat)
+    assert created and d2r2.space_id == lab.id
+
+
+def test_revision_cannot_change_space(db):
+    """Review Focus 2: a revision push naming another space is refused, not moved."""
+    from documents import service
+    from documents.errors import BadRequestError
+    cat = service.resolve_category(db, category="ART")
+    lab = _space(db, "lab")
+    d, _ = service.create_document(db, title="A", html=HTML, category=cat, space=lab)
+    with pytest.raises(BadRequestError, match="move"):
+        service.create_document(db, code=d.code, html=HTML + "<!--2-->", category=cat,
+                                space=service.general_space(db))
+    assert service.revision_count(db, d.code) == 1
+
+
+def test_identical_bytes_dedupe_is_scoped_to_category_and_space(db):
+    """A duplicate inside another space is not named (spec 5.2); same space still 409s."""
+    from documents import service
+    from documents.errors import ConflictError
+    cat = service.resolve_category(db, category="ART")
+    lab = _space(db, "lab")
+    a, _ = service.create_document(db, title="A", html=HTML, category=cat, space=lab)
+    b, created = service.create_document(db, title="B", html=HTML, category=cat)  # General
+    assert created and b.code != a.code
+    with pytest.raises(ConflictError, match=a.code):
+        service.create_document(db, title="C", html=HTML, category=cat, space=lab)
+
+
+def test_move_document_space_moves_every_revision(db):
+    from documents import service
+    cat = service.resolve_category(db, category="ART")
+    lab = _space(db, "lab")
+    d1, _ = service.create_document(db, title="A", html=HTML, category=cat)
+    service.create_document(db, code=d1.code, html=HTML + "<!--2-->", category=cat)
+    service.create_document(db, code=d1.code, html=HTML + "<!--3-->", category=cat, activate=False)
+    rows = service.move_document_space(db, d1.code, lab.id, updated_by="admin@x.t")
+    assert len(rows) == 3 and {r.space_id for r in rows} == {lab.id}
+    assert {r.updated_by for r in rows} == {"admin@x.t"}
+
+
+def test_list_filters_by_space_and_visibility(db):
+    from sqlalchemy import select
+    from documents import service
+    from documents.models import DocumentSpace
+    cat = service.resolve_category(db, category="ART")
+    lab = _space(db, "lab")
+    secret = _space(db, "leadership", "restricted")
+    service.create_document(db, title="G", html=HTML, category=cat)
+    service.create_document(db, title="L", html=HTML + "<!--l-->", category=cat, space=lab)
+    service.create_document(db, title="S", html=HTML + "<!--s-->", category=cat, space=secret)
+    rows, total = service.list_documents(db)
+    assert total == 3
+    rows, total = service.list_documents(db, space_id=lab.id)
+    assert total == 1 and rows[0][0].title == "L"
+    visible = select(DocumentSpace.id).where(DocumentSpace.visibility == "company")
+    rows, total = service.list_documents(db, visible_spaces=visible)
+    assert total == 2 and {r[0].title for r in rows} == {"G", "L"}
+    rows, total = service.list_documents(db, space_id=secret.id, visible_spaces=visible)
+    assert total == 0 and rows == []
+
+
+def test_list_includes_null_space_rows(db):
+    """Review Focus 1: a NULL space_id row is General and stays listed under a visibility filter."""
+    from sqlalchemy import select
+    from documents import service
+    from documents.models import Document, DocumentSpace
+    cat = service.resolve_category(db, category="ART")
+    d, _ = service.create_document(db, title="Old", html=HTML, category=cat)
+    db.execute(Document.__table__.update().where(Document.id == d.id).values(space_id=None))
+    db.commit()
+    visible = select(DocumentSpace.id).where(DocumentSpace.visibility == "company")
+    rows, total = service.list_documents(db, visible_spaces=visible)
+    assert total == 1 and rows[0][0].id == d.id
+
+
+def test_list_space_filter_general_includes_null_rows(db):
+    from documents import service
+    from documents.models import Document
+    cat = service.resolve_category(db, category="ART")
+    lab = _space(db, "lab")
+    d, _ = service.create_document(db, title="Old", html=HTML, category=cat)
+    db.execute(Document.__table__.update().where(Document.id == d.id).values(space_id=None))
+    db.commit()
+    rows, total = service.list_documents(db, space_id=service.general_space(db).id)
+    assert total == 1 and rows[0][0].id == d.id
+    rows, total = service.list_documents(db, space_id=lab.id)
+    assert total == 0
+
+
+def test_may_revise_refusal_reads_as_missing_and_writes_nothing(db):
+    """Important 2: the lock-time check closes the gap between the route's unlocked read
+    and the insert. A refusal is the unknown-code 404 text, and no row lands."""
+    from documents import service
+    from documents.errors import NotFoundError
+    from documents.models import Document
+    cat = service.resolve_category(db, category="ART")
+    d, _ = service.create_document(db, title="Secret", html=HTML, category=cat)
+    seen = []
+
+    def deny(doc):
+        seen.append(doc.code)
+        return False
+    with pytest.raises(NotFoundError) as e:
+        service.create_document(db, code=d.code, html=HTML + "<!--2-->", category=cat, may_revise=deny)
+    assert str(e.value) == f"document {d.code!r} not found"
+    assert seen == [d.code]
+    assert db.query(Document).count() == 1
+    # A new code never consults the callback (there is nothing to reveal).
+    service.create_document(db, title="New", html=HTML + "<!--n-->", category=cat, may_revise=deny)
+    assert seen == [d.code]
+
+
+def test_move_to_an_inactive_space_is_refused(db):
+    from documents import service
+    from documents.errors import BadRequestError
+    cat = service.resolve_category(db, category="ART")
+    old = _space(db, "old")
+    old.is_active = False
+    db.commit()
+    d, _ = service.create_document(db, title="A", html=HTML, category=cat)
+    with pytest.raises(BadRequestError) as e:
+        service.move_document_space(db, d.code, old.id, updated_by="admin@x.t")
+    assert str(e.value) == "space 'old' is inactive"
+    assert db.get(type(d), d.id).space_id == service.general_space(db).id
+
+
+def test_null_space_rows_count_and_dedupe_as_general(db):
+    """Minor 5: a NULL space_id row is General for the space count and for the
+    identical-bytes dedupe (no second code minted for the same content)."""
+    from documents import service
+    from documents.errors import ConflictError
+    from documents.models import Document
+    cat = service.resolve_category(db, category="ART")
+    d, _ = service.create_document(db, title="Old", html=HTML, category=cat)
+    service.create_document(db, title="New", html=HTML + "<!--n-->", category=cat)
+    db.execute(Document.__table__.update().where(Document.id == d.id).values(space_id=None))
+    db.commit()
+    counts = {sp.slug: n for sp, n in service.list_spaces(db)}
+    assert counts["general"] == 2
+    with pytest.raises(ConflictError, match=d.code):
+        service.create_document(db, title="Again", html=HTML, category=cat)

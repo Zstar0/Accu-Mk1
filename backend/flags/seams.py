@@ -795,14 +795,24 @@ def register_mk1_entities() -> None:
                 break
         return out
 
+    from documents.flag_entity import audience as _document_audience
+    from documents.flag_entity import can_raise as _document_can_raise
+    from documents.flag_entity import can_view as _document_can_view
+    from documents.flag_entity import search_scoped as _document_search_scoped
+    from documents.flag_entity import visible_ids as _document_visible_ids
     register_entity("document",
                     label=_document_label,
                     deep_link=lambda eid: "/#reports/documents",
-                    can_flag=lambda user, eid: True,
+                    can_flag=lambda user, eid: True,   # never consulted: can_raise wins
+                    can_raise=_document_can_raise,
+                    can_view=_document_can_view,
+                    visible_entity_ids=_document_visible_ids,
                     context=_document_context,
                     state=_document_state,
                     search=_document_search,
+                    search_scoped=_document_search_scoped,
                     snapshot=_document_snapshot,
+                    audience=_document_audience,
                     must_exist=True)
 
     # --- planning boards (2026-09-26): closures live in boards.flag_entity -----------

@@ -28,6 +28,8 @@ import { checkHtmlFile, starterHtml } from './new-document-template'
 interface NewDocumentDialogProps {
   open: boolean
   onOpenChange: (open: boolean) => void
+  /** Slug of the space being browsed; the draft is created there (server default: General). */
+  space?: string
 }
 
 type Source = 'blank' | 'file'
@@ -38,6 +40,7 @@ type Source = 'blank' | 'file'
 export function NewDocumentDialog({
   open,
   onOpenChange,
+  space,
 }: NewDocumentDialogProps) {
   const [title, setTitle] = useState('')
   const [description, setDescription] = useState('')
@@ -102,6 +105,7 @@ export function NewDocumentDialog({
         description: description.trim() || null,
         effective_date: effective || null,
         author: user ? displayName(user) : undefined,
+        ...(space ? { space } : {}),
       },
       {
         onSuccess: row => {

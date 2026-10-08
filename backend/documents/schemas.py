@@ -35,6 +35,48 @@ class CategoryUpdate(BaseModel):
     active: Optional[bool] = None
 
 
+class SpaceOut(BaseModel):
+    id: int
+    slug: str
+    name: str
+    description: Optional[str] = None
+    visibility: str
+    is_active: bool
+    sort_order: int
+    document_count: int = 0
+    can_write: bool = False
+    created_at: datetime
+    updated_at: datetime
+    model_config = ConfigDict(from_attributes=True)
+
+
+class SpaceCreate(BaseModel):
+    slug: str
+    name: str
+    description: Optional[str] = None
+    visibility: str = "company"
+    sort_order: int = 0
+
+
+class SpaceUpdate(BaseModel):
+    """Partial. No slug: immutable."""
+    model_config = ConfigDict(extra="forbid")
+    name: Optional[str] = None
+    description: Optional[str] = None
+    visibility: Optional[str] = None
+    is_active: Optional[bool] = None
+    sort_order: Optional[int] = None
+
+
+class SpaceGrantsReplace(BaseModel):
+    group_ids: List[int]
+
+
+class SpaceGrantsOut(BaseModel):
+    space_id: int
+    group_ids: List[int]
+
+
 class DocumentOut(BaseModel):
     id: int
     code: str
@@ -44,6 +86,9 @@ class DocumentOut(BaseModel):
     category_id: int
     category_name: str
     category_prefix: str
+    space_id: Optional[int] = None
+    space_slug: str = "general"
+    space_name: str = "General"
     status: str
     effective_date: Optional[date] = None
     activated_at: Optional[datetime] = None
@@ -79,6 +124,8 @@ class DocumentCreate(BaseModel):
     html: str
     category: Optional[str] = None       # code prefix or name
     category_id: Optional[int] = None
+    space: Optional[str] = None  # slug; default General
+    space_id: Optional[int] = None
     description: Optional[str] = None
     code: Optional[str] = None           # existing code => next revision
     author: Optional[str] = None
@@ -91,6 +138,7 @@ class DocumentPatch(BaseModel):
     title: Optional[str] = None
     description: Optional[str] = None
     category_id: Optional[int] = None
+    space_id: Optional[int] = None  # admin bearer only; moves every revision
     effective_date: Optional[date] = None
     updated_by: Optional[str] = None
 

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Optional
 
-from sqlalchemy import select
+from sqlalchemy import or_, select
 from sqlalchemy.orm import Session
 
 from documents import comments, labels
@@ -80,7 +80,9 @@ def export_markdown(db: Session, code: str, status: str = "open") -> str:
 
 
 def list_index(db: Session, *, status: str = "open", author_agent: Optional[str] = None,
-               code_prefix: Optional[str] = None, limit: int = 100) -> list[dict]:
+               code_prefix: Optional[str] = None, limit: int = 100, visible_spaces=None) -> list[dict]:
+    """`visible_spaces`: a Select of space ids (access.visible_space_ids); when given, comments on
+    documents outside it are left out. NULL space_id reads as General."""
     if status not in comments.STATUSES + ("all",):
         raise BadRequestError("status must be open, resolved, or all")
     stmt = select(DocumentComment).where(DocumentComment.parent_id.is_(None))
@@ -90,6 +92,9 @@ def list_index(db: Session, *, status: str = "open", author_agent: Optional[str]
         stmt = stmt.where(DocumentComment.author_agent == author_agent)
     if code_prefix:
         stmt = stmt.where(DocumentComment.code.like(f"{code_prefix.upper()}-%"))
+    if visible_spaces is not None:
+        stmt = stmt.join(Document, Document.id == DocumentComment.document_id).where(
+            or_(Document.space_id.in_(visible_spaces), Document.space_id.is_(None)))
     rows = db.execute(stmt.order_by(DocumentComment.created_at.desc(), DocumentComment.id.desc())
                       .limit(max(1, min(500, limit)))).scalars().all()
     if not rows:

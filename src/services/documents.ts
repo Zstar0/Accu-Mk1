@@ -11,19 +11,27 @@ import { toast } from 'sonner'
 import type { DocumentCreate } from '@/lib/api-documents'
 import {
   createDocumentCategory,
+  createDocumentSpace,
   createDocumentRevision,
   deleteDocumentCategory,
+  deleteDocumentSpace,
   getDocument,
   getDocumentContent,
+  getDocumentSpaceGrants,
   listDocumentCategories,
+  listDocumentSpaces,
   listDocuments,
   patchDocument,
+  replaceDocumentSpaceGrants,
   replaceDraftContent,
   updateDocumentCategory,
+  updateDocumentSpace,
   type DocumentCategoryCreate,
   type DocumentCategoryUpdate,
   type DocumentDetail,
   type DocumentPatch,
+  type DocumentSpaceCreate,
+  type DocumentSpaceUpdate,
   createDocument,
 } from '@/lib/api-documents'
 import type { DocumentListParams } from '@/components/documents/documents-utils'
@@ -41,6 +49,10 @@ export const documentKeys = {
   allCategories: ['documents', 'categories'] as const,
   categories: (activeOnly: boolean) =>
     ['documents', 'categories', activeOnly] as const,
+  allSpaces: ['documents', 'spaces'] as const,
+  spaces: (includeInactive: boolean) =>
+    ['documents', 'spaces', includeInactive] as const,
+  spaceGrants: (id: number) => ['documents', 'spaces', 'grants', id] as const,
 }
 
 export function useDocuments(params: DocumentListParams) {
@@ -79,6 +91,8 @@ export function usePatchDocument() {
     onSuccess: (_updated, { id }) => {
       qc.invalidateQueries({ queryKey: documentKeys.lists })
       qc.invalidateQueries({ queryKey: documentKeys.detail(id) })
+      // A space move changes per-space document counts.
+      qc.invalidateQueries({ queryKey: documentKeys.allSpaces })
       toast.success('Document updated')
     },
     onError: (e: Error) => toast.error(e.message),
@@ -201,6 +215,87 @@ export function useDeleteDocumentCategory() {
         toast.error(
           'Category is still referenced by documents; deactivate it instead'
         )
+        return
+      }
+      toast.error(e.message)
+    },
+  })
+}
+
+export function useDocumentSpaces(includeInactive = false) {
+  return useQuery({
+    queryKey: documentKeys.spaces(includeInactive),
+    queryFn: () => listDocumentSpaces(includeInactive),
+    staleTime: 60_000,
+  })
+}
+
+export function useDocumentSpaceGrants(id: number | null) {
+  return useQuery({
+    queryKey: documentKeys.spaceGrants(id ?? -1),
+    queryFn: () => getDocumentSpaceGrants(id as number),
+    enabled: id != null,
+  })
+}
+
+function invalidateSpaces(qc: ReturnType<typeof useQueryClient>) {
+  qc.invalidateQueries({ queryKey: documentKeys.allSpaces })
+  qc.invalidateQueries({ queryKey: documentKeys.lists })
+}
+
+export function useCreateDocumentSpace() {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: (data: DocumentSpaceCreate) => createDocumentSpace(data),
+    onSuccess: () => {
+      invalidateSpaces(qc)
+      toast.success('Space created')
+    },
+    onError: (e: Error) =>
+      toast.error(
+        /failed: 409/.test(e.message) ? 'That slug is taken' : e.message
+      ),
+  })
+}
+
+export function useUpdateDocumentSpace() {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: ({ id, data }: { id: number; data: DocumentSpaceUpdate }) =>
+      updateDocumentSpace(id, data),
+    onSuccess: () => {
+      invalidateSpaces(qc)
+      toast.success('Space updated')
+    },
+    onError: (e: Error) => toast.error(e.message),
+  })
+}
+
+export function useReplaceDocumentSpaceGrants() {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: ({ id, groupIds }: { id: number; groupIds: number[] }) =>
+      replaceDocumentSpaceGrants(id, groupIds),
+    onSuccess: (_ids, { id }) => {
+      qc.invalidateQueries({ queryKey: documentKeys.spaceGrants(id) })
+      invalidateSpaces(qc)
+      toast.success('Access saved')
+    },
+    onError: (e: Error) => toast.error(e.message),
+  })
+}
+
+export function useDeleteDocumentSpace() {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: (id: number) => deleteDocumentSpace(id),
+    onSuccess: () => {
+      invalidateSpaces(qc)
+      toast.success('Space deleted')
+    },
+    onError: (e: Error) => {
+      if (/failed: 409/.test(e.message)) {
+        toast.error('Space still holds documents; move them first')
         return
       }
       toast.error(e.message)

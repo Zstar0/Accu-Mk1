@@ -113,6 +113,26 @@ def _seed_federal_holidays_window() -> None:
         log.warning("federal_holiday_seed_skipped err=%s", e)
 
 
+def _ensure_documents_space_column(bind) -> None:
+    """documents.space_id references document_spaces, which create_all has to create
+    FIRST, so this cannot sit in the _run_migrations list (that runs before create_all).
+    Idempotent on Postgres and SQLite. A failure here raises: the ORM maps the column,
+    so a backend without it cannot serve documents at all."""
+    from sqlalchemy import inspect, text
+    cols = {c["name"] for c in inspect(bind).get_columns("documents")}
+    with bind.begin() as conn:
+        if "space_id" not in cols:
+            conn.execute(text(
+                "ALTER TABLE documents ADD COLUMN space_id INTEGER "
+                "REFERENCES document_spaces(id) ON DELETE RESTRICT"))
+        if bind.dialect.name == "postgresql":
+            conn.execute(text("CREATE INDEX IF NOT EXISTS ix_documents_space_id ON documents (space_id)"))
+        else:
+            names = {ix["name"] for ix in inspect(bind).get_indexes("documents")}
+            if "ix_documents_space_id" not in names:
+                conn.execute(text("CREATE INDEX ix_documents_space_id ON documents (space_id)"))
+
+
 def init_db():
     """Initialize database tables."""
     # Import models to register them with Base
@@ -124,11 +144,15 @@ def init_db():
     # Run column migrations before create_all so ORM mappings match the DB schema
     _run_migrations()
     Base.metadata.create_all(bind=engine)
+    # Document spaces (spec 2026-10-06 section 4.4): the FK column after the table exists.
+    _ensure_documents_space_column(engine)
     # Documents library: seed the Artifact/SOP categories (spec 2026-09-15 §3.1).
     try:
         from documents.service import seed_categories
         with SessionLocal() as _s:
             seed_categories(_s)
+            from documents.service import seed_spaces
+            seed_spaces(_s)
     except Exception as e:  # never block startup
         log.warning("documents_category_seed_skipped err=%s", e)
     # S6b: per-substance PUR_/QTY_ derivation — moved out of _run_migrations

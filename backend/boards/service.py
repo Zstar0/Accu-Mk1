@@ -159,7 +159,10 @@ def replace_grants(db: Session, user, slug: str, grants) -> list[GrantOut]:
 # --- reverse lookup ----------------------------------------------------------------
 
 def boards_for_entity(db: Session, user, entity_type: str, entity_id: str) -> list[tuple[Board, BoardNode]]:
-    rows = db.execute(select(Board, BoardNode).join(BoardNode, BoardNode.board_id == Board.id)
+    from flags import seams
+    if seams.is_view_scoped(entity_type) and not seams.can_view_entity(db, user, entity_type, entity_id):
+        return []  # a hidden entity reads as one that is on no board (node labels hold titles)
+    rows =db.execute(select(Board, BoardNode).join(BoardNode, BoardNode.board_id == Board.id)
                       .where(BoardNode.entity_type == entity_type, BoardNode.entity_id == str(entity_id),
                              Board.id.in_(access.visible_board_ids(db, user)))
                       .order_by(Board.name, BoardNode.id)).all()
@@ -173,6 +176,24 @@ def board_out(db: Session, user, board: Board, counts: Optional[dict] = None) ->
     out.node_count = (counts or node_counts(db, [board.id])).get(board.id, 0)
     out.can_edit = access.can_edit_board(db, user, board)
     return out
+
+
+def _restricted_context(entity_type: str, entity_id: str) -> dict:
+    """Spec 9.3: a node pointing at an entity the viewer cannot see keeps its code and
+    says "Restricted"; title and deep link never leave the server."""
+    return {"entity_type": entity_type, "entity_id": entity_id, "label": "Restricted",
+            "sample_id": None, "analyses": [], "lot": None, "deep_link": None}
+
+
+def _hidden_from(db: Session, user, node: BoardNode) -> bool:
+    from flags import seams
+    return (seams.is_view_scoped(node.entity_type)
+            and not seams.can_view_entity(db, user, node.entity_type, node.entity_id))
+
+
+def _mask(out: NodeOut, node: BoardNode) -> None:
+    out.label = node.entity_id
+    out.context = _restricted_context(node.entity_type, node.entity_id)
 
 
 def board_detail_payload(db: Session, user, board: Board) -> BoardDetail:
@@ -192,7 +213,10 @@ def board_detail_payload(db: Session, user, board: Board) -> BoardDetail:
     for n in nodes:
         o = NodeOut.model_validate(n)
         if n.kind == "entity":
-            o.context = ctx.get((n.entity_type, n.entity_id))
+            if n.entity_type and n.entity_id and _hidden_from(db, user, n):
+                _mask(o, n)
+            else:
+                o.context = ctx.get((n.entity_type, n.entity_id))
         detail.nodes.append(o)
     detail.edges = [EdgeOut.model_validate(e) for e in edges]
     detail.grants = list_grants(db, board)
@@ -218,7 +242,7 @@ class StaleVersionError(ConflictError):
         self.stale_ids = stale_ids or []
 
 
-def validate_node_data(db: Session, *, kind: str, data: Optional[dict], entity_type: Optional[str],
+def validate_node_data(db: Session, user, *, kind: str, data: Optional[dict], entity_type: Optional[str],
                        entity_id: Optional[str]) -> tuple[dict, Optional[str]]:
     """Returns (clean_data, label_from_registry_or_None). Raises BadRequestError."""
     from flags import seams
@@ -237,7 +261,9 @@ def validate_node_data(db: Session, *, kind: str, data: Optional[dict], entity_t
         if not seams.is_registered(entity_type):
             raise BadRequestError(f"unknown entity_type {entity_type!r}")
         ctx = seams.resolve_context(db, entity_type, str(entity_id))
-        if ctx is None:
+        # A hidden entity reads exactly like a missing one: same text, no title echoed.
+        if ctx is None or (seams.is_view_scoped(entity_type)
+                           and not seams.can_view_entity(db, user, entity_type, str(entity_id))):
             raise BadRequestError(f"{entity_type} {entity_id!r} not found")
         label = ctx.get("label")
     elif entity_type is not None or entity_id is not None:
@@ -283,17 +309,20 @@ def _editable(db: Session, user, slug: str) -> Board:
     return board
 
 
-def _node_out(db: Session, node: BoardNode) -> NodeOut:
+def _node_out(db: Session, user, node: BoardNode) -> NodeOut:
     from flags import seams
     out = NodeOut.model_validate(node)
     if node.kind == "entity" and node.entity_type and node.entity_id:
-        out.context = seams.resolve_context(db, node.entity_type, node.entity_id)
+        if _hidden_from(db, user, node):
+            _mask(out, node)
+        else:
+            out.context = seams.resolve_context(db, node.entity_type, node.entity_id)
     return out
 
 
 def create_node(db: Session, user, slug: str, body) -> NodeOut:
     board = _editable(db, user, slug)
-    clean, reg_label = validate_node_data(db, kind=body.kind, data=body.data,
+    clean, reg_label = validate_node_data(db, user, kind=body.kind, data=body.data,
                                           entity_type=body.entity_type, entity_id=body.entity_id)
     _check_parent(db, board, body.parent_id)
     uid = getattr(user, "id", None)
@@ -305,7 +334,7 @@ def create_node(db: Session, user, slug: str, body) -> NodeOut:
     db.add(node)
     db.commit()
     db.refresh(node)
-    return _node_out(db, node)
+    return _node_out(db, user, node)
 
 
 def patch_node(db: Session, user, slug: str, node_id: int, *, version: int, **fields) -> NodeOut:
@@ -314,7 +343,7 @@ def patch_node(db: Session, user, slug: str, node_id: int, *, version: int, **fi
     if node.version != version:
         raise StaleVersionError("stale version; reload the node", current=node)
     if "data" in fields and fields["data"] is not None:
-        clean, _ = validate_node_data(db, kind=node.kind, data=fields["data"],
+        clean, _ = validate_node_data(db, user, kind=node.kind, data=fields["data"],
                                       entity_type=node.entity_type, entity_id=node.entity_id)
         node.data = clean
     if "parent_id" in fields:
@@ -330,7 +359,7 @@ def patch_node(db: Session, user, slug: str, node_id: int, *, version: int, **fi
     node.updated_by = getattr(user, "id", None)
     db.commit()
     db.refresh(node)
-    return _node_out(db, node)
+    return _node_out(db, user, node)
 
 
 def patch_positions(db: Session, user, slug: str, items) -> list[NodeOut]:
@@ -356,7 +385,7 @@ def patch_positions(db: Session, user, slug: str, items) -> list[NodeOut]:
         n.version += 1
         n.updated_by = uid
     db.commit()
-    return [_node_out(db, n) for n, _ in nodes]
+    return [_node_out(db, user, n) for n, _ in nodes]
 
 
 def delete_node(db: Session, user, slug: str, node_id: int) -> None:
