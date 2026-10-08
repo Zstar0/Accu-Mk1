@@ -32,6 +32,10 @@ From a read-only probe of Plain's GraphQL API on 2026-10-08 (shapes and counts o
 - `EmailEntry` carries `textContent` plus `hasMoreTextContent` / `fullTextContent` for long emails.
 - `TimelineEntryConnection` has `pageInfo` but no `totalCount`.
 - The key can write internal notes, AI drafts and thread links. Read-only is enforced in our client.
+- Long emails are common: 4 of Kyle's 11 emails had `hasMoreTextContent: true`.
+- Website contact-form submissions arrive as `CustomEntry` (actor `MachineUserActor`, title "Contact...", one `ComponentText`). They are the customer's own words.
+- `customerByEmail` returns `null` for an unknown email (no error). A bad key gets HTTP 401. A malformed thread id gets a GraphQL validation error.
+- Entry types that share a field name with different nullability (`text` on Chat/Note/Slack/Discussion) must be aliased in one query.
 
 ## 3. Architecture
 
@@ -90,7 +94,7 @@ Test threads (`isTestThread: true`) are dropped in `threads.py`.
 {
   "id": "<timeline entry id>",
   "at": "<iso>",
-  "kind": "email" | "chat" | "slack" | "note" | "discussion" | "event",
+  "kind": "email" | "chat" | "slack" | "note" | "discussion" | "form" | "event",
   "author": "<name>" | null,
   "author_kind": "customer" | "agent" | "system",
   "internal": true | false,
@@ -103,7 +107,8 @@ Test threads (`isTestThread: true`) are dropped in `threads.py`.
 |---|---|---|
 | `EmailEntry` | email | false |
 | `ChatEntry` | chat | false |
-| `SlackMessageEntry`, `SlackReplyEntry`, `MSTeamsMessageEntry`, `DiscordMessageEntry` | slack | false |
+| `SlackMessageEntry`, `SlackReplyEntry` | slack | false |
+| `CustomEntry` (website contact form) | form, author = the thread's customer, `author_kind: customer`, subject = entry title | false |
 | `NoteEntry` | note | true |
 | `ThreadDiscussionMessageEntry` | discussion | true |
 | `ThreadStatusTransitionedEntry`, `ThreadLabelsChangedEntry`, `ThreadAssignmentTransitionedEntry`, `ThreadPriorityChangedEntry` | event | false |
@@ -129,7 +134,7 @@ Both routes use `Depends(require_admin)`. Every response key is declared on its 
 
 ### `GET /support/customers/{customer_key}`
 
-Query: `status` (comma list of open/snoozed/done, default all), `refresh` (bool), `page` (default 1), `page_size` (default 50, max 200).
+Query: `status` (repeatable: `status=open&status=snoozed`, as the CRM route's `types`; default all), `refresh` (bool), `page` (default 1), `page_size` (default 50, max 200).
 
 ```json
 {
@@ -141,17 +146,18 @@ Query: `status` (comma list of open/snoozed/done, default all), `refresh` (bool)
   "page_size": 50,
   "counts": {"open": 0, "snoozed": 1, "done": 3, "waiting": 0},
   "last_contact_at": "<iso>" | null,
+  "oldest_waiting_since": "<iso>" | null,
   "fetched_at": "<iso>",
   "stale": false,
   "refresh_throttled": false
 }
 ```
 
-`counts` covers all of the customer's threads, ignoring the `status` filter. `last_contact_at` is the newest `updated_at`.
+`counts` covers all of the customer's threads, ignoring the `status` filter. `last_contact_at` is the newest `updated_at`; `oldest_waiting_since` is the earliest non-null `waiting_since` across all threads.
 
 ### `GET /support/customers/{customer_key}/threads/{thread_id}`
 
-Query: `refresh` (bool). `thread_id` must match `^th_[A-Za-z0-9]+$` (422 otherwise). Returns 404 unless the thread's customer id is one of this customer's matched Plain ids.
+Query: `refresh` (bool). `thread_id` must match `^th_[A-Za-z0-9]+$` (422 otherwise). Returns 404 unless the thread is in this customer's (cached) thread list, which only holds threads of the customer's matched Plain ids. An unknown or foreign id never reaches Plain.
 
 ```json
 {
@@ -177,7 +183,7 @@ Query: `refresh` (bool). `thread_id` must match `^th_[A-Za-z0-9]+$` (422 otherwi
 - Read-only by construction: the client only sends query strings from `queries.py`; a test asserts no `mutation` text exists in the package.
 - `PLAIN_API_KEY` lives only in the prod `backend/.env`, loaded from the vault, never printed or logged. Request logging must not include the Authorization header or customer emails.
 - Bodies render as plain text, so customer HTML and markdown cannot inject script or load tracking pixels.
-- Thread detail is scoped to the requesting customer's matched Plain ids, so one customer's key cannot open another customer's thread.
+- Thread detail is scoped to the requesting customer's thread list, so one customer's key cannot open another customer's thread.
 - "Open in Plain" links are built by us from ids, never taken from Plain response URLs.
 
 ## 7. Errors
