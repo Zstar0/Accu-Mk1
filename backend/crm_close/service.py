@@ -8,7 +8,7 @@ from typing import Any
 
 from crm_close import match, rules, timeline
 from crm_close.cache import TTLCache
-from crm_close.client import CrmNotConfigured, CrmUnavailable, get_client
+from crm_close.client import CrmUnavailable, get_client
 
 logger = logging.getLogger(__name__)
 CACHE = TTLCache()
@@ -23,10 +23,14 @@ def _iso(monotonic_at: float) -> str:
     return datetime.fromtimestamp(time.time() - age, timezone.utc).isoformat().replace("+00:00", "Z")
 
 
-def _load(customer_key: str, emails: list[str]) -> dict[str, Any]:
+def _load(customer_key: str, emails: list[str], *, fresh: bool = False) -> dict[str, Any]:
     client = _client_factory()
-    raw_leads, _ = CACHE.get_or_load(f"m:{customer_key}", rules.MATCH_TTL,
-                                     lambda: match.find_leads(emails, client))
+    if fresh:  # refresh: re-match, and replace the cached match only once Close answered
+        raw_leads = match.find_leads(emails, client)
+        CACHE.put(f"m:{customer_key}", raw_leads)
+    else:
+        raw_leads, _ = CACHE.get_or_load(f"m:{customer_key}", rules.MATCH_TTL,
+                                         lambda: match.find_leads(emails, client))
     leads = [match.shape_lead(l) for l in raw_leads]
     names = {l["id"]: l["name"] for l in leads}
     acts: list[dict] = []
@@ -42,30 +46,27 @@ def customer_crm(customer_key: str, *, refresh: bool, types: list[str], include_
         return None
     key = f"t:{customer_key}"
     throttled = False
+    do_refresh = False
     if refresh:
-        if CACHE.allow_refresh(customer_key, rules.REFRESH_COOLDOWN):
-            stale_copy = CACHE.peek(key)
-            CACHE.drop(f"m:{customer_key}")
-            CACHE.drop(key)
-        else:
-            throttled = True
-            stale_copy = None
-    else:
-        stale_copy = None
+        do_refresh = CACHE.allow_refresh(customer_key, rules.REFRESH_COOLDOWN)
+        throttled = not do_refresh
     stale = False
     try:
         if not emails:
             data, at = {"leads": [], "items": []}, time.monotonic()
+        elif do_refresh:
+            # Load first; the cached copy is replaced only on success, so a failed refresh
+            # leaves it in place for this and later requests (spec 3.4 / 7).
+            data = _load(customer_key, emails, fresh=True)
+            at = CACHE.put(key, data)
         else:
             data, at = CACHE.get_or_load(key, rules.TIMELINE_TTL, lambda: _load(customer_key, emails))
     except CrmUnavailable:
-        fallback = stale_copy or CACHE.peek(key)
+        fallback = CACHE.peek(key)
         if fallback is None:
             raise
         data, at = fallback
         stale = True
-    except CrmNotConfigured:
-        raise
     items = data["items"]
     counts = {t: sum(1 for i in items if i["type"] == t and not i["automated"])
               for t in ("email", "call", "sms", "meeting", "note")}

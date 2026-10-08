@@ -100,8 +100,9 @@ def detail(a: dict[str, Any], thread: list[dict[str, Any]], lead_names: dict[str
     item = normalize(a, lead_names) or {}
     extra: dict[str, Any] = {}
     if item.get("type") == "email":
-        msgs = thread or [a]
-        extra["messages"] = [_email_message(m) for m in sorted(msgs, key=lambda m: _at(m) or "")]
+        by_id = {m["id"]: m for m in thread}
+        by_id[a["id"]] = a  # the clicked email is always shown, even if the thread lookup missed it
+        extra["messages"] = [_email_message(m) for m in sorted(by_id.values(), key=lambda m: _at(m) or "")]
     elif item.get("type") == "call":
         extra.update(duration=a.get("duration"), disposition=a.get("disposition"),
                      note=a.get("note") or "", recording_url=a.get("recording_url"), phone=a.get("phone"))
@@ -109,7 +110,7 @@ def detail(a: dict[str, Any], thread: list[dict[str, Any]], lead_names: dict[str
         extra.update(text=a.get("text") or "", remote_phone=a.get("remote_phone"))
     elif item.get("type") == "meeting":
         extra.update(starts_at=a.get("starts_at"), ends_at=a.get("ends_at"),
-                     attendees=[x.get("email") or x.get("name") for x in a.get("attendees") or []],
+                     attendees=[v for v in (x.get("email") or x.get("name") for x in a.get("attendees") or []) if v],
                      note=html_to_text(a.get("note")) if "<" in (a.get("note") or "") else (a.get("note") or ""))
     elif item.get("type") == "note":
         extra["note"] = a.get("note") or html_to_text(a.get("note_html"))

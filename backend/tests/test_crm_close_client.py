@@ -66,3 +66,11 @@ def test_missing_key_raises_not_configured(monkeypatch):
     monkeypatch.setenv("CLOSE_API_KEY", "  ")
     with pytest.raises(c.CrmNotConfigured):
         c.get_client()
+
+
+def test_get_client_reuses_one_client_per_key(monkeypatch):
+    monkeypatch.setenv("CLOSE_API_KEY", "k1")
+    a, b = c.get_client(), c.get_client()
+    assert a is b
+    monkeypatch.setenv("CLOSE_API_KEY", "k2")
+    assert c.get_client() is not a

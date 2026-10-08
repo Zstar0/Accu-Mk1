@@ -42,6 +42,12 @@ class TTLCache:
                 self._data[key] = (at, value)
             return value, at
 
+    def put(self, key: str, value) -> float:
+        at = self._clock()
+        with self._lock:
+            self._data[key] = (at, value)
+        return at
+
     def peek(self, key: str):
         with self._lock:
             hit = self._data.get(key)

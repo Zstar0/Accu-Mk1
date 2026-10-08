@@ -64,8 +64,15 @@ class CloseClient:
         return out[:max_items]
 
 
+_shared: dict[str, CloseClient] = {}
+
+
 def get_client() -> CloseClient:
+    """One pooled client per key for the life of the process (no per-request socket churn)."""
     key = (os.environ.get("CLOSE_API_KEY") or "").strip()
     if not key:
         raise CrmNotConfigured()
-    return CloseClient(api_key=key)
+    if key not in _shared:
+        _shared.clear()
+        _shared[key] = CloseClient(api_key=key)
+    return _shared[key]

@@ -84,3 +84,16 @@ def test_every_woocommerce_admin_notification_is_automated_but_replies_are_not()
         assert timeline.normalize(email(subject=subject), LEADS)["automated"] is True
     for subject in ("Re: [Accumark Labs]: Order #3010 has failed", "Re: Accumark Labs", "TB500 Mismatch"):
         assert timeline.normalize(email(subject=subject), LEADS)["automated"] is False
+
+
+def test_email_detail_always_includes_the_clicked_message():
+    clicked = email(id="a9", activity_at="2026-09-09T00:00:00Z", body_text="clicked")
+    other = email(id="a1", activity_at="2026-09-01T00:00:00Z", body_text="older")
+    d = timeline.detail(clicked, [other], LEADS)  # partial thread result without the clicked one
+    assert [m["id"] for m in d["messages"]] == ["a1", "a9"]
+
+
+def test_meeting_attendees_without_email_or_name_are_dropped():
+    m = {"_type": "Meeting", "id": "acti_m", "lead_id": "lead_A", "starts_at": "2026-09-05T15:00:00Z",
+         "title": "Sync", "attendees": [{"email": "a@x.example"}, {}, {"name": "Bo"}, {"email": None, "name": ""}]}
+    assert timeline.detail(m, [], LEADS)["attendees"] == ["a@x.example", "Bo"]

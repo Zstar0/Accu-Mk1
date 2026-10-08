@@ -1,10 +1,15 @@
 """Mk1 customer key -> customer emails (IS DB) -> Close leads."""
 from __future__ import annotations
 
+import re
 from typing import Any, Callable
 
 from integration_db import get_integration_db
 
+# Plain address: no quotes/spaces (it is interpolated into a Close search query).
+_EMAIL = re.compile(r"^[^\s@\"]+@[^\s@\"]+\.[^\s@\"]+$")
+_KNOWN_GUEST_SQL = ("SELECT 1 FROM wc_orders WHERE lower(billing_email) = %s "
+                    "UNION ALL SELECT 1 FROM wc_customers WHERE lower(email) = %s AND deleted_at IS NULL LIMIT 1")
 _ACCOUNT_EMAIL_SQL = "SELECT email FROM wc_customers WHERE id = %s AND deleted_at IS NULL"
 _BILLING_EMAILS_SQL = ("SELECT DISTINCT billing_email FROM wc_orders "
                        "WHERE customer_id = %s AND billing_email IS NOT NULL")
@@ -21,7 +26,14 @@ def _clean(values) -> list[str]:
 
 def customer_emails(customer_key: str, conn_factory: Callable = get_integration_db) -> list[str] | None:
     if customer_key.startswith("email:"):
-        return _clean([customer_key[6:]])
+        emails = _clean([customer_key[6:]])
+        if not emails or not _EMAIL.match(emails[0]):
+            return None
+        with conn_factory() as conn, conn.cursor() as cur:  # a guest key must be a known customer email
+            cur.execute(_KNOWN_GUEST_SQL, (emails[0], emails[0]))
+            if not cur.fetchall():
+                return None
+        return emails
     if not customer_key.startswith("wc:") or not customer_key[3:].isdigit():
         return None
     cid = int(customer_key[3:])
@@ -41,6 +53,8 @@ _LEAD_FIELDS = "id,display_name,status_label,html_url,contacts,opportunities"
 def find_leads(emails: list[str], client) -> list[dict[str, Any]]:
     seen: dict[str, dict[str, Any]] = {}
     for e in emails:
+        if not _EMAIL.match(e):
+            continue
         page = client.get("lead/", {"query": f'email_address:"{e}"', "_fields": _LEAD_FIELDS})
         for lead in page.get("data") or []:
             seen.setdefault(lead["id"], lead)

@@ -138,3 +138,12 @@ def test_detail_scoped_to_customer_leads(api):
         assert client.get("/crm/customers/wc:2/activities/acti_1?type=email").status_code == 404
     finally:
         FakeClose.get = orig
+
+
+def test_failed_refresh_keeps_the_cached_copy_for_later_requests(api):
+    client, fake = api
+    assert client.get("/crm/customers/wc:1").json()["stale"] is False
+    fake["close"] = FakeClose(fail=True)
+    assert client.get("/crm/customers/wc:1?refresh=true").json()["stale"] is True
+    later = client.get("/crm/customers/wc:1?types=note")
+    assert later.status_code == 200 and later.json()["stale"] is False  # cache entry survived

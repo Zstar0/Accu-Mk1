@@ -41,8 +41,7 @@ def test_wc_key_collects_account_and_billing_emails_lowercased_deduped():
 
 def test_unknown_wc_key_is_none_and_email_key_passes_through():
     assert match.customer_emails("wc:99", conn_factory=_conn([[], []])) is None
-    assert match.customer_emails("email:G@X.com", conn_factory=_conn([])) == ["g@x.com"]
-    assert match.customer_emails("email:", conn_factory=_conn([])) == []
+    assert match.customer_emails("email:", conn_factory=_conn([])) is None
     assert match.customer_emails("bogus", conn_factory=_conn([])) is None
 
 
@@ -112,3 +111,17 @@ def test_nested_load_of_a_different_key_does_not_deadlock():
     t.start()
     t.join(timeout=5)
     assert done == ["timeline(leads)"], "nested get_or_load deadlocked"
+
+
+def test_guest_key_must_be_a_known_email():
+    known = _conn([[(1,)]])
+    assert match.customer_emails("email:G@X.com", conn_factory=known) == ["g@x.com"]
+    assert match.customer_emails("email:nobody@x.com", conn_factory=_conn([[]])) is None
+    assert match.customer_emails('email:a"b@x.com', conn_factory=_conn([[(1,)]])) is None
+    assert match.customer_emails("email:not-an-email", conn_factory=_conn([[(1,)]])) is None
+
+
+def test_find_leads_skips_unsafe_emails():
+    close = _Close({})
+    match.find_leads(['x"@y.com', "ok@y.com"], close)
+    assert close.calls == ['email_address:"ok@y.com"']

@@ -115,6 +115,16 @@ describe('CustomerCrmTab', () => {
     )
   })
 
+  it('refresh is one-shot: later filter changes do not refresh again', async () => {
+    setup()
+    await screen.findByText('Valor')
+    await userEvent.click(screen.getByRole('button', { name: /Refresh/ }))
+    await userEvent.click(screen.getByRole('button', { name: /^Notes/ }))
+    const last = vi.mocked(crm.getCustomerCrm).mock.lastCall
+    expect(last?.[1]).toEqual(expect.objectContaining({ types: ['note'] }))
+    expect(last?.[1]?.refresh).toBeFalsy()
+  })
+
   it('opens the drill-down panel with the email body as text', async () => {
     vi.mocked(crm.getCrmActivity).mockResolvedValue({
       ...(base.items[1] as crm.CrmItem),

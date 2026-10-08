@@ -14,7 +14,7 @@ import {
   StickyNote,
   Users,
 } from 'lucide-react'
-import { useState } from 'react'
+import { useRef, useState } from 'react'
 import { cn } from '@/lib/utils'
 import { Button } from '@/components/ui/button'
 import { Switch } from '@/components/ui/switch'
@@ -73,9 +73,16 @@ export function CustomerCrmTab({ customerKey }: { customerKey: string }) {
   const [includeAutomated, setIncludeAutomated] = useState(false)
   const [pages, setPages] = useState(1)
   const [refreshNonce, setRefreshNonce] = useState(0)
+  // Refresh is one-shot: only the first fetch after a Refresh click asks for it.
+  const sentRefresh = useRef(0)
   const [open, setOpen] = useState<CrmItem | null>(null)
   const qc = useQueryClient()
   const types = type === 'all' ? [] : [type]
+  const takeRefresh = () => {
+    const due = refreshNonce > sentRefresh.current
+    sentRefresh.current = refreshNonce
+    return due
+  }
   const q = useQuery({
     queryKey: [
       'crm',
@@ -90,7 +97,7 @@ export function CustomerCrmTab({ customerKey }: { customerKey: string }) {
         types,
         includeAutomated,
         page: 1,
-        refresh: refreshNonce > 0,
+        refresh: takeRefresh(),
       }).then(async first => {
         if (pages <= 1) return first
         const rest = await Promise.all(
