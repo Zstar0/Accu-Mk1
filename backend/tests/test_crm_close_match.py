@@ -95,3 +95,20 @@ def test_cache_ttl_drop_peek_and_cooldown():
     assert cache.allow_refresh("wc:1", 10) is True and cache.allow_refresh("wc:1", 10) is False
     now[0] = 22
     assert cache.allow_refresh("wc:1", 10) is True
+
+
+def test_nested_load_of_a_different_key_does_not_deadlock():
+    """The timeline loader loads the lead match from inside its own load (service._load)."""
+    import threading
+
+    cache = TTLCache()
+    done = []
+
+    def outer():
+        inner, _ = cache.get_or_load("m:wc:1", 10, lambda: "leads")
+        return f"timeline({inner})"
+
+    t = threading.Thread(target=lambda: done.append(cache.get_or_load("t:wc:1", 10, outer)[0]), daemon=True)
+    t.start()
+    t.join(timeout=5)
+    assert done == ["timeline(leads)"], "nested get_or_load deadlocked"

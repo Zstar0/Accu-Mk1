@@ -1,4 +1,8 @@
-"""In-process TTL cache with single-flight loads (same pattern as customer_insights.sources)."""
+"""In-process TTL cache with single-flight loads per key.
+
+Locks are per key: a loader may load another key (the timeline loads the lead match), and
+loads for different customers never wait on each other.
+"""
 from __future__ import annotations
 
 import threading
@@ -14,7 +18,7 @@ class TTLCache:
         self._data: dict[str, tuple[float, Any]] = {}
         self._refresh: dict[str, float] = {}
         self._lock = threading.Lock()
-        self._load_lock = threading.Lock()
+        self._load_locks: dict[str, threading.Lock] = {}
 
     def _fresh(self, key: str, ttl: float):
         hit = self._data.get(key)
@@ -25,7 +29,9 @@ class TTLCache:
             hit = self._fresh(key, ttl)
         if hit:
             return hit[1], hit[0]
-        with self._load_lock:
+        with self._lock:
+            load_lock = self._load_locks.setdefault(key, threading.Lock())
+        with load_lock:
             with self._lock:
                 hit = self._fresh(key, ttl)
             if hit:
