@@ -774,26 +774,28 @@ describe('CustomerStatusPage — detail view', () => {
     expect(vi.mocked(getExplorerOrdersByCustomer).mock.calls[0]?.[0]).toBe(42)
   })
 
-  it('shows the CRM tab to admins only', async () => {
+  it('shows the CRM and Support tabs to admins only', async () => {
     const { useAuthStore } = await import('@/store/auth-store')
     const before = useAuthStore.getState().user
     try {
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
       useAuthStore.setState({
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
         user: { id: 1, email: 's@x', role: 'standard' } as any,
       })
       renderDetailWithCache(makeCustomer({ customer_id: 42 }))
       await screen.findByText('No orders for this customer')
       expect(screen.queryByRole('tab', { name: 'CRM' })).toBeNull()
+      expect(screen.queryByRole('tab', { name: 'Support' })).toBeNull()
       ;(await import('@testing-library/react')).cleanup()
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
       useAuthStore.setState({
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
         user: { id: 1, email: 'a@x', role: 'admin' } as any,
       })
       renderDetailWithCache(makeCustomer({ customer_id: 42 }))
       expect(
         await screen.findByRole('tab', { name: 'CRM' })
       ).toBeInTheDocument()
+      expect(screen.getByRole('tab', { name: 'Support' })).toBeInTheDocument()
     } finally {
       useAuthStore.setState({ user: before })
     }
