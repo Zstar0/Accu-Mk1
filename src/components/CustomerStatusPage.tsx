@@ -88,6 +88,7 @@ import {
 } from '@/components/customers/insights-utils'
 import { CustomerDashboard } from '@/components/customers/CustomerDashboard'
 import { CustomerCrmTab } from '@/components/customers/CustomerCrmTab'
+import { CustomerSupportTab } from '@/components/customers/CustomerSupportTab'
 import { useAuthStore } from '@/store/auth-store'
 import {
   NO_INSIGHT,
@@ -1054,12 +1055,13 @@ function CustomerDetailView() {
           Customer Orders is the default; Dashboard is the insights dossier. */}
       <Tabs
         value={
-          customerDetailTab === 'crm' && !isAdminUser
+          (customerDetailTab === 'crm' || customerDetailTab === 'support') &&
+          !isAdminUser
             ? 'orders'
             : customerDetailTab
         }
         onValueChange={v =>
-          setCustomerDetailTab(v as 'orders' | 'dashboard' | 'crm')
+          setCustomerDetailTab(v as 'orders' | 'dashboard' | 'crm' | 'support')
         }
         className="mt-4"
       >
@@ -1067,6 +1069,7 @@ function CustomerDetailView() {
           <TabsTrigger value="orders">Customer Orders</TabsTrigger>
           <TabsTrigger value="dashboard">Dashboard</TabsTrigger>
           {isAdminUser && <TabsTrigger value="crm">CRM</TabsTrigger>}
+          {isAdminUser && <TabsTrigger value="support">Support</TabsTrigger>}
         </TabsList>
         <TabsContent value="orders" className="mt-4">
           <CustomerOrdersTab
@@ -1092,6 +1095,11 @@ function CustomerDetailView() {
         {isAdminUser && (
           <TabsContent value="crm" className="mt-4">
             <CustomerCrmTab customerKey={`wc:${customerDetailTargetId}`} />
+          </TabsContent>
+        )}
+        {isAdminUser && (
+          <TabsContent value="support" className="mt-4">
+            <CustomerSupportTab customerKey={`wc:${customerDetailTargetId}`} />
           </TabsContent>
         )}
       </Tabs>
@@ -1592,10 +1600,16 @@ function GuestCustomerDetailView({ customerKey }: { customerKey: string }) {
         onOpenAnalyte={() => navigateTo('reports', 'dashboard')}
       />
       {isAdminUser && (
-        <section className="mt-4">
-          <h2 className="mb-2 text-sm font-medium">CRM</h2>
-          <CustomerCrmTab customerKey={customerKey} />
-        </section>
+        <>
+          <section className="mt-4">
+            <h2 className="mb-2 text-sm font-medium">CRM</h2>
+            <CustomerCrmTab customerKey={customerKey} />
+          </section>
+          <section className="mt-4">
+            <h2 className="mb-2 text-sm font-medium">Support</h2>
+            <CustomerSupportTab customerKey={customerKey} />
+          </section>
+        </>
       )}
     </div>
   )
