@@ -1,5 +1,14 @@
 # Changelog
 
+## v1.40.0 - 2026-10-08
+
+### AI customer review (admin)
+- **An AI review card at the top of the customer page.** Click Generate and an AI agent (Claude Sonnet 5.5) reads the customer's history across Close, Plain and Mk1 (orders, samples, SLA, retests, COA versions) and writes a review: sentiment with its trend, open issues, where we fell short, strengths, and suggested next steps.
+- Every finding links to its source: ticket chips open the Support slide-out, Close chips open the CRM slide-out, sample and order chips open the sample or order. Findings that cannot point at something the agent actually read are dropped.
+- Findings describe events and process, never individual staff.
+- The card shows live progress while the agent works (about a minute), keeps previous reviews in a history menu, and shows the lookups made and the cost of each run.
+- On demand only. Admin only. Needs `ANTHROPIC_API_KEY` in the backend env; a daily cap (`AI_REVIEW_DAILY_CAP`, default 50 runs) guards spend.
+
 ## v1.39.0 - 2026-10-08
 
 ### Customer page slide-outs
