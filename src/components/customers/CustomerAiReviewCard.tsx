@@ -1,6 +1,6 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { Loader2, Sparkles } from 'lucide-react'
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { Button } from '@/components/ui/button'
 import { cn } from '@/lib/utils'
 import { CrmError, type CrmItem } from '@/lib/api-crm'
@@ -87,10 +87,16 @@ export function CustomerAiReviewCard({ customerKey }: { customerKey: string }) {
     refetchInterval: q =>
       q.state.data?.status === 'running' || !q.state.data ? 2000 : false,
   })
-  if (running.data && running.data.status !== 'running' && runningId !== null) {
-    setActiveRunId(null)
+  const finishedRunId =
+    running.data && running.data.status !== 'running'
+      ? running.data.run_id
+      : null
+  useEffect(() => {
+    // Once per finished run: reload latest + history (activeRunId may keep pointing at the
+    // finished run; isRunning reads the run's own status, so nothing needs resetting).
+    if (finishedRunId === null) return
     void qc.invalidateQueries({ queryKey: ['ai-review', customerKey] })
-  }
+  }, [finishedRunId, customerKey, qc])
   const lastGoodId =
     viewRunId ??
     (latest?.status === 'done'
@@ -106,7 +112,10 @@ export function CustomerAiReviewCard({ customerKey }: { customerKey: string }) {
   })
   const start = useMutation({
     mutationFn: () => startReview(customerKey),
-    onSuccess: r => setActiveRunId(r.run_id),
+    onSuccess: r => {
+      setActiveRunId(r.run_id)
+      void qc.invalidateQueries({ queryKey: ['ai-review', customerKey] })
+    },
   })
 
   const openCitation = (c: ReviewCitation) => {
@@ -129,7 +138,8 @@ export function CustomerAiReviewCard({ customerKey }: { customerKey: string }) {
       </button>
     ))
 
-  const isRunning = runningId !== null && running.data?.status !== 'done'
+  const isRunning =
+    runningId !== null && (!running.data || running.data.status === 'running')
   const runView: ReviewRun | undefined = shown.data
   const review = runView?.review ?? null
   const notConfigured =

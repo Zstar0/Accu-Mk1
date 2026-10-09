@@ -146,6 +146,36 @@ describe('CustomerAiReviewCard', () => {
     expect(navigateToSample).toHaveBeenCalledWith('P-2390')
   })
 
+  it('mounting mid-run then finishing shows the review without crashing', async () => {
+    const runningRun = { ...done, status: 'running' as const, review: null }
+    vi.mocked(api.getReviews)
+      .mockResolvedValueOnce({
+        latest: runningRun,
+        history: [
+          {
+            run_id: 5,
+            status: 'running',
+            created_at: done.created_at,
+            sentiment_score: null,
+          },
+        ],
+      })
+      .mockResolvedValue({
+        latest: done,
+        history: [
+          {
+            run_id: 5,
+            status: 'done',
+            created_at: done.created_at,
+            sentiment_score: 1,
+          },
+        ],
+      })
+    vi.mocked(api.getReviewRun).mockResolvedValue(done)
+    setup()
+    expect(await screen.findByText(/Positive · steady/)).toBeInTheDocument()
+  })
+
   it('failed run keeps the last good review visible', async () => {
     vi.mocked(api.getReviews).mockResolvedValue({
       latest: {
