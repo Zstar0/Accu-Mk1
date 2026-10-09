@@ -82,11 +82,13 @@ export class CrmError extends Error {
 
 export async function crmFetch<T>(
   path: string,
-  qs: URLSearchParams
+  qs: URLSearchParams,
+  init: RequestInit = {}
 ): Promise<T> {
   const suffix = qs.toString() ? `?${qs}` : ''
   const r = await fetch(`${API_BASE_URL()}${path}${suffix}`, {
-    headers: getBearerHeaders(),
+    ...init,
+    headers: { ...getBearerHeaders(), ...(init.headers ?? {}) },
   })
   if (!r.ok) {
     let code: string | null = null
