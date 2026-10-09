@@ -1,5 +1,13 @@
 # Changelog
 
+## v1.41.0 - 2026-10-09
+
+### AI review becomes a document
+- **AI reviews are now documents.** Each review is published to the Documents library in a new "Customer reviews" space (readable by everyone for now): one document per customer, a new revision every time it is regenerated. Comments and annotations work on reviews like any other document.
+- **New AI review tab** on the customer page, after Support. It shows a summary bar (sentiment, headline, counts, cost, Generate or Regenerate with live progress, Open in Documents) and the review document itself.
+- **Easier to read:** the review opens with a one or two sentence headline, metric cards (lifetime spend and rank, spend change, on-time rate vs the lab, days since the last order), "Needs attention" cards sorted by severity, where we fell short grouped by theme, next steps as a checklist, and what is going well. Links open the Plain ticket, the Close lead, or the sample or order in Mk1.
+- **No staff names:** staff names are now removed from reviews before they are published, including citation labels.
+
 ## v1.40.0 - 2026-10-08
 
 ### AI customer review (admin)
