@@ -127,6 +127,7 @@ from priority.routes import router as priority_router
 from customer_insights.routes import router as customer_insights_router
 from crm_close.routes import router as crm_close_router
 from support_plain.routes import router as support_plain_router
+from customer_review.routes import router as customer_review_router
 from workflow.cancel_routes import router as cancel_router
 from conformance.routes import router as conformance_router
 from documents.routes import router as documents_router
@@ -404,6 +405,13 @@ async def lifespan(app: FastAPI):
     verify_identity_indexes(_db_engine)
     from flags import seams as _flag_seams
     _flag_seams.register_mk1_entities()
+    # AI review runs live in daemon threads: any row still "running" at startup is dead.
+    from customer_review.store import sweep_running as _sweep_ai_reviews
+    from database import SessionLocal as _SessionLocal
+    with _SessionLocal() as _db:
+        _swept = _sweep_ai_reviews(_db)
+    if _swept:
+        print(f"[startup] customer AI reviews marked interrupted: {_swept}")
     # Flag attachments reuse the S3 blob store used by vial photos when
     # configured (module purity: the adapter lives here, not in flags/).
     if os.environ.get("MK1_PHOTO_S3_BUCKET"):
@@ -640,6 +648,7 @@ app.include_router(priority_router)
 app.include_router(customer_insights_router)
 app.include_router(crm_close_router)
 app.include_router(support_plain_router)
+app.include_router(customer_review_router)
 app.include_router(cancel_router)
 app.include_router(conformance_router)
 app.include_router(document_comments_router)  # literal /documents/comments* paths must beat /documents/{doc_id}

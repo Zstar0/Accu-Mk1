@@ -89,6 +89,7 @@ import {
 import { CustomerDashboard } from '@/components/customers/CustomerDashboard'
 import { CustomerCrmTab } from '@/components/customers/CustomerCrmTab'
 import { CustomerSupportTab } from '@/components/customers/CustomerSupportTab'
+import { CustomerAiReviewCard } from '@/components/customers/CustomerAiReviewCard'
 import { useAuthStore } from '@/store/auth-store'
 import {
   NO_INSIGHT,
@@ -1051,6 +1052,10 @@ function CustomerDetailView() {
         </CardContent>
       </Card>
 
+      {isAdminUser && (
+        <CustomerAiReviewCard customerKey={`wc:${customerDetailTargetId}`} />
+      )}
+
       {/* Phase 30 — Task 6: Tabs wrap everything below the header card.
           Customer Orders is the default; Dashboard is the insights dossier. */}
       <Tabs
@@ -1601,6 +1606,7 @@ function GuestCustomerDetailView({ customerKey }: { customerKey: string }) {
       />
       {isAdminUser && (
         <>
+          <CustomerAiReviewCard customerKey={customerKey} />
           <section className="mt-4">
             <h2 className="mb-2 text-sm font-medium">CRM</h2>
             <CustomerCrmTab customerKey={customerKey} />
