@@ -60,3 +60,19 @@ def test_metrics_from_dossier():
     assert cards[2]["value"] == "56%" and cards[2]["note"] == "lab 58%"
     assert cards[3]["value"] == "27 days" and cards[3]["note"] == "usual gap 14 days"
     assert document.metrics(None) == []
+
+
+def test_uses_theme_v2_components_and_no_private_css():
+    html = render()
+    assert "<style" not in html, "the server-inlined theme styles the page; no private CSS"
+    for marker in ('class="eyebrow"', 'class="lede"', 'class="meta"', 'class="paths"', 'class="path-card"', 'class="where"',
+                   'class="note stop"', 'class="note ok"', 'class="check"', "<main"):
+        assert marker in html, marker
+    assert 'class="note stop"' in html and html.index('class="note stop"') < html.index("Low thing")
+
+
+
+def test_no_pills_only_guide_idioms():
+    html = render()
+    assert 'class="chip' not in html, "the guide never uses pill chips; sources are links on a .where line"
+    assert '<a href="https://app.plain.com/w/t/th_9"' in html

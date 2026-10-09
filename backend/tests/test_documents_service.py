@@ -666,8 +666,8 @@ def test_create_inlines_the_theme_once_before_the_page_css(db):
     from documents import service
     doc, _ = service.create_document(db, title="t", html=PLAIN, category=_art(db))
     out = service.read_content(doc).decode()
-    assert out.count("accumark-docs v1") == 1
-    assert out.index("accumark-docs v1") < out.index(".x{color:red}"), "page CSS must come after the theme so it wins"
+    assert out.count("accumark-docs v2") == 1
+    assert out.index("accumark-docs v2") < out.index(".x{color:red}"), "page CSS must come after the theme so it wins"
     assert "fonts.googleapis.com" in out, "fonts link added when the page has none"
     assert doc.size_bytes == len(out.encode())
 
@@ -684,7 +684,7 @@ def test_theme_is_inlined_even_without_a_head(db):
     from documents import service
     doc, _ = service.create_document(db, title="t", html="<html><body><p>x</p></body></html>", category=_art(db))
     out = service.read_content(doc).decode()
-    assert out.count("accumark-docs v1") == 1 and "<head>" in out
+    assert out.count("accumark-docs v2") == 1 and "<head>" in out
 
 
 def test_size_limit_applies_to_the_stored_bytes_after_theming(db):
@@ -939,3 +939,26 @@ def test_null_space_rows_count_and_dedupe_as_general(db):
     assert counts["general"] == 2
     with pytest.raises(ConflictError, match=d.code):
         service.create_document(db, title="Again", html=HTML, category=cat)
+
+
+
+def test_theme_v2_is_the_accuverify_design_language():
+    from documents import service
+
+    css = service.theme_css()
+    assert css.lstrip().startswith("/* accumark-docs v2")
+    for token in ("--accent:#2ABFC4", "--accent:#3FD0D5", "'Poppins'", "'Open Sans'", "'JetBrains Mono'"):
+        assert token in css, token
+    for cls in (".eyebrow", ".lede", ".meta", ".part", ".part-head", "ol.steps", ".note.warn", ".note.stop",
+                ".note.ok", ".path-card", ".split", ".opt", ".flow", "div.facts", "ul.check", ".ui.primary",
+                ".crumb", ".kpi", ".chip.crit", ".masthead", ".prose", ".doc-control", "dl.facts"):
+        assert cls in css, cls
+    assert chr(0x2014) not in css  # house style: no em dashes
+
+
+def test_fonts_link_loads_the_v2_faces():
+    from documents import service
+
+    for face in ("Poppins", "Open+Sans", "JetBrains+Mono"):
+        assert face in service.FONTS_LINK
+    assert "Archivo" not in service.FONTS_LINK
