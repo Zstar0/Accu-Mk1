@@ -1,11 +1,11 @@
-import { render, screen, within } from '@testing-library/react'
+import { render, screen } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import * as api from '@/lib/api-ai-review'
 import type { ReviewRun } from '@/lib/api-ai-review'
 import { CrmError } from '@/lib/api-crm'
-import { CustomerAiReviewCard } from './CustomerAiReviewCard'
+import { CustomerAiReviewTab } from './CustomerAiReviewTab'
 
 vi.mock('@/lib/api-ai-review', async () => {
   const actual = await vi.importActual<typeof api>('@/lib/api-ai-review')
@@ -16,20 +16,15 @@ vi.mock('@/lib/api-ai-review', async () => {
     getReviewRun: vi.fn(),
   }
 })
-const navigateToSample = vi.fn()
-vi.mock('@/store/ui-store', () => ({
-  useUIStore: (sel: (s: unknown) => unknown) =>
-    sel({ navigateToSample, navigateToOrderExplorer: vi.fn() }),
-}))
-vi.mock('./SupportThreadPanel', () => ({
-  SupportThreadPanel: ({ thread }: { thread: { ref: string } | null }) =>
-    thread ? <div role="dialog">Support panel {thread.ref}</div> : null,
-}))
-vi.mock('./CrmActivityPanel', () => ({
-  CrmActivityPanel: () => null,
+vi.mock('@/components/documents/DocumentViewer', () => ({
+  DocumentViewer: ({ id, embedded }: { id: number; embedded?: boolean }) => (
+    <div>
+      viewer {id} {String(embedded)}
+    </div>
+  ),
 }))
 
-const thread = { id: 'th_1', ref: 'T-948', title: 'COA late' }
+const cite = [{ kind: 'ticket' as const, id: 'T-948', label: 'T-948' }]
 const done: ReviewRun = {
   run_id: 5,
   customer_key: 'wc:1',
@@ -39,23 +34,29 @@ const done: ReviewRun = {
   model: 'claude-sonnet-5-5',
   steps: [],
   review: {
+    headline: 'Cooling off after the SLU delay.',
     sentiment: {
-      score: 1,
+      score: -1,
       trend: 'steady',
-      reason: 'Happy overall',
+      reason: 'r',
       citations: [],
       unsupported: true,
     },
     open_issues: [
       {
-        text: 'Retest result not sent',
-        citations: [{ kind: 'sample', id: 'P-2390', label: 'P-2390' }],
+        title: 'SLU unresulted',
+        detail: 'd',
+        severity: 'high',
+        citations: cite,
       },
     ],
     shortfalls: [
       {
-        text: 'The reply on T-948 took 3 days',
-        citations: [{ kind: 'ticket', id: 'T-948', label: 'T-948', thread }],
+        title: 'Slow reply',
+        detail: 'd',
+        severity: 'medium',
+        theme: 'communication',
+        citations: cite,
       },
     ],
     strengths: [],
@@ -68,21 +69,25 @@ const done: ReviewRun = {
   cost_usd: 0.31,
   citations_dropped: 0,
   error: null,
+  document_id: 42,
+  document_code: 'CR-0001',
+  names_scrubbed: 0,
+  document_error: null,
 }
 
 function setup() {
   const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } })
   render(
     <QueryClientProvider client={qc}>
-      <CustomerAiReviewCard customerKey="wc:1" />
+      <CustomerAiReviewTab customerKey="wc:1" />
     </QueryClientProvider>
   )
 }
 
-describe('CustomerAiReviewCard', () => {
+describe('CustomerAiReviewTab', () => {
   beforeEach(() => vi.clearAllMocks())
 
-  it('empty state offers Generate and starts a run', async () => {
+  it('empty state offers Generate and shows live progress', async () => {
     vi.mocked(api.getReviews).mockResolvedValue({ latest: null, history: [] })
     vi.mocked(api.startReview).mockResolvedValue({
       run_id: 9,
@@ -93,6 +98,7 @@ describe('CustomerAiReviewCard', () => {
       run_id: 9,
       status: 'running',
       review: null,
+      document_id: null,
       steps: [
         { at: 't', tool: 'list_tickets', label: 'Listed support tickets' },
       ],
@@ -110,46 +116,42 @@ describe('CustomerAiReviewCard', () => {
     ).toBeInTheDocument()
   })
 
-  it('done state shows sentiment, counts, sections and cost', async () => {
-    vi.mocked(api.getReviews).mockResolvedValue({
-      latest: done,
-      history: [
-        {
-          run_id: 5,
-          status: 'done',
-          created_at: done.created_at,
-          sentiment_score: 1,
-        },
-      ],
-    })
+  it('done with a document shows the summary and embeds the document', async () => {
+    vi.mocked(api.getReviews).mockResolvedValue({ latest: done, history: [] })
     setup()
-    expect(await screen.findByText(/Positive · steady/)).toBeInTheDocument()
+    expect(
+      await screen.findByText('Cooling off after the SLU delay.')
+    ).toBeInTheDocument()
+    expect(screen.getByText(/Negative · steady/)).toBeInTheDocument()
     expect(
       screen.getByText(/1 open issue · 1 where we fell short/)
-    ).toBeInTheDocument()
-    await userEvent.click(screen.getByRole('button', { name: /Show details/ }))
-    expect(
-      screen.getByText('The reply on T-948 took 3 days')
     ).toBeInTheDocument()
     expect(
       screen.getByText(/claude-sonnet-5-5 · 1 lookup · \$0\.31/)
     ).toBeInTheDocument()
-    expect(screen.getByText(/unsupported/i)).toBeInTheDocument()
+    expect(screen.getByText('viewer 42 true')).toBeInTheDocument()
+    expect(
+      screen.getByRole('link', { name: /Open in Documents/ })
+    ).toHaveAttribute('href', '#reports/documents?id=42')
   })
 
-  it('citation chips open the support panel and the sample page', async () => {
-    vi.mocked(api.getReviews).mockResolvedValue({ latest: done, history: [] })
+  it('done without a document asks for a regenerate and shows the error', async () => {
+    vi.mocked(api.getReviews).mockResolvedValue({
+      latest: {
+        ...done,
+        document_id: null,
+        document_error: 'document publish failed',
+      },
+      history: [],
+    })
     setup()
-    await userEvent.click(
-      await screen.findByRole('button', { name: /Show details/ })
-    )
-    await userEvent.click(screen.getByRole('button', { name: 'T-948' }))
-    expect(screen.getByRole('dialog')).toHaveTextContent('Support panel T-948')
-    await userEvent.click(screen.getByRole('button', { name: 'P-2390' }))
-    expect(navigateToSample).toHaveBeenCalledWith('P-2390')
+    expect(
+      await screen.findByText(/No review document yet/)
+    ).toBeInTheDocument()
+    expect(screen.getByText(/document publish failed/)).toBeInTheDocument()
   })
 
-  it('mounting mid-run then finishing shows the review without crashing', async () => {
+  it('mounting mid-run then finishing shows the review', async () => {
     const runningRun = { ...done, status: 'running' as const, review: null }
     vi.mocked(api.getReviews)
       .mockResolvedValueOnce({
@@ -170,13 +172,13 @@ describe('CustomerAiReviewCard', () => {
             run_id: 5,
             status: 'done',
             created_at: done.created_at,
-            sentiment_score: 1,
+            sentiment_score: -1,
           },
         ],
       })
     vi.mocked(api.getReviewRun).mockResolvedValue(done)
     setup()
-    expect(await screen.findByText(/Positive · steady/)).toBeInTheDocument()
+    expect(await screen.findByText(/Negative · steady/)).toBeInTheDocument()
   })
 
   it('failed run keeps the last good review visible', async () => {
@@ -199,7 +201,7 @@ describe('CustomerAiReviewCard', () => {
           run_id: 5,
           status: 'done',
           created_at: done.created_at,
-          sentiment_score: 1,
+          sentiment_score: -1,
         },
       ],
     })
@@ -208,7 +210,7 @@ describe('CustomerAiReviewCard', () => {
     expect(
       await screen.findByText(/AI service unavailable/)
     ).toBeInTheDocument()
-    expect(await screen.findByText(/Positive · steady/)).toBeInTheDocument()
+    expect(await screen.findByText('viewer 42 true')).toBeInTheDocument()
     expect(api.getReviewRun).toHaveBeenCalledWith(5)
   })
 
@@ -223,20 +225,6 @@ describe('CustomerAiReviewCard', () => {
     )
     expect(
       await screen.findByText(/AI review not configured/)
-    ).toBeInTheDocument()
-  })
-
-  it('show lookups lists the tool calls', async () => {
-    vi.mocked(api.getReviews).mockResolvedValue({ latest: done, history: [] })
-    setup()
-    await userEvent.click(
-      await screen.findByRole('button', { name: /Show details/ })
-    )
-    await userEvent.click(screen.getByRole('button', { name: /Show lookups/ }))
-    expect(
-      within(screen.getByRole('list', { name: 'Lookups' })).getByText(
-        /customer_overview/
-      )
     ).toBeInTheDocument()
   })
 })

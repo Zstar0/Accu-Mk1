@@ -12,11 +12,15 @@ export interface ReviewCitation {
 }
 
 export interface ReviewItem {
-  text: string
+  title: string
+  detail: string
+  severity?: 'high' | 'medium' | 'low'
+  theme?: string
   citations: ReviewCitation[]
 }
 
 export interface Review {
+  headline: string
   sentiment: {
     score: number
     trend: 'improving' | 'steady' | 'declining'
@@ -51,6 +55,10 @@ export interface ReviewRun {
   cost_usd: number
   citations_dropped: number
   error: string | null
+  document_id: number | null
+  document_code: string | null
+  names_scrubbed: number
+  document_error: string | null
 }
 
 export interface CustomerReviews {
