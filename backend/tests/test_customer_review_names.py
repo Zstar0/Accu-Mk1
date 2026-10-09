@@ -53,3 +53,12 @@ def test_tools_collect_staff_names(monkeypatch):
         {"id": "a2", "type": "email", "direction": "inbound", "who": "Kyle R"}])
     tools.call(c, "list_crm", {})
     assert c.memo["staff"] == {"Scott Joseph", "Lauren Smith", "Dana Lee"}
+
+
+def test_citation_labels_are_scrubbed():
+    review = {"headline": "", "sentiment": {"reason": "", "citations": [{"kind": "crm", "id": "a", "label": "Scott note"}]},
+              "open_issues": [{"title": "t", "detail": "", "citations": [{"kind": "crm", "id": "b", "label": "Scott said"}]}],
+              "shortfalls": [], "strengths": [], "next_steps": []}
+    out, n = names.scrub(review, {"Scott"})
+    assert out["sentiment"]["citations"][0]["label"] == "the team note"
+    assert out["open_issues"][0]["citations"][0]["label"] == "the team said" and n == 2

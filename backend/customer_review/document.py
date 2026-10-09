@@ -172,6 +172,21 @@ def publish(db, *, review: dict, customer_key: str, customer_name: str, author: 
                        cost_usd=cost_usd, metric_cards=metric_cards)
     doc, _created = create_document(
         db, title=f"Customer review: {customer_name}", html=html, category=category,
-        description=f"AI review · {model} · {lookups} lookups · ${cost_usd:.2f}", code=code, author=author,
-        source_session=f"ai-review-run-{run_id}", space=space)
+        description=f"AI review {_marker(customer_key)} · {model} · {lookups} lookups · ${cost_usd:.2f}",
+        code=code, author=author, source_session=f"ai-review-run-{run_id}",
+        space=None if code else space)  # a revision stays wherever an admin moved the document
     return doc.id, doc.code
+
+
+def _marker(customer_key: str) -> str:
+    return f"[{customer_key}]"
+
+
+def existing_code(db, customer_key: str) -> str | None:
+    """The customer's CR code from the documents themselves, for when the run row never recorded it."""
+    from sqlalchemy import select
+
+    from documents.models import Document
+    return db.execute(select(Document.code).where(Document.code.like(f"{CATEGORY_PREFIX}-%"),
+                                                  Document.description.contains(_marker(customer_key)))
+                      .order_by(Document.id.desc()).limit(1)).scalar_one_or_none()

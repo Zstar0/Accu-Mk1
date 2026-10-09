@@ -48,10 +48,17 @@ def scrub(review: dict[str, Any], staff: set[str]) -> tuple[dict[str, Any], int]
         count += n
         return new
 
+    def fix_cites(cites) -> None:
+        for c in cites or []:
+            if isinstance(c.get("label"), str):
+                c["label"] = fix(c["label"])
+
     out["headline"] = fix(out.get("headline", ""))
     out["sentiment"]["reason"] = fix(out["sentiment"].get("reason", ""))
+    fix_cites(out["sentiment"].get("citations"))
     for name in _SECTIONS:
         for it in out.get(name) or []:
             it["title"] = fix(it.get("title", ""))
             it["detail"] = fix(it.get("detail", ""))
+            fix_cites(it.get("citations"))
     return out, count

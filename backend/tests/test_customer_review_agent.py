@@ -114,7 +114,7 @@ def test_sentiment_without_valid_citation_is_marked_unsupported(ctx):
                                  {"sentiment": {"score": 1, "trend": "sideways", "reason": "x"}},
                                  {"sentiment": "good"}])
 def test_malformed_submission_fails(ctx, raw):
-    llm = ScriptedLLM([use("submit_review", raw)])
+    llm = ScriptedLLM([use("submit_review", raw)], [use("submit_review", raw, "u2")])  # after the one retry
     out, _ = run(llm, ctx)
     assert out.status == "failed" and out.error == "invalid review"
 
@@ -195,7 +195,7 @@ def test_v2_shape_defaults_and_headline(ctx):
 
 def test_v1_text_items_are_invalid(ctx):
     r = review(open_issues=[{"text": "old shape", "citations": [{"kind": "ticket", "id": "T-948"}]}])
-    llm = ScriptedLLM([use("list_tickets", {})], [use("submit_review", r, "u2")])
+    llm = ScriptedLLM([use("list_tickets", {})], [use("submit_review", r, "u2")], [use("submit_review", r, "u3")])
     out, _ = run(llm, ctx)
     assert out.status == "failed" and out.error == "invalid review"
 
@@ -209,3 +209,27 @@ def test_submit_schema_requires_headline_and_titles():
     assert set(item_schema["required"]) == {"title", "citations"}
     assert item_schema["properties"]["theme"]["enum"] == ["turnaround", "coa_quality", "communication", "billing", "other"]
     assert "possessive" in prompts.SYSTEM.lower()
+
+
+def test_crm_citation_label_is_neutral(ctx):
+    ctx.ledger[("crm", "acti_9")] = {"item": {"type": "note", "at": "2026-09-17T10:00:00Z", "title": "Scott said X"}}
+    r = review(strengths=[item("Good", citations=[{"kind": "crm", "id": "acti_9"}])])
+    llm = ScriptedLLM([use("list_tickets", {})], [use("submit_review", r, "u2")])
+    out, _ = run(llm, ctx)
+    assert out.review["strengths"][0]["citations"][0]["label"] == "Note Sep 17"
+
+
+def test_invalid_submission_gets_one_corrective_retry(ctx):
+    bad = review(open_issues=[{"detail": "no title", "citations": [{"kind": "ticket", "id": "T-948"}]}])
+    llm = ScriptedLLM([use("list_tickets", {})], [use("submit_review", bad, "u2")], [use("submit_review", review(), "u3")])
+    out, _ = run(llm, ctx)
+    assert out.status == "done"
+    fix_msg = llm.payloads[2]["messages"][-1]["content"][0]
+    assert fix_msg["type"] == "tool_result" and fix_msg["is_error"] is True and "title" in fix_msg["content"]
+
+
+def test_second_invalid_submission_fails(ctx):
+    bad = review(open_issues=[{"detail": "no title", "citations": [{"kind": "ticket", "id": "T-948"}]}])
+    llm = ScriptedLLM([use("list_tickets", {})], [use("submit_review", bad, "u2")], [use("submit_review", bad, "u3")])
+    out, _ = run(llm, ctx)
+    assert out.status == "failed" and out.error == "invalid review"

@@ -96,7 +96,7 @@ def test_runner_records_done_failed_and_unavailable(api, monkeypatch):
         ok, bad, down = (store.create_run(db, "wc:1", 1, "m").id for _ in range(3))
     monkeypatch.setattr(llm, "get_client", lambda: object())
     monkeypatch.setattr(routes.document, "publish", lambda db, **kw: (42, "CR-0001"))
-    monkeypatch.setattr(routes, "_dossier_for", lambda db, key: None)
+    monkeypatch.setattr(routes, "_dossier_for", lambda ctx: None)
     monkeypatch.setattr(routes.names, "staff_names", lambda db, ctx: {"Scott"})
     v2 = {"headline": "Scott was slow", "sentiment": {"score": 0, "trend": "steady", "reason": "", "citations": [],
                                                       "unsupported": True},
@@ -156,7 +156,7 @@ def test_publish_failure_keeps_the_run_done(api, monkeypatch):
     good = {"headline": "h", "sentiment": {"score": 0, "trend": "steady", "reason": "", "citations": [], "unsupported": True},
             "open_issues": [], "shortfalls": [], "strengths": [], "next_steps": []}
     monkeypatch.setattr(routes.agent, "run", lambda **kw: agent.Outcome(status="done", review=good))
-    monkeypatch.setattr(routes, "_dossier_for", lambda db, key: None)
+    monkeypatch.setattr(routes, "_dossier_for", lambda ctx: None)
 
     def boom(db, **kw):
         raise RuntimeError("documents down")
@@ -166,3 +166,25 @@ def test_publish_failure_keeps_the_run_done(api, monkeypatch):
     with Session() as db:
         row = store.get_run(db, run_id)
         assert row.status == "done" and row.document_id is None and row.document_error == "document publish failed"
+
+
+def test_scrub_failure_keeps_the_review_and_skips_publishing(api, monkeypatch):
+    _, Session, _ = api
+    with Session() as db:
+        run_id = store.create_run(db, "wc:1", 1, "m").id
+    monkeypatch.setattr(llm, "get_client", lambda: object())
+    good = {"headline": "h", "sentiment": {"score": 0, "trend": "steady", "reason": "", "citations": [], "unsupported": True},
+            "open_issues": [], "shortfalls": [], "strengths": [], "next_steps": []}
+    monkeypatch.setattr(routes.agent, "run", lambda **kw: agent.Outcome(status="done", review=good))
+
+    def boom(db, ctx):
+        raise RuntimeError("users query failed")
+
+    published = []
+    monkeypatch.setattr(routes.names, "staff_names", boom)
+    monkeypatch.setattr(routes.document, "publish", lambda db, **kw: published.append(1) or (1, "CR-0001"))
+    routes._execute(run_id, "wc:1")
+    with Session() as db:
+        row = store.get_run(db, run_id)
+        assert row.status == "done" and row.review["headline"] == "h"
+        assert row.document_error == "document publish failed" and published == []

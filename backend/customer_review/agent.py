@@ -46,9 +46,18 @@ class Outcome:
 
 def _label(kind: str, cid: str, meta: dict) -> dict:
     out = {"kind": kind, "id": cid, "label": {"order": f"Order {cid}"}.get(kind, cid)}
-    if kind == "crm":
-        out["label"] = (meta.get("item") or {}).get("title") or cid
+    if kind == "crm":  # never the item title: a note's first line is staff-written text
+        out["label"] = _crm_label(meta.get("item") or {}, cid)
     return {**out, **meta}
+
+
+def _crm_label(item: dict, cid: str) -> str:
+    kind = str(item.get("type") or "item").capitalize()
+    try:
+        dt = datetime.fromisoformat(str(item.get("at") or "")[:10])
+        return f"{kind} {dt:%b} {dt.day}"
+    except ValueError:
+        return kind if item.get("type") else cid
 
 
 def _cites(raw: Any, ledger: dict) -> tuple[list[dict], int]:
@@ -81,7 +90,7 @@ def validate(raw: dict, ledger: dict) -> tuple[dict, int]:
         kept = []
         for it in items:
             if not isinstance(it, dict) or not isinstance(it.get("title"), str) or not it["title"].strip():
-                raise InvalidReview(f"bad item in {name}")
+                raise InvalidReview(f"every item in {name} needs a non-empty title")
             cites, n = _cites(it.get("citations"), ledger)
             dropped += n
             if not cites:
@@ -124,7 +133,8 @@ def run(*, llm, ctx: tools.Ctx, on_step: Callable[[dict], None], clock: Callable
     messages: list[dict] = [{"role": "user", "content": prompts.kickoff(ctx.customer_key)}]
     specs = _specs()
     forced = False
-    for _turn in range(limits.max_tool_calls + 3):
+    retried_submit = False
+    for _turn in range(limits.max_tool_calls + 4):
         forced = len(out.tool_calls) >= limits.max_tool_calls or clock() - started >= limits.max_seconds
         payload = {"model": llm_mod.MODEL, "max_tokens": limits.max_tokens,
                    "system": [{"type": "text", "text": prompts.SYSTEM, "cache_control": _EPHEMERAL}],
@@ -150,10 +160,18 @@ def run(*, llm, ctx: tools.Ctx, on_step: Callable[[dict], None], clock: Callable
         if submit is not None:
             try:
                 out.review, out.citations_dropped = validate(submit.get("input"), ctx.ledger)
-            except InvalidReview:
-                out.status, out.error = "failed", "invalid review"
-                out.review = {"raw": submit.get("input")}
-                return out
+            except InvalidReview as e:
+                if retried_submit:
+                    out.status, out.error = "failed", "invalid review"
+                    out.review = {"raw": submit.get("input")}
+                    return out
+                retried_submit = True  # one corrective resubmit instead of losing a paid run
+                fix = [{"type": "tool_result", "tool_use_id": b.get("id"), "is_error": True,
+                        "content": (f"Invalid review: {e}. Fix it and call submit_review again."
+                                    if b is submit else "Ignored: submit_review must be called on its own.")}
+                       for b in uses]
+                messages.append({"role": "user", "content": fix})
+                continue
             out.status = "done"
             return out
         if not uses:

@@ -52,3 +52,21 @@ def test_ensure_is_idempotent(db):
     a = document.ensure_space_and_category(db)
     b = document.ensure_space_and_category(db)
     assert (a[0].id, a[1].id) == (b[0].id, b[1].id)
+
+
+def test_moved_document_still_takes_new_revisions(db):
+    from documents.models import Document
+    from documents.service import create_space
+
+    first_id, code = pub(db)
+    other = create_space(db, slug="elsewhere", name="Elsewhere")
+    db.query(Document).filter_by(code=code).update({"space_id": other.id})
+    db.commit()
+    second_id, code2 = pub(db, code=code, headline="after move")
+    assert code2 == code and db.get(Document, second_id).space_id == other.id
+
+
+def test_existing_code_is_found_when_the_run_row_lost_it(db):
+    _, code = pub(db)
+    assert document.existing_code(db, "wc:1") == code
+    assert document.existing_code(db, "wc:2") is None

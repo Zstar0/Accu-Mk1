@@ -62,9 +62,9 @@ class CustomerReviews(BaseModel):
     history: list[HistoryRow]
 
 
-def _dossier_for(db, key: str) -> dict | None:
+def _dossier_for(ctx) -> dict | None:
     try:
-        return tools._dossier(tools.Ctx(customer_key=key, db=db))
+        return tools._dossier(ctx)  # memoized on the run's ctx: no second dataset build
     except Exception as e:
         logger.warning("customer_review.dossier_failed error=%s", type(e).__name__)
         return None
@@ -96,17 +96,20 @@ def _execute(run_id: int, key: str) -> None:
         doc_fields: dict = {}
         review = outcome.review
         if outcome.status == "done" and review:
-            review, scrubbed = names.scrub(review, names.staff_names(db, ctx))
-            doc_fields["names_scrubbed"] = scrubbed
             try:
-                dossier = _dossier_for(db, key)
+                # Scrub inside the guard: a failure here must not lose the paid review, and an
+                # unscrubbed review is never published.
+                review, scrubbed = names.scrub(review, names.staff_names(db, ctx))
+                doc_fields["names_scrubbed"] = scrubbed
+                dossier = _dossier_for(ctx)
                 row = store.get_run(db, run_id)
                 doc_id, code = document.publish(
                     db, review=review, customer_key=key,
                     customer_name=((dossier or {}).get("identity") or {}).get("name") or key,
                     author=_author(db, row.created_by if row else None), run_id=run_id, model=llm.MODEL,
                     lookups=len(outcome.tool_calls), cost_usd=float(outcome.cost),
-                    metric_cards=document.metrics(dossier), code=store.document_code_for(db, key))
+                    metric_cards=document.metrics(dossier),
+                    code=store.document_code_for(db, key) or document.existing_code(db, key))
                 doc_fields.update(document_id=doc_id, document_code=code)
             except Exception as e:
                 db.rollback()
