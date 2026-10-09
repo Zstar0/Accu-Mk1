@@ -175,12 +175,19 @@ def _ledger_order(c: Ctx, number: str) -> None:
         c.ledger[("order", _bare(number))] = {"order_id": str(o.order_id)}
 
 
+def _note_staff(c: Ctx, name: Any) -> None:
+    """Names the review must not repeat (names.scrub); collected from what the tools return."""
+    if name and str(name).strip():
+        c.memo.setdefault("staff", set()).add(str(name).strip())
+
+
 # ---- tools -----------------------------------------------------------------------------------------
 
 def customer_overview(c: Ctx) -> dict:
     d = _dossier(c)
     if d is None:
         return {"note": "no paid orders on record for this customer"}
+    _note_staff(c, (d.get("identity") or {}).get("rep"))
     for number in _orders_by_number(c):
         _ledger_order(c, number)
     return {k: v for k, v in d.items() if k not in _DROP_FROM_OVERVIEW}
@@ -200,6 +207,9 @@ def read_ticket(c: Ctx, ref: str) -> dict:
         return {"error": f"{ref} is not one of this customer's tickets"}
     d = _support_detail(c.customer_key, t["id"]) or {}
     c.ledger[("ticket", ref)] = {"thread": t}
+    for e in d.get("entries", []):
+        if e.get("author_kind") == "agent":
+            _note_staff(c, e.get("author"))
     entries = [{**e, "text": _cut(e.get("text"))} for e in d.get("entries", [])]
     return {"ref": ref, "title": t["title"], "status": t["status"], "entries": entries}
 
@@ -208,6 +218,8 @@ def list_crm(c: Ctx, type: str | None = None) -> dict:
     rows = _crm_list(c.customer_key, type)
     for it in rows:
         c.ledger[("crm", it["id"])] = {"item": it}
+        if it.get("direction") == "outbound":
+            _note_staff(c, it.get("who"))
     keep = ("id", "type", "at", "direction", "title", "preview")
     return {"items": [{k: it.get(k) for k in keep} for it in rows[:MAX_ROWS]], "more": len(rows) > MAX_ROWS}
 
@@ -216,6 +228,11 @@ def read_crm_item(c: Ctx, id: str, type: str) -> dict:
     d = _crm_detail(c.customer_key, id, type)
     if d is None:
         return {"error": f"{id} is not one of this customer's CRM items"}
+    if d.get("direction") == "outbound":
+        _note_staff(c, d.get("who"))
+    for m in d.get("messages") or []:
+        if m.get("direction") == "outbound":
+            _note_staff(c, (m.get("sender") or "").split("<")[0])
     item_keys = ("id", "type", "at", "direction", "who", "title", "preview", "lead_id", "lead_name", "automated",
                  "support_thread_url")
     c.ledger[("crm", id)] = {"item": {k: d.get(k) for k in item_keys}}
