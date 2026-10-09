@@ -1,5 +1,11 @@
 # Changelog
 
+## v1.39.0 - 2026-10-08
+
+### Customer page slide-outs
+- **Resizable:** the Support and CRM side panels have a drag handle on their left edge. Drag to widen or narrow (400 px up to 90% of the window); the width is remembered in your browser for both panels. Double-click the handle to reset; arrow keys nudge it.
+- **Newest first:** a Support conversation now opens with the newest message on top. The Newest first / Oldest first button flips it, and your choice is remembered.
+
 ## v1.38.0 - 2026-10-08
 
 ### Customer Support tab (admin)

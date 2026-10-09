@@ -1,13 +1,14 @@
 import { useQuery } from '@tanstack/react-query'
-import { Loader2 } from 'lucide-react'
+import { ArrowDownUp, Loader2 } from 'lucide-react'
+import { useState } from 'react'
 import { cn } from '@/lib/utils'
 import {
   Sheet,
-  SheetContent,
   SheetDescription,
   SheetHeader,
   SheetTitle,
 } from '@/components/ui/sheet'
+import { ResizableSheetContent } from './ResizableSheetContent'
 import { getSupportThread, type SupportThread } from '@/lib/api-support'
 
 const when = (iso: string | null | undefined) =>
@@ -17,6 +18,17 @@ const when = (iso: string | null | undefined) =>
         timeStyle: 'short',
       })
     : ''
+
+const ORDER_KEY = 'mk1.supportConversationOrder'
+type Order = 'newest' | 'oldest'
+
+function readOrder(): Order {
+  try {
+    return localStorage.getItem(ORDER_KEY) === 'oldest' ? 'oldest' : 'newest'
+  } catch {
+    return 'newest'
+  }
+}
 
 /** Full Plain conversation. Bodies are plain text (whitespace-pre-wrap), never HTML. */
 export function SupportThreadPanel({
@@ -38,9 +50,24 @@ export function SupportThreadPanel({
     staleTime: 300_000,
   })
   const d = q.data
+  const [order, setOrder] = useState<Order>(readOrder)
+  const toggleOrder = () => {
+    const next = order === 'newest' ? 'oldest' : 'newest'
+    setOrder(next)
+    try {
+      localStorage.setItem(ORDER_KEY, next)
+    } catch {
+      // storage blocked: choice just won't persist
+    }
+  }
+  const entries = d
+    ? order === 'newest'
+      ? [...d.entries].reverse()
+      : d.entries
+    : []
   return (
     <Sheet open={thread !== null} onOpenChange={o => !o && onClose()}>
-      <SheetContent className="w-full overflow-y-auto sm:max-w-xl">
+      <ResizableSheetContent className="overflow-y-auto">
         <SheetHeader>
           <SheetTitle>
             {thread?.ref} · {thread?.title}
@@ -75,8 +102,20 @@ export function SupportThreadPanel({
           </p>
         )}
         {d && (
-          <div className="mt-4 flex flex-col gap-3 px-4 text-sm">
-            {d.entries.map(e =>
+          <div className="px-4">
+            <button
+              type="button"
+              onClick={toggleOrder}
+              className="inline-flex items-center gap-1 rounded-md border px-2 py-1 text-xs text-muted-foreground hover:bg-accent"
+            >
+              <ArrowDownUp className="h-3 w-3" />
+              {order === 'newest' ? 'Newest first' : 'Oldest first'}
+            </button>
+          </div>
+        )}
+        {d && (
+          <div className="flex flex flex-col gap-3 px-4 text-sm">
+            {entries.map(e =>
               e.kind === 'event' ? (
                 <div
                   key={e.id}
@@ -116,7 +155,7 @@ export function SupportThreadPanel({
             )}
           </div>
         )}
-      </SheetContent>
+      </ResizableSheetContent>
     </Sheet>
   )
 }

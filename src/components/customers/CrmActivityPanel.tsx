@@ -2,11 +2,11 @@ import { useQuery } from '@tanstack/react-query'
 import { Loader2 } from 'lucide-react'
 import {
   Sheet,
-  SheetContent,
   SheetDescription,
   SheetHeader,
   SheetTitle,
 } from '@/components/ui/sheet'
+import { ResizableSheetContent } from './ResizableSheetContent'
 import { getCrmActivity, type CrmItem } from '@/lib/api-crm'
 
 const when = (iso: string | null | undefined) =>
@@ -39,7 +39,7 @@ export function CrmActivityPanel({
   const d = q.data
   return (
     <Sheet open={item !== null} onOpenChange={o => !o && onClose()}>
-      <SheetContent className="w-full overflow-y-auto sm:max-w-xl">
+      <ResizableSheetContent className="overflow-y-auto">
         <SheetHeader>
           <SheetTitle>{item?.title}</SheetTitle>
           <SheetDescription>
@@ -120,7 +120,7 @@ export function CrmActivityPanel({
               ))}
           </div>
         )}
-      </SheetContent>
+      </ResizableSheetContent>
     </Sheet>
   )
 }
