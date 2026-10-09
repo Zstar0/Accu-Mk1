@@ -27,7 +27,7 @@ def test_active_run_returns_the_live_run(db_session):
 
 def test_stale_running_row_is_interrupted_and_closed(db_session):
     row = store.create_run(db_session, "wc:1", 7, "m")
-    row.created_at = datetime.now(timezone.utc) - timedelta(minutes=6)
+    row.created_at = datetime.now(timezone.utc) - timedelta(minutes=11)
     db_session.commit()
     assert store.status_of(row) == "interrupted"
     assert store.active_run(db_session, "wc:1") is None
@@ -59,3 +59,20 @@ def test_finished_rows_are_never_reopened(db_session):
     store.finish(db_session, row.id, status="done", tool_calls=[], input_tokens=0, output_tokens=0, cost_usd=0)
     assert store.get_run(db_session, row.id).status == "failed"
     assert isinstance(db_session.get(CustomerAiReview, row.id).steps, list)
+
+
+def test_a_six_minute_run_is_still_running(db_session):
+    row = store.create_run(db_session, "wc:1", 7, "m")
+    row.created_at = datetime.now(timezone.utc) - timedelta(minutes=6)
+    db_session.commit()
+    assert store.status_of(row) == "running"
+    assert store.active_run(db_session, "wc:1").id == row.id
+
+
+def test_startup_sweep_closes_every_running_row(db_session):
+    a = store.create_run(db_session, "wc:1", 7, "m")
+    b = store.create_run(db_session, "wc:2", 7, "m")
+    store.finish(db_session, b.id, status="done", tool_calls=[], input_tokens=0, output_tokens=0, cost_usd=0)
+    assert store.sweep_running(db_session) == 1
+    assert store.get_run(db_session, a.id).error == "interrupted"
+    assert store.get_run(db_session, b.id).status == "done"

@@ -9,6 +9,7 @@ from sqlalchemy.pool import StaticPool
 
 from auth import get_current_user
 from customer_review import agent, llm, routes, store
+from customer_review.llm import cost_usd
 from database import Base, get_db
 
 
@@ -100,7 +101,8 @@ def test_runner_records_done_failed_and_unavailable(api, monkeypatch):
             raise llm_mod_unavailable
         return agent.Outcome(status=fake_run.mode, review={"x": 1} if fake_run.mode == "done" else None,
                              error=None if fake_run.mode == "done" else "no review produced",
-                             tool_calls=[{"tool": "list_tickets"}], input_tokens=1000, output_tokens=100)
+                             tool_calls=[{"tool": "list_tickets"}], input_tokens=1000, output_tokens=100,
+                             cost=cost_usd(1000, 100))
 
     llm_mod_unavailable = llm.ReviewUnavailable("http_529")
     monkeypatch.setattr(routes.agent, "run", fake_run)
@@ -112,3 +114,26 @@ def test_runner_records_done_failed_and_unavailable(api, monkeypatch):
         assert a.status == "done" and float(a.cost_usd) == 0.003 and a.steps[0]["tool"] == "list_tickets"
         assert b.status == "failed" and b.error == "no review produced"
         assert c.status == "failed" and c.error == "AI service unavailable"
+
+
+def test_runner_finishes_on_a_fresh_session(api, monkeypatch):
+    _, Session, _ = api
+    with Session() as db:
+        run_id = store.create_run(db, "wc:1", 1, "m").id
+    opened = []
+
+    def factory():
+        opened.append(1)
+        return Session()
+
+    monkeypatch.setattr(routes, "_session_factory", factory)
+    monkeypatch.setattr(llm, "get_client", lambda: object())
+
+    def crash(**kw):
+        raise RuntimeError("db went away")
+
+    monkeypatch.setattr(routes.agent, "run", crash)
+    routes._execute(run_id, "wc:1")
+    assert len(opened) == 2
+    with Session() as db:
+        assert store.get_run(db, run_id).error == "internal error"

@@ -58,24 +58,33 @@ class CustomerReviews(BaseModel):
     history: list[HistoryRow]
 
 
+def _finish(run_id: int, **fields) -> None:
+    """Finish on a fresh session: the run's own session may hold an aborted transaction."""
+    db = _session_factory()
+    try:
+        store.finish(db, run_id, **fields)
+    finally:
+        db.close()
+
+
 def _execute(run_id: int, key: str) -> None:
     """Runs one review in its own DB session; every exit path finishes the row."""
     db = _session_factory()
     try:
         outcome = agent.run(llm=llm.get_client(), ctx=tools.Ctx(customer_key=key, db=db),
                             on_step=lambda step: store.add_step(db, run_id, step))
-        store.finish(db, run_id, status=outcome.status, review=outcome.review, tool_calls=outcome.tool_calls,
-                     input_tokens=outcome.input_tokens, output_tokens=outcome.output_tokens,
-                     cost_usd=llm.cost_usd(outcome.input_tokens, outcome.output_tokens),
-                     citations_dropped=outcome.citations_dropped, error=outcome.error)
+        db.close()
+        _finish(run_id, status=outcome.status, review=outcome.review, tool_calls=outcome.tool_calls,
+                input_tokens=outcome.input_tokens, output_tokens=outcome.output_tokens, cost_usd=outcome.cost,
+                citations_dropped=outcome.citations_dropped, error=outcome.error)
     except (llm.ReviewUnavailable, llm.ReviewNotConfigured) as e:
         logger.warning("customer_review.run_failed run=%s error=%s", run_id, type(e).__name__)
-        store.finish(db, run_id, status="failed", tool_calls=[], input_tokens=0, output_tokens=0, cost_usd=0,
-                     error="AI service unavailable")
+        _finish(run_id, status="failed", tool_calls=[], input_tokens=0, output_tokens=0, cost_usd=0,
+                error="AI service unavailable")
     except Exception as e:
         logger.exception("customer_review.run_crashed run=%s error=%s", run_id, type(e).__name__)
-        store.finish(db, run_id, status="failed", tool_calls=[], input_tokens=0, output_tokens=0, cost_usd=0,
-                     error="internal error")
+        _finish(run_id, status="failed", tool_calls=[], input_tokens=0, output_tokens=0, cost_usd=0,
+                error="internal error")
     finally:
         db.close()
 

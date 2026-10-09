@@ -101,3 +101,32 @@ def test_every_tool_has_a_schema_and_no_customer_argument():
     for name, t in tools.TOOLS.items():
         assert t.schema["type"] == "object"
         assert not any("customer" in p for p in t.schema.get("properties", {})), name
+
+
+def test_a_failing_tool_rolls_back_the_session(ctx, monkeypatch):
+    rolled = []
+    ctx.db = SimpleNamespace(rollback=lambda: rolled.append(1))
+
+    def boom(key):
+        raise RuntimeError("statement timeout")
+
+    monkeypatch.setattr(tools, "_support_list", boom)
+    assert "error" in tools.call(ctx, "list_tickets", {})
+    assert rolled == [1]
+
+
+def test_sample_flags_match_the_human_sample_id(db_session):
+    from flags.models import FlagFlag
+
+    FlagFlag.__table__.create(db_session.get_bind(), checkfirst=True)  # fixture ran create_all before this import
+    db_session.add_all([
+        FlagFlag(entity_type="sample", entity_id="P-2390", kind="issue", type="blocker", status="open",
+                 title="On hold", created_by=1),
+        FlagFlag(entity_type="sample", entity_id="77", kind="issue", type="blocker", status="open",
+                 title="Legacy pk flag", created_by=1),
+        FlagFlag(entity_type="sample", entity_id="P-1", kind="issue", type="blocker", status="open",
+                 title="Other sample", created_by=1),
+    ])
+    db_session.commit()
+    titles = sorted(f["title"] for f in tools._flags_for(db_session, "P-2390", 77))
+    assert titles == ["Legacy pk flag", "On hold"]

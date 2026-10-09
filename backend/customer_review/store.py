@@ -9,7 +9,9 @@ from sqlalchemy.orm import Session
 
 from models import CustomerAiReview
 
-INTERRUPTED_AFTER = timedelta(minutes=5)
+# Well above the worst-case run (2 LLM retries x 60 s + forced turn + cold data sources);
+# a restart is caught at startup by sweep_running instead.
+INTERRUPTED_AFTER = timedelta(minutes=10)
 
 
 def _now() -> datetime:
@@ -57,6 +59,15 @@ def active_run(db: Session, key: str) -> CustomerAiReview | None:
             live = row
     db.commit()
     return live
+
+
+def sweep_running(db: Session) -> int:
+    """At backend startup every running row belongs to a dead process (single worker)."""
+    rows = db.execute(select(CustomerAiReview).where(CustomerAiReview.status == "running")).scalars().all()
+    for row in rows:
+        row.status, row.error, row.finished_at = "failed", "interrupted", _now()
+    db.commit()
+    return len(rows)
 
 
 def recent(db: Session, key: str, limit: int = 20) -> list[CustomerAiReview]:

@@ -13,6 +13,8 @@ API_URL = "https://api.anthropic.com/v1/messages"
 MODEL = "claude-sonnet-5-5"
 PRICE_IN = Decimal("2")    # USD per million input tokens (October 2026)
 PRICE_OUT = Decimal("10")  # USD per million output tokens
+PRICE_CACHE_WRITE = Decimal("2.5")  # 1.25x input
+PRICE_CACHE_READ = Decimal("0.2")
 logger = logging.getLogger(__name__)
 
 
@@ -68,8 +70,9 @@ class AnthropicClient:
         raise ReviewUnavailable("unreachable")
 
 
-def cost_usd(input_tokens: int, output_tokens: int) -> Decimal:
-    raw = (Decimal(input_tokens) * PRICE_IN + Decimal(output_tokens) * PRICE_OUT) / Decimal(1_000_000)
+def cost_usd(input_tokens: int, output_tokens: int, cache_write: int = 0, cache_read: int = 0) -> Decimal:
+    raw = (Decimal(input_tokens) * PRICE_IN + Decimal(output_tokens) * PRICE_OUT
+           + Decimal(cache_write) * PRICE_CACHE_WRITE + Decimal(cache_read) * PRICE_CACHE_READ) / Decimal(1_000_000)
     return raw.quantize(Decimal("0.0001"))
 
 

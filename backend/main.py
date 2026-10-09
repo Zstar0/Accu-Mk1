@@ -405,6 +405,13 @@ async def lifespan(app: FastAPI):
     verify_identity_indexes(_db_engine)
     from flags import seams as _flag_seams
     _flag_seams.register_mk1_entities()
+    # AI review runs live in daemon threads: any row still "running" at startup is dead.
+    from customer_review.store import sweep_running as _sweep_ai_reviews
+    from database import SessionLocal as _SessionLocal
+    with _SessionLocal() as _db:
+        _swept = _sweep_ai_reviews(_db)
+    if _swept:
+        print(f"[startup] customer AI reviews marked interrupted: {_swept}")
     # Flag attachments reuse the S3 blob store used by vial photos when
     # configured (module purity: the adapter lives here, not in flags/).
     if os.environ.get("MK1_PHOTO_S3_BUCKET"):

@@ -130,11 +130,41 @@ def test_tool_errors_go_back_to_the_model(ctx):
     assert result["type"] == "tool_result" and "not this customer's ticket" in result["content"]
 
 
-def test_anthropic_failure_propagates(ctx):
+def test_anthropic_failure_mid_run_keeps_spend_and_lookups(ctx):
     from customer_review.llm import ReviewUnavailable
 
-    with pytest.raises(ReviewUnavailable):
-        run(ScriptedLLM(ReviewUnavailable("http_529")), ctx)
+    out, _ = run(ScriptedLLM([use("list_tickets", {})], ReviewUnavailable("http_529")), ctx)
+    assert out.status == "failed" and out.error == "AI service unavailable"
+    assert out.input_tokens == 100 and len(out.tool_calls) == 1 and out.cost > 0
+
+
+def test_prompt_caching_breakpoints(ctx):
+    llm = ScriptedLLM([use("list_tickets", {})], [use("submit_review", review(), "u2")])
+    run(llm, ctx)
+    p0, p1 = llm.payloads
+    assert p0["system"][0]["cache_control"] == {"type": "ephemeral"}
+    assert p0["tools"][-1]["cache_control"] == {"type": "ephemeral"}
+    assert p1["messages"][-1]["content"][-1]["cache_control"] == {"type": "ephemeral"}
+    marks = sum(1 for m in p1["messages"] if isinstance(m["content"], list)
+                for b in m["content"] if isinstance(b, dict) and "cache_control" in b)
+    assert marks == 1  # only the newest message carries a breakpoint (API max is 4 in total)
+
+
+def test_parallel_tool_calls_past_the_limit_are_refused(ctx):
+    three = [use("list_tickets", {}, "a"), use("list_tickets", {}, "b"), use("list_tickets", {}, "c")]
+    llm = ScriptedLLM(three, [use("submit_review", review(), "u2")])
+    out, _ = run(llm, ctx, limits=agent.Limits(max_tool_calls=2))
+    assert len(out.tool_calls) == 2
+    results = llm.payloads[1]["messages"][-1]["content"]
+    assert [r["tool_use_id"] for r in results] == ["a", "b", "c"] and "limit" in results[2]["content"]
+
+
+def test_cost_counts_cache_reads_and_writes():
+    from decimal import Decimal
+
+    from customer_review import llm
+
+    assert llm.cost_usd(0, 0, cache_write=1_000_000, cache_read=1_000_000) == Decimal("2.7000")
 
 
 def test_system_prompt_rules():

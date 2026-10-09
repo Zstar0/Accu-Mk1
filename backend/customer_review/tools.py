@@ -127,16 +127,20 @@ def _sample_activity(c: Ctx, sample_id: str) -> list[dict]:
 
 
 def _sample_notes(c: Ctx, sample_id: str) -> dict:
-    from flags.models import FlagFlag
     from models import LimsSample
     from sub_samples.registry_details import native_sample_remarks
     s = c.db.execute(select(LimsSample).where(LimsSample.sample_id == sample_id)).scalars().first()
-    flags = []
-    if s is not None:
-        flags = [{"title": f.title, "type": f.type, "status": f.status} for f in c.db.execute(
-            select(FlagFlag).where(FlagFlag.entity_type == "sample", FlagFlag.entity_id == str(s.id))).scalars()]
+    flags = _flags_for(c.db, sample_id, s.id) if s is not None else []
     return {"remarks": [_cut(r.content) for r in native_sample_remarks(c.db, sample_id)],
             "customer_remarks": _cut(getattr(s, "customer_remarks", None)) or None, "flags": flags}
+
+
+def _flags_for(db, sample_id: str, pk: int) -> list[dict]:
+    """Sample flags are keyed by the human id (P-2390) in the UI; some older rows use the pk."""
+    from flags.models import FlagFlag
+    rows = db.execute(select(FlagFlag).where(FlagFlag.entity_type == "sample",
+                                             FlagFlag.entity_id.in_([sample_id, str(pk)]))).scalars()
+    return [{"title": f.title, "type": f.type, "status": f.status} for f in rows]
 
 
 def _coa_rows(order_id: str) -> list[dict]:
@@ -306,4 +310,10 @@ def call(c: Ctx, name: str, args: dict) -> dict:
         return {"error": f"bad arguments for {name}"}
     except Exception as e:  # a data source failing is information for the model, not a crashed run
         logger.warning("customer_review.tool_failed tool=%s error=%s", name, type(e).__name__)
+        rollback = getattr(c.db, "rollback", None)
+        if rollback is not None:  # a failed statement must not poison the run's session
+            try:
+                rollback()
+            except Exception:
+                logger.warning("customer_review.rollback_failed tool=%s", name)
         return {"error": f"{name} failed ({type(e).__name__})"}

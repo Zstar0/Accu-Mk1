@@ -1,9 +1,11 @@
 """The review agent loop (spec 3.1): tools, limits, forced submit, citation validation."""
 from __future__ import annotations
 
+import copy
 import time
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
+from decimal import Decimal
 from typing import Any, Callable
 
 from customer_review import llm as llm_mod
@@ -35,6 +37,7 @@ class Outcome:
     input_tokens: int = 0
     output_tokens: int = 0
     citations_dropped: int = 0
+    cost: Decimal = Decimal("0")
 
 
 def _label(kind: str, cid: str, meta: dict) -> dict:
@@ -81,9 +84,24 @@ def validate(raw: dict, ledger: dict) -> tuple[dict, int]:
     return out, dropped
 
 
+_EPHEMERAL = {"type": "ephemeral"}
+
+
 def _specs() -> list[dict]:
     specs = [{"name": n, "description": t.description, "input_schema": t.schema} for n, t in tools.TOOLS.items()]
-    return [*specs, prompts.SUBMIT_TOOL]
+    return [*specs, {**prompts.SUBMIT_TOOL, "cache_control": _EPHEMERAL}]  # breakpoint: tools + system
+
+
+def _cached(messages: list[dict]) -> list[dict]:
+    """Copy with one cache breakpoint on the newest message, so each turn re-reads history at the cache rate."""
+    out = list(messages)
+    last = copy.copy(out[-1])
+    content = last["content"]
+    blocks = [{"type": "text", "text": content}] if isinstance(content, str) else list(content)
+    blocks[-1] = {**blocks[-1], "cache_control": _EPHEMERAL}
+    last["content"] = blocks
+    out[-1] = last
+    return out
 
 
 def run(*, llm, ctx: tools.Ctx, on_step: Callable[[dict], None], clock: Callable[[], float] = time.monotonic,
@@ -95,14 +113,23 @@ def run(*, llm, ctx: tools.Ctx, on_step: Callable[[dict], None], clock: Callable
     forced = False
     for _turn in range(limits.max_tool_calls + 3):
         forced = len(out.tool_calls) >= limits.max_tool_calls or clock() - started >= limits.max_seconds
-        payload = {"model": llm_mod.MODEL, "max_tokens": limits.max_tokens, "system": prompts.SYSTEM,
-                   "tools": specs, "messages": messages}
+        payload = {"model": llm_mod.MODEL, "max_tokens": limits.max_tokens,
+                   "system": [{"type": "text", "text": prompts.SYSTEM, "cache_control": _EPHEMERAL}],
+                   "tools": specs, "messages": _cached(messages)}
         if forced:
             payload["tool_choice"] = {"type": "tool", "name": "submit_review"}
-        resp = llm.create(payload)
+        try:
+            resp = llm.create(payload)
+        except llm_mod.ReviewUnavailable:
+            out.status, out.error = "failed", "AI service unavailable"  # keep spend + lookups so far
+            return out
         usage = resp.get("usage") or {}
-        out.input_tokens += int(usage.get("input_tokens") or 0)
-        out.output_tokens += int(usage.get("output_tokens") or 0)
+        fresh, written, read = (int(usage.get(k) or 0) for k in
+                                ("input_tokens", "cache_creation_input_tokens", "cache_read_input_tokens"))
+        produced = int(usage.get("output_tokens") or 0)
+        out.input_tokens += fresh + written + read
+        out.output_tokens += produced
+        out.cost += llm_mod.cost_usd(fresh, produced, cache_write=written, cache_read=read)
         content = resp.get("content") or []
         messages.append({"role": "assistant", "content": content})
         uses = [b for b in content if isinstance(b, dict) and b.get("type") == "tool_use"]
@@ -124,6 +151,10 @@ def run(*, llm, ctx: tools.Ctx, on_step: Callable[[dict], None], clock: Callable
         results = []
         for b in uses:
             name, args = b.get("name"), b.get("input") or {}
+            if len(out.tool_calls) >= limits.max_tool_calls:  # parallel calls past the budget
+                results.append({"type": "tool_result", "tool_use_id": b.get("id"),
+                                "content": tools.capped_json({"error": "tool call limit reached; call submit_review"})})
+                continue
             result = tools.call(ctx, name, args)
             t = tools.TOOLS.get(name)
             label = t.label(args) if t else f"Unknown tool {name}"
