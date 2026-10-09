@@ -41,11 +41,11 @@ New backend package `backend/customer_review/`. One new table. No IS or WordPres
 
 | Unit | Purpose |
 |---|---|
-| `llm.py` | Thin Anthropic Messages client over `httpx`: `POST https://api.anthropic.com/v1/messages`, headers `x-api-key`, `anthropic-version: 2023-06-01`. 60 s timeout; one retry on 429 (honouring `retry-after`, capped at 10 s) and 5xx/529. Raises `ReviewNotConfigured` (no key) and `ReviewUnavailable`. One pooled client per key. |
+| `llm.py` | Thin Anthropic Messages client over `httpx`: `POST https://api.anthropic.com/v1/messages`, headers `x-api-key`, `anthropic-version: 2023-06-01`, plus `anthropic-workspace-id` when `ANTHROPIC_WORKSPACE_ID` is set (an organization key that is not scoped to a workspace requires it). 60 s timeout; one retry on 429 (honouring `retry-after`, capped at 10 s) and 5xx/529. Raises `ReviewNotConfigured` (no key) and `ReviewUnavailable`. One pooled client per key. |
 | `tools.py` | The read-only tools (section 3.2). Each is a function `(ctx, **args) -> dict` plus its JSON schema. `ctx` carries the fixed customer key and the run's ledger of fetched ids. |
 | `agent.py` | The loop: system prompt, tool dispatch, limits, forced submit, citation validation. Pure orchestration; the model client and tools are injected (test seams). |
 | `store.py` | `customer_ai_reviews` reads/writes; daily cap; one active run per customer; interrupted-run detection. |
-| `routes.py` | Three admin-only routes (section 4). |
+| `routes.py` | Three admin-only routes (section 4) and the background runner that executes a run in its own DB session. |
 | `prompts.py` | The system prompt and the submit schema text, in one place for tuning. |
 
 Runs execute in a background thread started by the POST route; the route returns the run id at once.
@@ -72,7 +72,7 @@ The customer key is fixed by the server for the run; no tool takes a customer ar
 | `read_crm_item` | `id`, `type` | the item detail (email thread messages, call note, note text), text capped at 4000 chars | `crm_close.service.activity_detail` |
 | `list_samples` | `since?` (ISO date, default 12 months back) | samples: sample_id, order, tests, status, received, published, is_retest, sla: late, missed_by_business_hours | `lims_samples` by order-number variants + `sla_sample_records` |
 | `sample_history` | `sample_id` | the sample timeline (retests with reason, COA events, status changes), internal remarks, customer remarks, open flags | `/samples/{id}/activity` builder, `lims_sample_remarks`, `flag_flags` |
-| `coa_versions` | `order_number` | COA generations: number, primary/additional, status, published_at, superseded_at | `fetch_coa_generations_for_order` |
+| `coa_versions` | `order_number` | COA generations: sample, number, status, published_at, superseded_at (the existing query carries no primary/additional marker) | `fetch_coa_generations_for_order` |
 
 - Tool output is plain JSON with plain text; HTML never reaches the model.
 - Names of staff in tool output are left as they are (the model needs context to read a thread); the no-names rule is enforced on the output (section 3.4).
