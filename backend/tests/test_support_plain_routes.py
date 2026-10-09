@@ -84,7 +84,14 @@ def test_list_dedupes_sorts_counts_and_declares_every_key(api):
     assert body["last_contact_at"] == "2026-09-03T00:00:00.000Z"
     assert body["oldest_waiting_since"] == "2026-09-03T00:00:00.000Z"
     assert set(body["threads"][0]) == {"id", "ref", "title", "status", "priority", "labels", "assignee", "created_at",
-                                       "updated_at", "preview", "waiting_since", "plain_url"}
+                                       "updated_at", "preview", "waiting_since", "plain_url",
+                                       "assignee_id", "customer_plain_id", "label_refs"}
+
+
+def test_list_declares_new_thread_keys(api):
+    client, _ = api
+    t = client.get("/support/customers/wc:1").json()["threads"][0]
+    assert t["customer_plain_id"] == "c_1" and t["label_refs"] == [] and t["assignee_id"] is None
 
 
 def test_status_filter_keeps_counts_whole(api):

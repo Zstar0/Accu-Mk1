@@ -14,6 +14,12 @@ router = APIRouter(prefix="/support", tags=["support"])
 Status = Literal["open", "snoozed", "done"]
 
 
+class LabelRef(BaseModel):
+    id: str
+    type_id: str
+    name: str
+
+
 class Thread(BaseModel):
     id: str
     ref: str
@@ -27,6 +33,9 @@ class Thread(BaseModel):
     preview: str
     waiting_since: Optional[str] = None
     plain_url: str
+    assignee_id: Optional[str] = None
+    customer_plain_id: Optional[str] = None
+    label_refs: list[LabelRef] = []
 
 
 class Counts(BaseModel):
