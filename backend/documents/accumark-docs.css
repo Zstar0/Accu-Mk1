@@ -90,8 +90,7 @@ nav.toc ol{list-style:none;margin:0;padding:0;display:grid;gap:1px;border-left:1
 nav.toc a{display:block;padding:4px 0 4px 14px;margin-left:-1px;border-left:2px solid transparent;color:var(--ink-2);text-decoration:none}
 nav.toc a:hover,nav.toc a:focus-visible{color:var(--accent-ink);border-left-color:var(--accent);outline:none}
 nav.toc a.part{color:var(--ink);font-weight:600}
-main{min-width:0;max-width:840px;margin-inline:auto;display:grid;gap:40px}
-.shell main{margin-inline:0}
+main{min-width:0;max-width:840px;display:grid;gap:40px}
 .page{max-width:1200px;margin:0 auto;display:grid;gap:44px}
 
 /* document header */
@@ -174,9 +173,14 @@ dl.facts{font-size:13px;color:var(--ink-2);display:grid;grid-template-columns:au
 dl.facts dt{color:var(--ink-3)}
 dl.facts dd{margin:0;color:var(--ink);font-variant-numeric:tabular-nums}
 
-/* hand-off box */
+/* hand-off box and copy buttons */
 .handoff{background:var(--surface);border:1px solid var(--line-strong);border-radius:10px;padding:22px;display:grid;gap:16px}
 .handoff h2{border:none;padding:0;font-size:20px}
+.copyrow{display:flex;flex-wrap:wrap;gap:10px;align-items:center}
+button.copy{font-family:var(--font-head);font-weight:600;font-size:13.5px;color:var(--on-accent);background:var(--accent);border:none;border-radius:6px;padding:10px 16px;cursor:pointer}
+button.copy.ghost{background:transparent;color:var(--accent-ink);border:1px solid var(--accent-line)}
+button.copy:focus-visible{outline:2px solid var(--accent-ink);outline-offset:2px}
+.copystate{font-size:13px;color:var(--ink-2)}
 
 /* tables */
 .tablewrap{overflow-x:auto;border:1px solid var(--line);border-radius:8px;background:var(--surface)}

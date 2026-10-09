@@ -66,23 +66,20 @@ def metrics(d: dict | None) -> list[dict]:
     return cards
 
 
-def _cites(cs: list[dict]) -> str:
+def _sources(cs: list[dict], lead: str = "") -> str:
+    """The guide's idiom for references: a small .where line of teal links, no pills."""
     out = []
     for c in cs or []:
         url = link_for(c)
         label = _e(c.get("label") or c.get("id"))
-        out.append(f'<a class="chip info" href="{_e(url)}" target="_blank" rel="noopener">{label}</a>' if url
-                   else f'<span class="chip">{label}</span>')
-    return f'<div class="chips">{"".join(out)}</div>' if out else ""
+        out.append(f'<a href="{_e(url)}" target="_blank" rel="noopener">{label}</a>' if url else label)
+    if not out and not lead:
+        return ""
+    body = " &nbsp;·&nbsp; ".join(out)
+    return f'<span class="where">{_e(lead)}{" &nbsp;·&nbsp; " if lead and out else ""}{"Source: " + body if out else ""}</span>'
 
 
 _NOTE_FOR = {"high": "note stop", "medium": "note warn", "low": "note"}
-_CHIP_FOR = {"high": "chip crit", "medium": "chip warn", "low": "chip"}
-
-
-def _sentiment_chip(score: int, trend: str) -> str:
-    cls = "chip crit" if score < 0 else ("chip good" if score > 0 else "chip")
-    return f'<span class="{cls}">{_e(SENTIMENT.get(score, "Neutral"))} · {_e(trend)}</span>'
 
 
 def render_html(review: dict, *, customer_name: str, customer_key: str, generated_at: str, model: str,
@@ -96,19 +93,15 @@ def render_html(review: dict, *, customer_name: str, customer_key: str, generate
              f'<h1>{_e(customer_name)}</h1>',
              f'<p class="lede">{_e(review.get("headline"))}</p>',
              '<ul class="meta">'
-             f'<li><b>Sentiment</b> {_sentiment_chip(score, s.get("trend", ""))}</li>'
+             f'<li><b>Sentiment</b> {_e(SENTIMENT.get(score, "Neutral"))} · {_e(s.get("trend", ""))}</li>'
              f'<li><b>Customer</b> {_e(customer_key)}</li>'
              f'<li><b>Generated</b> {_e(generated_at[:10])}</li>'
              f'<li><b>Model</b> {_e(model)}</li></ul>',
              '</header>']
     if metric_cards:
-        tiles = []
-        for c in metric_cards:
-            value_cls = "value bad" if c.get("tone") == "bad" else "value"
-            sub = f'<span class="sub">{_e(c["note"])}</span>' if c.get("note") else ""
-            tiles.append(f'<div class="kpi"><span class="label">{_e(c["label"])}</span>'
-                         f'<span class="{value_cls}">{_e(c["value"])}</span>{sub}</div>')
-        parts.append(f'<section><div class="kpis">{"".join(tiles)}</div></section>')
+        cards = [f'<div class="path-card"><span class="k">{_e(c["label"])}</span><h3>{_e(c["value"])}</h3>'
+                 + (f'<p>{_e(c["note"])}</p>' if c.get("note") else "") + "</div>" for c in metric_cards]
+        parts.append(f'<section><h2>At a glance</h2><div class="paths">{"".join(cards)}</div></section>')
 
     issues = sorted(review.get("open_issues") or [], key=lambda i: SEVERITY_ORDER.get(i.get("severity"), 1))
     parts.append("<section><h2>Needs attention</h2>")
@@ -116,7 +109,7 @@ def render_html(review: dict, *, customer_name: str, customer_key: str, generate
         for i in issues:
             sev = i.get("severity", "medium")
             parts.append(f'<div class="{_NOTE_FOR.get(sev, "note")}"><strong>{_e(sev.capitalize())} · {_e(i["title"])}</strong>'
-                         f'<span>{_e(i.get("detail"))}</span>{_cites(i.get("citations"))}</div>')
+                         f'<span>{_e(i.get("detail"))}</span>{_sources(i.get("citations"))}</div>')
     else:
         parts.append("<p>No open issues found.</p>")
     parts.append("</section>")
@@ -132,8 +125,8 @@ def render_html(review: dict, *, customer_name: str, customer_key: str, generate
             parts.append(f"<h3>{_e(THEME_LABEL[theme])}</h3><ul>")
             for f in rows:
                 sev = f.get("severity", "medium")
-                parts.append(f'<li><span class="{_CHIP_FOR.get(sev, "chip")}">{_e(sev.capitalize())}</span> '
-                             f'<b>{_e(f["title"])}</b> {_e(f.get("detail"))}{_cites(f.get("citations"))}</li>')
+                parts.append(f'<li><b>{_e(f["title"])}</b> {_e(f.get("detail"))} '
+                             f'{_sources(f.get("citations"), lead=sev.capitalize())}</li>')
             parts.append("</ul>")
     else:
         parts.append("<p>Nothing found.</p>")
@@ -142,18 +135,18 @@ def render_html(review: dict, *, customer_name: str, customer_key: str, generate
     steps = review.get("next_steps") or []
     parts.append("<section><h2>Next steps</h2>")
     parts.append('<ul class="check">' + "".join(
-        f'<li><b>{_e(n["title"])}</b> {_e(n.get("detail"))}{_cites(n.get("citations"))}</li>' for n in steps)
+        f'<li><b>{_e(n["title"])}</b> {_e(n.get("detail"))} {_sources(n.get("citations"))}</li>' for n in steps)
         + "</ul>" if steps else "<p>None.</p>")
     parts.append("</section>")
 
     wins = review.get("strengths") or []
     parts.append("<section><h2>Going well</h2>")
     parts.append('<div class="note ok"><strong>What is working</strong><ul>' + "".join(
-        f'<li><b>{_e(w["title"])}</b> {_e(w.get("detail"))}{_cites(w.get("citations"))}</li>' for w in wins)
+        f'<li><b>{_e(w["title"])}</b> {_e(w.get("detail"))} {_sources(w.get("citations"))}</li>' for w in wins)
         + "</ul></div>" if wins else "<p>None recorded.</p>")
     parts.append("</section>")
 
-    parts.append(f'<section><h2>Why this sentiment</h2><p>{_e(s.get("reason"))}</p>{_cites(s.get("citations"))}</section>')
+    parts.append(f'<section><h2>Why this sentiment</h2><p>{_e(s.get("reason"))}</p>{_sources(s.get("citations"))}</section>')
     parts.append(f'<footer>Generated by {_e(model)} from {_e(lookups)} lookups (${_e(f"{cost_usd:.2f}")}). '
                  "Every finding cites what the agent read; check the source before acting on it.</footer>")
     parts.append("</main>")
