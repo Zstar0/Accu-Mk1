@@ -239,8 +239,8 @@ export function CustomerAiReviewCard({ customerKey }: { customerKey: string }) {
             <li key={i}>{s.label}</li>
           ))}
           <li className="flex items-center gap-1">
-            <Loader2 className="h-3 w-3 animate-spin" /> Working (
-            {age(running.data.created_at)})
+            <Loader2 className="h-3 w-3 animate-spin" /> Working · started{' '}
+            {age(running.data.created_at)}
           </li>
         </ol>
       )}

@@ -105,6 +105,9 @@ describe('CustomerAiReviewCard', () => {
     expect(
       await screen.findByText('Listed support tickets')
     ).toBeInTheDocument()
+    expect(
+      screen.getByText(/Working · started \d+ min ago/)
+    ).toBeInTheDocument()
   })
 
   it('done state shows sentiment, counts, sections and cost', async () => {
