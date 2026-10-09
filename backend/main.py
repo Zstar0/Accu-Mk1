@@ -127,6 +127,7 @@ from priority.routes import router as priority_router
 from customer_insights.routes import router as customer_insights_router
 from crm_close.routes import router as crm_close_router
 from support_plain.routes import router as support_plain_router
+from customer_review.routes import router as customer_review_router
 from workflow.cancel_routes import router as cancel_router
 from conformance.routes import router as conformance_router
 from documents.routes import router as documents_router
@@ -640,6 +641,7 @@ app.include_router(priority_router)
 app.include_router(customer_insights_router)
 app.include_router(crm_close_router)
 app.include_router(support_plain_router)
+app.include_router(customer_review_router)
 app.include_router(cancel_router)
 app.include_router(conformance_router)
 app.include_router(document_comments_router)  # literal /documents/comments* paths must beat /documents/{doc_id}
