@@ -89,7 +89,7 @@ import {
 import { CustomerDashboard } from '@/components/customers/CustomerDashboard'
 import { CustomerCrmTab } from '@/components/customers/CustomerCrmTab'
 import { CustomerSupportTab } from '@/components/customers/CustomerSupportTab'
-import { CustomerAiReviewCard } from '@/components/customers/CustomerAiReviewCard'
+import { CustomerAiReviewTab } from '@/components/customers/CustomerAiReviewTab'
 import { useAuthStore } from '@/store/auth-store'
 import {
   NO_INSIGHT,
@@ -1052,21 +1052,21 @@ function CustomerDetailView() {
         </CardContent>
       </Card>
 
-      {isAdminUser && (
-        <CustomerAiReviewCard customerKey={`wc:${customerDetailTargetId}`} />
-      )}
-
       {/* Phase 30 — Task 6: Tabs wrap everything below the header card.
           Customer Orders is the default; Dashboard is the insights dossier. */}
       <Tabs
         value={
-          (customerDetailTab === 'crm' || customerDetailTab === 'support') &&
+          (customerDetailTab === 'crm' ||
+            customerDetailTab === 'support' ||
+            customerDetailTab === 'ai-review') &&
           !isAdminUser
             ? 'orders'
             : customerDetailTab
         }
         onValueChange={v =>
-          setCustomerDetailTab(v as 'orders' | 'dashboard' | 'crm' | 'support')
+          setCustomerDetailTab(
+            v as 'orders' | 'dashboard' | 'crm' | 'support' | 'ai-review'
+          )
         }
         className="mt-4"
       >
@@ -1075,6 +1075,9 @@ function CustomerDetailView() {
           <TabsTrigger value="dashboard">Dashboard</TabsTrigger>
           {isAdminUser && <TabsTrigger value="crm">CRM</TabsTrigger>}
           {isAdminUser && <TabsTrigger value="support">Support</TabsTrigger>}
+          {isAdminUser && (
+            <TabsTrigger value="ai-review">AI review</TabsTrigger>
+          )}
         </TabsList>
         <TabsContent value="orders" className="mt-4">
           <CustomerOrdersTab
@@ -1105,6 +1108,11 @@ function CustomerDetailView() {
         {isAdminUser && (
           <TabsContent value="support" className="mt-4">
             <CustomerSupportTab customerKey={`wc:${customerDetailTargetId}`} />
+          </TabsContent>
+        )}
+        {isAdminUser && (
+          <TabsContent value="ai-review" className="mt-4">
+            <CustomerAiReviewTab customerKey={`wc:${customerDetailTargetId}`} />
           </TabsContent>
         )}
       </Tabs>
@@ -1606,7 +1614,6 @@ function GuestCustomerDetailView({ customerKey }: { customerKey: string }) {
       />
       {isAdminUser && (
         <>
-          <CustomerAiReviewCard customerKey={customerKey} />
           <section className="mt-4">
             <h2 className="mb-2 text-sm font-medium">CRM</h2>
             <CustomerCrmTab customerKey={customerKey} />
@@ -1614,6 +1621,10 @@ function GuestCustomerDetailView({ customerKey }: { customerKey: string }) {
           <section className="mt-4">
             <h2 className="mb-2 text-sm font-medium">Support</h2>
             <CustomerSupportTab customerKey={customerKey} />
+          </section>
+          <section className="mt-4">
+            <h2 className="mb-2 text-sm font-medium">AI review</h2>
+            <CustomerAiReviewTab customerKey={customerKey} />
           </section>
         </>
       )}

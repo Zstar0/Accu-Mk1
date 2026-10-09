@@ -142,7 +142,7 @@ interface UIState {
    *  on arrival. */
   orderStatusPrefill: { orderId: string } | null
   // Customer detail page — Phase 30
-  customerDetailTab: 'orders' | 'dashboard' | 'crm' | 'support'
+  customerDetailTab: 'orders' | 'dashboard' | 'crm' | 'support' | 'ai-review'
   // UX revision: four independent search slots, AND-combined server-side.
   // Each slot is the raw committed value (post-debounce) for one input. Empty
   // string = "no filter on that axis" (back-compat with debounce-flush flow).
@@ -199,7 +199,7 @@ interface UIState {
   setHideTestAccounts: (hide: boolean) => void
   setSearchAndResetPage: (term: string) => void
   setCustomerDetailTab: (
-    tab: 'orders' | 'dashboard' | 'crm' | 'support'
+    tab: 'orders' | 'dashboard' | 'crm' | 'support' | 'ai-review'
   ) => void
   // Per-axis setter: writes ONE slot, leaves the others unchanged. This is
   // how the four-input UI commits debounced values independently per axis.

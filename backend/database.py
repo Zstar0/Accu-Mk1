@@ -2524,6 +2524,11 @@ def _run_migrations():
         SELECT 'PB', 1000
         WHERE NOT EXISTS (SELECT 1 FROM lims_native_id_sequences WHERE prefix = 'PB')
         """,
+        # AI review as documents (2026-10-09): the review's document and the name scrub count.
+        "ALTER TABLE customer_ai_reviews ADD COLUMN IF NOT EXISTS document_id INTEGER",
+        "ALTER TABLE customer_ai_reviews ADD COLUMN IF NOT EXISTS document_code VARCHAR(32)",
+        "ALTER TABLE customer_ai_reviews ADD COLUMN IF NOT EXISTS names_scrubbed INTEGER NOT NULL DEFAULT 0",
+        "ALTER TABLE customer_ai_reviews ADD COLUMN IF NOT EXISTS document_error TEXT",
         # HPLC-native slice 6 (M8): links a retest's sample row back to the
         # original Mk1 row it was retested from (from signal meta
         # RetestOfSampleId). Nullable, no FK — the original may be a

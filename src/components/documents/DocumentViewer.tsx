@@ -112,9 +112,20 @@ export function usePrefersDark(): boolean {
 const SCRIPT_SAVE_CONFIRM =
   'This document runs scripts; the saved copy captures the rendered page, including anything the scripts built. Save anyway?'
 
-export function DocumentViewer({ id }: { id: number }) {
+export function DocumentViewer({
+  id,
+  embedded = false,
+  onNavigate,
+}: {
+  id: number
+  /** Rendered inside another page (the customer AI review tab): no back-to-library button. */
+  embedded?: boolean
+  /** Revision switching target; defaults to the Documents page's global viewer. */
+  onNavigate?: (id: number) => void
+}) {
   const clear = useUIStore(s => s.clearDocumentViewer)
   const navigateToDocument = useUIStore(s => s.navigateToDocument)
+  const goTo = onNavigate ?? navigateToDocument
   const editRequested = useUIStore(s => s.documentViewerEditRequested)
   const consumeEditRequest = useUIStore(s => s.consumeDocumentEditRequest)
   const editRequestHandled = useRef(false)
@@ -346,7 +357,7 @@ export function DocumentViewer({ id }: { id: number }) {
           }
         }
         if (r.createdId != null) {
-          navigateToDocument(r.createdId)
+          goTo(r.createdId)
           setNavigating(false)
         }
       })
@@ -522,16 +533,18 @@ export function DocumentViewer({ id }: { id: number }) {
   return (
     <div className="flex h-full flex-col">
       <div className="flex flex-wrap items-center gap-2 border-b px-4 py-2">
-        <Button
-          variant="ghost"
-          size="sm"
-          onClick={() => {
-            if (guardLeave()) clear()
-          }}
-        >
-          <ArrowLeft className="mr-1 h-4 w-4" />
-          Documents
-        </Button>
+        {!embedded && (
+          <Button
+            variant="ghost"
+            size="sm"
+            onClick={() => {
+              if (guardLeave()) clear()
+            }}
+          >
+            <ArrowLeft className="mr-1 h-4 w-4" />
+            Documents
+          </Button>
+        )}
         {doc && (
           <>
             <span className="font-mono text-xs text-muted-foreground">
@@ -596,7 +609,7 @@ export function DocumentViewer({ id }: { id: number }) {
                 <Select
                   value={String(doc.id)}
                   onValueChange={v => {
-                    if (guardLeave()) navigateToDocument(Number(v))
+                    if (guardLeave()) goTo(Number(v))
                   }}
                 >
                   <SelectTrigger
@@ -643,7 +656,7 @@ export function DocumentViewer({ id }: { id: number }) {
                   variant="ghost"
                   size="sm"
                   onClick={() => {
-                    if (guardLeave()) navigateToDocument(latestId)
+                    if (guardLeave()) goTo(latestId)
                   }}
                 >
                   Newest revision

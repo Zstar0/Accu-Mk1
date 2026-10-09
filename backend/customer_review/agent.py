@@ -13,7 +13,11 @@ from customer_review import prompts, tools
 
 SECTIONS = ("open_issues", "shortfalls", "strengths", "next_steps")
 TRENDS = ("improving", "steady", "declining")
+SEVERITIES = ("high", "medium", "low")
+THEMES = ("turnaround", "coa_quality", "communication", "billing", "other")
 MAX_ITEM_CHARS = 400
+MAX_TITLE_CHARS = 80
+MAX_HEADLINE_CHARS = 300
 MAX_ITEMS = 8
 
 
@@ -42,9 +46,18 @@ class Outcome:
 
 def _label(kind: str, cid: str, meta: dict) -> dict:
     out = {"kind": kind, "id": cid, "label": {"order": f"Order {cid}"}.get(kind, cid)}
-    if kind == "crm":
-        out["label"] = (meta.get("item") or {}).get("title") or cid
+    if kind == "crm":  # never the item title: a note's first line is staff-written text
+        out["label"] = _crm_label(meta.get("item") or {}, cid)
     return {**out, **meta}
+
+
+def _crm_label(item: dict, cid: str) -> str:
+    kind = str(item.get("type") or "item").capitalize()
+    try:
+        dt = datetime.fromisoformat(str(item.get("at") or "")[:10])
+        return f"{kind} {dt:%b} {dt.day}"
+    except ValueError:
+        return kind if item.get("type") else cid
 
 
 def _cites(raw: Any, ledger: dict) -> tuple[list[dict], int]:
@@ -66,20 +79,29 @@ def validate(raw: dict, ledger: dict) -> tuple[dict, int]:
     if not isinstance(score, int) or isinstance(score, bool) or not -2 <= score <= 2 or s.get("trend") not in TRENDS:
         raise InvalidReview("bad sentiment")
     cites, dropped = _cites(s.get("citations"), ledger)
-    out: dict[str, Any] = {"sentiment": {"score": score, "trend": s["trend"], "reason": str(s.get("reason") or "")[:MAX_ITEM_CHARS],
-                                         "citations": cites, "unsupported": not cites}}
+    out: dict[str, Any] = {
+        "headline": str(raw.get("headline") or "")[:MAX_HEADLINE_CHARS],
+        "sentiment": {"score": score, "trend": s["trend"], "reason": str(s.get("reason") or "")[:MAX_ITEM_CHARS],
+                      "citations": cites, "unsupported": not cites}}
     for name in SECTIONS:
         items = raw.get(name) or []
         if not isinstance(items, list):
             raise InvalidReview(f"{name} is not a list")
         kept = []
         for it in items:
-            if not isinstance(it, dict) or not isinstance(it.get("text"), str):
-                raise InvalidReview(f"bad item in {name}")
+            if not isinstance(it, dict) or not isinstance(it.get("title"), str) or not it["title"].strip():
+                raise InvalidReview(f"every item in {name} needs a non-empty title")
             cites, n = _cites(it.get("citations"), ledger)
             dropped += n
-            if cites:
-                kept.append({"text": it["text"][:MAX_ITEM_CHARS], "citations": cites})
+            if not cites:
+                continue
+            row = {"title": it["title"].strip()[:MAX_TITLE_CHARS], "detail": str(it.get("detail") or "")[:MAX_ITEM_CHARS],
+                   "citations": cites}
+            if name in ("open_issues", "shortfalls"):
+                row["severity"] = it.get("severity") if it.get("severity") in SEVERITIES else "medium"
+            if name == "shortfalls":
+                row["theme"] = it.get("theme") if it.get("theme") in THEMES else "other"
+            kept.append(row)
         out[name] = kept[:MAX_ITEMS]
     return out, dropped
 
@@ -111,7 +133,8 @@ def run(*, llm, ctx: tools.Ctx, on_step: Callable[[dict], None], clock: Callable
     messages: list[dict] = [{"role": "user", "content": prompts.kickoff(ctx.customer_key)}]
     specs = _specs()
     forced = False
-    for _turn in range(limits.max_tool_calls + 3):
+    retried_submit = False
+    for _turn in range(limits.max_tool_calls + 4):
         forced = len(out.tool_calls) >= limits.max_tool_calls or clock() - started >= limits.max_seconds
         payload = {"model": llm_mod.MODEL, "max_tokens": limits.max_tokens,
                    "system": [{"type": "text", "text": prompts.SYSTEM, "cache_control": _EPHEMERAL}],
@@ -137,10 +160,18 @@ def run(*, llm, ctx: tools.Ctx, on_step: Callable[[dict], None], clock: Callable
         if submit is not None:
             try:
                 out.review, out.citations_dropped = validate(submit.get("input"), ctx.ledger)
-            except InvalidReview:
-                out.status, out.error = "failed", "invalid review"
-                out.review = {"raw": submit.get("input")}
-                return out
+            except InvalidReview as e:
+                if retried_submit:
+                    out.status, out.error = "failed", "invalid review"
+                    out.review = {"raw": submit.get("input")}
+                    return out
+                retried_submit = True  # one corrective resubmit instead of losing a paid run
+                fix = [{"type": "tool_result", "tool_use_id": b.get("id"), "is_error": True,
+                        "content": (f"Invalid review: {e}. Fix it and call submit_review again."
+                                    if b is submit else "Ignored: submit_review must be called on its own.")}
+                       for b in uses]
+                messages.append({"role": "user", "content": fix})
+                continue
             out.status = "done"
             return out
         if not uses:

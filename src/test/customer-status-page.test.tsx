@@ -792,7 +792,7 @@ describe('CustomerStatusPage — detail view', () => {
       await screen.findByText('No orders for this customer')
       expect(screen.queryByRole('tab', { name: 'CRM' })).toBeNull()
       expect(screen.queryByRole('tab', { name: 'Support' })).toBeNull()
-      expect(screen.queryByRole('region', { name: 'AI review' })).toBeNull()
+      expect(screen.queryByRole('tab', { name: 'AI review' })).toBeNull()
       ;(await import('@testing-library/react')).cleanup()
       useAuthStore.setState({
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -803,9 +803,7 @@ describe('CustomerStatusPage — detail view', () => {
         await screen.findByRole('tab', { name: 'CRM' })
       ).toBeInTheDocument()
       expect(screen.getByRole('tab', { name: 'Support' })).toBeInTheDocument()
-      expect(
-        screen.getByRole('region', { name: 'AI review' })
-      ).toBeInTheDocument()
+      expect(screen.getByRole('tab', { name: 'AI review' })).toBeInTheDocument()
     } finally {
       useAuthStore.setState({ user: before })
     }

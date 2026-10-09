@@ -24,12 +24,18 @@ def use(name, args, uid="u1"):
     return {"type": "tool_use", "id": uid, "name": name, "input": args}
 
 
+def item(title="Reply on T-948 took 3 days", **kw):
+    base = {"title": title, "detail": "Customer waited for an answer.", "severity": "high",
+            "citations": [{"kind": "ticket", "id": "T-948"}]}
+    base.update(kw)
+    return base
+
+
 def review(**over):
-    base = {"sentiment": {"score": 1, "trend": "steady", "reason": "Happy overall",
+    base = {"headline": "Happy overall, one slow reply.",
+            "sentiment": {"score": 1, "trend": "steady", "reason": "Happy overall",
                           "citations": [{"kind": "ticket", "id": "T-948"}]},
-            "open_issues": [], "shortfalls": [{"text": "Reply on T-948 took 3 days",
-                                               "citations": [{"kind": "ticket", "id": "T-948"}]}],
-            "strengths": [], "next_steps": []}
+            "open_issues": [], "shortfalls": [item(theme="communication")], "strengths": [], "next_steps": []}
     base.update(over)
     return base
 
@@ -88,9 +94,8 @@ def test_no_submission_after_forcing_fails(ctx):
 
 
 def test_uncited_and_foreign_citations_are_dropped(ctx):
-    bad = review(open_issues=[{"text": "Invented", "citations": [{"kind": "ticket", "id": "T-1"}]}],
-                 strengths=[{"text": "Mixed", "citations": [{"kind": "ticket", "id": "T-948"},
-                                                            {"kind": "sample", "id": "P-0"}]}])
+    bad = review(open_issues=[item("Invented", citations=[{"kind": "ticket", "id": "T-1"}])],
+                 strengths=[item("Mixed", citations=[{"kind": "ticket", "id": "T-948"}, {"kind": "sample", "id": "P-0"}])])
     llm = ScriptedLLM([use("list_tickets", {})], [use("submit_review", bad, "u2")])
     out, _ = run(llm, ctx)
     assert out.review["open_issues"] == []
@@ -109,16 +114,17 @@ def test_sentiment_without_valid_citation_is_marked_unsupported(ctx):
                                  {"sentiment": {"score": 1, "trend": "sideways", "reason": "x"}},
                                  {"sentiment": "good"}])
 def test_malformed_submission_fails(ctx, raw):
-    llm = ScriptedLLM([use("submit_review", raw)])
+    llm = ScriptedLLM([use("submit_review", raw)], [use("submit_review", raw, "u2")])  # after the one retry
     out, _ = run(llm, ctx)
     assert out.status == "failed" and out.error == "invalid review"
 
 
 def test_items_are_trimmed_and_capped(ctx):
-    many = [{"text": "y" * 900, "citations": [{"kind": "ticket", "id": "T-948"}]}] * 12
+    many = [item("t" * 200, detail="y" * 900)] * 12
     llm = ScriptedLLM([use("list_tickets", {})], [use("submit_review", review(next_steps=many), "u2")])
     out, _ = run(llm, ctx)
-    assert len(out.review["next_steps"]) == 8 and len(out.review["next_steps"][0]["text"]) == 400
+    first = out.review["next_steps"][0]
+    assert len(out.review["next_steps"]) == 8 and len(first["title"]) == 80 and len(first["detail"]) == 400
 
 
 def test_tool_errors_go_back_to_the_model(ctx):
@@ -172,3 +178,58 @@ def test_system_prompt_rules():
 
     s = prompts.SYSTEM.lower()
     assert "never attribute" in s and "data" in s and "cite" in s and "strengths" in s
+
+
+def test_v2_shape_defaults_and_headline(ctx):
+    r = review(open_issues=[{"title": "No severity given", "detail": "d", "citations": [{"kind": "ticket", "id": "T-948"}]}],
+               shortfalls=[{"title": "No theme", "detail": "d", "severity": "low",
+                            "citations": [{"kind": "ticket", "id": "T-948"}]}],
+               strengths=[item("Good", severity="high")], headline="h" * 500)
+    llm = ScriptedLLM([use("list_tickets", {})], [use("submit_review", r, "u2")])
+    out, _ = run(llm, ctx)
+    assert out.review["open_issues"][0]["severity"] == "medium"
+    assert out.review["shortfalls"][0]["theme"] == "other" and out.review["shortfalls"][0]["severity"] == "low"
+    assert len(out.review["headline"]) == 300
+    assert "severity" not in out.review["strengths"][0]
+
+
+def test_v1_text_items_are_invalid(ctx):
+    r = review(open_issues=[{"text": "old shape", "citations": [{"kind": "ticket", "id": "T-948"}]}])
+    llm = ScriptedLLM([use("list_tickets", {})], [use("submit_review", r, "u2")], [use("submit_review", r, "u3")])
+    out, _ = run(llm, ctx)
+    assert out.status == "failed" and out.error == "invalid review"
+
+
+def test_submit_schema_requires_headline_and_titles():
+    from customer_review import prompts
+
+    schema = prompts.SUBMIT_TOOL["input_schema"]
+    assert "headline" in schema["required"]
+    item_schema = schema["properties"]["shortfalls"]["items"]
+    assert set(item_schema["required"]) == {"title", "citations"}
+    assert item_schema["properties"]["theme"]["enum"] == ["turnaround", "coa_quality", "communication", "billing", "other"]
+    assert "possessive" in prompts.SYSTEM.lower()
+
+
+def test_crm_citation_label_is_neutral(ctx):
+    ctx.ledger[("crm", "acti_9")] = {"item": {"type": "note", "at": "2026-09-17T10:00:00Z", "title": "Scott said X"}}
+    r = review(strengths=[item("Good", citations=[{"kind": "crm", "id": "acti_9"}])])
+    llm = ScriptedLLM([use("list_tickets", {})], [use("submit_review", r, "u2")])
+    out, _ = run(llm, ctx)
+    assert out.review["strengths"][0]["citations"][0]["label"] == "Note Sep 17"
+
+
+def test_invalid_submission_gets_one_corrective_retry(ctx):
+    bad = review(open_issues=[{"detail": "no title", "citations": [{"kind": "ticket", "id": "T-948"}]}])
+    llm = ScriptedLLM([use("list_tickets", {})], [use("submit_review", bad, "u2")], [use("submit_review", review(), "u3")])
+    out, _ = run(llm, ctx)
+    assert out.status == "done"
+    fix_msg = llm.payloads[2]["messages"][-1]["content"][0]
+    assert fix_msg["type"] == "tool_result" and fix_msg["is_error"] is True and "title" in fix_msg["content"]
+
+
+def test_second_invalid_submission_fails(ctx):
+    bad = review(open_issues=[{"detail": "no title", "citations": [{"kind": "ticket", "id": "T-948"}]}])
+    llm = ScriptedLLM([use("list_tickets", {})], [use("submit_review", bad, "u2")], [use("submit_review", bad, "u3")])
+    out, _ = run(llm, ctx)
+    assert out.status == "failed" and out.error == "invalid review"

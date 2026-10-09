@@ -93,13 +93,16 @@ def add_step(db: Session, run_id: int, step: dict[str, Any]) -> None:
 
 def finish(db: Session, run_id: int, *, status: str, review: dict | None = None, tool_calls: list,
            input_tokens: int, output_tokens: int, cost_usd, citations_dropped: int = 0,
-           error: str | None = None) -> None:
+           error: str | None = None, document_id: int | None = None, document_code: str | None = None,
+           names_scrubbed: int = 0, document_error: str | None = None) -> None:
     row = db.get(CustomerAiReview, run_id)
     if row is None or row.finished_at is not None:
         return
     row.status, row.review, row.tool_calls = status, review, tool_calls
     row.input_tokens, row.output_tokens, row.cost_usd = input_tokens, output_tokens, cost_usd
     row.citations_dropped, row.error, row.finished_at = citations_dropped, error, _now()
+    row.document_id, row.document_code = document_id, document_code
+    row.names_scrubbed, row.document_error = names_scrubbed, document_error
     db.commit()
 
 
@@ -110,4 +113,11 @@ def to_dict(row: CustomerAiReview) -> dict[str, Any]:
             "steps": row.steps or [], "review": row.review, "tool_calls": calls, "tool_call_count": len(calls),
             "input_tokens": row.input_tokens or 0, "output_tokens": row.output_tokens or 0,
             "cost_usd": float(row.cost_usd or 0), "citations_dropped": row.citations_dropped or 0,
-            "error": row.error}
+            "error": row.error, "document_id": row.document_id, "document_code": row.document_code,
+            "names_scrubbed": row.names_scrubbed or 0, "document_error": row.document_error}
+
+
+def document_code_for(db: Session, key: str) -> str | None:
+    return db.execute(select(CustomerAiReview.document_code)
+                      .where(CustomerAiReview.customer_key == key, CustomerAiReview.document_code.is_not(None))
+                      .order_by(CustomerAiReview.id.desc()).limit(1)).scalar_one_or_none()

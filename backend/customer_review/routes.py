@@ -13,7 +13,7 @@ from sqlalchemy.orm import Session
 
 from auth import require_admin
 from crm_close import match as crm_match
-from customer_review import agent, llm, store, tools
+from customer_review import agent, document, llm, names, store, tools
 from database import SessionLocal, get_db
 
 logger = logging.getLogger(__name__)
@@ -44,6 +44,10 @@ class Run(BaseModel):
     cost_usd: float
     citations_dropped: int
     error: Optional[str] = None
+    document_id: Optional[int] = None
+    document_code: Optional[str] = None
+    names_scrubbed: int = 0
+    document_error: Optional[str] = None
 
 
 class HistoryRow(BaseModel):
@@ -56,6 +60,22 @@ class HistoryRow(BaseModel):
 class CustomerReviews(BaseModel):
     latest: Optional[Run] = None
     history: list[HistoryRow]
+
+
+def _dossier_for(ctx) -> dict | None:
+    try:
+        return tools._dossier(ctx)  # memoized on the run's ctx: no second dataset build
+    except Exception as e:
+        logger.warning("customer_review.dossier_failed error=%s", type(e).__name__)
+        return None
+
+
+def _author(db, user_id: int | None) -> str | None:
+    from models import User
+    u = db.get(User, user_id) if user_id else None
+    if u is None:
+        return None
+    return " ".join(p for p in (u.first_name, u.last_name) if p) or u.email
 
 
 def _finish(run_id: int, **fields) -> None:
@@ -71,12 +91,34 @@ def _execute(run_id: int, key: str) -> None:
     """Runs one review in its own DB session; every exit path finishes the row."""
     db = _session_factory()
     try:
-        outcome = agent.run(llm=llm.get_client(), ctx=tools.Ctx(customer_key=key, db=db),
-                            on_step=lambda step: store.add_step(db, run_id, step))
+        ctx = tools.Ctx(customer_key=key, db=db)
+        outcome = agent.run(llm=llm.get_client(), ctx=ctx, on_step=lambda step: store.add_step(db, run_id, step))
+        doc_fields: dict = {}
+        review = outcome.review
+        if outcome.status == "done" and review:
+            try:
+                # Scrub inside the guard: a failure here must not lose the paid review, and an
+                # unscrubbed review is never published.
+                review, scrubbed = names.scrub(review, names.staff_names(db, ctx))
+                doc_fields["names_scrubbed"] = scrubbed
+                dossier = _dossier_for(ctx)
+                row = store.get_run(db, run_id)
+                doc_id, code = document.publish(
+                    db, review=review, customer_key=key,
+                    customer_name=((dossier or {}).get("identity") or {}).get("name") or key,
+                    author=_author(db, row.created_by if row else None), run_id=run_id, model=llm.MODEL,
+                    lookups=len(outcome.tool_calls), cost_usd=float(outcome.cost),
+                    metric_cards=document.metrics(dossier),
+                    code=store.document_code_for(db, key) or document.existing_code(db, key))
+                doc_fields.update(document_id=doc_id, document_code=code)
+            except Exception as e:
+                db.rollback()
+                logger.warning("customer_review.publish_failed run=%s error=%s", run_id, type(e).__name__)
+                doc_fields["document_error"] = "document publish failed"
         db.close()
-        _finish(run_id, status=outcome.status, review=outcome.review, tool_calls=outcome.tool_calls,
+        _finish(run_id, status=outcome.status, review=review, tool_calls=outcome.tool_calls,
                 input_tokens=outcome.input_tokens, output_tokens=outcome.output_tokens, cost_usd=outcome.cost,
-                citations_dropped=outcome.citations_dropped, error=outcome.error)
+                citations_dropped=outcome.citations_dropped, error=outcome.error, **doc_fields)
     except (llm.ReviewUnavailable, llm.ReviewNotConfigured) as e:
         logger.warning("customer_review.run_failed run=%s error=%s", run_id, type(e).__name__)
         _finish(run_id, status="failed", tool_calls=[], input_tokens=0, output_tokens=0, cost_usd=0,
