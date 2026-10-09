@@ -205,3 +205,73 @@ describe('CustomerSupportTab', () => {
     ).toBeInTheDocument()
   })
 })
+
+describe('support conversation order', () => {
+  const entry = (
+    id: string,
+    at: string,
+    kind: 'email' | 'event' = 'email'
+  ) => ({
+    id,
+    at,
+    kind,
+    author: 'A',
+    author_kind: 'agent' as const,
+    internal: false,
+    subject: null,
+    text: `text-${id}`,
+  })
+  const detail = {
+    thread: open,
+    entries: [
+      entry('e1', '2026-09-02T00:00:00Z'),
+      entry('e2', '2026-09-02T01:00:00Z', 'event'),
+      entry('e3', '2026-09-02T02:00:00Z'),
+    ],
+    fetched_at: new Date().toISOString(),
+    stale: false,
+  }
+  const KEY = 'mk1.supportConversationOrder'
+  const order = (panel: HTMLElement) =>
+    (panel.textContent ?? '').match(/text-e\d/g)
+
+  async function openPanel() {
+    vi.mocked(support.getSupportThread).mockResolvedValue(detail)
+    setup()
+    await userEvent.click(await screen.findByRole('button', { name: /T-482/ }))
+    return screen.findByRole('dialog')
+  }
+
+  beforeEach(() => {
+    vi.clearAllMocks()
+    localStorage.clear()
+  })
+
+  it('shows newest first by default, events included', async () => {
+    const panel = await openPanel()
+    await within(panel).findByText('text-e3')
+    expect(order(panel)).toEqual(['text-e3', 'text-e2', 'text-e1'])
+    expect(
+      within(panel).getByRole('button', { name: /Newest first/ })
+    ).toBeInTheDocument()
+  })
+
+  it('toggles to oldest first and persists', async () => {
+    const panel = await openPanel()
+    await userEvent.click(
+      await within(panel).findByRole('button', { name: /Newest first/ })
+    )
+    expect(order(panel)).toEqual(['text-e1', 'text-e2', 'text-e3'])
+    expect(
+      within(panel).getByRole('button', { name: /Oldest first/ })
+    ).toBeInTheDocument()
+    expect(localStorage.getItem(KEY)).toBe('oldest')
+  })
+
+  it('restores oldest from storage', async () => {
+    localStorage.setItem(KEY, 'oldest')
+    const panel = await openPanel()
+    await within(panel).findByText('text-e3')
+    expect(order(panel)).toEqual(['text-e1', 'text-e2', 'text-e3'])
+  })
+})
