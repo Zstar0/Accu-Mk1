@@ -32,7 +32,8 @@ class FakePlain:
 
     def query(self, q, variables=None):
         op = {queries.WORKSPACE: "ws", queries.CUSTOMER_BY_EMAIL: "cust", queries.THREADS: "threads",
-              queries.THREAD: "thread"}[q]
+              queries.THREAD: "thread", queries.USER_BY_EMAIL: "user", queries.USERS: "users",
+              queries.LABEL_TYPES: "labels"}[q]
         self.ops.append(op)
         if self.fail:
             raise plain_client.SupportUnavailable("http_503")
@@ -44,6 +45,18 @@ class FakePlain:
             assert variables["customerIds"] == ["c_1"]
             return {"threads": {"pageInfo": {"hasNextPage": False, "endCursor": None},
                                 "edges": [{"node": t} for t in THREADS + THREADS[:1]]}}
+        if op == "user":
+            u = {"sam@accumark.example": {"id": "u_1", "fullName": "Sam Parker", "publicName": "Sam",
+                                          "email": "sam@accumark.example", "isDeleted": False}}
+            return {"userByEmail": u.get(variables["email"])}
+        if op == "users":
+            return {"users": {"pageInfo": {"hasNextPage": False, "endCursor": None},
+                              "edges": [{"node": {"id": "u_1", "fullName": "Sam Parker", "email": "sam@accumark.example",
+                                                  "isDeleted": False}},
+                                        {"node": {"id": "u_2", "fullName": "Gone", "email": "g@x", "isDeleted": True}}]}}
+        if op == "labels":
+            return {"labelTypes": {"pageInfo": {"hasNextPage": False, "endCursor": None},
+                                   "edges": [{"node": {"id": "lt_1", "name": "Lab", "color": "#fff"}}]}}
         t = next(x for x in THREADS if x["id"] == variables["threadId"])
         return {"thread": {**t, "timelineEntries": {"pageInfo": {"hasNextPage": False, "endCursor": None},
                                                     "edges": [{"node": ENTRY}]}}}
@@ -59,7 +72,7 @@ def api(monkeypatch):
                         lambda key: {"wc:1": ["k@x.example", "k2@x.example"], "wc:2": [], "wc:3": ["o@x.example"]}.get(key))
     service.CACHE.drop("")
     service.CACHE._refresh.clear()
-    main.app.dependency_overrides[get_current_user] = lambda: MagicMock(id=1, role="admin")
+    main.app.dependency_overrides[get_current_user] = lambda: MagicMock(id=1, role="admin", email="admin@accumark.example")
     yield TestClient(main.app), fake
     main.app.dependency_overrides.clear()
 
@@ -204,3 +217,51 @@ def test_malformed_plain_data_falls_back_to_stale_not_500(api):
     assert detail.status_code == 200 and detail.json()["stale"] is True
     service.CACHE.drop("")
     assert client.get("/support/customers/wc:1").status_code == 502
+
+
+def _as(email, role="standard"):
+    import main
+    main.app.dependency_overrides[get_current_user] = lambda: MagicMock(id=3, role=role, email=email)
+
+
+def test_seat_holder_without_admin_reads(api):
+    client, _ = api
+    _as("sam@accumark.example")
+    assert client.get("/support/customers/wc:1").status_code == 200
+    assert client.get("/support/customers/wc:1/threads/th_b").status_code == 200
+
+
+def test_no_seat_non_admin_is_403_even_when_plain_is_down(api):
+    client, fake = api
+    _as("nobody@x.example")
+    assert client.get("/support/customers/wc:1").status_code == 403
+    fake["plain"] = FakePlain(fail=True)
+    service.CACHE.drop("")
+    assert client.get("/support/customers/wc:1").status_code == 403
+
+
+def test_me_reports_the_seat(api):
+    client, _ = api
+    _as("sam@accumark.example")
+    assert client.get("/support/me").json() == {"has_seat": True, "plain_user_id": "u_1", "name": "Sam Parker",
+                                                "email": "sam@accumark.example", "unavailable": False}
+    _as("nobody@x.example", role="admin")
+    assert client.get("/support/me").json()["has_seat"] is False
+
+
+def test_me_when_plain_is_down(api):
+    client, fake = api
+    fake["plain"] = FakePlain(fail=True)
+    _as("sam@accumark.example")
+    body = client.get("/support/me").json()
+    assert body["has_seat"] is False and body["unavailable"] is True
+
+
+def test_workspace_needs_a_seat_and_lists_active_teammates(api):
+    client, _ = api
+    _as("nobody@x.example", role="admin")
+    assert client.get("/support/workspace").status_code == 403
+    _as("sam@accumark.example")
+    body = client.get("/support/workspace").json()
+    assert body == {"teammates": [{"plain_user_id": "u_1", "name": "Sam Parker", "email": "sam@accumark.example"}],
+                    "label_types": [{"id": "lt_1", "name": "Lab", "color": "#fff"}]}

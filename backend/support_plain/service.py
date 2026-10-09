@@ -146,3 +146,29 @@ def thread_detail(customer_key: str, thread_id: str, *, refresh: bool = False) -
         data, at = fallback
         stale = True
     return {**data, "fetched_at": _iso(at), "stale": stale}
+
+
+def paged(client, query: str, root: str) -> list[dict]:
+    out: list[dict] = []
+    after = None
+    while len(out) < rules.MAX_THREADS:
+        page = client.query(query, {"after": after})[root]
+        out.extend(e["node"] for e in page["edges"])
+        if not page["pageInfo"]["hasNextPage"]:
+            break
+        after = page["pageInfo"]["endCursor"]
+    return out
+
+
+def workspace_people() -> dict[str, Any]:
+    @_shape_safe
+    def load() -> dict[str, Any]:
+        client = _client_factory()
+        users = paged(client, queries.USERS, "users")
+        labels = paged(client, queries.LABEL_TYPES, "labelTypes")
+        return {"teammates": [{"plain_user_id": u["id"], "name": u["fullName"], "email": u["email"]}
+                              for u in users if not u.get("isDeleted")],
+                "label_types": [{"id": l["id"], "name": l["name"], "color": l.get("color")} for l in labels]}
+
+    data, _ = CACHE.get_or_load("people", rules.PEOPLE_TTL, load)
+    return data
