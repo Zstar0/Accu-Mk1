@@ -95,12 +95,18 @@ def test_runner_records_done_failed_and_unavailable(api, monkeypatch):
     with Session() as db:
         ok, bad, down = (store.create_run(db, "wc:1", 1, "m").id for _ in range(3))
     monkeypatch.setattr(llm, "get_client", lambda: object())
+    monkeypatch.setattr(routes.document, "publish", lambda db, **kw: (42, "CR-0001"))
+    monkeypatch.setattr(routes, "_dossier_for", lambda db, key: None)
+    monkeypatch.setattr(routes.names, "staff_names", lambda db, ctx: {"Scott"})
+    v2 = {"headline": "Scott was slow", "sentiment": {"score": 0, "trend": "steady", "reason": "", "citations": [],
+                                                      "unsupported": True},
+          "open_issues": [], "shortfalls": [], "strengths": [], "next_steps": []}
 
     def fake_run(*, llm, ctx, on_step, **kw):
         on_step({"at": "t", "tool": "list_tickets", "label": "Listed support tickets"})
         if fake_run.mode == "down":
             raise llm_mod_unavailable
-        return agent.Outcome(status=fake_run.mode, review={"x": 1} if fake_run.mode == "done" else None,
+        return agent.Outcome(status=fake_run.mode, review=v2 if fake_run.mode == "done" else None,
                              error=None if fake_run.mode == "done" else "no review produced",
                              tool_calls=[{"tool": "list_tickets"}], input_tokens=1000, output_tokens=100,
                              cost=cost_usd(1000, 100))
@@ -113,6 +119,8 @@ def test_runner_records_done_failed_and_unavailable(api, monkeypatch):
     with Session() as db:
         a, b, c = store.get_run(db, ok), store.get_run(db, bad), store.get_run(db, down)
         assert a.status == "done" and float(a.cost_usd) == 0.003 and a.steps[0]["tool"] == "list_tickets"
+        assert (a.document_id, a.document_code, a.names_scrubbed) == (42, "CR-0001", 1)
+        assert a.review["headline"] == "the team was slow"
         assert b.status == "failed" and b.error == "no review produced"
         assert c.status == "failed" and c.error == "AI service unavailable"
 
@@ -138,3 +146,23 @@ def test_runner_finishes_on_a_fresh_session(api, monkeypatch):
     assert len(opened) == 2
     with Session() as db:
         assert store.get_run(db, run_id).error == "internal error"
+
+
+def test_publish_failure_keeps_the_run_done(api, monkeypatch):
+    _, Session, _ = api
+    with Session() as db:
+        run_id = store.create_run(db, "wc:1", 1, "m").id
+    monkeypatch.setattr(llm, "get_client", lambda: object())
+    good = {"headline": "h", "sentiment": {"score": 0, "trend": "steady", "reason": "", "citations": [], "unsupported": True},
+            "open_issues": [], "shortfalls": [], "strengths": [], "next_steps": []}
+    monkeypatch.setattr(routes.agent, "run", lambda **kw: agent.Outcome(status="done", review=good))
+    monkeypatch.setattr(routes, "_dossier_for", lambda db, key: None)
+
+    def boom(db, **kw):
+        raise RuntimeError("documents down")
+
+    monkeypatch.setattr(routes.document, "publish", boom)
+    routes._execute(run_id, "wc:1")
+    with Session() as db:
+        row = store.get_run(db, run_id)
+        assert row.status == "done" and row.document_id is None and row.document_error == "document publish failed"
