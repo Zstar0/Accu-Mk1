@@ -1,5 +1,11 @@
 # Changelog
 
+## v1.42.0 - 2026-10-09
+
+### New document look
+- **Every new document now looks like the AccuVerify Integration Guide:** Poppins headings, Open Sans text, the teal accent, and the guide's building blocks (numbered steps, colored callouts, cards, checklists, fact rows, button chips). This applies to artifacts, SOPs, reports and AI reviews published from now on; existing documents keep their look until their next revision.
+- **AI reviews** use the same look: an "At a glance" card row, severity-colored callouts, shortfalls grouped by theme, a next-steps checklist, and links to every source.
+
 ## v1.41.0 - 2026-10-09
 
 ### AI review becomes a document
