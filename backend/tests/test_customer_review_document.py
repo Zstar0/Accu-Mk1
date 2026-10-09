@@ -60,3 +60,12 @@ def test_metrics_from_dossier():
     assert cards[2]["value"] == "56%" and cards[2]["note"] == "lab 58%"
     assert cards[3]["value"] == "27 days" and cards[3]["note"] == "usual gap 14 days"
     assert document.metrics(None) == []
+
+
+def test_uses_theme_v2_components_and_no_private_css():
+    html = render()
+    assert "<style" not in html, "the server-inlined theme styles the page; no private CSS"
+    for marker in ('class="eyebrow"', 'class="lede"', 'class="meta"', 'class="kpis"', 'class="kpi"',
+                   'class="note stop"', 'class="note ok"', 'class="check"', "<main"):
+        assert marker in html, marker
+    assert 'class="note stop"' in html and html.index('class="note stop"') < html.index("Low thing")

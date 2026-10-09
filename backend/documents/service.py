@@ -361,8 +361,8 @@ THEME_PATH = Path(__file__).with_name("accumark-docs.css")
 THEME_MARKER_RE = re.compile(r"/\*\s*accumark-docs v\d+")
 FONTS_HOST = "fonts.googleapis.com"
 FONTS_LINK = ('<link rel="stylesheet" href="https://fonts.googleapis.com/css2'
-              '?family=Archivo:wght@500;600;700&family=IBM+Plex+Sans:wght@400;500;600'
-              '&family=IBM+Plex+Mono:wght@400;500&display=swap">')
+              '?family=Poppins:wght@500;600;700&family=Open+Sans:wght@400;600'
+              '&family=JetBrains+Mono:wght@400;500&display=swap">')
 
 
 @lru_cache(maxsize=1)

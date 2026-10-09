@@ -66,82 +66,99 @@ def metrics(d: dict | None) -> list[dict]:
     return cards
 
 
-_CSS = """
-.cr-head{display:flex;flex-wrap:wrap;align-items:center;gap:10px;margin-bottom:6px}
-.cr-chip{display:inline-block;padding:1px 10px;border-radius:999px;font-size:12px}
-.cr-bad{background:#fcebeb;color:#a32d2d}.cr-warn{background:#faeeda;color:#854f0b}
-.cr-ok{background:#eaf3de;color:#3b6d11}.cr-muted{color:#6b6b6b;font-size:13px}
-.cr-headline{font-family:Georgia,serif;font-size:19px;line-height:1.6;margin:14px 0 18px}
-.cr-cards{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:10px;margin-bottom:22px}
-.cr-card{border:1px solid #e5e3dc;border-radius:10px;padding:10px 12px}
-.cr-card .v{font-size:22px;font-weight:600}.cr-card .v.bad{color:#a32d2d}.cr-card .l{font-size:12px;color:#6b6b6b}
-.cr-issues{display:grid;grid-template-columns:repeat(auto-fit,minmax(280px,1fr));gap:10px;margin-bottom:22px}
-.cr-issue{border:1px solid #e5e3dc;border-left:4px solid #b4b2a9;padding:10px 12px}
-.cr-issue.high{border-left-color:#e24b4a}.cr-issue.medium{border-left-color:#ef9f27}
-.cr-issue h4{margin:4px 0;font-size:15px}.cr-issue p{margin:4px 0 6px;font-size:14px}
-.cr-cite{display:inline-block;margin:2px 4px 0 0;padding:0 8px;border-radius:999px;background:#e6f1fb;color:#0c447c;font-size:12px;text-decoration:none}
-.cr-list{list-style:none;padding:0;margin:0 0 20px}.cr-list li{padding:8px 0;border-bottom:1px solid #eeece6}
-.cr-theme{font-size:11px;color:#6b6b6b;text-transform:uppercase;letter-spacing:.04em}
-.cr-foot{margin-top:24px;font-size:12px;color:#6b6b6b}
-"""
-
-
 def _cites(cs: list[dict]) -> str:
     out = []
     for c in cs or []:
         url = link_for(c)
         label = _e(c.get("label") or c.get("id"))
-        out.append(f'<a class="cr-cite" href="{_e(url)}" target="_blank" rel="noopener">{label}</a>' if url
-                   else f'<span class="cr-cite">{label}</span>')
-    return "".join(out)
+        out.append(f'<a class="chip info" href="{_e(url)}" target="_blank" rel="noopener">{label}</a>' if url
+                   else f'<span class="chip">{label}</span>')
+    return f'<div class="chips">{"".join(out)}</div>' if out else ""
 
 
-def _sev_chip(sev: str) -> str:
-    cls = {"high": "cr-bad", "medium": "cr-warn"}.get(sev, "cr-ok")
-    return f'<span class="cr-chip {cls}">{_e(sev.capitalize())}</span>'
+_NOTE_FOR = {"high": "note stop", "medium": "note warn", "low": "note"}
+_CHIP_FOR = {"high": "chip crit", "medium": "chip warn", "low": "chip"}
+
+
+def _sentiment_chip(score: int, trend: str) -> str:
+    cls = "chip crit" if score < 0 else ("chip good" if score > 0 else "chip")
+    return f'<span class="{cls}">{_e(SENTIMENT.get(score, "Neutral"))} · {_e(trend)}</span>'
 
 
 def render_html(review: dict, *, customer_name: str, customer_key: str, generated_at: str, model: str,
                 lookups: int, cost_usd: float, metric_cards: list[dict]) -> str:
+    """The review as an accumark-docs v2 page. Markup only: the server inlines the theme, so the page carries
+    no CSS of its own. Every string from the model or the data sources goes through _e()."""
     s = review.get("sentiment") or {}
     score = s.get("score", 0)
-    tone = "cr-bad" if score < 0 else ("cr-ok" if score > 0 else "")
-    parts = [f"<style>{_CSS}</style>",
+    parts = ['<main>', '<header class="top">',
+             '<p class="eyebrow">Accumark Labs · AI review</p>',
              f'<h1>{_e(customer_name)}</h1>',
-             '<div class="cr-head">'
-             f'<span class="cr-chip {tone}">{_e(SENTIMENT.get(score, "Neutral"))} · {_e(s.get("trend", ""))}</span>'
-             f'<span class="cr-muted">AI review · {_e(customer_key)} · generated {_e(generated_at[:10])}</span></div>',
-             f'<p class="cr-headline">{_e(review.get("headline"))}</p>']
+             f'<p class="lede">{_e(review.get("headline"))}</p>',
+             '<ul class="meta">'
+             f'<li><b>Sentiment</b> {_sentiment_chip(score, s.get("trend", ""))}</li>'
+             f'<li><b>Customer</b> {_e(customer_key)}</li>'
+             f'<li><b>Generated</b> {_e(generated_at[:10])}</li>'
+             f'<li><b>Model</b> {_e(model)}</li></ul>',
+             '</header>']
     if metric_cards:
-        cards = []
+        tiles = []
         for c in metric_cards:
-            value_cls = "v bad" if c.get("tone") == "bad" else "v"
-            note = f'<div class="l">{_e(c["note"])}</div>' if c.get("note") else ""
-            cards.append(f'<div class="cr-card"><div class="l">{_e(c["label"])}</div>'
-                         f'<div class="{value_cls}">{_e(c["value"])}</div>{note}</div>')
-        parts.append('<div class="cr-cards">' + "".join(cards) + "</div>")
+            value_cls = "value bad" if c.get("tone") == "bad" else "value"
+            sub = f'<span class="sub">{_e(c["note"])}</span>' if c.get("note") else ""
+            tiles.append(f'<div class="kpi"><span class="label">{_e(c["label"])}</span>'
+                         f'<span class="{value_cls}">{_e(c["value"])}</span>{sub}</div>')
+        parts.append(f'<section><div class="kpis">{"".join(tiles)}</div></section>')
+
     issues = sorted(review.get("open_issues") or [], key=lambda i: SEVERITY_ORDER.get(i.get("severity"), 1))
-    parts.append("<h2>Needs attention</h2>")
-    parts.append('<div class="cr-issues">' + "".join(
-        f'<div class="cr-issue {_e(i.get("severity"))}">{_sev_chip(i.get("severity", "medium"))}'
-        f'<h4>{_e(i["title"])}</h4><p>{_e(i.get("detail"))}</p>{_cites(i.get("citations"))}</div>'
-        for i in issues) + "</div>" if issues else '<p class="cr-muted">No open issues found.</p>')
-    parts.append("<h2>Where we fell short</h2>")
-    falls = sorted(review.get("shortfalls") or [], key=lambda i: (i.get("theme", "other"), SEVERITY_ORDER.get(i.get("severity"), 1)))
-    parts.append('<ul class="cr-list">' + "".join(
-        f'<li><div class="cr-theme">{_e(THEME_LABEL.get(i.get("theme"), "Other"))} · {_e(i.get("severity", "medium"))}</div>'
-        f'<strong>{_e(i["title"])}</strong> {_e(i.get("detail"))} {_cites(i.get("citations"))}</li>'
-        for i in falls) + "</ul>" if falls else '<p class="cr-muted">Nothing found.</p>')
-    for heading, key, mark in (("Next steps", "next_steps", "&#9744;"), ("Going well", "strengths", "&#10003;")):
-        rows = review.get(key) or []
-        parts.append(f"<h2>{heading}</h2>")
-        parts.append('<ul class="cr-list">' + "".join(
-            f'<li>{mark} <strong>{_e(i["title"])}</strong> {_e(i.get("detail"))} {_cites(i.get("citations"))}</li>'
-            for i in rows) + "</ul>" if rows else '<p class="cr-muted">None.</p>')
-    parts.append(f'<p class="cr-muted">Sentiment: {_e(s.get("reason"))} {_cites(s.get("citations"))}</p>')
-    parts.append(f'<p class="cr-foot">Generated by {_e(model)} from {_e(lookups)} lookups (${_e(f"{cost_usd:.2f}")}). '
-                 "Findings cite what the agent read; verify before acting.</p>")
-    return "<!doctype html><html><head><meta charset=\"utf-8\"></head><body>" + "".join(parts) + "</body></html>"
+    parts.append("<section><h2>Needs attention</h2>")
+    if issues:
+        for i in issues:
+            sev = i.get("severity", "medium")
+            parts.append(f'<div class="{_NOTE_FOR.get(sev, "note")}"><strong>{_e(sev.capitalize())} · {_e(i["title"])}</strong>'
+                         f'<span>{_e(i.get("detail"))}</span>{_cites(i.get("citations"))}</div>')
+    else:
+        parts.append("<p>No open issues found.</p>")
+    parts.append("</section>")
+
+    parts.append("<section><h2>Where we fell short</h2>")
+    falls = review.get("shortfalls") or []
+    if falls:
+        for theme in THEME_LABEL:
+            rows = sorted((f for f in falls if f.get("theme", "other") == theme),
+                          key=lambda f: SEVERITY_ORDER.get(f.get("severity"), 1))
+            if not rows:
+                continue
+            parts.append(f"<h3>{_e(THEME_LABEL[theme])}</h3><ul>")
+            for f in rows:
+                sev = f.get("severity", "medium")
+                parts.append(f'<li><span class="{_CHIP_FOR.get(sev, "chip")}">{_e(sev.capitalize())}</span> '
+                             f'<b>{_e(f["title"])}</b> {_e(f.get("detail"))}{_cites(f.get("citations"))}</li>')
+            parts.append("</ul>")
+    else:
+        parts.append("<p>Nothing found.</p>")
+    parts.append("</section>")
+
+    steps = review.get("next_steps") or []
+    parts.append("<section><h2>Next steps</h2>")
+    parts.append('<ul class="check">' + "".join(
+        f'<li><b>{_e(n["title"])}</b> {_e(n.get("detail"))}{_cites(n.get("citations"))}</li>' for n in steps)
+        + "</ul>" if steps else "<p>None.</p>")
+    parts.append("</section>")
+
+    wins = review.get("strengths") or []
+    parts.append("<section><h2>Going well</h2>")
+    parts.append('<div class="note ok"><strong>What is working</strong><ul>' + "".join(
+        f'<li><b>{_e(w["title"])}</b> {_e(w.get("detail"))}{_cites(w.get("citations"))}</li>' for w in wins)
+        + "</ul></div>" if wins else "<p>None recorded.</p>")
+    parts.append("</section>")
+
+    parts.append(f'<section><h2>Why this sentiment</h2><p>{_e(s.get("reason"))}</p>{_cites(s.get("citations"))}</section>')
+    parts.append(f'<footer>Generated by {_e(model)} from {_e(lookups)} lookups (${_e(f"{cost_usd:.2f}")}). '
+                 "Every finding cites what the agent read; check the source before acting on it.</footer>")
+    parts.append("</main>")
+    return ("<!doctype html><html lang=\"en\"><head><meta charset=\"utf-8\"><title>"
+            + _e(f"Customer review: {customer_name}") + "</title></head><body>" + "".join(parts) + "</body></html>")
 
 
 def ensure_space_and_category(db):
