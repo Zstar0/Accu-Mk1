@@ -2529,6 +2529,11 @@ def _run_migrations():
         # RetestOfSampleId). Nullable, no FK — the original may be a
         # SENAITE-born sample_id.
         "ALTER TABLE lims_samples ADD COLUMN IF NOT EXISTS retest_of_sample_id TEXT",
+        # AI review as documents (2026-10-09): the review's document and the name scrub count.
+        "ALTER TABLE customer_ai_reviews ADD COLUMN IF NOT EXISTS document_id INTEGER",
+        "ALTER TABLE customer_ai_reviews ADD COLUMN IF NOT EXISTS document_code VARCHAR(32)",
+        "ALTER TABLE customer_ai_reviews ADD COLUMN IF NOT EXISTS names_scrubbed INTEGER NOT NULL DEFAULT 0",
+        "ALTER TABLE customer_ai_reviews ADD COLUMN IF NOT EXISTS document_error TEXT",
     ]
     # Per-statement isolation: a failure in one statement (e.g., a table that
     # create_all hasn't built yet on first run) must not skip subsequent

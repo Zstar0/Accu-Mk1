@@ -2625,3 +2625,7 @@ class CustomerAiReview(Base):
     cost_usd: Mapped[Decimal] = mapped_column(Numeric(8, 4), nullable=False, default=0)
     citations_dropped: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     error: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    document_id: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    document_code: Mapped[Optional[str]] = mapped_column(String(32), nullable=True)
+    names_scrubbed: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    document_error: Mapped[Optional[str]] = mapped_column(Text, nullable=True)

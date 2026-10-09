@@ -16,7 +16,8 @@ def test_create_and_finish_round_trip(db_session):
     assert d["cost_usd"] == 0.004 and d["citations_dropped"] == 2 and d["finished_at"]
     assert set(d) == {"run_id", "customer_key", "status", "created_at", "finished_at", "model", "steps", "review",
                       "tool_calls", "tool_call_count", "input_tokens", "output_tokens", "cost_usd",
-                      "citations_dropped", "error"}
+                      "citations_dropped", "error", "document_id", "document_code", "names_scrubbed",
+                      "document_error"}
 
 
 def test_active_run_returns_the_live_run(db_session):
@@ -76,3 +77,27 @@ def test_startup_sweep_closes_every_running_row(db_session):
     assert store.sweep_running(db_session) == 1
     assert store.get_run(db_session, a.id).error == "interrupted"
     assert store.get_run(db_session, b.id).status == "done"
+
+
+def test_document_fields_round_trip_and_code_lookup(db_session):
+    a = store.create_run(db_session, "wc:1", 7, "m")
+    store.finish(db_session, a.id, status="done", tool_calls=[], input_tokens=0, output_tokens=0, cost_usd=0,
+                 document_id=11, document_code="CR-0001", names_scrubbed=2)
+    b = store.create_run(db_session, "wc:1", 7, "m")
+    store.finish(db_session, b.id, status="done", tool_calls=[], input_tokens=0, output_tokens=0, cost_usd=0,
+                 document_error="publish failed")
+    d = store.to_dict(store.get_run(db_session, a.id))
+    assert (d["document_id"], d["document_code"], d["names_scrubbed"], d["document_error"]) == (11, "CR-0001", 2, None)
+    assert store.to_dict(store.get_run(db_session, b.id))["document_error"] == "publish failed"
+    assert store.document_code_for(db_session, "wc:1") == "CR-0001"
+    assert store.document_code_for(db_session, "wc:2") is None
+
+
+def test_migrations_add_the_document_columns():
+    import inspect
+
+    import database
+
+    src = inspect.getsource(database._run_migrations)
+    for col in ("document_id INTEGER", "document_code VARCHAR(32)", "names_scrubbed INTEGER", "document_error TEXT"):
+        assert f"ALTER TABLE customer_ai_reviews ADD COLUMN IF NOT EXISTS {col}" in src

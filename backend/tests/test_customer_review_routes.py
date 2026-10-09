@@ -84,7 +84,8 @@ def test_latest_and_history_shapes(api):
     run = client.get(f"/ai-review/runs/{run_id}").json()
     assert set(run) == {"run_id", "customer_key", "status", "created_at", "finished_at", "model", "steps", "review",
                         "tool_calls", "tool_call_count", "input_tokens", "output_tokens", "cost_usd",
-                        "citations_dropped", "error"}
+                        "citations_dropped", "error", "document_id", "document_code", "names_scrubbed",
+                        "document_error"}
     assert client.get("/ai-review/runs/999").status_code == 404
     assert client.get("/ai-review/customers/wc:2").json() == {"latest": None, "history": []}
 

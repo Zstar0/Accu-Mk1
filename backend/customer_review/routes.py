@@ -44,6 +44,10 @@ class Run(BaseModel):
     cost_usd: float
     citations_dropped: int
     error: Optional[str] = None
+    document_id: Optional[int] = None
+    document_code: Optional[str] = None
+    names_scrubbed: int = 0
+    document_error: Optional[str] = None
 
 
 class HistoryRow(BaseModel):
