@@ -74,7 +74,8 @@ export function SupportComposer({
       setConfirming(false)
       update('')
     } catch (e) {
-      setError(supportErrorMessage(e))
+      setConfirming(false)
+      setError(supportErrorMessage(e, tab))
     } finally {
       setBusy(false)
     }
@@ -83,6 +84,8 @@ export function SupportComposer({
   const onKey = (e: KeyboardEvent<HTMLTextAreaElement>) => {
     if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) {
       e.preventDefault()
+      // The keyboard can ask, never answer: confirming a customer reply takes a click.
+      if (e.repeat || confirming) return
       void send()
     }
   }

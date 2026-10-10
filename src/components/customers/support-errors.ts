@@ -13,7 +13,12 @@ const MESSAGES: Record<string, string> = {
   support_not_configured: 'Support actions are not configured on the server.',
 }
 
-export function supportErrorMessage(e: unknown): string {
+export function supportErrorMessage(e: unknown, action?: string): string {
+  // A reply that failed without our error code (proxy page, dropped connection, server crash) may still
+  // have reached the customer: never tell the user to just try again.
+  if (action === 'reply' && !(e instanceof CrmError && e.code)) {
+    return MESSAGES.reply_unconfirmed ?? ''
+  }
   const known = e instanceof CrmError && e.code ? MESSAGES[e.code] : undefined
   return known ?? 'Plain is unavailable right now. Try again in a moment.'
 }

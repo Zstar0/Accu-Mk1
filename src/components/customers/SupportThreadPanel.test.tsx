@@ -214,4 +214,52 @@ describe('SupportThreadPanel actions', () => {
       Date.now() + 50 * 60_000
     )
   })
+
+  it('an unconfirmed reply refetches the thread and drops the pending confirmation', async () => {
+    setup()
+    vi.mocked(support.supportAction).mockRejectedValueOnce(
+      new CrmError(504, 'reply_unconfirmed')
+    )
+    const box = await screen.findByRole('textbox', { name: /Reply/ })
+    await userEvent.type(box, 'hello')
+    await userEvent.click(
+      screen.getByRole('button', { name: 'Send as Sam Parker' })
+    )
+    await userEvent.click(screen.getByRole('button', { name: 'Yes, send' }))
+    expect(await screen.findByText(/Not confirmed/)).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'Yes, send' })).toBeNull()
+    await waitFor(() =>
+      expect(
+        vi.mocked(support.getSupportThread).mock.calls.length
+      ).toBeGreaterThan(1)
+    )
+  })
+
+  it('a reply that failed without a code is treated as unconfirmed, not as try again', async () => {
+    setup()
+    vi.mocked(support.supportAction).mockRejectedValueOnce(
+      new TypeError('Failed to fetch')
+    )
+    await userEvent.type(
+      await screen.findByRole('textbox', { name: /Reply/ }),
+      'hello'
+    )
+    await userEvent.click(
+      screen.getByRole('button', { name: 'Send as Sam Parker' })
+    )
+    await userEvent.click(screen.getByRole('button', { name: 'Yes, send' }))
+    expect(await screen.findByText(/Not confirmed/)).toBeInTheDocument()
+    expect(screen.queryByText(/Try again/)).toBeNull()
+  })
+
+  it('Ctrl+Enter never confirms a reply, even when held', async () => {
+    setup()
+    const box = await screen.findByRole('textbox', { name: /Reply/ })
+    await userEvent.type(box, 'hello')
+    await userEvent.keyboard('{Control>}{Enter}{Enter}{Enter}{/Control}')
+    expect(
+      screen.getByRole('button', { name: 'Yes, send' })
+    ).toBeInTheDocument()
+    expect(support.supportAction).not.toHaveBeenCalled()
+  })
 })

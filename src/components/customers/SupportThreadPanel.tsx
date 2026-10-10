@@ -64,8 +64,16 @@ export function SupportThreadPanel({
   const current = d?.thread ?? thread
   const run = async (action: SupportAction, body: Record<string, unknown>) => {
     if (!thread) return
-    const out = await supportAction(customerKey, thread.id, action, body)
     const key = ['support', 'thread', customerKey, thread.id]
+    let out
+    try {
+      out = await supportAction(customerKey, thread.id, action, body)
+    } catch (e) {
+      // The write may have happened (or half-happened): show Plain's current state, then report.
+      void qc.invalidateQueries({ queryKey: key })
+      void qc.invalidateQueries({ queryKey: ['support', customerKey] })
+      throw e
+    }
     if (out.detail) qc.setQueryData(key, out.detail)
     else void qc.invalidateQueries({ queryKey: key })
     void qc.invalidateQueries({ queryKey: ['support', customerKey] })
