@@ -2629,3 +2629,29 @@ class CustomerAiReview(Base):
     document_code: Mapped[Optional[str]] = mapped_column(String(32), nullable=True)
     names_scrubbed: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     document_error: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+
+
+class IntegrationKey(Base):
+    """A third-party API key saved from Settings > Integrations, Fernet-encrypted (spec 2026-10-10, 3.2).
+
+    The plaintext never touches this table; last4 is for display only.
+    """
+    __tablename__ = "integration_keys"
+
+    name: Mapped[str] = mapped_column(String(64), primary_key=True)
+    ciphertext: Mapped[str] = mapped_column(Text, nullable=False)
+    last4: Mapped[str] = mapped_column(String(4), nullable=False)
+    updated_by: Mapped[int] = mapped_column(Integer, nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+
+
+class IntegrationKeyEvent(Base):
+    """Audit of integration key changes and tests. Never holds a key value."""
+    __tablename__ = "integration_key_events"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, index=True)
+    name: Mapped[str] = mapped_column(String(64), nullable=False)
+    action: Mapped[str] = mapped_column(String(16), nullable=False)
+    user_id: Mapped[int] = mapped_column(Integer, nullable=False)
+    outcome: Mapped[str] = mapped_column(String(16), nullable=False)
