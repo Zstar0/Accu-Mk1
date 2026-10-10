@@ -2631,6 +2631,27 @@ class CustomerAiReview(Base):
     document_error: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
 
 
+class SupportAction(Base):
+    """One attempted Support ticket action from Mk1 (spec 2026-10-09-support-ticket-actions-design.md, 3.5).
+
+    Never stores message text: Plain holds it; the hash and length prove what was sent.
+    """
+    __tablename__ = "support_actions"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, index=True)
+    mk1_user_id: Mapped[int] = mapped_column(Integer, nullable=False, index=True)
+    plain_user_id: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
+    customer_key: Mapped[str] = mapped_column(String(255), nullable=False)
+    thread_id: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
+    action: Mapped[str] = mapped_column(String(16), nullable=False)
+    args: Mapped[dict] = mapped_column(JSONB().with_variant(JSON(), "sqlite"), nullable=False, default=dict)
+    body_sha256: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
+    body_len: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    outcome: Mapped[str] = mapped_column(String(32), nullable=False)
+    error_code: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
+
+
 class IntegrationKey(Base):
     """A third-party API key saved from Settings > Integrations, Fernet-encrypted (spec 2026-10-10, 3.2).
 

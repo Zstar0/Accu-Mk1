@@ -29,6 +29,15 @@ def _labels(labels) -> list[str]:
     return [l["labelType"]["name"] for l in labels or [] if (l.get("labelType") or {}).get("name")]
 
 
+def _label_refs(labels) -> list[dict[str, str]]:
+    out = []
+    for l in labels or []:
+        lt = l.get("labelType") or {}
+        if l.get("id") and lt.get("id") and lt.get("name"):
+            out.append({"id": l["id"], "type_id": lt["id"], "name": lt["name"]})
+    return out
+
+
 def plain_url(workspace_id: str, thread_id: str) -> str:
     return f"https://app.plain.com/workspace/{workspace_id}/thread/{thread_id}"
 
@@ -50,7 +59,10 @@ def thread_item(t: dict, workspace_id: str) -> dict[str, Any]:
             "priority": rules.PRIORITY.get(t.get("priority"), "normal"), "labels": _labels(t.get("labels")),
             "assignee": _name(t.get("assignedTo")), "created_at": _iso(t.get("createdAt")),
             "updated_at": _iso(t.get("updatedAt")), "preview": preview[:rules.PREVIEW_CHARS],
-            "waiting_since": _waiting_since(t, status), "plain_url": plain_url(workspace_id, t["id"])}
+            "waiting_since": _waiting_since(t, status), "plain_url": plain_url(workspace_id, t["id"]),
+            "assignee_id": (t.get("assignedTo") or {}).get("id"),
+            "customer_plain_id": (t.get("customer") or {}).get("id"),
+            "label_refs": _label_refs(t.get("labels"))}
 
 
 def build_threads(raw: list[dict], workspace_id: str) -> list[dict[str, Any]]:

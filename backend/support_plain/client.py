@@ -1,4 +1,4 @@
-"""Thin Plain GraphQL client. Sends only the fixed queries in queries.py (the key itself can write)."""
+"""Thin Plain GraphQL client. Reads retry once; writes (mutate) never retry (spec 3.2)."""
 from __future__ import annotations
 
 import logging
@@ -7,7 +7,7 @@ from typing import Any, Callable
 
 import httpx
 
-from support_plain import queries
+from support_plain import queries, rules
 from integration_keys import store as integration_keys
 
 API_URL = "https://core-api.uk.plain.com/graphql/v1"
@@ -20,6 +20,18 @@ class SupportNotConfigured(Exception):
 
 class SupportUnavailable(Exception):
     """Plain failed after one retry (429/5xx/timeout/network), refused the key, or returned GraphQL errors."""
+
+
+class SupportWriteUnconfirmed(Exception):
+    """A write may or may not have reached Plain (network error, timeout, 5xx). Never retried."""
+
+
+class PlainActionError(Exception):
+    """Plain answered the mutation with an error payload."""
+
+    def __init__(self, code: str, type_: str, message: str) -> None:
+        super().__init__(code)
+        self.code, self.type_, self.message = code, type_, message
 
 
 class PlainClient:
@@ -71,6 +83,46 @@ class PlainClient:
                 raise SupportUnavailable("bad_response")
             return data
         raise SupportUnavailable("unreachable")
+
+    def mutate(self, mutation: str, variables: dict) -> dict:
+        if mutation not in queries.MUTATIONS:
+            raise ValueError("unknown mutation")
+        op = mutation.split()[1].split("(")[0]
+        try:
+            r = self._http.post(API_URL, json={"query": mutation, "variables": variables},
+                                timeout=rules.WRITE_TIMEOUT)
+        except (httpx.ConnectError, httpx.ConnectTimeout) as e:  # never reached Plain: safe to retry
+            logger.warning("support_plain.write_not_sent op=%s error=%s", op, type(e).__name__)
+            raise SupportUnavailable(type(e).__name__) from e
+        except httpx.HTTPError as e:
+            logger.warning("support_plain.write_unconfirmed op=%s error=%s", op, type(e).__name__)
+            raise SupportWriteUnconfirmed(type(e).__name__) from e
+        if r.status_code in (401, 403):
+            raise SupportNotConfigured()
+        if r.status_code >= 500 or 300 <= r.status_code < 400:  # proxy/redirect: Plain may have acted
+            logger.warning("support_plain.write_unconfirmed op=%s status=%s", op, r.status_code)
+            raise SupportWriteUnconfirmed(f"http_{r.status_code}")
+        if r.status_code >= 400:  # 429 and other 4xx: Plain refused before acting
+            logger.warning("support_plain.write_refused op=%s status=%s", op, r.status_code)
+            raise SupportUnavailable(f"http_{r.status_code}")
+        try:
+            body = r.json()
+        except ValueError:
+            body = None
+        if isinstance(body, dict) and body.get("errors"):  # GraphQL rejected the document: nothing ran
+            logger.warning("support_plain.write_refused op=%s graphql_errors", op)
+            raise SupportUnavailable("graphql_errors")
+        payload = next(iter(body["data"].values()), None) if isinstance(body, dict) and isinstance(
+            body.get("data"), dict) else None
+        if not isinstance(payload, dict):  # a 200 we cannot read (proxy page, empty data): Plain may have acted
+            logger.warning("support_plain.write_unconfirmed op=%s bad_response", op)
+            raise SupportWriteUnconfirmed("bad_response")
+        err = payload.get("error")
+        if err:
+            logger.warning("support_plain.write_error op=%s code=%s", op, err.get("code"))
+            raise PlainActionError(str(err.get("code") or ""), str(err.get("type") or ""),
+                                   str(err.get("message") or ""))
+        return payload
 
 
 _shared: dict[str, PlainClient] = {}

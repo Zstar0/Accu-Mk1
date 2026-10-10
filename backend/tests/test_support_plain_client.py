@@ -1,6 +1,5 @@
 """support_plain.client: fixed queries only, GraphQL errors are failures, retry once."""
 import json
-import pathlib
 
 import httpx
 import pytest
@@ -31,12 +30,6 @@ def test_posts_query_with_bearer_and_returns_data():
 def test_refuses_any_query_not_in_queries_module():
     with pytest.raises(ValueError):
         _client(lambda req: httpx.Response(200, json={"data": {}})).query("query { me { id } }")
-
-
-def test_no_mutation_text_anywhere_in_the_package():
-    pkg = pathlib.Path(c.__file__).parent
-    for f in pkg.glob("*.py"):
-        assert "mutation" not in f.read_text(encoding="utf-8").lower(), f.name
 
 
 def test_graphql_errors_in_a_200_are_unavailable():
@@ -92,3 +85,93 @@ def test_get_client_requires_key_and_reuses_one_client_per_key(monkeypatch):
 def test_malformed_responses_are_unavailable(resp):
     with pytest.raises(c.SupportUnavailable):
         _client(lambda req: resp).query(queries.WORKSPACE)
+
+
+def test_query_refuses_mutations():
+    for m in queries.MUTATIONS:
+        with pytest.raises(ValueError):
+            _client(lambda req: httpx.Response(200, json={"data": {}})).query(m)
+
+
+def test_mutations_and_queries_are_disjoint():
+    assert not (queries.MUTATIONS & queries.ALL)
+    assert all(m.lstrip().startswith("mutation ") for m in queries.MUTATIONS)
+    assert all(q.lstrip().startswith("query ") for q in queries.ALL)
+
+
+def test_mutate_refuses_unknown_documents():
+    with pytest.raises(ValueError):
+        _client(lambda req: httpx.Response(200, json={"data": {}})).mutate("mutation { x }", {})
+
+
+def test_mutate_returns_root_payload_once():
+    calls = []
+
+    def handler(req):
+        calls.append(json.loads(req.content))
+        return httpx.Response(200, json={"data": {"markThreadAsDone": {"error": None}}})
+
+    assert _client(handler).mutate(queries.MARK_DONE, {"input": {"threadId": "th_1"}}) == {"error": None}
+    assert len(calls) == 1 and calls[0]["variables"] == {"input": {"threadId": "th_1"}}
+
+
+def test_mutate_error_payload_raises_action_error():
+    body = {"data": {"replyToThread": {"error": {"code": "cannot_reply_to_thread", "type": "FORBIDDEN",
+                                                 "message": "no"}}}}
+    with pytest.raises(c.PlainActionError) as e:
+        _client(lambda req: httpx.Response(200, json=body)).mutate(queries.REPLY, {"input": {}})
+    assert e.value.code == "cannot_reply_to_thread" and e.value.type_ == "FORBIDDEN"
+
+
+def test_mutate_never_retries_network_errors():
+    calls = []
+
+    def handler(req):
+        calls.append(1)
+        raise httpx.ReadTimeout("slow")
+
+    with pytest.raises(c.SupportWriteUnconfirmed):
+        _client(handler).mutate(queries.REPLY, {"input": {}})
+    assert len(calls) == 1
+
+
+def test_mutate_5xx_is_unconfirmed():
+    calls = []
+
+    def handler(req):
+        calls.append(1)
+        return httpx.Response(502)
+
+    with pytest.raises(c.SupportWriteUnconfirmed):
+        _client(handler).mutate(queries.REPLY, {"input": {}})
+    assert len(calls) == 1
+
+
+def test_mutate_429_is_unavailable_and_401_is_not_configured():
+    with pytest.raises(c.SupportUnavailable):
+        _client(lambda req: httpx.Response(429)).mutate(queries.MARK_DONE, {"input": {}})
+    with pytest.raises(c.SupportNotConfigured):
+        _client(lambda req: httpx.Response(401)).mutate(queries.MARK_DONE, {"input": {}})
+
+
+def test_mutate_graphql_errors_are_unavailable():
+    with pytest.raises(c.SupportUnavailable):
+        _client(lambda req: httpx.Response(200, json={"errors": [{"message": "x"}]})).mutate(queries.MARK_DONE, {})
+
+
+def test_connect_failures_never_left_so_they_are_unavailable():
+    def handler(req):
+        raise httpx.ConnectError("refused")
+
+    with pytest.raises(c.SupportUnavailable):
+        _client(handler).mutate(queries.REPLY, {"input": {}})
+
+
+@pytest.mark.parametrize("resp", [
+    httpx.Response(200, text="<html>proxy error</html>"),
+    httpx.Response(200, json={"data": None}),
+    httpx.Response(302, headers={"Location": "https://example.invalid/"}),
+])
+def test_ambiguous_write_responses_are_unconfirmed(resp):
+    with pytest.raises(c.SupportWriteUnconfirmed):
+        _client(lambda req: resp).mutate(queries.REPLY, {"input": {}})
