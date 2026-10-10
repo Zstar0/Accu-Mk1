@@ -2,13 +2,13 @@
 from __future__ import annotations
 
 import logging
-import os
 import time
 from typing import Any, Callable
 
 import httpx
 
 from support_plain import queries, rules
+from integration_keys import store as integration_keys
 
 API_URL = "https://core-api.uk.plain.com/graphql/v1"
 logger = logging.getLogger(__name__)
@@ -130,7 +130,7 @@ _shared: dict[str, PlainClient] = {}
 
 def get_client() -> PlainClient:
     """One pooled client per key for the life of the process."""
-    key = (os.environ.get("PLAIN_API_KEY") or "").strip()
+    key = integration_keys.get("PLAIN_API_KEY") or ""
     if not key:
         raise SupportNotConfigured()
     if key not in _shared:

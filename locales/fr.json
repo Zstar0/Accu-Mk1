@@ -146,6 +146,7 @@
   "preferences.checkIn.multiOrderLabel": "Autoriser la réception multi-commandes",
   "preferences.checkIn.multiOrderDescription": "Désactivé = les techniciens traitent une commande entièrement avant la suivante (procédure par défaut) ; Activé = la liste de réception par commande permet de sélectionner et de combiner plusieurs commandes.",
   "preferences.documents": "Documents",
+  "preferences.integrations": "Intégrations",
   "preferences.documents.loadError": "Could not load document categories.",
   "preferences.documents.readOnly": "Only administrators can change document categories.",
   "preferences.documents.sectionTitle": "Document categories",
