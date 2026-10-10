@@ -145,10 +145,9 @@ A new Settings pane **Integrations** (`src/components/preferences/panes/Integrat
 ## 7. Rollout
 
 1. On the prod droplet, generate the Fernet key inside the backend container and append it to `backend/.env` as `INTEGRATION_KEYS_SECRET`, with a dated backup, without printing it. Also save a copy in the Accumark vault for disaster recovery (Handler).
-2. Deploy (the backend creates both tables).
-3. Restart once so the backend reads `INTEGRATION_KEYS_SECRET`.
-4. Smoke: the pane lists three rows from `env`; **Test** each (all ok); save the current Close key through the pane (source changes to Settings); **Use server env** reverts it.
-5. Support actions rollout (PR #300) then needs no ssh: the Handler pastes the new Plain read-write key into this pane.
+2. Deploy. The backend creates both tables. Prod injects `backend/.env` through compose `env_file`, so the deploy's container recreate is what loads the new variable: a plain restart would not.
+3. Smoke: the pane lists three rows from `env`; **Test** each (all ok); save the current Close key through the pane (source changes to Settings); **Use server env** reverts it.
+4. Support actions rollout (PR #300) then needs no ssh: the Handler pastes the new Plain read-write key into this pane.
 
 ## 8. Errors
 
