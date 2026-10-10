@@ -13,7 +13,7 @@ Sources:
 Mk1's endotoxin worksheet becomes Dennis's current tool: the 2 mL prep, his three-box layout on screen and paper, and a Results section that turns the instrument reading (typed, or imported from the reader's export) into LOD, LOQ, EU per vial and a verdict. Cartridges come from a managed consumables catalog linked to methods, so the lab, not code, decides which cartridges a method allows. Endo worksheets get a full page; the flyout becomes a read-only summary.
 
 Success means:
-- Mk1's numbers equal Dennis's on all 52 of his test cases.
+- Mk1's numbers equal Dennis's on the 18 of his 52 test cases that cover the 2 mL prep, results and the reader import (the rest cover stock runs, his own intake file and method rules; mapping in section 11).
 - The printed bench sheet and the three boxes match his layout, column order and spacing (checked side by side, section 11).
 - Every worksheet that exists today, and every completed one, looks and calculates exactly as before.
 - Nothing in this release writes to a sample's analyses or reaches a COA.
@@ -131,7 +131,7 @@ varchar(100). Partial unique index `WHERE serial_number IS NOT NULL` (a duplicat
 | --- | --- | --- |
 | `endo_prep` | varchar(10) | `2ml` or `stock`; default `2ml` for new rows (3.8) |
 | `cartridge_type_id` | FK `consumable_types` | the run's cartridge |
-| `endo_method_id` | FK `hplc_methods` | the method revision pinned when the first reading is saved (4.1) |
+| `endo_method_id` | FK `hplc_methods` | the method revision pinned at first print or first reading (4.1) |
 
 Non-endo worksheets carry `endo_prep` harmlessly; only endo views read it.
 
@@ -163,13 +163,17 @@ In `database.py` `_run_migrations`, in this order, all idempotent:
 
 After the first boot no row is NULL, so later boots change nothing, and a worksheet someone switched back to stock is never switched again. Adding the column with a default in step 2 would have filled every existing row with `2ml`, which is why the default comes last.
 
+`backend/scripts/backfill_endo_worksheets.py` (the pending historical backfill) sets `endo_prep='stock'` on every worksheet it creates: those runs were prepped the old way, and the new column default would otherwise give them 2 mL maths.
+
 ## 4. Resolution rules
 
 ### 4.1 The worksheet's endo method
 
 The serializer adds `endo_method` to each worksheet: for every endo item, follow the vial's endo analysis service to its active default method (`method_services.is_default`, method `status = 'active'`). If every endo item resolves to the same single method, return it with its `run_parameters` and its endo-cartridge consumables; otherwise `null`.
 
-**Pinning.** The first time a reading is saved on a worksheet (item PATCH or reader import), the server stores that resolved method in `worksheets.endo_method_id`. From then on the worksheet uses the pinned revision, not whatever is active later. Revision content is locked, so a pinned worksheet's run parameters and allowed cartridges never change, and neither do its results. Before the first reading (prep and printing), the current active method applies. If no method resolves, nothing is pinned and Dennis's values apply.
+**Pinning.** The first time the worksheet is printed (`POST /worksheets/{id}/printed`, Mk1's bench-start event) or a reading is saved on it (item PATCH or reader import), whichever comes first, the server stores that resolved method in `worksheets.endo_method_id`. From then on the worksheet uses the pinned revision, not whatever is active later. Pinning at print matters because the bench preps from the paper: the sheet and the results must use the same standard dilution and cartridge. Revision content is locked, so a pinned worksheet's run parameters and allowed cartridges never change, and neither do its results. Before that, the current active method applies. If no method resolves, nothing is pinned and Dennis's values apply.
+
+**Cost.** `endo_method` is resolved only on `GET /worksheets/{id}`, the item PATCH response and the reader-import response, never on the list endpoints, and in a fixed number of queries per call (all endo items' services at once, then their methods, then the consumables), never per item. The shared serializer serves the list endpoints too, and a per-item lookup there is the fan-out class behind the 2026-09-15 connection-pool outage.
 
 ### 4.2 Form
 
@@ -206,7 +210,7 @@ New `src/lib/endo-prep-2ml.ts`, a port of Dennis's `calc.js` at `5ef2a62`, with 
 
 **Limits in this release.** The worksheet judges against Dennis's working limits, 350 EU per vial for peptides and 0.25 EU/mL for bac water, as constants in this file. They are not the COA spec: the spec stays at today's values until R6. The Results box says so (6.1). These limits and the fixed parts of the maths (4.4) change only in a reviewed release; everything an admin can change (cartridges, run parameters) is pinned per worksheet (4.1).
 
-**Parity.** `src/lib/__tests__/endo-prep-2ml.test.ts` ports all 52 of Dennis's cases (inputs and expected outputs unchanged; the reader cases use his made-up export, never real results). `endo-prep.ts` and its tests are untouched, which proves stock worksheets do not move.
+**Parity.** `src/lib/__tests__/endo-prep-2ml.test.ts` ports the 18 of Dennis's cases listed in section 11, with inputs and expected outputs unchanged; the reader cases use his made-up export, never real results. `endo-prep.ts` and its tests are untouched, which proves stock worksheets do not move.
 
 ## 6. Screens
 
@@ -219,7 +223,7 @@ Layout, top to bottom, with the run log (`BenchRunLog`, kind `endo`) as a left r
 - **Run header:** title, analyst, date made, due, orders; the **Prep** switch (`2 mL` / `1 mg/mL stock`); the **run cartridge** picker (the allowed list, preset to the method default); the method name and revision; Preview, Print and CSV.
 - **Box 1, Prep** (2 mL columns): #, Received, Due (with time), Priority, Order #, Sample ID (stacked vial), Sample identity, Declared wt, Form, Water (mL), Vial conc, Cartridge with MVD/MVC and its verdict under it, Status, Made, MCS, Flag. Stock worksheets show today's columns unchanged.
 - **Box 2, Sample dilution** (2 mL only): #, Sample ID ("no ID yet" when empty), Total, then one cell per step: step 1 ratio box and sample uL (Tris computed), step 2 derived ratio and sample uL (LAL water computed), step 3 "1:2" and sample uL (BG600 computed), each with its total uL and running dilution and a tube-overflow warning; then Loaded (mg/mL). Grouped by total with a rule per group; the row number is the Box 1 row.
-- **Box 3, Results:** #, Sample ID, mg, Cartridge, Loaded, MVD, MVC, Reading (its own input, 6.1.1), Reader (spike recovery and the larger CV; red when Invalid; the whole record on hover), LOD (EU/mL), LOQ, EU/mg, EU per vial, Limit, Verdict, **Accu-Mk1 value** (blue, with its unit; a click copies the number). Under the box title, one line: "Accu-Mk1 values are per vial; Mk1's endotoxin test reports EU/mL against <= 5 until the spec switch." The reader import drop zone sits in the box header (section 8).
+- **Box 3, Results** (2 mL only; stock worksheets have no Results box, as today): #, Sample ID, mg, Cartridge, Loaded, MVD, MVC, Reading (its own input, 6.1.1), Reader (spike recovery and the larger CV; red when Invalid; the whole record on hover), LOD (EU/mL), LOQ, EU/mg, EU per vial, Limit, Verdict, **Accu-Mk1 value** (blue, with its unit; a click copies the number). Under the box title, one line: "Accu-Mk1 values are per vial; Mk1's endotoxin test reports {unit} against {limit} until the spec switch", with unit and limit read from the endo service's peptide spec tier through the existing spec API, not hardcoded (the 09-01 snapshot of <= 5 EU/mL is unverified). The reader import drop zone sits in the box header (section 8).
 - Calculations legend and notes, as today.
 - Every computed cell shows its worked line on hover.
 
@@ -324,7 +328,8 @@ Server, for the whole request in one transaction (all or nothing):
 | `POST/PATCH /instruments` | `serial_number` |
 | `PUT /worksheets/{id}` | `endo_prep`, `cartridge_type_id` (409 on completed; audited) |
 | `PATCH /worksheets/{ws}/items/{item}` | `prep_form`, `prep_water_ml`, `prep_total_dilution`, `prep_steps`, `cartridge_type_id`, `result_reading` (409 on completed for these fields only; audited). Setting `result_reading` requires the row's resolved `cartridge_type_id` in the same request when the item has none, and pins the worksheet's method (4.1) |
-| `GET /worksheets`, `GET /worksheets/{id}` | serialize the new worksheet and item fields, `endo_method` (4.1), and each referenced cartridge's sensitivity |
+| `GET /worksheets`, `GET /worksheets/{id}` | serialize the new worksheet and item fields and each referenced cartridge's sensitivity; `endo_method` (4.1) on the single-worksheet GET only |
+| `POST /worksheets/{id}/printed` | also pins the method (4.1) |
 | `POST /worksheets/{id}/reader-import` | new (8.2) |
 
 New endpoints declare their response models.
@@ -340,9 +345,19 @@ New endpoints declare their response models.
 
 ## 11. Testing
 
-- **Maths:** `endo-prep-2ml.test.ts` (Dennis's 52 cases, ported unchanged). The existing endo tests (`endo-prep.test.ts`, `endo-bench-sheet.test.ts`, `endo-holidays.test.ts`, `worksheet-kind.test.ts`) pass unchanged.
+- **Maths:** `endo-prep-2ml.test.ts` ports 18 of Dennis's 52 cases (`calc.test.js` at `5ef2a62`, by line); the existing endo tests (`endo-prep.test.ts`, `endo-bench-sheet.test.ts`, `endo-holidays.test.ts`, `worksheet-kind.test.ts`) pass unchanged.
+
+  | Dennis's tests | Count | Here |
+  | --- | --- | --- |
+  | 2 mL: prep and floors (533), reading to EU/vial (602), the 2 mL flag vs stock fields (641, as the worksheet prep switch), dilution scheme (670), LOD and LOQ (820), bac water 20x on 2 mL (835, without its method-rule clause), bac water last and on 0.01 (861), bac water limit 0.25 (879), liquid form (906), Accu-Mk1 value (934) | 10 | Ported |
+  | Shared helpers: 350 per vial and per mg (196), MVC (210), parseResult (352), limit flat per vial (480), small-number formatting (517) | 5 | Ported |
+  | Reader: parse and checks (992), invalid verdict (1016), matching by Sample ID (1035) | 3 | Ported |
+  | Stock prep, dates, order, intake parsing, storage (17 to 181) | 15 | Not ported: the stock maths is unchanged and already covered by the September port's tests; his intake file and storage do not exist in Mk1 |
+  | Stock-run cartridge and results, 10-07 (224, 240, 254, 284, 305, 324, 345, 362, 381, 403, 416, 435, 447, 469, 496) | 15 | Not ported: stock worksheets get no cartridge or Results box in Mk1 |
+  | Method rules (747, 768, 797) | 3 | Slice 5 |
+  | Inbox identity label (952) | 1 | Ported only if the identity trace (section 7) finds Mk1 adds the assay suffix |
 - **Paper:** `endo-bench-sheet` tests for the 2 mL sheet (grouping, marks, summary totals, CSV columns and defusing); stock output byte-identical to today.
-- **Backend (pytest, the `test_worksheet_endo_prep.py` style):** consumables CRUD, registry validation, lock on use, retire; method consumables replace-set, draft-only 409, copied with default on new revision; `run_parameters` validation, lock and copy; instrument serial uniqueness; the new item fields (validation, null clears, 409 on completed, audit rows); `endo_method` resolution (single method, mixed, none) and pinning (first reading pins; a later activated revision does not change a pinned worksheet; a reading without a resolved cartridge is refused); reader import (ownership, completed 409, all-or-nothing, replace flag, cartridge rules, serial-to-instrument stamp and fallback, no-op repeat, audit rows); the migration switch run twice, including a worksheet switched back to stock.
+- **Backend (pytest, the `test_worksheet_endo_prep.py` style):** consumables CRUD, registry validation, lock on use, retire; method consumables replace-set, draft-only 409, copied with default on new revision; `run_parameters` validation, lock and copy; instrument serial uniqueness; the new item fields (validation, null clears, 409 on completed, audit rows); `endo_method` resolution (single method, mixed, none; a query-count assertion proving it is batched) and pinning (first print or first reading pins, whichever comes first; a later activated revision does not change a pinned worksheet; a reading without a resolved cartridge is refused); reader import (ownership, completed 409, all-or-nothing, replace flag, cartridge rules, serial-to-instrument stamp and fallback, no-op repeat, audit rows); the backfill script writing `stock`. The migration switch (run twice, including a worksheet switched back to stock) uses Postgres-only SQL, so that test runs against the stack's Postgres inside the container, not the in-memory SQLite the other worksheet tests use.
 - **Frontend:** hash route and store action; the read-only flyout; the Reading input; the import preview (matched, unmatched, replace ticks, invalid).
 - **Layout parity:** run Dennis's tool locally (`serve-local.js`) and the Mk1 page on the same run data; compare screenshots at 1920 and 1440 wide for box order, columns, widths and spacing; differences listed and either fixed or accepted by the Handler.
 - **UAT:** an isolated accumark-stack with the Handler and Dennis.
