@@ -15,6 +15,9 @@ export interface SupportThread {
   preview: string
   waiting_since: string | null
   plain_url: string
+  assignee_id?: string | null
+  customer_plain_id?: string | null
+  label_refs?: SupportLabelRef[]
 }
 
 export interface CustomerSupport {
@@ -71,5 +74,57 @@ export function getSupportThread(
   return crmFetch(
     `/support/customers/${encodeURIComponent(key)}/threads/${encodeURIComponent(id)}`,
     qs
+  )
+}
+
+export interface SupportLabelRef {
+  id: string
+  type_id: string
+  name: string
+}
+
+export interface SupportMe {
+  has_seat: boolean
+  plain_user_id: string | null
+  name: string | null
+  email: string | null
+  unavailable: boolean
+}
+
+export interface SupportWorkspace {
+  teammates: { plain_user_id: string; name: string; email: string }[]
+  label_types: { id: string; name: string; color: string | null }[]
+}
+
+export type SupportAction =
+  | 'reply'
+  | 'note'
+  | 'status'
+  | 'assign'
+  | 'priority'
+  | 'labels'
+
+export function getSupportMe(): Promise<SupportMe> {
+  return crmFetch('/support/me', new URLSearchParams())
+}
+
+export function getSupportWorkspace(): Promise<SupportWorkspace> {
+  return crmFetch('/support/workspace', new URLSearchParams())
+}
+
+export function supportAction(
+  key: string,
+  threadId: string,
+  action: SupportAction,
+  body: Record<string, unknown>
+): Promise<{ detail: SupportThreadDetail | null }> {
+  return crmFetch(
+    `/support/customers/${encodeURIComponent(key)}/threads/${encodeURIComponent(threadId)}/${action}`,
+    new URLSearchParams(),
+    {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    }
   )
 }
