@@ -779,12 +779,11 @@ function resolveIdentityLabel(result: string | null, conformsValue: string): str
   return result
 }
 
-/** Native blend aggregates are CALCULATED by Mk1 from the peptide rows
- *  (backend/lims_analyses/blend_aggregates.py). Typed by hand on PB-1002 they
- *  drifted from what the COA recomputes, so a row with a value is read-only.
- *  An EMPTY one takes a typed value (Handler ruling 2026-10-09, PB-1062: when
- *  every quantity is 0 there is nothing to calculate); the vial recalc still
- *  replaces it once the figure can be calculated. Twin: hplc_native.AGGREGATES. */
+/** Native blend aggregates are CALCULATED by Mk1 from the peptide rows, never
+ *  typed (backend/lims_analyses/blend_aggregates.py). Typed by hand on PB-1002
+ *  they drifted from what the COA recomputes. When every quantity is 0 there is
+ *  nothing to calculate and Mk1 fills both with 0 itself (PB-1062, 2026-10-10).
+ *  Twin: hplc_native.AGGREGATES. */
 const CALCULATED_AGGREGATES: Record<string, { label: string; formula: string }> = {
   'HPLC-BLEND-TOTAL': {
     label: 'Blend total quantity',
@@ -821,7 +820,7 @@ export function CalculatedAggregateTooltip({
       <div className="border-t border-primary-foreground/20 pt-1.5 opacity-70">
         {hasValue
           ? 'Updates by itself when a peptide result changes. It is still promoted and verified like any other row.'
-          : 'Fills in once every peptide has both a purity and a quantity. If it cannot be calculated (every quantity is 0), type it in. A calculated figure replaces a typed one.'}
+          : 'Fills in once every peptide has both a purity and a quantity. If every quantity is 0, it fills in as 0.'}
       </div>
     </div>
   )
@@ -843,8 +842,8 @@ function EditableResultCell({
   const inputRef = useRef<HTMLInputElement>(null)
   const selectRef = useRef<HTMLSelectElement>(null)
   const calculated = calculatedAggregateInfo(analysis)
-  // A calculated row is editable only while empty, whatever the caller allows.
-  const readOnly = readOnlyProp || (calculated != null && !!analysis.result)
+  // A calculated row is never editable, whatever the caller allows.
+  const readOnly = readOnlyProp || calculated != null
   const isEditing = !readOnly && editing.editingUid === analysis.uid
   const canEdit = !readOnly && isResultEditable(analysis)
   // autoEdit: always show input when there's no result yet (no click needed)
