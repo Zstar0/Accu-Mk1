@@ -1,5 +1,15 @@
 # Changelog
 
+## v1.44.0 - 2026-10-10
+
+### Answer and manage support tickets from Mk1
+- **Reply to customers from the Support tab.** Open a ticket on the customer page and write back in the composer at the bottom of the slide-out. The reply goes out from your own Plain account, under your name, and asks you to confirm the first time each time you open a ticket. Drafts are kept if you close the slide-out.
+- **Internal notes** from the same composer (Note tab). The team sees them in Plain, prefixed with your name.
+- **Manage the ticket in place:** mark it Done or back to Todo, snooze it (1 hour, tomorrow morning, next Monday, or a date you pick), assign it, set its priority, and add or remove labels.
+- **Your Plain account is your permission.** Anyone whose Mk1 email matches an active Plain user can work tickets, and now sees the Support tab even if they are not an admin.
+- **Built not to double-send.** A reply is never sent twice by retrying. If Plain does not confirm a reply, Mk1 checks the ticket and tells you whether it went out before you try again. Every action is recorded, without storing message text.
+- Replying needs the new Plain key with reply permission, set in Settings > Integrations.
+
 ## v1.43.0 - 2026-10-10
 
 ### API keys in Settings
