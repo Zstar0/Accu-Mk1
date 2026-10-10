@@ -157,3 +157,21 @@ def test_mutate_429_is_unavailable_and_401_is_not_configured():
 def test_mutate_graphql_errors_are_unavailable():
     with pytest.raises(c.SupportUnavailable):
         _client(lambda req: httpx.Response(200, json={"errors": [{"message": "x"}]})).mutate(queries.MARK_DONE, {})
+
+
+def test_connect_failures_never_left_so_they_are_unavailable():
+    def handler(req):
+        raise httpx.ConnectError("refused")
+
+    with pytest.raises(c.SupportUnavailable):
+        _client(handler).mutate(queries.REPLY, {"input": {}})
+
+
+@pytest.mark.parametrize("resp", [
+    httpx.Response(200, text="<html>proxy error</html>"),
+    httpx.Response(200, json={"data": None}),
+    httpx.Response(302, headers={"Location": "https://example.invalid/"}),
+])
+def test_ambiguous_write_responses_are_unconfirmed(resp):
+    with pytest.raises(c.SupportWriteUnconfirmed):
+        _client(lambda req: resp).mutate(queries.REPLY, {"input": {}})

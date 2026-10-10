@@ -46,7 +46,7 @@ def _norm(s: str) -> str:
 
 def _markdown(body: dict) -> str:
     md = (body.get("markdown") or "").strip()
-    if not md or len(md) > rules.MAX_BODY:
+    if not md or len(md) > rules.MAX_BODY or not plain_text(md):  # "**" alone would confirm against anything
         raise _bad()
     return md
 
@@ -112,13 +112,14 @@ def _plan(action: str, body: dict, seat: Seat, thread: dict) -> tuple[list[tuple
     raise _bad()
 
 
-def _confirmed(client, thread_id: str, seat: Seat, md: str) -> bool:
+def _confirmed(client, thread_id: str, seat: Seat, md: str, started: datetime) -> bool:
     try:
         _, nodes = service.raw_timeline(client, thread_id)
     except (SupportUnavailable, SupportNotConfigured, KeyError, TypeError):
         return False
     want = _norm(plain_text(md))[:rules.CONFIRM_PREFIX]
-    cutoff = _now() - timedelta(seconds=rules.CONFIRM_WINDOW)
+    # Only entries from this attempt: an earlier reply with the same opening must not confirm this one.
+    cutoff = max(started - timedelta(seconds=rules.CONFIRM_SKEW), _now() - timedelta(seconds=rules.CONFIRM_WINDOW))
     for n in nodes:
         actor = n.get("actor") or {}
         if actor.get("__typename") != "UserActor" or actor.get("userId") != seat.plain_user_id:
@@ -144,38 +145,44 @@ def run(db: Session, user: Any, seat: Seat, customer_key: str, thread_id: str, a
     steps, md = _plan(action, body, seat, detail["thread"])
     args = {k: v for k, v in body.items() if k != "markdown"}
 
-    def rec(outcome: str, code: str | None = None) -> None:
-        audit.record(db, user_id=user.id, plain_user_id=seat.plain_user_id, customer_key=customer_key,
-                     thread_id=thread_id, action=action, args=args, body=md, outcome=outcome, error_code=code)
+    def rec(outcome: str, code: str | None = None):
+        return audit.record(db, user_id=user.id, plain_user_id=seat.plain_user_id, customer_key=customer_key,
+                            thread_id=thread_id, action=action, args=args, body=md, outcome=outcome, error_code=code)
 
     if md is not None and audit.is_duplicate(db, user_id=user.id, thread_id=thread_id, action=action, body=md):
         rec("duplicate")
         raise ActionFailed(409, "duplicate_reply")
+    # ponytail: check-then-insert leaves a millisecond race between two identical sends; a unique
+    # (user, thread, hash) lock is the upgrade if that ever shows up. The pending row closes the 20 s window.
+    row = rec("pending")
     client = service._client_factory()
+    started = _now()
     try:
         for mutation, variables in steps:
             client.mutate(mutation, variables)
     except PlainActionError as e:
-        rec("error", e.code)
+        audit.finish(db, row, "error", e.code)
         status, code = _CODES.get(e.code) or ((422, "invalid_input") if e.type_.upper() == "VALIDATION"
                                               else (502, "support_unavailable"))
         raise ActionFailed(status, code)
     except SupportWriteUnconfirmed:
-        if action == "reply" and _confirmed(client, thread_id, seat, md or ""):
-            rec("confirmed_after_timeout")
+        if action == "reply" and _confirmed(client, thread_id, seat, md or "", started):
+            audit.finish(db, row, "confirmed_after_timeout")
         else:
-            rec("unconfirmed")
+            audit.finish(db, row, "unconfirmed")
             raise ActionFailed(504, "reply_unconfirmed") if action == "reply" else ActionFailed(502, "support_unavailable")
     except SupportNotConfigured:
-        rec("error", "not_configured")
+        audit.finish(db, row, "error", "not_configured")
         raise ActionFailed(503, "support_not_configured")
     except SupportUnavailable as e:
-        rec("error", str(e)[:64])
+        audit.finish(db, row, "error", str(e)[:64])
         raise ActionFailed(502, "support_unavailable")
     else:
-        rec("ok")
+        audit.finish(db, row, "ok")
+    finally:
+        # Whatever happened, the cached thread may now be wrong; the next read must ask Plain.
+        service.invalidate(customer_key, thread_id)
     logger.info("support_plain.action action=%s thread=%s", action, thread_id)
-    service.invalidate(customer_key, thread_id)
     try:
         return service.thread_detail(customer_key, thread_id)
     except (SupportUnavailable, SupportNotConfigured):

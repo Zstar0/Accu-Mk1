@@ -224,7 +224,7 @@ def _mine(text, ago=timedelta(seconds=5)):
 def test_reply_timeout_confirmed_when_entry_present(api):
     client, plain, Session = api
     plain.mutate_error = plain_client.SupportWriteUnconfirmed("ReadTimeout")
-    plain.timeline = [_mine("Thanks  for\nwaiting")]
+    plain.timeline = [_mine("Thanks  for\nwaiting", ago=timedelta(0))]  # Plain stamps it during the send
     r = post(client, "reply", {"markdown": "Thanks for waiting"})
     assert r.status_code == 200 and len(plain.sent) == 1
     assert rows(Session)[-1].outcome == "confirmed_after_timeout"
@@ -262,3 +262,41 @@ def test_not_configured_is_503(api, monkeypatch):
     plain.mutate_error = plain_client.SupportNotConfigured()
     r = post(client, "status", {"status": "done"})
     assert r.status_code == 503 and r.json()["detail"]["code"] == "support_not_configured"
+
+
+def test_unconfirmed_reply_drops_the_cached_thread(api):
+    client, plain, _ = api
+    assert client.get("/support/customers/wc:1/threads/th_b").json()["entries"] == []
+    plain.mutate_error = plain_client.SupportWriteUnconfirmed("ReadTimeout")
+    assert post(client, "reply", {"markdown": "Thanks for waiting"}).status_code == 504
+    plain.timeline = [_mine("Thanks for waiting", ago=timedelta(minutes=10))]  # Plain shows it a little later
+    assert len(client.get("/support/customers/wc:1/threads/th_b").json()["entries"]) == 1
+
+
+def test_in_flight_send_blocks_an_identical_one(api):
+    client, plain, Session = api
+    from support_plain import audit
+    s = Session()
+    audit.record(s, user_id=3, plain_user_id="u_1", customer_key="wc:1", thread_id="th_b", action="reply",
+                 args={}, body="hello", outcome="pending")
+    r = post(client, "reply", {"markdown": "hello"})
+    assert r.status_code == 409 and plain.sent == []
+
+
+def test_one_row_per_attempt_ends_with_the_final_outcome(api):
+    client, plain, Session = api
+    post(client, "reply", {"markdown": "hello"})
+    assert [x.outcome for x in rows(Session)] == ["ok"]
+
+
+def test_earlier_reply_with_the_same_opening_does_not_confirm(api):
+    client, plain, Session = api
+    plain.mutate_error = plain_client.SupportWriteUnconfirmed("ReadTimeout")
+    plain.timeline = [_mine("Got it, checking the COA now", ago=timedelta(seconds=90))]
+    r = post(client, "reply", {"markdown": "Got it"})
+    assert r.status_code == 504 and rows(Session)[-1].outcome == "unconfirmed"
+
+
+def test_markup_only_body_is_422(api):
+    client, plain, _ = api
+    assert post(client, "reply", {"markdown": "**"}).status_code == 422 and plain.sent == []

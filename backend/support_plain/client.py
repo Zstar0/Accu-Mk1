@@ -91,12 +91,15 @@ class PlainClient:
         try:
             r = self._http.post(API_URL, json={"query": mutation, "variables": variables},
                                 timeout=rules.WRITE_TIMEOUT)
+        except (httpx.ConnectError, httpx.ConnectTimeout) as e:  # never reached Plain: safe to retry
+            logger.warning("support_plain.write_not_sent op=%s error=%s", op, type(e).__name__)
+            raise SupportUnavailable(type(e).__name__) from e
         except httpx.HTTPError as e:
             logger.warning("support_plain.write_unconfirmed op=%s error=%s", op, type(e).__name__)
             raise SupportWriteUnconfirmed(type(e).__name__) from e
         if r.status_code in (401, 403):
             raise SupportNotConfigured()
-        if r.status_code >= 500:
+        if r.status_code >= 500 or 300 <= r.status_code < 400:  # proxy/redirect: Plain may have acted
             logger.warning("support_plain.write_unconfirmed op=%s status=%s", op, r.status_code)
             raise SupportWriteUnconfirmed(f"http_{r.status_code}")
         if r.status_code >= 400:  # 429 and other 4xx: Plain refused before acting
@@ -106,13 +109,14 @@ class PlainClient:
             body = r.json()
         except ValueError:
             body = None
-        if not isinstance(body, dict) or body.get("errors") or not isinstance(body.get("data"), dict):
-            logger.warning("support_plain.write_bad_response op=%s", op)
-            raise SupportUnavailable("graphql_errors" if isinstance(body, dict) and body.get("errors")
-                                     else "bad_response")
-        payload = next(iter(body["data"].values()), None)
-        if not isinstance(payload, dict):
-            raise SupportUnavailable("bad_response")
+        if isinstance(body, dict) and body.get("errors"):  # GraphQL rejected the document: nothing ran
+            logger.warning("support_plain.write_refused op=%s graphql_errors", op)
+            raise SupportUnavailable("graphql_errors")
+        payload = next(iter(body["data"].values()), None) if isinstance(body, dict) and isinstance(
+            body.get("data"), dict) else None
+        if not isinstance(payload, dict):  # a 200 we cannot read (proxy page, empty data): Plain may have acted
+            logger.warning("support_plain.write_unconfirmed op=%s bad_response", op)
+            raise SupportWriteUnconfirmed("bad_response")
         err = payload.get("error")
         if err:
             logger.warning("support_plain.write_error op=%s code=%s", op, err.get("code"))

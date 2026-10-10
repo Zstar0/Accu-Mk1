@@ -11,6 +11,7 @@ from models import SupportAction
 from support_plain import rules
 
 SENT = ("ok", "confirmed_after_timeout")
+BLOCKING = SENT + ("pending",)  # an identical send still in flight counts as sent
 
 
 def _now() -> datetime:
@@ -37,6 +38,11 @@ def is_duplicate(db: Session, *, user_id: int, thread_id: str, action: str, body
     since = (now or _now()) - timedelta(seconds=rules.DUPLICATE_WINDOW)
     hit = db.execute(select(SupportAction.id).where(
         SupportAction.mk1_user_id == user_id, SupportAction.thread_id == thread_id, SupportAction.action == action,
-        SupportAction.body_sha256 == body_hash(body), SupportAction.outcome.in_(SENT),
+        SupportAction.body_sha256 == body_hash(body), SupportAction.outcome.in_(BLOCKING),
         SupportAction.at >= since).limit(1)).first()
     return hit is not None
+
+
+def finish(db: Session, row: SupportAction, outcome: str, error_code: str | None = None) -> None:
+    row.outcome, row.error_code = outcome, error_code
+    db.commit()
