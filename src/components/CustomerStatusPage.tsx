@@ -143,9 +143,7 @@ function CustomerListView() {
   const hideTestAccounts = useUIStore(state => state.hideTestAccounts)
   const setCustomerListPage = useUIStore(state => state.setCustomerListPage)
   const setHideTestAccounts = useUIStore(state => state.setHideTestAccounts)
-  const setSearchAndResetPage = useUIStore(
-    state => state.setSearchAndResetPage
-  )
+  const setSearchAndResetPage = useUIStore(state => state.setSearchAndResetPage)
   const navigateToCustomer = useUIStore(state => state.navigateToCustomer)
   const navigateToCustomerKey = useUIStore(state => state.navigateToCustomerKey)
 
@@ -340,9 +338,7 @@ function CustomerListView() {
           <CardContent className="py-4">
             <div className="flex items-center gap-2 text-destructive">
               <AlertCircle className="h-4 w-4" />
-              <span>
-                Failed to connect to database: {status.error}
-              </span>
+              <span>Failed to connect to database: {status.error}</span>
             </div>
           </CardContent>
         </Card>
@@ -490,7 +486,10 @@ function CustomerListView() {
                   customersLoading &&
                   !hasError &&
                   Array.from({ length: 8 }).map((_, i) => (
-                    <tr key={`skeleton-${i}`} data-testid="customer-row-skeleton">
+                    <tr
+                      key={`skeleton-${i}`}
+                      data-testid="customer-row-skeleton"
+                    >
                       {Array.from({ length: 13 }).map((__, j) => (
                         <td key={j} className="py-3 px-3">
                           <Skeleton className="h-4 w-full" />
@@ -867,9 +866,7 @@ function CustomerDetailView() {
       return getExplorerCustomerById(customerDetailTargetId)
     },
     enabled:
-      isConnected &&
-      customerDetailTargetId !== null &&
-      headerCustomer === null,
+      isConnected && customerDetailTargetId !== null && headerCustomer === null,
     staleTime: 60_000,
   })
 
@@ -940,9 +937,7 @@ function CustomerDetailView() {
       const aOpen = a.completed_at === null
       const bOpen = b.completed_at === null
       if (aOpen !== bOpen) return aOpen ? -1 : 1
-      return (
-        new Date(b.created_at).getTime() - new Date(a.created_at).getTime()
-      )
+      return new Date(b.created_at).getTime() - new Date(a.created_at).getTime()
     })
   }, [orders])
 
@@ -950,8 +945,12 @@ function CustomerDetailView() {
   // Resolved from the 'sample_details' two-tier read-source setting — same
   // mechanism as SampleDetails.tsx; defaults to 'senaite' (no behavior
   // change until the Handler flips it).
-  const { effective: sampleDetailsSource } = useEffectiveReadSource('sample_details')
-  const { sampleLookupMap } = useSenaiteLookupMap(orders ?? [], sampleDetailsSource)
+  const { effective: sampleDetailsSource } =
+    useEffectiveReadSource('sample_details')
+  const { sampleLookupMap } = useSenaiteLookupMap(
+    orders ?? [],
+    sampleDetailsSource
+  )
 
   // wordpressHost is read here and threaded into CustomerOrdersTab (the
   // derived render flags hasError/hasOrders/showLoading/showEmpty now live
@@ -1003,7 +1002,9 @@ function CustomerDetailView() {
             <div className="flex h-7 w-7 items-center justify-center rounded-full bg-primary/10 shrink-0">
               <User className="h-3.5 w-3.5 text-primary" />
             </div>
-            <span className="text-sm font-semibold truncate">{displayName}</span>
+            <span className="text-sm font-semibold truncate">
+              {displayName}
+            </span>
             {secondaryEmail && (
               <span className="text-xs text-muted-foreground whitespace-nowrap">
                 {secondaryEmail}
@@ -1059,8 +1060,7 @@ function CustomerDetailView() {
           Customer Orders is the default; Dashboard is the insights dossier. */}
       <Tabs
         value={
-          ((customerDetailTab === 'crm' ||
-            customerDetailTab === 'ai-review') &&
+          ((customerDetailTab === 'crm' || customerDetailTab === 'ai-review') &&
             !isAdminUser) ||
           (customerDetailTab === 'support' && !canSupport)
             ? 'orders'
@@ -1251,11 +1251,7 @@ function CustomerOrdersTab({
       setCustomerOrderSearchField('analyte', analyteInput)
     }, 300)
     return () => clearTimeout(handle)
-  }, [
-    analyteInput,
-    customerOrderSearch.analyte,
-    setCustomerOrderSearchField,
-  ])
+  }, [analyteInput, customerOrderSearch.analyte, setCustomerOrderSearchField])
 
   useEffect(() => {
     if (lotInput === customerOrderSearch.lot) return
@@ -1269,9 +1265,9 @@ function CustomerOrdersTab({
   // empty-state echo, OrderRow.defaultExpanded, and the Clear button mount.
   const searchActive = Boolean(
     customerOrderSearch.order_number ||
-      customerOrderSearch.sample_id ||
-      customerOrderSearch.analyte ||
-      customerOrderSearch.lot
+    customerOrderSearch.sample_id ||
+    customerOrderSearch.analyte ||
+    customerOrderSearch.lot
   )
 
   // highlightSampleId: sample-ID highlight forwarded to OrderRow only when
@@ -1535,7 +1531,9 @@ function CustomerOrdersTab({
                     <th className="py-2 px-3 font-medium whitespace-nowrap">
                       Timing
                     </th>
-                    <th className="py-2 px-3 font-medium whitespace-nowrap">SLA</th>
+                    <th className="py-2 px-3 font-medium whitespace-nowrap">
+                      SLA
+                    </th>
                     <th className="py-2 px-3 font-medium whitespace-nowrap">
                       Sample Details
                     </th>
