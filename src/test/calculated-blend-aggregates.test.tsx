@@ -1,7 +1,7 @@
 /**
- * Native blend aggregates are calculated by Mk1, so a FILLED one never offers an
- * editor (typed by hand on PB-1002 they drifted from the COA). An EMPTY one takes
- * a typed value: PB-1062 (every quantity 0) had nothing to calculate.
+ * Native blend aggregates are calculated by Mk1, so the result cell never offers
+ * an editor for them (typed by hand on PB-1002 they drifted from the COA). When
+ * every quantity is 0 (PB-1062) Mk1 fills both with 0 itself.
  */
 import { describe, expect, it, vi } from 'vitest'
 import { render, screen } from '@testing-library/react'
@@ -67,9 +67,11 @@ describe('calculatedAggregateInfo', () => {
 })
 
 describe('result cell on a calculated row', () => {
-  it('an empty native aggregate takes a typed value and keeps the marker', () => {
+  it('an empty native aggregate offers NO editor, just the marker', () => {
     renderTable(row({}))
-    expect(screen.getByLabelText('Edit result for HPLC Blend Purity (mass-weighted)')).toBeInTheDocument()
+    expect(screen.queryByLabelText(/^Edit result for/)).toBeNull()
+    expect(screen.queryByRole('textbox')).toBeNull()
+    expect(screen.queryByRole('spinbutton')).toBeNull()
     expect(screen.getByLabelText('Blend purity is calculated')).toBeInTheDocument()
   })
 
@@ -102,7 +104,7 @@ describe('CalculatedAggregateTooltip', () => {
     expect(text).toContain('Calculated: Blend purity')
     expect(text).toContain('Quantity-weighted average')
     expect(text).toContain('once every peptide has both a purity and a quantity')
-    expect(text).toContain('type it in')
+    expect(text).toContain('If every quantity is 0, it fills in as 0')
   })
   it('says it is still promoted and verified once it has a value', () => {
     const { getByTestId } = render(<CalculatedAggregateTooltip info={info} hasValue />)
