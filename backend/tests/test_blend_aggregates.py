@@ -153,10 +153,10 @@ def test_singles_and_aggregate_rows_themselves_are_ignored(db):
 
 # ── parent tier ─────────────────────────────────────────────────────────────
 
-def _promoted_blend(db, sample_id, *, vials=1):
+def _promoted_blend(db, sample_id, *, vials=1, pur=("98", "99"), qty=("1", "3")):
     parent, _, _, vial_rows = native_family(db, sample_id=sample_id, slots=SLOTS, vials=vials)
     rows = next(iter(vial_rows.values()))
-    _fill(db, rows, pur=["98", "99"], qty=["1", "3"])
+    _fill(db, rows, pur=list(pur), qty=list(qty))
     parents = {}
     for r in rows:
         if r.result_value is not None:
@@ -175,6 +175,19 @@ def test_promoting_everything_from_one_vial_changes_nothing(db):
         LimsAnalysisTransition.analysis_id.in_([total.id, purity.id]),
         LimsAnalysisTransition.reason.like("auto: recalc%")).count()
     assert autos == 0
+
+
+def test_pb1062_shape_verified_zero_aggregates_stay_verified_on_the_parent(db):
+    # Before 2026-10-10 a zero-total parent read as "incomplete" and dropped
+    # verified aggregates to parent_to_verify on every promote / un-promote.
+    parent, _, parents = _promoted_blend(db, "PB-7114", pur=("0", "100"), qty=("0", "0"))
+    total, purity = parents[(KW_BLEND_TOTAL, None)], parents[(KW_BLEND_PURITY, None)]
+    db.refresh(total); db.refresh(purity)
+    assert (total.result_value, total.review_state) == ("0", "verified")
+    assert (purity.result_value, purity.review_state) == ("0", "verified")
+    assert recalc_parent_blend_aggregates(db, parent_pk=parent.id, user_id=1) == []
+    db.refresh(total); db.refresh(purity)
+    assert (total.review_state, purity.review_state) == ("verified", "verified")
 
 
 def test_ruling_a_retesting_a_slot_unverifies_the_aggregates(db):
