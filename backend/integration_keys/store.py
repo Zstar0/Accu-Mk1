@@ -18,11 +18,14 @@ from models import IntegrationKey, IntegrationKeyEvent, User
 
 logger = logging.getLogger(__name__)
 CACHE_TTL = 60.0
+FAILURE_BACKOFF = 10.0  # after a failed lookup, use the last known value or env for this long
 _session_factory = SessionLocal
 _clock = time.monotonic
 _lock = threading.Lock()
 _cache: dict[str, tuple[float, str | None, bool]] = {}  # name -> (at, decrypted stored value, undecryptable)
 _warned: set[str] = set()
+_failed_at: dict[str, float] = {}
+_loading: dict[str, threading.Lock] = {}
 
 
 class KeysNotConfigured(Exception):
@@ -68,20 +71,33 @@ def _stored(name: str) -> tuple[str | None, bool]:
         hit = _cache.get(name)
         if hit and _clock() - hit[0] < CACHE_TTL:
             return hit[1], hit[2]
+        last = (hit[1], hit[2]) if hit else (None, False)  # an expired value beats env while the DB is out
+        failed = _failed_at.get(name)
+        if failed is not None and _clock() - failed < FAILURE_BACKOFF:
+            return last
+        loader = _loading.setdefault(name, threading.Lock())
+    if not loader.acquire(blocking=False):  # another request is already asking the DB: never queue behind it
+        return last
     try:
-        with _session_factory() as db:
-            row = db.get(IntegrationKey, name)
-            token = row.ciphertext if row else None
-    except SQLAlchemyError:
-        logger.warning("integration_keys.db_unavailable name=%s", name)
-        return None, False  # not cached: the stored key wins again once the DB is back
-    value, bad = _decrypt(token)
-    if bad and name not in _warned:
-        _warned.add(name)
-        logger.warning("integration_keys.undecryptable name=%s", name)
-    with _lock:
-        _cache[name] = (_clock(), value, bad)
-    return value, bad
+        try:
+            with _session_factory() as db:
+                row = db.get(IntegrationKey, name)
+                token = row.ciphertext if row else None
+        except SQLAlchemyError:
+            logger.warning("integration_keys.db_unavailable name=%s", name)
+            with _lock:
+                _failed_at[name] = _clock()
+            return last
+        value, bad = _decrypt(token)
+        if bad and name not in _warned:
+            _warned.add(name)
+            logger.warning("integration_keys.undecryptable name=%s", name)
+        with _lock:
+            _cache[name] = (_clock(), value, bad)
+            _failed_at.pop(name, None)
+        return value, bad
+    finally:
+        loader.release()
 
 
 def get(name: str) -> str | None:
@@ -93,6 +109,7 @@ def get(name: str) -> str | None:
 def drop_cache() -> None:
     with _lock:
         _cache.clear()
+        _failed_at.clear()
 
 
 def _now() -> datetime:

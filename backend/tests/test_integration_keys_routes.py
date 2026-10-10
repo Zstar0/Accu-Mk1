@@ -164,9 +164,19 @@ def test_without_secret_writes_503_and_list_says_not_configured(api, monkeypatch
 
 def test_no_response_ever_contains_the_value(api):
     client, _ = api
-    texts = [client.put("/admin/integrations/CLOSE_API_KEY", json={"value": GOOD}).text,
+    huge = "LEAK" + "x" * 5000
+    texts = [client.put("/admin/integrations/CLOSE_API_KEY", json={"value": huge}).text,
+             client.put("/admin/integrations/CLOSE_API_KEY", json={"value": GOOD}).text,
              client.put("/admin/integrations/PLAIN_API_KEY", json={"value": BAD}).text,
              client.get("/admin/integrations").text,
              client.post("/admin/integrations/CLOSE_API_KEY/test").text,
              client.delete("/admin/integrations/CLOSE_API_KEY").text]
-    assert not any(GOOD in t or BAD in t for t in texts)
+    assert not any(GOOD in t or BAD in t or "LEAKxxxx" in t for t in texts)
+
+
+@pytest.mark.parametrize("value", ["abc\u200bdef_key", "abc def_key", "abc\ndef_key", "abc\u00e9def_key"])
+def test_non_ascii_or_whitespace_inside_a_key_is_422(api, value):
+    client, Session = api
+    r = client.put("/admin/integrations/PLAIN_API_KEY", json={"value": value})
+    assert r.status_code == 422 and r.json()["detail"]["code"] == "invalid_input"
+    assert Session().get(IntegrationKey, "PLAIN_API_KEY") is None

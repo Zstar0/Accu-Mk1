@@ -5,7 +5,7 @@ from typing import Literal, Optional
 
 import httpx
 from fastapi import APIRouter, Depends, HTTPException
-from pydantic import BaseModel, Field
+from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
 from auth import require_admin
@@ -33,7 +33,7 @@ class KeyList(BaseModel):
 
 
 class SaveBody(BaseModel):
-    value: str = Field(max_length=4096)
+    value: str  # no pydantic constraint: its 422 echoes the input, and this field is a secret
 
 
 class TestResult(BaseModel):
@@ -57,7 +57,8 @@ def save_key(name: str, body: SaveBody, db: Session = Depends(get_db), user=Depe
     if not store.configured():
         raise HTTPException(status_code=503, detail={"code": "keys_not_configured"})
     value = body.value.strip()
-    if not value or len(value) > MAX_LEN:
+    # Printable ASCII only: httpx cannot send anything else in a header, and stray whitespace is a paste error.
+    if not value or len(value) > MAX_LEN or not all(33 <= ord(ch) <= 126 for ch in value):
         raise HTTPException(status_code=422, detail={"code": "invalid_input"})
     outcome = registry.run_test(name, value, _transport)
     if outcome != "ok":

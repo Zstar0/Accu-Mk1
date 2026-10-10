@@ -75,6 +75,8 @@ def test_undecryptable_row_falls_back_to_env_and_reports_it(db, monkeypatch):
 
 
 def test_db_error_falls_back_to_env_and_is_not_cached(db, monkeypatch):
+    now = [1000.0]
+    monkeypatch.setattr(store, "_clock", lambda: now[0])
     store.save(db, "CLOSE_API_KEY", "stored_key", 7)
     monkeypatch.setenv("CLOSE_API_KEY", "env_key")
     store.drop_cache()
@@ -86,6 +88,7 @@ def test_db_error_falls_back_to_env_and_is_not_cached(db, monkeypatch):
     monkeypatch.setattr(store, "_session_factory", broken)
     assert store.get("CLOSE_API_KEY") == "env_key"
     monkeypatch.setattr(store, "_session_factory", good)
+    now[0] += store.FAILURE_BACKOFF + 1  # retried once the short backoff passes
     assert store.get("CLOSE_API_KEY") == "stored_key"
 
 
@@ -121,3 +124,45 @@ def test_status_for_settings_env_and_none(db, monkeypatch):
     s = store.status(db, "CLOSE_API_KEY")
     assert (s["source"], s["last4"], s["updated_by_name"]) == ("settings", "a3f9", "Forrest")
     assert s["updated_at"]
+
+
+def test_a_lookup_in_flight_never_blocks_other_callers(db, monkeypatch):
+    import threading
+    store.save(db, "CLOSE_API_KEY", "stored_key", 7)
+    monkeypatch.setenv("CLOSE_API_KEY", "env_key")
+    store.drop_cache()
+    entered, release = threading.Event(), threading.Event()
+    good = store._session_factory
+
+    def slow():
+        entered.set()
+        release.wait(5)
+        return good()
+
+    monkeypatch.setattr(store, "_session_factory", slow)
+    t = threading.Thread(target=store.get, args=("CLOSE_API_KEY",))
+    t.start()
+    assert entered.wait(5)
+    assert store.get("CLOSE_API_KEY") == "env_key"  # does not wait behind the slow lookup
+    release.set()
+    t.join(5)
+    assert store.get("CLOSE_API_KEY") == "stored_key"
+
+
+def test_a_failed_lookup_is_not_retried_for_a_few_seconds(db, monkeypatch):
+    now = [1000.0]
+    monkeypatch.setattr(store, "_clock", lambda: now[0])
+    monkeypatch.setenv("CLOSE_API_KEY", "env_key")
+    store.save(db, "CLOSE_API_KEY", "stored_key", 7)
+    good, calls = store._session_factory, []
+
+    def broken():
+        calls.append(1)
+        raise OperationalError("select", {}, Exception("down"))
+
+    monkeypatch.setattr(store, "_session_factory", broken)
+    assert store.get("CLOSE_API_KEY") == "env_key" and store.get("CLOSE_API_KEY") == "env_key"
+    assert len(calls) == 1
+    monkeypatch.setattr(store, "_session_factory", good)
+    now[0] += store.FAILURE_BACKOFF + 1
+    assert store.get("CLOSE_API_KEY") == "stored_key"
