@@ -43,11 +43,11 @@ const row = (over: Partial<SenaiteAnalysis>): SenaiteAnalysis => ({
   service_origin: 'mk1', ...over,
 })
 
-function renderTable(analysis: SenaiteAnalysis) {
+function renderTable(analysis: SenaiteAnalysis, resultsReadOnly = false) {
   const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } })
   return render(
     <QueryClientProvider client={qc}>
-      <AnalysisTable analyses={[analysis]} analyteNameMap={new Map()} />
+      <AnalysisTable analyses={[analysis]} analyteNameMap={new Map()} resultsReadOnly={resultsReadOnly} />
     </QueryClientProvider>
   )
 }
@@ -70,6 +70,12 @@ describe('result cell on a calculated row', () => {
   it('an empty native aggregate takes a typed value and keeps the marker', () => {
     renderTable(row({}))
     expect(screen.getByLabelText('Edit result for HPLC Blend Purity (mass-weighted)')).toBeInTheDocument()
+    expect(screen.getByLabelText('Blend purity is calculated')).toBeInTheDocument()
+  })
+
+  it('an empty aggregate on the parent page (resultsReadOnly) still offers no editor', () => {
+    renderTable(row({}), true)
+    expect(screen.queryByLabelText(/^Edit result for/)).toBeNull()
     expect(screen.getByLabelText('Blend purity is calculated')).toBeInTheDocument()
   })
 
