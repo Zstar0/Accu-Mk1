@@ -1,5 +1,16 @@
 # Changelog
 
+## v1.43.0 - 2026-10-10
+
+### API keys in Settings
+- **New Settings > Integrations page (admins only)** for the Close, Plain and Anthropic API keys. Each row shows where the key comes from (saved in Settings or the server), its last four characters, and who changed it and when, with **Replace**, **Test** and **Use server env**.
+- **A new key is tested with the provider before it is saved**, so a typo never takes an integration down, and it takes effect right away with no restart.
+- **Keys are encrypted and write-only.** Nobody, admins included, can read a saved key back, and every change and test is recorded.
+
+### Blend results fill themselves
+- **When every peptide in a blend has a quantity of 0, blend total and blend purity now fill in as 0 on their own** and lock, instead of waiting to be typed (PB-1062). This replaces the typed entry from 1.42.1. The certificate still prints both as N/A whenever identity fails.
+- Verified blend lines with a zero total now stay verified when the parent recalculates.
+
 ## v1.42.1 - 2026-10-09
 
 ### Blend results you can finish
