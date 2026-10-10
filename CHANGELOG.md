@@ -1,5 +1,11 @@
 # Changelog
 
+## v1.42.1 - 2026-10-09
+
+### Blend results you can finish
+- **Blend total and blend purity can now be typed when they can't be calculated.** When every peptide in a blend has a quantity of 0 (for example, none was identified), there is nothing to calculate, so these two lines used to sit at Pending with no way to fill them (PB-1062). While they are empty you can now type a value, and once saved they lock again. Whenever the figure can be calculated, the calculated one still replaces anything typed.
+- Pairs with COA Builder 2.35.1, which prints blend total and blend purity as N/A on the certificate when any peptide fails identity.
+
 ## v1.42.0 - 2026-10-09
 
 ### New document look
