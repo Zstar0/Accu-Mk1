@@ -2792,6 +2792,7 @@ class InstrumentResponse(BaseModel):
     active: bool
     department_id: Optional[int] = None
     origin: str = "mk1"
+    serial_number: Optional[str] = None
     created_at: datetime
     updated_at: datetime
 
@@ -2806,6 +2807,8 @@ class InstrumentCreate(BaseModel):
     brand: Optional[str] = None
     model: Optional[str] = None
     department_id: Optional[int] = None
+    # instruments.serial_number is VARCHAR(100): refuse longer here, not as a Postgres 500.
+    serial_number: Optional[str] = Field(None, max_length=100)
 
     class Config:
         extra = "ignore"  # Silently ignore senaite_uid, senaite_id
@@ -2819,6 +2822,7 @@ class InstrumentUpdate(BaseModel):
     model: Optional[str] = None
     department_id: Optional[int] = None
     active: Optional[bool] = None
+    serial_number: Optional[str] = Field(None, max_length=100)
 
     class Config:
         extra = "ignore"
@@ -3237,7 +3241,7 @@ METHOD_ATTACHMENT_LOG_FIELDS = ("filename", "content_type", "size_bytes")
 # catalog/change_log.py log_create/apply_and_log field list for instrument CRUD
 # (Task 6) — the identity + lifecycle columns worth an audit snapshot.
 INSTRUMENT_LOG_FIELDS = ("name", "instrument_type", "brand", "model", "department_id",
-                         "active", "origin")
+                         "active", "origin", "serial_number")
 _RESERVED_LEGACY_ROLES = {"hplc", "endo", "ster"}
 
 
@@ -3892,6 +3896,15 @@ async def sync_instruments(db: Session = Depends(get_db), _current_user=Depends(
 # ─── Instrument Endpoints (Local CRUD) ───
 
 
+def _instrument_holding_serial(db: Session, serial: str, exclude_id: Optional[int] = None) -> Optional[str]:
+    """Name of the instrument that already carries `serial`, else None (the
+    uq_instruments_serial_number partial index is the backstop)."""
+    q = select(Instrument.name).where(Instrument.serial_number == serial)
+    if exclude_id is not None:
+        q = q.where(Instrument.id != exclude_id)
+    return db.execute(q).scalars().first()
+
+
 @app.post("/instruments", response_model=InstrumentResponse, status_code=201)
 async def create_instrument(data: InstrumentCreate, db: Session = Depends(get_db),
                             current_user=Depends(get_current_user)):
@@ -3902,6 +3915,11 @@ async def create_instrument(data: InstrumentCreate, db: Session = Depends(get_db
         from models import Department
         if not db.get(Department, data.department_id):
             raise HTTPException(400, f"Department {data.department_id} not found")
+    data.serial_number = _blank_to_none(data.serial_number)
+    if data.serial_number is not None:
+        holder = _instrument_holding_serial(db, data.serial_number)
+        if holder is not None:
+            raise HTTPException(409, f"serial number '{data.serial_number}' is already on '{holder}'")
     inst = Instrument(**data.model_dump())
     db.add(inst)
     db.flush()
@@ -3936,6 +3954,12 @@ async def update_instrument(instrument_id: int, data: InstrumentUpdate,
         from models import Department
         if not db.get(Department, fields["department_id"]):
             raise HTTPException(400, f"Department {fields['department_id']} not found")
+    if "serial_number" in fields:
+        fields["serial_number"] = _blank_to_none(fields["serial_number"])
+        if fields["serial_number"] is not None:
+            holder = _instrument_holding_serial(db, fields["serial_number"], exclude_id=instrument_id)
+            if holder is not None:
+                raise HTTPException(409, f"serial number '{fields['serial_number']}' is already on '{holder}'")
     from catalog.change_log import apply_and_log
     apply_and_log(db, inst, fields, entity_type="instrument", entity_pk=inst.id,
                   user_id=getattr(current_user, "id", None))
