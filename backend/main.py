@@ -2807,8 +2807,8 @@ class InstrumentCreate(BaseModel):
     brand: Optional[str] = None
     model: Optional[str] = None
     department_id: Optional[int] = None
-    # instruments.serial_number is VARCHAR(100): refuse longer here, not as a Postgres 500.
-    serial_number: Optional[str] = Field(None, max_length=100)
+    # instruments.serial_number is VARCHAR(100) and Postgres rejects NUL: refuse both here (422), not as a 500.
+    serial_number: Optional[str] = Field(None, max_length=100, pattern=r"^[^\x00]*$")
 
     class Config:
         extra = "ignore"  # Silently ignore senaite_uid, senaite_id
@@ -2822,7 +2822,7 @@ class InstrumentUpdate(BaseModel):
     model: Optional[str] = None
     department_id: Optional[int] = None
     active: Optional[bool] = None
-    serial_number: Optional[str] = Field(None, max_length=100)
+    serial_number: Optional[str] = Field(None, max_length=100, pattern=r"^[^\x00]*$")
 
     class Config:
         extra = "ignore"

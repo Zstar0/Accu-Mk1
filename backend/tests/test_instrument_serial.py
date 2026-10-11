@@ -87,3 +87,13 @@ def test_overlong_serial_is_refused_before_the_database(client):
     r = client.patch(f"/instruments/{inst['id']}", json={"serial_number": "Y" * 101})
     assert r.status_code == 422, r.text
     assert client.get("/instruments").json()[0]["serial_number"] == "X" * 100
+
+
+def test_nul_in_serial_is_refused_before_the_database(client):
+    # Postgres rejects NUL in text, which would be a 500 on the duplicate lookup.
+    r = client.post("/instruments", json={"name": "Nexgen-MCS", "serial_number": "NX-\u00001"})
+    assert r.status_code == 422, r.text
+    inst = client.post("/instruments", json={"name": "Nexgen-MCS", "serial_number": "NX-1"}).json()
+    r = client.patch(f"/instruments/{inst['id']}", json={"serial_number": "NX-\u00002"})
+    assert r.status_code == 422, r.text
+    assert client.get("/instruments").json()[0]["serial_number"] == "NX-1"
