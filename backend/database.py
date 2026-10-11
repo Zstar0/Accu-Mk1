@@ -133,6 +133,68 @@ def _ensure_documents_space_column(bind) -> None:
                 conn.execute(text("CREATE INDEX ix_documents_space_id ON documents (space_id)"))
 
 
+# Endo worksheet v2 (spec 2026-10-10 section 3.8), steps 1 and 2. The new
+# tables come from create_all; their partial indexes are repeated here so a
+# table create_all built before an index was declared still gets it. Columns
+# are added WITHOUT defaults: a default here would fill every existing
+# worksheet with '2ml'.
+_ENDO_V2_DDL = (
+    "CREATE UNIQUE INDEX IF NOT EXISTS uq_consumable_types_part_number "
+    "ON consumable_types (coalesce(manufacturer, ''), part_number) WHERE part_number IS NOT NULL",
+    "CREATE UNIQUE INDEX IF NOT EXISTS uq_method_consumable_default "
+    "ON method_consumables (method_id, kind) WHERE is_default",
+    "ALTER TABLE hplc_methods ADD COLUMN IF NOT EXISTS run_parameters JSON",
+    "ALTER TABLE instruments ADD COLUMN IF NOT EXISTS serial_number VARCHAR(100)",
+    "CREATE UNIQUE INDEX IF NOT EXISTS uq_instruments_serial_number "
+    "ON instruments (serial_number) WHERE serial_number IS NOT NULL",
+    "ALTER TABLE worksheets ADD COLUMN IF NOT EXISTS endo_prep VARCHAR(10)",
+    "ALTER TABLE worksheets ADD COLUMN IF NOT EXISTS cartridge_type_id INTEGER REFERENCES consumable_types(id)",
+    "ALTER TABLE worksheets ADD COLUMN IF NOT EXISTS endo_method_id INTEGER REFERENCES hplc_methods(id)",
+    "ALTER TABLE worksheet_items ADD COLUMN IF NOT EXISTS prep_form VARCHAR(10)",
+    "ALTER TABLE worksheet_items ADD COLUMN IF NOT EXISTS prep_water_ml FLOAT",
+    "ALTER TABLE worksheet_items ADD COLUMN IF NOT EXISTS prep_total_dilution FLOAT",
+    "ALTER TABLE worksheet_items ADD COLUMN IF NOT EXISTS prep_steps JSON",
+    "ALTER TABLE worksheet_items ADD COLUMN IF NOT EXISTS cartridge_type_id INTEGER REFERENCES consumable_types(id)",
+    "ALTER TABLE worksheet_items ADD COLUMN IF NOT EXISTS result_reading VARCHAR(40)",
+    "ALTER TABLE worksheet_items ADD COLUMN IF NOT EXISTS result_reader JSON",
+    "ALTER TABLE worksheet_items ADD COLUMN IF NOT EXISTS result_entered_at TIMESTAMP",
+    "ALTER TABLE worksheet_items ADD COLUMN IF NOT EXISTS result_entered_by_user_id INTEGER "
+    "REFERENCES users(id) ON DELETE SET NULL",
+)
+
+
+def _run_endo_v2_migrations(bind) -> None:
+    """Endo worksheet v2 schema (spec 2026-10-10 section 3.8). Runs AFTER
+    create_all: the new FK columns reference consumable_types, which create_all
+    builds (the _ensure_documents_space_column precedent). One transaction, so
+    the 2 mL switch is all or nothing. A failure raises: the ORM maps every
+    column added here.
+
+    Step 3, the one-time switch, is guarded on endo_prep IS NULL: open and
+    staging worksheets made on or after the lab date 2026-10-08 go to '2ml',
+    every other row to 'stock'. Step 4 sets the '2ml' default last. After the
+    first boot no row is NULL, so later boots change nothing and a worksheet
+    switched back to stock stays there. SQLite test fixtures get everything
+    from create_all, so this is Postgres-only."""
+    if bind.dialect.name != "postgresql":
+        return
+    from sqlalchemy import text
+    from scheduled_publish import DEFAULT_TZ
+    with bind.begin() as conn:
+        for sql in _ENDO_V2_DDL:
+            conn.execute(text(sql))
+        # The lab time zone, as scheduled_publish.lab_tz reads it.
+        lab_tz = conn.execute(text(
+            "SELECT timezone FROM business_hours_config WHERE id = 1")).scalar() or DEFAULT_TZ
+        conn.execute(text(
+            "UPDATE worksheets SET endo_prep = '2ml' "
+            "WHERE endo_prep IS NULL AND status <> 'completed' "
+            "AND (created_at AT TIME ZONE 'UTC' AT TIME ZONE :lab_tz)::date >= DATE '2026-10-08'"),
+            {"lab_tz": lab_tz})
+        conn.execute(text("UPDATE worksheets SET endo_prep = 'stock' WHERE endo_prep IS NULL"))
+        conn.execute(text("ALTER TABLE worksheets ALTER COLUMN endo_prep SET DEFAULT '2ml'"))
+
+
 def init_db():
     """Initialize database tables."""
     # Import models to register them with Base
@@ -146,6 +208,9 @@ def init_db():
     Base.metadata.create_all(bind=engine)
     # Document spaces (spec 2026-10-06 section 4.4): the FK column after the table exists.
     _ensure_documents_space_column(engine)
+    # Endo worksheet v2: new columns, partial indexes and the one-time 2 mL
+    # switch, after create_all and before any seed reads these tables.
+    _run_endo_v2_migrations(engine)
     # Documents library: seed the Artifact/SOP categories (spec 2026-09-15 §3.1).
     try:
         from documents.service import seed_categories

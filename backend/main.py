@@ -4895,6 +4895,15 @@ async def delete_method(method_id: int, db: Session = Depends(get_db), _current_
             409, f"Method '{method.name}' is referenced by {ref} analyses and is part "
                  f"of their traceability record — deactivate it instead of deleting")
 
+    # Endo worksheet v2: a pinned revision is the record a worksheet's results
+    # were computed with (spec 2026-10-10 section 4.1); the FK is a plain one.
+    pinned = db.execute(select(func.count()).select_from(Worksheet)
+                        .where(Worksheet.endo_method_id == method_id)).scalar()
+    if pinned:
+        raise HTTPException(
+            409, f"Method '{method.name}' is pinned by {pinned} worksheet(s) and is part "
+                 f"of their results record. Retire it instead of deleting")
+
     db.delete(method)
     db.commit()
     return {"message": f"Method '{method.name}' deleted"}
