@@ -96,7 +96,8 @@ function EndoJudged({ serviceId }: { serviceId: number }) {
     methodId === null
       ? [specsQ, linksQ, catalogQ]
       : [specsQ, linksQ, catalogQ, methodsQ, methodLinksQ]
-  const failed = needed.filter(q => q.isError)
+  // A failed refetch with data on hand keeps showing that data.
+  const failed = needed.filter(q => q.isError && q.data === undefined)
   const loading = needed.some(q => q.isPending)
 
   const catalog = catalogQ.data ?? []
