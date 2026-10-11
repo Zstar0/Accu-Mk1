@@ -91,8 +91,16 @@ function fullWorksheet(over: Partial<WorksheetListItem> = {}) {
   )
 }
 
-function setup(full: WorksheetListItem) {
-  vi.mocked(getWorksheet).mockResolvedValue(full)
+function setup(
+  full: WorksheetListItem,
+  fetch: 'lands' | 'pending' | 'fails' = 'lands'
+) {
+  if (fetch === 'lands') vi.mocked(getWorksheet).mockResolvedValue(full)
+  if (fetch === 'pending')
+    // never settles: the read is still in flight
+    vi.mocked(getWorksheet).mockReturnValue(new Promise(() => undefined))
+  if (fetch === 'fails')
+    vi.mocked(getWorksheet).mockRejectedValue(new Error('Server error'))
   // the flyout is handed the list payload, which has no endo_method key
   const listed = { ...full, endo_method: undefined }
   const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } })
@@ -120,6 +128,27 @@ describe('EndoFlyoutSummary', () => {
     expect(countOf('Invalid')).toBe('1')
     expect(getWorksheet).toHaveBeenCalledWith(77)
     expect(screen.getByText('Fail')).toBeInTheDocument()
+  })
+
+  it('shows … for Invalid and Ready for Mk1 until the run settings land', () => {
+    setup(fullWorksheet(), 'pending')
+    expect(countOf('Results in')).toBe('3/4')
+    expect(countOf('Invalid')).toBe('…')
+    expect(countOf('Ready for Mk1')).toBe('…')
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument()
+  })
+
+  it('says so when the run settings cannot be read, with a retry', async () => {
+    setup(fullWorksheet(), 'fails')
+    expect(await screen.findByRole('alert')).toHaveTextContent(
+      'Could not load the run settings'
+    )
+    expect(countOf('Invalid')).toBe('-')
+    expect(countOf('Ready for Mk1')).toBe('-')
+    vi.mocked(getWorksheet).mockResolvedValue(fullWorksheet())
+    fireEvent.click(screen.getByRole('button', { name: 'Retry' }))
+    await waitFor(() => expect(countOf('Ready for Mk1')).toBe('2/4'))
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument()
   })
 
   it('opens the worksheet page and closes the flyout', () => {

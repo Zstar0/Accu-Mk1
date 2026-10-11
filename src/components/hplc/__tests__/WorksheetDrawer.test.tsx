@@ -60,8 +60,12 @@ describe('WorksheetDrawer: bench kinds (endo v2)', () => {
   const mutation = { mutate: vi.fn(), mutateAsync: vi.fn(), isPending: false }
 
   /** Opens the flyout on a worksheet holding one item per role given. The
-   *  worksheet is on 2 mL, as every new worksheet is by default (HPLC too). */
-  function openWith(...roles: string[]): HTMLElement {
+   *  worksheet is on 2 mL unless told otherwise, as every new worksheet is by
+   *  default (HPLC too). */
+  function openWith(
+    roles: string[],
+    endoPrep: '2ml' | 'stock' = '2ml'
+  ): HTMLElement {
     const ws = {
       id: 1,
       title: 'WS 1',
@@ -72,7 +76,7 @@ describe('WorksheetDrawer: bench kinds (endo v2)', () => {
       item_count: roles.length,
       created_at: null,
       completed_at: null,
-      endo_prep: '2ml',
+      endo_prep: endoPrep,
       items: roles.map((role, i) => ({
         id: 11 + i,
         sample_id: `P-000${i + 1}-S02`,
@@ -112,14 +116,26 @@ describe('WorksheetDrawer: bench kinds (endo v2)', () => {
   beforeEach(() => vi.clearAllMocks())
 
   it('shows the read-only endo summary at the 1100px width', () => {
-    const sheet = openWith('endo')
+    const sheet = openWith(['endo'])
     expect(screen.getByText('endo summary')).toBeInTheDocument()
     expect(sheet.className).toContain('sm:max-w-[1100px]')
     expect(sheet.className).not.toContain('sm:max-w-[1760px]')
   })
 
+  // Spec 6.2 and plan A.0 #12: stock runs get the summary too; their
+  // editable view is the page.
+  it('shows the summary, not the editable flyout, on a stock endo worksheet', () => {
+    const sheet = openWith(['endo'], 'stock')
+    expect(screen.getByText('endo summary')).toBeInTheDocument()
+    expect(screen.queryByText(/generic items/)).not.toBeInTheDocument()
+    expect(
+      screen.queryByRole('button', { name: 'Add Samples' })
+    ).not.toBeInTheDocument()
+    expect(sheet.className).toContain('sm:max-w-[1100px]')
+  })
+
   it('keeps the PCR bench view at its wide width', () => {
-    const sheet = openWith('pcr')
+    const sheet = openWith(['pcr'])
     expect(screen.getByText('pcr view')).toBeInTheDocument()
     expect(sheet.className).toContain('sm:max-w-[1760px]')
   })
@@ -128,7 +144,7 @@ describe('WorksheetDrawer: bench kinds (endo v2)', () => {
   // cannot mark one as endo; an empty worksheet keeps the editable flyout,
   // where samples get added.
   it('keeps the generic editable flyout on an empty worksheet', () => {
-    const sheet = openWith()
+    const sheet = openWith([])
     expect(screen.queryByText('endo summary')).not.toBeInTheDocument()
     expect(screen.getByText('generic items of WS-1')).toBeInTheDocument()
     expect(screen.getByRole('button', { name: 'Add Samples' })).toBeVisible()
@@ -136,7 +152,7 @@ describe('WorksheetDrawer: bench kinds (endo v2)', () => {
   })
 
   it('hands a mixed worksheet to the item list, where the endo line reads its prep', () => {
-    const sheet = openWith('endo', 'pcr')
+    const sheet = openWith(['endo', 'pcr'])
     expect(screen.queryByText('endo summary')).not.toBeInTheDocument()
     expect(screen.queryByText('pcr view')).not.toBeInTheDocument()
     expect(screen.getByText('generic items of WS-1')).toBeInTheDocument()

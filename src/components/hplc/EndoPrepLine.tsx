@@ -16,6 +16,7 @@ import {
   fmtConc,
   formOf,
   prep2Check,
+  waterOf,
   type EndoForm,
 } from '@/lib/endo-prep-2ml'
 import {
@@ -23,16 +24,21 @@ import {
   shortLabDate,
   type WorksheetItemRow,
 } from '@/lib/endo-worksheet'
-import { endoCtxFor, endoSampleFor } from '@/lib/endo-worksheet-2ml'
+import {
+  allowedCartridges,
+  endoCtxFor,
+  endoRowsFor,
+} from '@/lib/endo-worksheet-2ml'
 import { useLabCalendar } from '@/hooks/use-lab-calendar'
 import { worksheetPageKey } from '@/hooks/use-worksheet-drawer'
 
 /**
  * The endotoxin bench line under a worksheet item on a MIXED worksheet (an
  * endo vial sharing a Microbiology worksheet with PCR or sterility work).
- * Endo-only worksheets render EndoWorksheetTable instead. Everything derived
- * comes from src/lib/endo-prep.ts, the same code the printed bench sheet
- * uses, so screen and paper always agree; the due date is the SLA engine's.
+ * Endo-only worksheets are worked in EndoWorksheetTable on their own page.
+ * Everything derived comes from the same code the printed bench sheets use,
+ * so screen and paper always agree: src/lib/endo-prep.ts on a stock run,
+ * src/lib/endo-prep-2ml.ts on a 2 mL run. The due date is the SLA engine's.
  */
 interface EndoPrepLineProps {
   item: WorksheetItemRow
@@ -63,11 +69,15 @@ export function EndoPrepLine({
     staleTime: 30_000,
   })
   const runWs = full ?? worksheet
-  // With no method resolved, every active endo cartridge is allowed (4.3).
+  // Handed the list payload: nothing is typed until the method lands, so a
+  // standard is never judged against Dennis's defaults by mistake.
+  const pending = worksheet?.endo_method === undefined && full === undefined
+  // The allowed list when no method resolves, or the method links no
+  // cartridges (4.3), as the page reads it.
   const { data: catalog = [] } = useQuery({
     queryKey: ['consumables', 'endo_cartridge'],
     queryFn: () => listConsumables({ kind: 'endo_cartridge' }),
-    enabled: twoMl && runWs?.endo_method === null,
+    enabled: twoMl,
     staleTime: 5 * 60_000,
   })
   const prep = endoPrepFor(item)
@@ -93,7 +103,7 @@ export function EndoPrepLine({
           item={item}
           worksheet={runWs}
           catalog={catalog}
-          isCompleted={isCompleted}
+          disabled={isCompleted || pending}
           onUpdate={onUpdate}
         />
       </div>
@@ -184,43 +194,60 @@ export function EndoPrepFields({
 }
 
 /**
- * The 2 mL prep on a mixed worksheet's endo line (spec 6.3): Box 1's prep
- * inputs (Weight, Form, Water) and Box 2's Total, what they give, the row's
- * cartridge and what lands on it, with the tube and cartridge warnings. A
- * mixed worksheet has no page, so this line is the only place to edit them.
- * The figures come from
- * src/lib/endo-prep-2ml.ts, as on the worksheet page and the 2 mL sheet. The
- * row's cartridge is shown, not picked (the picker is on the worksheet page).
+ * The 2 mL prep on a mixed worksheet's endo line (spec 6.3, the same prep
+ * inputs as Box 1): Weight, Form, Water and the row's cartridge as Box 1 has
+ * them, Box 2's Total, and what they give, with the tube and cartridge
+ * warnings. A mixed worksheet has no page, so this line is the only place to
+ * set them. The figures come from src/lib/endo-prep-2ml.ts, as on the
+ * worksheet page and the 2 mL sheet.
  */
 export function EndoPrep2mlFields({
   item,
   worksheet,
   catalog,
-  isCompleted,
+  disabled,
   onUpdate,
 }: {
   item: WorksheetItemRow
   worksheet: WorksheetListItem
   catalog: ConsumableType[]
-  isCompleted: boolean
+  /** A completed worksheet, or the run settings still loading. */
+  disabled: boolean
   onUpdate: (data: WorksheetItemPatch) => void
 }) {
   const ctx = endoCtxFor(worksheet, catalog)
-  const s = endoSampleFor(item, worksheet, catalog)
+  const [row] = endoRowsFor([item], worksheet, catalog)
+  if (!row) return null
+  const s = row.sample
   const form = formOf(s)
+  const bac = form === 'bac'
   const k = prep2Check(s, ctx)
   const plan = dilutionPlan(s, ctx)
   const stdTotal = ctx.params.stdTotalDilution
+  const cartridges = allowedCartridges(worksheet, catalog)
+  const own = item.cartridge_type_id ?? null
+  const unlisted = own != null && !cartridges.some(c => c.id === own)
+  const select =
+    'h-6 rounded border border-transparent bg-transparent px-1 text-[11px] text-foreground hover:border-border focus:border-teal-500 focus:outline-none disabled:opacity-100 dark:focus:border-teal-400'
+
+  // Box 2's rule: the standard is stored as null, and a total already stored
+  // is not sent again.
+  function commitTotal(v: number | null) {
+    const next = v === stdTotal ? null : v
+    if (next === (item.prep_total_dilution ?? null)) return
+    onUpdate({ prep_total_dilution: next })
+  }
+
   return (
     <>
-      {form !== 'bac' && (
+      {!bac && (
         <PrepField
           label="Weight"
           unit="mg"
           value={s.weightMg}
           overridden={item.prep_weight_mg != null}
           computed={item.declared_weight_mg ?? null}
-          disabled={isCompleted}
+          disabled={disabled}
           onCommit={v => onUpdate({ prep_weight_mg: v })}
         />
       )}
@@ -230,14 +257,14 @@ export function EndoPrep2mlFields({
         </span>
         <select
           aria-label="Form"
-          disabled={isCompleted}
+          disabled={disabled}
           value={item.prep_form ?? ''}
           onChange={e =>
             onUpdate({
               prep_form: (e.target.value || null) as EndoForm | null,
             })
           }
-          className="h-6 rounded border border-transparent bg-transparent px-1 text-[11px] text-foreground hover:border-border focus:border-teal-500 focus:outline-none disabled:opacity-100 dark:focus:border-teal-400"
+          className={select}
         >
           <option value="">
             {`Auto (${FORMS.find(f => f[0] === form)?.[1] ?? form})`}
@@ -249,37 +276,60 @@ export function EndoPrep2mlFields({
           ))}
         </select>
       </span>
-      {form !== 'bac' && (
+      {!bac && (
         <PrepField
           label="Water"
           unit="mL"
-          value={item.prep_water_ml ?? null}
+          value={waterOf(s, ctx)}
           overridden={item.prep_water_ml != null}
           computed={form === 'liquid' ? null : ctx.params.reconWaterMl}
-          disabled={isCompleted}
+          disabled={disabled}
           onCommit={v => onUpdate({ prep_water_ml: v })}
         />
       )}
-      {form !== 'bac' && (
+      {!bac && (
         <PrepField
           label="Total"
           unit="1:N"
           value={item.prep_total_dilution ?? null}
           overridden={item.prep_total_dilution != null}
           computed={stdTotal}
-          disabled={isCompleted}
-          onCommit={v =>
-            onUpdate({ prep_total_dilution: v === stdTotal ? null : v })
-          }
+          disabled={disabled}
+          onCommit={commitTotal}
         />
       )}
-      <Stat
-        label="Cartridge"
-        value={s.lambda === null ? '-' : fmt(s.lambda)}
-        unit="EU/mL"
-        strong
-      />
-      {form === 'bac' ? (
+      <span className="inline-flex items-center gap-1">
+        <span className="uppercase tracking-wider text-[9px] font-semibold">
+          Cartridge
+        </span>
+        <select
+          aria-label="Cartridge for this sample"
+          value={own ?? ''}
+          disabled={disabled}
+          onChange={e =>
+            onUpdate({
+              cartridge_type_id: e.target.value ? Number(e.target.value) : null,
+            })
+          }
+          className={`${select} font-mono ${own == null ? 'text-muted-foreground' : ''}`}
+        >
+          <option value="">
+            {`${bac ? 'bac water' : 'run'} (${row.inherited ? fmt(row.inherited.sensitivity) : '-'})`}
+          </option>
+          {unlisted && (
+            <option value={own ?? ''}>
+              {`${fmt(item.cartridge_sensitivity_eu_ml)} (not in the list)`}
+            </option>
+          )}
+          {cartridges.map(c => (
+            <option key={c.id} value={c.id} title={c.name}>
+              {fmt(c.sensitivity_eu_ml)}
+            </option>
+          ))}
+        </select>
+        <span className="text-[9px]">EU/mL</span>
+      </span>
+      {bac ? (
         <Stat label="Dilution" value={`1:${fmt(plan.total)}`} />
       ) : (
         <Stat label="Loaded" value={fmtConc(k.loaded) || '-'} unit="mg/mL" />

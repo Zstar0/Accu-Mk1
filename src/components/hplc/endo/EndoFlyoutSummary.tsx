@@ -69,17 +69,21 @@ export function EndoFlyoutSummary({
   worksheet: WorksheetListItem
   users: WorksheetUser[]
 }) {
-  const { data: full } = useQuery({
+  const {
+    data: full,
+    isError,
+    refetch,
+  } = useQuery({
     queryKey: worksheetPageKey(worksheet.id),
     queryFn: () => getWorksheet(worksheet.id),
     staleTime: 30_000,
   })
   const ws = full ?? worksheet
-  // With no method resolved, every active endo cartridge is allowed (4.3).
+  // The allowed list when no method resolves, or the method links no
+  // cartridges (4.3), as the page reads it.
   const { data: catalog = [] } = useQuery({
     queryKey: ['consumables', 'endo_cartridge'],
     queryFn: () => listConsumables({ kind: 'endo_cartridge' }),
-    enabled: ws.endo_method === null,
     staleTime: 5 * 60_000,
   })
   const { calendar } = useLabCalendar()
@@ -96,6 +100,8 @@ export function EndoFlyoutSummary({
   const rows = endoItemsInBenchOrder(items, dueAt, calendar)
   const twoMl = ws.endo_prep === '2ml'
   const ready = full !== undefined
+  // Not worked out (yet): loading, or the read failed and is offered again.
+  const unknown = isError ? '-' : '…'
 
   const judged = new Map<number, { verdict: EndoVerdict; toMk1: boolean }>()
   if (twoMl && ready) {
@@ -184,11 +190,25 @@ export function EndoFlyoutSummary({
         {twoMl && (
           <>
             <Count label="Results in">{`${resultsIn}/${n}`}</Count>
-            <Count label="Invalid">{ready ? invalid : '…'}</Count>
-            <Count label="Ready for Mk1">{ready ? `${toMk1}/${n}` : '…'}</Count>
+            <Count label="Invalid">{ready ? invalid : unknown}</Count>
+            <Count label="Ready for Mk1">
+              {ready ? `${toMk1}/${n}` : unknown}
+            </Count>
           </>
         )}
       </dl>
+      {twoMl && isError && !ready && (
+        <p
+          role="alert"
+          className="flex flex-wrap items-center gap-2 text-xs font-medium text-red-600 dark:text-red-400"
+        >
+          Could not load the run settings, so Invalid and Ready for Mk1 are not
+          worked out.
+          <Button variant="outline" size="sm" onClick={() => void refetch()}>
+            Retry
+          </Button>
+        </p>
+      )}
 
       <ol className="overflow-hidden rounded-[5px] border bg-card shadow-sm">
         {rows.map((it, i) => {
