@@ -1,21 +1,41 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import type { ReactNode } from 'react'
-import { fireEvent, render, screen, within } from '@testing-library/react'
+import {
+  fireEvent,
+  render,
+  screen,
+  waitFor,
+  within,
+} from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import type * as ApiModule from '@/lib/api'
-import type { WorksheetListItem } from '@/lib/api'
+import { importReaderResults, type WorksheetListItem } from '@/lib/api'
 import { EndoResultsBox } from '@/components/hplc/endo/EndoResultsBox'
 import type { EndoReaderRecord } from '@/lib/endo-prep-2ml'
+import type * as EndoReaderModule from '@/lib/endo-reader'
+import { parseEndoScan } from '@/lib/endo-reader'
+import { worksheetPageKey } from '@/hooks/use-worksheet-drawer'
 import type { WorksheetItemRow } from '@/lib/endo-worksheet'
-import { endoBoxProps, endoItem } from './endo-fixtures'
+import {
+  endoBoxProps,
+  endoItem,
+  endoWorksheet,
+  readerTest,
+} from './endo-fixtures'
 
 vi.mock('sonner', () => ({ toast: { error: vi.fn(), success: vi.fn() } }))
+
+vi.mock('@/lib/endo-reader', async importOriginal => ({
+  ...(await importOriginal<typeof EndoReaderModule>()),
+  parseEndoScan: vi.fn(),
+}))
 
 vi.mock('@/lib/api', async importOriginal => {
   const actual = await importOriginal<typeof ApiModule>()
   return {
     ...actual,
+    importReaderResults: vi.fn(),
     getAnalysisServices: vi.fn().mockResolvedValue([
       {
         id: 61,
@@ -83,7 +103,7 @@ function setup(
     <QueryClientProvider client={qc}>{children}</QueryClientProvider>
   )
   render(<EndoResultsBox {...props} />, { wrapper: wrap })
-  return { onUpdateItem }
+  return { onUpdateItem, qc }
 }
 
 function rowOf(sampleId: string): HTMLElement {
@@ -282,6 +302,40 @@ describe('EndoResultsBox', () => {
     )
   })
 
+  it('puts an applied reader import in the page cache at once, then refetches the worksheets list', async () => {
+    const a = endoItem({ sample_id: 'P-0001-S02' })
+    const { qc } = setup([a])
+    // the page as it was read before the method was pinned
+    qc.setQueryData(
+      worksheetPageKey(77),
+      endoWorksheet([a], { endo_method: null })
+    )
+    const invalidate = vi.spyOn(qc, 'invalidateQueries')
+    const pinned = endoWorksheet([]).endo_method ?? null
+    vi.mocked(importReaderResults).mockResolvedValue({
+      applied: 1,
+      items: [{ ...a, result_reading: '<0.05' }],
+      endo_method: pinned,
+    })
+    vi.mocked(parseEndoScan).mockReturnValueOnce({
+      tests: [readerTest({ sampleId: 'P-0001-S02' })],
+      cartridges: [],
+    })
+    fireEvent.change(screen.getByLabelText('Reader export file'), {
+      target: { files: [new File(['x'], 'export.csv', { type: 'text/csv' })] },
+    })
+    fireEvent.click(
+      await screen.findByRole('button', { name: 'Apply 1 reading' })
+    )
+    await waitFor(() =>
+      expect(invalidate).toHaveBeenCalledWith({ queryKey: ['worksheets-list'] })
+    )
+    expect(invalidate).toHaveBeenCalledTimes(1)
+    const page = qc.getQueryData<WorksheetListItem>(worksheetPageKey(77))
+    expect(page?.items[0]?.result_reading).toBe('<0.05')
+    expect(page?.endo_method?.id).toBe(12)
+  })
+
   it('is read-only on a completed worksheet', () => {
     setup(
       [endoItem({ sample_id: 'P-0001-S02', result_reading: '<0.05' })],
@@ -289,5 +343,9 @@ describe('EndoResultsBox', () => {
     )
     expect(screen.queryByRole('textbox')).not.toBeInTheDocument()
     expect(screen.getByText('<0.05')).toBeInTheDocument()
+    // a completed worksheet refuses an import (409): no drop zone
+    expect(
+      screen.queryByLabelText('Reader export file')
+    ).not.toBeInTheDocument()
   })
 })

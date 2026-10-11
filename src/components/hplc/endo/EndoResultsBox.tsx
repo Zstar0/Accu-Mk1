@@ -1,12 +1,16 @@
 import type { ReactNode } from 'react'
-import { useQuery } from '@tanstack/react-query'
+import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { toast } from 'sonner'
 import {
   Tooltip,
   TooltipContent,
   TooltipTrigger,
 } from '@/components/ui/tooltip'
-import { listServiceSpecs, type AnalysisServiceSpecRecord } from '@/lib/api'
+import {
+  listServiceSpecs,
+  type AnalysisServiceSpecRecord,
+  type WorksheetListItem,
+} from '@/lib/api'
 import { fmt } from '@/lib/endo-prep'
 import {
   BW_LIMIT_EU_PER_ML,
@@ -35,7 +39,12 @@ import {
   TH_CALC,
   UNIT,
 } from '@/components/hplc/EndoWorksheetTable'
+import { worksheetPageKey } from '@/hooks/use-worksheet-drawer'
 import { EndoReadingInput } from './EndoReadingInput'
+import {
+  EndoReaderImportDialog,
+  type ReaderImportResult,
+} from './EndoReaderImportDialog'
 import { EndoBox, type EndoBoxProps } from './EndoBox'
 import { WorkedTip } from './EndoWorkedTip'
 import { useRowRefusals } from './use-row-refusals'
@@ -404,8 +413,10 @@ function ResultRow({
  * until that row's next save.
  */
 export function EndoResultsBox({
+  worksheet,
   rows,
   ctx,
+  cartridges,
   isCompleted,
   onUpdateItem,
 }: EndoBoxProps) {
@@ -428,6 +439,7 @@ export function EndoResultsBox({
     enabled: service != null,
     staleTime: 60_000,
   })
+  const queryClient = useQueryClient()
   const { refused, send, refuse } = useRowRefusals(onUpdateItem)
 
   if (!rows.length) return null
@@ -463,10 +475,42 @@ export function EndoResultsBox({
     })
   }
 
+  // Refresh from the import response: the page cache gets the updated rows
+  // and the (possibly just pinned) method at once, then the worksheets-list
+  // prefix refetches once (the page entry and the flyout list).
+  function applied(res: ReaderImportResult) {
+    const byId = new Map(res.items.map(it => [it.id, it]))
+    queryClient.setQueryData<WorksheetListItem>(
+      worksheetPageKey(worksheet.id),
+      ws =>
+        ws
+          ? {
+              ...ws,
+              endo_method: res.endo_method,
+              items: ws.items.map(it => byId.get(it.id) ?? it),
+            }
+          : ws
+    )
+    void queryClient.invalidateQueries({ queryKey: ['worksheets-list'] })
+  }
+
   return (
     <EndoBox
       n={3}
       title="Results: EU per vial"
+      actions={
+        !isCompleted && (
+          <div className="pt-2.5">
+            <EndoReaderImportDialog
+              worksheet={worksheet}
+              rows={rows}
+              cartridges={cartridges}
+              params={ctx.params}
+              onApplied={applied}
+            />
+          </div>
+        )
+      }
       sub={
         <>
           <span className="block font-medium text-foreground/80">{note}</span>

@@ -1,6 +1,7 @@
 import { vi } from 'vitest'
 import type { WorksheetListItem } from '@/lib/api'
 import type { WorksheetItemRow } from '@/lib/endo-worksheet'
+import type { ReaderTest } from '@/lib/endo-reader'
 import {
   allowedCartridges,
   endoCtxFor,
@@ -142,5 +143,37 @@ export function endoBoxProps(
       onUpdateItem,
     },
     onUpdateItem,
+  }
+}
+
+// A made-up test in the reader's shape; never real results.
+export function readerTest(over: Partial<ReaderTest> = {}): ReaderTest {
+  return {
+    testId: 'T1',
+    sampleId: 'P-0001-S02',
+    identity: 'Retatrutide',
+    sampleType: 'Peptide',
+    result: '<0.05',
+    lt: true,
+    value: 0.05,
+    sampleCv: 3.1,
+    spikeCv: 3.7,
+    cvLimit: 25,
+    recovery: 87,
+    recMin: 50,
+    recMax: 200,
+    spikeLevel: 0.8,
+    readerPass: true,
+    operator: 'QA',
+    testedAt: '2026-10-09 14:02',
+    reader: 'MCS-1234',
+    slot: 2,
+    tempStart: 37,
+    tempEnd: 37.1,
+    cartLot: 'L1',
+    cartExpiry: '2027-01-31',
+    cartRange: '5 - 0.05',
+    software: '1.0',
+    ...over,
   }
 }
