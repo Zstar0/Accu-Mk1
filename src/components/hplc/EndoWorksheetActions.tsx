@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { useMutation, useQueryClient } from '@tanstack/react-query'
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { Download, Eye, Printer } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import {
@@ -9,16 +9,28 @@ import {
   DialogTitle,
 } from '@/components/ui/dialog'
 import {
+  getWorksheet,
+  listConsumables,
   recordWorksheetPrinted,
   type WorksheetListItem,
   type WorksheetUser,
 } from '@/lib/api'
 import { buildEndoBenchSheetHtml, buildEndoCsv } from '@/lib/endo-bench-sheet'
-import { buildEndoSheetDoc, isEndoWorksheetItem } from '@/lib/endo-worksheet'
+import {
+  buildEndoBenchSheet2Html,
+  buildEndoCsv2,
+  buildEndoSheet2Doc,
+} from '@/lib/endo-bench-sheet-2ml'
+import {
+  buildEndoSheetDoc,
+  isEndoWorksheetItem,
+  type EndoSheetOptions,
+} from '@/lib/endo-worksheet'
 import { worksheetItemSlaSubjects } from '@/lib/worksheet-sla-subjects'
 import { downloadTextFile, printHtmlDocument } from '@/lib/print-document'
 import { displayName } from '@/lib/user-display'
 import { useLabCalendar } from '@/hooks/use-lab-calendar'
+import { worksheetPageKey } from '@/hooks/use-worksheet-drawer'
 import { useSlaForSubjects } from '@/services/sla-subjects'
 
 /**
@@ -26,7 +38,10 @@ import { useSlaForSubjects } from '@/services/sla-subjects'
  * Dennis's tool. All three build the same document (bench order, prep
  * figures, SLA due dates) so screen, paper and export never disagree. The
  * tech prints the sheet and carries it to the bench, so every Print is
- * recorded: the first one is the run's start (worksheets.printed_at).
+ * recorded: the first one is the run's start (worksheets.printed_at), and
+ * it pins the worksheet's endo method. A 2 mL worksheet prints the 2 mL
+ * sheet (endo-bench-sheet-2ml.ts) from the GET-by-id worksheet, which
+ * carries the method; a stock worksheet prints the stock sheet as before.
  * Renders nothing on a worksheet with no endo work.
  */
 export function EndoWorksheetActions({
@@ -39,7 +54,29 @@ export function EndoWorksheetActions({
   const queryClient = useQueryClient()
   const { calendar } = useLabCalendar()
   const [previewHtml, setPreviewHtml] = useState<string | null>(null)
-  const endoItems = worksheet.items.filter(isEndoWorksheetItem)
+  const twoMl = worksheet.endo_prep === '2ml'
+  // The list payload has no endo_method key; a 2 mL sheet needs the method
+  // (run parameters, cartridges), so it reads the page's GET-by-id entry.
+  const needsFull = twoMl && worksheet.endo_method === undefined
+  const { data: full, isError: fullFailed } = useQuery({
+    queryKey: worksheetPageKey(worksheet.id),
+    queryFn: () => getWorksheet(worksheet.id),
+    enabled: needsFull,
+    staleTime: 30_000,
+  })
+  const sheetWorksheet = needsFull ? full : worksheet
+  // The allowed list when no method resolves, or the method links no
+  // cartridges (4.3), as the page reads it.
+  const { data: catalog, isError: catalogFailed } = useQuery({
+    queryKey: ['consumables', 'endo_cartridge'],
+    queryFn: () => listConsumables({ kind: 'endo_cartridge' }),
+    enabled: twoMl,
+    staleTime: 5 * 60_000,
+  })
+  const needsCatalog = twoMl && !sheetWorksheet?.endo_method?.cartridges.length
+  // Due dates key on the items the sheet is built from.
+  const sheetItems = (sheetWorksheet ?? worksheet).items
+  const endoItems = sheetItems.filter(isEndoWorksheetItem)
   const { byKey } = useSlaForSubjects(
     worksheetItemSlaSubjects(
       endoItems,
@@ -61,29 +98,47 @@ export function EndoWorksheetActions({
   const analystName = analyst
     ? displayName(analyst)
     : (worksheet.assigned_analyst_email ?? '')
-  const doc = () =>
-    buildEndoSheetDoc(worksheet, {
-      analystName,
-      calendar,
-      printedAt: new Date().toLocaleString(undefined, {
-        year: 'numeric',
-        month: 'short',
-        day: 'numeric',
-        hour: '2-digit',
-        minute: '2-digit',
-      }),
-      dueAtByItemId: new Map(
-        endoItems.map(it => [
-          it.id,
-          byKey.get(String(it.id))?.status.due_at ?? null,
-        ])
-      ),
-    })
+  const opts = (): EndoSheetOptions => ({
+    analystName,
+    calendar,
+    printedAt: new Date().toLocaleString(undefined, {
+      year: 'numeric',
+      month: 'short',
+      day: 'numeric',
+      hour: '2-digit',
+      minute: '2-digit',
+    }),
+    dueAtByItemId: new Map(
+      endoItems.map(it => [
+        it.id,
+        byKey.get(String(it.id))?.status.due_at ?? null,
+      ])
+    ),
+  })
+  const sheetHtml = (preview: boolean) =>
+    twoMl && sheetWorksheet
+      ? buildEndoBenchSheet2Html(
+          buildEndoSheet2Doc(sheetWorksheet, opts(), catalog),
+          { preview }
+        )
+      : buildEndoBenchSheetHtml(buildEndoSheetDoc(worksheet, opts()), {
+          preview,
+        })
+  const sheetCsv = () =>
+    twoMl && sheetWorksheet
+      ? buildEndoCsv2(buildEndoSheet2Doc(sheetWorksheet, opts(), catalog))
+      : buildEndoCsv(buildEndoSheetDoc(worksheet, opts()))
   const fileStem = worksheet.title.replace(/[^A-Za-z0-9._-]+/g, '_')
-  const waiting = calendar ? undefined : 'Loading the lab calendar…'
+  const waiting = !calendar
+    ? 'Loading the lab calendar…'
+    : twoMl && ((needsFull && fullFailed) || (needsCatalog && catalogFailed))
+      ? 'Could not load the run settings; reopen to try again'
+      : twoMl && (!sheetWorksheet || (needsCatalog && !catalog))
+        ? 'Loading the run settings…'
+        : undefined
 
   function print() {
-    printHtmlDocument(buildEndoBenchSheetHtml(doc()))
+    printHtmlDocument(sheetHtml(false))
     recordPrint.mutate()
   }
 
@@ -92,11 +147,9 @@ export function EndoWorksheetActions({
       <Button
         variant="outline"
         size="sm"
-        disabled={!calendar}
+        disabled={waiting !== undefined}
         title={waiting ?? 'See the bench sheet as it will print'}
-        onClick={() =>
-          setPreviewHtml(buildEndoBenchSheetHtml(doc(), { preview: true }))
-        }
+        onClick={() => setPreviewHtml(sheetHtml(true))}
       >
         <Eye className="h-3.5 w-3.5" />
         Preview
@@ -104,7 +157,7 @@ export function EndoWorksheetActions({
       <Button
         variant="outline"
         size="sm"
-        disabled={!calendar}
+        disabled={waiting !== undefined}
         title={waiting ?? 'Print the bench sheet to take to the bench'}
         onClick={print}
       >
@@ -114,10 +167,10 @@ export function EndoWorksheetActions({
       <Button
         variant="outline"
         size="sm"
-        disabled={!calendar}
+        disabled={waiting !== undefined}
         title={waiting ?? 'Export the bench rows as CSV'}
         onClick={() =>
-          downloadTextFile(`${fileStem}_endotoxin.csv`, buildEndoCsv(doc()))
+          downloadTextFile(`${fileStem}_endotoxin.csv`, sheetCsv())
         }
       >
         <Download className="h-3.5 w-3.5" />
