@@ -10,8 +10,9 @@ depends on the free-text technique:
 Every key is optional; a missing key means Dennis's value below. Content-locked
 with the method's other fields (main.py METHOD_LOCKED_FIELDS).
 """
-import math
 from typing import Optional
+
+from catalog.consumables import is_positive_finite_number
 
 ENDO_RUN_PARAM_DEFAULTS = {
     "std_total_dilution": 250,
@@ -48,7 +49,7 @@ def validate_run_parameters(value: Optional[dict]) -> Optional[dict]:
     for key, v in block.items():
         if v is None:
             continue
-        if isinstance(v, bool) or not isinstance(v, (int, float)) or not math.isfinite(v) or v <= 0:
+        if not is_positive_finite_number(v):
             raise ValueError(f"endotoxin.{key} must be a positive number")
         clean[key] = v
     effective = {**ENDO_RUN_PARAM_DEFAULTS, **clean}

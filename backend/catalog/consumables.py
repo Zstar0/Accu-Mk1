@@ -28,6 +28,18 @@ CONSUMABLE_KINDS: dict[str, dict] = {
 CONSUMABLE_LOG_FIELDS = ("kind", "name", "manufacturer", "part_number", "instrument_id", "specs", "active")
 
 
+def is_positive_finite_number(value) -> bool:
+    """True for a real number (bool is not one) that is finite and above zero.
+    An int too big for a float counts as not finite: math.isfinite raises
+    OverflowError on it, which would escape a route's ValueError handler as a 500."""
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return False
+    try:
+        return math.isfinite(value) and value > 0
+    except OverflowError:
+        return False
+
+
 class ConsumableSpecError(ValueError):
     """A kind or specs value the registry refuses (the routes answer 400)."""
 
@@ -51,9 +63,7 @@ def validate_specs(kind: str, specs: dict) -> dict:
             if field["required"]:
                 raise ConsumableSpecError(f"{key} is required for {kind}")
             continue
-        # bool is an int in Python; a checkbox value is not a number here.
-        if (isinstance(value, bool) or not isinstance(value, (int, float))
-                or not math.isfinite(value) or value <= 0):
+        if not is_positive_finite_number(value):
             raise ConsumableSpecError(f"{key} must be a positive number")
         clean[key] = float(value)
     return clean

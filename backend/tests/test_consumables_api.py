@@ -84,6 +84,7 @@ def test_kinds_endpoint_serves_the_registry(client):
     {}, {"sensitivity_eu_ml": None}, {"sensitivity_eu_ml": 0}, {"sensitivity_eu_ml": -0.05},
     {"sensitivity_eu_ml": True}, {"sensitivity_eu_ml": "0.05"}, {"sensitivity_eu_ml": float("nan")},
     {"sensitivity_eu_ml": float("inf")}, {"sensitivity_eu_ml": 0.05, "lot": 7}, [0.05],
+    {"sensitivity_eu_ml": 10**400},   # an int too big for a float: math.isfinite raises OverflowError
 ])
 def test_validate_specs_rejects(specs):
     with pytest.raises(ConsumableSpecError):
@@ -125,6 +126,12 @@ def test_create_returns_the_row_and_logs_it(client, db):
 def test_create_rejects_bad_input_with_400(client, over):
     r = client.post("/consumables", json={**CART, **over})
     assert r.status_code == 400, r.text
+
+
+def test_create_huge_int_spec_is_400_not_500(client):
+    r = client.post("/consumables", json={**CART, "specs": {"sensitivity_eu_ml": 10**400}})
+    assert r.status_code == 400, r.text
+    assert "sensitivity_eu_ml" in r.json()["detail"]
 
 
 def test_create_duplicate_kind_and_name_is_409(client):

@@ -103,6 +103,29 @@ def test_non_draft_method_consumables_are_409(client, db, verb):
     assert len(client.get(f"/hplc/methods/{mid}/consumables").json()) == 1
 
 
+def test_draft_referenced_by_an_analysis_is_locked_like_the_rest_of_its_content(client, db):
+    """One lock rule for all method content (update_method's): a draft stamped
+    onto an analysis refuses a consumables PUT as it refuses run_parameters."""
+    from models import AnalysisService, LimsAnalysis, LimsSample
+    c05, c01 = _cart(db, "Endosafe 0.05", 0.05), _cart(db, "Endosafe 0.01", 0.01)
+    mid = _draft(client)
+    assert _put(client, mid, [{"consumable_type_id": c05, "is_default": True}]).status_code == 200
+    svc = AnalysisService(title="Endotoxin", keyword="ENDO-LAL", origin="mk1", active=True)
+    parent = LimsSample(sample_id="P-9301")
+    db.add_all([svc, parent])
+    db.flush()
+    db.add(LimsAnalysis(lims_sample_pk=parent.id, analysis_service_id=svc.id, keyword="ENDO-LAL",
+                        title="Endotoxin", review_state="assigned", provenance="canonical",
+                        method_id=mid))
+    db.commit()
+    r = _put(client, mid, [{"consumable_type_id": c01, "is_default": True}])
+    assert r.status_code == 409
+    assert "new revision" in r.json()["detail"]
+    assert [x["consumable_type_id"] for x in client.get(f"/hplc/methods/{mid}/consumables").json()] == [c05]
+    r = client.put(f"/hplc/methods/{mid}", json={"run_parameters": {"endotoxin": {"cv_limit_pct": 20}}})
+    assert r.status_code == 409
+
+
 def test_put_rejects_bad_links_with_400(client, db):
     c05, c01 = _cart(db, "Endosafe 0.05", 0.05), _cart(db, "Endosafe 0.01", 0.01)
     old = _cart(db, "Old 0.25", 0.25, active=False)
@@ -147,6 +170,7 @@ def test_new_revision_copies_consumables_with_default_and_run_parameters(client,
     {"endotoxin": {"spike_recovery_min_pct": 250}},   # above the default max of 200
     {"endotoxin": {"spike_recovery_max_pct": 40}},    # below the default min of 50
     {"endotoxin": {"std_total_dilution": 19}},
+    {"endotoxin": {"cv_limit_pct": 10**400}},   # an int too big for a float: isfinite raises OverflowError
 ])
 def test_validate_run_parameters_rejects(value):
     with pytest.raises(ValueError):
@@ -181,6 +205,13 @@ def test_put_method_sets_validates_and_clears_run_parameters(client, db):
         CatalogChangeLog.action == "update")).scalars().all()
     assert [log.details["changed"]["run_parameters"]["after"] for log in logs] == [
         {"endotoxin": {"std_total_dilution": 500}}, None]
+
+
+def test_put_method_huge_int_run_parameter_is_400_not_500(client, db):
+    mid = _draft(client)
+    r = client.put(f"/hplc/methods/{mid}", json={"run_parameters": {"endotoxin": {"cv_limit_pct": 10**400}}})
+    assert r.status_code == 400, r.text
+    assert "cv_limit_pct" in r.json()["detail"]
 
 
 def test_run_parameters_lock_once_issued(client, db):

@@ -3216,6 +3216,15 @@ METHOD_LOCKED_FIELDS = ("name", "code", "technique", "reference", "procedure_sum
                         "size_peptide", "starting_organic_pct", "temperature_mct_c",
                         "dissolution", "run_parameters")
 
+def _method_content_locked(db: Session, method: HplcMethod) -> bool:
+    """The one lock rule for a method's content (METHOD_LOCKED_FIELDS and the
+    allowed consumables): issued (not a draft), or referenced by any analysis."""
+    from models import LimsAnalysis
+    referenced = db.execute(select(func.count()).select_from(LimsAnalysis)
+                            .where(LimsAnalysis.method_id == method.id)).scalar()
+    return method.status != "draft" or bool(referenced)
+
+
 # catalog/change_log.py log_create field list for method create/new-revision —
 # the identity + lifecycle columns worth an audit snapshot at mint time.
 METHOD_LOG_FIELDS = ("name", "code", "technique", "reference", "department_id",
@@ -5045,11 +5054,7 @@ async def update_method(method_id: int, data: MethodUpdate, db: Session = Depend
         raise HTTPException(400, "active is managed by the lifecycle verbs "
                                  "(activate / retire) — not settable directly")
 
-    from models import LimsAnalysis
-    referenced = db.execute(select(func.count()).select_from(LimsAnalysis)
-                            .where(LimsAnalysis.method_id == method_id)).scalar()
-    locked = method.status != "draft" or bool(referenced)
-    if locked:
+    if _method_content_locked(db, method):
         offending = sorted(set(fields) & set(METHOD_LOCKED_FIELDS))
         if offending:
             raise HTTPException(
@@ -5223,10 +5228,11 @@ async def put_method_consumables(method_id: int, links: list[MethodConsumableLin
     method = db.get(HplcMethod, method_id)
     if not method:
         raise HTTPException(404, f"Method {method_id} not found")
-    if method.status != "draft":
+    if _method_content_locked(db, method):
         raise HTTPException(
-            409, f"method '{method.name}' rev {method.revision} is {method.status}; consumables "
-                 f"change only on a draft. Create a new revision instead")
+            409, f"method '{method.name}' rev {method.revision} is locked (status "
+                 f"{method.status}, or used by analyses); consumables change only on an unused "
+                 f"draft. Create a new revision instead")
     picked: list[tuple[ConsumableType, bool]] = []
     defaults: dict[str, int] = {}
     for ln in links:
