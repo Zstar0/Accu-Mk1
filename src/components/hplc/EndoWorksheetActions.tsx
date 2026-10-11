@@ -77,7 +77,9 @@ export function EndoWorksheetActions({
   // Due dates key on the items the sheet is built from.
   const sheetItems = (sheetWorksheet ?? worksheet).items
   const endoItems = sheetItems.filter(isEndoWorksheetItem)
-  const { byKey } = useSlaForSubjects(
+  // Due dates order the bench and print in the Due column; a sheet built
+  // before they land prints them blank and numbers the rows another way.
+  const { byKey, isLoading: slaLoading } = useSlaForSubjects(
     worksheetItemSlaSubjects(
       endoItems,
       worksheet.status === 'completed' ? worksheet.completed_at : null
@@ -129,13 +131,21 @@ export function EndoWorksheetActions({
       ? buildEndoCsv2(buildEndoSheet2Doc(sheetWorksheet, opts(), catalog))
       : buildEndoCsv(buildEndoSheetDoc(worksheet, opts()))
   const fileStem = worksheet.title.replace(/[^A-Za-z0-9._-]+/g, '_')
+  // A failed refetch keeps the data it had (react-query): only a read with
+  // nothing on hand blocks the sheet.
+  const runSettingsFailed =
+    twoMl &&
+    ((needsFull && fullFailed && !full) ||
+      (needsCatalog && catalogFailed && !catalog))
   const waiting = !calendar
     ? 'Loading the lab calendar…'
-    : twoMl && ((needsFull && fullFailed) || (needsCatalog && catalogFailed))
+    : runSettingsFailed
       ? 'Could not load the run settings; reopen to try again'
       : twoMl && (!sheetWorksheet || (needsCatalog && !catalog))
         ? 'Loading the run settings…'
-        : undefined
+        : slaLoading
+          ? 'Loading the SLA due dates…'
+          : undefined
 
   function print() {
     printHtmlDocument(sheetHtml(false))

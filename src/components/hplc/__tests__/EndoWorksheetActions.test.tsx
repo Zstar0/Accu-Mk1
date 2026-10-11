@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import type { ReactNode } from 'react'
-import { fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { act, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { EndoWorksheetActions } from '@/components/hplc/EndoWorksheetActions'
 import {
@@ -32,11 +32,12 @@ vi.mock('@/hooks/use-lab-calendar', () => ({
     isLoading: false,
   }),
 }))
+const sla = vi.hoisted(() => ({ isLoading: false }))
 vi.mock('@/services/sla-subjects', async importOriginal => ({
   ...(await importOriginal<typeof SlaSubjects>()),
   useSlaForSubjects: () => ({
     byKey: new Map(),
-    isLoading: false,
+    isLoading: sla.isLoading,
     isError: false,
   }),
 }))
@@ -65,10 +66,13 @@ function renderActions(worksheet: WorksheetListItem) {
   const wrapper = ({ children }: { children: ReactNode }) => (
     <QueryClientProvider client={qc}>{children}</QueryClientProvider>
   )
-  return render(<EndoWorksheetActions worksheet={worksheet} users={[]} />, {
+  render(<EndoWorksheetActions worksheet={worksheet} users={[]} />, {
     wrapper,
   })
+  return qc
 }
+
+const FAILED = 'Could not load the run settings; reopen to try again'
 
 function previewHtml(): string {
   fireEvent.click(screen.getByRole('button', { name: 'Preview' }))
@@ -79,6 +83,7 @@ describe('EndoWorksheetActions', () => {
   beforeEach(() => {
     vi.mocked(getWorksheet).mockReset()
     vi.mocked(listConsumables).mockReset().mockResolvedValue([])
+    sla.isLoading = false
   })
 
   it('builds the stock sheet on a stock worksheet, with no extra reads', () => {
@@ -131,5 +136,60 @@ describe('EndoWorksheetActions', () => {
     expect(getWorksheet).not.toHaveBeenCalled()
     // The run cartridge resolves from the catalog, not to "-".
     expect(previewHtml()).toContain('<dt>Cartridge</dt><dd>0.05 EU/mL</dd>')
+  })
+
+  it('says the run settings failed when GET /worksheets/{id} fails with nothing on hand', async () => {
+    vi.mocked(getWorksheet).mockRejectedValue(
+      new Error('Get worksheet failed: 500')
+    )
+    renderActions(listPayload(endoWorksheet([endoItem()])))
+    const preview = screen.getByRole('button', { name: 'Preview' })
+    await waitFor(() => expect(preview).toHaveAttribute('title', FAILED))
+    expect(preview).toBeDisabled()
+    expect(screen.getByRole('button', { name: 'Print' })).toBeDisabled()
+    expect(screen.getByRole('button', { name: 'CSV' })).toBeDisabled()
+  })
+
+  it('keeps the buttons when a background refetch fails with the worksheet on hand', async () => {
+    const full = endoWorksheet([endoItem()])
+    vi.mocked(getWorksheet).mockResolvedValue(full)
+    const qc = renderActions(listPayload(full))
+    const preview = screen.getByRole('button', { name: 'Preview' })
+    await waitFor(() => expect(preview).toBeEnabled())
+    vi.mocked(getWorksheet).mockRejectedValue(
+      new Error('Get worksheet failed: 500')
+    )
+    await qc.invalidateQueries({ queryKey: ['worksheets-list'] })
+    // let react-query notify and React re-render with the failed refetch
+    await act(() => new Promise(r => setTimeout(r, 20)))
+    expect(qc.getQueryState(['worksheets-list', 'page', 77])?.status).toBe(
+      'error'
+    )
+    expect(preview).toBeEnabled()
+    expect(previewHtml()).toContain('Step 1 &middot; Tris')
+  })
+
+  it('does not wait on a failed catalog when the method links its cartridges', async () => {
+    vi.mocked(listConsumables).mockRejectedValue(new Error('List failed: 500'))
+    const qc = renderActions(endoWorksheet([endoItem()]))
+    await waitFor(() =>
+      expect(qc.getQueryState(['consumables', 'endo_cartridge'])?.status).toBe(
+        'error'
+      )
+    )
+    for (const name of ['Preview', 'Print', 'CSV'])
+      expect(screen.getByRole('button', { name })).toBeEnabled()
+  })
+
+  it('waits for the SLA due dates on stock and 2 mL alike', () => {
+    sla.isLoading = true
+    renderActions(endoWorksheet([endoItem()], { endo_prep: 'stock' }))
+    renderActions(endoWorksheet([endoItem()]))
+    const previews = screen.getAllByRole('button', { name: 'Preview' })
+    expect(previews).toHaveLength(2)
+    for (const b of previews) {
+      expect(b).toBeDisabled()
+      expect(b).toHaveAttribute('title', 'Loading the SLA due dates…')
+    }
   })
 })
