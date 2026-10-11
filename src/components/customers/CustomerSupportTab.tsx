@@ -238,6 +238,8 @@ export function CustomerSupportTab({ customerKey }: { customerKey: string }) {
         customerKey={customerKey}
         thread={open}
         onClose={() => setOpen(null)}
+        threads={q.data?.threads ?? []}
+        onSelect={setOpen}
       />
     </div>
   )

@@ -34,14 +34,21 @@ export function SupportComposer({
   threadStatus,
   sendAs,
   onSubmit,
+  initialTab,
+  onClose: _onClose,
 }: {
   threadId: string
   threadStatus: SupportStatus
   sendAs: string
   onSubmit: (tab: Tab, markdown: string) => Promise<void>
+  initialTab?: Tab
+  /** Closing is handled by the panel's Esc handler on the sheet; kept for callers. */
+  onClose?: () => void
 }) {
-  const [tab, setTab] = useState<Tab>('reply')
-  const [text, setText] = useState(() => readDraft(threadId, 'reply'))
+  const [tab, setTab] = useState<Tab>(initialTab ?? 'reply')
+  const [text, setText] = useState(() =>
+    readDraft(threadId, initialTab ?? 'reply')
+  )
   const [preview, setPreview] = useState(false)
   const [confirming, setConfirming] = useState(false)
   const [confirmedOnce, setConfirmedOnce] = useState(false)
@@ -125,6 +132,7 @@ export function SupportComposer({
         />
       ) : (
         <textarea
+          autoFocus
           aria-label={label}
           value={text}
           onChange={e => update(e.target.value)}

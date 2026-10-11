@@ -81,7 +81,9 @@ def test_email_uses_full_text_when_truncated_and_falls_back():
                    fullTextContent=None, **{"from": {"name": None, "email": "k@x.example"}})
     out = threads.build_entries([full, missing], "Kyle R")
     assert out[0] == {"id": "e1", "at": "2026-09-01T10:00:00.000Z", "kind": "email", "author": "Kyle R",
-                      "author_kind": "customer", "internal": False, "subject": "Hi", "text": "short and the rest"}
+                      "author_kind": "customer", "internal": False, "subject": "Hi", "text": "short and the rest",
+                      "author_avatar_url": None, "automated": False, "email_to": None,
+                      "email_from": "Kyle R <k@x.example>", "markdown": None, "event": None}
     assert out[1]["text"] == "short"
 
 

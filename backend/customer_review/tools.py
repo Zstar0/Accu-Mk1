@@ -210,7 +210,9 @@ def read_ticket(c: Ctx, ref: str) -> dict:
     for e in d.get("entries", []):
         if e.get("author_kind") == "agent":
             _note_staff(c, e.get("author"))
-    entries = [{**e, "text": _cut(e.get("text"))} for e in d.get("entries", [])]
+    # The AI input contract: only these keys, so new view fields (markdown, emails, avatars) never reach the model.
+    keep = ("id", "at", "kind", "author", "author_kind", "internal", "subject")
+    entries = [{**{k: e.get(k) for k in keep}, "text": _cut(e.get("text"))} for e in d.get("entries", [])]
     return {"ref": ref, "title": t["title"], "status": t["status"], "entries": entries}
 
 

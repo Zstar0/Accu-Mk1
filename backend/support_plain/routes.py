@@ -18,6 +18,47 @@ router = APIRouter(prefix="/support", tags=["support"])
 Status = Literal["open", "snoozed", "done"]
 
 
+class StatusDetail(BaseModel):
+    kind: str
+    label: str
+    until: Optional[str] = None
+
+
+class Assignee(BaseModel):
+    plain_user_id: Optional[str] = None
+    name: str
+    avatar_url: Optional[str] = None
+    primary: bool = False
+
+
+class Tier(BaseModel):
+    name: str
+    color: Optional[str] = None
+
+
+class ThreadFieldValue(BaseModel):
+    key: str
+    label: str
+    value: Optional[str] = None
+
+
+class CustomerBlock(BaseModel):
+    name: str
+    email: Optional[str] = None
+    external_id: Optional[str] = None
+    avatar_url: Optional[str] = None
+    company: Optional[str] = None
+    created_at: Optional[str] = None
+    updated_at: Optional[str] = None
+    wp_profile_url: Optional[str] = None
+
+
+class EventInfo(BaseModel):
+    icon: Literal["status", "label", "assign", "priority"]
+    actor: str
+    text: str
+
+
 class LabelRef(BaseModel):
     id: str
     type_id: str
@@ -40,6 +81,11 @@ class Thread(BaseModel):
     assignee_id: Optional[str] = None
     customer_plain_id: Optional[str] = None
     label_refs: list[LabelRef] = []
+    status_detail: Optional[StatusDetail] = None
+    assignees: list[Assignee] = []
+    tier: Optional[Tier] = None
+    fields: list[ThreadFieldValue] = []
+    customer: Optional[CustomerBlock] = None
 
 
 class Counts(BaseModel):
@@ -73,6 +119,12 @@ class Entry(BaseModel):
     internal: bool
     subject: Optional[str] = None
     text: str
+    author_avatar_url: Optional[str] = None
+    automated: bool = False
+    email_to: Optional[str] = None
+    email_from: Optional[str] = None
+    markdown: Optional[str] = None
+    event: Optional[EventInfo] = None
 
 
 class ThreadDetail(BaseModel):
@@ -164,7 +216,7 @@ class TextBody(BaseModel):
 
 
 class StatusBody(BaseModel):
-    status: Literal["todo", "done", "snoozed"]
+    status: Literal["todo", "done", "snoozed", "waiting_for_customer", "waiting"]
     until: Optional[datetime] = None
 
 
@@ -232,3 +284,14 @@ def priority(customer_key: str, body: PriorityBody, thread_id: str = _TH, su=Dep
 def labels(customer_key: str, body: LabelsBody, thread_id: str = _TH, su=Depends(require_seat),
            db: Session = Depends(get_db)):
     return _act("labels", customer_key, thread_id, body, su, db)
+
+
+class AssigneesBody(BaseModel):
+    add: list[str] = []
+    remove: list[str] = []
+
+
+@router.post("/customers/{customer_key}/threads/{thread_id}/assignees", response_model=ActionResult)
+def assignees(customer_key: str, body: AssigneesBody, thread_id: str = _TH, su=Depends(require_seat),
+              db: Session = Depends(get_db)):
+    return _act("assignees", customer_key, thread_id, body, su, db)

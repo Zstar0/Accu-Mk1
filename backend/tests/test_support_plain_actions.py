@@ -28,6 +28,7 @@ def thread(tid):
 class Plain:
     def __init__(self):
         self.sent, self.mutate_error, self.read_fail, self.timeline = [], None, False, []
+        self.additional = []
 
     def query(self, q, variables=None):
         if self.read_fail and q in (queries.THREADS, queries.THREAD):
@@ -40,7 +41,7 @@ class Plain:
             return {"threads": {"pageInfo": {"hasNextPage": False, "endCursor": None},
                                 "edges": [{"node": thread("th_b")}]}}
         if q == queries.THREAD:
-            return {"thread": {**thread("th_b"), "timelineEntries": {
+            return {"thread": {**thread("th_b"), "additionalAssignees": self.additional, "timelineEntries": {
                 "pageInfo": {"hasNextPage": False, "endCursor": None}, "edges": [{"node": n} for n in self.timeline]}}}
         if q == queries.USER_BY_EMAIL:
             ok = variables["email"] == "sam@accumark.example"
@@ -53,6 +54,10 @@ class Plain:
         if q == queries.LABEL_TYPES:
             return {"labelTypes": {"pageInfo": {"hasNextPage": False, "endCursor": None},
                                    "edges": [{"node": {"id": "lt_2", "name": "Shipping", "color": None}}]}}
+        if q == queries.THREAD_EXTRAS:
+            return {"thread": {**thread("th_b"), "additionalAssignees": self.additional}}
+        if q == queries.THREAD_FIELD_SCHEMAS:
+            return {"threadFieldSchemas": {"pageInfo": {"hasNextPage": False, "endCursor": None}, "edges": []}}
         raise AssertionError(q)
 
     def mutate(self, m, variables):
@@ -300,3 +305,32 @@ def test_earlier_reply_with_the_same_opening_does_not_confirm(api):
 def test_markup_only_body_is_422(api):
     client, plain, _ = api
     assert post(client, "reply", {"markdown": "**"}).status_code == 422 and plain.sent == []
+
+
+def test_waiting_statuses_snooze_with_detail(api):
+    client, plain, _ = api
+    assert post(client, "status", {"status": "waiting_for_customer"}).status_code == 200
+    assert plain.sent[-1] == (queries.SNOOZE, {"input": {"threadId": "th_b", "statusDetail": "WAITING_FOR_CUSTOMER"}})
+    assert post(client, "status", {"status": "waiting"}).status_code == 200
+    assert plain.sent[-1] == (queries.SNOOZE, {"input": {"threadId": "th_b", "statusDetail": "WAITING_INDEFINITELY"}})
+    until = (datetime.now(timezone.utc) + timedelta(hours=2)).isoformat()
+    post(client, "status", {"status": "snoozed", "until": until})
+    assert plain.sent[-1][1]["input"]["statusDetail"] == "WAITING_FOR_DURATION"
+
+
+def test_add_and_remove_additional_assignees(api):
+    client, plain, Session = api
+    plain.additional = [{"__typename": "User", "id": "u_1", "fullName": "Sam Parker"}]
+    r = post(client, "assignees", {"add": ["u_1"], "remove": ["u_1"]})
+    assert r.status_code == 200
+    assert plain.sent == [(queries.ADD_ASSIGNEES, {"input": {"threadId": "th_b", "userIds": ["u_1"]}}),
+                          (queries.REMOVE_ASSIGNEES, {"input": {"threadId": "th_b", "userIds": ["u_1"]}})]
+    assert rows(Session)[-1].action == "assignees"
+
+
+def test_assignees_validation(api):
+    client, plain, _ = api
+    for body in ({"add": [], "remove": []}, {"add": ["u_999"]}, {"remove": ["u_1"]}):
+        r = post(client, "assignees", body)
+        assert r.status_code == 422 and r.json()["detail"]["code"] == "invalid_input", body
+    assert plain.sent == []
