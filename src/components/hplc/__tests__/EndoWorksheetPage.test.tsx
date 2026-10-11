@@ -264,7 +264,7 @@ describe('EndoWorksheetPage', () => {
     ])
     expect(
       screen.getByText(
-        'underlined on the sheet, dotted on screen, where a row has its own'
+        'underlined on the printed sheet, dotted on screen, where a row has its own'
       )
     ).toBeInTheDocument()
     expect(

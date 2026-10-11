@@ -167,13 +167,23 @@ describe('EndoPrepLine on a mixed worksheet', () => {
     expect(second.onUpdate).not.toHaveBeenCalled()
   })
 
-  it('sends Form Auto as null', async () => {
+  it('sends Form Auto as null, labelled with what Auto resolves to, not the hand-set form', async () => {
     const item = endoItem({ sample_id: 'P-0001-S02', prep_form: 'liquid' })
     const { onUpdate } = setup(endoWorksheet([item]), item)
     const form = screen.getByRole('combobox', { name: 'Form' })
     expect(form).toHaveTextContent(/^Liquid \(reconstituted\)$/)
-    await pick(form, 'Auto (Liquid (reconstituted))')
+    // A peptide with no form of its own reads as lyophilized.
+    await pick(form, 'Auto (Lyophilized)')
     expect(onUpdate).toHaveBeenCalledWith({ prep_form: null })
+  })
+
+  it("labels bac water's Auto as bac water even when set by hand to powder", async () => {
+    const item = endoItem({ sample_id: 'BW-0114-S02', prep_form: 'powder' })
+    setup(endoWorksheet([item]), item)
+    fireEvent.click(screen.getByRole('combobox', { name: 'Form' }))
+    expect(
+      await screen.findByRole('option', { name: 'Auto (Bacteriostatic water)' })
+    ).toBeInTheDocument()
   })
 
   // Spec 6.3 (ruling, fix round 1): the row's cartridge is picked here as in

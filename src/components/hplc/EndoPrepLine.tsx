@@ -235,6 +235,8 @@ export function EndoPrep2mlFields({
   if (!row) return null
   const s = row.sample
   const form = formOf(s)
+  // What Auto resolves to: the form with no hand-set pick, not the pick.
+  const autoForm = formOf({ ...s, form: null })
   const bac = form === 'bac'
   const k = prep2Check(s, ctx)
   const plan = dilutionPlan(s, ctx)
@@ -280,7 +282,7 @@ export function EndoPrep2mlFields({
           </SelectTrigger>
           <SelectContent>
             <SelectItem value={AUTO}>
-              {`Auto (${FORMS.find(f => f[0] === form)?.[1] ?? form})`}
+              {`Auto (${FORMS.find(f => f[0] === autoForm)?.[1] ?? autoForm})`}
             </SelectItem>
             {FORMS.map(([key, label]) => (
               <SelectItem key={key} value={key}>

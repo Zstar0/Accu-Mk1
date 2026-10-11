@@ -598,7 +598,7 @@ export function EndoCalculations({ ctx }: { ctx?: EndoCtx }) {
         [
           'Reconstitution water',
           `${fmt(ctx.params.reconWaterMl)} mL`,
-          'underlined on the sheet, dotted on screen, where a row has its own',
+          'underlined on the printed sheet, dotted on screen, where a row has its own',
         ],
         ['Step 1 · Tris', step(0), '0.1 M Tris (BT103), first, per its insert'],
         ['Step 2 · LAL water', step(1), 'ratio = total ÷ (step 1 × 2)'],

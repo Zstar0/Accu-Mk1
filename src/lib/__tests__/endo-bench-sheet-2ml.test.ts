@@ -279,17 +279,17 @@ describe('buildEndoSheet2Doc order', () => {
     printedAt: 'now',
     dueAtByItemId: new Map<number, string | null>(),
   }
-  // Received first and expedited: bench order alone puts it at the top.
+  // No due dates, so bench order falls to priority, then the worksheet's own
+  // order: expedited and first in the worksheet puts it at the top.
   const bw = endoItem({
     sample_id: 'BW-0114-S02',
     sample_identity: 'Bacteriostatic Water',
     sample_type: 'Bacteriostatic Water',
     priority: 'expedited',
-    date_received: '2026-10-08T16:00:00Z',
   })
   const pep = endoItem({ sample_id: 'P-0200-S02' })
 
-  it('numbers bac water last, as Box 1 does, even received first and expedited', () => {
+  it('numbers bac water last, as Box 1 does, whatever its priority or place in the worksheet', () => {
     const d = buildEndoSheet2Doc(endoWorksheet([bw, pep]), opts)
     expect(d.rows.map(r => [r.n, r.sample.sampleId])).toEqual([
       [1, 'P-0200-S02'],
