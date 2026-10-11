@@ -1,3 +1,4 @@
+import { useEffect } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { AlertCircle, Loader2 } from 'lucide-react'
 import { Badge } from '@/components/ui/badge'
@@ -16,6 +17,7 @@ import {
   BW_DILUTION,
   BW_LIMIT_EU_PER_ML,
   LIMIT_EU_PER_VIAL,
+  prep2Check,
 } from '@/lib/endo-prep-2ml'
 import { allowedCartridges, runParamsFrom } from '@/lib/endo-worksheet-2ml'
 import { useUIStore } from '@/store/ui-store'
@@ -72,52 +74,80 @@ function EndoJudged({ serviceId }: { serviceId: number }) {
   const link =
     linksQ.data?.find(l => l.is_default && l.status === 'active') ?? null
   const methodId = link?.method_id ?? null
+  // Shared with the worksheet page and drawer, and nothing invalidates it,
+  // so it is refetched on every mount: a revision activated or edited since
+  // is read fresh. Enabled from mount, because refetchOnMount does not apply
+  // to a query enabled later.
   const methodsQ = useQuery({
     queryKey: ['hplc-methods'],
     queryFn: getMethods,
     staleTime: 5 * 60_000,
-    enabled: methodId !== null,
+    refetchOnMount: 'always',
   })
+  // Only this panel reads it. staleTime 0 refetches it when the method id
+  // first resolves, where refetchOnMount does not apply.
   const methodLinksQ = useQuery({
     queryKey: ['hplc-methods', methodId, 'consumables'],
     queryFn: () => getMethodConsumables(methodId ?? 0),
     enabled: methodId !== null,
+    staleTime: 0,
+    refetchOnMount: 'always',
   })
-  // Retired types included, so a method whose links are all retired is
-  // told apart from one that links none (4.3).
+  // The method's endo cartridges from the link rows themselves (name, specs,
+  // active), retired ones included: the shape the server's _method_payload
+  // serves the worksheet as endo_method.
+  const linked = (methodLinksQ.data ?? [])
+    .filter(l => l.kind === 'endo_cartridge')
+    .map(l => ({
+      id: l.consumable_type_id,
+      name: l.name ?? '',
+      sensitivity_eu_ml: Number(l.specs?.sensitivity_eu_ml),
+      is_default: l.is_default,
+      active: l.active === true,
+    }))
+  // The catalog only answers "every active endo cartridge" (4.3): no method,
+  // or a method that links none.
+  const needCatalog =
+    methodId === null || (methodLinksQ.data !== undefined && !linked.length)
   const catalogQ = useQuery({
     queryKey: ['consumables', 'endo_cartridge'],
     queryFn: () => listConsumables({ kind: 'endo_cartridge' }),
     staleTime: 5 * 60_000,
+    enabled: needCatalog,
   })
+
+  const method = methodsQ.data?.find(m => m.id === methodId) ?? null
+  // A methods list older than the links that name a method it lacks (a
+  // revision activated in between) is refetched once. It cannot loop: after
+  // the refetch, or a failed one, the list is no older than the links.
+  const listPredatesLink =
+    methodId !== null &&
+    method === null &&
+    methodsQ.data !== undefined &&
+    methodsQ.dataUpdatedAt < linksQ.dataUpdatedAt &&
+    methodsQ.errorUpdatedAt < linksQ.dataUpdatedAt
+  const { isFetching: methodsFetching, refetch: refetchMethods } = methodsQ
+  useEffect(() => {
+    if (listPredatesLink && !methodsFetching) void refetchMethods()
+  }, [listPredatesLink, methodsFetching, refetchMethods])
 
   // Until these settle, the defaults would read as the method's own numbers.
-  const needed =
-    methodId === null
-      ? [specsQ, linksQ, catalogQ]
-      : [specsQ, linksQ, catalogQ, methodsQ, methodLinksQ]
+  const needed = [
+    specsQ,
+    linksQ,
+    ...(methodId === null ? [] : [methodsQ, methodLinksQ]),
+    ...(needCatalog ? [catalogQ] : []),
+  ]
   // A failed refetch with data on hand keeps showing that data.
   const failed = needed.filter(q => q.isError && q.data === undefined)
-  const loading = needed.some(q => q.isPending)
+  const loading =
+    needed.some(q => q.isPending) ||
+    (methodId !== null &&
+      (methodsFetching || methodLinksQ.isFetching || listPredatesLink))
+  // Still missing from a list fetched after the links: say so, rather than
+  // show the standard parameters under this revision's name.
+  const missing = link !== null && method === null
 
-  const catalog = catalogQ.data ?? []
-  const method = methodsQ.data?.find(m => m.id === methodId) ?? null
-  // Every endo link joined to the catalog, retired ones included: the shape
-  // the server's _method_payload serves the worksheet as endo_method.
-  const linked = (methodLinksQ.data ?? []).flatMap(l => {
-    const c = catalog.find(x => x.id === l.consumable_type_id)
-    return c?.kind === 'endo_cartridge'
-      ? [
-          {
-            id: c.id,
-            name: c.name,
-            sensitivity_eu_ml: Number(c.specs.sensitivity_eu_ml),
-            is_default: l.is_default,
-            active: c.active,
-          },
-        ]
-      : []
-  })
   // The same EndoMethodInfo the worksheet resolves, so the numbers and the
   // cartridges here come from the same runParamsFrom and allowedCartridges.
   const info: EndoMethodInfo | null = method
@@ -131,25 +161,55 @@ function EndoJudged({ serviceId }: { serviceId: number }) {
       }
     : null
   const p = runParamsFrom(info)
-  const allowed = allowedCartridges({ endo_method: info }, catalog)
-  // The run cartridge a worksheet falls back to (runCartridgeFor).
+  const allowed = allowedCartridges({ endo_method: info }, catalogQ.data ?? [])
+  // The run cartridge a worksheet falls back to (runCartridgeFor), worked
+  // through the worksheet's own check on a standard powder vial.
   const dflt = allowed.find(c => c.is_default) ?? null
+  const std = dflt
+    ? prep2Check(
+        {
+          sampleId: '',
+          identity: '',
+          sampleType: null,
+          weightMg: null,
+          form: 'powder',
+          waterMl: null,
+          totalDilution: null,
+          steps: null,
+          lambda: dflt.sensitivity_eu_ml,
+          reading: null,
+          reader: null,
+        },
+        { params: p, allowedLambdas: allowed.map(c => c.sensitivity_eu_ml) }
+      )
+    : null
   const tiers = (specsQ.data ?? []).filter(s => s.active)
   const ui = useUIStore.getState
+
+  const problem =
+    failed.length > 0
+      ? "Couldn't load how results are judged."
+      : !loading && missing && link
+        ? `Couldn't find ${link.name} · Rev ${link.revision}, this service's default method, in the methods list, so its numbers are not shown.`
+        : null
 
   return (
     <div className="border-t pt-4">
       <h4 className="mb-3 text-sm font-semibold text-muted-foreground">
         How results are judged
       </h4>
-      {failed.length > 0 ? (
+      {problem ? (
         <div className="flex items-center gap-2 text-sm text-destructive">
           <AlertCircle className="h-4 w-4 shrink-0" />
-          <span>Couldn&apos;t load how results are judged.</span>
+          <span>{problem}</span>
           <Button
             variant="ghost"
             size="sm"
-            onClick={() => failed.forEach(q => void q.refetch())}
+            onClick={() =>
+              failed.length > 0
+                ? failed.forEach(q => void q.refetch())
+                : void refetchMethods()
+            }
           >
             Retry
           </Button>
@@ -205,8 +265,8 @@ function EndoJudged({ serviceId }: { serviceId: number }) {
               <dt className="text-muted-foreground">LOQ</dt>
               <dd>
                 {`λ × total dilution × water, EU per vial${
-                  dflt
-                    ? `: ${fmt(dflt.sensitivity_eu_ml)} × ${fmt(p.stdTotalDilution)} × ${fmt(p.reconWaterMl)} mL = ${fmt(dflt.sensitivity_eu_ml * p.stdTotalDilution * p.reconWaterMl)} EU per vial at the standard prep`
+                  std?.loqVial != null
+                    ? `: ${fmt(std.lambda)} × ${fmt(std.dilution)} × ${fmt(std.water)} mL = ${fmt(std.loqVial)} EU per vial at the standard prep`
                     : ''
                 }. Bac water: λ × ${fmt(BW_DILUTION)}, EU/mL.`}
               </dd>
