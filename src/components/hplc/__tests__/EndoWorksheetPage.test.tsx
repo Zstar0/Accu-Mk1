@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
-import { render, screen } from '@testing-library/react'
+import { act, fireEvent, render, screen } from '@testing-library/react'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import type * as ApiModule from '@/lib/api'
 import type { WorksheetListItem } from '@/lib/api'
@@ -145,6 +145,22 @@ describe('EndoWorksheetPage', () => {
     expect(await screen.findByText(/Sample volume/)).toBeInTheDocument()
     expect(screen.queryByLabelText('Form the vial arrived in')).toBeNull()
     expect(screen.queryByLabelText('Run cartridge')).toBeNull()
+  })
+
+  it('switching worksheets in the run log drops the title being edited', async () => {
+    vi.mocked(getWorksheet).mockImplementation(async id =>
+      worksheet('endo', { id, title: `Endo run ${id}` })
+    )
+    renderPage()
+    expect(await screen.findByText('Endo run 42')).toBeInTheDocument()
+    act(() => useUIStore.getState().navigateToWorksheet(43))
+    expect(await screen.findByText('Endo run 43')).toBeInTheDocument()
+    fireEvent.click(screen.getByRole('button', { name: 'Rename' }))
+    expect(screen.getByLabelText('Worksheet title')).toBeInTheDocument()
+    // 42 is cached, so the page goes straight back to it with no skeleton.
+    act(() => useUIStore.getState().navigateToWorksheet(42))
+    expect(await screen.findByText('Endo run 42')).toBeInTheDocument()
+    expect(screen.queryByLabelText('Worksheet title')).toBeNull()
   })
 
   it('offers the flyout for a worksheet that is not endotoxin', async () => {

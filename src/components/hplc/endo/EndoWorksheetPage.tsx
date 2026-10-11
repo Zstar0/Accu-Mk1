@@ -94,7 +94,9 @@ export function EndoWorksheetPage() {
         </Button>
       </PageNotice>
     )
-  return <EndoWorksheetPageBody worksheet={worksheet} />
+  // Keyed: the title draft and the Add samples dialog never carry over when
+  // the run log switches worksheets.
+  return <EndoWorksheetPageBody key={worksheet.id} worksheet={worksheet} />
 }
 
 function PageNotice({ children }: { children: ReactNode }) {

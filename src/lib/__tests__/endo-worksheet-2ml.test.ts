@@ -137,6 +137,18 @@ describe('allowed cartridges', () => {
     ])
     expect(endoCtxFor(bare, catalog).params.stdTotalDilution).toBe(300)
   })
+
+  it('a method that links only retired cartridges allows none, not the catalog', () => {
+    const catalog = [catalogType(2, 0.01), catalogType(1, 0.05)]
+    const retiredOnly = ws({
+      endo_method: {
+        ...METHOD,
+        cartridges: METHOD.cartridges.filter(c => !c.active),
+      },
+    })
+    expect(allowedCartridges(retiredOnly, catalog)).toEqual([])
+    expect(endoCtxFor(retiredOnly, catalog).allowedLambdas).toEqual([])
+  })
 })
 
 describe('endoSampleFor', () => {

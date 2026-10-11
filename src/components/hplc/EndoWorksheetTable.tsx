@@ -771,7 +771,7 @@ export function FlagCell({ item }: { item: WorksheetItemRow }) {
 
 // Dennis's select.form / select.cart: 12.5px, padding 3px 6px, radius 6px.
 const CELL_SELECT =
-  'rounded-md border bg-card px-1.5 py-[3px] text-[12.5px] text-foreground focus:border-teal-500 focus:outline-none focus:ring-2 focus:ring-teal-500/20 disabled:cursor-default disabled:opacity-70'
+  'rounded-md border bg-card px-1.5 py-[3px] text-[12.5px] text-foreground focus:border-teal-500 focus:outline-none focus:ring-2 focus:ring-teal-500/20 dark:focus:border-teal-400 dark:focus:ring-teal-400/25 disabled:cursor-default disabled:opacity-70'
 
 /**
  * Box 1's 2 mL cells (spec 2026-10-10 6.1, Dennis's 2 mL sheet): the
@@ -828,7 +828,7 @@ function TwoMlPrepCells({
           onChange={e =>
             onUpdateItem(item.id, { prep_form: e.target.value as EndoForm })
           }
-          className={`${CELL_SELECT} ${form === 'liquid' ? 'border-teal-500/45 font-semibold text-teal-700 dark:text-teal-300' : ''}`}
+          className={`${CELL_SELECT} ${form === 'liquid' ? 'border-teal-500/45 font-semibold text-teal-700 dark:border-teal-400/50 dark:text-teal-300' : ''}`}
         >
           {FORMS.map(([value, label]) => (
             <option key={value} value={value}>
@@ -838,7 +838,7 @@ function TwoMlPrepCells({
         </select>
       </td>
       <td
-        className={`${TD} w-[92px] px-1 text-right ${form === 'liquid' && water == null ? 'bg-amber-500/10' : ''}`}
+        className={`${TD} w-[92px] px-1 text-right ${form === 'liquid' && water == null ? 'bg-amber-500/10 dark:bg-amber-400/15' : ''}`}
         title={
           form === 'liquid'
             ? 'Arrived reconstituted: type the water the customer used, in mL. Nothing is added here.'

@@ -5,7 +5,7 @@ import { Meta } from '@/components/hplc/EndoWorksheetTable'
 
 // Dennis's .meta select: borderless, 13px mono, an accent underline on focus.
 const META_SELECT =
-  'h-6 w-full min-w-0 cursor-pointer border-0 bg-transparent p-0 font-mono text-[13px] font-medium text-foreground focus:outline-none focus-visible:shadow-[0_1px_0_var(--color-teal-500)] disabled:cursor-default disabled:opacity-70'
+  'h-6 w-full min-w-0 cursor-pointer border-0 bg-transparent p-0 font-mono text-[13px] font-medium text-foreground focus:outline-none focus-visible:shadow-[0_1px_0_var(--color-teal-500)] dark:focus-visible:shadow-[0_1px_0_var(--color-teal-400)] disabled:cursor-default disabled:opacity-70'
 
 /**
  * The run's settings, as cells of Box 1's meta strip where Dennis keeps Prep
