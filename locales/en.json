@@ -1,4 +1,16 @@
 {
+  "documentEmbed.loading": "Loading document…",
+  "documentEmbed.invalid": "This document link is malformed.",
+  "documentEmbed.auth": "Sign in to AccuMk1 to view this document.",
+  "documentEmbed.email": "Email",
+  "documentEmbed.password": "Password",
+  "documentEmbed.signIn": "Sign in",
+  "documentEmbed.signInFailed": "Sign-in failed.",
+  "documentEmbed.unavailable": "Restricted or unavailable. Your AccuMk1 account cannot view this document.",
+  "documentEmbed.mismatch": "This reference does not match the document revision in AccuMk1. Nothing is shown.",
+  "documentEmbed.error": "The document failed to load.",
+  "documentEmbed.rev": "Rev {{rev}}",
+  "documentEmbed.newer": "Newer revision {{rev}} exists",
   "app.name": "Tauri Template",
 
   "menu.about": "About {{appName}}",

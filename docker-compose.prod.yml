@@ -16,6 +16,9 @@ services:
     image: ghcr.io/zstar0/accu-mk1-frontend:${VERSION:?VERSION is required}
     ports:
       - '3100:80'
+    environment:
+      # Exact Paperclip origin(s) allowed to frame the read-only /embed.html.
+      MK1_EMBED_FRAME_ANCESTORS: ${MK1_EMBED_FRAME_ANCESTORS:-https://jarvis.paradise-massometer.ts.net}
     depends_on:
       - backend
     restart: unless-stopped

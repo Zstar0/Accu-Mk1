@@ -106,7 +106,34 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--allow-secrets", action="store_true")
     p.add_argument("--dry-run", action="store_true", help="print the payload summary, do not POST")
     p.add_argument("--self-test", action="store_true")
+    p.add_argument("--paperclip-ref", action="store_true",
+                   help="print the Paperclip work-product reference JSON (no content) on success")
     return p
+
+
+ALREADY_RE = re.compile(r"already published as ([A-Z][A-Z0-9]*-\d+) r(\d+)")
+
+
+def paperclip_ref(doc: dict) -> dict:
+    """Durable reference/display metadata for a Paperclip work product. Never content."""
+    return {
+        "provider": "accumk1", "objectType": "controlled_document",
+        "documentId": doc["id"], "code": doc["code"], "revision": doc["revision"],
+        "contentHash": doc["content_sha256"], "status": doc["status"],
+        "title": doc.get("title"), "spaceSlug": doc.get("space_slug"),
+    }
+
+
+def post_with_reconcile(base_url: str, token: str, payload: dict) -> dict:
+    """POST once; on a transport failure (response unknown) POST the identical payload
+    once more. Safe by server design: identical bytes never mint a second document
+    (new code -> 409 naming the existing one; existing code -> 200, no new row)."""
+    try:
+        return post_document(base_url, token, payload)
+    except urllib.error.HTTPError:
+        raise
+    except (urllib.error.URLError, TimeoutError, OSError):
+        return post_document(base_url, token, payload)
 
 
 def main(argv=None) -> int:
@@ -151,15 +178,25 @@ def main(argv=None) -> int:
         print(json.dumps(summary, indent=2))
         return 0
 
-    token = os.environ.get("ACCUMK1_INTERNAL_SERVICE_TOKEN")
+    # An agent token (MK1_DOCUMENT_AGENT_TOKENS entry) is preferred: the server records
+    # the agent as co_author and limits it to its spaces. --author is the human requester.
+    token = (os.environ.get("MK1_DOCUMENT_AGENT_TOKEN")
+             or os.environ.get("ACCUMK1_INTERNAL_SERVICE_TOKEN"))
     if not args.base_url or not token:
-        print("MK1_API_BASE_URL (or --base-url) and ACCUMK1_INTERNAL_SERVICE_TOKEN must be set",
-              file=sys.stderr)
+        print("MK1_API_BASE_URL (or --base-url) and MK1_DOCUMENT_AGENT_TOKEN"
+              " (or ACCUMK1_INTERNAL_SERVICE_TOKEN) must be set", file=sys.stderr)
         return 3
     try:
-        doc = post_document(args.base_url, token, payload)
+        doc = post_with_reconcile(args.base_url, token, payload)
     except urllib.error.HTTPError as e:
         body = e.read().decode("utf-8", errors="replace")[:500]
+        m = ALREADY_RE.search(body) if e.code == 409 else None
+        if m:
+            # Not retried with code=: the match may be an older revision, and re-pushing
+            # it would mint a new revision of old bytes. The caller decides.
+            print(json.dumps({"already_published": {"code": m.group(1),
+                                                    "revision": int(m.group(2))}}))
+            return 4
         print(f"publish failed: HTTP {e.code} {body}", file=sys.stderr)
         return 1
     except urllib.error.URLError as e:
@@ -171,6 +208,8 @@ def main(argv=None) -> int:
     print(f"{doc['code']} r{doc['revision']} id={doc['id']} status={doc['status']}"
           f" space={doc.get('space_slug', '?')}"
           f"  open: #reports/documents?id={doc['id']}")
+    if args.paperclip_ref:
+        print(json.dumps(paperclip_ref(doc)))
     return 0
 
 

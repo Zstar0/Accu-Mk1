@@ -30,6 +30,7 @@ export default defineConfig(async () => ({
       input: {
         main: resolve(__dirname, 'index.html'),
         'quick-pane': resolve(__dirname, 'quick-pane.html'),
+        embed: resolve(__dirname, 'embed.html'),
       },
     },
   },
