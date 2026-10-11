@@ -245,7 +245,9 @@ def _step1_ratio(steps) -> float:
     """The row's step 1 ratio: its own (prep_steps[0][1]) when set, else 1:10."""
     first = steps[0] if isinstance(steps, list) and steps else None
     if isinstance(first, list) and len(first) == 2 and first[1] is not None:
-        return first[1]
+        # float(): a huge int ratio (10**308 passed _finite) would make an int
+        # floor that the :g message cannot format (500); as a float it is inf.
+        return float(first[1])
     return STEP1_STANDARD_RATIO
 
 

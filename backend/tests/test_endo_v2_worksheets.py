@@ -522,6 +522,8 @@ def test_patch_sets_and_clears_the_prep_fields_and_audits_the_cartridge(client, 
     # Too big for a float (spec 10: a 400 with the reason, never a 422 or 500).
     {"prep_water_ml": 10**400},
     {"prep_total_dilution": 10**400},
+    # A finite but huge int ratio: the floor must not overflow into a 500.
+    {"prep_total_dilution": 20, "prep_steps": [[20, 10**308], None, None]},
 ])
 def test_patch_refuses_bad_row_values_and_writes_nothing(client, db, payload):
     ws, item, _, _ = _row_world(db)
@@ -548,6 +550,19 @@ def test_patch_refuses_a_total_the_steps_cannot_make(client, db):
                                    "prep_steps": [[30], None, None]}).status_code == 400
     db.refresh(item)
     assert (item.prep_total_dilution, item.prep_steps) == (8, [[20, 4], None, None])
+
+
+def test_a_stored_huge_step1_ratio_refuses_a_later_total_with_400(client, db):
+    # Steps alone skip the floor when the row has no total, so they are stored.
+    # A total sent later must then be a 400 with the reason, never a 500.
+    ws, item, _, _ = _row_world(db)
+    url = f"/worksheets/{ws.id}/items/{item.id}"
+    steps = [[20, 10**308], None, None]
+    assert client.patch(url, json={"prep_steps": steps}).status_code == 200
+    r = client.patch(url, json={"prep_total_dilution": 20})
+    assert r.status_code == 400 and "prep_total_dilution" in r.json()["detail"]
+    db.refresh(item)
+    assert item.prep_total_dilution is None
 
 
 def test_patch_refuses_a_cartridge_the_method_does_not_allow(client, db):
