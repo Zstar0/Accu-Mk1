@@ -999,3 +999,17 @@ def test_patch_refuses_a_reading_with_a_lone_surrogate_with_400(client, db):
     assert r.json()["detail"].startswith(r"'\ud800' is not a reading")
     db.refresh(item)
     assert _row(item) == dict.fromkeys(_ROW_FIELDS)
+
+
+def test_import_judges_against_the_pinned_revision_not_a_newer_one(client, db):
+    w = _reader_world(client, db, run_parameters={"endotoxin": {"spike_recovery_min_pct": 90}})
+    assert client.post(f"/worksheets/{w.ws.id}/printed").status_code == 200  # pins revision 1
+    rev2 = client.post(f"/hplc/methods/{w.mid}/new-revision").json()["id"]
+    db.get(HplcMethod, rev2).run_parameters = None  # back to Dennis's 50-200 %
+    db.commit()
+    assert client.post(f"/hplc/methods/{rev2}/activate").status_code == 200
+    line = _line(w.a, "0.8", w.c05)
+    line["record"]["recovery"] = 85
+    assert _import(client, w.ws, line).status_code == 200
+    db.refresh(w.a)
+    assert w.a.result_reader["why"] == ["spike recovery 85 % outside 90-200 %"]
