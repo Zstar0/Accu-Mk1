@@ -16101,6 +16101,8 @@ Expected: PASS (switch applied once; a second boot changes nothing; a worksheet 
 
 - [ ] **Step 5: Catalog and method setup on the stack (the launch steps, rehearsed)**
 
+In production these three steps run in the same after-hours window as the deploy, before the lab opens: until a cartridge exists, every 2 mL worksheet (including the ones the migration switched) has no run cartridge, so Box 1's MVD/MVC and all of Box 3 stay blank. On the stack, first confirm that blank state on a switched worksheet, then:
+
 1. Consumables page: add three `endo_cartridge` types with sensitivities 0.05, 0.01, 0.005 EU/mL (part numbers can be placeholders on the stack only).
 2. Instruments page: set a serial number on the endotoxin reader instrument.
 3. Methods page: new revision of the Endotoxin method; add the three cartridges with 0.05 as default; leave run parameters empty (Dennis's values apply); activate.

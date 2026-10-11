@@ -13,7 +13,7 @@ Sources:
 Mk1's endotoxin worksheet becomes Dennis's current tool: the 2 mL prep, his three-box layout on screen and paper, and a Results section that turns the instrument reading (typed, or imported from the reader's export) into LOD, LOQ, EU per vial and a verdict. Cartridges come from a managed consumables catalog linked to methods, so the lab, not code, decides which cartridges a method allows. Endo worksheets get a full page; the flyout becomes a read-only summary.
 
 Success means:
-- Mk1's numbers equal Dennis's on the 18 of his 52 test cases that cover the 2 mL prep, results and the reader import (the rest cover stock runs, his own intake file and method rules; mapping in section 11).
+- Mk1's numbers equal Dennis's on the 19 of his 52 test cases that cover the 2 mL prep, results, the reader import and the identity label (the rest cover stock runs, his own intake file and method rules; mapping in section 11).
 - The printed bench sheet and the three boxes match his layout, column order and spacing (checked side by side, section 11).
 - Every worksheet that exists today, and every completed one, looks and calculates exactly as before.
 - Nothing in this release writes results, units or limits to a sample's analyses or reaches a COA. The only analysis write is today's MCS-tick instrument stamp, which the reader import reuses.
@@ -210,7 +210,7 @@ New `src/lib/endo-prep-2ml.ts`, a port of Dennis's `calc.js` at `5ef2a62`, with 
 
 **Limits in this release.** The worksheet judges against Dennis's working limits, 350 EU per vial for peptides and 0.25 EU/mL for bac water, as constants in this file. They are not the COA spec: the spec stays at today's values until R6. The Results box says so (6.1). These limits and the fixed parts of the maths (4.4) change only in a reviewed release; everything an admin can change (cartridges, run parameters) is pinned per worksheet (4.1).
 
-**Parity.** `src/lib/__tests__/endo-prep-2ml.test.ts` ports the 18 of Dennis's cases listed in section 11, with inputs and expected outputs unchanged; the reader cases use his made-up export, never real results. `endo-prep.ts` and its tests are untouched, which proves stock worksheets do not move.
+**Parity.** `src/lib/__tests__/endo-prep-2ml.test.ts` and `endo-reader.test.ts` port the 19 of Dennis's cases listed in section 11, with inputs and expected outputs unchanged; the reader cases use his made-up export, never real results. `endo-prep.ts` and its tests are untouched, which proves stock worksheets do not move.
 
 ## 6. Screens
 
@@ -345,7 +345,7 @@ New endpoints declare their response models.
 
 ## 11. Testing
 
-- **Maths:** `endo-prep-2ml.test.ts` ports 18 of Dennis's 52 cases (`calc.test.js` at `5ef2a62`, by line); the existing endo tests (`endo-prep.test.ts`, `endo-bench-sheet.test.ts`, `endo-holidays.test.ts`, `worksheet-kind.test.ts`) pass unchanged.
+- **Maths:** `endo-prep-2ml.test.ts` and `endo-reader.test.ts` port 19 of Dennis's 52 cases (`calc.test.js` at `5ef2a62`, by line); the existing endo tests (`endo-prep.test.ts`, `endo-bench-sheet.test.ts`, `endo-holidays.test.ts`, `worksheet-kind.test.ts`) pass unchanged.
 
   | Dennis's tests | Count | Here |
   | --- | --- | --- |
@@ -355,7 +355,7 @@ New endpoints declare their response models.
   | Stock prep, dates, order, intake parsing, storage (17 to 181) | 15 | Not ported: the stock maths is unchanged and already covered by the September port's tests; his intake file and storage do not exist in Mk1 |
   | Stock-run cartridge and results, 10-07 (224, 240, 254, 284, 305, 324, 345, 362, 381, 403, 416, 435, 447, 469, 496) | 15 | Not ported: stock worksheets get no cartridge or Results box in Mk1 |
   | Method rules (747, 768, 797) | 3 | Slice 5 |
-  | Inbox identity label (952) | 1 | Ported only if the identity trace (section 7) finds Mk1 adds the assay suffix |
+  | Inbox identity label (952) | 1 | Ported: the identity trace (section 7) found Mk1 can add the assay suffix |
 - **Paper:** `endo-bench-sheet` tests for the 2 mL sheet (grouping, marks, summary totals, CSV columns and defusing); stock output byte-identical to today.
 - **Backend (pytest, the `test_worksheet_endo_prep.py` style):** consumables CRUD, registry validation, lock on use, retire; method consumables replace-set, draft-only 409, copied with default on new revision; `run_parameters` validation, lock and copy; instrument serial uniqueness; the new item fields (validation, null clears, 409 on completed, audit rows); `endo_method` resolution (single method, mixed, none; a query-count assertion proving it is batched) and pinning (first print or first reading pins, whichever comes first; a later activated revision does not change a pinned worksheet; a reading without a resolved cartridge is refused); reader import (ownership, completed 409, all-or-nothing, replace flag, cartridge rules, serial-to-instrument stamp and fallback, no-op repeat, audit rows); the backfill script writing `stock`. The migration switch (run twice, including a worksheet switched back to stock) uses Postgres-only SQL, so that test runs against the stack's Postgres inside the container, not the in-memory SQLite the other worksheet tests use.
 - **Frontend:** hash route and store action; the read-only flyout; the Reading input; the import preview (matched, unmatched, replace ticks, invalid).
@@ -367,6 +367,7 @@ New endpoints declare their response models.
 
 - Mk1 only; no coabuilder, Integration Service or WordPress change. Deployed after lab hours via the `accumark-deploy` skill.
 - At first boot the migration switches open worksheets made since 2026-10-08 to 2 mL (3.8).
+- **Steps 1 to 3 below happen in the same after-hours window as the deploy, before the lab opens.** Until a cartridge exists, every 2 mL worksheet (including the open ones the migration switched) has no run cartridge, so Box 1's MVD and MVC and all of Box 3 stay blank, and the flyout is already read-only.
 - **Launch steps for the lab:**
   1. Add the three cartridges on the Consumables page with their real part numbers (sensitivities 0.05, 0.01 and 0.005 EU/mL; the fit instrument is the Nexgen-MCS).
   2. Set the Nexgen-MCS serial number on its instrument.
