@@ -16095,7 +16095,7 @@ Expected: the set of failing test ids on the branch is a subset of master's; eve
 - [ ] **Step 4: Postgres-only migration test**
 
 Run inside the container. The test uses a throwaway schema on the URL in `MK1_TEST_POSTGRES_URL` (never the live `MK1_DB_*` database's own tables); build it from the container's `MK1_DB_*` variables as the test's docstring shows, then:
-`cd /app && MK1_TEST_POSTGRES_URL=<built url> python -m pytest tests/test_endo_v2_migration.py -q`
+`cd /app && MK1_TEST_POSTGRES_URL=<built url> python -m pytest tests/test_endo_v2_migration_pg.py -q`
 If `tests/` is not in the image, `docker cp` the branch's `backend/tests` in first.
 Expected: PASS (switch applied once; a second boot changes nothing; a worksheet switched back to stock stays stock; completed stays stock; staging since 2026-10-08 is 2 mL).
 
