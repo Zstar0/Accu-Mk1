@@ -555,12 +555,13 @@ def test_patch_refuses_a_total_the_steps_cannot_make(client, db):
 
 
 def test_a_stored_huge_step1_ratio_refuses_a_later_total_with_400(client, db):
-    # Steps alone skip the floor when the row has no total, so they are stored.
-    # A total sent later must then be a 400 with the reason, never a 500.
+    # A huge ratio stored before the standard-total floor (final review D1)
+    # refused it. A total sent later must then be a 400 with the reason,
+    # never a 500.
     ws, item, _, _ = _row_world(db)
     url = f"/worksheets/{ws.id}/items/{item.id}"
-    steps = [[20, 10**308], None, None]
-    assert client.patch(url, json={"prep_steps": steps}).status_code == 200
+    item.prep_steps = [[20, 10**308], None, None]
+    db.commit()
     r = client.patch(url, json={"prep_total_dilution": 20})
     assert r.status_code == 400 and "prep_total_dilution" in r.json()["detail"]
     db.refresh(item)
@@ -714,7 +715,10 @@ def _record(test_id="T-0001", reader="NX-1001", slot=1):
 
 
 def _line(item, reading, cartridge, *, replace=False, **record):
-    return {"item_id": item.id, "reading": reading, "record": _record(**record),
+    # The browser sends the reader's own result as the reading, so the record's
+    # `result` is the same text (EndoReaderImportDialog.tsx apply()).
+    return {"item_id": item.id, "reading": reading,
+            "record": {**_record(**record), "result": reading},
             "cartridge_type_id": cartridge.id, "replace": replace}
 
 
@@ -1013,3 +1017,192 @@ def test_import_judges_against_the_pinned_revision_not_a_newer_one(client, db):
     assert _import(client, w.ws, line).status_code == 200
     db.refresh(w.a)
     assert w.a.result_reader["why"] == ["spike recovery 85 % outside 90-200 %"]
+
+
+# --- Final review fix wave ---------------------------------------------------
+
+
+def test_a_vial_resolves_through_its_endotoxin_analyses_only(client, db):
+    # The UAT stack's BW-0015-S04: an endo vial that also carries a live
+    # STER-PCR analysis. Only the vial's endotoxin analyses speak for its
+    # method (main.py's keyword rule), so the PCR one is not counted.
+    svc = _service(db)
+    pcr = _service(db, "STER-PCR")
+    mid = _method(client, db, "Endotoxin", svc)
+    _method(client, db, "Sterility PCR", pcr)
+    ws = _ws(db)
+    _item, row = _vial_item(db, ws, 1, svc, role="endo")
+    db.add(LimsAnalysis(lims_sub_sample_pk=row.lims_sub_sample_pk, analysis_service_id=pcr.id,
+                        keyword=pcr.keyword, title=pcr.title, review_state="assigned",
+                        provenance="canonical"))
+    pcr_only = _ws(db, "An endo vial with only a PCR analysis")
+    _vial_item(db, pcr_only, 2, pcr, role="endo")
+    db.commit()
+    assert client.get(f"/worksheets/{ws.id}").json()["endo_method"]["id"] == mid
+    # No endotoxin analysis on the vial: still nothing (the strict rule).
+    assert client.get(f"/worksheets/{pcr_only.id}").json()["endo_method"] is None
+
+
+def test_a_completed_worksheet_never_pinned_resolves_no_method(client, db):
+    # Every reading and print pins, so a completed sheet without a pin was
+    # worked on Dennis's values; a method resolved today never speaks for it.
+    svc = _service(db)
+    mid = _method(client, db, "Endotoxin", svc)
+    unpinned = _ws(db, "Completed, never pinned", status="completed")
+    _vial_item(db, unpinned, 1, svc)
+    pinned = _ws(db, "Completed, pinned", status="completed")
+    _vial_item(db, pinned, 2, svc)
+    pinned.endo_method_id = mid
+    db.commit()
+    assert client.get(f"/worksheets/{unpinned.id}").json()["endo_method"] is None
+    assert worksheets_endo.resolve_endo_method(db, unpinned) is None
+    assert client.get(f"/worksheets/{pinned.id}").json()["endo_method"]["id"] == mid
+
+
+def test_a_worksheet_unresolved_at_its_first_print_pins_at_a_later_one(client, db):
+    svc = _service(db)
+    ws = _ws(db)
+    _vial_item(db, ws, 1, svc)
+    db.commit()
+    assert client.post(f"/worksheets/{ws.id}/printed").status_code == 200
+    db.refresh(ws)
+    assert ws.endo_method_id is None
+    mid = _method(client, db, "Endotoxin", svc)  # the method appears after print 1
+    assert client.post(f"/worksheets/{ws.id}/printed").status_code == 200
+    db.refresh(ws)
+    assert ws.endo_method_id == mid
+    assert client.get(f"/worksheets/{ws.id}").json()["endo_method"]["id"] == mid
+
+
+def test_patch_audits_the_prep_inputs_it_changes_in_one_row(client, db):
+    # Spec 9: the row's prep inputs are audited like its cartridge and reading.
+    ws, item, _, _ = _row_world(db)
+    url = f"/worksheets/{ws.id}/items/{item.id}"
+    assert client.patch(url, json={"prep_form": "liquid", "prep_water_ml": 1.5,
+                                   "prep_total_dilution": 500,
+                                   "prep_steps": [[20, 5], None, [100]]}).status_code == 200
+    # Only what changes is logged: the form is sent again unchanged.
+    assert client.patch(url, json={"prep_form": "liquid", "prep_water_ml": 2}).status_code == 200
+    # Nothing changes: no row at all.
+    assert client.patch(url, json={"prep_form": "liquid", "prep_steps": [[20, 5], None, [100]]}
+                        ).status_code == 200
+    base = {"user_id": 1, "worksheet_id": ws.id, "sample_id": item.sample_id}
+    assert [(a.entity_type, a.entity_id, a.details) for a in db.query(AuditLog).filter(
+        AuditLog.operation == "endo_prep_inputs_set").order_by(AuditLog.id)] == [
+        ("worksheet_item", str(item.id), {
+            **base,
+            "old": {"prep_form": None, "prep_water_ml": None, "prep_total_dilution": None,
+                    "prep_steps": None},
+            "new": {"prep_form": "liquid", "prep_water_ml": 1.5, "prep_total_dilution": 500,
+                    "prep_steps": [[20, 5], None, [100]]}}),
+        ("worksheet_item", str(item.id), {
+            **base, "old": {"prep_water_ml": 1.5}, "new": {"prep_water_ml": 2}}),
+    ]
+
+
+_FLOOR_400 = ("prep_total_dilution must be at least 400 (the step 1 ratio x the fixed 1:2 step) "
+              "or step 2 cannot be made")
+
+
+def test_a_row_on_the_standard_total_refuses_a_step1_ratio_it_cannot_make(client, db):
+    # No total of its own: the row runs on the method's standard total (250
+    # here: no method resolves, so Dennis's value), which must stay makeable.
+    ws, item, _, _ = _row_world(db)
+    url = f"/worksheets/{ws.id}/items/{item.id}"
+    r = client.patch(url, json={"prep_steps": [[20, 200], None, None]})
+    assert (r.status_code, r.json()["detail"]) == (400, _FLOOR_400)
+    assert client.patch(url, json={"prep_steps": [[20, 100], None, None]}).status_code == 200
+    # Clearing an own total back to the standard is checked the same way.
+    assert client.patch(url, json={"prep_total_dilution": 1000,
+                                   "prep_steps": [[20, 200], None, None]}).status_code == 200
+    r = client.patch(url, json={"prep_total_dilution": None})
+    assert (r.status_code, r.json()["detail"]) == (400, _FLOOR_400)
+    db.refresh(item)
+    assert (item.prep_total_dilution, item.prep_steps) == (1000, [[20, 200], None, None])
+
+
+def test_the_standard_total_comes_from_the_worksheets_method(client, db):
+    svc = _service(db)
+    _method(client, db, "Endotoxin", svc, run_parameters={"endotoxin": {"std_total_dilution": 500}})
+    ws = _ws(db)
+    item, _ = _vial_item(db, ws, 1, svc)
+    db.commit()
+    url = f"/worksheets/{ws.id}/items/{item.id}"
+    assert client.patch(url, json={"prep_steps": [[20, 200], None, None]}).status_code == 200
+    r = client.patch(url, json={"prep_steps": [[20, 300], None, None]})
+    assert r.status_code == 400 and "at least 600" in r.json()["detail"]
+
+
+def test_a_patch_without_endo_fields_never_resolves_the_method(client, db, monkeypatch):
+    ws, item, _, _ = _row_world(db)
+    url = f"/worksheets/{ws.id}/items/{item.id}"
+    calls = []
+    real = worksheets_endo.resolve_endo_method
+    monkeypatch.setattr(worksheets_endo, "resolve_endo_method",
+                        lambda *a: calls.append(a) or real(*a))
+    r = client.patch(url, json={"made": True})
+    assert r.status_code == 200, r.text
+    assert "endo_method" not in r.json() and calls == []
+    r = client.patch(url, json={"prep_form": "powder"})
+    assert r.status_code == 200 and "endo_method" in r.json()
+    assert len(calls) == 1
+
+
+def test_a_failing_method_resolution_after_the_commit_is_not_a_500(client, db, monkeypatch):
+    # The row is already saved when the response resolves the method: a
+    # failure there is logged and the key left out, never a 500.
+    ws, item, _, _ = _row_world(db)
+
+    def boom(*_args):
+        raise RuntimeError("resolution failed")
+
+    monkeypatch.setattr(worksheets_endo, "resolve_endo_method", boom)
+    r = client.patch(f"/worksheets/{ws.id}/items/{item.id}", json={"prep_form": "powder"})
+    assert r.status_code == 200, r.text
+    assert "endo_method" not in r.json()
+    db.refresh(item)
+    assert item.prep_form == "powder"
+
+
+def test_import_bounds_the_test_count_and_the_file_name(client, db):
+    w = _reader_world(client, db)
+    url = f"/worksheets/{w.ws.id}/reader-import"
+    line = _line(w.a, "0.8", w.c05)
+    # 500 entries pass the bound (and are refused as repeats); 501 do not.
+    assert client.post(url, json={"file_name": "x.csv", "tests": [line] * 500}).status_code == 400
+    assert client.post(url, json={"file_name": "x.csv", "tests": [line] * 501}).status_code == 422
+    assert client.post(url, json={"file_name": "x" * 201, "tests": [line]}).status_code == 422
+    # A long name that is not clean text still gets the 400 that never echoes
+    # it: a 422 would echo the lone surrogate, which cannot be encoded (a 500).
+    raw = json.dumps({"file_name": "x" * 201 + "@s@", "tests": [line]}).replace("@s@", r"\ud800")
+    r = client.post(url, content=raw, headers={"Content-Type": "application/json"})
+    assert r.status_code == 400 and r.json()["detail"].startswith(
+        "Nothing was imported. The file name holds"), r.text
+    db.refresh(w.a)
+    assert (w.a.result_reading, w.a.result_reader) == (None, None)
+    r = client.post(url, json={"file_name": "x" * 196 + ".csv", "tests": [line]})
+    assert r.status_code == 200, r.text
+
+
+@pytest.mark.parametrize("result", ["0.9", "<0.8", "", None, 0.8, "abc", _DROP])
+def test_import_refuses_a_reading_the_reader_record_does_not_show(client, db, result):
+    w = _reader_world(client, db)
+    line = _line(w.a, "0.8", w.c05)
+    if result is _DROP:
+        del line["record"]["result"]
+    else:
+        line["record"]["result"] = result
+    r = _import(client, w.ws, line)
+    assert r.status_code == 400
+    assert r.json()["detail"] == (
+        "Nothing was imported. Row P-3001-S01: the reading does not match the reader record")
+    db.refresh(w.a)
+    assert (w.a.result_reading, w.a.result_reader, w.a.ran_at) == (None, None, None)
+    assert db.query(AuditLog).filter(AuditLog.operation.in_(_IMPORT_OPS)).count() == 0
+
+
+def test_import_compares_the_reading_and_the_record_as_parsed_values(client, db):
+    w = _reader_world(client, db)
+    line = _line(w.a, "<0.05", w.c05)
+    line["record"]["result"] = " < 0.05 "
+    assert _import(client, w.ws, line).status_code == 200

@@ -94,6 +94,11 @@ def test_switch_runs_once_in_lab_time_and_never_reflips(pg):
         "open-0930": "stock",
     }
     insp = inspect(pg)
+    # After the switch a new worksheet defaults to 2 mL (Postgres reports
+    # '2ml'::character varying); spec 12's rollback drops this default.
+    default = next(col["default"] for col in insp.get_columns("worksheets")
+                   if col["name"] == "endo_prep")
+    assert default is not None and default.startswith("'2ml'"), default
     assert set(NEW_ITEM_COLUMNS) <= {col["name"] for col in insp.get_columns("worksheet_items")}
     assert "serial_number" in {col["name"] for col in insp.get_columns("instruments")}
     assert "run_parameters" in {col["name"] for col in insp.get_columns("hplc_methods")}

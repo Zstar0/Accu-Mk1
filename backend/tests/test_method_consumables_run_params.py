@@ -158,6 +158,29 @@ def test_new_revision_copies_consumables_with_default_and_run_parameters(client,
     assert len(client.get(f"/hplc/methods/{mid}/consumables").json()) == 2
 
 
+
+def test_new_revision_logs_the_run_parameters_and_links_it_copies(client, db):
+    # Spec 10: method run_parameters and consumables are in catalog_change_log,
+    # copied ones included; the links in the same fields the consumables PUT uses.
+    c05, c01 = _cart(db, "Endosafe 0.05", 0.05), _cart(db, "Endosafe 0.01", 0.01)
+    mid = _draft(client)
+    _put(client, mid, [{"consumable_type_id": c05, "is_default": True}, {"consumable_type_id": c01}])
+    client.put(f"/hplc/methods/{mid}", json={"run_parameters": {"endotoxin": {"cv_limit_pct": 20}}})
+    client.post(f"/hplc/methods/{mid}/activate")
+    rev2 = client.post(f"/hplc/methods/{mid}/new-revision").json()["id"]
+    logs = db.execute(select(CatalogChangeLog).where(
+        CatalogChangeLog.entity_type == "method", CatalogChangeLog.entity_pk == rev2)
+        .order_by(CatalogChangeLog.id)).scalars().all()
+    assert [log.action for log in logs] == ["create", "update", "update"]
+    assert logs[0].details["changed"]["run_parameters"] == {
+        "before": None, "after": {"endotoxin": {"cv_limit_pct": 20}}}
+    assert [log.details["changed"] for log in logs[1:]] == [
+        {"consumables": {"before": [], "after": sorted([c05, c01])}},
+        {"consumable_defaults": {"before": [], "after": [c05]}},
+    ]
+    assert {log.user_id for log in logs} == {1}
+
+
 # --- run parameters --------------------------------------------------------
 
 

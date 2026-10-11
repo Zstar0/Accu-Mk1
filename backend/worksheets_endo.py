@@ -139,6 +139,23 @@ def check_reader_record(record: dict) -> None:
                              f"number or text of at most {_RECORD_TEXT_MAX} characters")
 
 
+def reader_shows(record: dict, parsed: tuple[bool, float]) -> bool:
+    """True when the reader record's `result` (the reading exactly as the
+    reader showed it, spec 8.4) parses to `parsed`, the reading being
+    imported. A missing or unreadable result fails closed."""
+    result = record.get("result")
+    try:
+        return isinstance(result, str) and parse_reading(result) == parsed
+    except ValueError:
+        return False
+
+
+def endo_run_params(run_params: Optional[dict]) -> dict:
+    """A method's stored run_parameters ({"endotoxin": {...}} or None) with
+    every missing key at Dennis's value: the browser's runParamsFrom."""
+    return {**ENDO_RUN_PARAM_DEFAULTS, **((run_params or {}).get("endotoxin") or {})}
+
+
 def reader_validity(record: dict, run_params: Optional[dict]) -> tuple[bool, list[str]]:
     """The server's own verdict on a reader test (spec 4.5), never the
     browser's: spike recovery inside the method's range and both CVs at or
@@ -147,7 +164,7 @@ def reader_validity(record: dict, run_params: Optional[dict]) -> tuple[bool, lis
     never from the file's rec_min, rec_max or cv_limit. A missing or
     non-numeric number fails closed. Wording follows readerValidity
     (src/lib/endo-reader.ts, Task 9), which applies the same fail-closed rule."""
-    limits = {**ENDO_RUN_PARAM_DEFAULTS, **((run_params or {}).get("endotoxin") or {})}
+    limits = endo_run_params(run_params)
     lo, hi, cv = (limits["spike_recovery_min_pct"], limits["spike_recovery_max_pct"],
                   limits["cv_limit_pct"])
     why = []
@@ -200,9 +217,12 @@ def _endo_method_id(db: Session, worksheet_id: int) -> Optional[int]:
     per item: a per-item lookup in the shared serializer is the fan-out class
     behind the 2026-09-15 pool outage. The rule is strict. A worksheet with
     no endo rows, an endo row with no vial (a legacy bare parent id), a vial
-    with no live analysis, or a service with no active default method all
-    resolve to None. So do two rows that disagree."""
-    from main import _bench_kind_for_item  # lazy: main imports this module too
+    with no live endotoxin analysis, or a service with no active default
+    method all resolve to None. So do two rows that disagree. Only a vial's
+    endotoxin analyses count (main.py's keyword rule): a live STER-PCR beside
+    the ENDO analysis on the same vial says nothing about its method."""
+    # lazy: main imports this module too
+    from main import _bench_kind_for_item, _bench_kind_for_keyword
 
     rows = db.execute(
         select(WorksheetItem.analyses_json, LimsSubSample.id.label("vial_pk"),
@@ -215,15 +235,17 @@ def _endo_method_id(db: Session, worksheet_id: int) -> Optional[int]:
     if not vial_pks or None in vial_pks:
         return None
     services_by_vial: dict[int, set[int]] = {pk: set() for pk in vial_pks}
-    for pk, service_id in db.execute(
-        select(LimsAnalysis.lims_sub_sample_pk, LimsAnalysis.analysis_service_id).where(
+    for pk, service_id, keyword in db.execute(
+        select(LimsAnalysis.lims_sub_sample_pk, LimsAnalysis.analysis_service_id,
+               LimsAnalysis.keyword).where(
             LimsAnalysis.lims_sub_sample_pk.in_(vial_pks),
             # The vial-row "current" idiom: the newest row of a retest chain.
             LimsAnalysis.retested.is_(False),
             LimsAnalysis.review_state.notin_(_DEAD_STATES),
         )
     ).all():
-        services_by_vial[pk].add(service_id)
+        if _bench_kind_for_keyword(keyword) == "endo":
+            services_by_vial[pk].add(service_id)
     if not all(services_by_vial.values()):
         return None
     method_by_service = dict(db.execute(
@@ -269,8 +291,12 @@ def _method_payload(db: Session, method_id: int) -> Optional[dict]:
 def resolve_endo_method(db: Session, worksheet) -> Optional[dict]:
     """The worksheet's endo method (spec 4.1). This is the pinned revision
     when there is one, else the single active default method every endo row
-    resolves to, else None. At most five queries. Callers: GET
-    /worksheets/{id}, the item PATCH and the reader import, never a list."""
+    resolves to, else None. A completed worksheet never pinned resolves None:
+    every reading and print pins, so it was worked on Dennis's values. At
+    most five queries. Callers: GET /worksheets/{id}, the item PATCH and the
+    reader import, never a list."""
+    if worksheet.endo_method_id is None and worksheet.status == "completed":
+        return None
     method_id = worksheet.endo_method_id or _endo_method_id(db, worksheet.id)
     return _method_payload(db, method_id) if method_id else None
 
@@ -338,8 +364,8 @@ def cartridge_sensitivities(db: Session, ids) -> dict[int, Optional[float]]:
 
 # The endo v2 row fields the item PATCH accepts (spec 3.7). Sent = set; an
 # explicit null clears; omitted = untouched (model_fields_set).
-ENDO_ITEM_FIELDS = ("prep_form", "prep_water_ml", "prep_total_dilution", "prep_steps",
-                    "cartridge_type_id", "result_reading")
+_PREP_FIELDS = ("prep_form", "prep_water_ml", "prep_total_dilution", "prep_steps")
+ENDO_ITEM_FIELDS = (*_PREP_FIELDS, "cartridge_type_id", "result_reading")
 # The fixed parts of the 2 mL steps that stay in code (spec 4.4): step 1's
 # standard ratio and the fixed 1:2 of step 3.
 STEP1_STANDARD_RATIO = 10
@@ -363,7 +389,9 @@ def check_item_endo_fields(db: Session, worksheet, item, values: dict) -> dict:
     reading needs one, sent now or already on the row. For the same reason a
     cartridge cannot be cleared from under a stored reading. A total below
     step 1's ratio x 2 cannot be made, because step 2 would need a ratio
-    under 1:1. Tube overflow is only a screen warning."""
+    under 1:1. A row with no total of its own runs on the method's standard
+    total (std_total_dilution, 250 when unset), so that one is checked the
+    same way. Tube overflow is only a screen warning."""
     out = dict(values)
     form = values.get("prep_form")
     if form is not None and form not in ENDO_FORMS:
@@ -377,13 +405,20 @@ def check_item_endo_fields(db: Session, worksheet, item, values: dict) -> dict:
     if values.get("prep_steps") is not None:
         out["prep_steps"] = validate_prep_steps(values["prep_steps"])
     total_after = out.get("prep_total_dilution", item.prep_total_dilution)
-    if total_after is not None and ("prep_total_dilution" in values or "prep_steps" in values):
+    floor_check = "prep_total_dilution" in values or "prep_steps" in values
+    cartridge = values.get("cartridge_type_id")
+    # Resolved once, and only when a check below needs it.
+    method = (resolve_endo_method(db, worksheet)
+              if cartridge is not None or (floor_check and total_after is None) else None)
+    if floor_check:
+        if total_after is None:
+            total_after = endo_run_params(
+                method["run_parameters"] if method else None)["std_total_dilution"]
         floor = STEP3_RATIO * _step1_ratio(out.get("prep_steps", item.prep_steps))
         if total_after < floor:
             raise ValueError(f"prep_total_dilution must be at least {floor:g} (the step 1 "
                              f"ratio x the fixed 1:{STEP3_RATIO} step) or step 2 cannot be made")
-    cartridge = values.get("cartridge_type_id")
-    if cartridge is not None and cartridge not in allowed_cartridge_ids(db, worksheet):
+    if cartridge is not None and cartridge not in cartridge_ids_allowed_by(db, method):
         raise ValueError(CARTRIDGE_REFUSED)
     if values.get("result_reading") is not None:
         parse_reading(values["result_reading"])
@@ -410,7 +445,12 @@ def apply_item_endo_fields(db: Session, worksheet, item, values: dict,
                         entity_id=str(item.id),
                         details={**base, "old": old, "new": new, **extra}))
 
-    for field in ("prep_form", "prep_water_ml", "prep_total_dilution", "prep_steps"):
+    # The prep inputs (spec 9): one row for what this PATCH changes, if anything.
+    changed = [f for f in _PREP_FIELDS if f in values and values[f] != getattr(item, f)]
+    if changed:
+        audit("endo_prep_inputs_set", {f: getattr(item, f) for f in changed},
+              {f: values[f] for f in changed})
+    for field in _PREP_FIELDS:
         if field in values:
             setattr(item, field, values[field])
     if "cartridge_type_id" in values and values["cartridge_type_id"] != item.cartridge_type_id:

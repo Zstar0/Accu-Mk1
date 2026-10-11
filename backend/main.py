@@ -33,7 +33,7 @@ APP_VERSION = _read_app_version()
 
 from fastapi import BackgroundTasks, FastAPI, Body, Depends, Form, HTTPException, Header, Query, Request, Response, UploadFile, status
 from fastapi.middleware.cors import CORSMiddleware
-from pydantic import BaseModel, ConfigDict, Field, validator, PrivateAttr
+from pydantic import BaseModel, ConfigDict, Field, field_validator, validator, PrivateAttr
 from sqlalchemy.orm import Session, joinedload
 from sqlalchemy import select, desc, delete, update, func, extract, and_, or_
 from sqlalchemy.exc import IntegrityError
@@ -4116,7 +4116,8 @@ async def create_consumable(data: ConsumableTypeCreate, db: Session = Depends(ge
 async def update_consumable(type_id: int, data: ConsumableTypeUpdate, db: Session = Depends(get_db),
                             current_user=Depends(get_current_user)):
     """Edit or retire a consumable type. Once a worksheet or an item uses it,
-    a change to kind or specs is 409 naming the fields (resending the stored
+    or a method revision that is not a draft links it (consumable_in_use), a
+    change to kind or specs is 409 naming the fields (resending the stored
     value is fine); name, manufacturer, part number, instrument and active
     stay editable."""
     from catalog.consumables import ConsumableSpecError, consumable_in_use, validate_specs
@@ -5336,15 +5337,25 @@ async def new_method_revision(method_id: int, db: Session = Depends(get_db),
         db.execute(method_services.insert().values(
             method_id=clone.id, analysis_service_id=link.analysis_service_id,
             is_default=False))
-    for link in db.execute(select(method_consumables).where(
-            method_consumables.c.method_id == src.id)).all():
+    copied = db.execute(select(method_consumables).where(
+        method_consumables.c.method_id == src.id)).all()
+    for link in copied:
         db.execute(method_consumables.insert().values(
             method_id=clone.id, consumable_type_id=link.consumable_type_id,
             kind=link.kind, is_default=link.is_default))
 
     from catalog.change_log import log_create
-    log_create(db, clone, METHOD_LOG_FIELDS, entity_type="method",
-              entity_pk=clone.id, user_id=getattr(current_user, "id", None))
+    user_id = getattr(current_user, "id", None)
+    # Spec 10: the copied run_parameters and consumable links are logged too,
+    # the links in the fields put_method_consumables uses.
+    log_create(db, clone, (*METHOD_LOG_FIELDS, "run_parameters"), entity_type="method",
+              entity_pk=clone.id, user_id=user_id)
+    log_members(db, entity_type="method", entity_pk=clone.id, user_id=user_id,
+                field="consumables", before_ids=[],
+                after_ids=sorted(link.consumable_type_id for link in copied))
+    log_members(db, entity_type="method", entity_pk=clone.id, user_id=user_id,
+                field="consumable_defaults", before_ids=[],
+                after_ids=sorted(link.consumable_type_id for link in copied if link.is_default))
 
     db.commit()
     db.refresh(clone)
@@ -24588,6 +24599,14 @@ _KEYWORD_BENCH_KIND = (
 )
 
 
+def _bench_kind_for_keyword(keyword: Optional[str]) -> Optional[str]:
+    """The bench one analysis keyword names, or None (_KEYWORD_BENCH_KIND)."""
+    for pattern, kind in _KEYWORD_BENCH_KIND:
+        if pattern.search(keyword or ""):
+            return kind
+    return None
+
+
 def _bench_kind_for_item(role: Optional[str], analyses_json: Optional[str]) -> Optional[str]:
     by_role = _ROLE_BENCH_KIND.get(role or "")
     if by_role:
@@ -24597,10 +24616,9 @@ def _bench_kind_for_item(role: Optional[str], analyses_json: Optional[str]) -> O
     except ValueError:
         analyses = []
     for a in analyses if isinstance(analyses, list) else []:
-        keyword = (a.get("keyword") if isinstance(a, dict) else None) or ""
-        for pattern, kind in _KEYWORD_BENCH_KIND:
-            if pattern.search(keyword):
-                return kind
+        kind = _bench_kind_for_keyword(a.get("keyword") if isinstance(a, dict) else None)
+        if kind:
+            return kind
     return None
 
 
@@ -25463,7 +25481,23 @@ class EndoReaderTest(BaseModel):
 
 class EndoReaderImport(BaseModel):
     file_name: str
-    tests: list[EndoReaderTest]
+    tests: list[EndoReaderTest] = Field(max_length=500)
+
+    @field_validator("file_name")
+    @classmethod
+    def _file_name_at_most_200(cls, v: str) -> str:
+        """At most 200 characters (a 422). Not Field(max_length=200): under a
+        length constraint pydantic refuses a lone surrogate with a 422 that
+        echoes it and cannot be encoded (a 500). A name that is not clean
+        text passes here, and the route's check_storable refuses it (a 400)."""
+        from worksheets_endo import check_storable
+        try:
+            check_storable(v, "The file name")
+        except ValueError:
+            return v
+        if len(v) > 200:
+            raise ValueError("the file name is at most 200 characters")
+        return v
 
 
 class EndoReaderImportOut(BaseModel):
@@ -25486,7 +25520,8 @@ def import_endo_reader_results(
     id path, so it has no ordering concern against GET /worksheets/{worksheet_id}."""
     from worksheets_endo import (CARTRIDGE_REFUSED, cartridge_ids_allowed_by, check_reader_record,
                                  check_storable, instrument_id_for_serial, parse_reading,
-                                 pin_endo_method, reader_validity, resolve_endo_method)
+                                 pin_endo_method, reader_shows, reader_validity,
+                                 resolve_endo_method)
 
     ws = db.execute(select(Worksheet).where(Worksheet.id == worksheet_id)).scalar_one_or_none()
     if not ws or ws.status == "staging":
@@ -25532,6 +25567,8 @@ def import_endo_reader_results(
             if not isinstance(test_id, str) or not test_id.strip():
                 raise ValueError("the reader record has no test_id")
             parsed = parse_reading(t.reading)
+            if not reader_shows(t.record, parsed):
+                raise ValueError("the reading does not match the reader record")
             if t.cartridge_type_id not in allowed:
                 raise ValueError(CARTRIDGE_REFUSED)
             # Compared as parsed values, so "< 0.05" and "<0.05" are the same reading.
@@ -25875,9 +25912,17 @@ async def update_worksheet_item(
         apply_item_endo_fields(db, ws, item, endo_values, _current_user.id)
 
     db.commit()
-    return {"status": "updated", "item_id": item_id, "resolved_method": resolved_method,
-            # Endo v2 (spec 4.1): the worksheet's endo method, as GET /worksheets/{id} has it.
-            "endo_method": resolve_endo_method(db, ws)}
+    out = {"status": "updated", "item_id": item_id, "resolved_method": resolved_method}
+    if endo_values:
+        # Endo v2 (spec 4.1): the worksheet's endo method, as GET /worksheets/{id}
+        # has it, for an endo PATCH only. The row is already saved, so a failure
+        # here is logged and the key left out, never a 500.
+        try:
+            out["endo_method"] = resolve_endo_method(db, ws)
+        except Exception:
+            logger.exception("endo_method resolution failed after the PATCH of item %s", item_id)
+            db.rollback()
+    return out
 
 
 class WorksheetApplyMethodInstrument(BaseModel):
