@@ -19,7 +19,11 @@ import { useSlaForSubjects } from '@/services/sla-subjects'
 import { EntityFlagButton } from '@/components/flags/EntityFlagButton'
 import { useRegisterActiveFlagEntity } from '@/components/flags/use-active-flag-entity'
 import { EndoWorksheetActions } from './EndoWorksheetActions'
-import { EndoCalculations, EndoWorksheetTable } from './EndoWorksheetTable'
+import {
+  EndoCalculations,
+  EndoWorksheetTable,
+  type EndoTwoMl,
+} from './EndoWorksheetTable'
 
 /**
  * The main column of the flyout for an endotoxin worksheet, laid out as
@@ -41,6 +45,11 @@ export function EndoWorksheetView({
   onReassign,
   onUpdateItem,
   onTickAll,
+  prepModel,
+  twoMl,
+  heading,
+  runHeader,
+  children,
 }: {
   worksheet: WorksheetListItem
   users: WorksheetUser[]
@@ -60,6 +69,14 @@ export function EndoWorksheetView({
   onReassign: (itemId: number, targetWorksheetId: number) => void
   onUpdateItem: (itemId: number, data: WorksheetItemPatch) => void
   onTickAll: (data: { made?: boolean; ran?: boolean }) => void
+  /** The worksheet page (spec 2026-10-10 6.1): the prep model and its 2 mL
+   *  data, Box 1's title, the run settings for the meta strip, and Boxes 2
+   *  and 3 as children. The flyout passes none and renders as before. */
+  prepModel?: 'stock' | '2ml'
+  twoMl?: EndoTwoMl
+  heading?: ReactNode
+  runHeader?: ReactNode
+  children?: ReactNode
 }) {
   useRegisterActiveFlagEntity(
     'worksheet',
@@ -210,7 +227,14 @@ export function EndoWorksheetView({
         onReassign={onReassign}
         onUpdateItem={onUpdateItem}
         onTickAll={onTickAll}
+        prepModel={prepModel}
+        twoMl={twoMl}
+        heading={heading}
+        metaExtra={runHeader}
       />
+
+      {/* Boxes 2 and 3; with the column's 16px gap, 24px between boxes as on Dennis's sheet */}
+      {children && <div className="space-y-6 pt-2">{children}</div>}
 
       <EndoCalculations />
 

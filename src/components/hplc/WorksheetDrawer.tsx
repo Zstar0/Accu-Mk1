@@ -31,6 +31,7 @@ import { useWorksheetDrawer } from '@/hooks/use-worksheet-drawer'
 import { getWorksheetUsers, getInstruments, getMethods } from '@/lib/api'
 import type { HplcMethod, Instrument } from '@/lib/api'
 import { prepStartedKey } from '@/lib/worksheet-scope-key'
+import { parseWorksheetNotes, withNotesText } from '@/lib/worksheet-notes'
 import WorksheetDrawerHeader from './WorksheetDrawerHeader'
 import WorksheetDrawerItems from './WorksheetDrawerItems'
 import { EndoWorksheetActions } from './EndoWorksheetActions'
@@ -141,24 +142,10 @@ export function WorksheetDrawer() {
   const isBench = isEndo || isPcr
 
   // Parse notes JSON: separate user text from prep_started metadata
-  const { userNotes, prepStartedItems } = useMemo(() => {
-    const raw = activeWorksheet?.notes ?? ''
-    let parsed: Record<string, unknown> = {}
-    try {
-      parsed = JSON.parse(raw)
-    } catch {
-      // Plain text notes (not JSON) — treat as user text
-      return { userNotes: raw, prepStartedItems: new Set<string>() }
-    }
-    const set = new Set<string>()
-    for (const key of Object.keys(parsed)) {
-      if (key.startsWith('prep_started:')) {
-        set.add(key.replace('prep_started:', ''))
-      }
-    }
-    const text = typeof parsed.text === 'string' ? parsed.text : ''
-    return { userNotes: text, prepStartedItems: set }
-  }, [activeWorksheet?.notes])
+  const { userNotes, prepStartedItems } = useMemo(
+    () => parseWorksheetNotes(activeWorksheet?.notes ?? ''),
+    [activeWorksheet?.notes]
+  )
 
   function handleApplyToAll(methodId: number, instrumentId: number) {
     if (!activeWorksheet) return
@@ -183,31 +170,9 @@ export function WorksheetDrawer() {
   }
 
   const completeAction = activeWorksheet && (
-    <AlertDialog>
-      <AlertDialogTrigger asChild>
-        <Button variant="destructive" size="sm">
-          Complete Worksheet
-        </Button>
-      </AlertDialogTrigger>
-      <AlertDialogContent>
-        <AlertDialogHeader>
-          <AlertDialogTitle>Complete this worksheet?</AlertDialogTitle>
-          <AlertDialogDescription>
-            This worksheet will be marked as completed and removed from the active
-            queue. This cannot be undone.
-          </AlertDialogDescription>
-        </AlertDialogHeader>
-        <AlertDialogFooter>
-          <AlertDialogCancel>Keep Worksheet</AlertDialogCancel>
-          <AlertDialogAction
-            onClick={() => completeMutation.mutate(activeWorksheet.id)}
-            className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
-          >
-            Complete Worksheet
-          </AlertDialogAction>
-        </AlertDialogFooter>
-      </AlertDialogContent>
-    </AlertDialog>
+    <CompleteWorksheetButton
+      onConfirm={() => completeMutation.mutate(activeWorksheet.id)}
+    />
   )
 
   // Worksheet PUT from either header: a notes edit is merged into the notes
@@ -220,15 +185,10 @@ export function WorksheetDrawer() {
   }) {
     if (!activeWorksheet) return
     if (data.notes !== undefined) {
-      const raw = activeWorksheet.notes ?? ''
-      let parsed: Record<string, unknown> = {}
-      try {
-        parsed = JSON.parse(raw)
-      } catch {
-        parsed = {}
+      data = {
+        ...data,
+        notes: withNotesText(activeWorksheet.notes ?? '', data.notes),
       }
-      parsed.text = data.notes
-      data = { ...data, notes: JSON.stringify(parsed) }
     }
     updateMutation.mutate({ worksheetId: activeWorksheet.id, data })
   }
@@ -600,11 +560,47 @@ interface WorksheetApplyBarProps {
   onApply: (methodId: number, instrumentId: number) => void
 }
 
+/** "Complete Worksheet" with its confirmation; the flyout and the endo
+ *  worksheet page share it. */
+export function CompleteWorksheetButton({
+  onConfirm,
+}: {
+  onConfirm: () => void
+}) {
+  return (
+    <AlertDialog>
+      <AlertDialogTrigger asChild>
+        <Button variant="destructive" size="sm">
+          Complete Worksheet
+        </Button>
+      </AlertDialogTrigger>
+      <AlertDialogContent>
+        <AlertDialogHeader>
+          <AlertDialogTitle>Complete this worksheet?</AlertDialogTitle>
+          <AlertDialogDescription>
+            This worksheet will be marked as completed and removed from the active
+            queue. This cannot be undone.
+          </AlertDialogDescription>
+        </AlertDialogHeader>
+        <AlertDialogFooter>
+          <AlertDialogCancel>Keep Worksheet</AlertDialogCancel>
+          <AlertDialogAction
+            onClick={onConfirm}
+            className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+          >
+            Complete Worksheet
+          </AlertDialogAction>
+        </AlertDialogFooter>
+      </AlertDialogContent>
+    </AlertDialog>
+  )
+}
+
 /** Method + instrument "run context" picker for the worksheet drawer's
  *  "Apply to all". Split out from WorksheetDrawer so its armed selections
  *  reset for free by remounting on `key={worksheet.id}` — see the comment
  *  at its call site. */
-function WorksheetApplyBar({
+export function WorksheetApplyBar({
   activeMethods,
   instruments,
   isPending,
