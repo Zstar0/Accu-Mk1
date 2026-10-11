@@ -84,10 +84,11 @@ export function runParamsFrom(method: EndoMethodInfo | null): EndoRunParams {
  * 2026-10-10, as the server's cartridge_ids_allowed_by), every active endo
  * cartridge in `catalog`, with no default. Retired
  * types never appear here; a run or row that used one still resolves it from
- * its serialized sensitivity.
+ * its serialized sensitivity. Reads only `endo_method`, so the service
+ * page's panel passes the method it resolves.
  */
 export function allowedCartridges(
-  ws: WorksheetRow,
+  ws: Pick<WorksheetRow, 'endo_method'>,
   catalog: ConsumableType[] = []
 ): EndoCartridgeOption[] {
   const linked = ws.endo_method?.cartridges ?? []
