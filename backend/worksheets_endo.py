@@ -146,7 +146,7 @@ def reader_validity(record: dict, run_params: Optional[dict]) -> tuple[bool, lis
     run_parameters ({"endotoxin": {...}}, missing keys at Dennis's values),
     never from the file's rec_min, rec_max or cv_limit. A missing or
     non-numeric number fails closed. Wording follows readerValidity
-    (src/lib/endo-reader.ts, Task 9), which lets a missing CV pass."""
+    (src/lib/endo-reader.ts, Task 9), which applies the same fail-closed rule."""
     limits = {**ENDO_RUN_PARAM_DEFAULTS, **((run_params or {}).get("endotoxin") or {})}
     lo, hi, cv = (limits["spike_recovery_min_pct"], limits["spike_recovery_max_pct"],
                   limits["cv_limit_pct"])
