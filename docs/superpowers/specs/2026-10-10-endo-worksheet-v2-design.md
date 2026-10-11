@@ -373,7 +373,7 @@ New endpoints declare their response models.
   2. Set the Nexgen-MCS serial number on its instrument.
   3. Make a new revision of the Endotoxin method; add the cartridges with 0.05 as default, set run parameters only where they differ from Dennis's values; activate it.
   4. Send the lab the release note, including the line about Accu-Mk1 values being per vial.
-- **Rollback:** redeploy the previous image. New columns and tables are additive and ignored by the old code.
+- **Rollback:** redeploy the previous image. New columns and tables are additive and ignored by the old code. Then run `ALTER TABLE worksheets ALTER COLUMN endo_prep DROP DEFAULT;`: the migration's `DEFAULT '2ml'` stays on the column after a redeploy, and the old code does not set `endo_prep`, so without this every worksheet it creates would be stored as 2 mL.
 
 ## 13. Open items
 
