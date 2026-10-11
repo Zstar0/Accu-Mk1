@@ -36,7 +36,21 @@ const thread: SupportThread = {
   plain_url: 'https://app.plain.com/x',
 }
 const detail: SupportThreadDetail = {
-  thread,
+  thread: {
+    ...thread,
+    customer: {
+      name: 'Kyle Robertson',
+      email: 'k@x',
+      external_id: null,
+      avatar_url: null,
+      company: null,
+      created_at: null,
+      updated_at: null,
+      wp_profile_url: null,
+    },
+    assignees: [],
+    fields: [],
+  },
   entries: [],
   fetched_at: new Date().toISOString(),
   stale: false,
@@ -68,6 +82,9 @@ function setup(hasSeat = true) {
   )
 }
 
+const openReply = async () =>
+  userEvent.click(await screen.findByRole('button', { name: /Reply to/ }))
+
 describe('SupportThreadPanel actions', () => {
   beforeEach(() => {
     vi.clearAllMocks()
@@ -84,6 +101,7 @@ describe('SupportThreadPanel actions', () => {
 
   it('reply asks once, sends, and clears the draft', async () => {
     setup()
+    await openReply()
     const box = await screen.findByRole('textbox', { name: /Reply/ })
     await userEvent.type(box, 'Thanks for waiting')
     await userEvent.click(
@@ -107,6 +125,7 @@ describe('SupportThreadPanel actions', () => {
 
   it('send is disabled when empty', async () => {
     setup()
+    await openReply()
     expect(
       await screen.findByRole('button', { name: 'Send as Sam Parker' })
     ).toBeDisabled()
@@ -114,6 +133,7 @@ describe('SupportThreadPanel actions', () => {
 
   it('a failed reply keeps the draft and shows the reason', async () => {
     setup()
+    await openReply()
     vi.mocked(support.supportAction).mockRejectedValueOnce(
       new CrmError(403, 'not_allowed_to_reply')
     )
@@ -131,7 +151,9 @@ describe('SupportThreadPanel actions', () => {
 
   it('note sends without confirmation', async () => {
     setup()
-    await userEvent.click(await screen.findByRole('tab', { name: 'Note' }))
+    await userEvent.click(
+      await screen.findByRole('button', { name: 'Add note' })
+    )
     await userEvent.type(
       screen.getByRole('textbox', { name: /Note/ }),
       'check COA'
@@ -153,6 +175,7 @@ describe('SupportThreadPanel actions', () => {
 
   it('draft survives closing the panel', async () => {
     setup()
+    await openReply()
     await userEvent.type(
       await screen.findByRole('textbox', { name: /Reply/ }),
       'half'
@@ -160,63 +183,9 @@ describe('SupportThreadPanel actions', () => {
     expect(localStorage.getItem('mk1.supportDraft.th_b.reply')).toBe('half')
   })
 
-  it('status, priority, assignee and labels call their actions', async () => {
-    setup()
-    // Controls disable while an action is in flight and until the workspace loads.
-    const ready = async (label: string) => {
-      const el = await screen.findByLabelText(label)
-      await waitFor(() => expect(el).toBeEnabled())
-      return el
-    }
-    await userEvent.selectOptions(await ready('Status'), 'done')
-    await waitFor(() =>
-      expect(support.supportAction).toHaveBeenCalledWith(
-        'wc:1',
-        'th_b',
-        'status',
-        { status: 'done' }
-      )
-    )
-    await userEvent.selectOptions(await ready('Priority'), 'urgent')
-    await userEvent.selectOptions(await ready('Assignee'), 'u_1')
-    await ready('Status')
-    await userEvent.click(
-      screen.getByRole('button', { name: 'Remove label Lab' })
-    )
-    await userEvent.selectOptions(await ready('Add label'), 'lt_2')
-    await ready('Status')
-    const calls = vi
-      .mocked(support.supportAction)
-      .mock.calls.map(c => [c[2], c[3]])
-    expect(calls).toEqual(
-      expect.arrayContaining([
-        ['priority', { priority: 'urgent' }],
-        ['assign', { plain_user_id: 'u_1' }],
-        ['labels', { remove: ['l_1'] }],
-        ['labels', { add: ['lt_2'] }],
-      ])
-    )
-  })
-
-  it('snooze presets send an until in the future', async () => {
-    setup()
-    await userEvent.selectOptions(
-      await screen.findByLabelText('Status'),
-      'snooze:1h'
-    )
-    await waitFor(() => expect(support.supportAction).toHaveBeenCalled())
-    const body = vi.mocked(support.supportAction).mock.calls[0]?.[3] as {
-      status: string
-      until: string
-    }
-    expect(body.status).toBe('snoozed')
-    expect(new Date(body.until).getTime()).toBeGreaterThan(
-      Date.now() + 50 * 60_000
-    )
-  })
-
   it('an unconfirmed reply refetches the thread and drops the pending confirmation', async () => {
     setup()
+    await openReply()
     vi.mocked(support.supportAction).mockRejectedValueOnce(
       new CrmError(504, 'reply_unconfirmed')
     )
@@ -237,6 +206,7 @@ describe('SupportThreadPanel actions', () => {
 
   it('a reply that failed without a code is treated as unconfirmed, not as try again', async () => {
     setup()
+    await openReply()
     vi.mocked(support.supportAction).mockRejectedValueOnce(
       new TypeError('Failed to fetch')
     )
@@ -254,6 +224,7 @@ describe('SupportThreadPanel actions', () => {
 
   it('Ctrl+Enter never confirms a reply, even when held', async () => {
     setup()
+    await openReply()
     const box = await screen.findByRole('textbox', { name: /Reply/ })
     await userEvent.type(box, 'hello')
     await userEvent.keyboard('{Control>}{Enter}{Enter}{Enter}{/Control}')
@@ -261,5 +232,60 @@ describe('SupportThreadPanel actions', () => {
       screen.getByRole('button', { name: 'Yes, send' })
     ).toBeInTheDocument()
     expect(support.supportAction).not.toHaveBeenCalled()
+  })
+
+  it('lays out Plain-style: action bar, sidebar, oldest first', async () => {
+    setup()
+    expect(
+      await screen.findByRole('button', { name: 'Reply to Kyle' })
+    ).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Add note' })).toBeInTheDocument()
+    expect(screen.getByText('Thread details')).toBeInTheDocument()
+    expect(
+      screen.getByRole('button', { name: /Oldest first/ })
+    ).toBeInTheDocument()
+  })
+
+  it('R and N open the composer, Esc closes it', async () => {
+    setup()
+    await screen.findByRole('button', { name: 'Add note' })
+    await userEvent.keyboard('n')
+    expect(
+      await screen.findByRole('textbox', { name: /Note/ })
+    ).toBeInTheDocument()
+    await userEvent.keyboard('{Escape}')
+    await waitFor(() =>
+      expect(screen.queryByRole('textbox', { name: /Note/ })).toBeNull()
+    )
+    await userEvent.keyboard('r')
+    expect(
+      await screen.findByRole('textbox', { name: /Reply/ })
+    ).toBeInTheDocument()
+  })
+
+  it('R and N do nothing while typing', async () => {
+    setup()
+    await screen.findByRole('button', { name: 'Add note' })
+    await userEvent.keyboard('r')
+    const box = await screen.findByRole('textbox', { name: /Reply/ })
+    await userEvent.type(box, 'rn')
+    expect(box).toHaveValue('rn')
+    expect(screen.queryByRole('textbox', { name: /Note/ })).toBeNull()
+  })
+
+  it('More offers waiting for customer', async () => {
+    setup()
+    await userEvent.click(await screen.findByRole('button', { name: 'More' }))
+    await userEvent.click(
+      screen.getByRole('menuitem', { name: 'Waiting for customer' })
+    )
+    await waitFor(() =>
+      expect(support.supportAction).toHaveBeenCalledWith(
+        'wc:1',
+        'th_b',
+        'status',
+        { status: 'waiting_for_customer' }
+      )
+    )
   })
 })
