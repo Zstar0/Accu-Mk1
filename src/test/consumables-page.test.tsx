@@ -146,6 +146,20 @@ describe('ConsumablesPage', () => {
     expect(createConsumable).not.toHaveBeenCalled()
   })
 
+  it("shows the server's refusal in the panel and keeps it open", async () => {
+    vi.mocked(updateConsumable).mockRejectedValue(
+      new Error('A consumable named Endosafe 0.01 already exists')
+    )
+    const user = userEvent.setup()
+    render(<ConsumablesPage />)
+    await user.click(await screen.findByText('Endosafe 0.01'))
+    await user.click(screen.getByRole('button', { name: /^save$/i }))
+    expect(
+      await screen.findByText('A consumable named Endosafe 0.01 already exists')
+    ).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: /^save$/i })).toBeInTheDocument()
+  })
+
   it("caps the text fields at the server's column lengths", async () => {
     const user = userEvent.setup()
     render(<ConsumablesPage />)
