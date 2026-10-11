@@ -136,6 +136,31 @@ describe('EndoResultsBox', () => {
     ).toBeInTheDocument()
   })
 
+  it('shows the larger CV the record carries, and "-" for what it does not', () => {
+    setup([
+      endoItem({
+        sample_id: 'P-0001-S02',
+        result_reading: '<0.05',
+        result_reader: {
+          ...invalidReader,
+          recovery: null,
+          sample_cv: null,
+          spike_cv: null,
+        },
+      }),
+      endoItem({
+        sample_id: 'P-0002-S02',
+        result_reading: '<0.05',
+        result_reader: { ...invalidReader, recovery: 90, sample_cv: null },
+      }),
+    ])
+    // no CV is not a CV of 0
+    expect(within(rowOf('P-0001-S02')).getByText('- · -')).toBeInTheDocument()
+    expect(
+      within(rowOf('P-0002-S02')).getByText('90 % · 3.7')
+    ).toBeInTheDocument()
+  })
+
   it('flags a typed reading that differs from the reader, and keeps an invalid test Invalid', () => {
     setup([
       endoItem({
@@ -218,11 +243,32 @@ describe('EndoResultsBox', () => {
       value: { writeText },
       configurable: true,
     })
-    setup([endoItem({ sample_id: 'P-0001-S02', result_reading: '<0.05' })])
+    setup([
+      endoItem({ sample_id: 'P-0001-S02', result_reading: '<0.05' }),
+      // bac water runs on the 0.01: its floor is <0.2 EU/mL of the water
+      endoItem({
+        sample_id: 'BW-0001',
+        sample_type: 'Bacteriostatic Water',
+        result_reading: '<0.2',
+      }),
+    ])
     fireEvent.click(
       screen.getByRole('button', { name: 'Copy <25 for Accu-Mk1' })
     )
     expect(writeText).toHaveBeenCalledWith('<25')
+    // bac water reports the reading itself, in EU/mL; LOQ and Limit per mL
+    const bw = rowOf('BW-0001')
+    const copy = within(bw).getByRole('button', {
+      name: 'Copy <0.2 for Accu-Mk1',
+    })
+    expect(within(copy).getByText('EU/mL')).toBeInTheDocument()
+    fireEvent.click(copy)
+    expect(writeText).toHaveBeenLastCalledWith('<0.2')
+    expect(
+      within(bw)
+        .getAllByText('/mL')
+        .map(unit => unit.parentElement?.textContent)
+    ).toEqual(['0.2/mL', '0.25/mL'])
   })
 
   it('shows the worked line of a computed cell on hover', async () => {

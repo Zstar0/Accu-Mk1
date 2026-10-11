@@ -61,7 +61,6 @@ export function EndoReadingInput({
   return (
     <input
       type="text"
-      inputMode="decimal"
       aria-label={label}
       aria-invalid={rejected || undefined}
       title={

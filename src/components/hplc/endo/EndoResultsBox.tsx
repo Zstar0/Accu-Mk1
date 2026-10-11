@@ -231,6 +231,10 @@ function ResultRow({
   // when the two disagree (the record's validity still governs the verdict).
   const typed = parseReading(s.reading)
   const exported = rd ? parseReading(rd.result) : null
+  // The larger CV the record carries; none is "-", never a CV of 0.
+  const cvs = [rd?.sample_cv, rd?.spike_cv].filter(
+    (v): v is number => v != null
+  )
   const readerDiffers =
     rd !== null &&
     typed !== null &&
@@ -310,7 +314,7 @@ function ResultRow({
         }
       >
         {rd
-          ? `${rd.recovery ?? '-'} % · ${fmt(Math.max(rd.sample_cv ?? 0, rd.spike_cv ?? 0))}`
+          ? `${rd.recovery == null ? '-' : `${rd.recovery} %`} · ${cvs.length ? fmt(Math.max(...cvs)) : '-'}`
           : ''}
       </Calc>
       <Calc tip={tips.euPerMg}>{bw ? '' : eu(rs.lt, rs.euPerMg)}</Calc>
