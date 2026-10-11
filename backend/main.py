@@ -24426,6 +24426,15 @@ def _serialize_worksheets(db: Session, worksheets: "list[Worksheet]") -> list:
             return None
         return method_by_pair.get((peptide_id, inst_id))
 
+    # Endo v2 (spec 2026-10-10 section 4.3): each referenced cartridge's
+    # sensitivity, retired types included. ONE query for the whole page.
+    from worksheets_endo import cartridge_sensitivities
+    sensitivity_by_type = cartridge_sensitivities(
+        db,
+        {ws.cartridge_type_id for ws in worksheets if ws.cartridge_type_id}
+        | {it.cartridge_type_id for it in all_items if it.cartridge_type_id},
+    )
+
     result = []
     for ws in worksheets:
         items = items_by_ws.get(ws.id, [])
@@ -24446,6 +24455,12 @@ def _serialize_worksheets(db: Session, worksheets: "list[Worksheet]") -> list:
             "bench_config": ws.bench_config,
             "well_high_water": ws.well_high_water,
             "note_log": notes_by_ws.get(ws.id, []),
+            # Endo v2 run fields (spec 3.6). The sensitivity is the run
+            # cartridge's own; the method's default is on endo_method.
+            "endo_prep": ws.endo_prep,
+            "cartridge_type_id": ws.cartridge_type_id,
+            "cartridge_sensitivity_eu_ml": sensitivity_by_type.get(ws.cartridge_type_id),
+            "endo_method_id": ws.endo_method_id,
             "items": [
                 {
                     "id": it.id,
@@ -24502,6 +24517,17 @@ def _serialize_worksheets(db: Session, worksheets: "list[Worksheet]") -> list:
                     # PCR plate map: the frozen well, or null while the row may still move.
                     "plate_no": it.plate_no,
                     "well_pos": it.well_pos,
+                    # Endo v2 row fields (spec 3.7).
+                    "prep_form": it.prep_form,
+                    "prep_water_ml": it.prep_water_ml,
+                    "prep_total_dilution": it.prep_total_dilution,
+                    "prep_steps": it.prep_steps,
+                    "cartridge_type_id": it.cartridge_type_id,
+                    "cartridge_sensitivity_eu_ml": sensitivity_by_type.get(it.cartridge_type_id),
+                    "result_reading": it.result_reading,
+                    "result_reader": it.result_reader,
+                    "result_entered_at": (it.result_entered_at.isoformat() + "Z") if it.result_entered_at else None,
+                    "result_entered_by_user_id": it.result_entered_by_user_id,
                     **_worksheet_item_parent_facts(_parent_for(it.sample_id)),
                 }
                 for it in items
@@ -24655,7 +24681,12 @@ def get_worksheet_by_id(
     ).scalar_one_or_none()
     if not ws or ws.status == "staging":
         raise HTTPException(404, "Worksheet not found")
-    return _serialize_worksheets(db, [ws])[0]
+    out = _serialize_worksheets(db, [ws])[0]
+    # Endo v2 (spec 4.1): the worksheet's endo method, on this single GET only.
+    # The list endpoints never resolve it (a fixed number of queries per call).
+    from worksheets_endo import resolve_endo_method
+    out["endo_method"] = resolve_endo_method(db, ws)
+    return out
 
 
 class WorksheetUpdate(BaseModel):
@@ -24665,6 +24696,10 @@ class WorksheetUpdate(BaseModel):
     # Per-bench run settings, replaced whole (PCR: overage, curve, plate_type,
     # sort_by_order). Omitted = untouched.
     bench_config: Optional[dict] = None
+    # Endo v2 run fields (spec 3.6 and 10). Sent = set (null clears the run
+    # cartridge); omitted = untouched. 409 on a completed worksheet.
+    endo_prep: Optional[str] = None
+    cartridge_type_id: Optional[int] = None
 
 
 @app.put("/worksheets/{worksheet_id}")
@@ -24680,6 +24715,18 @@ async def update_worksheet(
     ).scalar_one_or_none()
     if not ws:
         raise HTTPException(404, "Worksheet not found")
+
+    # Endo v2 run fields, checked before anything is written. A completed
+    # worksheet refuses them; the older fields keep today's behaviour.
+    run_fields = [f for f in ("endo_prep", "cartridge_type_id") if f in data.model_fields_set]
+    if run_fields:
+        from worksheets_endo import CARTRIDGE_REFUSED, ENDO_PREP_VALUES, allowed_cartridge_ids
+        if ws.status == "completed":
+            raise HTTPException(409, "Worksheet is completed")
+        if "endo_prep" in run_fields and data.endo_prep not in ENDO_PREP_VALUES:
+            raise HTTPException(400, f"endo_prep must be one of {', '.join(ENDO_PREP_VALUES)}")
+        if data.cartridge_type_id is not None and data.cartridge_type_id not in allowed_cartridge_ids(db, ws):
+            raise HTTPException(400, CARTRIDGE_REFUSED)
 
     if data.title is not None:
         ws.title = data.title
@@ -24710,6 +24757,18 @@ async def update_worksheet(
         ws.notes = data.notes
     if data.bench_config is not None:
         ws.bench_config = data.bench_config
+    for field, operation in (("endo_prep", "endo_prep_set"),
+                             ("cartridge_type_id", "endo_cartridge_set")):
+        new = getattr(data, field)
+        if field in run_fields and getattr(ws, field) != new:
+            db.add(AuditLog(
+                operation=operation,
+                entity_type="worksheet",
+                entity_id=str(ws.id),
+                details={"user_id": getattr(_current_user, "id", None),
+                         "old": getattr(ws, field), "new": new},
+            ))
+            setattr(ws, field, new)
 
     db.commit()
     return {"status": "updated"}
@@ -25360,6 +25419,10 @@ def record_worksheet_printed(
         ws.printed_at = datetime.utcnow()
         ws.printed_by_user_id = _current_user.id
     ws.print_count = (ws.print_count or 0) + 1
+    # Endo v2 (spec 4.1): the first print is the bench start, so it pins the
+    # worksheet's endo method revision (a no-op once pinned or unresolvable).
+    from worksheets_endo import pin_endo_method
+    pin_endo_method(db, ws, _current_user.id)
     db.add(AuditLog(
         operation="worksheet_printed",
         entity_type="worksheet",
