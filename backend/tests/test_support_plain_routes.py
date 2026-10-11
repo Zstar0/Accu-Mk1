@@ -33,7 +33,7 @@ class FakePlain:
     def query(self, q, variables=None):
         op = {queries.WORKSPACE: "ws", queries.CUSTOMER_BY_EMAIL: "cust", queries.THREADS: "threads",
               queries.THREAD: "thread", queries.USER_BY_EMAIL: "user", queries.USERS: "users",
-              queries.LABEL_TYPES: "labels"}[q]
+              queries.LABEL_TYPES: "labels", queries.THREAD_FIELD_SCHEMAS: "schemas"}[q]
         self.ops.append(op)
         if self.fail:
             raise plain_client.SupportUnavailable("http_503")
@@ -57,6 +57,8 @@ class FakePlain:
         if op == "labels":
             return {"labelTypes": {"pageInfo": {"hasNextPage": False, "endCursor": None},
                                    "edges": [{"node": {"id": "lt_1", "name": "Lab", "color": "#fff"}}]}}
+        if op == "schemas":
+            return {"threadFieldSchemas": {"pageInfo": {"hasNextPage": False, "endCursor": None}, "edges": []}}
         t = next(x for x in THREADS if x["id"] == variables["threadId"])
         return {"thread": {**t, "timelineEntries": {"pageInfo": {"hasNextPage": False, "endCursor": None},
                                                     "edges": [{"node": ENTRY}]}}}
@@ -98,7 +100,8 @@ def test_list_dedupes_sorts_counts_and_declares_every_key(api):
     assert body["oldest_waiting_since"] == "2026-09-03T00:00:00.000Z"
     assert set(body["threads"][0]) == {"id", "ref", "title", "status", "priority", "labels", "assignee", "created_at",
                                        "updated_at", "preview", "waiting_since", "plain_url",
-                                       "assignee_id", "customer_plain_id", "label_refs"}
+                                       "assignee_id", "customer_plain_id", "label_refs", "status_detail",
+                                       "assignees", "tier", "fields", "customer"}
 
 
 def test_list_declares_new_thread_keys(api):
@@ -127,7 +130,9 @@ def test_detail_returns_thread_and_entries(api):
     assert set(body) == {"thread", "entries", "fetched_at", "stale"}
     assert body["thread"]["id"] == "th_b"
     assert body["entries"] == [{"id": "e1", "at": "2026-09-03T00:00:00.000Z", "kind": "chat", "author": "Kyle R",
-                                "author_kind": "customer", "internal": False, "subject": None, "text": "hello"}]
+                                "author_kind": "customer", "internal": False, "subject": None, "text": "hello",
+                                "author_avatar_url": None, "automated": False, "email_to": None, "email_from": None,
+                                "markdown": None, "event": None}]
 
 
 def test_foreign_or_unknown_thread_is_404_without_a_thread_query(api, monkeypatch):
@@ -265,3 +270,10 @@ def test_workspace_needs_a_seat_and_lists_active_teammates(api):
     body = client.get("/support/workspace").json()
     assert body == {"teammates": [{"plain_user_id": "u_1", "name": "Sam Parker", "email": "sam@accumark.example"}],
                     "label_types": [{"id": "lt_1", "name": "Lab", "color": "#fff"}]}
+
+
+def test_detail_declares_the_view_keys(api):
+    client, _ = api
+    body = client.get("/support/customers/wc:1/threads/th_b").json()
+    assert {"status_detail", "assignees", "tier", "fields", "customer"} <= set(body["thread"])
+    assert {"author_avatar_url", "automated", "email_to", "email_from", "markdown", "event"} <= set(body["entries"][0])

@@ -53,6 +53,8 @@ class Plain:
         if q == queries.LABEL_TYPES:
             return {"labelTypes": {"pageInfo": {"hasNextPage": False, "endCursor": None},
                                    "edges": [{"node": {"id": "lt_2", "name": "Shipping", "color": None}}]}}
+        if q == queries.THREAD_FIELD_SCHEMAS:
+            return {"threadFieldSchemas": {"pageInfo": {"hasNextPage": False, "endCursor": None}, "edges": []}}
         raise AssertionError(q)
 
     def mutate(self, m, variables):

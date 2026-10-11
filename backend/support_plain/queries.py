@@ -23,14 +23,33 @@ THREADS = """query CustomerThreads($customerIds: [ID!]!, $after: String) {
 }""" % _THREAD_FIELDS
 
 _ACTOR = """__typename
-        ... on UserActor { userId user { fullName } }
-        ... on CustomerActor { customer { fullName } }
+        ... on UserActor { userId user { fullName avatarUrl } }
+        ... on CustomerActor { customer { fullName avatarUrl } }
+        ... on SystemActor { systemId }
         ... on MachineUserActor { machineUser { fullName } }"""
+
+_DETAIL_FIELDS = """statusDetail { __typename
+        ... on ThreadStatusDetailWaitingForDuration { waitingUntil { iso8601 } }
+        ... on ThreadStatusDetailSnoozed { snoozedUntil { iso8601 } } }
+      assignedTo { ... on User { avatarUrl } }
+      additionalAssignees { __typename ... on User { id fullName avatarUrl } ... on MachineUser { id fullName } }
+      tier { name color }
+      threadFields { key stringValue numberValue booleanValue dateValue { iso8601 } }
+      customer { id fullName externalId avatarUrl email { email } company { name }
+        createdAt { iso8601 } updatedAt { iso8601 } }"""
+
+THREAD_FIELD_SCHEMAS = """query ThreadFieldSchemas($after: String) {
+  threadFieldSchemas(first: 100, after: $after) {
+    pageInfo { hasNextPage endCursor }
+    edges { node { key label order } }
+  }
+}"""
 
 # `text` is aliased per entry type: Plain declares it String on some and String! on others,
 # which GraphQL rejects as a field conflict in one selection.
 THREAD = """query Thread($threadId: ID!, $after: String) {
   thread(threadId: $threadId) {
+    %s
     %s
     timelineEntries(first: 100, after: $after) {
       pageInfo { hasNextPage endCursor }
@@ -40,7 +59,7 @@ THREAD = """query Thread($threadId: ID!, $after: String) {
         actor { %s }
         entry {
           __typename
-          ... on EmailEntry { subject textContent hasMoreTextContent fullTextContent from { name email } }
+          ... on EmailEntry { subject textContent hasMoreTextContent fullTextContent markdownContent hasMoreMarkdownContent fullMarkdownContent from { name email } to { name email } }
           ... on ChatEntry { chatText: text }
           ... on NoteEntry { noteText: text }
           ... on SlackMessageEntry { slackText: text }
@@ -55,7 +74,7 @@ THREAD = """query Thread($threadId: ID!, $after: String) {
       } }
     }
   }
-}""" % (_THREAD_FIELDS, _ACTOR)
+}""" % (_THREAD_FIELDS, _DETAIL_FIELDS, _ACTOR)
 
 USER_BY_EMAIL = """query UserByEmail($email: String!) {
   userByEmail(email: $email) { id fullName publicName email isDeleted }
@@ -75,7 +94,8 @@ LABEL_TYPES = """query LabelTypes($after: String) {
   }
 }"""
 
-ALL = frozenset({WORKSPACE, CUSTOMER_BY_EMAIL, THREADS, THREAD, USER_BY_EMAIL, USERS, LABEL_TYPES})
+ALL = frozenset({WORKSPACE, CUSTOMER_BY_EMAIL, THREADS, THREAD, USER_BY_EMAIL, USERS, LABEL_TYPES,
+                 THREAD_FIELD_SCHEMAS})
 
 _ERR = "error { message type code }"
 

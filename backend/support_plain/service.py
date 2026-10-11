@@ -119,7 +119,8 @@ def thread_detail(customer_key: str, thread_id: str, *, refresh: bool = False) -
     def load() -> dict[str, Any]:
         client = _client_factory()
         t, nodes = raw_timeline(client, thread_id)
-        return {"thread": threads.thread_item(t, _workspace(client)),
+        return {"thread": {**threads.thread_item(t, _workspace(client)),
+                           **threads.detail_extras(t, _field_schemas(client))},
                 "entries": threads.build_entries(nodes, (t.get("customer") or {}).get("fullName"))}
 
     stale = False
@@ -183,3 +184,13 @@ def raw_timeline(client, thread_id: str) -> tuple[dict, list[dict]]:
             break
         after = conn["pageInfo"]["endCursor"]
     return t, nodes[:rules.MAX_ENTRIES]
+
+
+def _field_schemas(client) -> list[dict]:
+    """Thread field labels; on failure the view falls back to keys (spec 5)."""
+    try:
+        schemas, _ = CACHE.get_or_load("fieldschemas", rules.PEOPLE_TTL,
+                                       lambda: paged(client, queries.THREAD_FIELD_SCHEMAS, "threadFieldSchemas"))
+        return schemas
+    except (SupportUnavailable, KeyError, TypeError):
+        return []
