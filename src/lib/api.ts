@@ -2714,10 +2714,13 @@ export async function createInstrument(
     headers: getBearerHeaders('application/json'),
     body: JSON.stringify(data),
   })
-  if (!response.ok) {
-    const err = await response.json().catch(() => null)
-    throw new Error(err?.detail || `Create instrument failed: ${response.status}`)
-  }
+  if (!response.ok)
+    throw new Error(
+      await extractErrorMessage(
+        response,
+        `Create instrument failed: ${response.status}`
+      )
+    )
   return response.json()
 }
 
@@ -2730,10 +2733,13 @@ export async function updateInstrument(
     headers: getBearerHeaders('application/json'),
     body: JSON.stringify(data),
   })
-  if (!response.ok) {
-    const err = await response.json().catch(() => null)
-    throw new Error(err?.detail || `Update instrument failed: ${response.status}`)
-  }
+  if (!response.ok)
+    throw new Error(
+      await extractErrorMessage(
+        response,
+        `Update instrument failed: ${response.status}`
+      )
+    )
   return response.json()
 }
 

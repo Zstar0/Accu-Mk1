@@ -1,9 +1,11 @@
 import { describe, it, expect, vi, afterEach } from 'vitest'
 import {
+  createInstrument,
   importReaderResults,
   listConsumables,
   putMethodConsumables,
   updateConsumable,
+  updateInstrument,
   updateMethod,
   updateWorksheet,
   updateWorksheetItem,
@@ -90,5 +92,45 @@ describe('endo v2 api client', () => {
   ])('%s surfaces the server reason', async (_name, call) => {
     stubFetch(409, { detail: 'Worksheet 5 is completed' })
     await expect(call()).rejects.toThrow('Worksheet 5 is completed')
+  })
+})
+
+describe('instrument create and update errors', () => {
+  it.each([
+    ['createInstrument', () => createInstrument({ name: 'Reader' })],
+    [
+      'updateInstrument',
+      () => updateInstrument(1, { serial_number: 'NX-1001' }),
+    ],
+  ])('%s surfaces the server reason', async (_name, call) => {
+    const detail = "serial number 'NX-1001' is already on 'Nexgen-MCS'"
+    stubFetch(409, { detail })
+    await expect(call()).rejects.toThrow(detail)
+  })
+
+  // pydantic's 422 detail is an array: the fallback, never [object Object].
+  it.each([
+    [
+      'createInstrument',
+      () => createInstrument({ name: 'Reader' }),
+      'Create instrument failed: 422',
+    ],
+    [
+      'updateInstrument',
+      () => updateInstrument(1, { serial_number: 'x'.repeat(101) }),
+      'Update instrument failed: 422',
+    ],
+  ])('%s reads a 422 array detail as the fallback', async (_n, call, msg) => {
+    stubFetch(422, {
+      detail: [
+        {
+          loc: ['body', 'serial_number'],
+          msg: 'String should have at most 100 characters',
+          type: 'string_too_long',
+        },
+      ],
+    })
+    await expect(call()).rejects.toThrow(msg)
+    await expect(call()).rejects.not.toThrow('[object Object]')
   })
 })

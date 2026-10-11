@@ -26,6 +26,8 @@ import {
   CardTitle,
 } from '@/components/ui/card'
 import { useUIStore } from '@/store/ui-store'
+import { MethodConsumablesSection } from './MethodConsumablesSection'
+import { MethodRunParamsSection } from './MethodRunParamsSection'
 import { toast } from 'sonner'
 import {
   updateMethod,
@@ -82,6 +84,12 @@ export function MethodPanel({ method, onUpdated, onSelectMethod }: MethodPanelPr
   const [actionBusy, setActionBusy] = useState(false)
 
   const locked = method.status !== 'draft'
+  // Endotoxin methods carry the consumables and run-parameter sections (spec
+  // 2026-10-10 6.5): a method covering an ENDO service (the spec 6.7 rule),
+  // or one that already holds endotoxin run parameters.
+  const isEndoMethod =
+    services.some(s => /ENDO/i.test(s.keyword ?? '')) ||
+    method.run_parameters?.endotoxin != null
   const predecessor =
     method.supersedes_id != null
       ? allMethods.find(m => m.id === method.supersedes_id) ?? null
@@ -822,6 +830,13 @@ export function MethodPanel({ method, onUpdated, onSelectMethod }: MethodPanelPr
           </div>
         )}
       </div>
+
+      {isEndoMethod && (
+        <>
+          <MethodConsumablesSection method={method} onUpdated={onUpdated} />
+          <MethodRunParamsSection method={method} onUpdated={onUpdated} />
+        </>
+      )}
 
       {/* Revision history section */}
       <div className="border-t pt-4">
