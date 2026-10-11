@@ -20,6 +20,7 @@ import type {
   AddToWorksheetPayload,
   WorksheetItemPatch,
   WorksheetWellFreeze,
+  WorksheetUpdate,
 } from '@/lib/api'
 import { useUIStore } from '@/store/ui-store'
 import { toast } from 'sonner'
@@ -43,6 +44,74 @@ function withTickStatus(
         ? 'in_progress'
         : 'ready',
   }
+}
+
+/** The worksheet page's cache entry (spec 2026-10-10 6.1). Under the
+ *  'worksheets-list' prefix on purpose, like BenchRunLog's: every worksheet
+ *  mutation already invalidates that prefix, so the page refreshes with the
+ *  flyout. It holds GET /worksheets/{id}, the only read that carries the
+ *  worksheet's endo method. */
+export function worksheetPageKey(worksheetId: number) {
+  return ['worksheets-list', 'page', worksheetId] as const
+}
+
+/** A PATCH's fields on a cached item, as the server will store them. */
+export function mergeItemPatch(
+  item: WorksheetItemRow,
+  data: WorksheetItemPatch
+): WorksheetItemRow {
+  return withTickStatus(data, {
+    ...item,
+    ...(data.prep_status !== undefined
+      ? { prep_status: data.prep_status }
+      : {}),
+    ...(data.instrument_uid !== undefined
+      ? { instrument_uid: data.instrument_uid || null }
+      : {}),
+    ...(data.instrument_id !== undefined
+      ? { instrument_id: data.instrument_id }
+      : {}),
+    ...(data.prep_weight_mg !== undefined
+      ? { prep_weight_mg: data.prep_weight_mg }
+      : {}),
+    ...(data.prep_volume_ml !== undefined
+      ? { prep_volume_ml: data.prep_volume_ml }
+      : {}),
+    ...(data.prep_target_mg_ml !== undefined
+      ? { prep_target_mg_ml: data.prep_target_mg_ml }
+      : {}),
+    ...(data.made !== undefined
+      ? {
+          made_at: data.made
+            ? (item.made_at ?? new Date().toISOString())
+            : null,
+        }
+      : {}),
+    ...(data.ran !== undefined
+      ? {
+          ran_at: data.ran ? (item.ran_at ?? new Date().toISOString()) : null,
+        }
+      : {}),
+    ...(data.prep_dilution_factor !== undefined
+      ? { prep_dilution_factor: data.prep_dilution_factor }
+      : {}),
+    // Endo worksheet v2 (spec 2026-10-10 3.7): the 2 mL prep inputs, the
+    // row's own cartridge and the reading.
+    ...(data.prep_form !== undefined ? { prep_form: data.prep_form } : {}),
+    ...(data.prep_water_ml !== undefined
+      ? { prep_water_ml: data.prep_water_ml }
+      : {}),
+    ...(data.prep_total_dilution !== undefined
+      ? { prep_total_dilution: data.prep_total_dilution }
+      : {}),
+    ...(data.prep_steps !== undefined ? { prep_steps: data.prep_steps } : {}),
+    ...(data.cartridge_type_id !== undefined
+      ? { cartridge_type_id: data.cartridge_type_id }
+      : {}),
+    ...(data.result_reading !== undefined
+      ? { result_reading: data.result_reading }
+      : {}),
+  })
 }
 
 export function useWorksheetDrawer() {
@@ -102,12 +171,7 @@ export function useWorksheetDrawer() {
       data,
     }: {
       worksheetId: number
-      data: {
-        title?: string
-        assigned_analyst?: number
-        notes?: string
-        bench_config?: Record<string, unknown>
-      }
+      data: WorksheetUpdate
     }) => updateWorksheet(worksheetId, data),
     onSuccess: () =>
       queryClient.invalidateQueries({ queryKey: ['worksheets-list'] }),
@@ -191,86 +255,50 @@ export function useWorksheetDrawer() {
     // of the burst settles (a refetch mid-burst returns server state without
     // the ticks still in flight and wipes their checkmarks).
     onMutate: async ({ worksheetId, itemId, data }) => {
-      await queryClient.cancelQueries({ queryKey: ['worksheets-list', 'open'] })
+      const pageKey = worksheetPageKey(worksheetId)
+      await Promise.all([
+        queryClient.cancelQueries({ queryKey: ['worksheets-list', 'open'] }),
+        queryClient.cancelQueries({ queryKey: pageKey }),
+      ])
       const previous = queryClient.getQueryData<WorksheetListItem[]>([
         'worksheets-list',
         'open',
       ])
+      const page = queryClient.getQueryData<WorksheetListItem>(pageKey)
+      const patched = (ws: WorksheetListItem): WorksheetListItem => ({
+        ...ws,
+        items: ws.items.map(it =>
+          it.id !== itemId ? it : mergeItemPatch(it, data)
+        ),
+      })
       if (previous) {
         queryClient.setQueryData<WorksheetListItem[]>(
           ['worksheets-list', 'open'],
-          previous.map(ws =>
-            ws.id !== worksheetId
-              ? ws
-              : {
-                  ...ws,
-                  items: ws.items.map(it =>
-                    it.id !== itemId
-                      ? it
-                      : withTickStatus(data, {
-                          ...it,
-                          ...(data.prep_status !== undefined
-                            ? { prep_status: data.prep_status }
-                            : {}),
-                          ...(data.instrument_uid !== undefined
-                            ? { instrument_uid: data.instrument_uid || null }
-                            : {}),
-                          ...(data.instrument_id !== undefined
-                            ? { instrument_id: data.instrument_id }
-                            : {}),
-                          ...(data.prep_weight_mg !== undefined
-                            ? { prep_weight_mg: data.prep_weight_mg }
-                            : {}),
-                          ...(data.prep_volume_ml !== undefined
-                            ? { prep_volume_ml: data.prep_volume_ml }
-                            : {}),
-                          ...(data.prep_target_mg_ml !== undefined
-                            ? { prep_target_mg_ml: data.prep_target_mg_ml }
-                            : {}),
-                          ...(data.made !== undefined
-                            ? {
-                                made_at: data.made
-                                  ? (it.made_at ?? new Date().toISOString())
-                                  : null,
-                              }
-                            : {}),
-                          ...(data.ran !== undefined
-                            ? {
-                                ran_at: data.ran
-                                  ? (it.ran_at ?? new Date().toISOString())
-                                  : null,
-                              }
-                            : {}),
-                          ...(data.prep_dilution_factor !== undefined
-                            ? {
-                                prep_dilution_factor: data.prep_dilution_factor,
-                              }
-                            : {}),
-                        })
-                  ),
-                }
-          )
+          previous.map(ws => (ws.id !== worksheetId ? ws : patched(ws)))
         )
       }
-      const previousItem = previous
-        ?.find(ws => ws.id === worksheetId)
-        ?.items.find(it => it.id === itemId)
+      // The worksheet page (endo) reads its own entry: patch it the same way.
+      if (page)
+        queryClient.setQueryData<WorksheetListItem>(pageKey, patched(page))
+      const previousItem = (
+        previous?.find(ws => ws.id === worksheetId) ?? page
+      )?.items.find(it => it.id === itemId)
       return { previousItem }
     },
     onError: (err, { worksheetId, itemId }, context) => {
       const before = context?.previousItem
       if (before) {
+        const restored = (ws: WorksheetListItem): WorksheetListItem => ({
+          ...ws,
+          items: ws.items.map(it => (it.id === itemId ? before : it)),
+        })
         queryClient.setQueryData<WorksheetListItem[]>(
           ['worksheets-list', 'open'],
-          list =>
-            list?.map(ws =>
-              ws.id !== worksheetId
-                ? ws
-                : {
-                    ...ws,
-                    items: ws.items.map(it => (it.id === itemId ? before : it)),
-                  }
-            )
+          list => list?.map(ws => (ws.id !== worksheetId ? ws : restored(ws)))
+        )
+        queryClient.setQueryData<WorksheetListItem>(
+          worksheetPageKey(worksheetId),
+          ws => (ws ? restored(ws) : ws)
         )
       }
       toast.error(err instanceof Error ? err.message : 'Update item failed')
