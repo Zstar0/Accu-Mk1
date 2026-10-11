@@ -27,13 +27,14 @@ ENTRY = {"id": "e1", "timestamp": {"iso8601": "2026-09-03T00:00:00.000Z"},
 
 
 class FakePlain:
-    def __init__(self, fail=False):
-        self.fail, self.ops = fail, []
+    def __init__(self, fail=False, extras_fail=False):
+        self.fail, self.ops, self.extras_fail = fail, [], extras_fail
 
     def query(self, q, variables=None):
         op = {queries.WORKSPACE: "ws", queries.CUSTOMER_BY_EMAIL: "cust", queries.THREADS: "threads",
               queries.THREAD: "thread", queries.USER_BY_EMAIL: "user", queries.USERS: "users",
-              queries.LABEL_TYPES: "labels", queries.THREAD_FIELD_SCHEMAS: "schemas"}[q]
+              queries.LABEL_TYPES: "labels", queries.THREAD_FIELD_SCHEMAS: "schemas",
+              getattr(queries, "THREAD_EXTRAS", "_none_"): "extras"}[q]
         self.ops.append(op)
         if self.fail:
             raise plain_client.SupportUnavailable("http_503")
@@ -57,6 +58,11 @@ class FakePlain:
         if op == "labels":
             return {"labelTypes": {"pageInfo": {"hasNextPage": False, "endCursor": None},
                                    "edges": [{"node": {"id": "lt_1", "name": "Lab", "color": "#fff"}}]}}
+        if op == "extras":
+            if self.extras_fail:
+                raise plain_client.SupportUnavailable("graphql_errors")
+            t = next(x for x in THREADS if x["id"] == variables["threadId"])
+            return {"thread": {**t, "tier": {"name": "Regular Support", "color": "#00f"}}}
         if op == "schemas":
             return {"threadFieldSchemas": {"pageInfo": {"hasNextPage": False, "endCursor": None}, "edges": []}}
         t = next(x for x in THREADS if x["id"] == variables["threadId"])
@@ -277,3 +283,19 @@ def test_detail_declares_the_view_keys(api):
     body = client.get("/support/customers/wc:1/threads/th_b").json()
     assert {"status_detail", "assignees", "tier", "fields", "customer"} <= set(body["thread"])
     assert {"author_avatar_url", "automated", "email_to", "email_from", "markdown", "event"} <= set(body["entries"][0])
+
+
+def test_sidebar_extras_come_from_their_own_query(api):
+    client, fake = api
+    body = client.get("/support/customers/wc:1/threads/th_b").json()
+    assert "extras" in fake["plain"].ops and body["thread"]["tier"] == {"name": "Regular Support", "color": "#00f"}
+
+
+def test_extras_failure_degrades_to_placeholders(api):
+    client, fake = api
+    fake["plain"] = FakePlain(extras_fail=True)
+    r = client.get("/support/customers/wc:1/threads/th_b")
+    assert r.status_code == 200
+    t = r.json()["thread"]
+    assert t["tier"] is None and t["fields"] == [] and t["status_detail"]["kind"] == "needs_next_response"
+    assert r.json()["entries"]  # the conversation still loads

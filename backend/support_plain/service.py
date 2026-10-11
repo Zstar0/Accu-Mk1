@@ -120,7 +120,7 @@ def thread_detail(customer_key: str, thread_id: str, *, refresh: bool = False) -
         client = _client_factory()
         t, nodes = raw_timeline(client, thread_id)
         return {"thread": {**threads.thread_item(t, _workspace(client)),
-                           **threads.detail_extras(t, _field_schemas(client))},
+                           **threads.detail_extras(_thread_extras(client, thread_id) or t, _field_schemas(client))},
                 "entries": threads.build_entries(nodes, (t.get("customer") or {}).get("fullName"))}
 
     stale = False
@@ -194,3 +194,12 @@ def _field_schemas(client) -> list[dict]:
         return schemas
     except (SupportUnavailable, KeyError, TypeError):
         return []
+
+
+def _thread_extras(client, thread_id: str) -> dict | None:
+    """Sidebar data (spec 3.1). None on any failure: the sidebar falls back to what the timeline query has."""
+    try:
+        return client.query(queries.THREAD_EXTRAS, {"threadId": thread_id})["thread"]
+    except (SupportUnavailable, KeyError, TypeError):
+        logger.warning("support_plain.extras_unavailable")
+        return None

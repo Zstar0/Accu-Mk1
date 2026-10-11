@@ -141,3 +141,12 @@ def test_events_are_structured_and_text_is_unchanged():
                   {"icon": "assign", "actor": "Plain", "text": "assigned Forrest Parker"},
                   {"icon": "priority", "actor": "Lauren Hamilton", "text": "set priority to High"}]
     assert threads.build_entries(nodes, "C")[0]["text"] == "Marked done by Lauren Hamilton"
+
+
+def test_inline_data_images_are_stripped_from_markdown():
+    e = threads.build_entries([_node(
+        {"__typename": "EmailEntry", "subject": "s", "textContent": "Hi", "hasMoreTextContent": False,
+         "markdownContent": "Hi\n\n![logo](data:image/png;base64,AAAA)\n![](data:image/gif;base64,BB)\n[site](https://x)",
+         "hasMoreMarkdownContent": False, "from": {"email": "a@x"}, "to": {"email": "b@x"}},
+        {"__typename": "UserActor", "userId": "u", "user": {"fullName": "L"}})], "C")[0]
+    assert "data:image" not in e["markdown"] and "[site](https://x)" in e["markdown"]

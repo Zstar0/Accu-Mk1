@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import logging
+import re
 from typing import Any
 
 from support_plain import rules
@@ -56,6 +57,8 @@ _DETAIL = {
 _BY_STATUS = {"TODO": ("needs_next_response", "Needs next response"), "SNOOZED": ("waiting", "Waiting"),
               "DONE": ("done", "Done")}
 WP_PROFILE = "https://accumarklabs.com/wp-admin/user-edit.php?user_id={}"
+# Inline images arrive as data URIs; the sanitizer drops <img>, leaving "!alt" links, and they bloat every response.
+_DATA_IMAGE = re.compile(r"!\[[^\]]*\]\(data:[^)]*\)\n?")
 
 
 def status_detail(t: dict) -> dict[str, Any]:
@@ -215,7 +218,8 @@ def _entry(node: dict, customer_name: str | None) -> dict[str, Any] | None:
         md = e.get("fullMarkdownContent") if e.get("hasMoreMarkdownContent") and e.get("fullMarkdownContent") else e.get("markdownContent")
         frm = e.get("from") or {}
         return {**base, "kind": "email", "author": who or frm.get("name") or frm.get("email"),
-                "subject": e.get("subject"), "text": text or "", "markdown": md or None, "automated": bot,
+                "subject": e.get("subject"), "text": text or "",
+                "markdown": _DATA_IMAGE.sub("", md).strip() or None if md else None, "automated": bot,
                 "email_to": _fmt(e.get("to")), "email_from": _fmt(frm)}
     if typ == "CustomEntry":  # website contact form, posted by our machine user on the customer's behalf
         text = "\n".join(c["text"] for c in e.get("components") or [] if c.get("text"))

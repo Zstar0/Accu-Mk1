@@ -28,15 +28,24 @@ _ACTOR = """__typename
         ... on SystemActor { systemId }
         ... on MachineUserActor { machineUser { fullName } }"""
 
-_DETAIL_FIELDS = """statusDetail { __typename
+_DETAIL_FIELDS = """id status
+      statusDetail { __typename
         ... on ThreadStatusDetailWaitingForDuration { waitingUntil { iso8601 } }
         ... on ThreadStatusDetailSnoozed { snoozedUntil { iso8601 } } }
-      assignedTo { ... on User { avatarUrl } }
+      assignedTo { __typename ... on User { id fullName avatarUrl } ... on MachineUser { id fullName } }
       additionalAssignees { __typename ... on User { id fullName avatarUrl } ... on MachineUser { id fullName } }
       tier { name color }
       threadFields { key stringValue numberValue booleanValue dateValue { iso8601 } }
       customer { id fullName externalId avatarUrl email { email } company { name }
         createdAt { iso8601 } updatedAt { iso8601 } }"""
+
+# Sidebar-only fields in their own query: if the key lacks a permission (tier, company, thread fields),
+# only the sidebar degrades; the conversation and every write keep working.
+THREAD_EXTRAS = """query ThreadExtras($threadId: ID!) {
+  thread(threadId: $threadId) {
+    %s
+  }
+}""" % _DETAIL_FIELDS
 
 THREAD_FIELD_SCHEMAS = """query ThreadFieldSchemas($after: String) {
   threadFieldSchemas(first: 100, after: $after) {
@@ -49,7 +58,6 @@ THREAD_FIELD_SCHEMAS = """query ThreadFieldSchemas($after: String) {
 # which GraphQL rejects as a field conflict in one selection.
 THREAD = """query Thread($threadId: ID!, $after: String) {
   thread(threadId: $threadId) {
-    %s
     %s
     timelineEntries(first: 100, after: $after) {
       pageInfo { hasNextPage endCursor }
@@ -74,7 +82,7 @@ THREAD = """query Thread($threadId: ID!, $after: String) {
       } }
     }
   }
-}""" % (_THREAD_FIELDS, _DETAIL_FIELDS, _ACTOR)
+}""" % (_THREAD_FIELDS, _ACTOR)
 
 USER_BY_EMAIL = """query UserByEmail($email: String!) {
   userByEmail(email: $email) { id fullName publicName email isDeleted }
@@ -95,7 +103,7 @@ LABEL_TYPES = """query LabelTypes($after: String) {
 }"""
 
 ALL = frozenset({WORKSPACE, CUSTOMER_BY_EMAIL, THREADS, THREAD, USER_BY_EMAIL, USERS, LABEL_TYPES,
-                 THREAD_FIELD_SCHEMAS})
+                 THREAD_FIELD_SCHEMAS, THREAD_EXTRAS})
 
 _ERR = "error { message type code }"
 
