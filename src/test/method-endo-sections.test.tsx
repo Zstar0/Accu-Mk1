@@ -204,6 +204,67 @@ describe('MethodConsumablesSection', () => {
       await screen.findByText(/Create a new revision instead/)
     ).toBeInTheDocument()
   })
+  // A dropped retired default leaves the kind with active links: the first
+  // of them takes the default, so the kind never ends up without one.
+  it('gives the default to the first active link when a retired default is dropped', async () => {
+    const user = userEvent.setup()
+    vi.mocked(getMethodConsumables).mockResolvedValue([
+      {
+        consumable_type_id: 3,
+        kind: 'endo_cartridge',
+        is_default: true,
+        name: 'Endosafe old',
+        specs: { sensitivity_eu_ml: 0.02 },
+        active: false,
+      },
+      {
+        consumable_type_id: 1,
+        kind: 'endo_cartridge',
+        is_default: false,
+        name: 'Endosafe 0.05',
+        specs: { sensitivity_eu_ml: 0.05 },
+        active: true,
+      },
+    ])
+    render(<MethodConsumablesSection method={method()} onUpdated={vi.fn()} />)
+    await user.click(await screen.findByLabelText('Remove Endosafe old'))
+    await waitFor(() =>
+      expect(putMethodConsumables).toHaveBeenLastCalledWith(7, [
+        { consumable_type_id: 1, is_default: true },
+      ])
+    )
+  })
+
+  // A replace-set PUT built from an unloaded list would delete the method's
+  // real links: no edit control until the links GET succeeds.
+  it('offers no edits and sends nothing when the links fail to load', async () => {
+    vi.mocked(getMethodConsumables).mockRejectedValue(
+      new Error('Get method consumables failed: 500')
+    )
+    render(<MethodConsumablesSection method={method()} onUpdated={vi.fn()} />)
+    expect(
+      await screen.findByText('Get method consumables failed: 500')
+    ).toBeInTheDocument()
+    expect(screen.queryByLabelText('Add Endotoxin cartridge')).toBeNull()
+    expect(screen.queryByRole('combobox')).toBeNull()
+    expect(putMethodConsumables).not.toHaveBeenCalled()
+  })
+
+  it('on an issued method, a failed load is not read as no consumables', async () => {
+    vi.mocked(getMethodConsumables).mockRejectedValue(
+      new Error('Get method consumables failed: 500')
+    )
+    render(
+      <MethodConsumablesSection
+        method={method({ status: 'active' })}
+        onUpdated={vi.fn()}
+      />
+    )
+    expect(
+      await screen.findByText('Get method consumables failed: 500')
+    ).toBeInTheDocument()
+    expect(screen.queryByText('No consumables linked.')).toBeNull()
+  })
 })
 
 describe('MethodRunParamsSection', () => {

@@ -12,15 +12,10 @@ import {
   type MethodConsumableLink,
 } from '@/lib/api'
 
-interface LinkWire {
-  consumable_type_id: number
-  is_default: boolean
-}
-
-const wire = (l: MethodConsumableLink): LinkWire => ({
-  consumable_type_id: l.consumable_type_id,
-  is_default: l.is_default,
-})
+type LinkDraft = Pick<
+  MethodConsumableLink,
+  'consumable_type_id' | 'kind' | 'is_default'
+>
 
 /** "0.05 EU/mL": a type's numbers as its kind labels them. */
 function specText(
@@ -44,6 +39,8 @@ function specText(
  * Same replace-set idiom as Covered Services; names come from the catalog.
  * A revision also copies links to types retired since, which the server
  * refuses (400 "is retired"): they are flagged and left out of every save.
+ * Nothing is editable until the links have loaded: the PUT replaces the set,
+ * so one built from an empty or stale list would delete the real links.
  */
 export function MethodConsumablesSection({
   method,
@@ -58,18 +55,49 @@ export function MethodConsumablesSection({
   const [kinds, setKinds] = useState<ConsumableKind[]>([])
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  const [loaded, setLoaded] = useState(false)
 
   useEffect(() => {
-    getMethodConsumables(method.id).then(setLinks).catch(console.error)
-    listConsumables().then(setCatalog).catch(console.error)
-    listConsumableKinds().then(setKinds).catch(console.error)
+    let ignore = false
+    getMethodConsumables(method.id)
+      .then(rows => {
+        if (ignore) return
+        setLinks(rows)
+        setLoaded(true)
+      })
+      .catch(err => {
+        if (!ignore)
+          setError(
+            err instanceof Error ? err.message : 'Failed to load consumables'
+          )
+      })
+    listConsumables()
+      .then(rows => !ignore && setCatalog(rows))
+      .catch(console.error)
+    listConsumableKinds()
+      .then(rows => !ignore && setKinds(rows))
+      .catch(console.error)
+    return () => {
+      ignore = true
+    }
   }, [method.id])
 
   // The server refuses a referenced draft too (409): its reason shows here.
-  async function save(next: LinkWire[]) {
+  async function save(next: LinkDraft[]) {
+    // A kind whose retired default is dropped keeps a default when it still
+    // has links: the first of them, unless the save already names one.
+    const orphaned = links.filter(l => retired(l) && l.is_default)
+    const body = next.map((l, i) => ({
+      consumable_type_id: l.consumable_type_id,
+      is_default:
+        l.is_default ||
+        (orphaned.some(o => o.kind === l.kind) &&
+          !next.some(n => n.kind === l.kind && n.is_default) &&
+          next.findIndex(n => n.kind === l.kind) === i),
+    }))
     setBusy(true)
     try {
-      setLinks(await putMethodConsumables(method.id, next))
+      setLinks(await putMethodConsumables(method.id, body))
       setError(null)
       onUpdated()
     } catch (err) {
@@ -93,7 +121,7 @@ export function MethodConsumablesSection({
         <h4 className="text-sm font-semibold text-muted-foreground">
           Consumables ({links.length})
         </h4>
-        {busy && (
+        {(busy || (!loaded && !error)) && (
           <Loader2 className="h-4 w-4 animate-spin text-muted-foreground" />
         )}
         {locked && (
@@ -108,12 +136,12 @@ export function MethodConsumablesSection({
           {error}
         </div>
       )}
-      {!locked && kept.length < links.length && (
+      {!locked && loaded && kept.length < links.length && (
         <p className="mb-3 text-xs text-muted-foreground">
           Retired types are dropped on the next save.
         </p>
       )}
-      {locked && links.length === 0 ? (
+      {!loaded ? null : locked && links.length === 0 ? (
         <p className="text-sm text-muted-foreground">No consumables linked.</p>
       ) : (
         <div className="space-y-3">
@@ -172,7 +200,7 @@ export function MethodConsumablesSection({
                               onChange={() =>
                                 save(
                                   kept.map(l => ({
-                                    consumable_type_id: l.consumable_type_id,
+                                    ...l,
                                     is_default:
                                       l.kind === kind.key
                                         ? l.consumable_type_id ===
@@ -192,13 +220,11 @@ export function MethodConsumablesSection({
                             className="rounded p-0.5 text-muted-foreground transition-colors hover:text-destructive"
                             onClick={() =>
                               save(
-                                kept
-                                  .filter(
-                                    l =>
-                                      l.consumable_type_id !==
-                                      link.consumable_type_id
-                                  )
-                                  .map(wire)
+                                kept.filter(
+                                  l =>
+                                    l.consumable_type_id !==
+                                    link.consumable_type_id
+                                )
                               )
                             }
                           >
@@ -218,13 +244,16 @@ export function MethodConsumablesSection({
                     onChange={e => {
                       const id = Number(e.target.value)
                       e.target.value = ''
-                      // The first type of a kind becomes its default.
+                      // A kind with no default gives it to the added type.
                       if (id)
                         save([
-                          ...kept.map(wire),
+                          ...kept,
                           {
                             consumable_type_id: id,
-                            is_default: !kept.some(l => l.kind === kind.key),
+                            kind: kind.key,
+                            is_default: !kept.some(
+                              l => l.kind === kind.key && l.is_default
+                            ),
                           },
                         ])
                     }}
