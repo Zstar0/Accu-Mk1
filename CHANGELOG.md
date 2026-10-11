@@ -1,5 +1,13 @@
 # Changelog
 
+## v1.45.0 - 2026-10-11
+
+### Support tickets look and work like Plain
+- **Two columns:** the conversation on the left and Plain's details sidebar on the right, in Plain's colors (light and dark follow Mk1's theme). The slide-out opens wider and remembers its own width; on a narrow window the details fold behind a Details button.
+- **Easier to follow:** team replies, customer messages and internal notes each have their own card, notes say who they are hidden from, automatic replies are collapsed, status and label changes are one-line events, and days are separated. Oldest first, scrolled to the latest.
+- **Action bar like Plain's:** Reply (R), Add note (N) and More (mark done, waiting for customer, snooze, back to todo). Esc closes the composer and keeps the draft.
+- **Details sidebar:** status in Plain's words (including Waiting for customer), assignee plus additional assignees you can add or remove, priority, labels, tier, the thread fields (WP user, orders, spent, sales rep and the rest), customer details with a link to their WordPress profile, and the customer's other tickets.
+
 ## v1.44.0 - 2026-10-10
 
 ### Answer and manage support tickets from Mk1
