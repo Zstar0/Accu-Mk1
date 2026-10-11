@@ -62,7 +62,7 @@ from sla_perf import (  # noqa: E402
     build_sla_performance,
 )
 from models import AuditLog, Settings, Job, Sample, Result, Instrument, AnalysisService, AnalysisServiceSpec, HplcMethod, Peptide, PeptideAnalyte, CalibrationCurve, HPLCAnalysis, User, SharePointFileCache, WizardSession, WizardMeasurement, peptide_methods, blend_components, ServiceGroup, service_group_members, SamplePriority, Worksheet, WorksheetItem, WorksheetNote, instrument_methods, SampleAnalyteAlias, SlaTier, SlaPriorityTier, BusinessHoursConfig, LabHoliday, LimsSample, LimsSampleRemark, LimsSubSample, LimsBox, FlagType, LimsParentAttachment, MethodAttachment, method_services, LimsOrder
-from models import ConsumableType  # endo worksheet v2
+from models import ConsumableType, method_consumables  # endo worksheet v2
 from catalog.change_log import apply_and_log, log_create, log_delete, log_members
 from auth import (
     get_current_user, require_admin, create_access_token,
@@ -3214,7 +3214,7 @@ COA_ARCHETYPES = {"limit_table", LEGACY_HPLC_ARCHETYPE}
 # method content). Corrections go through new-revision instead.
 METHOD_LOCKED_FIELDS = ("name", "code", "technique", "reference", "procedure_summary",
                         "size_peptide", "starting_organic_pct", "temperature_mct_c",
-                        "dissolution")
+                        "dissolution", "run_parameters")
 
 # catalog/change_log.py log_create field list for method create/new-revision —
 # the identity + lifecycle columns worth an audit snapshot at mint time.
@@ -3403,6 +3403,8 @@ class MethodUpdate(BaseModel):
     dissolution: Optional[str] = None
     notes: Optional[str] = None
     active: Optional[bool] = None
+    # Endo worksheet v2: validated by catalog/method_run_params.py; null clears.
+    run_parameters: Optional[dict] = None
 
 
 class PeptideBrief(BaseModel):
@@ -3479,6 +3481,7 @@ class MethodResponse(BaseModel):
     updated_at: datetime
     common_peptides: list[PeptideBrief] = []
     services: list[MethodServiceOut] = []
+    run_parameters: Optional[dict] = None
 
     class Config:
         from_attributes = True
@@ -5053,6 +5056,13 @@ async def update_method(method_id: int, data: MethodUpdate, db: Session = Depend
                 409, f"method '{method.name}' rev {method.revision} is issued — "
                      f"locked fields: {', '.join(offending)}; create a new revision instead")
 
+    if "run_parameters" in fields:
+        from catalog.method_run_params import validate_run_parameters
+        try:
+            fields["run_parameters"] = validate_run_parameters(fields["run_parameters"])
+        except ValueError as e:
+            raise HTTPException(400, str(e))
+
     instrument_ids = fields.pop("instrument_ids", None)
 
     from catalog.change_log import apply_and_log
@@ -5167,6 +5177,88 @@ async def put_method_services(method_id: int, links: list[MethodServiceLinkIn],
     return _method_service_rows(db, method_id)
 
 
+class MethodConsumableLinkIn(BaseModel):
+    consumable_type_id: int
+    is_default: bool = False
+
+
+class MethodConsumableOut(BaseModel):
+    consumable_type_id: int
+    kind: str
+    name: str
+    specs: dict
+    active: bool
+    is_default: bool
+
+
+def _method_consumable_rows(db: Session, method_id: int) -> list[MethodConsumableOut]:
+    rows = db.execute(
+        select(method_consumables.c.consumable_type_id, method_consumables.c.kind,
+               ConsumableType.name, ConsumableType.specs, ConsumableType.active,
+               method_consumables.c.is_default)
+        .join(ConsumableType, ConsumableType.id == method_consumables.c.consumable_type_id)
+        .where(method_consumables.c.method_id == method_id)
+        .order_by(method_consumables.c.kind, ConsumableType.name)
+    ).all()
+    return [MethodConsumableOut(consumable_type_id=r[0], kind=r[1], name=r[2], specs=r[3],
+                                active=r[4], is_default=r[5]) for r in rows]
+
+
+@app.get("/hplc/methods/{method_id}/consumables", response_model=list[MethodConsumableOut])
+async def get_method_consumables(method_id: int, db: Session = Depends(get_db),
+                                 _current_user=Depends(get_current_user)):
+    if not db.get(HplcMethod, method_id):
+        raise HTTPException(404, f"Method {method_id} not found")
+    return _method_consumable_rows(db, method_id)
+
+
+@app.put("/hplc/methods/{method_id}/consumables", response_model=list[MethodConsumableOut])
+async def put_method_consumables(method_id: int, links: list[MethodConsumableLinkIn],
+                                 db: Session = Depends(get_db),
+                                 current_user=Depends(get_current_user)):
+    """Replace-set (the put_method_services precedent) on DRAFT methods only:
+    a method's allowed consumables change only through a new revision (Handler
+    ruling 2026-10-10). Each type must exist and be active; the link's kind is
+    copied from the type, never sent; at most one default per kind."""
+    method = db.get(HplcMethod, method_id)
+    if not method:
+        raise HTTPException(404, f"Method {method_id} not found")
+    if method.status != "draft":
+        raise HTTPException(
+            409, f"method '{method.name}' rev {method.revision} is {method.status}; consumables "
+                 f"change only on a draft. Create a new revision instead")
+    picked: list[tuple[ConsumableType, bool]] = []
+    defaults: dict[str, int] = {}
+    for ln in links:
+        if any(t.id == ln.consumable_type_id for t, _ in picked):
+            raise HTTPException(400, f"consumable type {ln.consumable_type_id} listed twice")
+        t = db.get(ConsumableType, ln.consumable_type_id)
+        if t is None:
+            raise HTTPException(400, f"consumable type {ln.consumable_type_id} not found")
+        if not t.active:
+            raise HTTPException(400, f"consumable type '{t.name}' is retired")
+        if ln.is_default:
+            if t.kind in defaults:
+                raise HTTPException(400, f"more than one default {t.kind}")
+            defaults[t.kind] = t.id
+        picked.append((t, ln.is_default))
+    before = db.execute(select(method_consumables.c.consumable_type_id, method_consumables.c.is_default)
+                        .where(method_consumables.c.method_id == method_id)).all()
+    db.execute(method_consumables.delete().where(method_consumables.c.method_id == method_id))
+    for t, is_default in picked:
+        db.execute(method_consumables.insert().values(
+            method_id=method_id, consumable_type_id=t.id, kind=t.kind, is_default=is_default))
+    # Two fields, so a change of default alone is still logged.
+    user_id = getattr(current_user, "id", None)
+    log_members(db, entity_type="method", entity_pk=method_id, user_id=user_id, field="consumables",
+                before_ids=sorted(r[0] for r in before), after_ids=sorted(t.id for t, _ in picked))
+    log_members(db, entity_type="method", entity_pk=method_id, user_id=user_id,
+                field="consumable_defaults", before_ids=sorted(r[0] for r in before if r[1]),
+                after_ids=sorted(defaults.values()))
+    db.commit()
+    return _method_consumable_rows(db, method_id)
+
+
 # ─── Methods controlled documents (slice 3): lifecycle verbs ───
 #
 # R4/R10: revision = new row, issued content never changes in place. Corrections
@@ -5182,7 +5274,9 @@ async def new_method_revision(method_id: int, db: Session = Depends(get_db),
     (400 from draft — a draft is already editable in place). Clones all
     content fields + department_id + notes, method_services links (is_default
     reset to False — defaults only move at activation, R11), and instrument
-    links. Never copies senaite_id (R0; also globally unique)."""
+    links. Never copies senaite_id (R0; also globally unique). Endo worksheet
+    v2: also run_parameters, and method_consumables WITH is_default (a
+    consumable default belongs to this method alone, so it cannot clash)."""
     src = db.get(HplcMethod, method_id)
     if not src:
         raise HTTPException(404, f"Method {method_id} not found")
@@ -5198,7 +5292,7 @@ async def new_method_revision(method_id: int, db: Session = Depends(get_db),
         starting_organic_pct=src.starting_organic_pct,
         temperature_mct_c=src.temperature_mct_c, dissolution=src.dissolution,
         notes=src.notes, origin="mk1", status="draft", active=False,
-        revision=max_rev + 1, supersedes_id=src.id,
+        revision=max_rev + 1, supersedes_id=src.id, run_parameters=src.run_parameters,
         # senaite_id deliberately NOT copied (R0; also unique)
     )
     clone.instruments = list(src.instruments)
@@ -5210,6 +5304,11 @@ async def new_method_revision(method_id: int, db: Session = Depends(get_db),
         db.execute(method_services.insert().values(
             method_id=clone.id, analysis_service_id=link.analysis_service_id,
             is_default=False))
+    for link in db.execute(select(method_consumables).where(
+            method_consumables.c.method_id == src.id)).all():
+        db.execute(method_consumables.insert().values(
+            method_id=clone.id, consumable_type_id=link.consumable_type_id,
+            kind=link.kind, is_default=link.is_default))
 
     from catalog.change_log import log_create
     log_create(db, clone, METHOD_LOG_FIELDS, entity_type="method",

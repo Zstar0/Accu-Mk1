@@ -89,6 +89,7 @@ WIRED_FUNCTIONS = [
     # Endo worksheet v2 (spec 2026-10-10 section 10): consumables catalog.
     "create_consumable",
     "update_consumable",
+    "put_method_consumables",
 ]
 
 LOG_CALL_NAMES = {"apply_and_log", "log_create", "log_delete", "log_members"}
