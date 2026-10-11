@@ -31,7 +31,7 @@ export interface EmbedRef {
   sha: string
 }
 
-const CODE_RE = /^[A-Z][A-Z0-9]{0,9}-\d{4,}$/
+const CODE_RE = /^(?=.{3,30}$)[A-Z0-9]+-[A-Z0-9-]+$/ // mirrors backend documents.service.CODE_RE
 const SHA_RE = /^[0-9a-f]{64}$/
 
 export function parseEmbedRef(hash: string): EmbedRef | null {
