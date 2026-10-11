@@ -768,6 +768,7 @@ describe("the reader's invalid verdict (contract rule; Dennis's case, calc.test.
   it('a failed reader test is invalid whatever the reading, and never reaches Mk1', () => {
     const reader: EndoReaderRecord = {
       test_id: 'T-1',
+      result: '<0.05',
       reader: null,
       slot: null,
       operator: null,
@@ -850,6 +851,17 @@ describe('calc.test.js:352 parseResult -> parseReading, keeping the <', () => {
     expect(parseReading('0')).toEqual({ lt: false, value: 0 })
     for (const bad of ['0,8', '-1', '<0', 'abc', ''])
       expect(parseReading(bad)).toBeNull()
+  })
+
+  it('RF2: at most 40 characters once trimmed, as the server (result_reading is varchar(40))', () => {
+    const at40 = '0.' + '0'.repeat(37) + '1'
+    const at41 = '0.' + '0'.repeat(38) + '1'
+    expect(at40).toHaveLength(40)
+    expect(at41).toHaveLength(41)
+    expect(parseReading(at40)).toEqual({ lt: false, value: 1e-38 })
+    expect(parseReading(at41)).toBeNull()
+    expect(parseReading(`  ${at40}  `)).toEqual({ lt: false, value: 1e-38 })
+    expect(parseReading('1'.repeat(400))).toBeNull() // would be Infinity
   })
 })
 

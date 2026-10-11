@@ -46,6 +46,8 @@ export interface EndoStepOverride {
 /** The reader's record for one test, stored as worksheet_items.result_reader. */
 export interface EndoReaderRecord {
   test_id: string
+  /** The reading exactly as the reader exported it (Task 15 compares a typed reading to it). */
+  result: string
   reader: string | null
   slot: number | null
   operator: string | null
@@ -474,12 +476,16 @@ export function prep2Check(s: EndoSample, ctx: EndoCtx): EndoCheck {
 /**
  * The reading as the instrument shows it: "0.8", "0", "<0.05" ("< 0.05" and
  * padding are fine). null for blank or anything else, including "<0", which
- * says nothing (spec 3.7). The "<" is carried through every derived value.
+ * says nothing (spec 3.7), and for more than 40 characters once trimmed (the
+ * column's width, as on the server). The "<" is carried through every derived
+ * value.
  */
 export function parseReading(
   text: string | null
 ): { lt: boolean; value: number } | null {
-  const m = /^(<)?(\d*\.?\d+)$/.exec((text ?? '').replace(/\s+/g, ''))
+  const t = (text ?? '').trim()
+  if (t.length > 40) return null // result_reading is varchar(40); the server's parse_reading refuses longer
+  const m = /^(<)?(\d*\.?\d+)$/.exec(t.replace(/\s+/g, ''))
   if (!m) return null
   const lt = m[1] === '<'
   const value = Number(m[2])
