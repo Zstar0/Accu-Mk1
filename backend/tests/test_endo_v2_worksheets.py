@@ -890,3 +890,15 @@ def test_import_refuses_pathological_values_with_400_and_writes_nothing(client, 
     assert (w.a.result_reading, w.a.result_reader, w.a.ran_at) == (None, None, None)
     assert w.ws.endo_method_id is None
     assert db.query(AuditLog).filter(AuditLog.operation.in_(_IMPORT_OPS)).count() == 0
+
+
+def test_import_keeps_the_record_as_the_reader_exported_it(client, db):
+    # Appendix A.0 item 5: `result` is the reading exactly as the reader showed
+    # it, so the page can flag a typed reading that differs. The row's reading
+    # is trimmed; the record is stored as sent.
+    w = _reader_world(client, db)
+    line = _line(w.a, " 0.8 ", w.c05)
+    line["record"]["result"] = " 0.8 "
+    assert _import(client, w.ws, line).status_code == 200
+    db.refresh(w.a)
+    assert (w.a.result_reading, w.a.result_reader["result"]) == ("0.8", " 0.8 ")
