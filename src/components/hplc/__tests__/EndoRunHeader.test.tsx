@@ -58,45 +58,53 @@ function renderHeader(
   return onUpdate
 }
 
-const picker = () => screen.getByLabelText('Run cartridge') as HTMLSelectElement
+const picker = () => screen.getByRole('combobox', { name: 'Run cartridge' })
+
+// Radix Select under jsdom: fireEvent, not userEvent (no hasPointerCapture),
+// as worksheet-apply-method.test.tsx does.
+async function open(trigger: HTMLElement) {
+  fireEvent.click(trigger)
+  return (await screen.findAllByRole('option')).map(o => o.textContent)
+}
+async function pick(trigger: HTMLElement, option: string) {
+  fireEvent.click(trigger)
+  fireEvent.click(await screen.findByRole('option', { name: option }))
+}
 
 describe('EndoRunHeader', () => {
-  it('switches the prep with one worksheet PUT', () => {
+  it('switches the prep with one worksheet PUT', async () => {
     const onUpdate = renderHeader()
-    fireEvent.change(screen.getByLabelText('Prep'), {
-      target: { value: 'stock' },
-    })
+    await pick(screen.getByRole('combobox', { name: 'Prep' }), '1 mg/mL stock')
     expect(onUpdate).toHaveBeenCalledWith({ endo_prep: 'stock' })
   })
 
-  it('offers the allowed cartridges under the method default and never saves on its own', () => {
+  it('offers the allowed cartridges under the method default and never saves on its own', async () => {
     const onUpdate = renderHeader()
-    expect(Array.from(picker().options).map(o => o.text)).toEqual([
+    expect(picker()).toHaveTextContent(/^Method default \(0\.05\)$/)
+    expect(await open(picker())).toEqual([
       'Method default (0.05)',
       '0.05 EU/mL',
       '0.01 EU/mL',
     ])
-    expect(picker().value).toBe('')
     expect(onUpdate).not.toHaveBeenCalled()
-    fireEvent.change(picker(), { target: { value: '2' } })
+    fireEvent.click(screen.getByRole('option', { name: '0.01 EU/mL' }))
     expect(onUpdate).toHaveBeenCalledWith({ cartridge_type_id: 2 })
   })
 
-  it('going back to the method default clears the run pick', () => {
+  it('going back to the method default clears the run pick', async () => {
     const onUpdate = renderHeader({
       cartridge_type_id: 2,
       cartridge_sensitivity_eu_ml: 0.01,
     })
-    fireEvent.change(picker(), { target: { value: '' } })
+    expect(picker()).toHaveTextContent(/^0\.01 EU\/mL$/)
+    await pick(picker(), 'Method default (0.05)')
     expect(onUpdate).toHaveBeenCalledWith({ cartridge_type_id: null })
   })
 
-  it('keeps a retired run cartridge visible', () => {
+  it('keeps a retired run cartridge visible', async () => {
     renderHeader({ cartridge_type_id: 4, cartridge_sensitivity_eu_ml: 0.02 })
-    expect(picker().value).toBe('4')
-    expect(
-      screen.getByRole('option', { name: '0.02 EU/mL (not in the list)' })
-    ).toBeInTheDocument()
+    expect(picker()).toHaveTextContent(/^0\.02 EU\/mL \(not in the list\)$/)
+    expect(await open(picker())).toContain('0.02 EU/mL (not in the list)')
   })
 
   it('names the method revision the numbers come from', () => {
@@ -106,8 +114,8 @@ describe('EndoRunHeader', () => {
 
   it('a stock run shows only the prep', () => {
     renderHeader({ endo_prep: 'stock' })
-    expect((screen.getByLabelText('Prep') as HTMLSelectElement).value).toBe(
-      'stock'
+    expect(screen.getByRole('combobox', { name: 'Prep' })).toHaveTextContent(
+      /^1 mg\/mL stock$/
     )
     expect(screen.queryByLabelText('Run cartridge')).toBeNull()
   })

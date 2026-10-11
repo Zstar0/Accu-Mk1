@@ -170,25 +170,45 @@ describe('Box 1 columns', () => {
   })
 })
 
+const formPicker = () =>
+  screen.getByRole('combobox', { name: 'Form the vial arrived in' })
+const cartridgePicker = () =>
+  screen.getByRole('combobox', { name: 'Cartridge for this sample' })
+
+// Radix Select under jsdom: fireEvent, not userEvent (no hasPointerCapture),
+// as worksheet-apply-method.test.tsx does.
+async function pick(trigger: HTMLElement, option: string) {
+  fireEvent.click(trigger)
+  fireEvent.click(await screen.findByRole('option', { name: option }))
+}
+
+/** TWO_ML with the row's own cartridge pick. */
+function withOwnCartridge(id: number, sensitivity: number): EndoTwoMl {
+  const item = {
+    ...ITEM,
+    cartridge_type_id: id,
+    cartridge_sensitivity_eu_ml: sensitivity,
+  }
+  return {
+    ...TWO_ML,
+    rows: [{ ...ROW, item, cartridge: { id, sensitivity } }],
+  }
+}
+
 describe('Box 1 on a 2 mL row', () => {
   it('shows the form, the water, the vial concentration and the cartridge with MVD and MVC', () => {
     renderTable({ items: [ITEM], prepModel: '2ml', twoMl: TWO_ML })
-    expect(
-      (screen.getByLabelText('Form the vial arrived in') as HTMLSelectElement)
-        .value
-    ).toBe('powder')
+    expect(formPicker()).toHaveTextContent(/^Lyophilized$/)
     expect(
       (screen.getByLabelText('Water (mL)') as HTMLInputElement).value
     ).toBe('2')
     expect(screen.getByText('5')).toBeInTheDocument() // 10 mg in 2 mL
     // Dennis's figures for 10 mg in 2 mL on the 0.05: MVD (350 / 2) / 0.05, MVC 0.05 x 10 / 350.
     expect(screen.getByText('MVD 3500× · MVC 0.0014')).toBeInTheDocument()
-    expect(
-      screen.getByRole('option', { name: 'run (0.05)' })
-    ).toBeInTheDocument()
+    expect(cartridgePicker()).toHaveTextContent(/^run \(0\.05\)$/)
   })
 
-  it('saves the form and the row cartridge through the item PATCH', () => {
+  it('saves the form and the row cartridge through the item PATCH', async () => {
     const onUpdateItem = vi.fn()
     renderTable({
       items: [ITEM],
@@ -196,13 +216,47 @@ describe('Box 1 on a 2 mL row', () => {
       twoMl: TWO_ML,
       onUpdateItem,
     })
-    fireEvent.change(screen.getByLabelText('Form the vial arrived in'), {
-      target: { value: 'liquid' },
-    })
+    await pick(formPicker(), 'Liquid (reconstituted)')
     expect(onUpdateItem).toHaveBeenCalledWith(10, { prep_form: 'liquid' })
-    fireEvent.change(screen.getByLabelText('Cartridge for this sample'), {
-      target: { value: '2' },
-    })
+    fireEvent.click(cartridgePicker())
+    expect(
+      (await screen.findAllByRole('option')).map(o => o.textContent)
+    ).toEqual(['run (0.05)', '0.05', '0.01'])
+    fireEvent.click(screen.getByRole('option', { name: '0.01' }))
     expect(onUpdateItem).toHaveBeenCalledWith(10, { cartridge_type_id: 2 })
+  })
+
+  it("sends null to go back to the run's cartridge, and keeps a retired pick visible", async () => {
+    const onUpdateItem = vi.fn()
+    const twoMl = withOwnCartridge(2, 0.01)
+    const view = renderTable({
+      items: [twoMl.rows[0]?.item ?? ITEM],
+      prepModel: '2ml',
+      twoMl,
+      onUpdateItem,
+    })
+    expect(cartridgePicker()).toHaveTextContent(/^0\.01$/)
+    await pick(cartridgePicker(), 'run (0.05)')
+    expect(onUpdateItem).toHaveBeenCalledWith(10, { cartridge_type_id: null })
+    view.unmount()
+
+    const retired = withOwnCartridge(4, 0.02)
+    renderTable({
+      items: [retired.rows[0]?.item ?? ITEM],
+      prepModel: '2ml',
+      twoMl: retired,
+    })
+    expect(cartridgePicker()).toHaveTextContent(/^0\.02 \(not in the list\)$/)
+  })
+
+  it('a completed run cannot change the form or the cartridge', () => {
+    renderTable({
+      items: [ITEM],
+      prepModel: '2ml',
+      twoMl: TWO_ML,
+      isCompleted: true,
+    })
+    expect(formPicker()).toBeDisabled()
+    expect(cartridgePicker()).toBeDisabled()
   })
 })

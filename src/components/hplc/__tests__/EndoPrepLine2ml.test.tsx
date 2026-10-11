@@ -43,6 +43,16 @@ function setup(ws: WorksheetListItem, item: WorksheetItemRow) {
   return { onUpdate, unmount }
 }
 
+const cartridgePicker = () =>
+  screen.getByRole('combobox', { name: 'Cartridge for this sample' })
+
+// Radix Select under jsdom: fireEvent, not userEvent (no hasPointerCapture),
+// as worksheet-apply-method.test.tsx does.
+async function pick(trigger: HTMLElement, option: string) {
+  fireEvent.click(trigger)
+  fireEvent.click(await screen.findByRole('option', { name: option }))
+}
+
 describe('EndoPrepLine on a mixed worksheet', () => {
   beforeEach(() => vi.clearAllMocks())
 
@@ -57,7 +67,7 @@ describe('EndoPrepLine on a mixed worksheet', () => {
       'placeholder',
       '250'
     )
-    expect(screen.getByText('0.05')).toBeInTheDocument()
+    expect(cartridgePicker()).toHaveTextContent(/^run \(0\.05\)$/)
     fireEvent.change(screen.getByLabelText('Water (mL)'), {
       target: { value: '3' },
     })
@@ -119,10 +129,13 @@ describe('EndoPrepLine on a mixed worksheet', () => {
     const method = base.endo_method
     if (!method) throw new Error('fixture has a method')
     setup({ ...base, endo_method: { ...method, cartridges: [] } }, item)
+    await waitFor(() =>
+      expect(listConsumables).toHaveBeenCalledWith({ kind: 'endo_cartridge' })
+    )
+    fireEvent.click(cartridgePicker())
     expect(
       await screen.findByRole('option', { name: '0.005' })
     ).toBeInTheDocument()
-    expect(listConsumables).toHaveBeenCalledWith({ kind: 'endo_cartridge' })
   })
 
   it('shows the water used, and typing the default sends nothing', () => {
@@ -154,24 +167,22 @@ describe('EndoPrepLine on a mixed worksheet', () => {
     expect(second.onUpdate).not.toHaveBeenCalled()
   })
 
-  it('sends Form Auto as null', () => {
+  it('sends Form Auto as null', async () => {
     const item = endoItem({ sample_id: 'P-0001-S02', prep_form: 'liquid' })
     const { onUpdate } = setup(endoWorksheet([item]), item)
-    fireEvent.change(screen.getByLabelText('Form'), { target: { value: '' } })
+    const form = screen.getByRole('combobox', { name: 'Form' })
+    expect(form).toHaveTextContent(/^Liquid \(reconstituted\)$/)
+    await pick(form, 'Auto (Liquid (reconstituted))')
     expect(onUpdate).toHaveBeenCalledWith({ prep_form: null })
   })
 
   // Spec 6.3 (ruling, fix round 1): the row's cartridge is picked here as in
   // Box 1; a mixed worksheet has no page to pick it on.
-  it("picks the row's cartridge as Box 1 does: an id, or null for the run's", () => {
+  it("picks the row's cartridge as Box 1 does: an id, or null for the run's", async () => {
     const item = endoItem({ sample_id: 'P-0001-S02' })
     const first = setup(endoWorksheet([item]), item)
-    const picker = screen.getByLabelText('Cartridge for this sample')
-    expect(picker).toHaveValue('')
-    expect(
-      screen.getByRole('option', { name: 'run (0.05)' })
-    ).toBeInTheDocument()
-    fireEvent.change(picker, { target: { value: '4' } })
+    expect(cartridgePicker()).toHaveTextContent(/^run \(0\.05\)$/)
+    await pick(cartridgePicker(), '0.01')
     expect(first.onUpdate).toHaveBeenCalledWith({ cartridge_type_id: 4 })
     first.unmount()
 
@@ -182,12 +193,8 @@ describe('EndoPrepLine on a mixed worksheet', () => {
       cartridge_sensitivity_eu_ml: 0.1,
     })
     const second = setup(endoWorksheet([retired]), retired)
-    const own = screen.getByLabelText('Cartridge for this sample')
-    expect(own).toHaveValue('9')
-    expect(
-      screen.getByRole('option', { name: '0.1 (not in the list)' })
-    ).toBeInTheDocument()
-    fireEvent.change(own, { target: { value: '' } })
+    expect(cartridgePicker()).toHaveTextContent(/^0\.1 \(not in the list\)$/)
+    await pick(cartridgePicker(), 'run (0.05)')
     expect(second.onUpdate).toHaveBeenCalledWith({ cartridge_type_id: null })
   })
 })

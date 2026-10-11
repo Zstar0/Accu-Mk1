@@ -3,6 +3,13 @@ import { useQuery } from '@tanstack/react-query'
 import { X } from 'lucide-react'
 import { Input } from '@/components/ui/input'
 import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from '@/components/ui/select'
+import {
   getWorksheet,
   listConsumables,
   type ConsumableType,
@@ -31,6 +38,14 @@ import {
 } from '@/lib/endo-worksheet-2ml'
 import { useLabCalendar } from '@/hooks/use-lab-calendar'
 import { worksheetPageKey } from '@/hooks/use-worksheet-drawer'
+
+// Radix Select holds no empty value: Form Auto and the inherited cartridge
+// ride on these and go out as null, as the blank option did.
+const AUTO = '__auto__'
+const INHERIT = '__inherit__'
+// The line's bare look (borderless until hovered) on the app's Select.
+const LINE_TRIGGER =
+  'gap-1 rounded border-transparent bg-transparent px-1 py-0 text-[11px] text-foreground shadow-none data-[size=default]:h-6 hover:border-border focus-visible:border-teal-500 focus-visible:ring-0 dark:bg-transparent dark:hover:bg-transparent dark:focus-visible:border-teal-400 disabled:cursor-default disabled:opacity-100 [&>svg]:size-3'
 
 /**
  * The endotoxin bench line under a worksheet item on a MIXED worksheet (an
@@ -227,8 +242,6 @@ export function EndoPrep2mlFields({
   const cartridges = allowedCartridges(worksheet, catalog)
   const own = item.cartridge_type_id ?? null
   const unlisted = own != null && !cartridges.some(c => c.id === own)
-  const select =
-    'h-6 rounded border border-transparent bg-transparent px-1 text-[11px] text-foreground hover:border-border focus:border-teal-500 focus:outline-none disabled:opacity-100 dark:focus:border-teal-400'
 
   // Box 2's rule: the standard is stored as null, and a total already stored
   // is not sent again.
@@ -255,26 +268,27 @@ export function EndoPrep2mlFields({
         <span className="uppercase tracking-wider text-[9px] font-semibold">
           Form
         </span>
-        <select
-          aria-label="Form"
+        <Select
           disabled={disabled}
-          value={item.prep_form ?? ''}
-          onChange={e =>
-            onUpdate({
-              prep_form: (e.target.value || null) as EndoForm | null,
-            })
+          value={item.prep_form ?? AUTO}
+          onValueChange={v =>
+            onUpdate({ prep_form: v === AUTO ? null : (v as EndoForm) })
           }
-          className={select}
         >
-          <option value="">
-            {`Auto (${FORMS.find(f => f[0] === form)?.[1] ?? form})`}
-          </option>
-          {FORMS.map(([key, label]) => (
-            <option key={key} value={key}>
-              {label}
-            </option>
-          ))}
-        </select>
+          <SelectTrigger aria-label="Form" className={LINE_TRIGGER}>
+            <SelectValue />
+          </SelectTrigger>
+          <SelectContent>
+            <SelectItem value={AUTO}>
+              {`Auto (${FORMS.find(f => f[0] === form)?.[1] ?? form})`}
+            </SelectItem>
+            {FORMS.map(([key, label]) => (
+              <SelectItem key={key} value={key}>
+                {label}
+              </SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
       </span>
       {!bac && (
         <PrepField
@@ -302,31 +316,35 @@ export function EndoPrep2mlFields({
         <span className="uppercase tracking-wider text-[9px] font-semibold">
           Cartridge
         </span>
-        <select
-          aria-label="Cartridge for this sample"
-          value={own ?? ''}
+        <Select
+          value={own == null ? INHERIT : String(own)}
           disabled={disabled}
-          onChange={e =>
-            onUpdate({
-              cartridge_type_id: e.target.value ? Number(e.target.value) : null,
-            })
+          onValueChange={v =>
+            onUpdate({ cartridge_type_id: v === INHERIT ? null : Number(v) })
           }
-          className={`${select} font-mono ${own == null ? 'text-muted-foreground' : ''}`}
         >
-          <option value="">
-            {`${bac ? 'bac water' : 'run'} (${row.inherited ? fmt(row.inherited.sensitivity) : '-'})`}
-          </option>
-          {unlisted && (
-            <option value={own ?? ''}>
-              {`${fmt(item.cartridge_sensitivity_eu_ml)} (not in the list)`}
-            </option>
-          )}
-          {cartridges.map(c => (
-            <option key={c.id} value={c.id} title={c.name}>
-              {fmt(c.sensitivity_eu_ml)}
-            </option>
-          ))}
-        </select>
+          <SelectTrigger
+            aria-label="Cartridge for this sample"
+            className={`${LINE_TRIGGER} font-mono ${own == null ? 'text-muted-foreground' : ''}`}
+          >
+            <SelectValue />
+          </SelectTrigger>
+          <SelectContent>
+            <SelectItem value={INHERIT}>
+              {`${bac ? 'bac water' : 'run'} (${row.inherited ? fmt(row.inherited.sensitivity) : '-'})`}
+            </SelectItem>
+            {unlisted && (
+              <SelectItem value={String(own)}>
+                {`${fmt(item.cartridge_sensitivity_eu_ml)} (not in the list)`}
+              </SelectItem>
+            )}
+            {cartridges.map(c => (
+              <SelectItem key={c.id} value={String(c.id)} title={c.name}>
+                {fmt(c.sensitivity_eu_ml)}
+              </SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
         <span className="text-[9px]">EU/mL</span>
       </span>
       {bac ? (

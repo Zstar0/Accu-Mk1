@@ -170,8 +170,8 @@ describe('EndoWorksheetPage', () => {
       await screen.findByText('1 · Sample intake: reconstitute each vial')
     ).toBeInTheDocument()
     expect(getWorksheet).toHaveBeenCalledWith(42)
-    expect((screen.getByLabelText('Prep') as HTMLSelectElement).value).toBe(
-      '2ml'
+    expect(screen.getByRole('combobox', { name: 'Prep' })).toHaveTextContent(
+      /^2 mL$/
     )
     expect(screen.getByText('Endotoxin rev 3')).toBeInTheDocument()
     expect(

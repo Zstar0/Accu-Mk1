@@ -1,16 +1,26 @@
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from '@/components/ui/select'
 import type { WorksheetListItem, WorksheetUpdate } from '@/lib/api'
 import { fmt } from '@/lib/endo-prep'
 import type { EndoCartridgeOption } from '@/lib/endo-worksheet-2ml'
 import { Meta } from '@/components/hplc/EndoWorksheetTable'
 
-// Dennis's .meta select: borderless, 13px mono, an accent underline on focus.
-const META_SELECT =
-  'h-6 w-full min-w-0 cursor-pointer border-0 bg-transparent p-0 font-mono text-[13px] font-medium text-foreground focus:outline-none focus-visible:shadow-[0_1px_0_var(--color-teal-500)] dark:focus-visible:shadow-[0_1px_0_var(--color-teal-400)] disabled:cursor-default disabled:opacity-70'
+// The Analyst picker's trigger (EndoWorksheetView), whose meta strip these
+// share; disabled as before.
+const META_TRIGGER =
+  'h-6 w-full border-0 bg-transparent p-0 text-sm font-medium shadow-none focus:ring-0 disabled:cursor-default disabled:opacity-70'
+// Radix Select holds no empty value: the method default rides on this.
+const INHERIT = '__inherit__'
 
 /**
  * The run's settings, as cells of Box 1's meta strip where Dennis keeps Prep
  * and Cartridge (spec 2026-10-10 6.1): the prep model, the run cartridge from
- * the allowed list (blank = the method default, which is never written on its
+ * the allowed list (no pick = the method default, which is never written on its
  * own) and the method revision the numbers come from. Each change is one
  * worksheet PUT. The title, analyst, dates, orders and Preview / Print / CSV
  * stay where they are on every endo worksheet: EndoWorksheetView's top bar
@@ -37,19 +47,25 @@ export function EndoRunHeader({
   return (
     <>
       <Meta label="Prep">
-        <select
-          aria-label="Prep"
-          className={META_SELECT}
+        <Select
           value={twoMl ? '2ml' : 'stock'}
           disabled={isCompleted}
-          title="2 mL in the vial, then three dilution steps into the cartridge. 1 mg/mL stock is the old prep: switch back only for a run made that way."
-          onChange={e =>
-            onUpdate({ endo_prep: e.target.value === '2ml' ? '2ml' : 'stock' })
+          onValueChange={v =>
+            onUpdate({ endo_prep: v === '2ml' ? '2ml' : 'stock' })
           }
         >
-          <option value="2ml">2 mL</option>
-          <option value="stock">1 mg/mL stock</option>
-        </select>
+          <SelectTrigger
+            aria-label="Prep"
+            title="2 mL in the vial, then three dilution steps into the cartridge. 1 mg/mL stock is the old prep: switch back only for a run made that way."
+            className={META_TRIGGER}
+          >
+            <SelectValue />
+          </SelectTrigger>
+          <SelectContent>
+            <SelectItem value="2ml">2 mL</SelectItem>
+            <SelectItem value="stock">1 mg/mL stock</SelectItem>
+          </SelectContent>
+        </Select>
       </Meta>
       {twoMl && (
         <>
@@ -57,35 +73,39 @@ export function EndoRunHeader({
             label="Cartridge"
             title="The run's cartridge; a row can take its own in the table"
           >
-            <select
-              aria-label="Run cartridge"
-              className={META_SELECT}
-              value={current ?? ''}
+            <Select
+              value={current == null ? INHERIT : String(current)}
               disabled={isCompleted}
-              onChange={e =>
+              onValueChange={v =>
                 onUpdate({
-                  cartridge_type_id: e.target.value
-                    ? Number(e.target.value)
-                    : null,
+                  cartridge_type_id: v === INHERIT ? null : Number(v),
                 })
               }
             >
-              <option value="">
-                {fallback
-                  ? `Method default (${fmt(fallback.sensitivity_eu_ml)})`
-                  : 'None picked'}
-              </option>
-              {unlisted && (
-                <option value={current ?? ''}>
-                  {`${fmt(worksheet.cartridge_sensitivity_eu_ml)} EU/mL (not in the list)`}
-                </option>
-              )}
-              {cartridges.map(c => (
-                <option key={c.id} value={c.id} title={c.name}>
-                  {`${fmt(c.sensitivity_eu_ml)} EU/mL`}
-                </option>
-              ))}
-            </select>
+              <SelectTrigger
+                aria-label="Run cartridge"
+                className={META_TRIGGER}
+              >
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value={INHERIT}>
+                  {fallback
+                    ? `Method default (${fmt(fallback.sensitivity_eu_ml)})`
+                    : 'None picked'}
+                </SelectItem>
+                {unlisted && (
+                  <SelectItem value={String(current)}>
+                    {`${fmt(worksheet.cartridge_sensitivity_eu_ml)} EU/mL (not in the list)`}
+                  </SelectItem>
+                )}
+                {cartridges.map(c => (
+                  <SelectItem key={c.id} value={String(c.id)} title={c.name}>
+                    {`${fmt(c.sensitivity_eu_ml)} EU/mL`}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
           </Meta>
           <Meta
             label="Method"

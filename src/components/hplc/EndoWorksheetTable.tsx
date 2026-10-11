@@ -24,6 +24,13 @@ import { useEntityFlags } from '@/hooks/use-flags'
 import { flagTypeDef } from '@/components/flags/flag-catalog'
 import { useFlagTypesMap } from '@/services/flag-types'
 import { RaiseFlagButton } from '@/components/flags/RaiseFlagButton'
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from '@/components/ui/select'
 import { PrepField } from '@/components/hplc/EndoPrepLine'
 import { ReassignButton } from '@/components/hplc/ReassignButton'
 import {
@@ -825,9 +832,12 @@ export function FlagCell({ item }: { item: WorksheetItemRow }) {
   )
 }
 
-// Dennis's select.form / select.cart: 12.5px, padding 3px 6px, radius 6px.
-const CELL_SELECT =
-  'rounded-md border bg-card px-1.5 py-[3px] text-[12.5px] text-foreground focus:border-teal-500 focus:outline-none focus:ring-2 focus:ring-teal-500/20 dark:focus:border-teal-400 dark:focus:ring-teal-400/25 disabled:cursor-default disabled:opacity-70'
+// Dennis's select.form / select.cart (12.5px, padding 3px 6px, radius 6px)
+// as a compact trigger of the app's Select, so the cell keeps its size.
+const CELL_TRIGGER =
+  'gap-1 rounded-md border bg-card px-1.5 py-[3px] text-[12.5px] text-foreground shadow-none data-[size=default]:h-auto focus-visible:border-teal-500 focus-visible:ring-2 focus-visible:ring-teal-500/20 dark:bg-card dark:focus-visible:border-teal-400 dark:focus-visible:ring-teal-400/25 disabled:cursor-default disabled:opacity-70 [&>svg]:size-3'
+// Radix Select holds no empty value: the inherited cartridge rides on this.
+const INHERIT = '__inherit__'
 
 /**
  * Box 1's 2 mL cells (spec 2026-10-10 6.1, Dennis's 2 mL sheet): the
@@ -876,22 +886,28 @@ function TwoMlPrepCells({
         )}
       </td>
       <td className={TD}>
-        <select
-          aria-label="Form the vial arrived in"
-          title="How the vial arrived. Lyophilized: the standard water is added here. Liquid: the customer already added water; type theirs under Water. Bacteriostatic water: its own 20x prep."
+        <Select
           value={form}
           disabled={isCompleted}
-          onChange={e =>
-            onUpdateItem(item.id, { prep_form: e.target.value as EndoForm })
+          onValueChange={v =>
+            onUpdateItem(item.id, { prep_form: v as EndoForm })
           }
-          className={`${CELL_SELECT} ${form === 'liquid' ? 'border-teal-500/45 font-semibold text-teal-700 dark:border-teal-400/50 dark:text-teal-300' : ''}`}
         >
-          {FORMS.map(([value, label]) => (
-            <option key={value} value={value}>
-              {label}
-            </option>
-          ))}
-        </select>
+          <SelectTrigger
+            aria-label="Form the vial arrived in"
+            title="How the vial arrived. Lyophilized: the standard water is added here. Liquid: the customer already added water; type theirs under Water. Bacteriostatic water: its own 20x prep."
+            className={`${CELL_TRIGGER} ${form === 'liquid' ? 'border-teal-500/45 font-semibold text-teal-700 dark:border-teal-400/50 dark:text-teal-300' : ''}`}
+          >
+            <SelectValue />
+          </SelectTrigger>
+          <SelectContent>
+            {FORMS.map(([value, label]) => (
+              <SelectItem key={value} value={value}>
+                {label}
+              </SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
       </td>
       <td
         className={`${TD} w-[92px] px-1 text-right ${form === 'liquid' && water == null ? 'bg-amber-500/10 dark:bg-amber-400/15' : ''}`}
@@ -927,31 +943,37 @@ function TwoMlPrepCells({
         className={`${TD} whitespace-nowrap`}
         title={cartridgeTitle(check, bac) || undefined}
       >
-        <select
-          aria-label="Cartridge for this sample"
-          value={own ?? ''}
+        <Select
+          value={own == null ? INHERIT : String(own)}
           disabled={isCompleted}
-          onChange={e =>
+          onValueChange={v =>
             onUpdateItem(item.id, {
-              cartridge_type_id: e.target.value ? Number(e.target.value) : null,
+              cartridge_type_id: v === INHERIT ? null : Number(v),
             })
           }
-          className={`${CELL_SELECT} font-mono ${own == null ? 'text-muted-foreground' : ''}`}
         >
-          <option value="">
-            {`${bac ? 'bac water' : 'run'} (${row.inherited ? fmt(row.inherited.sensitivity) : '-'})`}
-          </option>
-          {unlisted && (
-            <option value={own ?? ''}>
-              {`${fmt(item.cartridge_sensitivity_eu_ml)} (not in the list)`}
-            </option>
-          )}
-          {cartridges.map(c => (
-            <option key={c.id} value={c.id} title={c.name}>
-              {fmt(c.sensitivity_eu_ml)}
-            </option>
-          ))}
-        </select>
+          <SelectTrigger
+            aria-label="Cartridge for this sample"
+            className={`${CELL_TRIGGER} font-mono ${own == null ? 'text-muted-foreground' : ''}`}
+          >
+            <SelectValue />
+          </SelectTrigger>
+          <SelectContent>
+            <SelectItem value={INHERIT}>
+              {`${bac ? 'bac water' : 'run'} (${row.inherited ? fmt(row.inherited.sensitivity) : '-'})`}
+            </SelectItem>
+            {unlisted && (
+              <SelectItem value={String(own)}>
+                {`${fmt(item.cartridge_sensitivity_eu_ml)} (not in the list)`}
+              </SelectItem>
+            )}
+            {cartridges.map(c => (
+              <SelectItem key={c.id} value={String(c.id)} title={c.name}>
+                {fmt(c.sensitivity_eu_ml)}
+              </SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
         {check.mvd != null && (
           <span className={SUBTIME}>
             {`MVD ${fmt(check.mvd)}× · MVC ${fmtConc(check.mvc)}`}
