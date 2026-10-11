@@ -114,6 +114,7 @@ export type SupportAction =
   | 'assign'
   | 'priority'
   | 'labels'
+  | 'assignees'
 
 export function getSupportMe(): Promise<SupportMe> {
   return crmFetch('/support/me', new URLSearchParams())
