@@ -25293,13 +25293,16 @@ def _open_vial_analyses(db: Session, item: "WorksheetItem") -> list:
     ).scalars().all()
 
 
-def _sole_instrument_for_item(db: Session, item: "WorksheetItem") -> "Optional[tuple[int, list]]":
+def _sole_instrument_for_item(db: Session, item: "WorksheetItem",
+                              prefer: Optional[int] = None) -> "Optional[tuple[int, list]]":
     """The one instrument this item's open analyses can have run on, with
     the analyses it applies to, from the catalog: analysis service -> active
     method covering it -> active instrument linked to that method. None
     unless exactly one instrument resolves, so a second analyzer is never
     guessed at (the apply bar stays the way to choose). The method is only
-    the path to the instrument; it is never written (see _apply_bench_ticks)."""
+    the path to the instrument; it is never written (see _apply_bench_ticks).
+    `prefer` (a reader import's serial match, spec 4.5) wins only when it is
+    one of those candidates, and then covers only the rows it is linked to."""
     open_rows = _open_vial_analyses(db, item)
     service_ids = {r.analysis_service_id for r in open_rows}
     if not service_ids:
@@ -25317,6 +25320,9 @@ def _sole_instrument_for_item(db: Session, item: "WorksheetItem") -> "Optional[t
         .distinct()
     ).all()
     instruments = {r[1] for r in pairs}
+    if prefer in instruments:
+        covered = {s for s, i in pairs if i == prefer}
+        return prefer, [r for r in open_rows if r.analysis_service_id in covered]
     if len(instruments) != 1:
         return None
     covered = {r[0] for r in pairs}
@@ -25338,8 +25344,8 @@ def _apply_bench_ticks(db: Session, worksheet_id: int, item: "WorksheetItem", *,
     for the samples somebody ticked. Methods are not shown on COAs yet
     (Handler, 2026-09-19); the COA wire never reads instrument_id. A method
     already chosen through the apply bar is kept as it is.
-    A reader import passes the instrument its serial names (instrument_id),
-    and that wins over the catalog lookup.
+    A reader import passes the instrument its serial names (instrument_id);
+    it wins only among the catalog's candidates (spec 4.5).
     Returns whether anything changed."""
     changed = False
     newly_set = set()
@@ -25367,10 +25373,9 @@ def _apply_bench_ticks(db: Session, worksheet_id: int, item: "WorksheetItem", *,
     # set or cleared the instrument itself in the same request: their
     # explicit choice stands (stamp_instrument=False).
     if stamp_instrument and "ran" in newly_set and not item.instrument_id:
-        # A reader import names its instrument by serial (endo v2, spec 4.5);
-        # otherwise the catalog decides, and only when it leaves one choice.
-        resolved = ((instrument_id, _open_vial_analyses(db, item)) if instrument_id
-                    else _sole_instrument_for_item(db, item))
+        # A reader import names its instrument by serial (endo v2, spec 4.5),
+        # used when the catalog links it; otherwise only a single choice stamps.
+        resolved = _sole_instrument_for_item(db, item, prefer=instrument_id)
         if resolved:
             from lims_analyses.service import stamp_method_instrument
 
@@ -25477,9 +25482,9 @@ def import_endo_reader_results(
     writes share one commit, so a refused row writes nothing at all. A test
     already on its row (same reading, same test id) is skipped. A POST on an
     id path, so it has no ordering concern against GET /worksheets/{worksheet_id}."""
-    from worksheets_endo import (CARTRIDGE_REFUSED, allowed_cartridge_ids, check_storable,
-                                 instrument_id_for_serial, parse_reading, pin_endo_method,
-                                 resolve_endo_method)
+    from worksheets_endo import (CARTRIDGE_REFUSED, cartridge_ids_allowed_by, check_reader_record,
+                                 check_storable, instrument_id_for_serial, parse_reading,
+                                 pin_endo_method, reader_validity, resolve_endo_method)
 
     ws = db.execute(select(Worksheet).where(Worksheet.id == worksheet_id)).scalar_one_or_none()
     if not ws or ws.status == "staging":
@@ -25490,9 +25495,18 @@ def import_endo_reader_results(
         check_storable(data.file_name, "The file name")
     except ValueError as exc:
         raise HTTPException(400, f"Nothing was imported. {exc}")
-    items = {it.id: it for it in db.execute(
-        select(WorksheetItem).where(WorksheetItem.worksheet_id == worksheet_id)).scalars()}
-    allowed = allowed_cartridge_ids(db, ws)
+    rows = db.execute(
+        select(WorksheetItem, LimsSubSample.assignment_role)
+        .outerjoin(LimsSubSample, LimsSubSample.sample_id == WorksheetItem.sample_id)
+        .where(WorksheetItem.worksheet_id == worksheet_id)).all()
+    items = {it.id: it for it, _role in rows}
+    endo_ids = {it.id for it, role in rows if _bench_kind_for_item(role, it.analyses_json) == "endo"}
+    # Resolved once: it sets the allowed cartridges, the validity limits and
+    # the response. The import changes nothing it resolves from, and pinning
+    # stores this same method.
+    method = resolve_endo_method(db, ws)
+    allowed = cartridge_ids_allowed_by(db, method)
+    run_params = method["run_parameters"] if method else None
 
     errors: list[str] = []
     plan: list[tuple["WorksheetItem", EndoReaderTest, str]] = []
@@ -25505,8 +25519,11 @@ def import_endo_reader_results(
             # Before parse_reading, whose reason echoes the text it refuses.
             check_storable(t.reading, "the reading")
             check_storable(t.record, "the reader record")
+            check_reader_record(t.record)
             if item is None:
                 raise ValueError("not on this worksheet")
+            if t.item_id not in endo_ids:
+                raise ValueError("not an endotoxin row")
             if t.item_id in seen:
                 raise ValueError("listed twice in one import")
             seen.add(t.item_id)
@@ -25543,14 +25560,19 @@ def import_endo_reader_results(
                      "file_name": data.file_name, "test_id": t.record.get("test_id"),
                      "reader": t.record.get("reader"), "slot": t.record.get("slot"),
                      "old": item.result_reading, "new": reading,
+                     # The record this one replaces: the file is not stored anywhere.
+                     "old_reader": item.result_reader,
                      "old_cartridge_type_id": item.cartridge_type_id,
                      "new_cartridge_type_id": t.cartridge_type_id},
         ))
         # The reading and its record are always written together: the item
         # PATCH relies on that when a cleared reading clears the record.
         item.result_reading = reading
+        # The server's verdict goes after the spread, so the browser's never wins.
+        valid, why = reader_validity(t.record, run_params)
         # A new dict every time: a plain JSON column does not see in-place edits.
-        item.result_reader = {**t.record, "imported_at": now.isoformat() + "Z",
+        item.result_reader = {**t.record, "valid": valid, "why": why,
+                              "imported_at": now.isoformat() + "Z",
                               "imported_by_user_id": user_id}
         item.result_entered_at = now
         item.result_entered_by_user_id = user_id
@@ -25559,7 +25581,7 @@ def import_endo_reader_results(
                            instrument_id=instrument_id_for_serial(db, t.record.get("reader")))
     db.commit()
     return {"applied": len(plan), "items": _serialize_worksheets(db, [ws])[0]["items"],
-            "endo_method": resolve_endo_method(db, ws)}
+            "endo_method": method}
 
 
 class WorksheetWellFreeze(BaseModel):

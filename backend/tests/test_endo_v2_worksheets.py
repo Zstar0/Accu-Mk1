@@ -723,14 +723,15 @@ def _import(client, ws, *lines):
                        json={"file_name": "EndoScanV-Export-2026-10-09.csv", "tests": list(lines)})
 
 
-def _reader_world(client, db, *, serials=(None,)):
+def _reader_world(client, db, *, serials=(None,), run_parameters=None):
     """Two endo vials (P-3001-S01 and -S02) on an open worksheet. An active
     method allows the 0.05 (default) and 0.01 cartridges. One instrument is
     linked to it per entry in `serials`."""
     svc = _service(db)
     c05 = _cartridge(db, "Endosafe 0.05", 0.05)
     c01 = _cartridge(db, "Endosafe 0.01", 0.01)
-    mid = _method(client, db, "Endotoxin", svc, [(c05, True), (c01, False)])
+    mid = _method(client, db, "Endotoxin", svc, [(c05, True), (c01, False)],
+                  run_parameters=run_parameters)
     ws = _ws(db)
     a, row_a = _vial_item(db, ws, 1, svc)
     b, row_b = _vial_item(db, ws, 2, svc)
@@ -796,9 +797,12 @@ def test_import_is_all_or_nothing_and_names_each_failing_row(client, db):
     stray, _ = _vial_item(db, elsewhere, 3, w.svc)
     retired = _cartridge(db, "Endosafe old", 0.05, active=False)
     off_method = _cartridge(db, "Endosafe 0.005", 0.005)
+    # A mixed worksheet: an HPLC vial sits beside the endo rows.
+    hplc_row, _ = _vial_item(db, w.ws, 4, _service(db, "BPC157-PURITY"), role="hplc")
     db.commit()
     bad_rows = [
         (_line(stray, "0.8", w.c05), f"item {stray.id}: not on this worksheet"),
+        (_line(hplc_row, "0.8", w.c05), "P-3001-S04: not an endotoxin row"),
         (_line(w.b, "0,8", w.c05), "P-3001-S02: '0,8' is not a reading"),
         (_line(w.b, "0.8", retired), f"P-3001-S02: {worksheets_endo.CARTRIDGE_REFUSED}"),
         (_line(w.b, "0.8", off_method), f"P-3001-S02: {worksheets_endo.CARTRIDGE_REFUSED}"),
@@ -833,6 +837,13 @@ def test_import_repeats_are_no_ops_and_a_different_reading_needs_replace(client,
     assert r.status_code == 200 and r.json()["applied"] == 1
     db.refresh(w.a)
     assert (w.a.result_reading, w.a.result_reader["test_id"]) == ("1.2", "T-9")
+    # The overwritten record lives on in the audit trail (the file is not stored).
+    first, replaced = db.query(AuditLog).filter(
+        AuditLog.operation == "endo_reader_imported").order_by(AuditLog.id).all()
+    assert first.details["old_reader"] is None
+    assert (replaced.details["old"], replaced.details["new"]) == ("<0.05", "1.2")
+    assert replaced.details["old_reader"]["test_id"] == "T-1"
+    assert replaced.details["old_reader"]["imported_by_user_id"] == 1
 
 
 def test_import_stamps_the_instrument_named_by_the_reader_serial(client, db):
@@ -868,6 +879,12 @@ def test_import_without_a_serial_match_falls_back_to_the_sole_instrument(client,
     # Postgres refuses a NUL in the serial lookup's query parameter.
     ("reader", r'"NX\u00001001"', "Row P-3001-S02: the reader record holds"),
     ("file_name", r'"Export\ud800.csv"', "The file name holds"),
+    # Spec 8.4's keys with plain values only. Stored, a deep value commits and
+    # then fails every later serialization of the worksheet.
+    ("operator", '{"a":' * 300 + "1" + "}" * 300, "Row P-3001-S02: the reader record's operator"),
+    ("colour", '"red"', "Row P-3001-S02: the reader record has an unknown key 'colour'"),
+    ("software", '"' + "x" * 201 + '"', "Row P-3001-S02: the reader record's software"),
+    ("why", json.dumps(["x"] * 21), "Row P-3001-S02: the reader record's why"),
 ])
 def test_import_refuses_pathological_values_with_400_and_writes_nothing(client, db, field, raw,
                                                                         refusal):
@@ -902,3 +919,83 @@ def test_import_keeps_the_record_as_the_reader_exported_it(client, db):
     assert _import(client, w.ws, line).status_code == 200
     db.refresh(w.a)
     assert (w.a.result_reading, w.a.result_reader["result"]) == ("0.8", " 0.8 ")
+
+
+# --- Task 7 fix round 1 ------------------------------------------------------
+
+_DROP = object()  # a _record key the reader left out
+
+
+@pytest.mark.parametrize("patch, run_parameters, why", [
+    ({}, None, []),  # 98 %, CVs 3.1 and 4.0: inside Dennis's 50-200 % and 25 %
+    ({"valid": False, "why": ["typed by hand"]}, None, []),
+    ({"recovery": 44}, None, ["spike recovery 44 % outside 50-200 %"]),
+    ({"recovery": _DROP}, None, ["no spike recovery"]),
+    ({"recovery": None, "sample_cv": _DROP, "spike_cv": "4.0"}, None,
+     ["no spike recovery", "no sample CV", "no spike CV"]),
+    ({"spike_cv": True}, None, ["no spike CV"]),  # a bool is not a number
+    ({"sample_cv": 26, "cv_limit": 30}, None, ["sample CV 26 % over 25 %"]),
+    ({"recovery": 85, "rec_min": 50}, {"endotoxin": {"spike_recovery_min_pct": 90}},
+     ["spike recovery 85 % outside 90-200 %"]),
+])
+def test_import_recomputes_validity_against_the_method_limits(client, db, patch,
+                                                              run_parameters, why):
+    """Spec 4.5: the server never trusts the browser's verdict (every record
+    here claims valid) nor the file's own limits (rec_min, cv_limit). The
+    worksheet's pinned method sets them, else Dennis's 50-200 % and 25 %;
+    a missing or non-numeric number fails closed."""
+    w = _reader_world(client, db, run_parameters=run_parameters)
+    assert client.post(f"/worksheets/{w.ws.id}/printed").status_code == 200  # pins the method
+    line = _line(w.a, "0.8", w.c05)
+    for key, value in patch.items():
+        if value is _DROP:
+            del line["record"][key]
+        else:
+            line["record"][key] = value
+    r = _import(client, w.ws, line)
+    assert r.status_code == 200, r.text
+    db.refresh(w.a)
+    assert (w.a.result_reader["valid"], w.a.result_reader["why"]) == (not why, why)
+
+
+def test_import_ignores_a_serial_whose_instrument_the_method_does_not_link(client, db):
+    # Spec 4.5: the serial chooses only among the catalog's candidates. An
+    # active analyzer outside them is not stamped; the catalog fallback is.
+    w = _reader_world(client, db, serials=("NX-1001",))
+    db.add(Instrument(name="Nexgen-MCS loaner", origin="mk1", active=True,
+                      serial_number="NX-3003"))
+    db.commit()
+    r = _import(client, w.ws, _line(w.a, "0.8", w.c05, reader="NX-3003"))
+    assert r.status_code == 200, r.text
+    db.refresh(w.a)
+    db.refresh(w.row_a)
+    assert (w.a.instrument_id, w.row_a.instrument_id) == (w.instruments[0], w.instruments[0])
+
+
+def test_a_serial_instrument_is_stamped_only_onto_the_rows_it_covers(client, db):
+    w = _reader_world(client, db, serials=("NX-1001", "NX-2002"))
+    other = _service(db, "BPC157-PURITY")  # no method links it to the analyzer
+    extra = LimsAnalysis(lims_sub_sample_pk=w.row_a.lims_sub_sample_pk,
+                         analysis_service_id=other.id, keyword=other.keyword,
+                         title=other.title, review_state="assigned", provenance="canonical")
+    db.add(extra)
+    db.commit()
+    r = _import(client, w.ws, _line(w.a, "0.8", w.c05, reader="NX-2002"))
+    assert r.status_code == 200, r.text
+    for x in (w.a, w.row_a, extra):
+        db.refresh(x)
+    assert (w.a.instrument_id, w.row_a.instrument_id, extra.instrument_id) == (
+        w.instruments[1], w.instruments[1], None)
+
+
+def test_patch_refuses_a_reading_with_a_lone_surrogate_with_400(client, db):
+    # parse_reading shows the refused text through ascii(). Echoed raw, a lone
+    # surrogate could not be encoded and the 400 became a 500.
+    ws, item, c05, _ = _row_world(db)
+    r = client.patch(f"/worksheets/{ws.id}/items/{item.id}",
+                     content=json.dumps({"result_reading": "\ud800", "cartridge_type_id": c05.id}),
+                     headers={"Content-Type": "application/json"})
+    assert r.status_code == 400
+    assert r.json()["detail"].startswith(r"'\ud800' is not a reading")
+    db.refresh(item)
+    assert _row(item) == dict.fromkeys(_ROW_FIELDS)

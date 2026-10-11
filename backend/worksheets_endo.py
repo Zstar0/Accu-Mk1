@@ -16,6 +16,7 @@ from typing import Optional
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from catalog.method_run_params import ENDO_RUN_PARAM_DEFAULTS
 from models import (
     AuditLog, ConsumableType, HplcMethod, Instrument, LimsAnalysis, LimsSubSample,
     WorksheetItem, method_consumables, method_services,
@@ -47,7 +48,9 @@ def parse_reading(text: str) -> tuple[bool, float]:
         raise ValueError(f"A reading is at most {_READING_MAX} characters")
     m = re.fullmatch(r"(<)?([0-9]*\.?[0-9]+)", re.sub(r"\s+", "", s))
     if not m:
-        raise ValueError(f"'{s}' is not a reading: type a number such as 0.8, "
+        # ascii(): '0,8' still reads '0,8', but a lone surrogate is escaped,
+        # so the 400 can be encoded (echoed raw, it became a 500).
+        raise ValueError(f"{ascii(s)} is not a reading: type a number such as 0.8, "
                          "or < and a number such as <0.05")
     lt, value = bool(m.group(1)), float(m.group(2))
     if lt and value <= 0:
@@ -93,6 +96,73 @@ def _clean_text(s: str) -> bool:
     except UnicodeEncodeError:
         return False
     return "\x00" not in s
+
+
+# The reader record (spec 8.4) as the browser sends it; the server adds
+# imported_at and imported_by_user_id and recomputes valid and why.
+READER_RECORD_KEYS = frozenset((
+    "test_id", "result", "reader", "slot", "operator", "tested_at", "temp_start", "temp_end",
+    "software", "cartridge_lot", "cartridge_expiry", "cartridge_range", "spike_level",
+    "recovery", "rec_min", "rec_max", "sample_cv", "spike_cv", "cv_limit", "reader_pass",
+    "valid", "why", "file_name",
+))
+_RECORD_TEXT_MAX = 200
+_RECORD_WHY_MAX = 20
+
+
+def _number(v) -> bool:
+    """A real, finite number: int or float, never a bool."""
+    return isinstance(v, (int, float)) and not isinstance(v, bool) and _finite(v)
+
+
+def _short_text(v) -> bool:
+    return isinstance(v, str) and len(v) <= _RECORD_TEXT_MAX
+
+
+def check_reader_record(record: dict) -> None:
+    """Spec 8.4's keys with plain values only, so a stored record stays small
+    and flat: a deep value would commit and then fail every later
+    serialization of the worksheet. Each value is null, true/false, a finite
+    number or text of at most 200 characters; `why` is a list of at most 20
+    such texts. Raises ValueError naming the key."""
+    for key in sorted(record):
+        v = record[key]
+        if key not in READER_RECORD_KEYS:
+            raise ValueError(f"the reader record has an unknown key {ascii(key)}")
+        if key == "why":
+            if not (isinstance(v, list) and len(v) <= _RECORD_WHY_MAX
+                    and all(_short_text(s) for s in v)):
+                raise ValueError(f"the reader record's why must be a list of at most "
+                                 f"{_RECORD_WHY_MAX} texts of at most {_RECORD_TEXT_MAX} characters")
+        elif not (v is None or isinstance(v, bool) or _number(v) or _short_text(v)):
+            raise ValueError(f"the reader record's {key} must be null, true/false, a finite "
+                             f"number or text of at most {_RECORD_TEXT_MAX} characters")
+
+
+def reader_validity(record: dict, run_params: Optional[dict]) -> tuple[bool, list[str]]:
+    """The server's own verdict on a reader test (spec 4.5), never the
+    browser's: spike recovery inside the method's range and both CVs at or
+    under its limit. The limits come from the worksheet's method
+    run_parameters ({"endotoxin": {...}}, missing keys at Dennis's values),
+    never from the file's rec_min, rec_max or cv_limit. A missing or
+    non-numeric number fails closed. Wording follows readerValidity
+    (src/lib/endo-reader.ts, Task 9), which lets a missing CV pass."""
+    limits = {**ENDO_RUN_PARAM_DEFAULTS, **((run_params or {}).get("endotoxin") or {})}
+    lo, hi, cv = (limits["spike_recovery_min_pct"], limits["spike_recovery_max_pct"],
+                  limits["cv_limit_pct"])
+    why = []
+    recovery = record.get("recovery")
+    if not _number(recovery):
+        why.append("no spike recovery")
+    elif not lo <= recovery <= hi:
+        why.append(f"spike recovery {recovery:g} % outside {lo:g}-{hi:g} %")
+    for key, name in (("sample_cv", "sample CV"), ("spike_cv", "spike CV")):
+        value = record.get(key)
+        if not _number(value):
+            why.append(f"no {name}")
+        elif value > cv:
+            why.append(f"{name} {value:g} % over {cv:g} %")
+    return not why, why
 
 
 def validate_prep_steps(value) -> list:
@@ -210,7 +280,12 @@ def allowed_cartridge_ids(db: Session, worksheet) -> set[int]:
     one or more endo cartridges allows only its active ones. When no method
     resolves (the legacy ENDO-LAL test, say), or the method lists none yet
     (lead decision 2026-10-10), every active endo cartridge is allowed."""
-    method = resolve_endo_method(db, worksheet)
+    return cartridge_ids_allowed_by(db, resolve_endo_method(db, worksheet))
+
+
+def cartridge_ids_allowed_by(db: Session, method: Optional[dict]) -> set[int]:
+    """allowed_cartridge_ids for a method already resolved (the reader import
+    resolves it once per request). One query at most."""
     if method is not None and method["cartridges"]:
         return {c["id"] for c in method["cartridges"] if c["active"]}
     return set(db.execute(select(ConsumableType.id).where(
