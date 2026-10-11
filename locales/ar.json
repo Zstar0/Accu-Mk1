@@ -146,6 +146,7 @@
   "preferences.checkIn.multiOrderLabel": "السماح باستلام عدة طلبات معًا",
   "preferences.checkIn.multiOrderDescription": "إيقاف = يعالج الفنيون طلبًا واحدًا بالكامل قبل الانتقال إلى التالي (الإجراء المعياري الافتراضي)؛ تشغيل = تتيح قائمة الاستلام حسب الطلب تحديد عدة طلبات ودمجها.",
   "preferences.documents": "Documents",
+  "preferences.integrations": "التكاملات",
   "preferences.documents.loadError": "Could not load document categories.",
   "preferences.documents.readOnly": "Only administrators can change document categories.",
   "preferences.documents.sectionTitle": "Document categories",

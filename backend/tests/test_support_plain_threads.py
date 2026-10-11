@@ -8,7 +8,8 @@ def raw_thread(**kw):
     t = {"id": "th_1", "ref": "T-1", "title": "COA late", "previewText": "  Where   is\nit  ", "status": "TODO",
          "priority": 2, "isTestThread": False, "createdAt": {"iso8601": "2026-09-01T10:00:00.000Z"},
          "updatedAt": {"iso8601": "2026-09-02T10:00:00.000Z"}, "customer": {"id": "c_1", "fullName": "Kyle R"},
-         "labels": [{"labelType": {"name": "Lab"}}], "assignedTo": {"__typename": "User", "fullName": "Lauren"},
+         "labels": [{"id": "l_1", "labelType": {"id": "lt_1", "name": "Lab"}}],
+         "assignedTo": {"__typename": "User", "id": "u_9", "fullName": "Lauren"},
          "lastInboundMessageInfo": {"timestamp": {"iso8601": "2026-09-02T09:00:00.000Z"}},
          "lastOutboundMessageInfo": {"timestamp": {"iso8601": "2026-09-01T11:00:00.000Z"}}}
     t.update(kw)
@@ -31,7 +32,18 @@ def test_thread_item_maps_fields():
                     "labels": ["Lab"], "assignee": "Lauren", "created_at": "2026-09-01T10:00:00.000Z",
                     "updated_at": "2026-09-02T10:00:00.000Z", "preview": "Where is it",
                     "waiting_since": "2026-09-02T09:00:00.000Z",
-                    "plain_url": "https://app.plain.com/workspace/w_1/thread/th_1"}
+                    "plain_url": "https://app.plain.com/workspace/w_1/thread/th_1",
+                    "assignee_id": "u_9", "customer_plain_id": "c_1",
+                    "label_refs": [{"id": "l_1", "type_id": "lt_1", "name": "Lab"}]}
+
+
+def test_label_refs_skip_labels_without_ids():
+    item = threads.thread_item(raw_thread(labels=[{"labelType": {"name": "Old"}}]), WS)
+    assert item["labels"] == ["Old"] and item["label_refs"] == []
+
+
+def test_unassigned_thread_has_no_assignee_id():
+    assert threads.thread_item(raw_thread(assignedTo=None), WS)["assignee_id"] is None
 
 
 def test_status_and_priority_maps():

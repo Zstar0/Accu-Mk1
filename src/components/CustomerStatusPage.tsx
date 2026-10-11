@@ -89,6 +89,7 @@ import {
 import { CustomerDashboard } from '@/components/customers/CustomerDashboard'
 import { CustomerCrmTab } from '@/components/customers/CustomerCrmTab'
 import { CustomerSupportTab } from '@/components/customers/CustomerSupportTab'
+import { useSupportSeat } from '@/components/customers/useSupportSeat'
 import { CustomerAiReviewTab } from '@/components/customers/CustomerAiReviewTab'
 import { useAuthStore } from '@/store/auth-store'
 import {
@@ -781,6 +782,8 @@ function InsightCells({ insight }: { insight?: InsightRow }) {
  */
 function CustomerDetailView() {
   const isAdminUser = useAuthStore(state => state.user)?.role === 'admin'
+  const supportSeat = useSupportSeat()
+  const canSupport = isAdminUser || supportSeat.data?.has_seat === true
   // --- Store reads (selector syntax mandatory — ast-grep enforced) ---
   const customerDetailTargetId = useUIStore(
     state => state.customerDetailTargetId
@@ -1056,10 +1059,9 @@ function CustomerDetailView() {
           Customer Orders is the default; Dashboard is the insights dossier. */}
       <Tabs
         value={
-          (customerDetailTab === 'crm' ||
-            customerDetailTab === 'support' ||
-            customerDetailTab === 'ai-review') &&
-          !isAdminUser
+          ((customerDetailTab === 'crm' || customerDetailTab === 'ai-review') &&
+            !isAdminUser) ||
+          (customerDetailTab === 'support' && !canSupport)
             ? 'orders'
             : customerDetailTab
         }
@@ -1074,7 +1076,7 @@ function CustomerDetailView() {
           <TabsTrigger value="orders">Customer Orders</TabsTrigger>
           <TabsTrigger value="dashboard">Dashboard</TabsTrigger>
           {isAdminUser && <TabsTrigger value="crm">CRM</TabsTrigger>}
-          {isAdminUser && <TabsTrigger value="support">Support</TabsTrigger>}
+          {canSupport && <TabsTrigger value="support">Support</TabsTrigger>}
           {isAdminUser && (
             <TabsTrigger value="ai-review">AI review</TabsTrigger>
           )}
@@ -1105,7 +1107,7 @@ function CustomerDetailView() {
             <CustomerCrmTab customerKey={`wc:${customerDetailTargetId}`} />
           </TabsContent>
         )}
-        {isAdminUser && (
+        {canSupport && (
           <TabsContent value="support" className="mt-4">
             <CustomerSupportTab customerKey={`wc:${customerDetailTargetId}`} />
           </TabsContent>
@@ -1573,6 +1575,8 @@ function CustomerOrdersTab({
  */
 function GuestCustomerDetailView({ customerKey }: { customerKey: string }) {
   const isAdminUser = useAuthStore(state => state.user)?.role === 'admin'
+  const supportSeat = useSupportSeat()
+  const canSupport = isAdminUser || supportSeat.data?.has_seat === true
   const navigateToCustomers = useUIStore(state => state.navigateToCustomers)
   const navigateTo = useUIStore(state => state.navigateTo)
   const { data } = useQuery(dossierQuery(customerKey))
@@ -1618,15 +1622,19 @@ function GuestCustomerDetailView({ customerKey }: { customerKey: string }) {
             <h2 className="mb-2 text-sm font-medium">CRM</h2>
             <CustomerCrmTab customerKey={customerKey} />
           </section>
-          <section className="mt-4">
-            <h2 className="mb-2 text-sm font-medium">Support</h2>
-            <CustomerSupportTab customerKey={customerKey} />
-          </section>
-          <section className="mt-4">
-            <h2 className="mb-2 text-sm font-medium">AI review</h2>
-            <CustomerAiReviewTab customerKey={customerKey} />
-          </section>
         </>
+      )}
+      {canSupport && (
+        <section className="mt-4">
+          <h2 className="mb-2 text-sm font-medium">Support</h2>
+          <CustomerSupportTab customerKey={customerKey} />
+        </section>
+      )}
+      {isAdminUser && (
+        <section className="mt-4">
+          <h2 className="mb-2 text-sm font-medium">AI review</h2>
+          <CustomerAiReviewTab customerKey={customerKey} />
+        </section>
       )}
     </div>
   )

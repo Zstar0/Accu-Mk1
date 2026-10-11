@@ -118,19 +118,9 @@ def thread_detail(customer_key: str, thread_id: str, *, refresh: bool = False) -
     @_shape_safe
     def load() -> dict[str, Any]:
         client = _client_factory()
-        nodes: list[dict] = []
-        after = None
-        while len(nodes) < rules.MAX_ENTRIES:
-            t = client.query(queries.THREAD, {"threadId": thread_id, "after": after})["thread"]
-            if t is None:
-                raise SupportUnavailable("thread_missing")
-            conn = t["timelineEntries"]
-            nodes.extend(e["node"] for e in conn["edges"])
-            if not conn["pageInfo"]["hasNextPage"]:
-                break
-            after = conn["pageInfo"]["endCursor"]
+        t, nodes = raw_timeline(client, thread_id)
         return {"thread": threads.thread_item(t, _workspace(client)),
-                "entries": threads.build_entries(nodes[:rules.MAX_ENTRIES], (t.get("customer") or {}).get("fullName"))}
+                "entries": threads.build_entries(nodes, (t.get("customer") or {}).get("fullName"))}
 
     stale = False
     try:
@@ -146,3 +136,50 @@ def thread_detail(customer_key: str, thread_id: str, *, refresh: bool = False) -
         data, at = fallback
         stale = True
     return {**data, "fetched_at": _iso(at), "stale": stale}
+
+
+def paged(client, query: str, root: str) -> list[dict]:
+    out: list[dict] = []
+    after = None
+    while len(out) < rules.MAX_THREADS:
+        page = client.query(query, {"after": after})[root]
+        out.extend(e["node"] for e in page["edges"])
+        if not page["pageInfo"]["hasNextPage"]:
+            break
+        after = page["pageInfo"]["endCursor"]
+    return out
+
+
+def workspace_people() -> dict[str, Any]:
+    @_shape_safe
+    def load() -> dict[str, Any]:
+        client = _client_factory()
+        users = paged(client, queries.USERS, "users")
+        labels = paged(client, queries.LABEL_TYPES, "labelTypes")
+        return {"teammates": [{"plain_user_id": u["id"], "name": u["fullName"], "email": u["email"]}
+                              for u in users if not u.get("isDeleted")],
+                "label_types": [{"id": l["id"], "name": l["name"], "color": l.get("color")} for l in labels]}
+
+    data, _ = CACHE.get_or_load("people", rules.PEOPLE_TTL, load)
+    return data
+
+
+def invalidate(customer_key: str, thread_id: str) -> None:
+    # drop() is prefix-based: "l:wc:1" also drops "l:wc:12". Extra invalidation only, never stale data.
+    CACHE.drop(f"l:{customer_key}")
+    CACHE.drop(f"d:{customer_key}:{thread_id}")
+
+
+def raw_timeline(client, thread_id: str) -> tuple[dict, list[dict]]:
+    nodes: list[dict] = []
+    after = None
+    while len(nodes) < rules.MAX_ENTRIES:
+        t = client.query(queries.THREAD, {"threadId": thread_id, "after": after})["thread"]
+        if t is None:
+            raise SupportUnavailable("thread_missing")
+        conn = t["timelineEntries"]
+        nodes.extend(e["node"] for e in conn["edges"])
+        if not conn["pageInfo"]["hasNextPage"]:
+            break
+        after = conn["pageInfo"]["endCursor"]
+    return t, nodes[:rules.MAX_ENTRIES]

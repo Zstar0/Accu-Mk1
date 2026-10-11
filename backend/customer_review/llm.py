@@ -8,6 +8,7 @@ from decimal import Decimal
 from typing import Any, Callable
 
 import httpx
+from integration_keys import store as integration_keys
 
 API_URL = "https://api.anthropic.com/v1/messages"
 MODEL = "claude-sonnet-5-5"
@@ -80,7 +81,7 @@ _shared: dict[tuple[str, str], AnthropicClient] = {}
 
 
 def get_client() -> AnthropicClient:
-    key = (os.environ.get("ANTHROPIC_API_KEY") or "").strip()
+    key = integration_keys.get("ANTHROPIC_API_KEY") or ""
     if not key:
         raise ReviewNotConfigured()
     ws = (os.environ.get("ANTHROPIC_WORKSPACE_ID") or "").strip()

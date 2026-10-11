@@ -1,4 +1,4 @@
-import { useQuery } from '@tanstack/react-query'
+import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { ArrowDownUp, Loader2 } from 'lucide-react'
 import { useState } from 'react'
 import { cn } from '@/lib/utils'
@@ -9,7 +9,15 @@ import {
   SheetTitle,
 } from '@/components/ui/sheet'
 import { ResizableSheetContent } from './ResizableSheetContent'
-import { getSupportThread, type SupportThread } from '@/lib/api-support'
+import {
+  getSupportThread,
+  supportAction,
+  type SupportAction,
+  type SupportThread,
+} from '@/lib/api-support'
+import { SupportComposer } from './SupportComposer'
+import { SupportThreadControls } from './SupportThreadControls'
+import { useSupportSeat } from './useSupportSeat'
 
 const when = (iso: string | null | undefined) =>
   iso
@@ -50,6 +58,26 @@ export function SupportThreadPanel({
     staleTime: 300_000,
   })
   const d = q.data
+  const qc = useQueryClient()
+  const seat = useSupportSeat()
+  const hasSeat = seat.data?.has_seat === true
+  const current = d?.thread ?? thread
+  const run = async (action: SupportAction, body: Record<string, unknown>) => {
+    if (!thread) return
+    const key = ['support', 'thread', customerKey, thread.id]
+    let out
+    try {
+      out = await supportAction(customerKey, thread.id, action, body)
+    } catch (e) {
+      // The write may have happened (or half-happened): show Plain's current state, then report.
+      void qc.invalidateQueries({ queryKey: key })
+      void qc.invalidateQueries({ queryKey: ['support', customerKey] })
+      throw e
+    }
+    if (out.detail) qc.setQueryData(key, out.detail)
+    else void qc.invalidateQueries({ queryKey: key })
+    void qc.invalidateQueries({ queryKey: ['support', customerKey] })
+  }
   const [order, setOrder] = useState<Order>(readOrder)
   const toggleOrder = () => {
     const next = order === 'newest' ? 'oldest' : 'newest'
@@ -88,6 +116,14 @@ export function SupportThreadPanel({
             )}
           </SheetDescription>
         </SheetHeader>
+        {current && hasSeat && (
+          <SupportThreadControls thread={current} run={run} />
+        )}
+        {seat.data && !hasSeat && (
+          <p className="px-4 text-xs text-muted-foreground">
+            Replying needs a Plain account under your Mk1 email.
+          </p>
+        )}
         {q.isLoading && (
           <Loader2 className="mx-auto mt-6 h-5 w-5 animate-spin text-muted-foreground" />
         )}
@@ -154,6 +190,14 @@ export function SupportThreadPanel({
               )
             )}
           </div>
+        )}
+        {current && hasSeat && (
+          <SupportComposer
+            threadId={current.id}
+            threadStatus={current.status}
+            sendAs={seat.data?.name ?? 'you'}
+            onSubmit={(tab, markdown) => run(tab, { markdown })}
+          />
         )}
       </ResizableSheetContent>
     </Sheet>
