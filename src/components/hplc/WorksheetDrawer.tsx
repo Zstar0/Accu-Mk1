@@ -35,7 +35,7 @@ import { parseWorksheetNotes, withNotesText } from '@/lib/worksheet-notes'
 import WorksheetDrawerHeader from './WorksheetDrawerHeader'
 import WorksheetDrawerItems from './WorksheetDrawerItems'
 import { EndoWorksheetActions } from './EndoWorksheetActions'
-import { EndoWorksheetView } from './EndoWorksheetView'
+import { EndoFlyoutSummary } from './endo/EndoFlyoutSummary'
 import { BenchRunLog } from './BenchRunLog'
 import { PcrWorksheetView } from './PcrWorksheetView'
 import { worksheetKind } from '@/lib/worksheet-kind'
@@ -134,8 +134,12 @@ export function WorksheetDrawer() {
   const [addSamplesOpen, setAddSamplesOpen] = useState(false)
 
   const isCompleted = activeWorksheet?.status === 'completed'
-  // Worksheets 2.0: an all-endo or all-PCR worksheet gets its bench view,
-  // which needs the room of a page; every other worksheet keeps the 1100px drawer.
+  // Worksheets 2.0: an all-PCR worksheet gets its bench view, which needs the
+  // room of a page. An all-endo worksheet shows a read-only summary here and
+  // is worked on its own page (endo v2, spec 6.2); every other worksheet keeps
+  // the 1100px drawer. An empty worksheet has no kind and keeps the editable
+  // drawer, where samples get added (endo_prep cannot tell: it defaults to
+  // 2ml on every new worksheet).
   const kind = activeWorksheet ? worksheetKind(activeWorksheet.items) : null
   const isEndo = kind === 'endo'
   const isPcr = kind === 'pcr'
@@ -199,7 +203,7 @@ export function WorksheetDrawer() {
       <Sheet open={drawerOpen} onOpenChange={open => { if (!open) closeDrawer() }}>
         <SheetContent
           side="right"
-          className={`p-0 flex flex-col ${isBench ? 'w-[97vw] sm:max-w-[1760px]' : 'w-[1100px] sm:max-w-[1100px]'}`}
+          className={`p-0 flex flex-col ${isPcr ? 'w-[97vw] sm:max-w-[1760px]' : 'w-[1100px] sm:max-w-[1100px]'}`}
         >
           {/* Loading state */}
           {isLoading && (
@@ -268,81 +272,10 @@ export function WorksheetDrawer() {
             </div>
           )}
 
-          {/* Endotoxin worksheet: Dennis's run log + sheet (Worksheets 2.0) */}
+          {/* Endotoxin worksheet: a read-only summary; the run is worked on its page (endo v2, spec 6.2) */}
           {!isLoading && !isError && activeWorksheet && isEndo && (
             <div className="flex flex-1 min-h-0 overflow-hidden bg-muted/30">
-              <BenchRunLog
-                kind="endo"
-                label="Endotoxin"
-                tickLabels={['Made', 'MCS']}
-                activeId={activeWorksheet.id}
-                users={users}
-                onSelect={id => {
-                  // The log spans every analyst; drop the filter so an open
-                  // worksheet of someone else's is not bounced off.
-                  setAnalystFilter('all')
-                  setActiveId(id)
-                }}
-              />
-              <EndoWorksheetView
-                key={activeWorksheet.id}
-                worksheet={activeWorksheet}
-                users={users}
-                userNotes={userNotes}
-                isCompleted={!!isCompleted}
-                otherWorksheets={openWorksheets.filter(
-                  ws => ws.id !== activeWorksheet.id
-                )}
-                applyBar={
-                  !isCompleted && (
-                    <WorksheetApplyBar
-                      key={activeWorksheet.id}
-                      activeMethods={activeMethods}
-                      instruments={instruments}
-                      isPending={applyMethodInstrumentMutation.isPending}
-                      onApply={handleApplyToAll}
-                    />
-                  )
-                }
-                completeAction={completeAction}
-                onAddSamples={() => setAddSamplesOpen(true)}
-                onUpdate={handleUpdateWorksheet}
-                onRemove={itemId =>
-                  removeMutation.mutate({
-                    worksheetId: activeWorksheet.id,
-                    itemId,
-                  })
-                }
-                onReassign={(itemId, targetId) =>
-                  reassignMutation.mutate({
-                    worksheetId: activeWorksheet.id,
-                    itemId,
-                    targetWorksheetId: targetId,
-                  })
-                }
-                onUpdateItem={(itemId, data) =>
-                  updateItemMutation.mutate({
-                    worksheetId: activeWorksheet.id,
-                    itemId,
-                    data,
-                  })
-                }
-                onTickAll={data =>
-                  bulkTicksMutation.mutate({
-                    worksheetId: activeWorksheet.id,
-                    data,
-                  })
-                }
-              />
-              <AddSamplesModal
-                open={addSamplesOpen}
-                onOpenChange={setAddSamplesOpen}
-                worksheetId={activeWorksheet.id}
-                existingItems={activeWorksheet.items}
-                onAdd={data =>
-                  addItemMutation.mutate({ worksheetId: activeWorksheet.id, data })
-                }
-              />
+              <EndoFlyoutSummary worksheet={activeWorksheet} users={users} />
             </div>
           )}
 
@@ -463,6 +396,7 @@ export function WorksheetDrawer() {
               {/* Items section */}
               <WorksheetDrawerItems
                 items={activeWorksheet.items}
+                worksheet={activeWorksheet}
                 worksheetId={activeWorksheet.id}
                 openWorksheets={openWorksheets}
                 isCompleted={!!isCompleted}

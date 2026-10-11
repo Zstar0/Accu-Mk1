@@ -1,14 +1,31 @@
 import { useState } from 'react'
+import { useQuery } from '@tanstack/react-query'
 import { X } from 'lucide-react'
 import { Input } from '@/components/ui/input'
-import type { WorksheetItemPatch } from '@/lib/api'
+import {
+  getWorksheet,
+  listConsumables,
+  type ConsumableType,
+  type WorksheetItemPatch,
+  type WorksheetListItem,
+} from '@/lib/api'
 import { fmt, fmtUl, holidaysBetween, labDate } from '@/lib/endo-prep'
+import {
+  FORMS,
+  dilutionPlan,
+  fmtConc,
+  formOf,
+  prep2Check,
+  type EndoForm,
+} from '@/lib/endo-prep-2ml'
 import {
   endoPrepFor,
   shortLabDate,
   type WorksheetItemRow,
 } from '@/lib/endo-worksheet'
+import { endoCtxFor, endoSampleFor } from '@/lib/endo-worksheet-2ml'
 import { useLabCalendar } from '@/hooks/use-lab-calendar'
+import { worksheetPageKey } from '@/hooks/use-worksheet-drawer'
 
 /**
  * The endotoxin bench line under a worksheet item on a MIXED worksheet (an
@@ -23,6 +40,9 @@ interface EndoPrepLineProps {
   /** SLA `due_at` for this item, or null. */
   dueAt: string | null
   onUpdate: (data: WorksheetItemPatch) => void
+  /** The worksheet the item is on. On a 2 mL worksheet the line shows the
+   *  2 mL prep (spec 6.3); without it, or on stock, the stock line. */
+  worksheet?: WorksheetListItem
 }
 
 export function EndoPrepLine({
@@ -30,12 +50,55 @@ export function EndoPrepLine({
   isCompleted,
   dueAt,
   onUpdate,
+  worksheet,
 }: EndoPrepLineProps) {
   const { calendar } = useLabCalendar()
+  const twoMl = worksheet?.endo_prep === '2ml'
+  // The list payload has no endo_method; the 2 mL figures need the run's
+  // method and cartridges, which only GET /worksheets/{id} carries.
+  const { data: full } = useQuery({
+    queryKey: worksheetPageKey(worksheet?.id ?? 0),
+    queryFn: () => getWorksheet(worksheet?.id ?? 0),
+    enabled: twoMl && worksheet?.endo_method === undefined,
+    staleTime: 30_000,
+  })
+  const runWs = full ?? worksheet
+  // With no method resolved, every active endo cartridge is allowed (4.3).
+  const { data: catalog = [] } = useQuery({
+    queryKey: ['consumables', 'endo_cartridge'],
+    queryFn: () => listConsumables({ kind: 'endo_cartridge' }),
+    enabled: twoMl && runWs?.endo_method === null,
+    staleTime: 5 * 60_000,
+  })
   const prep = endoPrepFor(item)
   const received = calendar ? labDate(item.date_received, calendar) : null
   const due = calendar ? labDate(dueAt, calendar) : null
   const skipped = calendar ? holidaysBetween(received, due, calendar) : []
+
+  if (twoMl && runWs) {
+    return (
+      <div className="flex flex-wrap items-center gap-x-4 gap-y-1 px-4 pb-2 pl-[52px] text-[11px] text-muted-foreground">
+        <Stat label="Received" value={shortLabDate(received)} />
+        <Stat
+          label="Due"
+          value={`${shortLabDate(due)}${skipped.length ? '*' : ''}`}
+          title={
+            skipped.length
+              ? `Pushed past ${skipped.map(h => h.name).join(', ')}`
+              : undefined
+          }
+          strong
+        />
+        <EndoPrep2mlFields
+          item={item}
+          worksheet={runWs}
+          catalog={catalog}
+          isCompleted={isCompleted}
+          onUpdate={onUpdate}
+        />
+      </div>
+    )
+  }
 
   return (
     <div className="flex flex-wrap items-center gap-x-4 gap-y-1 px-4 pb-2 pl-[52px] text-[11px] text-muted-foreground">
@@ -116,6 +179,110 @@ export function EndoPrepFields({
         disabled={isCompleted}
         onCommit={v => onUpdate({ prep_volume_ml: v })}
       />
+    </>
+  )
+}
+
+/**
+ * The 2 mL prep on a mixed worksheet's endo line: Box 1's prep inputs (Form,
+ * Water, Total) and what they give, the row's cartridge and what lands on it,
+ * with the tube and cartridge warnings. The figures come from
+ * src/lib/endo-prep-2ml.ts, as on the worksheet page and the 2 mL sheet. The
+ * row's cartridge is shown, not picked (the picker is on the worksheet page).
+ */
+export function EndoPrep2mlFields({
+  item,
+  worksheet,
+  catalog,
+  isCompleted,
+  onUpdate,
+}: {
+  item: WorksheetItemRow
+  worksheet: WorksheetListItem
+  catalog: ConsumableType[]
+  isCompleted: boolean
+  onUpdate: (data: WorksheetItemPatch) => void
+}) {
+  const ctx = endoCtxFor(worksheet, catalog)
+  const s = endoSampleFor(item, worksheet, catalog)
+  const form = formOf(s)
+  const k = prep2Check(s, ctx)
+  const plan = dilutionPlan(s, ctx)
+  const stdTotal = ctx.params.stdTotalDilution
+  return (
+    <>
+      <span className="inline-flex items-center gap-1">
+        <span className="uppercase tracking-wider text-[9px] font-semibold">
+          Form
+        </span>
+        <select
+          aria-label="Form"
+          disabled={isCompleted}
+          value={item.prep_form ?? ''}
+          onChange={e =>
+            onUpdate({
+              prep_form: (e.target.value || null) as EndoForm | null,
+            })
+          }
+          className="h-6 rounded border border-transparent bg-transparent px-1 text-[11px] text-foreground hover:border-border focus:border-teal-500 focus:outline-none disabled:opacity-100 dark:focus:border-teal-400"
+        >
+          <option value="">
+            {`Auto (${FORMS.find(f => f[0] === form)?.[1] ?? form})`}
+          </option>
+          {FORMS.map(([key, label]) => (
+            <option key={key} value={key}>
+              {label}
+            </option>
+          ))}
+        </select>
+      </span>
+      {form !== 'bac' && (
+        <PrepField
+          label="Water"
+          unit="mL"
+          value={item.prep_water_ml ?? null}
+          overridden={item.prep_water_ml != null}
+          computed={form === 'liquid' ? null : ctx.params.reconWaterMl}
+          disabled={isCompleted}
+          onCommit={v => onUpdate({ prep_water_ml: v })}
+        />
+      )}
+      {form !== 'bac' && (
+        <PrepField
+          label="Total"
+          unit="1:N"
+          value={item.prep_total_dilution ?? null}
+          overridden={item.prep_total_dilution != null}
+          computed={stdTotal}
+          disabled={isCompleted}
+          onCommit={v =>
+            onUpdate({ prep_total_dilution: v === stdTotal ? null : v })
+          }
+        />
+      )}
+      <Stat
+        label="Cartridge"
+        value={s.lambda === null ? '-' : fmt(s.lambda)}
+        unit="EU/mL"
+        strong
+      />
+      {form === 'bac' ? (
+        <Stat label="Dilution" value={`1:${fmt(plan.total)}`} />
+      ) : (
+        <Stat label="Loaded" value={fmtConc(k.loaded) || '-'} unit="mg/mL" />
+      )}
+      {!plan.fits && (
+        <span className="rounded border border-red-500/40 bg-red-500/10 px-1.5 py-0.5 text-[10px] font-semibold text-red-600 dark:border-red-400/45 dark:bg-red-400/15 dark:text-red-400">
+          Over the 1.5 mL tube
+        </span>
+      )}
+      {k.valid === false && (
+        <span className="rounded border border-amber-500/40 bg-amber-500/10 px-1.5 py-0.5 text-[10px] font-semibold text-amber-600 dark:border-amber-400/45 dark:bg-amber-400/15 dark:text-amber-400">
+          {k.needs !== null
+            ? `Needs the ${fmt(k.needs)} cartridge`
+            : 'No cartridge holds this'}
+        </span>
+      )}
     </>
   )
 }
