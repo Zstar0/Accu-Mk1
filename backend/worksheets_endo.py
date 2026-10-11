@@ -65,6 +65,36 @@ def _finite(v) -> bool:
         return False
 
 
+def check_storable(value, what: str) -> None:
+    """Refuse a reader-import value that cannot be stored and served back
+    (spec 10: a 400 with the reason, never a 500). FastAPI's json.loads
+    accepts NaN, Infinity (1e400 arrives as inf), lone surrogates and NUL.
+    Postgres json refuses NaN and Infinity at commit; a lone surrogate cannot
+    be written as UTF-8, so the response and every later GET of the stored
+    record would fail; Postgres refuses a NUL in a query parameter (the
+    reader serial lookup). The reason never echoes the value. Walks without
+    recursion. Raises ValueError."""
+    stack = [value]
+    while stack:
+        v = stack.pop()
+        if isinstance(v, dict):
+            stack.extend(v.items())
+        elif isinstance(v, (list, tuple)):
+            stack.extend(v)
+        elif ((isinstance(v, float) and not math.isfinite(v))
+              or (isinstance(v, str) and not _clean_text(v))):
+            raise ValueError(f"{what} holds NaN, Infinity, a NUL character or invalid Unicode")
+
+
+def _clean_text(s: str) -> bool:
+    """Writable as UTF-8 (no lone surrogate) and free of NUL."""
+    try:
+        s.encode("utf-8")
+    except UnicodeEncodeError:
+        return False
+    return "\x00" not in s
+
+
 def validate_prep_steps(value) -> list:
     """A row's own step values (spec 3.7): exactly three entries, one per
     step. Each entry is null (standard), or [sample_ul, ratio] for step 1 and

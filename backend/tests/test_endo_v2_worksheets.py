@@ -6,6 +6,7 @@ reading) and the reader import. In-memory SQLite + dependency overrides, no
 live stack; the test_worksheet_endo_prep.py pattern."""
 import json
 from contextlib import contextmanager
+from types import SimpleNamespace
 from unittest.mock import MagicMock
 
 import pytest
@@ -20,7 +21,8 @@ from database import Base, get_db
 from main import app
 from models import (
     AnalysisService, AuditLog, ConsumableType, HplcMethod, Instrument, LimsAnalysis,
-    LimsSample, LimsSubSample, Worksheet, WorksheetItem, method_consumables,
+    LimsSample, LimsSubSample, Worksheet, WorksheetItem, instrument_methods,
+    method_consumables,
 )
 
 
@@ -694,3 +696,197 @@ def test_clearing_the_reading_clears_the_reader_record_and_audits_it(client, db)
     assert (item.result_reading, item.result_reader) == (None, None)
     cleared = db.query(AuditLog).filter(AuditLog.operation == "endo_reading_cleared").one()
     assert (cleared.details["old"], cleared.details["old_reader"]) == ("<0.05", _IMPORTED)
+
+
+# --- Task 7: POST /worksheets/{id}/reader-import ----------------------------
+
+
+def _record(test_id="T-0001", reader="NX-1001", slot=1):
+    """A reader record shaped like src/lib/endo-reader.ts toReaderRecord
+    (spec 8.4). Made-up values, never a real export."""
+    return {"test_id": test_id, "reader": reader, "slot": slot, "operator": "DL",
+            "tested_at": "2026-10-09T14:02:00", "temp_start": 37.0, "temp_end": 37.1,
+            "software": "EndoScan-V 6.2", "cartridge_lot": "L1234",
+            "cartridge_expiry": "2027-03", "cartridge_range": "0.05-5", "spike_level": 0.5,
+            "recovery": 98.0, "rec_min": 50, "rec_max": 200, "sample_cv": 3.1,
+            "spike_cv": 4.0, "cv_limit": 25, "reader_pass": True, "valid": True, "why": [],
+            "file_name": "EndoScanV-Export-2026-10-09.csv"}
+
+
+def _line(item, reading, cartridge, *, replace=False, **record):
+    return {"item_id": item.id, "reading": reading, "record": _record(**record),
+            "cartridge_type_id": cartridge.id, "replace": replace}
+
+
+def _import(client, ws, *lines):
+    return client.post(f"/worksheets/{ws.id}/reader-import",
+                       json={"file_name": "EndoScanV-Export-2026-10-09.csv", "tests": list(lines)})
+
+
+def _reader_world(client, db, *, serials=(None,)):
+    """Two endo vials (P-3001-S01 and -S02) on an open worksheet. An active
+    method allows the 0.05 (default) and 0.01 cartridges. One instrument is
+    linked to it per entry in `serials`."""
+    svc = _service(db)
+    c05 = _cartridge(db, "Endosafe 0.05", 0.05)
+    c01 = _cartridge(db, "Endosafe 0.01", 0.01)
+    mid = _method(client, db, "Endotoxin", svc, [(c05, True), (c01, False)])
+    ws = _ws(db)
+    a, row_a = _vial_item(db, ws, 1, svc)
+    b, row_b = _vial_item(db, ws, 2, svc)
+    instruments = []
+    for n, serial in enumerate(serials, start=1):
+        inst = Instrument(name=f"Nexgen-MCS {n}", origin="mk1", active=True, serial_number=serial)
+        db.add(inst)
+        db.flush()
+        db.execute(instrument_methods.insert().values(instrument_id=inst.id, method_id=mid))
+        instruments.append(inst.id)
+    db.commit()
+    return SimpleNamespace(svc=svc, c05=c05, c01=c01, mid=mid, ws=ws, a=a, b=b,
+                           row_a=row_a, row_b=row_b, instruments=instruments)
+
+
+_IMPORT_OPS = ("endo_reader_imported", "endo_method_pinned", "bench_ran_set")
+
+
+def test_import_stores_each_reading_ticks_ran_pins_and_audits(client, db):
+    w = _reader_world(client, db)
+    r = _import(client, w.ws, _line(w.a, "<0.05", w.c05, test_id="T-1", slot=1),
+                _line(w.b, " 0.8 ", w.c01, test_id="T-2", slot=2))
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["applied"] == 2 and body["endo_method"]["id"] == w.mid
+    items = {it["id"]: it for it in body["items"]}
+    a, b = items[w.a.id], items[w.b.id]
+    assert (a["result_reading"], b["result_reading"]) == ("<0.05", "0.8")
+    assert (a["cartridge_type_id"], b["cartridge_type_id"]) == (w.c05.id, w.c01.id)
+    assert b["cartridge_sensitivity_eu_ml"] == 0.01
+    assert a["result_reader"]["test_id"] == "T-1" and a["result_reader"]["recovery"] == 98.0
+    assert a["result_reader"]["imported_by_user_id"] == 1
+    assert a["result_reader"]["imported_at"].endswith("Z")
+    assert a["ran_at"] is not None and a["result_entered_by_user_id"] == 1
+    db.refresh(w.ws)
+    assert w.ws.endo_method_id == w.mid
+    assert [(x.entity_id, x.details["test_id"], x.details["reader"], x.details["slot"],
+             x.details["file_name"]) for x in db.query(AuditLog)
+            .filter(AuditLog.operation == "endo_reader_imported").order_by(AuditLog.id)] == [
+        (str(w.a.id), "T-1", "NX-1001", 1, "EndoScanV-Export-2026-10-09.csv"),
+        (str(w.b.id), "T-2", "NX-1001", 2, "EndoScanV-Export-2026-10-09.csv")]
+
+
+def test_import_on_a_missing_or_completed_worksheet_changes_nothing(client, db):
+    w = _reader_world(client, db)
+    assert client.post("/worksheets/99999/reader-import",
+                       json={"file_name": "x.csv", "tests": []}).status_code == 404
+    # Another analyst completes the worksheet while the import dialog is open.
+    w.ws.status = "completed"
+    db.commit()
+    assert _import(client, w.ws, _line(w.a, "0.8", w.c05)).status_code == 409
+    db.refresh(w.a)
+    db.refresh(w.ws)
+    assert (w.a.result_reading, w.a.result_reader, w.a.cartridge_type_id,
+            w.a.ran_at) == (None, None, None, None)
+    assert w.ws.endo_method_id is None
+    assert db.query(AuditLog).filter(AuditLog.operation.in_(_IMPORT_OPS)).count() == 0
+
+
+def test_import_is_all_or_nothing_and_names_each_failing_row(client, db):
+    w = _reader_world(client, db)
+    elsewhere = _ws(db, "Another run")
+    stray, _ = _vial_item(db, elsewhere, 3, w.svc)
+    retired = _cartridge(db, "Endosafe old", 0.05, active=False)
+    off_method = _cartridge(db, "Endosafe 0.005", 0.005)
+    db.commit()
+    bad_rows = [
+        (_line(stray, "0.8", w.c05), f"item {stray.id}: not on this worksheet"),
+        (_line(w.b, "0,8", w.c05), "P-3001-S02: '0,8' is not a reading"),
+        (_line(w.b, "0.8", retired), f"P-3001-S02: {worksheets_endo.CARTRIDGE_REFUSED}"),
+        (_line(w.b, "0.8", off_method), f"P-3001-S02: {worksheets_endo.CARTRIDGE_REFUSED}"),
+        (_line(w.b, "0.8", w.c05, test_id=""), "P-3001-S02: the reader record has no test_id"),
+        (_line(w.a, "0.9", w.c05, test_id="T-2"), "P-3001-S01: listed twice"),
+    ]
+    for bad, reason in bad_rows:
+        r = _import(client, w.ws, _line(w.a, "0.8", w.c05), bad)
+        assert r.status_code == 400, bad
+        assert r.json()["detail"].startswith("Nothing was imported.")
+        assert reason in r.json()["detail"], r.json()["detail"]
+        db.refresh(w.a)
+        assert w.a.result_reading is None and w.a.ran_at is None  # the good row was not written either
+    assert db.query(AuditLog).filter(AuditLog.operation.in_(_IMPORT_OPS)).count() == 0
+
+
+def test_import_repeats_are_no_ops_and_a_different_reading_needs_replace(client, db):
+    w = _reader_world(client, db)
+    assert _import(client, w.ws, _line(w.a, "<0.05", w.c05, test_id="T-1")).json()["applied"] == 1
+    # The same file again, spacing aside: same reading, same test, nothing to do.
+    r = _import(client, w.ws, _line(w.a, "< 0.05", w.c05, test_id="T-1"))
+    assert r.status_code == 200 and r.json()["applied"] == 0
+    assert db.query(AuditLog).filter(AuditLog.operation == "endo_reader_imported").count() == 1
+    # A different reading is refused without replace, naming the row ...
+    r = _import(client, w.ws, _line(w.a, "1.2", w.c05, test_id="T-9"))
+    assert r.status_code == 400
+    assert "P-3001-S01" in r.json()["detail"] and "replace" in r.json()["detail"]
+    db.refresh(w.a)
+    assert w.a.result_reading == "<0.05"
+    # ... and applied with it.
+    r = _import(client, w.ws, _line(w.a, "1.2", w.c05, test_id="T-9", replace=True))
+    assert r.status_code == 200 and r.json()["applied"] == 1
+    db.refresh(w.a)
+    assert (w.a.result_reading, w.a.result_reader["test_id"]) == ("1.2", "T-9")
+
+
+def test_import_stamps_the_instrument_named_by_the_reader_serial(client, db):
+    # Two analyzers: the catalog alone will not choose between them; the serial does.
+    w = _reader_world(client, db, serials=("NX-1001", "NX-2002"))
+    r = _import(client, w.ws, _line(w.a, "0.8", w.c05, reader="NX-2002"))
+    assert r.status_code == 200, r.text
+    db.refresh(w.a)
+    db.refresh(w.row_a)
+    assert w.a.instrument_id == w.instruments[1]
+    assert w.row_a.instrument_id == w.instruments[1]
+    assert w.row_a.method_id is None  # a method is never written
+
+
+def test_import_without_a_serial_match_falls_back_to_the_sole_instrument(client, db):
+    w = _reader_world(client, db, serials=("NX-1001",))
+    r = _import(client, w.ws, _line(w.a, "0.8", w.c05, reader="NX-UNKNOWN"),
+                _line(w.b, "0.5", w.c05, reader=None, test_id="T-2"))
+    assert r.status_code == 200, r.text
+    db.refresh(w.a)
+    db.refresh(w.b)
+    assert w.a.instrument_id == w.instruments[0] and w.b.instrument_id == w.instruments[0]
+
+
+@pytest.mark.parametrize("field, raw, refusal", [
+    ("reading", '"' + "1" * 41 + '"', "Row P-3001-S02: A reading is at most 40 characters"),
+    # A lone surrogate cannot be written as UTF-8: echoed in the reason, it would 500.
+    ("reading", r'"\ud800"', "Row P-3001-S02: the reading holds"),
+    ("recovery", "1e400", "Row P-3001-S02: the reader record holds"),  # arrives as inf
+    ("recovery", "NaN", "Row P-3001-S02: the reader record holds"),
+    # Stored, it would break every later GET of the worksheet.
+    ("operator", r'"\ud800"', "Row P-3001-S02: the reader record holds"),
+    # Postgres refuses a NUL in the serial lookup's query parameter.
+    ("reader", r'"NX\u00001001"', "Row P-3001-S02: the reader record holds"),
+    ("file_name", r'"Export\ud800.csv"', "The file name holds"),
+])
+def test_import_refuses_pathological_values_with_400_and_writes_nothing(client, db, field, raw,
+                                                                        refusal):
+    """Spec 10: a 400 with the reason, never a 500. The value goes on the wire
+    as raw JSON (httpx's json= refuses NaN and lone surrogates); FastAPI's
+    json.loads accepts all of them."""
+    w = _reader_world(client, db)
+    bad = _line(w.b, "0.8", w.c05, test_id="T-2")
+    body = {"file_name": "EndoScanV-Export-2026-10-09.csv",
+            "tests": [_line(w.a, "0.8", w.c05), bad]}
+    target = body if field == "file_name" else bad if field == "reading" else bad["record"]
+    target[field] = "@raw@"
+    r = client.post(f"/worksheets/{w.ws.id}/reader-import",
+                    content=json.dumps(body).replace('"@raw@"', raw),
+                    headers={"Content-Type": "application/json"})
+    assert r.status_code == 400, r.text
+    assert r.json()["detail"].startswith("Nothing was imported. " + refusal), r.json()["detail"]
+    db.refresh(w.a)
+    db.refresh(w.ws)
+    assert (w.a.result_reading, w.a.result_reader, w.a.ran_at) == (None, None, None)
+    assert w.ws.endo_method_id is None
+    assert db.query(AuditLog).filter(AuditLog.operation.in_(_IMPORT_OPS)).count() == 0

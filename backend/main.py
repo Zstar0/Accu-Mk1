@@ -25274,13 +25274,9 @@ async def reassign_worksheet_item_by_id(
     return {"status": "reassigned", "target_worksheet_id": data.target_worksheet_id}
 
 
-def _sole_instrument_for_item(db: Session, item: "WorksheetItem") -> "Optional[tuple[int, list]]":
-    """The one instrument this item's open analyses can have run on, with
-    the analyses it applies to, from the catalog: analysis service -> active
-    method covering it -> active instrument linked to that method. None
-    unless exactly one instrument resolves, so a second analyzer is never
-    guessed at (the apply bar stays the way to choose). The method is only
-    the path to the instrument; it is never written (see _apply_bench_ticks)."""
+def _open_vial_analyses(db: Session, item: "WorksheetItem") -> list:
+    """The analyses on this item's vial still open for a bench stamp
+    (STAMPABLE_STATES); [] for a bare parent id, which names no vial."""
     from lims_analyses.service import STAMPABLE_STATES
     from models import LimsAnalysis
 
@@ -25288,13 +25284,23 @@ def _sole_instrument_for_item(db: Session, item: "WorksheetItem") -> "Optional[t
         select(LimsSubSample.id).where(LimsSubSample.sample_id == item.sample_id)
     ).scalar_one_or_none()
     if vial_pk is None:
-        return None
-    open_rows = db.execute(
+        return []
+    return db.execute(
         select(LimsAnalysis).where(
             LimsAnalysis.lims_sub_sample_pk == vial_pk,
             LimsAnalysis.review_state.in_(STAMPABLE_STATES),
         )
     ).scalars().all()
+
+
+def _sole_instrument_for_item(db: Session, item: "WorksheetItem") -> "Optional[tuple[int, list]]":
+    """The one instrument this item's open analyses can have run on, with
+    the analyses it applies to, from the catalog: analysis service -> active
+    method covering it -> active instrument linked to that method. None
+    unless exactly one instrument resolves, so a second analyzer is never
+    guessed at (the apply bar stays the way to choose). The method is only
+    the path to the instrument; it is never written (see _apply_bench_ticks)."""
+    open_rows = _open_vial_analyses(db, item)
     service_ids = {r.analysis_service_id for r in open_rows}
     if not service_ids:
         return None
@@ -25319,7 +25325,8 @@ def _sole_instrument_for_item(db: Session, item: "WorksheetItem") -> "Optional[t
 
 def _apply_bench_ticks(db: Session, worksheet_id: int, item: "WorksheetItem", *,
                        made: Optional[bool], ran: Optional[bool], user_id: Optional[int],
-                       stamp_instrument: bool = True) -> bool:
+                       stamp_instrument: bool = True,
+                       instrument_id: Optional[int] = None) -> bool:
     """Set or clear an item's Made / Ran ticks. The server owns who and when;
     a tick already in the wanted state is left alone (its first stamp stands).
     Every change writes an audit_logs row, prep_status follows the ticks, and a
@@ -25331,6 +25338,8 @@ def _apply_bench_ticks(db: Session, worksheet_id: int, item: "WorksheetItem", *,
     for the samples somebody ticked. Methods are not shown on COAs yet
     (Handler, 2026-09-19); the COA wire never reads instrument_id. A method
     already chosen through the apply bar is kept as it is.
+    A reader import passes the instrument its serial names (instrument_id),
+    and that wins over the catalog lookup.
     Returns whether anything changed."""
     changed = False
     newly_set = set()
@@ -25358,7 +25367,10 @@ def _apply_bench_ticks(db: Session, worksheet_id: int, item: "WorksheetItem", *,
     # set or cleared the instrument itself in the same request: their
     # explicit choice stands (stamp_instrument=False).
     if stamp_instrument and "ran" in newly_set and not item.instrument_id:
-        resolved = _sole_instrument_for_item(db, item)
+        # A reader import names its instrument by serial (endo v2, spec 4.5);
+        # otherwise the catalog decides, and only when it leaves one choice.
+        resolved = ((instrument_id, _open_vial_analyses(db, item)) if instrument_id
+                    else _sole_instrument_for_item(db, item))
         if resolved:
             from lims_analyses.service import stamp_method_instrument
 
@@ -25431,6 +25443,123 @@ def record_worksheet_printed(
     ))
     db.commit()
     return {"status": "recorded", "printed_at": ws.printed_at.isoformat() + "Z", "print_count": ws.print_count}
+
+
+class EndoReaderTest(BaseModel):
+    """One reader test the browser matched to a row (endo v2, spec 8.2)."""
+    item_id: int
+    reading: str
+    record: dict  # the reader record, spec 8.4 (src/lib/endo-reader.ts toReaderRecord)
+    cartridge_type_id: int
+    replace: bool = False
+
+
+class EndoReaderImport(BaseModel):
+    file_name: str
+    tests: list[EndoReaderTest]
+
+
+class EndoReaderImportOut(BaseModel):
+    applied: int
+    items: list[dict]  # every item on the worksheet, in the GET /worksheets/{id} shape
+    endo_method: Optional[dict] = None
+
+
+@app.post("/worksheets/{worksheet_id}/reader-import", response_model=EndoReaderImportOut)
+def import_endo_reader_results(
+    worksheet_id: int,
+    data: EndoReaderImport,
+    db: Session = Depends(get_db),
+    _current_user=Depends(get_current_user),
+):
+    """Apply an EndoScan-V export that the browser parsed and matched to rows
+    (endo v2, spec 8.2). All or nothing: every row is checked first and the
+    writes share one commit, so a refused row writes nothing at all. A test
+    already on its row (same reading, same test id) is skipped. A POST on an
+    id path, so it has no ordering concern against GET /worksheets/{worksheet_id}."""
+    from worksheets_endo import (CARTRIDGE_REFUSED, allowed_cartridge_ids, check_storable,
+                                 instrument_id_for_serial, parse_reading, pin_endo_method,
+                                 resolve_endo_method)
+
+    ws = db.execute(select(Worksheet).where(Worksheet.id == worksheet_id)).scalar_one_or_none()
+    if not ws or ws.status == "staging":
+        raise HTTPException(404, "Worksheet not found")
+    if ws.status == "completed":
+        raise HTTPException(409, "Worksheet is completed")
+    try:
+        check_storable(data.file_name, "The file name")
+    except ValueError as exc:
+        raise HTTPException(400, f"Nothing was imported. {exc}")
+    items = {it.id: it for it in db.execute(
+        select(WorksheetItem).where(WorksheetItem.worksheet_id == worksheet_id)).scalars()}
+    allowed = allowed_cartridge_ids(db, ws)
+
+    errors: list[str] = []
+    plan: list[tuple["WorksheetItem", EndoReaderTest, str]] = []
+    seen: set[int] = set()
+    for t in data.tests:
+        item = items.get(t.item_id)
+        label = item.sample_id if item else f"item {t.item_id}"
+        test_id = t.record.get("test_id")
+        try:
+            # Before parse_reading, whose reason echoes the text it refuses.
+            check_storable(t.reading, "the reading")
+            check_storable(t.record, "the reader record")
+            if item is None:
+                raise ValueError("not on this worksheet")
+            if t.item_id in seen:
+                raise ValueError("listed twice in one import")
+            seen.add(t.item_id)
+            if not isinstance(test_id, str) or not test_id.strip():
+                raise ValueError("the reader record has no test_id")
+            parsed = parse_reading(t.reading)
+            if t.cartridge_type_id not in allowed:
+                raise ValueError(CARTRIDGE_REFUSED)
+            # Compared as parsed values, so "< 0.05" and "<0.05" are the same reading.
+            held = parse_reading(item.result_reading) if item.result_reading is not None else None
+            if held == parsed and (item.result_reader or {}).get("test_id") == test_id:
+                continue  # this test is already on the row
+            if held is not None and held != parsed and not t.replace:
+                raise ValueError(f"already holds the reading {item.result_reading}; "
+                                 "tick replace to overwrite it")
+        except ValueError as exc:
+            errors.append(f"Row {label}: {exc}")
+            continue
+        plan.append((item, t, t.reading.strip()))
+    if errors:
+        raise HTTPException(400, "Nothing was imported. " + "; ".join(errors))
+
+    user_id = _current_user.id
+    if plan:
+        pin_endo_method(db, ws, user_id)
+    # Naive UTC, as the item PATCH stamps result_entered_at; the serializer appends the Z.
+    now = datetime.now(timezone.utc).replace(tzinfo=None)
+    for item, t, reading in plan:
+        db.add(AuditLog(
+            operation="endo_reader_imported",
+            entity_type="worksheet_item",
+            entity_id=str(item.id),
+            details={"user_id": user_id, "worksheet_id": ws.id, "sample_id": item.sample_id,
+                     "file_name": data.file_name, "test_id": t.record.get("test_id"),
+                     "reader": t.record.get("reader"), "slot": t.record.get("slot"),
+                     "old": item.result_reading, "new": reading,
+                     "old_cartridge_type_id": item.cartridge_type_id,
+                     "new_cartridge_type_id": t.cartridge_type_id},
+        ))
+        # The reading and its record are always written together: the item
+        # PATCH relies on that when a cleared reading clears the record.
+        item.result_reading = reading
+        # A new dict every time: a plain JSON column does not see in-place edits.
+        item.result_reader = {**t.record, "imported_at": now.isoformat() + "Z",
+                              "imported_by_user_id": user_id}
+        item.result_entered_at = now
+        item.result_entered_by_user_id = user_id
+        item.cartridge_type_id = t.cartridge_type_id
+        _apply_bench_ticks(db, ws.id, item, made=None, ran=True, user_id=user_id,
+                           instrument_id=instrument_id_for_serial(db, t.record.get("reader")))
+    db.commit()
+    return {"applied": len(plan), "items": _serialize_worksheets(db, [ws])[0]["items"],
+            "endo_method": resolve_endo_method(db, ws)}
 
 
 class WorksheetWellFreeze(BaseModel):
