@@ -16,7 +16,7 @@ Success means:
 - Mk1's numbers equal Dennis's on the 18 of his 52 test cases that cover the 2 mL prep, results and the reader import (the rest cover stock runs, his own intake file and method rules; mapping in section 11).
 - The printed bench sheet and the three boxes match his layout, column order and spacing (checked side by side, section 11).
 - Every worksheet that exists today, and every completed one, looks and calculates exactly as before.
-- Nothing in this release writes to a sample's analyses or reaches a COA.
+- Nothing in this release writes results, units or limits to a sample's analyses or reaches a COA. The only analysis write is today's MCS-tick instrument stamp, which the reader import reuses.
 - Admins add, edit and retire cartridges, and set a method's cartridges and run parameters, without a code change.
 
 ### Rulings (Handler)
@@ -153,7 +153,7 @@ Non-endo worksheets carry `endo_prep` harmlessly; only endo views read it.
 
 ### 3.8 Migrations
 
-In `database.py` `_run_migrations`, in this order, all idempotent:
+In `database.py`, a new `_run_endo_v2_migrations(bind)` called from `init_db` right after `create_all` (the `_ensure_documents_space_column` precedent; `_run_migrations` runs before `create_all`, so foreign keys to the new tables cannot be added there). Postgres only, one transaction, in this order, all idempotent:
 1. `CREATE TABLE` via `create_all` for `consumable_types` and `method_consumables`; `CREATE UNIQUE INDEX IF NOT EXISTS` for the partial indexes.
 2. `ADD COLUMN IF NOT EXISTS` for every column in 3.4 to 3.7, **without defaults**.
 3. The one-time 2 mL switch, guarded on `endo_prep IS NULL`:
@@ -181,7 +181,7 @@ The serializer adds `endo_method` to each worksheet: for every endo item, follow
 
 ### 4.3 Cartridges
 
-- **Allowed list:** the method's active `endo_cartridge` consumables; if no method resolves (for example the legacy ENDO-LAL test), every active `endo_cartridge` type.
+- **Allowed list:** the method's active `endo_cartridge` consumables; if no method resolves (for example the legacy ENDO-LAL test), or the method lists none yet (between deploy and the launch revision), every active `endo_cartridge` type, with no default.
 - **Run cartridge:** `worksheets.cartridge_type_id`, else the method's default, else none. Results do not compute until there is one.
 - **Row cartridge:** `worksheet_items.cartridge_type_id`; else, for a bac water row, the allowed type with sensitivity 0.01 EU/mL (Dennis's rule); else the run cartridge.
 - The sensitivity is read from the type's `specs.sensitivity_eu_ml`; it cannot change once used (3.1).
@@ -263,7 +263,7 @@ A read-only panel on the service detail for endo services (keyword contains `END
 ### 6.8 Layout parity with Dennis's tool
 
 - Box order, numbered box titles, column order and captions as in his `endotoxin.html`.
-- Column widths from his colgroups as percentages; his base text 10pt and box titles 14pt; box padding 4px 14px 14px with a 12px gap.
+- The page copies his on-screen CSS (sizes, paddings, gaps; box padding 4px 14px 14px with a 12px gap); paper copies his print CSS (base 10pt, titles 14pt, colgroup percentages). Where the two disagree on screen, the parity check (section 11) decides.
 - His colours (calculated-column tint, step colours for Tris, LAL water and BG600, violet for the vial) mapped to Mk1 theme tokens, with dark-mode variants (his tool is light only).
 - Font: Mk1's font stack at his sizes.
 - Verified by the side-by-side check in section 11.
@@ -314,7 +314,7 @@ Server, for the whole request in one transaction (all or nothing):
 
 ### 8.4 The reader record (`result_reader`)
 
-`test_id`, `reader` (serial), `slot`, `operator`, `tested_at`, `temp_start`, `temp_end`, `software`, `cartridge_lot`, `cartridge_expiry`, `cartridge_range`, `spike_level`, `recovery`, `rec_min`, `rec_max`, `sample_cv`, `spike_cv`, `cv_limit`, `reader_pass` (the reader's flags), `valid` and `why` (worked out from the numbers), `file_name`, `imported_at`, `imported_by_user_id`.
+`test_id`, `result` (the reading exactly as the reader showed it, so the screen can flag a typed reading that differs), `reader` (serial), `slot`, `operator`, `tested_at`, `temp_start`, `temp_end`, `software`, `cartridge_lot`, `cartridge_expiry`, `cartridge_range`, `spike_level`, `recovery`, `rec_min`, `rec_max`, `sample_cv`, `spike_cv`, `cv_limit`, `reader_pass` (the reader's flags), `valid` and `why` (worked out from the numbers), `file_name`, `imported_at`, `imported_by_user_id`.
 
 ## 9. API changes
 
@@ -327,7 +327,7 @@ Server, for the whole request in one transaction (all or nothing):
 | `POST /hplc/methods/{id}/new-revision` | also copies `run_parameters` and `method_consumables` |
 | `POST/PATCH /instruments` | `serial_number` |
 | `PUT /worksheets/{id}` | `endo_prep`, `cartridge_type_id` (409 on completed; audited) |
-| `PATCH /worksheets/{ws}/items/{item}` | `prep_form`, `prep_water_ml`, `prep_total_dilution`, `prep_steps`, `cartridge_type_id`, `result_reading` (409 on completed for these fields only; audited). Setting `result_reading` requires the row's resolved `cartridge_type_id` in the same request when the item has none, and pins the worksheet's method (4.1) |
+| `PATCH /worksheets/{ws}/items/{item}` | `prep_form`, `prep_water_ml`, `prep_total_dilution`, `prep_steps`, `cartridge_type_id`, `result_reading` (409 on completed for these fields only; audited). Setting `result_reading` requires the row's resolved `cartridge_type_id` in the same request when the item has none, and pins the worksheet's method (4.1). A typed reading over an imported one keeps `result_reader` (the screen flags the difference); clearing the reading also clears `result_reader` |
 | `GET /worksheets`, `GET /worksheets/{id}` | serialize the new worksheet and item fields and each referenced cartridge's sensitivity; `endo_method` (4.1) on the single-worksheet GET only |
 | `POST /worksheets/{id}/printed` | also pins the method (4.1) |
 | `POST /worksheets/{id}/reader-import` | new (8.2) |
@@ -338,7 +338,7 @@ New endpoints declare their response models.
 
 - **Who can edit:** worksheet entry as today (any logged-in user). Consumables and instrument serials: any logged-in user, every change in `catalog_change_log`. Method content, run parameters and allowed cartridges: drafts only (409 on active or retired).
 - **Completed worksheets:** read-only on screen; the server returns 409 for the new item fields, the run fields and the reader import. Existing fields keep today's behaviour.
-- **Validation (400 with the reason):** a reading that is not a number or `<number>`; water at or below 0; a total the steps cannot make; malformed `prep_steps`; an unknown Form; a retired, wrong-kind or not-allowed cartridge; malformed `run_parameters`.
+- **Validation (400 with the reason):** a reading that is not a number or `<number>`; water at or below 0; a total below twice the row's step 1 ratio (step 2 cannot be made; tube overflow stays an on-screen warning); malformed `prep_steps`; an unknown Form; a retired, wrong-kind or not-allowed cartridge; malformed `run_parameters`.
 - **Conflicts (409):** editing a used cartridge's `kind` or `specs`; a duplicate instrument serial; editing a non-draft method's consumables or run parameters.
 - **Audit (`audit_logs`):** `endo_prep_set`, `endo_cartridge_set` (run and row), `endo_method_pinned`, `endo_reading_set` / `endo_reading_cleared`, `endo_reader_imported`, each with the item or worksheet id and old and new values.
 - **Audit (`catalog_change_log`):** consumable create, edit and retire; method consumables (`log_members`); method `run_parameters`; instrument `serial_number`.
