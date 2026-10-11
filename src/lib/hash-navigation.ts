@@ -14,6 +14,7 @@
  *  - accumark-tools/customer-detail → customerDetailTargetId
  *  - lims/peptide-config            → peptideConfigTargetId
  *  - reports/documents              → documentViewerTargetId
+ *  - hplc-analysis/worksheet       → worksheetPageId
  */
 
 import { useEffect } from 'react'
@@ -115,6 +116,13 @@ export function applyNavToStore(nav: ParsedNav) {
     store.navigateToCustomer(Number(targetId))
   } else if (subSection === 'peptide-config' && targetId) {
     store.navigateToPeptide(Number(targetId))
+  } else if (
+    subSection === 'worksheet' &&
+    targetId &&
+    !Number.isNaN(Number(targetId))
+  ) {
+    // The endo worksheet page; a non-numeric id falls through to a plain navigate.
+    store.navigateToWorksheet(Number(targetId))
   } else if (subSection === 'worksheet-detail' && targetId) {
     store.openWorksheetDrawer(Number(targetId))
   } else if (
@@ -165,6 +173,7 @@ export function buildHash(state: {
   documentViewerTargetId: number | null
   documentsSpaceSlug: string | null
   boardTargetSlug: string | null
+  worksheetPageId: number | null
 }): string {
   let hash = `#${state.activeSection}/${state.activeSubSection}`
 
@@ -205,6 +214,11 @@ export function buildHash(state: {
     state.boardTargetSlug
   ) {
     hash += `?id=${encodeURIComponent(state.boardTargetSlug)}`
+  } else if (
+    state.activeSubSection === 'worksheet' &&
+    state.worksheetPageId != null
+  ) {
+    hash += `?id=${encodeURIComponent(String(state.worksheetPageId))}`
   }
 
   return hash
@@ -239,7 +253,8 @@ export function useHashNavigation() {
         state.peptideConfigTargetId !== prev.peptideConfigTargetId ||
         state.documentViewerTargetId !== prev.documentViewerTargetId ||
         state.documentsSpaceSlug !== prev.documentsSpaceSlug ||
-        state.boardTargetSlug !== prev.boardTargetSlug
+        state.boardTargetSlug !== prev.boardTargetSlug ||
+        state.worksheetPageId !== prev.worksheetPageId
       ) {
         const newHash = buildHash(state)
         if (window.location.hash !== newHash) {

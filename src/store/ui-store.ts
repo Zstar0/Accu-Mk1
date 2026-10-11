@@ -42,6 +42,7 @@ export type HPLCAnalysisSubSection =
   | 'inbox'
   | 'worksheets'
   | 'worksheet-detail'
+  | 'worksheet'
 export type WorksheetSubSection = 'inbox' | 'worksheets' | 'worksheet-detail'
 export type AccuMarkToolsSubSection =
   | 'overview'
@@ -134,6 +135,9 @@ interface UIState {
   // reads it via consumePendingBoardNode() to focus/select a node on arrival.
   boardTargetSlug: string | null
   pendingBoardNode: string | null
+  // Endo worksheet page (#hplc-analysis/worksheet?id=N, spec 2026-10-10
+  // 6.1). Sticky like documentViewerTargetId; generic navigateTo clears it.
+  worksheetPageId: number | null
   customerListPage: number
   customerSearchTerm: string
   hideTestAccounts: boolean
@@ -183,6 +187,8 @@ interface UIState {
   navigateToCustomerKey: (key: string) => void
   navigateToDocument: (id: number) => void
   navigateToDocumentSpace: (slug: string | null) => void
+  /** The endo worksheet page; closes the worksheet flyout. */
+  navigateToWorksheet: (id: number) => void
   openDocumentForEditing: (id: number) => void
   consumeDocumentEditRequest: () => void
   clearDocumentViewer: () => void
@@ -309,6 +315,7 @@ export const useUIStore = create<UIState>()(
       documentViewerEditRequested: false,
       boardTargetSlug: null,
       pendingBoardNode: null,
+      worksheetPageId: null,
       customerListPage: 0,
       customerSearchTerm: '',
       hideTestAccounts: true,
@@ -401,6 +408,7 @@ export const useUIStore = create<UIState>()(
             documentsSpaceSlug: null,
             documentViewerEditRequested: false,
             boardTargetSlug: null,
+            worksheetPageId: null,
             navigationKey: state.navigationKey + 1,
           }),
           undefined,
@@ -466,6 +474,19 @@ export const useUIStore = create<UIState>()(
           }),
           undefined,
           'navigateToDocument'
+        ),
+
+      navigateToWorksheet: id =>
+        set(
+          state => ({
+            activeSection: 'hplc-analysis',
+            activeSubSection: 'worksheet',
+            worksheetPageId: id,
+            worksheetDrawerOpen: false,
+            navigationKey: state.navigationKey + 1,
+          }),
+          undefined,
+          'navigateToWorksheet'
         ),
 
       openDocumentForEditing: id =>
