@@ -2357,6 +2357,21 @@ def _run_migrations():
         """,
         # Documents library: the agent that authored a revision (from its scoped token).
         "ALTER TABLE documents ADD COLUMN IF NOT EXISTS co_author VARCHAR(100)",
+        # Documents provenance (2026-10-11, documents/provenance.py). One statement so the
+        # columns land together or not at all. Additive and nullable (source_verified
+        # defaults FALSE): an older image ignores them, so rollback is a plain redeploy.
+        "ALTER TABLE documents "
+        "ADD COLUMN IF NOT EXISTS creator_kind VARCHAR(20), "
+        "ADD COLUMN IF NOT EXISTS creator_ref VARCHAR(100), "
+        "ADD COLUMN IF NOT EXISTS requested_by_user_id INTEGER REFERENCES users(id) ON DELETE SET NULL, "
+        "ADD COLUMN IF NOT EXISTS content_edited_by_user_id INTEGER REFERENCES users(id) ON DELETE SET NULL, "
+        "ADD COLUMN IF NOT EXISTS content_edited_at TIMESTAMP, "
+        "ADD COLUMN IF NOT EXISTS source_system VARCHAR(40), "
+        "ADD COLUMN IF NOT EXISTS source_verified BOOLEAN NOT NULL DEFAULT FALSE, "
+        "ADD COLUMN IF NOT EXISTS source_record_type VARCHAR(40), "
+        "ADD COLUMN IF NOT EXISTS source_record_id VARCHAR(100), "
+        "ADD COLUMN IF NOT EXISTS source_record_label VARCHAR(100), "
+        "ADD COLUMN IF NOT EXISTS source_run_id VARCHAR(100)",
         # --- HPLC-native slice 1 (spec 2026-09-10, M1) ---
         # peptide_id + slot on analysis rows. Additive, nullable, no backfill:
         # NULL on every legacy row by contract. CHECK uses the union-preserve

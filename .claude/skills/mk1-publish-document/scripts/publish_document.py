@@ -5,6 +5,8 @@ Usage:
   publish_document.py PAGE.html --title T --category ART [--description D]
       [--code ART-0012] [--author "Forrest Parker"] [--session ID] [--draft] [--space SLUG]
       [--effective YYYY-MM-DD] [--base-url URL]
+      [--source-system paperclip --source-record-type issue --source-record-id UUID
+       --source-record-label ACC-111 --source-run RUN_ID]
       [--allow-secrets] [--dry-run]
   publish_document.py --self-test
 
@@ -59,14 +61,27 @@ def wrap_fragment(html: str) -> str:
 
 
 
-def post_document(base_url: str, token: str, payload: dict) -> dict:
+def post_document(base_url: str, token: str, payload: dict) -> tuple[int, dict]:
+    """(HTTP status, body). 201 = this request made a row; 200 = identical bytes were
+    already the latest revision of the named code, so nothing was made."""
     req = urllib.request.Request(
         f"{base_url.rstrip('/')}/api/documents",
         data=json.dumps(payload).encode("utf-8"),
         headers={"Content-Type": "application/json", "X-Service-Token": token},
         method="POST")
     with urllib.request.urlopen(req, timeout=60) as resp:
-        return json.loads(resp.read().decode("utf-8"))
+        return resp.status, json.loads(resp.read().decode("utf-8"))
+
+
+SOURCE_ARGS = (("source_system", "source_system"), ("source_record_type", "source_record_type"),
+               ("source_record_id", "source_record_id"), ("source_record_label", "source_record_label"),
+               ("source_run_id", "source_run"))
+
+
+def provenance(args) -> dict:
+    """The caller-ASSERTED origin sent as `provenance`. Mk1 labels it reported, never verified;
+    who the creator is comes from the token, not from here."""
+    return {key: v.strip() for key, attr in SOURCE_ARGS if (v := getattr(args, attr, None) or "").strip()}
 
 
 def self_test() -> None:
@@ -83,7 +98,10 @@ def self_test() -> None:
     ns = build_parser().parse_args(["x.html", "--title", "t", "--category", "ART", "--space", "Accounting"])
     assert ns.space == "accounting"
     ns = build_parser().parse_args(["x.html", "--title", "t", "--category", "ART"])
-    assert ns.space == "general"
+    assert ns.space == "general" and provenance(ns) == {}
+    ns = build_parser().parse_args(["x.html", "--title", "t", "--category", "ART",
+                                    "--source-system", "paperclip", "--source-run", " r1 "])
+    assert provenance(ns) == {"source_system": "paperclip", "source_run_id": "r1"}
     print("self-test ok")
 
 
@@ -109,6 +127,12 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--self-test", action="store_true")
     p.add_argument("--paperclip-ref", action="store_true",
                    help="print the Paperclip work-product reference JSON (no content) on success")
+    p.add_argument("--source-system", help="where the request came from: paperclip, valence-hq, "
+                   "slack, claude-code or accumk1 (recorded as REPORTED, not verified)")
+    p.add_argument("--source-record-type", help="source record kind, e.g. issue")
+    p.add_argument("--source-record-id", help="source record id, e.g. the Paperclip issue UUID")
+    p.add_argument("--source-record-label", help="source record display label, e.g. ACC-111")
+    p.add_argument("--source-run", help="exact run/session id in the source system; never invent one")
     return p
 
 
@@ -139,6 +163,13 @@ def reconcile(existing, args) -> str | None:
     for key, value in want.items():
         if existing.get(key) != value:
             return f"existing {key} does not match this publish"
+    # Same bytes do not prove the same origin: the stored source must equal ours exactly
+    # (both absent counts). A server without provenance only matches a source-less publish.
+    src = (existing.get("provenance") or {}).get("source") or {}
+    theirs = {key: src.get(key.removeprefix("source_")) for key, _ in SOURCE_ARGS}
+    mine = provenance(args)
+    if {k: v for k, v in theirs.items() if v} != mine:
+        return "existing source provenance does not match this publish"
     if os.environ.get("MK1_DOCUMENT_AGENT_TOKEN") and not existing.get("co_author"):
         return "existing document has no server-attested agent co-author"
     code, rev = existing.get("code"), existing.get("revision")
@@ -164,19 +195,23 @@ def post_with_reconcile(base_url: str, token: str, payload: dict) -> dict:
     """POST once; on a transport failure (response unknown) POST the identical payload
     once more. Safe by server design: identical bytes never mint a second document
     (new code -> 409 naming the existing one; existing code -> 200, no new row).
-    A 409 on the retry means the first POST may have succeeded: UncertainCreate."""
+    A 409 OR a 200 on the retry means this retry made nothing and the first POST may or
+    may not have: UncertainCreate, so the returned row is reconciled, never assumed ours."""
     try:
-        return post_document(base_url, token, payload)
+        return post_document(base_url, token, payload)[1]
     except urllib.error.HTTPError:
         raise
     except (urllib.error.URLError, TimeoutError, OSError):
         pass
     try:
-        return post_document(base_url, token, payload)
+        status, doc = post_document(base_url, token, payload)
     except urllib.error.HTTPError as e:
         if e.code != 409:
             raise
         raise UncertainCreate(e.read().decode("utf-8", errors="replace")) from e
+    if status != 201:
+        raise UncertainCreate(json.dumps({"existing": doc}))
+    return doc
 
 
 def main(argv=None) -> int:
@@ -215,6 +250,8 @@ def main(argv=None) -> int:
         "source_session": args.session, "effective_date": args.effective,
         "activate": not args.draft, "space": args.space,
     }
+    if provenance(args):
+        payload["provenance"] = provenance(args)
     if args.dry_run:
         summary = {k: v for k, v in payload.items() if k != "html"}
         summary["html_bytes"] = len(html.encode("utf-8"))
@@ -239,9 +276,10 @@ def main(argv=None) -> int:
         why = reconcile(existing, args)
         if why is not None:
             m = ALREADY_RE.search(u.body)
-            print(json.dumps({"outcome": "unknown", "reason": why,
-                              "candidate": ({"code": m.group(1), "revision": int(m.group(2))}
-                                            if m else None),
+            cand = ({"code": m.group(1), "revision": int(m.group(2))} if m else
+                    {"code": existing.get("code"), "revision": existing.get("revision")}
+                    if isinstance(existing, dict) and existing.get("code") else None)
+            print(json.dumps({"outcome": "unknown", "reason": why, "candidate": cand,
                               "reconcile": "The first attempt may have created a document; its outcome is unknown. A person "
                               "signed in to Mk1 opens Reports > Documents, checks the candidate's "
                               "title, space, author and session against this publish, and posts "

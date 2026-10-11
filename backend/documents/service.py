@@ -467,9 +467,13 @@ def create_document(db: Session, *, title: str = "", html, category: Optional[Do
                     user_id: Optional[int] = None,
                     co_author: Optional[str] = None,
                     space: Optional[DocumentSpace] = None,
-                    may_revise: Optional[Callable[[Document], bool]] = None) -> tuple[Document, bool]:
+                    may_revise: Optional[Callable[[Document], bool]] = None,
+                    provenance: Optional[dict] = None) -> tuple[Document, bool]:
     """Create revision 1 of a new code, or the next revision of an existing one.
     Identical bytes on an existing code => metadata patch, no new row (§5.5).
+    `provenance` is a dict of the new row's provenance columns, already validated
+    (documents/provenance.py). It lands only on a NEW row: the identical-bytes branch
+    keeps the existing revision's provenance untouched.
     `may_revise` is checked under the row lock: False reads as an unknown code, so a
     code minted into a hidden space between the caller's check and this lock is never
     revised (or named) by a caller who cannot see it."""
@@ -560,7 +564,7 @@ def create_document(db: Session, *, title: str = "", html, category: Optional[Do
                    co_author=co_author,
                    source_session=source_session,
                    created_by_user_id=user_id, storage_key=key, size_bytes=len(data),
-                   content_sha256=sha)
+                   content_sha256=sha, **(provenance or {}))
     db.add(doc)
     db.flush()
     if activate:
@@ -787,7 +791,8 @@ def read_content(doc: Document) -> bytes:
 
 
 def replace_draft_content(db: Session, doc_id: int, *, html, updated_by: Optional[str],
-                          expected_sha256: Optional[str] = None) -> tuple[Document, bool]:
+                          expected_sha256: Optional[str] = None,
+                          edited_by_user_id: Optional[int] = None) -> tuple[Document, bool]:
     """In-place content replace for a DRAFT only (spec §10.3). Anything that was
     ever active is immutable: an edit to it is a new revision through
     create_document. Blob ordering mirrors delete_document: write the new
@@ -816,6 +821,9 @@ def replace_draft_content(db: Session, doc_id: int, *, html, updated_by: Optiona
     if updated_by:
         doc.updated_by = updated_by
     doc.updated_at = datetime.utcnow()
+    # The bytes are no longer only the creator's: provenance says who rewrote them.
+    doc.content_edited_by_user_id = edited_by_user_id
+    doc.content_edited_at = doc.updated_at
     db.commit()
     db.refresh(doc)
     if old_key != doc.storage_key:

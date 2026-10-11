@@ -70,11 +70,14 @@ def test_duplicate_409_carries_the_existing_rows_reference_fields_for_reconcilia
         assert again.status_code == 409
         body = again.json()
         assert body["detail"].startswith(f"this content is already published as {first['code']} r1")
-        assert body["existing"] == {
+        existing = dict(body["existing"])
+        prov = existing.pop("provenance")  # additive: the legacy keys below are unchanged
+        assert existing == {
             "id": first["id"], "code": first["code"], "revision": 1,
             "content_sha256": first["content_sha256"], "title": first["title"],
             "status": "draft", "space_slug": "general", "author": "Requester Name",
             "co_author": "jarvis", "source_session": "paperclip-run-1"}
+        assert prov == first["provenance"]
         stored = client.get(f"/api/documents/{first['id']}/content").content
         assert hashlib.sha256(stored).hexdigest() == body["existing"]["content_sha256"]
         assert client.get("/api/documents").json()["total"] == 1
@@ -110,7 +113,7 @@ def test_publisher_retries_a_transport_failure_once_with_the_identical_payload()
         calls.append(payload)
         if len(calls) == 1:
             raise urllib.error.URLError("timed out")
-        return {"id": 1}
+        return 201, {"id": 1}
 
     with patch.object(publisher, "post_document", fake):
         assert publisher.post_with_reconcile("http://x", "t", {"html": "<p>"}) == {"id": 1}
