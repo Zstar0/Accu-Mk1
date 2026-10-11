@@ -20,6 +20,7 @@ import {
   dilutionPlan,
   fmtConc,
   formOf,
+  groupTotalOf,
   type EndoCheck,
   type EndoCtx,
   type EndoRunParams,
@@ -308,14 +309,13 @@ export function standardSteps(ctx: EndoCtx): EndoStepPlan[] {
 }
 
 /**
- * The total a row is grouped under, in the order orderByTotal sorts them:
- * the number as shown (fmt), 'x' for a total the steps cannot make, 'bac'
- * for bac water. Box 2 and the 2 mL bench sheet draw a rule where this
- * changes. As shown, because a step 1 ratio that does not divide the total
- * makes 1:15 x 1:8.333333 x 1:2 = 249.99999, which is still the 1:250 group.
+ * The total a row is grouped under, on the key orderByTotal sorts by
+ * (groupTotalOf): the target as shown, 'x' for a total the steps cannot
+ * make, 'bac' for bac water. Box 2 and the 2 mL bench sheet draw a rule
+ * where this changes.
  */
 export function totalGroupKey(s: EndoSample, ctx: EndoCtx): string {
   if (formOf(s) === 'bac') return 'bac'
-  const total = dilutionPlan(s, ctx).total
+  const total = groupTotalOf(s, ctx)
   return total === null ? 'x' : fmt(total)
 }

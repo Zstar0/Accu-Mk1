@@ -1,4 +1,4 @@
-import { useState, type ReactNode } from 'react'
+import { useRef, useState, type ReactNode } from 'react'
 import type { WorksheetItemPatch } from '@/lib/api'
 import { fmt, fmtUl } from '@/lib/endo-prep'
 import {
@@ -248,6 +248,9 @@ export function EndoSampleDilutionBox({
 }: EndoBoxProps) {
   // The server's refusal per item id, from onUpdateItem's resolved message.
   const [refused, setRefused] = useState<Record<number, string>>({})
+  // Each row's latest save: only its outcome may set the row's refusal, so
+  // an earlier refusal landing after a later save is dropped.
+  const latestSend = useRef<Record<number, number>>({})
   if (!rows.length) return null
   const std = standardSteps(ctx)
   const ordered = orderByTotal(rows, r => r.sample, ctx)
@@ -256,9 +259,12 @@ export function EndoSampleDilutionBox({
 
   function send(row: EndoRow, data: WorksheetItemPatch) {
     const id = row.item.id
+    const seq = (latestSend.current[id] ?? 0) + 1
+    latestSend.current[id] = seq
     setRefused(({ [id]: _cleared, ...rest }) => rest)
     void Promise.resolve(onUpdateItem(id, data)).then(msg => {
-      if (msg) setRefused(r => ({ ...r, [id]: msg }))
+      if (msg && latestSend.current[id] === seq)
+        setRefused(r => ({ ...r, [id]: msg }))
     })
   }
 

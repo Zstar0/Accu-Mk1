@@ -8,6 +8,7 @@ import {
   ENDO_RUN_PARAM_DEFAULTS,
   formOf,
   type EndoCheck,
+  type EndoSample,
 } from '@/lib/endo-prep-2ml'
 import {
   allowedCartridges,
@@ -16,6 +17,7 @@ import {
   endoRowsFor,
   endoSampleFor,
   runParamsFrom,
+  totalGroupKey,
   type WorksheetItemRow,
 } from '@/lib/endo-worksheet-2ml'
 
@@ -294,5 +296,44 @@ describe('cartridgeNote', () => {
     expect(
       cartridgeNote(check({ lambda: 0.05, valid: false, floorShown: 1 }), true)
     ).toEqual({ text: 'floor 1 > 0.25 limit', tone: 'crit' })
+  })
+})
+
+describe('totalGroupKey', () => {
+  const ctx = { params: ENDO_RUN_PARAM_DEFAULTS, allowedLambdas: [] }
+  const row = (o: Partial<EndoSample>): EndoSample => ({
+    sampleId: 'P-1',
+    identity: 'Examplerelin',
+    sampleType: null,
+    weightMg: 10,
+    form: null,
+    waterMl: null,
+    totalDilution: null,
+    steps: null,
+    lambda: null,
+    reading: null,
+    reader: null,
+    ...o,
+  })
+
+  it('is the target as shown, whatever r6 leaves in the product of the steps', () => {
+    // 1:15 at 1:250 makes 249.99999; 1:999 at 1:3000 makes 3000.000996
+    expect(
+      totalGroupKey(
+        row({ steps: [{ sampleUl: 20, ratio: 15 }, null, null] }),
+        ctx
+      )
+    ).toBe('250')
+    expect(
+      totalGroupKey(
+        row({
+          totalDilution: 3000,
+          steps: [{ sampleUl: 20, ratio: 999 }, null, null],
+        }),
+        ctx
+      )
+    ).toBe('3000')
+    expect(totalGroupKey(row({ totalDilution: 15 }), ctx)).toBe('x')
+    expect(totalGroupKey(row({ sampleId: 'BW-1' }), ctx)).toBe('bac')
   })
 })

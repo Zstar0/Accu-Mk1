@@ -607,6 +607,19 @@ export function mk1Value(
 /* ---------------- order ---------------- */
 
 /**
+ * The total a row is grouped and ordered under (Box 2 and the 2 mL bench
+ * sheet): its target as shown (fmt) when the steps can make it, else null;
+ * null for bac water. The target, not the product of the steps: r6 on step
+ * 2's ratio leaves the product a hair off (1:15 at 1:250 makes 249.99999,
+ * 1:999 at 1:3000 makes 3000.000996), which must neither split a group nor
+ * reorder the rows inside it.
+ */
+export function groupTotalOf(s: EndoSample, ctx: EndoCtx): number | null {
+  if (formOf(s) === 'bac' || vialDilutionOf(s, ctx) === null) return null
+  return Number(fmt(totalOf(s, ctx)))
+}
+
+/**
  * Box 2 and the 2 mL bench sheet order (Dennis 2026-10-09): grouped by total,
  * ascending; ties keep the order given (bench order); a total the steps
  * cannot make after the numbers; bac water last.
@@ -619,7 +632,7 @@ export function orderByTotal<T>(
   return rows
     .map((r, i) => {
       const s = sampleOf(r)
-      const total = formOf(s) === 'bac' ? null : vialDilutionOf(s, ctx)
+      const total = groupTotalOf(s, ctx)
       const group = formOf(s) === 'bac' ? 2 : total === null ? 1 : 0
       return { r, i, group, total: total ?? 0 }
     })
