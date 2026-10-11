@@ -20,6 +20,8 @@ import { TicketActionBar } from './TicketActionBar'
 import { TicketSidebar } from './TicketSidebar'
 import { TicketTimeline } from './TicketTimeline'
 import { useSupportSeat } from './useSupportSeat'
+import { statusLabel } from './plain-time'
+import { supportErrorMessage } from './support-errors'
 import './plain-view.css'
 
 const ORDER_KEY = 'mk1.supportConversationOrder'
@@ -89,6 +91,7 @@ export function SupportThreadPanel({
   }
   const [composer, setComposer] = useState<'reply' | 'note' | null>(null)
   const [details, setDetails] = useState(false)
+  const [moreError, setMoreError] = useState<string | null>(null)
   const scroller = useRef<HTMLDivElement>(null)
   const loadedId = d?.thread.id
   useEffect(() => {
@@ -103,17 +106,17 @@ export function SupportThreadPanel({
     : []
   const first =
     (current?.customer?.name ?? 'customer').split(' ')[0] ?? 'customer'
-  const onMore = (action: string, until?: string) =>
-    void run(
+  const onMore = (action: string, until?: string) => {
+    setMoreError(null)
+    run(
       'status',
       action === 'todo'
         ? { status: 'todo' }
         : until
           ? { status: 'snoozed', until }
           : { status: action }
-    ).catch(() => {
-      // the sidebar shows status errors; the bar has no error line of its own
-    })
+    ).catch((e: unknown) => setMoreError(supportErrorMessage(e)))
+  }
 
   return (
     <Sheet open={thread !== null} onOpenChange={o => !o && onClose()}>
@@ -140,7 +143,9 @@ export function SupportThreadPanel({
             {current?.title}
           </SheetTitle>
           <SheetDescription className="flex flex-wrap items-center gap-2 text-[var(--pv-ink-2)]">
-            <span>{current?.status_detail?.label ?? current?.status}</span>
+            <span>
+              {statusLabel(current?.status_detail) ?? current?.status}
+            </span>
             <span>· {current?.priority}</span>
             {current && (
               <a
@@ -229,6 +234,9 @@ export function SupportThreadPanel({
                 onClose={() => setComposer(null)}
                 onSubmit={(tab, markdown) => run(tab, { markdown })}
               />
+            )}
+            {moreError && (
+              <p className="px-4 text-xs text-red-500">{moreError}</p>
             )}
             {current && hasSeat && (
               <TicketActionBar

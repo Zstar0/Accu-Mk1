@@ -16,7 +16,7 @@ import {
 import { cn } from '@/lib/utils'
 import { PlainAvatar } from './PlainAvatar'
 import { supportErrorMessage } from './support-errors'
-import { exact } from './plain-time'
+import { exact, statusLabel } from './plain-time'
 import { SNOOZE_PRESETS } from './snooze-presets'
 
 type Run = (
@@ -165,7 +165,7 @@ export function TicketSidebar({
                   {thread.status === 'snoozed' &&
                     detail?.kind !== 'waiting_for_customer' && (
                       <option value="snoozed">
-                        {detail?.label ?? 'Snoozed'}
+                        {statusLabel(detail) ?? 'Snoozed'}
                       </option>
                     )}
                   <option value="snooze:1h">Snooze 1 hour</option>
@@ -204,7 +204,7 @@ export function TicketSidebar({
             ) : (
               <span className="flex items-center gap-1">
                 <StatusIcon className="h-4 w-4 text-[var(--pv-accent)]" />{' '}
-                {detail?.label ?? thread.status}
+                {statusLabel(detail) ?? thread.status}
               </span>
             )}
           </Row>

@@ -30,3 +30,18 @@ export const exact = (iso: string | null | undefined) =>
         timeStyle: 'short',
       })
     : ''
+
+/** Plain's status wording, with a snooze end date shown in the viewer's local time. */
+export function statusLabel(
+  d: { kind: string; label: string; until: string | null } | null | undefined
+): string | undefined {
+  if (!d) return undefined
+  if (d.kind === 'waiting_until' && d.until) {
+    const day = new Date(d.until).toLocaleDateString('en-US', {
+      month: 'short',
+      day: 'numeric',
+    })
+    return `Waiting until ${day}`
+  }
+  return d.label
+}

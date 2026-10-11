@@ -178,4 +178,39 @@ describe('TicketSidebar', () => {
     expect(screen.getByText('Needs next response')).toBeInTheDocument()
     expect(screen.queryByRole('button', { name: /Remove label/ })).toBeNull()
   })
+
+  it('shows a snooze end date in local time', () => {
+    const until = '2026-10-12T02:00:00Z'
+    vi.mocked(support.getSupportWorkspace).mockResolvedValue({
+      teammates: [],
+      label_types: [],
+    })
+    const qc = new QueryClient({
+      defaultOptions: { queries: { retry: false } },
+    })
+    render(
+      <QueryClientProvider client={qc}>
+        <TicketSidebar
+          thread={{
+            ...thread,
+            status: 'snoozed',
+            status_detail: {
+              kind: 'waiting_until',
+              label: 'Waiting until 2026-10-12',
+              until,
+            },
+          }}
+          threads={[]}
+          canEdit={false}
+          run={vi.fn()}
+          onSelect={vi.fn()}
+        />
+      </QueryClientProvider>
+    )
+    const local = new Date(until).toLocaleDateString('en-US', {
+      month: 'short',
+      day: 'numeric',
+    })
+    expect(screen.getByText(`Waiting until ${local}`)).toBeInTheDocument()
+  })
 })

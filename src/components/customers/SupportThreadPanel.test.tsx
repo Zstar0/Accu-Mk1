@@ -288,4 +288,14 @@ describe('SupportThreadPanel actions', () => {
       )
     )
   })
+
+  it('a failed More action says why', async () => {
+    setup()
+    vi.mocked(support.supportAction).mockRejectedValueOnce(
+      new CrmError(503, 'support_not_configured')
+    )
+    await userEvent.click(await screen.findByRole('button', { name: 'More' }))
+    await userEvent.click(screen.getByRole('menuitem', { name: 'Mark done' }))
+    expect(await screen.findByText(/not configured/)).toBeInTheDocument()
+  })
 })
