@@ -2,16 +2,17 @@
 
 A kind is one CONSUMABLE_KINDS entry plus rows in consumable_types; `specs`
 holds the kind's numbers and is validated here. Once a worksheet or a worksheet
-item references a type, its kind and specs are locked: a wrong number is fixed
-by retiring the type and adding a new one, so every result keeps the numbers it
-was computed with.
+item references a type, or a method revision that is no longer a draft links
+it, its kind and specs are locked: a wrong number is fixed by retiring the type
+and adding a new one, so every result keeps the numbers it was computed with
+and every issued revision the numbers it was issued with.
 """
 import math
 
 from sqlalchemy import select, union
 from sqlalchemy.orm import Session
 
-from models import Worksheet, WorksheetItem
+from models import HplcMethod, Worksheet, WorksheetItem, method_consumables
 
 # Spec entry fields are what GET /consumables/kinds serves to build the admin form.
 CONSUMABLE_KINDS: dict[str, dict] = {
@@ -69,13 +70,22 @@ def validate_specs(kind: str, specs: dict) -> dict:
     return clean
 
 
+def _issued_method_links():
+    """Type ids linked to a method revision that is not a draft (active or
+    retired). A draft's links can still change, so they lock nothing."""
+    return (select(method_consumables.c.consumable_type_id)
+            .join(HplcMethod, HplcMethod.id == method_consumables.c.method_id)
+            .where(HplcMethod.status != "draft"))
+
+
 def consumable_in_use(db: Session, type_id: int) -> bool:
-    """True once a worksheet (run cartridge) or a worksheet item (row
-    cartridge) references the type."""
+    """True once a worksheet (run cartridge), a worksheet item (row
+    cartridge) or a non-draft method revision references the type."""
     for col in (Worksheet.cartridge_type_id, WorksheetItem.cartridge_type_id):
         if db.execute(select(col).where(col == type_id).limit(1)).first() is not None:
             return True
-    return False
+    issued = _issued_method_links().where(method_consumables.c.consumable_type_id == type_id)
+    return db.execute(issued.limit(1)).first() is not None
 
 
 def used_type_ids(db: Session) -> set[int]:
@@ -83,6 +93,7 @@ def used_type_ids(db: Session) -> set[int]:
     q = union(
         select(Worksheet.cartridge_type_id).where(Worksheet.cartridge_type_id.is_not(None)),
         select(WorksheetItem.cartridge_type_id).where(WorksheetItem.cartridge_type_id.is_not(None)),
+        _issued_method_links(),
     )
     return set(db.execute(q).scalars().all())
 

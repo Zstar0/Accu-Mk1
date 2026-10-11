@@ -243,3 +243,43 @@ def test_patch_rejects_nulls_bad_specs_duplicates_and_missing(client):
 def test_there_is_no_delete(client):
     t = _create(client)
     assert client.delete(f"/consumables/{t['id']}").status_code == 405
+
+
+# --- lock through a method (final review fix wave) ----------------------------
+
+
+def _use_on_method(client, type_id, status):
+    """Link the type to a method left in `status`. The link goes in while the
+    method is a draft: method consumables change only on drafts."""
+    mid = client.post("/hplc/methods", json={"name": f"Endotoxin {status}",
+                                             "technique": "LAL"}).json()["id"]
+    r = client.put(f"/hplc/methods/{mid}/consumables",
+                   json=[{"consumable_type_id": type_id, "is_default": True}])
+    assert r.status_code == 200, r.text
+    if status != "draft":
+        assert client.post(f"/hplc/methods/{mid}/activate").status_code == 200
+    if status == "retired":
+        assert client.post(f"/hplc/methods/{mid}/retire").status_code == 200
+
+
+@pytest.mark.parametrize("status", ["active", "retired"])
+def test_a_type_behind_an_issued_method_locks_specs(client, db, status):
+    # A cartridge behind an active or retired revision keeps the numbers that
+    # revision was issued with: retire it and add a new one instead.
+    t = _create(client)
+    _use_on_method(client, t["id"], status)
+    r = client.patch(f"/consumables/{t['id']}", json={"specs": {"sensitivity_eu_ml": 0.01}})
+    assert r.status_code == 409
+    assert "specs" in r.json()["detail"]
+    assert [(row["id"], row["in_use"]) for row in client.get("/consumables").json()] == [
+        (t["id"], True)]
+
+
+def test_a_type_linked_only_to_a_draft_method_is_not_in_use(client, db):
+    t = _create(client)
+    _use_on_method(client, t["id"], "draft")
+    assert [(row["id"], row["in_use"]) for row in client.get("/consumables").json()] == [
+        (t["id"], False)]
+    r = client.patch(f"/consumables/{t['id']}", json={"specs": {"sensitivity_eu_ml": 0.01}})
+    assert r.status_code == 200, r.text
+    assert r.json()["in_use"] is False
