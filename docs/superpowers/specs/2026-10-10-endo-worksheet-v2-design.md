@@ -192,7 +192,7 @@ Each key from the method's `run_parameters.endotoxin`, else Dennis's value. The 
 
 ### 4.5 Instrument stamp on import
 
-The reader record's serial is matched to an active instrument's `serial_number`; that instrument is stamped through the existing tick path. No match falls back to `_sole_instrument_for_item`, as today. No method is ever written.
+The reader record's serial is matched to an active instrument's `serial_number`, and that instrument is used only if it is linked to an active method covering the vial's open analyses (the same candidate set `_sole_instrument_for_item` draws from); it is stamped through the existing tick path onto the rows it covers. Any other case falls back to `_sole_instrument_for_item`, as today. No method is ever written. The server also recomputes the record's `valid` and `why` from its numbers against the worksheet's method limits (missing numbers fail closed as invalid) rather than trusting the browser's verdict, and accepts only the record keys in 8.4 with plain values.
 
 ## 5. Calculations
 
