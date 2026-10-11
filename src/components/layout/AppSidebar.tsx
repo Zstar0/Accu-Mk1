@@ -89,6 +89,7 @@ const navItems: NavItem[] = [
     subItems: [
       { id: 'instruments', label: 'Instruments' },
       { id: 'methods', label: 'Methods' },
+      { id: 'consumables', label: 'Consumables' },
       { id: 'peptide-config', label: 'Peptides' },
       { id: 'analysis-services', label: 'Analysis Services' },
       { id: 'service-groups', label: 'Service Groups', adminOnly: true },

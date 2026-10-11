@@ -4,6 +4,7 @@ import { ChromatographViewer } from '@/components/ChromatographViewer'
 import { HPLCAnalysis } from '@/components/hplc/HPLCAnalysis'
 import { InstrumentsPage } from '@/components/hplc/InstrumentsPage'
 import { MethodsPage } from '@/components/hplc/MethodsPage'
+import { ConsumablesPage } from '@/components/hplc/ConsumablesPage'
 import { PeptideConfig } from '@/components/hplc/PeptideConfig'
 import { AnalysisServicesPage } from '@/components/hplc/AnalysisServicesPage'
 import ServiceGroupsPage from '@/components/hplc/ServiceGroupsPage'
@@ -69,6 +70,7 @@ export function MainWindowContent({
       case 'lims':
         if (activeSubSection === 'instruments') return <InstrumentsPage />
         if (activeSubSection === 'methods') return <MethodsPage />
+        if (activeSubSection === 'consumables') return <ConsumablesPage />
         if (activeSubSection === 'peptide-config') return <PeptideConfig />
         if (activeSubSection === 'analysis-services')
           return <AnalysisServicesPage />

@@ -26,6 +26,7 @@ export type SenaiteSubSection =
 export type LIMSSubSection =
   | 'instruments'
   | 'methods'
+  | 'consumables'
   | 'peptide-config'
   | 'analysis-services'
   | 'service-groups'
