@@ -71,6 +71,10 @@ def _plan(action: str, body: dict, seat: Seat, thread: dict) -> tuple[list[tuple
             return [(queries.MARK_TODO, {"input": {"threadId": tid}})], None
         if s == "done":
             return [(queries.MARK_DONE, {"input": {"threadId": tid}})], None
+        if s == "waiting_for_customer":
+            return [(queries.SNOOZE, {"input": {"threadId": tid, "statusDetail": "WAITING_FOR_CUSTOMER"}})], None
+        if s == "waiting":
+            return [(queries.SNOOZE, {"input": {"threadId": tid, "statusDetail": "WAITING_INDEFINITELY"}})], None
         if s != "snoozed" or not body.get("until"):
             raise _bad()
         try:
@@ -82,7 +86,8 @@ def _plan(action: str, body: dict, seat: Seat, thread: dict) -> tuple[list[tuple
         secs = int((until - _now()).total_seconds())
         if not rules.SNOOZE_MIN <= secs <= rules.SNOOZE_MAX:
             raise _bad()
-        return [(queries.SNOOZE, {"input": {"threadId": tid, "durationSeconds": secs}})], None
+        return [(queries.SNOOZE, {"input": {"threadId": tid, "durationSeconds": secs,
+                                            "statusDetail": "WAITING_FOR_DURATION"}})], None
     if action == "assign":
         uid = body.get("plain_user_id")
         if uid is None:
@@ -108,6 +113,20 @@ def _plan(action: str, body: dict, seat: Seat, thread: dict) -> tuple[list[tuple
             steps.append((queries.ADD_LABELS, {"input": {"threadId": tid, "labelTypeIds": add}}))
         if remove:
             steps.append((queries.REMOVE_LABELS, {"input": {"labelIds": remove}}))
+        return steps, None
+    if action == "assignees":
+        add, remove = list(body.get("add") or []), list(body.get("remove") or [])
+        if not add and not remove:
+            raise _bad()
+        team = {m["plain_user_id"] for m in service.workspace_people()["teammates"]}
+        current = {a["plain_user_id"] for a in thread.get("assignees") or [] if not a.get("primary") and a.get("plain_user_id")}
+        if not set(add) <= team or not set(remove) <= current:
+            raise _bad()
+        steps = []
+        if add:
+            steps.append((queries.ADD_ASSIGNEES, {"input": {"threadId": tid, "userIds": add}}))
+        if remove:
+            steps.append((queries.REMOVE_ASSIGNEES, {"input": {"threadId": tid, "userIds": remove}}))
         return steps, None
     raise _bad()
 

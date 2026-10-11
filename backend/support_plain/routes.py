@@ -216,7 +216,7 @@ class TextBody(BaseModel):
 
 
 class StatusBody(BaseModel):
-    status: Literal["todo", "done", "snoozed"]
+    status: Literal["todo", "done", "snoozed", "waiting_for_customer", "waiting"]
     until: Optional[datetime] = None
 
 
@@ -284,3 +284,14 @@ def priority(customer_key: str, body: PriorityBody, thread_id: str = _TH, su=Dep
 def labels(customer_key: str, body: LabelsBody, thread_id: str = _TH, su=Depends(require_seat),
            db: Session = Depends(get_db)):
     return _act("labels", customer_key, thread_id, body, su, db)
+
+
+class AssigneesBody(BaseModel):
+    add: list[str] = []
+    remove: list[str] = []
+
+
+@router.post("/customers/{customer_key}/threads/{thread_id}/assignees", response_model=ActionResult)
+def assignees(customer_key: str, body: AssigneesBody, thread_id: str = _TH, su=Depends(require_seat),
+              db: Session = Depends(get_db)):
+    return _act("assignees", customer_key, thread_id, body, su, db)

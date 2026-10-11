@@ -114,6 +114,8 @@ UNASSIGN = _m("UnassignThread", "unassignThread", "UnassignThreadInput")
 PRIORITY = _m("ChangeThreadPriority", "changeThreadPriority", "ChangeThreadPriorityInput")
 ADD_LABELS = _m("AddLabels", "addLabels", "AddLabelsInput")
 REMOVE_LABELS = _m("RemoveLabels", "removeLabels", "RemoveLabelsInput")
+ADD_ASSIGNEES = _m("AddAdditionalAssignees", "addAdditionalAssignees", "AddAdditionalAssigneesInput")
+REMOVE_ASSIGNEES = _m("RemoveAdditionalAssignees", "removeAdditionalAssignees", "RemoveAdditionalAssigneesInput")
 
 MUTATIONS = frozenset({REPLY, NOTE, MARK_DONE, MARK_TODO, SNOOZE, ASSIGN, UNASSIGN, PRIORITY, ADD_LABELS,
-                       REMOVE_LABELS})
+                       REMOVE_LABELS, ADD_ASSIGNEES, REMOVE_ASSIGNEES})
