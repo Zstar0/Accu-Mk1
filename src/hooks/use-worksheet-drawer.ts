@@ -55,6 +55,22 @@ export function worksheetPageKey(worksheetId: number) {
   return ['worksheets-list', 'page', worksheetId] as const
 }
 
+/** The cached item keys a PATCH writes: its own fields and, for a Made / Ran
+ *  tick, the stamp, who stamped it and the status the tick moves. A refused
+ *  PATCH rolls back only these, so another edit in flight on the same row
+ *  (the 2 mL page's water, dilution and reading cells) keeps its value. */
+function patchedItemKeys(data: WorksheetItemPatch): (keyof WorksheetItemRow)[] {
+  return (Object.keys(data) as (keyof WorksheetItemPatch)[])
+    .filter(k => data[k] !== undefined)
+    .flatMap(k =>
+      k === 'made'
+        ? (['made_at', 'made_by_user_id', 'prep_status'] as const)
+        : k === 'ran'
+          ? (['ran_at', 'ran_by_user_id', 'prep_status'] as const)
+          : [k]
+    )
+}
+
 /** A PATCH's fields on a cached item, as the server will store them. */
 export function mergeItemPatch(
   item: WorksheetItemRow,
@@ -249,9 +265,10 @@ export function useWorksheetDrawer() {
     //
     // A bench sheet is keyed in after the run, so ticks arrive in bursts with
     // several PATCHes in flight against this one cache entry. Two rules keep
-    // them from stomping each other: a failure rolls back ONLY its own row
-    // (a whole-list snapshot predates its neighbours and would revert rows
-    // that succeeded), and the list is refetched once, when the LAST tick
+    // them from stomping each other: a failure rolls back ONLY its own row,
+    // and only the keys it wrote (a whole-list snapshot predates its
+    // neighbours and would revert rows, or cells, that succeeded), and the
+    // list is refetched once, when the LAST tick
     // of the burst settles (a refetch mid-burst returns server state without
     // the ticks still in flight and wipes their checkmarks).
     onMutate: async ({ worksheetId, itemId, data }) => {
@@ -280,25 +297,43 @@ export function useWorksheetDrawer() {
       // The worksheet page (endo) reads its own entry: patch it the same way.
       if (page)
         queryClient.setQueryData<WorksheetListItem>(pageKey, patched(page))
-      const previousItem = (
-        previous?.find(ws => ws.id === worksheetId) ?? page
-      )?.items.find(it => it.id === itemId)
-      return { previousItem }
+      // Each entry is rolled back from its own row: the page and the list are
+      // separate reads and need not agree.
+      const listRow = previous
+        ?.find(ws => ws.id === worksheetId)
+        ?.items.find(it => it.id === itemId)
+      const pageRow = page?.items.find(it => it.id === itemId)
+      return { listRow, pageRow }
     },
-    onError: (err, { worksheetId, itemId }, context) => {
-      const before = context?.previousItem
-      if (before) {
-        const restored = (ws: WorksheetListItem): WorksheetListItem => ({
-          ...ws,
-          items: ws.items.map(it => (it.id === itemId ? before : it)),
-        })
+    onError: (err, { worksheetId, itemId, data }, context) => {
+      const keys = patchedItemKeys(data)
+      const restored = (
+        ws: WorksheetListItem,
+        before: WorksheetItemRow
+      ): WorksheetListItem => ({
+        ...ws,
+        items: ws.items.map(it => {
+          if (it.id !== itemId) return it
+          const back: Partial<WorksheetItemRow> = {}
+          for (const k of keys) Object.assign(back, { [k]: before[k] })
+          return { ...it, ...back }
+        }),
+      })
+      const listRow = context?.listRow
+      if (listRow) {
         queryClient.setQueryData<WorksheetListItem[]>(
           ['worksheets-list', 'open'],
-          list => list?.map(ws => (ws.id !== worksheetId ? ws : restored(ws)))
+          list =>
+            list?.map(ws =>
+              ws.id !== worksheetId ? ws : restored(ws, listRow)
+            )
         )
+      }
+      const pageRow = context?.pageRow
+      if (pageRow) {
         queryClient.setQueryData<WorksheetListItem>(
           worksheetPageKey(worksheetId),
-          ws => (ws ? restored(ws) : ws)
+          ws => (ws ? restored(ws, pageRow) : ws)
         )
       }
       toast.error(err instanceof Error ? err.message : 'Update item failed')
