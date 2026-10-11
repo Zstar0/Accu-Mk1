@@ -61,6 +61,35 @@ def test_blind_retry_of_an_uncertain_create_never_mints_a_duplicate(client):
         assert listed["total"] == 1
 
 
+def test_duplicate_409_carries_the_existing_rows_reference_fields_for_reconciliation(client):
+    """A lost first response + identical retry: the 409 names the exact stored row, with
+    the hash of the stored (server-themed) bytes, so the publisher can match it."""
+    with patch.dict(os.environ, AGENT_ENV):
+        first = _draft(client).json()
+        again = _draft(client)
+        assert again.status_code == 409
+        body = again.json()
+        assert body["detail"].startswith(f"this content is already published as {first['code']} r1")
+        assert body["existing"] == {
+            "id": first["id"], "code": first["code"], "revision": 1,
+            "content_sha256": first["content_sha256"], "title": first["title"],
+            "status": "draft", "space_slug": "general", "author": "Requester Name",
+            "co_author": "jarvis", "source_session": "paperclip-run-1"}
+        stored = client.get(f"/api/documents/{first['id']}/content").content
+        assert hashlib.sha256(stored).hexdigest() == body["existing"]["content_sha256"]
+        assert client.get("/api/documents").json()["total"] == 1
+
+
+def test_duplicate_409_from_another_session_exposes_the_mismatch(client):
+    with patch.dict(os.environ, AGENT_ENV):
+        _draft(client)
+        other = _publish(client, headers=_agent(JARVIS), author="Requester Name",
+                         source_session="paperclip-run-2", activate=False)
+        assert other.status_code == 409
+        assert other.json()["existing"]["source_session"] == "paperclip-run-1"
+        assert client.get("/api/documents").json()["total"] == 1
+
+
 def test_revision_keeps_old_id_pinned_and_identical_revise_is_a_noop(client):
     with patch.dict(os.environ, AGENT_ENV):
         r1 = _draft(client).json()

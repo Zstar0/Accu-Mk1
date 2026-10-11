@@ -10,6 +10,7 @@ from types import SimpleNamespace
 from typing import Dict, List, Optional
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Query, Response, status
+from fastapi.responses import JSONResponse
 from fastapi.security import OAuth2PasswordBearer
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
@@ -17,7 +18,8 @@ from sqlalchemy.orm import Session
 from auth import get_current_user, require_admin, require_internal_service_token
 from database import get_db
 from documents import access, comments, service
-from documents.errors import BadRequestError, ConflictError, ForbiddenError, NotFoundError
+from documents.errors import (BadRequestError, ConflictError, DuplicateContentError,
+                              ForbiddenError, NotFoundError)
 from documents.models import Document, DocumentCategory, DocumentSpace
 from documents.schemas import (CategoryCreate, CategoryOut, CategoryUpdate, DocumentContentReplace,
                                DocumentCreate, DocumentDetail, DocumentListOut, DocumentOut,
@@ -428,6 +430,19 @@ def create_document(req: DocumentCreate, response: Response, db: Session = Depen
             may_revise=lambda d: _agent_may_see(writer, d) and access.can_view_document(
                 db, _reader_for(writer), d))
         n = service.revision_count(db, doc.code)
+    except DuplicateContentError as e:
+        # Reference-safe fields of the existing row, for a writer that could already
+        # see it, so a publisher can reconcile a create whose response was lost.
+        # `detail` stays the same human string the UI shows.
+        dup = e.document
+        if _agent_may_see(writer, dup) and access.can_view_document(db, _reader_for(writer), dup):
+            return JSONResponse(status_code=409, content={"detail": str(e), "existing": {
+                "id": dup.id, "code": dup.code, "revision": dup.revision,
+                "content_sha256": dup.content_sha256, "title": dup.title, "status": dup.status,
+                "space_slug": dup.space.slug if dup.space is not None else "general",
+                "author": dup.author, "co_author": dup.co_author,
+                "source_session": dup.source_session}})
+        raise _http(e)
     except Exception as e:
         raise _http(e)
     if created:

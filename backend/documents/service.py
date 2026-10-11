@@ -18,7 +18,7 @@ from typing import Callable, Optional
 from sqlalchemy import and_, case, func, or_, select
 from sqlalchemy.orm import Session, lazyload
 
-from documents.errors import BadRequestError, ConflictError, NotFoundError
+from documents.errors import BadRequestError, ConflictError, DuplicateContentError, NotFoundError
 from documents.models import (Document, DocumentCategory, DocumentCodeCounter, DocumentSpace,
                               DocumentSpaceGrant, SPACE_VISIBILITIES)
 from documents.storage import get_storage
@@ -526,13 +526,13 @@ def create_document(db: Session, *, title: str = "", html, category: Optional[Do
                     f"code prefix must be {cat.code_prefix} for category {cat.name}")
         else:
             existing = db.execute(
-                select(Document.code, Document.revision)
+                select(Document)
                 .where(Document.content_sha256 == sha,
                        Document.category_id == cat.id,
                        (or_(Document.space_id == space_id, Document.space_id.is_(None))
                         if space_id == general_space(db).id else Document.space_id == space_id))
                 .order_by(Document.id).limit(1)
-            ).first()
+            ).scalars().first()
             if existing is not None:
                 # Without this a retry mints a SECOND controlled document holding
                 # identical content, which is how ART-0002 was born. Dedupe on an
@@ -544,10 +544,10 @@ def create_document(db: Session, *, title: str = "", html, category: Optional[Do
                 # Scoped to the category AND the space: a 409 that named a code in a
                 # space the caller cannot see would confirm that document exists
                 # (spec 5.2).
-                raise ConflictError(
-                    f"this content is already published as {existing[0]} "
-                    f"r{existing[1]}; pass code={existing[0]} to publish it as a new "
-                    f"revision, or change the content to mint a new document")
+                raise DuplicateContentError(
+                    f"this content is already published as {existing.code} "
+                    f"r{existing.revision}; pass code={existing.code} to publish it as a new "
+                    f"revision, or change the content to mint a new document", existing)
             code = mint_code(db, cat.code_prefix)
         revision = 1
         supersedes_id = None
