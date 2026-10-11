@@ -895,7 +895,7 @@ function TwoMlPrepCells({
         >
           <SelectTrigger
             aria-label="Form the vial arrived in"
-            title="How the vial arrived. Lyophilized: the standard water is added here. Liquid: the customer already added water; type theirs under Water. Bacteriostatic water: its own 20x prep."
+            title="How the vial arrived. Lyophilized: the standard water is added here. Liquid: the customer already added water; type theirs under Reconstitution water. Bacteriostatic water: its own 20x prep."
             className={`${CELL_TRIGGER} ${form === 'liquid' ? 'border-teal-500/45 font-semibold text-teal-700 dark:border-teal-400/50 dark:text-teal-300' : ''}`}
           >
             <SelectValue />
