@@ -43,8 +43,9 @@ const SELECT =
  * The consumables catalog (spec 2026-10-10 3.1, 3.2, 6.4): the cartridges the
  * lab runs and, later, other kinds, built like the Instruments page. Which
  * numbers a type holds comes from the server's kind registry. A type's kind
- * and numbers lock once a worksheet has used it; a wrong number is fixed by
- * retiring the type and adding a new one. Nothing is ever deleted.
+ * and numbers lock once a worksheet has used it or an issued (not draft)
+ * method revision links it; a wrong number is fixed by retiring the type and
+ * adding a new one. Nothing is ever deleted.
  */
 export function ConsumablesPage() {
   const [consumables, setConsumables] = useState<ConsumableType[]>([])

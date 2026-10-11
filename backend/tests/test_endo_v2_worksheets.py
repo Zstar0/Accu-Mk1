@@ -1206,3 +1206,12 @@ def test_import_compares_the_reading_and_the_record_as_parsed_values(client, db)
     line = _line(w.a, "<0.05", w.c05)
     line["record"]["result"] = " < 0.05 "
     assert _import(client, w.ws, line).status_code == 200
+
+
+def test_endo_run_params_fills_missing_and_null_keys_with_dennis_values():
+    # As the browser's runParamsFrom (`??`): a stored null is the default too,
+    # so the standard-total floor never compares against None (a 500).
+    params = worksheets_endo.endo_run_params(
+        {"endotoxin": {"std_total_dilution": None, "cv_limit_pct": 20}})
+    assert (params["std_total_dilution"], params["cv_limit_pct"]) == (250, 20)
+    assert worksheets_endo.endo_run_params(None)["std_total_dilution"] == 250

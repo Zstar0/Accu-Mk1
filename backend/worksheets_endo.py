@@ -152,8 +152,9 @@ def reader_shows(record: dict, parsed: tuple[bool, float]) -> bool:
 
 def endo_run_params(run_params: Optional[dict]) -> dict:
     """A method's stored run_parameters ({"endotoxin": {...}} or None) with
-    every missing key at Dennis's value: the browser's runParamsFrom."""
-    return {**ENDO_RUN_PARAM_DEFAULTS, **((run_params or {}).get("endotoxin") or {})}
+    every missing or null key at Dennis's value: the browser's runParamsFrom."""
+    stored = (run_params or {}).get("endotoxin") or {}
+    return {**ENDO_RUN_PARAM_DEFAULTS, **{k: v for k, v in stored.items() if v is not None}}
 
 
 def reader_validity(record: dict, run_params: Optional[dict]) -> tuple[bool, list[str]]:
