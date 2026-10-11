@@ -36,8 +36,9 @@ import {
   CompleteWorksheetButton,
   WorksheetApplyBar,
 } from '@/components/hplc/WorksheetDrawer'
-import { EndoBoxHead } from './EndoBox'
+import { EndoBoxHead, type EndoBoxProps } from './EndoBox'
 import { EndoRunHeader } from './EndoRunHeader'
+import { EndoSampleDilutionBox } from './EndoSampleDilutionBox'
 
 const FIVE_MINUTES = 5 * 60 * 1000
 
@@ -160,6 +161,14 @@ function EndoWorksheetPageBody({
   const cartridges = allowedCartridges(worksheet, catalog)
   const ctx = endoCtxFor(worksheet, catalog)
   const rows = endoRowsFor(ordered, worksheet, catalog)
+  const boxProps: EndoBoxProps = {
+    worksheet,
+    rows,
+    ctx,
+    cartridges,
+    isCompleted,
+    onUpdateItem: updateItem,
+  }
   const { userNotes } = parseWorksheetNotes(worksheet.notes ?? '')
 
   function update(data: WorksheetUpdate) {
@@ -175,8 +184,20 @@ function EndoWorksheetPageBody({
     })
   }
 
-  function updateItem(itemId: number, data: WorksheetItemPatch) {
-    drawer.updateItemMutation.mutate({ worksheetId: id, itemId, data })
+  // Resolves to the server's refusal text (null once saved) so a box can
+  // show it on the row; the mutation's onError still rolls back and toasts.
+  // Never rejects, so Box 1 can ignore what it returns.
+  function updateItem(
+    itemId: number,
+    data: WorksheetItemPatch
+  ): Promise<string | null> {
+    return drawer.updateItemMutation
+      .mutateAsync({ worksheetId: id, itemId, data })
+      .then(
+        () => null,
+        (err: unknown) =>
+          err instanceof Error ? err.message : 'Update item failed'
+      )
   }
 
   function applyToAll(methodId: number, instrumentId: number) {
@@ -215,9 +236,8 @@ function EndoWorksheetPageBody({
         users={users}
         onSelect={next => useUIStore.getState().navigateToWorksheet(next)}
       />
-      {/* Boxes 2 and 3 mount as children of EndoWorksheetView on 2 mL runs
-          (Tasks 14 and 15), each with EndoBoxProps:
-          { worksheet, rows, ctx, cartridges, isCompleted, onUpdateItem: updateItem } */}
+      {/* Boxes 2 and 3 mount as children of EndoWorksheetView (after Box 1)
+          on 2 mL runs, each with boxProps. */}
       <EndoWorksheetView
         worksheet={worksheet}
         users={users}
@@ -273,7 +293,13 @@ function EndoWorksheetPageBody({
             onUpdate={update}
           />
         }
-      />
+      >
+        {worksheet.endo_prep === '2ml' && (
+          <>
+            <EndoSampleDilutionBox {...boxProps} />
+          </>
+        )}
+      </EndoWorksheetView>
       <AddSamplesModal
         open={addSamplesOpen}
         onOpenChange={setAddSamplesOpen}

@@ -11,11 +11,13 @@ import type {
   EndoRunParamsWire,
   WorksheetListItem,
 } from '@/lib/api'
-import { fmt } from '@/lib/endo-prep'
+import { CARTRIDGE_UL, fmt } from '@/lib/endo-prep'
 import {
+  BW_DILUTION,
   BW_LAMBDA,
   BW_LIMIT_EU_PER_ML,
   ENDO_RUN_PARAM_DEFAULTS,
+  dilutionPlan,
   fmtConc,
   formOf,
   type EndoCheck,
@@ -23,6 +25,7 @@ import {
   type EndoRunParams,
   type EndoSample,
   type EndoStepOverride,
+  type EndoStepPlan,
 } from '@/lib/endo-prep-2ml'
 import { endoIdentityFor, type WorksheetItemRow } from '@/lib/endo-worksheet'
 
@@ -275,4 +278,42 @@ export function cartridgeTitle(k: EndoCheck, bac: boolean): string {
     )
   if (k.failAt != null) parts.push(`a reading above ${fmt(k.failAt)} fails`)
   return parts.join(' · ')
+}
+
+/** Bac water's single step: 50 uL made to 1000 uL with LAL water (its 20x). */
+export const BW_SAMPLE_UL = CARTRIDGE_UL / BW_DILUTION
+export const BW_LAL_UL = CARTRIDGE_UL - BW_SAMPLE_UL
+
+const STANDARD_SAMPLE: EndoSample = {
+  sampleId: '',
+  identity: '',
+  sampleType: null,
+  weightMg: null,
+  form: 'powder',
+  waterMl: null,
+  totalDilution: null,
+  steps: null,
+  lambda: null,
+  reading: null,
+  reader: null,
+}
+
+/**
+ * The method's standard steps (20 + 180, 20 + 230, 125 + 125 at 1:250 with
+ * Dennis's values). A row's steps are compared with these to show a value
+ * set by hand on screen and to box a non-standard step on paper.
+ */
+export function standardSteps(ctx: EndoCtx): EndoStepPlan[] {
+  return dilutionPlan(STANDARD_SAMPLE, ctx).steps
+}
+
+/**
+ * The total a row is grouped under, in the order orderByTotal sorts them:
+ * the number, 'x' for a total the steps cannot make, 'bac' for bac water.
+ * Box 2 and the 2 mL bench sheet draw a rule where this changes.
+ */
+export function totalGroupKey(s: EndoSample, ctx: EndoCtx): string {
+  if (formOf(s) === 'bac') return 'bac'
+  const total = dilutionPlan(s, ctx).total
+  return total === null ? 'x' : String(total)
 }

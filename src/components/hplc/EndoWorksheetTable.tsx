@@ -88,17 +88,20 @@ export interface EndoTwoMl {
   cartridges: EndoCartridgeOption[]
 }
 
-const TH =
+export const TH =
   'sticky top-0 z-[2] bg-muted/60 px-2 pb-[7px] pt-2 text-left align-bottom text-[9.5px] font-semibold uppercase tracking-[0.09em] text-muted-foreground whitespace-nowrap border-b'
-const TH_CALC = 'bg-teal-500/10 text-teal-800 dark:text-teal-200 text-right'
-const UNIT =
+export const TH_CALC = 'bg-teal-500/10 text-teal-800 dark:text-teal-200 text-right'
+export const UNIT =
   'block font-mono text-[10px] font-normal normal-case tracking-[0.04em] opacity-80'
-const TD = 'border-b border-border/60 px-2 py-[5px] align-middle text-[13px]'
-const MONO = 'font-mono text-[12.5px] tabular-nums'
-const TD_CALC = `${TD} ${MONO} bg-teal-500/[0.06] text-right text-foreground/80 whitespace-nowrap group-hover/item:bg-teal-500/10`
+export const TD = 'border-b border-border/60 px-2 py-[5px] align-middle text-[13px]'
+export const MONO = 'font-mono text-[12.5px] tabular-nums'
+export const TD_CALC = `${TD} ${MONO} bg-teal-500/[0.06] text-right text-foreground/80 whitespace-nowrap group-hover/item:bg-teal-500/10`
 
 // Same words and colours as the status select on every other worksheet.
-const STATUS_CHIP: Record<string, [string, string]> = {
+// Task 17's flyout summary reuses it; an object export costs Fast Refresh
+// on this file only.
+// eslint-disable-next-line react-refresh/only-export-components
+export const STATUS_CHIP: Record<string, [string, string]> = {
   ready: ['Ready', 'border-border text-zinc-400'],
   in_progress: [
     'In Progress',

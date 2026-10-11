@@ -15,6 +15,7 @@ vi.mock('@/lib/api', async importOriginal => ({
   getInstruments: vi.fn().mockResolvedValue([]),
   getMethods: vi.fn().mockResolvedValue([]),
   listConsumables: vi.fn().mockResolvedValue([]),
+  updateWorksheetItem: vi.fn(),
 }))
 vi.mock('@/hooks/use-lab-calendar', () => ({
   useLabCalendar: () => ({ calendar: null, isLoading: false }),
@@ -50,7 +51,7 @@ vi.mock('@/components/hplc/SlaAgeIndicator', () => ({
 }))
 vi.mock('@/components/hplc/AddSamplesModal', () => ({ default: () => null }))
 
-import { getWorksheet } from '@/lib/api'
+import { getWorksheet, updateWorksheetItem } from '@/lib/api'
 import { useUIStore } from '@/store/ui-store'
 import { EndoWorksheetPage } from '@/components/hplc/endo/EndoWorksheetPage'
 
@@ -135,6 +136,9 @@ describe('EndoWorksheetPage', () => {
     expect(
       screen.getByLabelText('Form the vial arrived in')
     ).toBeInTheDocument()
+    expect(
+      screen.getByText('2 · Sample dilution: from the vial to the cartridge')
+    ).toBeInTheDocument()
   })
 
   it('a stock run keeps the stock columns', async () => {
@@ -145,6 +149,7 @@ describe('EndoWorksheetPage', () => {
     expect(await screen.findByText(/Sample volume/)).toBeInTheDocument()
     expect(screen.queryByLabelText('Form the vial arrived in')).toBeNull()
     expect(screen.queryByLabelText('Run cartridge')).toBeNull()
+    expect(screen.queryByText(/Sample dilution/)).toBeNull()
   })
 
   it('switching worksheets in the run log drops the title being edited', async () => {
@@ -161,6 +166,21 @@ describe('EndoWorksheetPage', () => {
     act(() => useUIStore.getState().navigateToWorksheet(42))
     expect(await screen.findByText('Endo run 42')).toBeInTheDocument()
     expect(screen.queryByLabelText('Worksheet title')).toBeNull()
+  })
+
+  it("shows the server's refusal of a Box 2 edit on its row", async () => {
+    const refusal =
+      'prep_total_dilution must be at least 20 (the step 1 ratio x the fixed 1:2 step) or step 2 cannot be made'
+    vi.mocked(getWorksheet).mockResolvedValue(worksheet('endo'))
+    vi.mocked(updateWorksheetItem).mockRejectedValue(new Error(refusal))
+    renderPage()
+    const total = await screen.findByLabelText('Total dilution (1 in N)')
+    fireEvent.change(total, { target: { value: '15' } })
+    fireEvent.blur(total)
+    expect(await screen.findByText(`Not saved: ${refusal}`)).toBeInTheDocument()
+    expect(updateWorksheetItem).toHaveBeenCalledWith(42, 10, {
+      prep_total_dilution: 15,
+    })
   })
 
   it('offers the flyout for a worksheet that is not endotoxin', async () => {

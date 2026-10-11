@@ -81,5 +81,11 @@ export interface EndoBoxProps {
   /** The allowed cartridges, least sensitive first. */
   cartridges: EndoCartridgeOption[]
   isCompleted: boolean
-  onUpdateItem: (itemId: number, data: WorksheetItemPatch) => void
+  /** Saves one row's fields. The page's resolves to the server's refusal
+   *  text (null once saved) so a box can show it on the row; it never
+   *  rejects. */
+  onUpdateItem: (
+    itemId: number,
+    data: WorksheetItemPatch
+  ) => Promise<string | null> | undefined
 }
