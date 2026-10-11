@@ -119,6 +119,9 @@ function slotOf(v: string): number | null {
   return m ? Number(m[1]) : null
 }
 
+const NOT_A_READER_EXPORT =
+  'This is not a reader export: no test rows (channel 1-4, 79 columns) were found.'
+
 export function parseEndoScan(input: string): {
   tests: ReaderTest[]
   cartridges: { range: string; lot: string; expiry: string; code: string }[]
@@ -145,10 +148,7 @@ export function parseEndoScan(input: string): {
   const data = rows.filter(
     r => /^[1-4]$/.test(cell(r, ES.channel)) && r.length > ES.slot
   )
-  if (!data.length)
-    throw new Error(
-      'This is not a reader export: no test rows (channel 1-4, 79 columns) were found.'
-    )
+  if (!data.length) throw new Error(NOT_A_READER_EXPORT)
   const byTest = new Map<string, string[][]>()
   for (const r of data) {
     const id = cell(r, ES.testId)
@@ -161,8 +161,13 @@ export function parseEndoScan(input: string): {
     const spl = rs.find(r => cell(r, ES.kind) === 'SPL1')
     const spk = rs.find(r => cell(r, ES.kind) === 'SPK1')
     if (!spl || !spk) continue
-    const lt = cell(spl, ES.resultQual) === '<'
-    const value = num(cell(spl, ES.result))
+    const qual = cell(spl, ES.resultQual)
+    const raw = cell(spl, ES.result)
+    const lt = qual === '<'
+    // only "" (a number) and "<" are understood: any other qualifier (">")
+    // stays in the reading verbatim and is never an exact number
+    const understood = qual === '' || lt
+    const value = understood ? num(raw) : null
     const lot = cell(spl, ES.cartLot)
     const cart = cartridges.find(c => c.lot === lot)
     tests.push({
@@ -170,7 +175,7 @@ export function parseEndoScan(input: string): {
       sampleId: cell(spl, ES.sampleId),
       identity: cell(spl, ES.identity),
       sampleType: cell(spl, ES.sampleType),
-      result: value === null ? '' : (lt ? '<' : '') + cell(spl, ES.result),
+      result: understood && value === null ? '' : qual + raw,
       lt,
       value,
       sampleCv: num(cell(spl, ES.cv)),
@@ -194,6 +199,8 @@ export function parseEndoScan(input: string): {
       software: text(spl, ES.software),
     })
   }
+  // channel rows without a sample/spike pair are a wrong or shifted file too
+  if (!tests.length) throw new Error(NOT_A_READER_EXPORT)
   return { tests, cartridges }
 }
 
@@ -264,12 +271,16 @@ export function readerCartridgeLambda(range: string | null): number | null {
   return low > 0 ? low : null
 }
 
-/** A sample ID without its vial suffix: "P-5309-S02" -> "P-5309". */
+/**
+ * A sample ID without its vial suffix: "P-5309-S02" -> "P-5309". Only a vial
+ * (-S<NN>) comes off; a retest (-R<NN>) is a sample of its own, never a vial
+ * of its parent.
+ */
 export function baseSampleId(id: string): string {
   return id
     .trim()
     .toUpperCase()
-    .replace(/-[A-Z]\d{1,3}$/, '')
+    .replace(/-S\d{1,3}$/, '')
 }
 
 type Found =
@@ -301,9 +312,10 @@ function findRow(
 /**
  * Pairs each reader test with a worksheet row by Sample ID (Dennis
  * 2026-10-09): an exact ID first; otherwise the parent ID when exactly one
- * row fits; never a guess between two vials. A row tested twice takes its
- * latest test (a tie, or a time that does not parse, goes to the later one
- * in the file); the earlier tests are listed in `superseded`.
+ * row fits; never a guess between two vials. A row tested twice takes an
+ * exact-ID test over a parent-ID one, then the latest test (a tie goes to the
+ * later one in the file; a time that does not parse ranks below any that
+ * does); the other tests are listed in `superseded`.
  */
 export function matchReaderTests(
   tests: ReaderTest[],
@@ -315,12 +327,21 @@ export function matchReaderTests(
   superseded: ReaderTest[]
 } {
   const found = tests.map(t => findRow(t, rows))
-  const at = (t: ReaderTest): number => Date.parse(t.testedAt ?? '')
-  const latest = new Map<number, ReaderTest>()
+  const at = (t: ReaderTest): number => {
+    const ms = Date.parse(t.testedAt ?? '')
+    return Number.isNaN(ms) ? -Infinity : ms
+  }
+  const rank = (f: Found): number => (f.via === 'exact' ? 1 : 0)
+  const latest = new Map<number, Found>()
   for (const f of found) {
     if (f.itemId === null) continue
     const prev = latest.get(f.itemId)
-    if (!prev || !(at(prev) > at(f.test))) latest.set(f.itemId, f.test)
+    const keep =
+      prev &&
+      (rank(prev) !== rank(f)
+        ? rank(prev) > rank(f)
+        : at(prev.test) > at(f.test))
+    if (!keep) latest.set(f.itemId, f)
   }
   const matched: {
     test: ReaderTest
@@ -334,7 +355,7 @@ export function matchReaderTests(
     if (f.itemId === null) {
       if (f.via === 'none') unmatched.push(f.test)
       else ambiguous.push(f.test)
-    } else if (latest.get(f.itemId) === f.test)
+    } else if (latest.get(f.itemId) === f)
       matched.push({ test: f.test, itemId: f.itemId, via: f.via })
     else superseded.push(f.test)
   }

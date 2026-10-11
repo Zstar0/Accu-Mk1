@@ -304,6 +304,37 @@ describe('calc.test.js:992 reader export: one record per test, spike recovery an
         'This is not a reader export: no test rows (channel 1-4, 79 columns) were found.'
       )
   })
+
+  it('a file with channel rows but no sample/spike pair is not this export either', () => {
+    // a wrong or column-shifted file must not come back as {tests: []}
+    for (const bad of [
+      EXPORT.replace(/SPK1/g, 'SPK9'),
+      EXPORT.replace(/SPL1/g, 'SPL9'),
+      EXPORT.replace(/SPL1|SPK1/g, 'XXXX'),
+    ])
+      expect(() => parseEndoScan(bad)).toThrow(
+        'This is not a reader export: no test rows (channel 1-4, 79 columns) were found.'
+      )
+  })
+
+  it('a result qualifier other than "<" is kept verbatim and is never an exact number', () => {
+    // column 26 ">" on the first test: the reading is ">5.00", not 5
+    const odd = parseEndoScan(EXPORT.replace(',<,0.05,', ',>,5.00,'))
+    const [a, b] = three(odd.tests)
+    expect([a.result, a.lt, a.value]).toEqual(['>5.00', false, null])
+    expect(toReaderRecord(a, params, 'EndoScanV-Export-test.csv').result).toBe(
+      '>5.00'
+    )
+    // the others keep reading as before
+    expect([b.result, b.lt, b.value]).toEqual(['<0.05', true, 0.05])
+    // no qualifier at all is an exact number
+    const exact = parseEndoScan(EXPORT.replace(',<,0.05,', ',,0.05,'))
+    expect([exact.tests[0]?.result, exact.tests[0]?.lt]).toEqual([
+      '0.05',
+      false,
+    ])
+    expect(exact.tests[0]?.value).toBe(0.05)
+  })
 })
 
 const ctx: EndoCtx = { params, allowedLambdas: [0.05, 0.01, 0.005] }
@@ -480,6 +511,79 @@ describe('calc.test.js:1035 matched to rows by Sample ID, the parent only when u
     )
     expect(tie.matched.map(x => x.test.testId)).toEqual(['B'])
     expect(tie.superseded.map(t => t.testId)).toEqual(['A'])
+  })
+
+  it('a retest ID is not a vial of its parent: the two are never paired', () => {
+    expect(baseSampleId('P-0134-R01')).toBe('P-0134-R01')
+    expect(baseSampleId('p-0134-r01-s02')).toBe('P-0134-R01')
+    // the retest's test against the original's row, and the reverse
+    const toOriginal = matchReaderTests(
+      [rt('P-0134-R01')],
+      [{ itemId: 1, sampleId: 'P-0134' }]
+    )
+    expect(toOriginal.matched).toEqual([])
+    expect(toOriginal.unmatched.map(t => t.sampleId)).toEqual(['P-0134-R01'])
+    const toRetest = matchReaderTests(
+      [rt('P-0134')],
+      [{ itemId: 2, sampleId: 'P-0134-R01' }]
+    )
+    expect(toRetest.matched).toEqual([])
+    expect(toRetest.unmatched.map(t => t.sampleId)).toEqual(['P-0134'])
+    // both on the sheet: each test goes to its own sample, the retest's through its vial
+    const both = matchReaderTests(
+      [rt('P-0134-R01'), rt('P-0134')],
+      [
+        { itemId: 1, sampleId: 'P-0134' },
+        { itemId: 2, sampleId: 'P-0134-R01-S01' },
+      ]
+    )
+    expect(both.matched.map(x => [x.test.sampleId, x.itemId, x.via])).toEqual([
+      ['P-0134-R01', 2, 'parent'],
+      ['P-0134', 1, 'exact'],
+    ])
+    expect(both.ambiguous).toEqual([])
+    expect(both.unmatched).toEqual([])
+  })
+
+  it('on one row an exact ID outranks a parent ID whatever the times (exact first, spec 8.1)', () => {
+    const rows = [{ itemId: 7, sampleId: 'P-5299-S02' }]
+    const exact = {
+      ...rt('P-5299-S02', '2026-10-09T13:00:00-07:00'),
+      testId: 'A',
+    }
+    const parent = { ...rt('P-5299', '2026-10-09T15:00:00-07:00'), testId: 'B' }
+    for (const order of [
+      [exact, parent],
+      [parent, exact],
+    ]) {
+      const m = matchReaderTests(order, rows)
+      expect(m.matched.map(x => [x.test.testId, x.via])).toEqual([
+        ['A', 'exact'],
+      ])
+      expect(m.superseded.map(t => t.testId)).toEqual(['B'])
+    }
+  })
+
+  it('an unparseable time ranks below any parsed time; a tie goes to the later test in the file', () => {
+    const rows = [{ itemId: 2, sampleId: 'P-5311' }]
+    const parsed = { ...rt('P-5311'), testId: 'P' }
+    const garbled = { ...rt('P-5311'), testId: 'G', testedAt: 'garbled' }
+    const missing = { ...rt('P-5311'), testId: 'M', testedAt: null }
+    for (const order of [
+      [parsed, garbled],
+      [garbled, parsed],
+      [parsed, missing],
+      [missing, parsed],
+    ]) {
+      const m = matchReaderTests(order, rows)
+      expect(m.matched.map(x => x.test.testId)).toEqual(['P'])
+      expect(m.superseded).toHaveLength(1)
+    }
+    const bad = matchReaderTests([garbled, missing], rows)
+    expect(bad.matched.map(x => x.test.testId)).toEqual(['M'])
+    expect(
+      matchReaderTests([missing, garbled], rows).matched.map(x => x.test.testId)
+    ).toEqual(['G'])
   })
 
   it('reads the lower bound in either order, and nothing from nothing', () => {
