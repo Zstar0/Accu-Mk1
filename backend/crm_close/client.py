@@ -2,11 +2,11 @@
 from __future__ import annotations
 
 import logging
-import os
 import time
 from typing import Any, Callable
 
 import httpx
+from integration_keys import store as integration_keys
 
 BASE_URL = "https://api.close.com/api/v1/"
 logger = logging.getLogger(__name__)
@@ -69,7 +69,7 @@ _shared: dict[str, CloseClient] = {}
 
 def get_client() -> CloseClient:
     """One pooled client per key for the life of the process (no per-request socket churn)."""
-    key = (os.environ.get("CLOSE_API_KEY") or "").strip()
+    key = integration_keys.get("CLOSE_API_KEY") or ""
     if not key:
         raise CrmNotConfigured()
     if key not in _shared:

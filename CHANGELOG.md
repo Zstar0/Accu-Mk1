@@ -1,5 +1,46 @@
 # Changelog
 
+## v1.45.0 - 2026-10-11
+
+### Support tickets look and work like Plain
+- **Two columns:** the conversation on the left and Plain's details sidebar on the right, in Plain's colors (light and dark follow Mk1's theme). The slide-out opens wider and remembers its own width; on a narrow window the details fold behind a Details button.
+- **Easier to follow:** team replies, customer messages and internal notes each have their own card, notes say who they are hidden from, automatic replies are collapsed, status and label changes are one-line events, and days are separated. Oldest first, scrolled to the latest.
+- **Action bar like Plain's:** Reply (R), Add note (N) and More (mark done, waiting for customer, snooze, back to todo). Esc closes the composer and keeps the draft.
+- **Details sidebar:** status in Plain's words (including Waiting for customer), assignee plus additional assignees you can add or remove, priority, labels, tier, the thread fields (WP user, orders, spent, sales rep and the rest), customer details with a link to their WordPress profile, and the customer's other tickets.
+
+## v1.44.0 - 2026-10-10
+
+### Answer and manage support tickets from Mk1
+- **Reply to customers from the Support tab.** Open a ticket on the customer page and write back in the composer at the bottom of the slide-out. The reply goes out from your own Plain account, under your name, and asks you to confirm the first time each time you open a ticket. Drafts are kept if you close the slide-out.
+- **Internal notes** from the same composer (Note tab). The team sees them in Plain, prefixed with your name.
+- **Manage the ticket in place:** mark it Done or back to Todo, snooze it (1 hour, tomorrow morning, next Monday, or a date you pick), assign it, set its priority, and add or remove labels.
+- **Your Plain account is your permission.** Anyone whose Mk1 email matches an active Plain user can work tickets, and now sees the Support tab even if they are not an admin.
+- **Built not to double-send.** A reply is never sent twice by retrying. If Plain does not confirm a reply, Mk1 checks the ticket and tells you whether it went out before you try again. Every action is recorded, without storing message text.
+- Replying needs the new Plain key with reply permission, set in Settings > Integrations.
+
+## v1.43.0 - 2026-10-10
+
+### API keys in Settings
+- **New Settings > Integrations page (admins only)** for the Close, Plain and Anthropic API keys. Each row shows where the key comes from (saved in Settings or the server), its last four characters, and who changed it and when, with **Replace**, **Test** and **Use server env**.
+- **A new key is tested with the provider before it is saved**, so a typo never takes an integration down, and it takes effect right away with no restart.
+- **Keys are encrypted and write-only.** Nobody, admins included, can read a saved key back, and every change and test is recorded.
+
+### Blend results fill themselves
+- **When every peptide in a blend has a quantity of 0, blend total and blend purity now fill in as 0 on their own** and lock, instead of waiting to be typed (PB-1062). This replaces the typed entry from 1.42.1. The certificate still prints both as N/A whenever identity fails.
+- Verified blend lines with a zero total now stay verified when the parent recalculates.
+
+## v1.42.1 - 2026-10-09
+
+### Blend results you can finish
+- **Blend total and blend purity can now be typed when they can't be calculated.** When every peptide in a blend has a quantity of 0 (for example, none was identified), there is nothing to calculate, so these two lines used to sit at Pending with no way to fill them (PB-1062). While they are empty you can now type a value, and once saved they lock again. Whenever the figure can be calculated, the calculated one still replaces anything typed.
+- Pairs with COA Builder 2.35.1, which prints blend total and blend purity as N/A on the certificate when any peptide fails identity.
+
+## v1.42.0 - 2026-10-09
+
+### New document look
+- **Every new document now looks like the AccuVerify Integration Guide:** Poppins headings, Open Sans text, the teal accent, and the guide's building blocks (numbered steps, colored callouts, cards, checklists, fact rows, button chips). This applies to artifacts, SOPs, reports and AI reviews published from now on; existing documents keep their look until their next revision.
+- **AI reviews** use the same look: an "At a glance" card row, severity-colored callouts, shortfalls grouped by theme, a next-steps checklist, and links to every source.
+
 ## v1.41.0 - 2026-10-09
 
 ### AI review becomes a document

@@ -15,6 +15,14 @@ export interface SupportThread {
   preview: string
   waiting_since: string | null
   plain_url: string
+  assignee_id?: string | null
+  customer_plain_id?: string | null
+  label_refs?: SupportLabelRef[]
+  status_detail?: SupportStatusDetail | null
+  assignees?: SupportAssignee[]
+  tier?: { name: string; color: string | null } | null
+  fields?: SupportField[]
+  customer?: SupportCustomerBlock | null
 }
 
 export interface CustomerSupport {
@@ -41,6 +49,12 @@ export interface SupportEntry {
   internal: boolean
   subject: string | null
   text: string
+  author_avatar_url?: string | null
+  automated?: boolean
+  email_to?: string | null
+  email_from?: string | null
+  markdown?: string | null
+  event?: SupportEventInfo | null
 }
 
 export interface SupportThreadDetail {
@@ -72,4 +86,89 @@ export function getSupportThread(
     `/support/customers/${encodeURIComponent(key)}/threads/${encodeURIComponent(id)}`,
     qs
   )
+}
+
+export interface SupportLabelRef {
+  id: string
+  type_id: string
+  name: string
+}
+
+export interface SupportMe {
+  has_seat: boolean
+  plain_user_id: string | null
+  name: string | null
+  email: string | null
+  unavailable: boolean
+}
+
+export interface SupportWorkspace {
+  teammates: { plain_user_id: string; name: string; email: string }[]
+  label_types: { id: string; name: string; color: string | null }[]
+}
+
+export type SupportAction =
+  | 'reply'
+  | 'note'
+  | 'status'
+  | 'assign'
+  | 'priority'
+  | 'labels'
+  | 'assignees'
+
+export function getSupportMe(): Promise<SupportMe> {
+  return crmFetch('/support/me', new URLSearchParams())
+}
+
+export function getSupportWorkspace(): Promise<SupportWorkspace> {
+  return crmFetch('/support/workspace', new URLSearchParams())
+}
+
+export function supportAction(
+  key: string,
+  threadId: string,
+  action: SupportAction,
+  body: Record<string, unknown>
+): Promise<{ detail: SupportThreadDetail | null }> {
+  return crmFetch(
+    `/support/customers/${encodeURIComponent(key)}/threads/${encodeURIComponent(threadId)}/${action}`,
+    new URLSearchParams(),
+    {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    }
+  )
+}
+
+export interface SupportStatusDetail {
+  kind: string
+  label: string
+  until: string | null
+}
+export interface SupportAssignee {
+  plain_user_id: string | null
+  name: string
+  avatar_url: string | null
+  primary: boolean
+}
+export interface SupportField {
+  key: string
+  label: string
+  value: string | null
+}
+export interface SupportCustomerBlock {
+  name: string
+  email: string | null
+  external_id: string | null
+  avatar_url: string | null
+  company: string | null
+  created_at: string | null
+  updated_at: string | null
+  wp_profile_url: string | null
+}
+export interface SupportEventInfo {
+  icon: 'status' | 'label' | 'assign' | 'priority'
+  actor: string
+  text: string
 }

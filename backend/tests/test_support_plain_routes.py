@@ -27,12 +27,14 @@ ENTRY = {"id": "e1", "timestamp": {"iso8601": "2026-09-03T00:00:00.000Z"},
 
 
 class FakePlain:
-    def __init__(self, fail=False):
-        self.fail, self.ops = fail, []
+    def __init__(self, fail=False, extras_fail=False):
+        self.fail, self.ops, self.extras_fail = fail, [], extras_fail
 
     def query(self, q, variables=None):
         op = {queries.WORKSPACE: "ws", queries.CUSTOMER_BY_EMAIL: "cust", queries.THREADS: "threads",
-              queries.THREAD: "thread"}[q]
+              queries.THREAD: "thread", queries.USER_BY_EMAIL: "user", queries.USERS: "users",
+              queries.LABEL_TYPES: "labels", queries.THREAD_FIELD_SCHEMAS: "schemas",
+              getattr(queries, "THREAD_EXTRAS", "_none_"): "extras"}[q]
         self.ops.append(op)
         if self.fail:
             raise plain_client.SupportUnavailable("http_503")
@@ -44,6 +46,25 @@ class FakePlain:
             assert variables["customerIds"] == ["c_1"]
             return {"threads": {"pageInfo": {"hasNextPage": False, "endCursor": None},
                                 "edges": [{"node": t} for t in THREADS + THREADS[:1]]}}
+        if op == "user":
+            u = {"sam@accumark.example": {"id": "u_1", "fullName": "Sam Parker", "publicName": "Sam",
+                                          "email": "sam@accumark.example", "isDeleted": False}}
+            return {"userByEmail": u.get(variables["email"])}
+        if op == "users":
+            return {"users": {"pageInfo": {"hasNextPage": False, "endCursor": None},
+                              "edges": [{"node": {"id": "u_1", "fullName": "Sam Parker", "email": "sam@accumark.example",
+                                                  "isDeleted": False}},
+                                        {"node": {"id": "u_2", "fullName": "Gone", "email": "g@x", "isDeleted": True}}]}}
+        if op == "labels":
+            return {"labelTypes": {"pageInfo": {"hasNextPage": False, "endCursor": None},
+                                   "edges": [{"node": {"id": "lt_1", "name": "Lab", "color": "#fff"}}]}}
+        if op == "extras":
+            if self.extras_fail:
+                raise plain_client.SupportUnavailable("graphql_errors")
+            t = next(x for x in THREADS if x["id"] == variables["threadId"])
+            return {"thread": {**t, "tier": {"name": "Regular Support", "color": "#00f"}}}
+        if op == "schemas":
+            return {"threadFieldSchemas": {"pageInfo": {"hasNextPage": False, "endCursor": None}, "edges": []}}
         t = next(x for x in THREADS if x["id"] == variables["threadId"])
         return {"thread": {**t, "timelineEntries": {"pageInfo": {"hasNextPage": False, "endCursor": None},
                                                     "edges": [{"node": ENTRY}]}}}
@@ -59,7 +80,7 @@ def api(monkeypatch):
                         lambda key: {"wc:1": ["k@x.example", "k2@x.example"], "wc:2": [], "wc:3": ["o@x.example"]}.get(key))
     service.CACHE.drop("")
     service.CACHE._refresh.clear()
-    main.app.dependency_overrides[get_current_user] = lambda: MagicMock(id=1, role="admin")
+    main.app.dependency_overrides[get_current_user] = lambda: MagicMock(id=1, role="admin", email="admin@accumark.example")
     yield TestClient(main.app), fake
     main.app.dependency_overrides.clear()
 
@@ -84,7 +105,15 @@ def test_list_dedupes_sorts_counts_and_declares_every_key(api):
     assert body["last_contact_at"] == "2026-09-03T00:00:00.000Z"
     assert body["oldest_waiting_since"] == "2026-09-03T00:00:00.000Z"
     assert set(body["threads"][0]) == {"id", "ref", "title", "status", "priority", "labels", "assignee", "created_at",
-                                       "updated_at", "preview", "waiting_since", "plain_url"}
+                                       "updated_at", "preview", "waiting_since", "plain_url",
+                                       "assignee_id", "customer_plain_id", "label_refs", "status_detail",
+                                       "assignees", "tier", "fields", "customer"}
+
+
+def test_list_declares_new_thread_keys(api):
+    client, _ = api
+    t = client.get("/support/customers/wc:1").json()["threads"][0]
+    assert t["customer_plain_id"] == "c_1" and t["label_refs"] == [] and t["assignee_id"] is None
 
 
 def test_status_filter_keeps_counts_whole(api):
@@ -107,7 +136,9 @@ def test_detail_returns_thread_and_entries(api):
     assert set(body) == {"thread", "entries", "fetched_at", "stale"}
     assert body["thread"]["id"] == "th_b"
     assert body["entries"] == [{"id": "e1", "at": "2026-09-03T00:00:00.000Z", "kind": "chat", "author": "Kyle R",
-                                "author_kind": "customer", "internal": False, "subject": None, "text": "hello"}]
+                                "author_kind": "customer", "internal": False, "subject": None, "text": "hello",
+                                "author_avatar_url": None, "automated": False, "email_to": None, "email_from": None,
+                                "markdown": None, "event": None}]
 
 
 def test_foreign_or_unknown_thread_is_404_without_a_thread_query(api, monkeypatch):
@@ -197,3 +228,74 @@ def test_malformed_plain_data_falls_back_to_stale_not_500(api):
     assert detail.status_code == 200 and detail.json()["stale"] is True
     service.CACHE.drop("")
     assert client.get("/support/customers/wc:1").status_code == 502
+
+
+def _as(email, role="standard"):
+    import main
+    main.app.dependency_overrides[get_current_user] = lambda: MagicMock(id=3, role=role, email=email)
+
+
+def test_seat_holder_without_admin_reads(api):
+    client, _ = api
+    _as("sam@accumark.example")
+    assert client.get("/support/customers/wc:1").status_code == 200
+    assert client.get("/support/customers/wc:1/threads/th_b").status_code == 200
+
+
+def test_no_seat_non_admin_is_403_even_when_plain_is_down(api):
+    client, fake = api
+    _as("nobody@x.example")
+    assert client.get("/support/customers/wc:1").status_code == 403
+    fake["plain"] = FakePlain(fail=True)
+    service.CACHE.drop("")
+    assert client.get("/support/customers/wc:1").status_code == 403
+
+
+def test_me_reports_the_seat(api):
+    client, _ = api
+    _as("sam@accumark.example")
+    assert client.get("/support/me").json() == {"has_seat": True, "plain_user_id": "u_1", "name": "Sam Parker",
+                                                "email": "sam@accumark.example", "unavailable": False}
+    _as("nobody@x.example", role="admin")
+    assert client.get("/support/me").json()["has_seat"] is False
+
+
+def test_me_when_plain_is_down(api):
+    client, fake = api
+    fake["plain"] = FakePlain(fail=True)
+    _as("sam@accumark.example")
+    body = client.get("/support/me").json()
+    assert body["has_seat"] is False and body["unavailable"] is True
+
+
+def test_workspace_needs_a_seat_and_lists_active_teammates(api):
+    client, _ = api
+    _as("nobody@x.example", role="admin")
+    assert client.get("/support/workspace").status_code == 403
+    _as("sam@accumark.example")
+    body = client.get("/support/workspace").json()
+    assert body == {"teammates": [{"plain_user_id": "u_1", "name": "Sam Parker", "email": "sam@accumark.example"}],
+                    "label_types": [{"id": "lt_1", "name": "Lab", "color": "#fff"}]}
+
+
+def test_detail_declares_the_view_keys(api):
+    client, _ = api
+    body = client.get("/support/customers/wc:1/threads/th_b").json()
+    assert {"status_detail", "assignees", "tier", "fields", "customer"} <= set(body["thread"])
+    assert {"author_avatar_url", "automated", "email_to", "email_from", "markdown", "event"} <= set(body["entries"][0])
+
+
+def test_sidebar_extras_come_from_their_own_query(api):
+    client, fake = api
+    body = client.get("/support/customers/wc:1/threads/th_b").json()
+    assert "extras" in fake["plain"].ops and body["thread"]["tier"] == {"name": "Regular Support", "color": "#00f"}
+
+
+def test_extras_failure_degrades_to_placeholders(api):
+    client, fake = api
+    fake["plain"] = FakePlain(extras_fail=True)
+    r = client.get("/support/customers/wc:1/threads/th_b")
+    assert r.status_code == 200
+    t = r.json()["thread"]
+    assert t["tier"] is None and t["fields"] == [] and t["status_detail"]["kind"] == "needs_next_response"
+    assert r.json()["entries"]  # the conversation still loads

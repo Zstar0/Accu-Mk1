@@ -8,9 +8,14 @@ export function ResizableSheetContent({
   className,
   style,
   children,
+  widthKey,
+  defaultWidth,
   ...props
-}: React.ComponentProps<typeof SheetContent>) {
-  const w = useSlideoutWidth()
+}: React.ComponentProps<typeof SheetContent> & {
+  widthKey?: string
+  defaultWidth?: number
+}) {
+  const w = useSlideoutWidth({ key: widthKey, defaultWidth })
   const dragging = React.useRef(false)
 
   const onKeyDown = (e: React.KeyboardEvent) => {

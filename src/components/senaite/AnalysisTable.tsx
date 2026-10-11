@@ -781,7 +781,9 @@ function resolveIdentityLabel(result: string | null, conformsValue: string): str
 
 /** Native blend aggregates are CALCULATED by Mk1 from the peptide rows, never
  *  typed (backend/lims_analyses/blend_aggregates.py). Typed by hand on PB-1002
- *  they drifted from what the COA recomputes. Twin: hplc_native.AGGREGATES. */
+ *  they drifted from what the COA recomputes. When every quantity is 0 there is
+ *  nothing to calculate and Mk1 fills both with 0 itself (PB-1062, 2026-10-10).
+ *  Twin: hplc_native.AGGREGATES. */
 const CALCULATED_AGGREGATES: Record<string, { label: string; formula: string }> = {
   'HPLC-BLEND-TOTAL': {
     label: 'Blend total quantity',
@@ -818,7 +820,7 @@ export function CalculatedAggregateTooltip({
       <div className="border-t border-primary-foreground/20 pt-1.5 opacity-70">
         {hasValue
           ? 'Updates by itself when a peptide result changes. It is still promoted and verified like any other row.'
-          : 'Fills in once every peptide has both a purity and a quantity.'}
+          : 'Fills in once every peptide has both a purity and a quantity. If every quantity is 0, it fills in as 0.'}
       </div>
     </div>
   )
@@ -853,6 +855,21 @@ function EditableResultCell({
   const displayLabel = conformsValue
     ? resolveIdentityLabel(analysis.result, conformsValue)
     : resolveResultLabel(analysis.result, options)
+  const calcMarker = calculated && (
+    <Tooltip>
+      <TooltipTrigger asChild>
+        <span
+          className="ml-1.5 inline-flex align-middle text-muted-foreground/60 hover:text-foreground transition-colors"
+          aria-label={`${calculated.label} is calculated`}
+        >
+          <Calculator size={12} />
+        </span>
+      </TooltipTrigger>
+      <TooltipContent className="p-0 max-w-xs">
+        <CalculatedAggregateTooltip info={calculated} hasValue={!!displayLabel} />
+      </TooltipContent>
+    </Tooltip>
+  )
 
   // Auto-focus when entering edit mode
   useEffect(() => {
@@ -943,6 +960,7 @@ function EditableResultCell({
               <X size={14} />
             </button>
           )}
+          {calcMarker}
         </div>
       </td>
     )
@@ -1072,21 +1090,7 @@ function EditableResultCell({
       {analysis.unit && analysis.unit.toLowerCase() !== 'text' && (
         <span className="text-xs text-muted-foreground ml-1.5">{analysis.unit}</span>
       )}
-      {calculated && (
-        <Tooltip>
-          <TooltipTrigger asChild>
-            <span
-              className="ml-1.5 inline-flex align-middle text-muted-foreground/60 hover:text-foreground transition-colors"
-              aria-label={`${calculated.label} is calculated`}
-            >
-              <Calculator size={12} />
-            </span>
-          </TooltipTrigger>
-          <TooltipContent className="p-0 max-w-xs">
-            <CalculatedAggregateTooltip info={calculated} hasValue={!!displayLabel} />
-          </TooltipContent>
-        </Tooltip>
-      )}
+      {calcMarker}
     </td>
   )
 }
