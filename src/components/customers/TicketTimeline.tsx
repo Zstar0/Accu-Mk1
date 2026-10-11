@@ -144,13 +144,19 @@ export function TicketTimeline({
   customerFirstName: string
   viewerName: string
 }) {
-  let lastDay = ''
+  // The day of the nearest earlier entry that has a timestamp, so a divider shows once per day.
+  const days = entries.map(e => (e.at ? dayLabel(e.at) : ''))
+  const before: string[] = []
+  let last = ''
+  for (const d of days) {
+    before.push(last)
+    if (d) last = d
+  }
   return (
     <div className="flex flex-col gap-3">
-      {entries.map(e => {
-        const day = e.at ? dayLabel(e.at) : ''
-        const divider = day && day !== lastDay
-        lastDay = day || lastDay
+      {entries.map((e, i) => {
+        const day = days[i] ?? ''
+        const divider = day !== '' && day !== before[i]
         return (
           <Fragment key={e.id}>
             {divider && (
