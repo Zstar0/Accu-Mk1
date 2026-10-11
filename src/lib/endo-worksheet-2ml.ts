@@ -170,13 +170,9 @@ function stepsFrom(wire: WorksheetItemRow['prep_steps']): EndoSample['steps'] {
   return [step(wire[0], true), step(wire[1], false), step(wire[2], false)]
 }
 
-function resolveRow(
-  item: WorksheetItemRow,
-  ws: WorksheetRow,
-  catalog: ConsumableType[]
-): Pick<EndoRow, 'sample' | 'cartridge' | 'inherited'> {
-  const allowed = allowedCartridges(ws, catalog)
-  const base: EndoSample = {
+/** The row as the maths reads it, before a cartridge is resolved. */
+function baseSample(item: WorksheetItemRow): EndoSample {
+  return {
     sampleId: item.sample_id,
     identity: endoIdentityFor(item),
     sampleType: item.sample_type ?? null,
@@ -189,6 +185,27 @@ function resolveRow(
     reading: item.result_reading ?? null,
     reader: item.result_reader ?? null,
   }
+}
+
+/**
+ * Box 1's order on a 2 mL run (Dennis's calc.js orderSamples): bac water at
+ * the bottom, everything else in the order given (bench order: due date, then
+ * priority). Stable, on formOf, so a form set by hand decides. Every 2 mL
+ * surface that numbers rows (the page, the flyout, the 2 mL sheet and CSV)
+ * orders through this; stock runs keep plain bench order.
+ */
+export function bacWaterLast(items: WorksheetItemRow[]): WorksheetItemRow[] {
+  const bac = (it: WorksheetItemRow) => formOf(baseSample(it)) === 'bac'
+  return [...items.filter(it => !bac(it)), ...items.filter(bac)]
+}
+
+function resolveRow(
+  item: WorksheetItemRow,
+  ws: WorksheetRow,
+  catalog: ConsumableType[]
+): Pick<EndoRow, 'sample' | 'cartridge' | 'inherited'> {
+  const allowed = allowedCartridges(ws, catalog)
+  const base = baseSample(item)
   // Bac water runs on the allowed 0.01 unless its row says otherwise
   // (Dennis, 2026-10-09; spec 4.3). Of two allowed 0.01 types, the row's own.
   const bacTypes =
@@ -225,7 +242,7 @@ export function endoSampleFor(
   return resolveRow(item, ws, catalog).sample
 }
 
-/** The page's rows, numbered in the order given (Box 1's bench order). */
+/** The page's rows, numbered in the order given (Box 1's order, bacWaterLast). */
 export function endoRowsFor(
   ordered: WorksheetItemRow[],
   ws: WorksheetRow,

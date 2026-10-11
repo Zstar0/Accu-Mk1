@@ -12,6 +12,7 @@ import {
 } from '@/lib/endo-prep-2ml'
 import {
   allowedCartridges,
+  bacWaterLast,
   cartridgeNote,
   endoCtxFor,
   endoRowsFor,
@@ -271,6 +272,21 @@ describe('endoRowsFor', () => {
       [1, 11, 2, 2],
       [2, 10, 1, 1],
     ])
+  })
+})
+
+describe('bacWaterLast', () => {
+  it("puts bac water at the bottom as Dennis's orderSamples does; the rest keep the order given", () => {
+    const order = bacWaterLast([
+      item({ id: 1, sample_id: 'BW-0101' }),
+      item({ id: 2 }),
+      item({ id: 3, sample_identity: 'Bacteriostatic Water' }),
+      // A form set by hand wins, as formOf reads it: powder is not bac water.
+      item({ id: 4, sample_id: 'BW-0104', prep_form: 'powder' }),
+      item({ id: 5, prep_form: 'bac' }),
+      item({ id: 6 }),
+    ])
+    expect(order.map(it => it.id)).toEqual([2, 4, 6, 1, 3, 5])
   })
 })
 

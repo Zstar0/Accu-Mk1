@@ -37,9 +37,12 @@ import {
   type EndoForm,
 } from '@/lib/endo-prep-2ml'
 import {
+  BW_LAL_UL,
+  BW_SAMPLE_UL,
   cartridgeNote,
   cartridgeTitle,
   fmtConc,
+  standardSteps,
   type EndoCartridgeOption,
   type EndoRow,
 } from '@/lib/endo-worksheet-2ml'
@@ -161,10 +164,14 @@ export function EndoWorksheetTable({
   const dueAtByItemId = new Map(
     items.map(it => [it.id, slaByKey.get(String(it.id))?.status.due_at ?? null])
   )
-  const ordered = endoItemsInBenchOrder(items, dueAtByItemId, calendar)
   // 2 mL runs (spec 2026-10-10 6.1): the page hands over each row's sample.
   const two = prepModel === '2ml' && twoMl ? twoMl : null
   const twoRows = new Map<number, EndoRow>(two?.rows.map(r => [r.item.id, r]))
+  // On 2 mL the rows come in Box 1's order (bac water last, bacWaterLast);
+  // stock keeps plain bench order.
+  const ordered = two
+    ? two.rows.map(r => r.item)
+    : endoItemsInBenchOrder(items, dueAtByItemId, calendar)
 
   const rows = ordered.map(item => {
     const prep = endoPrepFor(item)
@@ -232,7 +239,7 @@ export function EndoWorksheetTable({
                   </th>
                   <th className={TH}>Form</th>
                   <th className={`${TH} text-right`}>
-                    Water<span className={UNIT}>mL</span>
+                    Reconstitution water<span className={UNIT}>mL</span>
                   </th>
                   <th className={`${TH} ${TH_CALC}`}>
                     Vial conc.<span className={UNIT}>mg/mL</span>
@@ -559,26 +566,65 @@ export function EndoWorksheetTable({
   )
 }
 
-/** The formulas behind the sheet, as Dennis prints them under his table. */
-export function EndoCalculations() {
-  const cells: [string, string][] = [
-    [
-      'Due date',
-      '= the SLA clock: received + the turnaround in business time, skipping lab holidays',
-    ],
-    ['Volume to add', '= MIN(10, 1 + FLOOR(wt ÷ 50))'],
-    ['Vial concentration', '= declared wt ÷ volume to add'],
-    ['Sample needed', '= target ÷ vial conc. × 1000'],
-    ['LAL needed', '= 1000 − sample needed'],
-    ['Bacteriostatic water', '20× dilution: 50 µL made to 1000 µL with LAL'],
+type LegendCell = [term: string, value: string, note?: string]
+
+/**
+ * The formulas behind the sheet, as Dennis prints them under his table. On a
+ * 2 mL run (`ctx` given), his 2 mL legend with the run's own numbers: the
+ * method's water and total and the standard steps they give.
+ */
+export function EndoCalculations({ ctx }: { ctx?: EndoCtx }) {
+  const due: LegendCell = [
+    'Due date',
+    '= the SLA clock: received + the turnaround in business time, skipping lab holidays',
   ]
+  const std = ctx ? standardSteps(ctx) : []
+  const step = (i: number) => {
+    const s = std[i]
+    return s
+      ? `${fmtUl(s.sampleUl)} + ${fmtUl(s.diluentUl)} µL · 1:${fmt(s.ratio)}`
+      : '-'
+  }
+  const cells: LegendCell[] = ctx
+    ? [
+        due,
+        [
+          'Reconstitution water',
+          `${fmt(ctx.params.reconWaterMl)} mL`,
+          'underlined on the sheet, dotted on screen, where a row has its own',
+        ],
+        ['Step 1 · Tris', step(0), '0.1 M Tris (BT103), first, per its insert'],
+        ['Step 2 · LAL water', step(1), 'ratio = total ÷ (step 1 × 2)'],
+        ['Step 3 · BG600', step(2), 'always 1:2: BG600 is half the final prep'],
+        [
+          'Total · MCS',
+          `1:${fmt(ctx.params.stdTotalDilution)}, factor 1 on the MCS`,
+          `the sheet multiplies the reading by the total and the ${fmt(ctx.params.reconWaterMl)} mL`,
+        ],
+        [
+          'Bacteriostatic water',
+          `${fmt(BW_DILUTION)}× dilution: ${fmtUl(BW_SAMPLE_UL)} µL`,
+          `made to ${fmtUl(BW_SAMPLE_UL + BW_LAL_UL)} µL with LAL water`,
+        ],
+      ]
+    : [
+        due,
+        ['Volume to add', '= MIN(10, 1 + FLOOR(wt ÷ 50))'],
+        ['Vial concentration', '= declared wt ÷ volume to add'],
+        ['Sample needed', '= target ÷ vial conc. × 1000'],
+        ['LAL needed', '= 1000 − sample needed'],
+        [
+          'Bacteriostatic water',
+          '20× dilution: 50 µL made to 1000 µL with LAL',
+        ],
+      ]
   return (
     <section>
       <h3 className="pb-2 text-[9.5px] font-semibold uppercase tracking-[0.13em] text-muted-foreground">
         Calculations
       </h3>
       <dl className="grid grid-cols-[repeat(auto-fit,minmax(210px,1fr))] overflow-hidden rounded-[5px] border">
-        {cells.map(([term, formula]) => (
+        {cells.map(([term, formula, note]) => (
           <div
             key={term}
             className="border-r bg-card px-3.5 py-2.5 last:border-r-0"
@@ -586,7 +632,14 @@ export function EndoCalculations() {
             <dt className="mb-1 text-[9.5px] font-semibold uppercase tracking-[0.12em] text-muted-foreground">
               {term}
             </dt>
-            <dd className="font-mono text-xs text-foreground/80">{formula}</dd>
+            <dd className="font-mono text-xs text-foreground/80">
+              {formula}
+              {note && (
+                <i className="mt-0.5 block font-sans text-[11px] text-muted-foreground">
+                  {note}
+                </i>
+              )}
+            </dd>
           </div>
         ))}
       </dl>

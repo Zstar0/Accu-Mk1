@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import type { ReactNode } from 'react'
 import {
+  cleanup,
   fireEvent,
   render,
   screen,
@@ -128,6 +129,30 @@ describe('EndoFlyoutSummary', () => {
     expect(countOf('Invalid')).toBe('1')
     expect(getWorksheet).toHaveBeenCalledWith(77)
     expect(screen.getByText('Fail')).toBeInTheDocument()
+  })
+
+  it('lists bac water last on a 2 mL run, as Box 1 numbers it; stock keeps bench order', () => {
+    const bw = endoItem({
+      sample_id: 'BW-0114-S02',
+      sample_identity: 'Bacteriostatic Water',
+      priority: 'expedited',
+    })
+    const pep = endoItem({ sample_id: 'P-0200-S02' })
+    const listed = () =>
+      within(screen.getByRole('list'))
+        .getAllByRole('listitem')
+        .map(li => li.textContent?.match(/^(\d+)(\S+-S02)/)?.slice(1))
+    setup(endoWorksheet([bw, pep]))
+    expect(listed()).toEqual([
+      ['1', 'P-0200-S02'],
+      ['2', 'BW-0114-S02'],
+    ])
+    cleanup()
+    setup(endoWorksheet([bw, pep], { endo_prep: 'stock' }))
+    expect(listed()).toEqual([
+      ['1', 'BW-0114-S02'],
+      ['2', 'P-0200-S02'],
+    ])
   })
 
   it('shows … for Invalid and Ready for Mk1 until the run settings land', () => {

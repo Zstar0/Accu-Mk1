@@ -51,6 +51,7 @@ import { splitIdentity } from '@/lib/endo-reader'
 import {
   BW_LAL_UL,
   BW_SAMPLE_UL,
+  bacWaterLast,
   endoCtxFor,
   endoRowsFor,
   runCartridgeFor,
@@ -125,7 +126,9 @@ export function buildEndoSheet2Doc(
   const cal = opts.calendar
   const holidays = new Map<string, string>()
   const orders = new Set<string>()
-  const bench = endoItemsInBenchOrder(ws.items, opts.dueAtByItemId, cal)
+  const bench = bacWaterLast(
+    endoItemsInBenchOrder(ws.items, opts.dueAtByItemId, cal)
+  )
   const rows: EndoSheet2Row[] = endoRowsFor(bench, ws, catalog).map(r => {
     const item = r.item
     const received = cal ? labDate(item.date_received, cal) : null

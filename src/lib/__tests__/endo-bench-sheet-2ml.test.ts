@@ -12,6 +12,7 @@ import {
   type EndoCtx,
   type EndoSample,
 } from '@/lib/endo-prep-2ml'
+import { buildEndoSheetDoc } from '@/lib/endo-worksheet'
 import {
   endoItem,
   endoWorksheet,
@@ -268,6 +269,43 @@ describe('buildEndoCsv2', () => {
     const line = csv.split('\r\n')[1] ?? ''
     expect(line).toContain('"\'=HYPERLINK(""http://x"")"')
     expect(line).toContain('"\'+8860"')
+  })
+})
+
+describe('buildEndoSheet2Doc order', () => {
+  const opts = {
+    analystName: 'Test Analyst',
+    calendar: null,
+    printedAt: 'now',
+    dueAtByItemId: new Map<number, string | null>(),
+  }
+  // Received first and expedited: bench order alone puts it at the top.
+  const bw = endoItem({
+    sample_id: 'BW-0114-S02',
+    sample_identity: 'Bacteriostatic Water',
+    sample_type: 'Bacteriostatic Water',
+    priority: 'expedited',
+    date_received: '2026-10-08T16:00:00Z',
+  })
+  const pep = endoItem({ sample_id: 'P-0200-S02' })
+
+  it('numbers bac water last, as Box 1 does, even received first and expedited', () => {
+    const d = buildEndoSheet2Doc(endoWorksheet([bw, pep]), opts)
+    expect(d.rows.map(r => [r.n, r.sample.sampleId])).toEqual([
+      [1, 'P-0200-S02'],
+      [2, 'BW-0114-S02'],
+    ])
+    const csv = buildEndoCsv2(d).trimEnd().split('\r\n')
+    expect(csv[1]).toContain('P-0200-S02')
+    expect(csv[2]).toContain('BW-0114-S02')
+  })
+
+  it('the stock sheet keeps bench order: bac water stays where it sorts', () => {
+    const d = buildEndoSheetDoc(
+      endoWorksheet([bw, pep], { endo_prep: 'stock' }),
+      opts
+    )
+    expect(d.rows.map(r => r.sampleId)).toEqual(['BW-0114-S02', 'P-0200-S02'])
   })
 })
 

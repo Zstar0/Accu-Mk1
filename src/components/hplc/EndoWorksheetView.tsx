@@ -236,7 +236,9 @@ export function EndoWorksheetView({
       {/* Boxes 2 and 3; with the column's 16px gap, 24px between boxes as on Dennis's sheet */}
       {children && <div className="space-y-6 pt-2">{children}</div>}
 
-      <EndoCalculations />
+      <EndoCalculations
+        ctx={prepModel === '2ml' && twoMl ? twoMl.ctx : undefined}
+      />
 
       <section>
         <h3 className="pb-2 text-[9.5px] font-semibold uppercase tracking-[0.13em] text-muted-foreground">

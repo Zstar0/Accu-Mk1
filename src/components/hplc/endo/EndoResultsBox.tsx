@@ -563,7 +563,8 @@ export function EndoResultsBox({
                 MVC<span className={UNIT}>mg/mL</span>
               </th>
               <th className={`${TH} !text-right`}>
-                Reading<span className={UNIT}>EU/mL on the MCS, factor 1</span>
+                Result as read
+                <span className={UNIT}>EU/mL on the MCS, factor 1</span>
               </th>
               <th className={`${TH} ${TH_CALC}`}>
                 Reader<span className={UNIT}>spike rec. · CV</span>

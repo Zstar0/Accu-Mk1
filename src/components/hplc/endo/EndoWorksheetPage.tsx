@@ -24,9 +24,11 @@ import { worksheetItemSlaSubjects } from '@/lib/worksheet-sla-subjects'
 import { endoItemsInBenchOrder } from '@/lib/endo-worksheet'
 import {
   allowedCartridges,
+  bacWaterLast,
   endoCtxFor,
   endoRowsFor,
 } from '@/lib/endo-worksheet-2ml'
+import { fmt } from '@/lib/endo-prep'
 import { parseWorksheetNotes, withNotesText } from '@/lib/worksheet-notes'
 import { worksheetKind } from '@/lib/worksheet-kind'
 import AddSamplesModal from '@/components/hplc/AddSamplesModal'
@@ -147,9 +149,10 @@ function EndoWorksheetPageBody({
     )
   )
 
-  // Box 1's order (due date, then priority), worked out as the table does, so
-  // Boxes 2 and 3 number their rows as Box 1 does.
-  const ordered = endoItemsInBenchOrder(
+  // Box 1's order on 2 mL (due date, then priority, bac water last), handed
+  // to Box 1 with the rows so Boxes 1 to 3 number their rows the same.
+  const twoMl = worksheet.endo_prep === '2ml'
+  const bench = endoItemsInBenchOrder(
     worksheet.items,
     new Map(
       worksheet.items.map(it => [
@@ -161,7 +164,11 @@ function EndoWorksheetPageBody({
   )
   const cartridges = allowedCartridges(worksheet, catalog)
   const ctx = endoCtxFor(worksheet, catalog)
-  const rows = endoRowsFor(ordered, worksheet, catalog)
+  const rows = endoRowsFor(
+    twoMl ? bacWaterLast(bench) : bench,
+    worksheet,
+    catalog
+  )
   const boxProps: EndoBoxProps = {
     worksheet,
     rows,
@@ -277,13 +284,15 @@ function EndoWorksheetPageBody({
         onTickAll={data =>
           drawer.bulkTicksMutation.mutate({ worksheetId: id, data })
         }
-        prepModel={worksheet.endo_prep === '2ml' ? '2ml' : 'stock'}
+        prepModel={twoMl ? '2ml' : 'stock'}
         twoMl={{ rows, ctx, cartridges }}
         heading={
           <EndoBoxHead
             n={1}
             title="Sample intake: reconstitute each vial"
-            sub="What came in, when it is due, and the water that goes into each vial. Tick Made and MCS as you go."
+            sub={`What came in, when it is due, and the water that goes into each vial${
+              twoMl ? ` (${fmt(ctx.params.reconWaterMl)} mL standard)` : ''
+            }. Tick Made and MCS as you go.`}
           />
         }
         runHeader={
@@ -295,7 +304,7 @@ function EndoWorksheetPageBody({
           />
         }
       >
-        {worksheet.endo_prep === '2ml' && (
+        {twoMl && (
           <>
             <EndoSampleDilutionBox {...boxProps} />
             <EndoResultsBox {...boxProps} />

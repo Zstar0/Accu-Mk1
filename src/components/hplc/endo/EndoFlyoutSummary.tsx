@@ -11,6 +11,7 @@ import {
 import { fmt, labDate } from '@/lib/endo-prep'
 import { mk1Value, prep2Result, type EndoVerdict } from '@/lib/endo-prep-2ml'
 import {
+  bacWaterLast,
   endoCtxFor,
   endoRowsFor,
   runCartridgeFor,
@@ -97,8 +98,10 @@ export function EndoFlyoutSummary({
   const dueAt = new Map(
     items.map(it => [it.id, byKey.get(String(it.id))?.status.due_at ?? null])
   )
-  const rows = endoItemsInBenchOrder(items, dueAt, calendar)
   const twoMl = ws.endo_prep === '2ml'
+  // Numbered as Box 1 numbers them: on 2 mL, bac water last.
+  const bench = endoItemsInBenchOrder(items, dueAt, calendar)
+  const rows = twoMl ? bacWaterLast(bench) : bench
   const ready = full !== undefined
   // Not worked out (yet): loading, or the read failed and is offered again.
   const unknown = isError ? '-' : '…'

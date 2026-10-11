@@ -143,7 +143,7 @@ const TWO = [
   'Sample identity',
   'Declared wtmg',
   'Form',
-  'WatermL',
+  'Reconstitution watermL',
   'Vial conc.mg/mL',
   'Cartridgeλ EU/mL',
   'Status',
