@@ -54,6 +54,37 @@ export interface DocumentSpaceUpdate {
   sort_order?: number
 }
 
+/**
+ * Who created ONE revision, who asked for it and where it came from (backend
+ * documents/provenance.py). `verified` is the server's word: the creator comes
+ * from the credential, a requester only when Mk1 resolved the login itself, and
+ * a source only for in-process Mk1 writers. Everything else is the caller's claim.
+ */
+export interface DocumentProvenance {
+  version: number
+  creator: {
+    kind: 'user' | 'agent' | 'service' | 'unknown'
+    id: string | null
+    label: string
+    verified: boolean
+  }
+  requested_by: {
+    label: string
+    user_id: number | null
+    verified: boolean
+  } | null
+  source: {
+    system: string
+    system_label: string
+    verified: boolean
+    record_type: string | null
+    record_id: string | null
+    record_label: string | null
+    run_id: string | null
+  } | null
+  content_edited: { by: string; at: string } | null
+}
+
 export interface DocumentRow {
   id: number
   code: string
@@ -85,6 +116,8 @@ export interface DocumentRow {
   revision_count: number
   /** Open top-level comments on this code (spec §6.2). */
   open_comment_count: number
+  /** Of THIS revision. Absent from a backend older than provenance. */
+  provenance?: DocumentProvenance
 }
 
 export interface DocumentDetail extends DocumentRow {

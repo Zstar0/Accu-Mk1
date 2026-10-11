@@ -1,12 +1,12 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import { render, screen, waitFor } from '@/test/test-utils'
 import { useAuthStore } from '@/store/auth-store'
+import { DocumentEmbed } from '../DocumentEmbed'
 import {
-  DocumentEmbed,
   EMBED_FRAME_CSP,
   buildEmbedSrcDoc,
   parseEmbedRef,
-} from '../DocumentEmbed'
+} from '../embed-utils'
 
 const HTML =
   '<!doctype html><html><head><title>t</title></head><body><h1>Report</h1></body></html>'
@@ -117,6 +117,50 @@ describe('DocumentEmbed', () => {
     expect(
       container.querySelector('[data-embed-status="draft"]')
     ).not.toBeNull()
+  })
+
+  it("shows the pinned revision's provenance with how each part was established", async () => {
+    mockApi(
+      doc({
+        created_at: '2026-10-11T18:04:05.123',
+        provenance: {
+          version: 1,
+          creator: {
+            kind: 'agent',
+            id: 'jarvis',
+            label: 'jarvis',
+            verified: true,
+          },
+          requested_by: {
+            label: 'Forrest Parker',
+            user_id: null,
+            verified: false,
+          },
+          source: {
+            system: 'paperclip',
+            system_label: 'Paperclip',
+            verified: false,
+            record_type: 'issue',
+            record_id: null,
+            record_label: 'ACC-111',
+            run_id: 'run-7d1f',
+          },
+          content_edited: null,
+        },
+      })
+    )
+    const { container } = render(<DocumentEmbed hash={hash()} />)
+    await waitFor(() =>
+      expect(container.querySelector('[data-provenance]')).not.toBeNull()
+    )
+    const text = container.querySelector('[data-provenance]')?.textContent
+    expect(text).toContain('Forrest Parker [supplied, not verified]')
+    expect(text).toContain('jarvis [authenticated agent]')
+    expect(text).toContain('Paperclip [reported, not verified]')
+    expect(text).toContain('issue · ACC-111')
+    expect(text).toContain('run-7d1f')
+    expect(text).toContain('2 · 2026-10-11 18:04 UTC')
+    expect(container.querySelector('a')).toBeNull() // no source links
   })
 
   it.each([
