@@ -85,7 +85,9 @@ FALSE`; two FKs to `users(id) ON DELETE SET NULL`). Fresh databases get the same
   always set: `created_by_user_id` = user, `co_author` = agent, otherwise `unknown`.
   `source_session` and other free text are never parsed.
 - Rollback = redeploy the previous image. It ignores the new columns and keeps writing
-  (proven on Postgres); rows it writes read as `unknown` creator after the next upgrade.
+  (proven on Postgres). Rows it writes still set `created_by_user_id` / `co_author`, so
+  after the next upgrade admin and agent rows derive as user / agent; only its
+  internal-service-token rows read as `unknown`, and no rollback row has a source.
   Optional cleanup SQL, only after a decision not to roll forward:
   `ALTER TABLE documents DROP COLUMN creator_kind, DROP COLUMN creator_ref, DROP COLUMN
 requested_by_user_id, DROP COLUMN content_edited_by_user_id, DROP COLUMN content_edited_at,

@@ -185,12 +185,14 @@ def test_rows_from_before_provenance_are_never_read_as_verified(client):
 
 
 def test_a_hidden_documents_provenance_is_not_readable(client):
-    _restricted_world(client)
+    _, secret = _restricted_world(client)
+    _read_as(client, 10)  # granted member: the positive control
+    member = client.get(f"/api/documents/{secret['id']}")
+    assert member.status_code == 200 and member.json()["provenance"]["creator"]["kind"] == "user"
     _read_as(client, 42)  # outsider
     listed = client.get("/api/documents").json()
     assert all(i["space_slug"] != "leadership" for i in listed["items"])
-    hidden_id = 1
-    r = client.get(f"/api/documents/{hidden_id}")
+    r = client.get(f"/api/documents/{secret['id']}")
     assert r.status_code == 404 and "provenance" not in r.text
 
 
