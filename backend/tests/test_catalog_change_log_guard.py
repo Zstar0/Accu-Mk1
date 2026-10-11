@@ -86,6 +86,9 @@ WIRED_FUNCTIONS = [
     # stored snapshot was NULL, else apply_and_log; either satisfies the
     # floor check below since both call nodes are present in the source).
     "reprovision_catalog_snapshot",
+    # Endo worksheet v2 (spec 2026-10-10 section 10): consumables catalog.
+    "create_consumable",
+    "update_consumable",
 ]
 
 LOG_CALL_NAMES = {"apply_and_log", "log_create", "log_delete", "log_members"}

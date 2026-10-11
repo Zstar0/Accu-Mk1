@@ -62,6 +62,7 @@ from sla_perf import (  # noqa: E402
     build_sla_performance,
 )
 from models import AuditLog, Settings, Job, Sample, Result, Instrument, AnalysisService, AnalysisServiceSpec, HplcMethod, Peptide, PeptideAnalyte, CalibrationCurve, HPLCAnalysis, User, SharePointFileCache, WizardSession, WizardMeasurement, peptide_methods, blend_components, ServiceGroup, service_group_members, SamplePriority, Worksheet, WorksheetItem, WorksheetNote, instrument_methods, SampleAnalyteAlias, SlaTier, SlaPriorityTier, BusinessHoursConfig, LabHoliday, LimsSample, LimsSampleRemark, LimsSubSample, LimsBox, FlagType, LimsParentAttachment, MethodAttachment, method_services, LimsOrder
+from models import ConsumableType  # endo worksheet v2
 from catalog.change_log import apply_and_log, log_create, log_delete, log_members
 from auth import (
     get_current_user, require_admin, create_access_token,
@@ -3929,6 +3930,193 @@ async def update_instrument(instrument_id: int, data: InstrumentUpdate,
     db.commit()
     db.refresh(inst)
     return InstrumentResponse.model_validate(inst)
+
+
+# ─── Consumables catalog (endo worksheet v2, spec 2026-10-10 sections 3.1, 3.2, 9) ───
+
+
+class ConsumableTypeCreate(BaseModel):
+    kind: str
+    name: str
+    manufacturer: Optional[str] = None
+    part_number: Optional[str] = None
+    instrument_id: Optional[int] = None
+    specs: dict = {}
+
+
+class ConsumableTypeUpdate(BaseModel):
+    """All optional. Retire with active=false; there is no delete."""
+    kind: Optional[str] = None
+    name: Optional[str] = None
+    manufacturer: Optional[str] = None
+    part_number: Optional[str] = None
+    instrument_id: Optional[int] = None
+    specs: Optional[dict] = None
+    active: Optional[bool] = None
+
+
+class ConsumableTypeResponse(BaseModel):
+    id: int
+    kind: str
+    name: str
+    manufacturer: Optional[str] = None
+    part_number: Optional[str] = None
+    instrument_id: Optional[int] = None
+    specs: dict
+    active: bool
+    origin: str
+    in_use: bool = False
+    created_at: datetime
+    updated_at: datetime
+
+    class Config:
+        from_attributes = True
+
+
+class ConsumableSpecFieldOut(BaseModel):
+    key: str
+    label: str
+    unit: Optional[str] = None
+    type: str
+    required: bool
+
+
+class ConsumableKindOut(BaseModel):
+    key: str
+    label: str
+    specs: list[ConsumableSpecFieldOut]
+
+
+def _blank_to_none(value: Optional[str]) -> Optional[str]:
+    """R-P1-2 edge normalization: a blank string never reaches a partial unique index."""
+    if value is None:
+        return None
+    return value.strip() or None
+
+
+def _consumable_out(row: ConsumableType, in_use: bool) -> ConsumableTypeResponse:
+    out = ConsumableTypeResponse.model_validate(row)
+    out.in_use = in_use
+    return out
+
+
+def _consumable_conflict(db: Session, *, kind: str, name: str, manufacturer: Optional[str],
+                         part_number: Optional[str], exclude_id: Optional[int] = None) -> Optional[str]:
+    """The 409 message for a duplicate (kind, name) or a duplicate part number
+    under the same manufacturer (none counts as ''), mirroring the two unique
+    indexes on consumable_types; None when the row is unique."""
+    q = select(ConsumableType.id).where(ConsumableType.kind == kind, ConsumableType.name == name)
+    if exclude_id is not None:
+        q = q.where(ConsumableType.id != exclude_id)
+    if db.execute(q).first() is not None:
+        return f"a {kind} named '{name}' already exists"
+    if part_number is not None:
+        q = select(ConsumableType.name).where(
+            ConsumableType.part_number == part_number,
+            func.coalesce(ConsumableType.manufacturer, "") == (manufacturer or ""))
+        if exclude_id is not None:
+            q = q.where(ConsumableType.id != exclude_id)
+        other = db.execute(q).scalars().first()
+        if other is not None:
+            return f"part number '{part_number}' is already on '{other}'"
+    return None
+
+
+@app.get("/consumables/kinds", response_model=list[ConsumableKindOut])
+async def list_consumable_kinds(_current_user=Depends(get_current_user)):
+    """The kind registry, for the admin form."""
+    from catalog.consumables import kinds_payload
+    return kinds_payload()
+
+
+@app.get("/consumables", response_model=list[ConsumableTypeResponse])
+async def list_consumables(kind: Optional[str] = None, active: Optional[bool] = None,
+                           db: Session = Depends(get_db), _current_user=Depends(get_current_user)):
+    """Every consumable type, retired ones included unless ?active=true.
+    in_use comes from one query, never one per row."""
+    from catalog.consumables import used_type_ids
+    q = select(ConsumableType).order_by(ConsumableType.kind, ConsumableType.name)
+    if kind is not None:
+        q = q.where(ConsumableType.kind == kind)
+    if active is not None:
+        q = q.where(ConsumableType.active == active)
+    used = used_type_ids(db)
+    return [_consumable_out(row, row.id in used) for row in db.execute(q).scalars().all()]
+
+
+@app.post("/consumables", response_model=ConsumableTypeResponse, status_code=201)
+async def create_consumable(data: ConsumableTypeCreate, db: Session = Depends(get_db),
+                            current_user=Depends(get_current_user)):
+    from catalog.consumables import CONSUMABLE_LOG_FIELDS, ConsumableSpecError, validate_specs
+    name = _blank_to_none(data.name)
+    if name is None:
+        raise HTTPException(400, "name is required")
+    try:
+        specs = validate_specs(data.kind, data.specs)
+    except ConsumableSpecError as e:
+        raise HTTPException(400, str(e))
+    manufacturer = _blank_to_none(data.manufacturer)
+    part_number = _blank_to_none(data.part_number)
+    if data.instrument_id is not None and not db.get(Instrument, data.instrument_id):
+        raise HTTPException(400, f"Instrument {data.instrument_id} not found")
+    conflict = _consumable_conflict(db, kind=data.kind, name=name, manufacturer=manufacturer,
+                                    part_number=part_number)
+    if conflict:
+        raise HTTPException(409, conflict)
+    row = ConsumableType(kind=data.kind, name=name, manufacturer=manufacturer,
+                         part_number=part_number, instrument_id=data.instrument_id, specs=specs)
+    db.add(row)
+    db.flush()
+    log_create(db, row, CONSUMABLE_LOG_FIELDS, entity_type="consumable_type", entity_pk=row.id,
+               user_id=getattr(current_user, "id", None))
+    db.commit()
+    db.refresh(row)
+    return _consumable_out(row, False)
+
+
+@app.patch("/consumables/{type_id}", response_model=ConsumableTypeResponse)
+async def update_consumable(type_id: int, data: ConsumableTypeUpdate, db: Session = Depends(get_db),
+                            current_user=Depends(get_current_user)):
+    """Edit or retire a consumable type. Once a worksheet or an item uses it,
+    a change to kind or specs is 409 naming the fields (resending the stored
+    value is fine); name, manufacturer, part number, instrument and active
+    stay editable."""
+    from catalog.consumables import ConsumableSpecError, consumable_in_use, validate_specs
+    row = db.get(ConsumableType, type_id)
+    if not row:
+        raise HTTPException(404, f"Consumable type {type_id} not found")
+    fields = data.model_dump(exclude_unset=True)
+    for f in ("name", "manufacturer", "part_number"):
+        if f in fields:
+            fields[f] = _blank_to_none(fields[f])
+    for f in ("kind", "name", "specs", "active"):
+        if f in fields and fields[f] is None:
+            raise HTTPException(400, f"{f} cannot be empty")
+    if "kind" in fields or "specs" in fields:
+        try:
+            specs = validate_specs(fields.get("kind", row.kind), fields.get("specs", row.specs))
+        except ConsumableSpecError as e:
+            raise HTTPException(400, str(e))
+        if "specs" in fields:
+            fields["specs"] = specs
+        changed = [f for f in ("kind", "specs") if f in fields and fields[f] != getattr(row, f)]
+        if changed and consumable_in_use(db, type_id):
+            raise HTTPException(
+                409, f"'{row.name}' is in use; locked: {', '.join(changed)}. "
+                     f"Retire it and add a new one to change these")
+    if fields.get("instrument_id") is not None and not db.get(Instrument, fields["instrument_id"]):
+        raise HTTPException(400, f"Instrument {fields['instrument_id']} not found")
+    conflict = _consumable_conflict(
+        db, kind=fields.get("kind", row.kind), name=fields.get("name", row.name),
+        manufacturer=fields.get("manufacturer", row.manufacturer),
+        part_number=fields.get("part_number", row.part_number), exclude_id=type_id)
+    if conflict:
+        raise HTTPException(409, conflict)
+    apply_and_log(db, row, fields, entity_type="consumable_type", entity_pk=row.id,
+                  user_id=getattr(current_user, "id", None))
+    db.commit()
+    db.refresh(row)
+    return _consumable_out(row, consumable_in_use(db, type_id))
 
 
 # ─── Analysis Service Endpoints ───
