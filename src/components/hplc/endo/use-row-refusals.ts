@@ -34,5 +34,16 @@ export function useRowRefusals(onUpdateItem: EndoBoxProps['onUpdateItem']) {
     setRefused(r => ({ ...r, [id]: msg }))
   }
 
-  return { refused, send, refuse }
+  /** Rows written elsewhere (Box 3's reader import): their refusals are
+   *  stale, and a reply still in flight for them is dropped. */
+  function clear(ids: readonly number[]) {
+    for (const id of ids) bump(id)
+    setRefused(r =>
+      Object.fromEntries(
+        Object.entries(r).filter(([id]) => !ids.includes(Number(id)))
+      )
+    )
+  }
+
+  return { refused, send, refuse, clear }
 }

@@ -47,7 +47,7 @@ function setup(items: WorksheetItemRow[]) {
       onApplied={onApplied}
     />
   )
-  return { onApplied }
+  return { onApplied, rows: props.rows }
 }
 
 function pick(name: string) {
@@ -116,12 +116,77 @@ describe('EndoReaderImportDialog', () => {
     ])
     expect(
       within(dialog).getByText(
-        'Earlier tests of a sample tested twice, skipped (the later one is used): T1'
+        'Other tests of a row tested more than once, skipped: T1 (P-0001-S02 uses T2)'
       )
     ).toBeInTheDocument()
     expect(
       within(dialog).getByRole('button', { name: 'Apply 1 reading' })
     ).toBeEnabled()
+  })
+
+  it('names the test a row uses when an earlier exact-ID test outranks a later parent-ID one', async () => {
+    setup([endoItem({ sample_id: 'P-0001-S02' })])
+    vi.mocked(importReaderResults).mockResolvedValue({
+      applied: 1,
+      items: [],
+      endo_method: null,
+    })
+    const dialog = await drop([
+      readerTest({
+        testId: 'T1',
+        sampleId: 'P-0001-S02',
+        testedAt: '2026-10-09T10:00:00',
+      }),
+      readerTest({
+        testId: 'T2',
+        sampleId: 'P-0001',
+        testedAt: '2026-10-09T14:00:00',
+      }),
+    ])
+    expect(
+      within(dialog).getByText(
+        'Other tests of a row tested more than once, skipped: T2 (P-0001-S02 uses T1)'
+      )
+    ).toBeInTheDocument()
+    fireEvent.click(
+      within(dialog).getByRole('button', { name: 'Apply 1 reading' })
+    )
+    await waitFor(() => expect(importReaderResults).toHaveBeenCalledTimes(1))
+    expect(
+      vi.mocked(importReaderResults).mock.calls[0]?.[1].tests[0]?.record.test_id
+    ).toBe('T1')
+  })
+
+  it('never falls back to an earlier test when the one a row uses is not usable', async () => {
+    setup([endoItem({ sample_id: 'P-0001-S02' })])
+    const dialog = await drop([
+      readerTest({
+        testId: 'T1',
+        sampleId: 'P-0001-S02',
+        testedAt: '2026-10-09T10:00:00',
+      }),
+      readerTest({
+        testId: 'T2',
+        sampleId: 'P-0001-S02',
+        testedAt: '2026-10-09T14:00:00',
+        result: '>5',
+        lt: false,
+        value: null,
+      }),
+    ])
+    expect(
+      within(dialog).getByText(
+        'Other tests of a row tested more than once, skipped: T1 (P-0001-S02 uses none: T2 is not usable)'
+      )
+    ).toBeInTheDocument()
+    expect(
+      within(dialog).getByText(
+        'Not usable, skipped: P-0001-S02 (>5 is not a usable reading)'
+      )
+    ).toBeInTheDocument()
+    expect(
+      within(dialog).getByRole('button', { name: 'Apply 0 readings' })
+    ).toBeDisabled()
   })
 
   it('replaces a different reading only when its box is ticked', async () => {
@@ -190,7 +255,7 @@ describe('EndoReaderImportDialog', () => {
   })
 
   it("falls back to the row's cartridge when the file names none, only when the method allows it", async () => {
-    setup([
+    const { rows } = setup([
       endoItem({ sample_id: 'P-0001-S02' }),
       // a pick the method no longer allows (retired, or outside its list)
       endoItem({
@@ -208,9 +273,24 @@ describe('EndoReaderImportDialog', () => {
         'no cartridge in the file, and none on this row the method allows'
       )
     ).toBeInTheDocument()
-    expect(
+    vi.mocked(importReaderResults).mockResolvedValue({
+      applied: 1,
+      items: [],
+      endo_method: null,
+    })
+    fireEvent.click(
       within(dialog).getByRole('button', { name: 'Apply 1 reading' })
-    ).toBeEnabled()
+    )
+    await waitFor(() => expect(importReaderResults).toHaveBeenCalledTimes(1))
+    const sent = vi.mocked(importReaderResults).mock.calls[0]?.[1].tests
+    // the first row inherits the run cartridge, 3 (0.05 EU/mL)
+    expect(rows[0]?.cartridge?.id).toBe(3)
+    expect(sent).toEqual([
+      expect.objectContaining({
+        item_id: rows[0]?.item.id,
+        cartridge_type_id: 3,
+      }),
+    ])
   })
 
   it('applies the matched tests in one request and hands the updated items back', async () => {
@@ -225,7 +305,7 @@ describe('EndoReaderImportDialog', () => {
     fireEvent.click(
       within(dialog).getByRole('button', { name: 'Apply 1 reading' })
     )
-    await waitFor(() => expect(onApplied).toHaveBeenCalledWith(res))
+    await waitFor(() => expect(onApplied).toHaveBeenCalledWith(res, [a.id]))
     expect(importReaderResults).toHaveBeenCalledWith(77, {
       file_name: FILE,
       tests: [
@@ -260,12 +340,30 @@ describe('EndoReaderImportDialog', () => {
       }),
     ])
     expect(
-      within(dialog).getByText('No usable reading, skipped: P-0001-S02 (>5)')
+      within(dialog).getByText(
+        'Not usable, skipped: P-0001-S02 (>5 is not a usable reading)'
+      )
     ).toBeInTheDocument()
     expect(
       within(dialog).getByRole('button', { name: 'Apply 0 readings' })
     ).toBeDisabled()
     expect(importReaderResults).not.toHaveBeenCalled()
+  })
+
+  it('lists a test with no Test ID as skipped and never sends it', async () => {
+    setup([endoItem({ sample_id: 'P-0001-S02' })])
+    // the server refuses the whole import for a record without a test_id
+    const dialog = await drop([
+      readerTest({ testId: ' ', sampleId: 'P-0001-S02' }),
+    ])
+    expect(
+      within(dialog).getByText(
+        'Not usable, skipped: P-0001-S02 (no Test ID in the file)'
+      )
+    ).toBeInTheDocument()
+    expect(
+      within(dialog).getByRole('button', { name: 'Apply 0 readings' })
+    ).toBeDisabled()
   })
 
   it('keeps the dialog open with the server refusal and hands nothing back', async () => {
@@ -280,6 +378,24 @@ describe('EndoReaderImportDialog', () => {
     expect(await within(dialog).findByRole('alert')).toHaveTextContent(refusal)
     expect(screen.getByRole('dialog')).toBeInTheDocument()
     expect(onApplied).not.toHaveBeenCalled()
+  })
+
+  it('refuses a file over 2 MB before reading it', async () => {
+    setup([endoItem({ sample_id: 'P-0001-S02' })])
+    fireEvent.change(screen.getByLabelText('Reader export file'), {
+      target: {
+        files: [
+          new File([new Uint8Array(2 * 1024 * 1024 + 1)], 'big.csv', {
+            type: 'text/csv',
+          }),
+        ],
+      },
+    })
+    expect(await screen.findByRole('alert')).toHaveTextContent(
+      'That file is over 2 MB, too big for a reader export.'
+    )
+    expect(parseEndoScan).not.toHaveBeenCalled()
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument()
   })
 
   it('shows a readable message for a file that is not a reader export', async () => {

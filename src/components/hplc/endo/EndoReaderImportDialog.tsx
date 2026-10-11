@@ -70,14 +70,27 @@ function sameReading(a: string, b: string): boolean {
   return x !== null && y !== null && x.lt === y.lt && x.value === y.value
 }
 
+/** Why a test cannot be sent, or null when it can. The server refuses the
+ *  whole import for either. */
+function unusableWhy(t: ReaderTest): string | null {
+  if (!t.testId.trim()) return 'no Test ID in the file'
+  if (parseReading(t.result) === null)
+    return t.result
+      ? `${t.result} is not a usable reading`
+      : 'no reading in the file'
+  return null
+}
+
+const testName = (t: ReaderTest) => t.testId.trim() || '(no Test ID)'
+
 /**
  * What applying each test would do (Dennis's readerAction): each matched
  * test with its checks against the method's limits, the cartridge it maps
  * to, and fill / tick to replace / already imported / skipped.
- * matchReaderTests already keeps only the latest test per row. A latest test
- * whose reading the server would refuse (">5", blank) is never sent: the
- * server refuses the whole import for one such row. It is listed in
- * `unusable`, after matching, so it still supersedes an earlier test.
+ * matchReaderTests keeps one test per row (an exact ID over a parent ID,
+ * then the latest). When that test cannot be sent it is listed in
+ * `unusable` and the row gets nothing: an earlier test never stands in.
+ * Each superseded test names the test its row uses.
  */
 function buildPreview(
   tests: ReaderTest[],
@@ -85,18 +98,21 @@ function buildPreview(
   cartridges: EndoCartridgeOption[],
   params: EndoRunParams
 ) {
-  const m = matchReaderTests(
-    tests,
-    rows.map(r => ({ itemId: r.item.id, sampleId: r.item.sample_id }))
-  )
+  const sheet = rows.map(r => ({
+    itemId: r.item.id,
+    sampleId: r.item.sample_id,
+  }))
+  const m = matchReaderTests(tests, sheet)
   const byItem = new Map(rows.map(r => [r.item.id, r]))
+  const used = new Map(m.matched.map(x => [x.itemId, x.test]))
   const lines: PreviewRow[] = []
-  const unusable: ReaderTest[] = []
+  const unusable: { test: ReaderTest; why: string }[] = []
   for (const x of m.matched) {
     const row = byItem.get(x.itemId)
     if (!row) continue
-    if (parseReading(x.test.result) === null) {
-      unusable.push(x.test)
+    const skip = unusableWhy(x.test)
+    if (skip) {
+      unusable.push({ test: x.test, why: skip })
       continue
     }
     const item = row.item
@@ -146,7 +162,18 @@ function buildPreview(
     lines,
     unmatched: m.unmatched,
     ambiguous: m.ambiguous,
-    superseded: m.superseded,
+    // A test matched on its own always takes its row, which finds the row
+    // each superseded test lost to.
+    superseded: m.superseded.map(t => {
+      const itemId = matchReaderTests([t], sheet).matched[0]?.itemId
+      const sid =
+        itemId === undefined ? null : byItem.get(itemId)?.item.sample_id
+      const won = itemId === undefined ? undefined : used.get(itemId)
+      if (!sid || !won) return testName(t)
+      return unusableWhy(won)
+        ? `${testName(t)} (${sid} uses none: ${testName(won)} is not usable)`
+        : `${testName(t)} (${sid} uses ${testName(won)})`
+    }),
     unusable,
   }
 }
@@ -173,7 +200,8 @@ export function EndoReaderImportDialog({
   /** The allowed cartridges (spec 4.3). */
   cartridges: EndoCartridgeOption[]
   params: EndoRunParams
-  onApplied: (res: ReaderImportResult) => void
+  /** The response, and the rows this import sent. */
+  onApplied: (res: ReaderImportResult, itemIds: number[]) => void
 }) {
   const fileInput = useRef<HTMLInputElement>(null)
   const [over, setOver] = useState(false)
@@ -238,7 +266,10 @@ export function EndoReaderImportDialog({
           replace: r.action === 'replace',
         })),
       })
-      onApplied(res)
+      onApplied(
+        res,
+        chosen.map(r => r.item.id)
+      )
       toast.success(
         `${res.applied} ${res.applied === 1 ? 'reading' : 'readings'} applied from ${staged.fileName}`
       )
@@ -435,15 +466,15 @@ export function EndoReaderImportDialog({
             )}
             {preview.superseded.length > 0 && (
               <p className="text-xs text-muted-foreground">
-                Earlier tests of a sample tested twice, skipped (the later one
-                is used): {preview.superseded.map(t => t.testId).join(', ')}
+                Other tests of a row tested more than once, skipped:{' '}
+                {preview.superseded.join(', ')}
               </p>
             )}
             {preview.unusable.length > 0 && (
               <p className="text-xs text-muted-foreground">
-                No usable reading, skipped:{' '}
+                Not usable, skipped:{' '}
                 {preview.unusable
-                  .map(t => `${t.sampleId} (${t.result || 'no reading'})`)
+                  .map(u => `${u.test.sampleId} (${u.why})`)
                   .join(', ')}
               </p>
             )}
@@ -464,7 +495,7 @@ export function EndoReaderImportDialog({
             <div className="flex items-center gap-2 border-t pt-3">
               <Button
                 size="sm"
-                className="bg-teal-600 text-white hover:bg-teal-600/90 dark:bg-teal-500 dark:hover:bg-teal-500/90"
+                className="bg-teal-600 text-white hover:bg-teal-600/90"
                 disabled={!chosen.length || applying}
                 onClick={() => void apply()}
               >

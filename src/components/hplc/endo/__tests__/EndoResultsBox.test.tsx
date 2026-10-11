@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import type { ReactNode } from 'react'
 import {
+  act,
   fireEvent,
   render,
   screen,
@@ -102,8 +103,8 @@ function setup(
   const wrap = ({ children }: { children: ReactNode }) => (
     <QueryClientProvider client={qc}>{children}</QueryClientProvider>
   )
-  render(<EndoResultsBox {...props} />, { wrapper: wrap })
-  return { onUpdateItem, qc }
+  const view = render(<EndoResultsBox {...props} />, { wrapper: wrap })
+  return { onUpdateItem, qc, rerender: view.rerender }
 }
 
 function rowOf(sampleId: string): HTMLElement {
@@ -334,6 +335,82 @@ describe('EndoResultsBox', () => {
     const page = qc.getQueryData<WorksheetListItem>(worksheetPageKey(77))
     expect(page?.items[0]?.result_reading).toBe('<0.05')
     expect(page?.endo_method?.id).toBe(12)
+  })
+
+  it('clears the refusals of the rows an import wrote, drops their late replies, and keeps the rest', async () => {
+    const refusal = 'the server refused it'
+    const a = endoItem({ sample_id: 'P-0001-S02' })
+    const b = endoItem({ sample_id: 'P-0002-S02' })
+    const c = endoItem({ sample_id: 'P-0003-S02' })
+    const { onUpdateItem } = setup([a, b, c])
+    let replyA: (msg: string | null) => void = () => undefined
+    onUpdateItem
+      .mockReturnValueOnce(
+        new Promise<string | null>(r => {
+          replyA = r
+        })
+      )
+      .mockResolvedValue(refusal)
+    for (const sid of ['P-0001-S02', 'P-0002-S02', 'P-0003-S02']) {
+      const input = screen.getByLabelText(`Reading for ${sid}`)
+      fireEvent.change(input, { target: { value: '0.8' } })
+      fireEvent.blur(input)
+    }
+    expect(
+      await within(rowOf('P-0002-S02')).findByText(`Not saved: ${refusal}`)
+    ).toBeInTheDocument()
+    expect(
+      await within(rowOf('P-0003-S02')).findByText(`Not saved: ${refusal}`)
+    ).toBeInTheDocument()
+    vi.mocked(importReaderResults).mockResolvedValue({
+      applied: 2,
+      items: [a, b],
+      endo_method: null,
+    })
+    vi.mocked(parseEndoScan).mockReturnValueOnce({
+      tests: [
+        readerTest({ testId: 'T1', sampleId: 'P-0001-S02' }),
+        readerTest({ testId: 'T2', sampleId: 'P-0002-S02' }),
+      ],
+      cartridges: [],
+    })
+    fireEvent.change(screen.getByLabelText('Reader export file'), {
+      target: { files: [new File(['x'], 'export.csv', { type: 'text/csv' })] },
+    })
+    fireEvent.click(
+      await screen.findByRole('button', { name: 'Apply 2 readings' })
+    )
+    await waitFor(() =>
+      expect(
+        within(rowOf('P-0002-S02')).queryByText(/Not saved/)
+      ).not.toBeInTheDocument()
+    )
+    // row 1's save was still in flight: its refusal lands after the import
+    await act(async () => replyA(refusal))
+    expect(
+      within(rowOf('P-0001-S02')).queryByText(/Not saved/)
+    ).not.toBeInTheDocument()
+    expect(
+      within(rowOf('P-0003-S02')).getByText(`Not saved: ${refusal}`)
+    ).toBeInTheDocument()
+  })
+
+  it("drops a rejected draft when the row's saved reading changes", () => {
+    const a = endoItem({ sample_id: 'P-0001-S02' })
+    const { rerender } = setup([a])
+    const input = screen.getByLabelText('Reading for P-0001-S02')
+    fireEvent.change(input, { target: { value: 'abc' } })
+    fireEvent.blur(input)
+    expect(input).toHaveAttribute('aria-invalid', 'true')
+    // the reader import (or another analyst) writes the row
+    rerender(
+      <EndoResultsBox
+        {...endoBoxProps([{ ...a, result_reading: '<0.05' }]).props}
+      />
+    )
+    const after = screen.getByLabelText('Reading for P-0001-S02')
+    expect(after).toHaveValue('<0.05')
+    expect(after).not.toHaveAttribute('aria-invalid')
   })
 
   it('is read-only on a completed worksheet', () => {

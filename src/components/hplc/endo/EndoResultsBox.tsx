@@ -287,7 +287,10 @@ function ResultRow({
       <Calc tip={tips.mvd}>{k.mvd === null ? '' : `${fmt(k.mvd)}×`}</Calc>
       <Calc tip={tips.mvc}>{fmtConc(k.mvc)}</Calc>
       <td className={`${TD} w-[92px] px-1 text-right`}>
+        {/* Keyed by the saved reading: when it changes under the row (the
+            reader import, another analyst), a stale draft goes with it. */}
         <EndoReadingInput
+          key={`${row.item.id}:${s.reading ?? ''}`}
           value={s.reading}
           placeholder={`<${fmt(k.floorShown ?? 0.05)}`}
           disabled={isCompleted}
@@ -440,7 +443,7 @@ export function EndoResultsBox({
     staleTime: 60_000,
   })
   const queryClient = useQueryClient()
-  const { refused, send, refuse } = useRowRefusals(onUpdateItem)
+  const { refused, send, refuse, clear } = useRowRefusals(onUpdateItem)
 
   if (!rows.length) return null
   const tier = peptideTier(specs)
@@ -477,8 +480,10 @@ export function EndoResultsBox({
 
   // Refresh from the import response: the page cache gets the updated rows
   // and the (possibly just pinned) method at once, then the worksheets-list
-  // prefix refetches once (the page entry and the flyout list).
-  function applied(res: ReaderImportResult) {
+  // prefix refetches once (the page entry and the flyout list). The rows it
+  // sent drop their stale refusals; the others keep theirs.
+  function applied(res: ReaderImportResult, itemIds: number[]) {
+    clear(itemIds)
     const byId = new Map(res.items.map(it => [it.id, it]))
     queryClient.setQueryData<WorksheetListItem>(
       worksheetPageKey(worksheet.id),
