@@ -19,7 +19,11 @@ import {
   toReaderRecord,
   type ReaderTest,
 } from '@/lib/endo-reader'
-import type { EndoCartridgeOption, EndoRow } from '@/lib/endo-worksheet-2ml'
+import {
+  runCartridgeFor,
+  type EndoCartridgeOption,
+  type EndoRow,
+} from '@/lib/endo-worksheet-2ml'
 import type { WorksheetItemRow } from '@/lib/endo-worksheet'
 import { TH, UNIT } from '@/components/hplc/EndoWorksheetTable'
 
@@ -86,7 +90,9 @@ const testName = (t: ReaderTest) => t.testId.trim() || '(no Test ID)'
 /**
  * What applying each test would do (Dennis's readerAction): each matched
  * test with its checks against the method's limits, the cartridge it maps
- * to, and fill / tick to replace / already imported / skipped.
+ * to, and fill / tick to replace / already imported / skipped. Of several
+ * allowed types with the file's sensitivity, the row's cartridge, then the
+ * run cartridge (`runId`); when neither is one of them, none is guessed.
  * matchReaderTests keeps one test per row (an exact ID over a parent ID,
  * then the latest). When that test cannot be sent it is listed in
  * `unusable` and the row gets nothing: an earlier test never stands in.
@@ -96,7 +102,8 @@ function buildPreview(
   tests: ReaderTest[],
   rows: EndoRow[],
   cartridges: EndoCartridgeOption[],
-  params: EndoRunParams
+  params: EndoRunParams,
+  runId: number | null
 ) {
   const sheet = rows.map(r => ({
     itemId: r.item.id,
@@ -118,17 +125,27 @@ function buildPreview(
     const item = row.item
     const { valid, why } = readerValidity(x.test, params)
     const lambda = readerCartridgeLambda(x.test.cartRange)
+    const same =
+      lambda === null
+        ? []
+        : cartridges.filter(c => Math.abs(c.sensitivity_eu_ml - lambda) < 1e-9)
+    const picked =
+      same.find(c => c.id === row.cartridge?.id) ??
+      same.find(c => c.id === runId) ??
+      (same.length === 1 ? same[0] : undefined)
     // Either way only an allowed type is sent: the server refuses the whole
     // import for one that is not (a row's own pick can be retired).
     const cartridgeId =
       lambda !== null
-        ? (cartridges.find(c => Math.abs(c.sensitivity_eu_ml - lambda) < 1e-9)
-            ?.id ?? null)
+        ? (picked?.id ?? null)
         : (cartridges.find(c => c.id === row.cartridge?.id)?.id ?? null)
     const had = item.result_reading ?? null
     let action: Action = 'fill'
     let note = 'fills the reading'
-    if (lambda !== null && cartridgeId === null) {
+    if (same.length > 1 && !picked) {
+      action = 'blocked'
+      note = 'more than one catalog cartridge has this sensitivity'
+    } else if (lambda !== null && cartridgeId === null) {
       action = 'blocked'
       note = `cartridge not in the catalog (${fmt(lambda)} EU/mL)`
     } else if (cartridgeId === null) {
@@ -242,7 +259,13 @@ export function EndoReaderImportDialog({
   }
 
   const preview = staged
-    ? buildPreview(staged.tests, rows, cartridges, params)
+    ? buildPreview(
+        staged.tests,
+        rows,
+        cartridges,
+        params,
+        runCartridgeFor(worksheet)?.id ?? null
+      )
     : null
   const chosen = (preview?.lines ?? []).filter(
     (r): r is PreviewRow & { cartridgeId: number } =>

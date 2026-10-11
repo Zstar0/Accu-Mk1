@@ -8,7 +8,11 @@ import {
 } from '@testing-library/react'
 import { EndoReaderImportDialog } from '@/components/hplc/endo/EndoReaderImportDialog'
 import type * as ApiModule from '@/lib/api'
-import { importReaderResults } from '@/lib/api'
+import {
+  importReaderResults,
+  type EndoMethodInfo,
+  type WorksheetListItem,
+} from '@/lib/api'
 import { ENDO_RUN_PARAM_DEFAULTS } from '@/lib/endo-prep-2ml'
 import type * as EndoReaderModule from '@/lib/endo-reader'
 import {
@@ -35,8 +39,11 @@ vi.mock('@/lib/api', async importOriginal => ({
 
 const FILE = 'EndoScanV-Export-2026-10-09.csv'
 
-function setup(items: WorksheetItemRow[]) {
-  const { props } = endoBoxProps(items)
+function setup(
+  items: WorksheetItemRow[],
+  over: Partial<WorksheetListItem> = {}
+) {
+  const { props } = endoBoxProps(items, over)
   const onApplied = vi.fn()
   render(
     <EndoReaderImportDialog
@@ -291,6 +298,93 @@ describe('EndoReaderImportDialog', () => {
         cartridge_type_id: 3,
       }),
     ])
+  })
+
+  // Two allowed types read 0.05 EU/mL (two makes of one sensitivity).
+  const twin05: EndoMethodInfo = {
+    id: 12,
+    name: 'Endotoxin (LAL)',
+    revision: 2,
+    status: 'active',
+    run_parameters: null,
+    cartridges: [
+      {
+        id: 3,
+        name: 'Endosafe 0.05',
+        sensitivity_eu_ml: 0.05,
+        is_default: true,
+        active: true,
+      },
+      {
+        id: 6,
+        name: 'Endosafe 0.05 (second make)',
+        sensitivity_eu_ml: 0.05,
+        is_default: false,
+        active: true,
+      },
+      {
+        id: 4,
+        name: 'Endosafe 0.01',
+        sensitivity_eu_ml: 0.01,
+        is_default: false,
+        active: true,
+      },
+    ],
+  }
+
+  it("picks the row's cartridge, then the run's, among types that share the file's sensitivity", async () => {
+    const { rows } = setup(
+      [
+        endoItem({
+          sample_id: 'P-0001-S02',
+          cartridge_type_id: 6,
+          cartridge_sensitivity_eu_ml: 0.05,
+        }),
+        // its own 0.01 does not match the file, so the run cartridge (3) does
+        endoItem({
+          sample_id: 'P-0002-S02',
+          cartridge_type_id: 4,
+          cartridge_sensitivity_eu_ml: 0.01,
+        }),
+      ],
+      { endo_method: twin05 }
+    )
+    vi.mocked(importReaderResults).mockResolvedValue({
+      applied: 2,
+      items: [],
+      endo_method: null,
+    })
+    const dialog = await drop([
+      readerTest({ testId: 'T1', sampleId: 'P-0001-S02' }),
+      readerTest({ testId: 'T2', sampleId: 'P-0002-S02' }),
+    ])
+    fireEvent.click(
+      within(dialog).getByRole('button', { name: 'Apply 2 readings' })
+    )
+    await waitFor(() => expect(importReaderResults).toHaveBeenCalledTimes(1))
+    const sent = vi.mocked(importReaderResults).mock.calls[0]?.[1].tests
+    expect(sent?.map(t => [t.item_id, t.cartridge_type_id])).toEqual([
+      [rows[0]?.item.id, 6],
+      [rows[1]?.item.id, 3],
+    ])
+  })
+
+  it('never sends a test whose sensitivity two allowed types share and neither the row nor the run names', async () => {
+    setup([endoItem({ sample_id: 'P-0001-S02' })], {
+      endo_method: twin05,
+      // the run (and so the row) is on the 0.01
+      cartridge_type_id: 4,
+      cartridge_sensitivity_eu_ml: 0.01,
+    })
+    const dialog = await drop([readerTest({ sampleId: 'P-0001-S02' })])
+    expect(
+      within(dialog).getByText(
+        'more than one catalog cartridge has this sensitivity'
+      )
+    ).toBeInTheDocument()
+    expect(
+      within(dialog).getByRole('button', { name: 'Apply 0 readings' })
+    ).toBeDisabled()
   })
 
   it('applies the matched tests in one request and hands the updated items back', async () => {

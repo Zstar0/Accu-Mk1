@@ -303,6 +303,48 @@ describe('EndoResultsBox', () => {
     )
   })
 
+  it("prints the method's validity limits on the reader hover, not the file's", async () => {
+    const method = endoWorksheet([]).endo_method
+    if (!method) throw new Error('the fixture worksheet has a method')
+    setup(
+      [
+        endoItem({
+          sample_id: 'P-0001-S02',
+          result_reading: '<0.05',
+          // the file's own limits, which the verdict does not use
+          result_reader: {
+            ...invalidReader,
+            recovery: 90,
+            rec_min: 70,
+            rec_max: 130,
+            cv_limit: 10,
+            valid: true,
+            why: [],
+          },
+        }),
+      ],
+      false,
+      {
+        endo_method: {
+          ...method,
+          run_parameters: {
+            endotoxin: {
+              spike_recovery_min_pct: 60,
+              spike_recovery_max_pct: 150,
+              cv_limit_pct: 20,
+            },
+          },
+        },
+      }
+    )
+    await userEvent
+      .setup()
+      .hover(within(rowOf('P-0001-S02')).getByText('90 % · 3.7'))
+    expect(await screen.findByRole('tooltip')).toHaveTextContent(
+      'Valid: spike recovery 60-150 %, CV under 20 %'
+    )
+  })
+
   it('puts an applied reader import in the page cache at once, then refetches the worksheets list', async () => {
     const a = endoItem({ sample_id: 'P-0001-S02' })
     const { qc } = setup([a])

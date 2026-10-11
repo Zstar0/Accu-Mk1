@@ -228,6 +228,38 @@ describe('endoSampleFor', () => {
 })
 
 describe('endoRowsFor', () => {
+  it("bac water prefers the row's own 0.01 when two allowed types share it", () => {
+    const twin01 = {
+      ...METHOD,
+      cartridges: [
+        ...METHOD.cartridges,
+        {
+          id: 5,
+          name: 'Endosafe 0.01 (second make)',
+          sensitivity_eu_ml: 0.01,
+          is_default: false,
+          active: true,
+        },
+      ],
+    }
+    const rows = endoRowsFor(
+      [
+        item({
+          id: 11,
+          sample_id: 'BW-0101',
+          cartridge_type_id: 5,
+          cartridge_sensitivity_eu_ml: 0.01,
+        }),
+        item({ id: 12, sample_id: 'BW-0102' }),
+      ],
+      ws({ endo_method: twin01 })
+    )
+    expect(rows.map(r => [r.cartridge?.id, r.inherited?.id])).toEqual([
+      [5, 5],
+      [2, 2],
+    ])
+  })
+
   it('numbers rows in the order given and carries the cartridge a reading saves with', () => {
     const rows = endoRowsFor(
       [item({ id: 11, sample_id: 'BW-0101' }), item({ id: 10 })],

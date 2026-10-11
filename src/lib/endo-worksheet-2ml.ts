@@ -190,11 +190,13 @@ function resolveRow(
     reader: item.result_reader ?? null,
   }
   // Bac water runs on the allowed 0.01 unless its row says otherwise
-  // (Dennis, 2026-10-09; spec 4.3).
-  const bacType =
+  // (Dennis, 2026-10-09; spec 4.3). Of two allowed 0.01 types, the row's own.
+  const bacTypes =
     formOf(base) === 'bac'
-      ? allowed.find(c => sameLambda(c.sensitivity_eu_ml, BW_LAMBDA))
-      : undefined
+      ? allowed.filter(c => sameLambda(c.sensitivity_eu_ml, BW_LAMBDA))
+      : []
+  const bacType =
+    bacTypes.find(c => c.id === item.cartridge_type_id) ?? bacTypes[0]
   const inherited = bacType
     ? { id: bacType.id, sensitivity: bacType.sensitivity_eu_ml }
     : runCartridgeFor(ws, catalog)

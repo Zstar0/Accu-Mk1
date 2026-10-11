@@ -25,6 +25,7 @@ import {
   type EndoCheck,
   type EndoCtx,
   type EndoResult,
+  type EndoRunParams,
   type EndoSample,
 } from '@/lib/endo-prep-2ml'
 import type { EndoRow } from '@/lib/endo-worksheet-2ml'
@@ -85,8 +86,16 @@ function peptideTier(
   )
 }
 
-/** Every computed cell's worked line, as Dennis's tip* helpers. */
-function workedLines(s: EndoSample, k: EndoCheck, rs: EndoResult, bw: boolean) {
+/** Every computed cell's worked line, as Dennis's tip* helpers. The reader
+ *  line prints the method's validity limits (`p`), which the verdict uses,
+ *  never the file's rec_min, rec_max or cv_limit. */
+function workedLines(
+  s: EndoSample,
+  k: EndoCheck,
+  rs: EndoResult,
+  bw: boolean,
+  p: EndoRunParams
+) {
   const lam = fmt(k.lambda)
   const lt = rs.lt
   const rd = s.reader
@@ -139,7 +148,7 @@ function workedLines(s: EndoSample, k: EndoCheck, rs: EndoResult, bw: boolean) {
       ? null
       : [
           rd.valid
-            ? `Valid: spike recovery ${rd.rec_min ?? '-'}-${rd.rec_max ?? '-'} %, CV under ${rd.cv_limit ?? '-'} %`
+            ? `Valid: spike recovery ${p.spikeRecoveryMinPct}-${p.spikeRecoveryMaxPct} %, CV under ${p.cvLimitPct} %`
             : `INVALID: ${why}`,
           `Spike recovery ${rd.recovery ?? '-'} % · sample CV ${rd.sample_cv ?? '-'} % · spike CV ${rd.spike_cv ?? '-'} %`,
           `Test ${rd.test_id} · ${rd.reader ?? '-'} (${rd.slot ?? '-'})`,
@@ -234,7 +243,7 @@ function ResultRow({
   const mk = mk1Value(s, ctx)
   const bw = formOf(s) === 'bac'
   const rd = s.reader
-  const tips = workedLines(s, k, rs, bw)
+  const tips = workedLines(s, k, rs, bw, ctx.params)
   const verdict = rs.verdict
   // A reading typed over an imported one keeps the reader's record; say so
   // when the two disagree (the record's validity still governs the verdict).
