@@ -184,9 +184,11 @@ export function EndoPrepFields({
 }
 
 /**
- * The 2 mL prep on a mixed worksheet's endo line: Box 1's prep inputs (Form,
- * Water, Total) and what they give, the row's cartridge and what lands on it,
- * with the tube and cartridge warnings. The figures come from
+ * The 2 mL prep on a mixed worksheet's endo line (spec 6.3): Box 1's prep
+ * inputs (Weight, Form, Water) and Box 2's Total, what they give, the row's
+ * cartridge and what lands on it, with the tube and cartridge warnings. A
+ * mixed worksheet has no page, so this line is the only place to edit them.
+ * The figures come from
  * src/lib/endo-prep-2ml.ts, as on the worksheet page and the 2 mL sheet. The
  * row's cartridge is shown, not picked (the picker is on the worksheet page).
  */
@@ -211,6 +213,17 @@ export function EndoPrep2mlFields({
   const stdTotal = ctx.params.stdTotalDilution
   return (
     <>
+      {form !== 'bac' && (
+        <PrepField
+          label="Weight"
+          unit="mg"
+          value={s.weightMg}
+          overridden={item.prep_weight_mg != null}
+          computed={item.declared_weight_mg ?? null}
+          disabled={isCompleted}
+          onCommit={v => onUpdate({ prep_weight_mg: v })}
+        />
+      )}
       <span className="inline-flex items-center gap-1">
         <span className="uppercase tracking-wider text-[9px] font-semibold">
           Form

@@ -62,6 +62,18 @@ describe('EndoPrepLine on a mixed worksheet', () => {
     expect(getWorksheet).not.toHaveBeenCalled()
   })
 
+  // Spec 6.3: the same prep inputs as Box 1, whose 2 mL row edits the
+  // declared weight; a mixed worksheet has no page to correct it on.
+  it('edits the declared weight on the 2 mL line, as Box 1 does', () => {
+    const item = endoItem({ sample_id: 'P-0001-S02' })
+    const { onUpdate } = setup(endoWorksheet([item]), item)
+    const weight = screen.getByLabelText('Weight (mg)')
+    expect(weight).toHaveValue(10)
+    fireEvent.change(weight, { target: { value: '12' } })
+    fireEvent.blur(weight)
+    expect(onUpdate).toHaveBeenCalledWith({ prep_weight_mg: 12 })
+  })
+
   it('keeps the stock line on a stock worksheet', () => {
     const item = endoItem({ sample_id: 'P-0001-S02' })
     setup(endoWorksheet([item], { endo_prep: 'stock' }), item)
