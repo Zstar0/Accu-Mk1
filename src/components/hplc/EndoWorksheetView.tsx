@@ -205,7 +205,7 @@ export function EndoWorksheetView({
             >
               <SelectTrigger
                 aria-label="Analyst"
-                className="h-6 w-full border-0 bg-transparent p-0 text-sm font-medium shadow-none focus:ring-0"
+                className="h-6 w-full border-0 bg-transparent p-0 text-sm font-medium shadow-none focus:ring-0 dark:px-3"
               >
                 <SelectValue placeholder="Assign analyst…" />
               </SelectTrigger>

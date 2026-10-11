@@ -13,7 +13,7 @@ import { Meta } from '@/components/hplc/EndoWorksheetTable'
 // The Analyst picker's trigger (EndoWorksheetView), whose meta strip these
 // share; disabled as before.
 const META_TRIGGER =
-  'h-6 w-full border-0 bg-transparent p-0 text-sm font-medium shadow-none focus:ring-0 disabled:cursor-default disabled:opacity-70'
+  'h-6 w-full border-0 bg-transparent p-0 text-sm font-medium shadow-none focus:ring-0 disabled:cursor-default disabled:opacity-70 dark:px-3'
 // Radix Select holds no empty value: the method default rides on this.
 const INHERIT = '__inherit__'
 
