@@ -147,6 +147,18 @@ describe('EndoSampleDilutionBox', () => {
     ).not.toBeInTheDocument()
   })
 
+  it('keeps a step 1 ratio that does not divide the total in its group', () => {
+    // 1:15 makes 15 x r6(250 / 30) x 2 = 249.99999, shown as 1:250
+    setup([
+      endoItem({ sample_id: 'P-0001-S02' }),
+      endoItem({ sample_id: 'P-0002-S02', prep_steps: [[20, 15], null, null] }),
+    ])
+    expect(bodyRows().map(r => r.hasAttribute('data-group-start'))).toEqual([
+      false,
+      false,
+    ])
+  })
+
   it('renders no inputs on a completed worksheet', () => {
     setup([endoItem({ sample_id: 'P-0001-S02' })], true)
     expect(screen.queryByRole('textbox')).not.toBeInTheDocument()
