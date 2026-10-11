@@ -1,8 +1,7 @@
-"""Publisher reconciliation of a lost create response, against the real documents routes.
+"""Exercise the committed publisher against real document routes with a lost response.
 
-Skips until docs/paperclip/publish_document-reconcile.patch is applied to the skill script
-(the .claude/ path was not writable from the session that wrote it). PATCHED_PUBLISHER
-points the test at another copy, which is how the patch itself was verified.
+The transport seam deliberately drops the first response after the route commits.
+Missing reconciliation in the shipped helper must fail, not skip this regression.
 """
 import importlib.util
 import io
@@ -18,13 +17,12 @@ import pytest
 sys.path.insert(0, os.path.dirname(__file__))
 from test_documents_routes import AGENT_ENV, HTML, JARVIS, client  # noqa: F401
 
-_PUB = os.environ.get("PATCHED_PUBLISHER") or str(
+_PUB = str(
     Path(__file__).resolve().parents[2] / ".claude/skills/mk1-publish-document/scripts/publish_document.py")
 _spec = importlib.util.spec_from_file_location("publisher_reconcile", _PUB)
 pub = importlib.util.module_from_spec(_spec)
 _spec.loader.exec_module(pub)
-if not hasattr(pub, "reconcile"):
-    pytest.skip("publisher reconciliation patch not applied yet", allow_module_level=True)
+assert hasattr(pub, "reconcile"), "committed publisher must implement reconciliation"
 
 
 def _lossy(client, lose_first=True):

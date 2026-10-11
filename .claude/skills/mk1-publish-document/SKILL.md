@@ -28,6 +28,16 @@ One script, stdlib only: `scripts/publish_document.py`.
 - Session id: pass `--session` with the current Claude Code session id (it is the folder name inside the scratchpad path) so the library records provenance.
 - Author: pass `--author` with the name of the PERSON who asked for the document, not the agent. It is what the list and the document header show. The agent's identity is already captured by `--session`.
 
+## Paperclip canonical-document handoff
+
+- AccuMk1 is the authoritative store. Publish with `--draft --paperclip-ref --author "<requesting person>" --session <actual-run-or-session-id>` and the authorized space/category. The emitted reference contains document id, code, revision and stored-content SHA256, not HTML or credentials. Register that reference as a Paperclip work product only after successful publication/readback.
+- Prefer the scoped `MK1_DOCUMENT_AGENT_TOKEN` when provisioned. Do not borrow an internal service token or another agent's credential. The authenticated agent token sets `co_author` server-side; the requester remains `author`.
+- Exit codes: `0` success with a usable result; `1` HTTP/transport error; `2` secret-shaped content rejected; `3` usage/configuration error; `4` existing-content conflict on the first attempt; `5` uncertain outcome after a lost response that could not be safely reconciled.
+- After one lost response, the helper makes one identical retry. A duplicate response can supply a reference only when the existing record matches the requested title, space, author, session and status, and the server's content deduplication attests the stored bytes. Missing or mismatched evidence fails closed with exit `5`. Do not invent a document id, alter the content to evade deduplication, or automatically publish another copy.
+- On exit `5`, a document may already exist. Keep the candidate code/revision and ask an authorized reader to reconcile it in Mk1 before registering a Paperclip reference. The helper does not prove that the first attempt failed.
+- Code parsing follows Mk1's actual `CODE_RE` grammar, including hyphenated codes such as `SOP-QA-0001`; do not truncate them to a guessed prefix-number format.
+- A later revision is published using the existing `--code`; Paperclip references the returned revision row and hash. A draft revision must not silently activate or retire the current approved revision.
+
 ## How documents should look (accumark-docs v2)
 
 The house look is the AccuVerify Integration Guide: Poppins headings, Open Sans body, JetBrains Mono metadata, a teal accent, light and dark themes handled by the theme. Build pages from these classes and nothing else.
