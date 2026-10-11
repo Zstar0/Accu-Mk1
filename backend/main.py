@@ -25603,6 +25603,17 @@ class WorksheetItemUpdate(BaseModel):
     # false clears; the server owns who/when, never the client.
     made: Optional[bool] = None
     ran: Optional[bool] = None
+    # Endo v2 row fields (spec 2026-10-10 sections 3.7 and 10): explicit null
+    # clears, omitted is a no-op (model_fields_set); 409 on a completed
+    # worksheet for these fields only. Rules in worksheets_endo.py.
+    prep_form: Optional[str] = None
+    # float | int so an int too big for a float (10**400) reaches the check
+    # and gets a 400 with the reason, not pydantic's 422 (spec 10).
+    prep_water_ml: Optional[Union[float, int]] = None
+    prep_total_dilution: Optional[Union[float, int]] = None
+    prep_steps: Optional[list] = None
+    cartridge_type_id: Optional[int] = None
+    result_reading: Optional[str] = None
 
 
 @app.patch("/worksheets/{worksheet_id}/items/{item_id}")
@@ -25622,6 +25633,20 @@ async def update_worksheet_item(
     ).scalar_one_or_none()
     if not item:
         raise HTTPException(404, "Worksheet item not found")
+
+    # Endo v2 row fields, validated before anything below writes. A completed
+    # worksheet refuses them (409); the older fields keep today's behaviour.
+    from worksheets_endo import (ENDO_ITEM_FIELDS, apply_item_endo_fields,
+                                 check_item_endo_fields, resolve_endo_method)
+    ws = db.execute(select(Worksheet).where(Worksheet.id == worksheet_id)).scalar_one()
+    endo_values = {f: getattr(data, f) for f in ENDO_ITEM_FIELDS if f in data.model_fields_set}
+    if endo_values:
+        if ws.status == "completed":
+            raise HTTPException(409, "Worksheet is completed")
+        try:
+            endo_values = check_item_endo_fields(db, ws, item, endo_values)
+        except ValueError as exc:
+            raise HTTPException(400, str(exc))
 
     resolved_method = None
     if data.instrument_uid is not None:
@@ -25693,8 +25718,13 @@ async def update_worksheet_item(
                        user_id=_current_user.id,
                        stamp_instrument="instrument_id" not in data.model_fields_set)
 
+    if endo_values:
+        apply_item_endo_fields(db, ws, item, endo_values, _current_user.id)
+
     db.commit()
-    return {"status": "updated", "item_id": item_id, "resolved_method": resolved_method}
+    return {"status": "updated", "item_id": item_id, "resolved_method": resolved_method,
+            # Endo v2 (spec 4.1): the worksheet's endo method, as GET /worksheets/{id} has it.
+            "endo_method": resolve_endo_method(db, ws)}
 
 
 class WorksheetApplyMethodInstrument(BaseModel):

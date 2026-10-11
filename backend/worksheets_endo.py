@@ -10,6 +10,7 @@ server validates and stores what the bench typed or the reader exported. It
 never writes a method onto analyses or worksheet items."""
 import math
 import re
+from datetime import datetime, timezone
 from typing import Optional
 
 from sqlalchemy import select
@@ -54,6 +55,16 @@ def parse_reading(text: str) -> tuple[bool, float]:
     return lt, value
 
 
+def _finite(v) -> bool:
+    """math.isfinite, except that an int too big for a float counts as not
+    finite. isfinite raises OverflowError on 10**400, which would be a 500;
+    spec 10 wants a 400 with the reason."""
+    try:
+        return math.isfinite(v)
+    except OverflowError:
+        return False
+
+
 def validate_prep_steps(value) -> list:
     """A row's own step values (spec 3.7): exactly three entries, one per
     step. Each entry is null (standard), or [sample_ul, ratio] for step 1 and
@@ -69,11 +80,8 @@ def validate_prep_steps(value) -> list:
             shape = "[sample_ul, ratio]" if i == 1 else "[sample_ul]"
             raise ValueError(f"prep_steps step {i} must be {shape} or null")
         for v in entry:
-            try:
-                ok = v is None or (not isinstance(v, bool) and isinstance(v, (int, float))
-                                   and math.isfinite(v))
-            except OverflowError:  # an int too big for a float: a 400, not a 500
-                ok = False
+            ok = v is None or (not isinstance(v, bool) and isinstance(v, (int, float))
+                               and _finite(v))
             if not ok:
                 raise ValueError(f"prep_steps step {i} values must be numbers or null")
         if entry[0] is not None and entry[0] <= 0:
@@ -221,3 +229,97 @@ def cartridge_sensitivities(db: Session, ids) -> dict[int, Optional[float]]:
         for r in db.execute(select(ConsumableType.id, ConsumableType.specs)
                             .where(ConsumableType.id.in_(ids))).all()
     }
+
+
+# The endo v2 row fields the item PATCH accepts (spec 3.7). Sent = set; an
+# explicit null clears; omitted = untouched (model_fields_set).
+ENDO_ITEM_FIELDS = ("prep_form", "prep_water_ml", "prep_total_dilution", "prep_steps",
+                    "cartridge_type_id", "result_reading")
+# The fixed parts of the 2 mL steps that stay in code (spec 4.4): step 1's
+# standard ratio and the fixed 1:2 of step 3.
+STEP1_STANDARD_RATIO = 10
+STEP3_RATIO = 2
+
+
+def _step1_ratio(steps) -> float:
+    """The row's step 1 ratio: its own (prep_steps[0][1]) when set, else 1:10."""
+    first = steps[0] if isinstance(steps, list) and steps else None
+    if isinstance(first, list) and len(first) == 2 and first[1] is not None:
+        return first[1]
+    return STEP1_STANDARD_RATIO
+
+
+def check_item_endo_fields(db: Session, worksheet, item, values: dict) -> dict:
+    """Validate the row fields one PATCH sent. Writes nothing. Returns the
+    values to store (a reading trimmed) or raises ValueError with the reason.
+    Saving a reading always stores the row's cartridge (spec 3.1), so a
+    reading needs one, sent now or already on the row. For the same reason a
+    cartridge cannot be cleared from under a stored reading. A total below
+    step 1's ratio x 2 cannot be made, because step 2 would need a ratio
+    under 1:1. Tube overflow is only a screen warning."""
+    out = dict(values)
+    form = values.get("prep_form")
+    if form is not None and form not in ENDO_FORMS:
+        raise ValueError(f"prep_form must be one of {', '.join(ENDO_FORMS)}")
+    water = values.get("prep_water_ml")
+    if water is not None and not (_finite(water) and water > 0):
+        raise ValueError("prep_water_ml must be a number greater than zero")
+    total = values.get("prep_total_dilution")
+    if total is not None and not _finite(total):
+        raise ValueError("prep_total_dilution must be a number")
+    if values.get("prep_steps") is not None:
+        out["prep_steps"] = validate_prep_steps(values["prep_steps"])
+    total_after = out.get("prep_total_dilution", item.prep_total_dilution)
+    if total_after is not None and ("prep_total_dilution" in values or "prep_steps" in values):
+        floor = STEP3_RATIO * _step1_ratio(out.get("prep_steps", item.prep_steps))
+        if total_after < floor:
+            raise ValueError(f"prep_total_dilution must be at least {floor:g} (the step 1 "
+                             f"ratio x the fixed 1:{STEP3_RATIO} step) or step 2 cannot be made")
+    cartridge = values.get("cartridge_type_id")
+    if cartridge is not None and cartridge not in allowed_cartridge_ids(db, worksheet):
+        raise ValueError(CARTRIDGE_REFUSED)
+    if values.get("result_reading") is not None:
+        parse_reading(values["result_reading"])
+        out["result_reading"] = values["result_reading"].strip()
+    reading_after = out.get("result_reading", item.result_reading)
+    cartridge_after = out.get("cartridge_type_id", item.cartridge_type_id)
+    if reading_after is not None and cartridge_after is None:
+        raise ValueError("A reading needs the row's cartridge: send cartridge_type_id with it")
+    return out
+
+
+def apply_item_endo_fields(db: Session, worksheet, item, values: dict,
+                           user_id: Optional[int]) -> None:
+    """Store values from check_item_endo_fields, with their audit rows. A new
+    reading stamps who and when and pins the worksheet's method (spec 4.1).
+    The reader record (lead decision 2026-10-10) is handled two ways. A typed
+    reading keeps result_reader: the page flags the mismatch, and validity
+    still comes from the record. Clearing the reading clears the record too,
+    and the audit row keeps the cleared record as old_reader. Callers commit."""
+    base = {"user_id": user_id, "worksheet_id": worksheet.id, "sample_id": item.sample_id}
+
+    def audit(operation: str, old, new, **extra) -> None:
+        db.add(AuditLog(operation=operation, entity_type="worksheet_item",
+                        entity_id=str(item.id),
+                        details={**base, "old": old, "new": new, **extra}))
+
+    for field in ("prep_form", "prep_water_ml", "prep_total_dilution", "prep_steps"):
+        if field in values:
+            setattr(item, field, values[field])
+    if "cartridge_type_id" in values and values["cartridge_type_id"] != item.cartridge_type_id:
+        audit("endo_cartridge_set", item.cartridge_type_id, values["cartridge_type_id"])
+        item.cartridge_type_id = values["cartridge_type_id"]
+    if "result_reading" in values and values["result_reading"] != item.result_reading:
+        new = values["result_reading"]
+        if new is None:
+            audit("endo_reading_cleared", item.result_reading, None, old_reader=item.result_reader)
+            item.result_reader = None
+        else:
+            audit("endo_reading_set", item.result_reading, new)
+        item.result_reading = new
+        # Naive UTC, like made_at / ran_at; the serializer appends the Z.
+        item.result_entered_at = (datetime.now(timezone.utc).replace(tzinfo=None)
+                                  if new is not None else None)
+        item.result_entered_by_user_id = user_id if new is not None else None
+    if values.get("result_reading") is not None:
+        pin_endo_method(db, worksheet, user_id)

@@ -457,3 +457,225 @@ def test_put_run_fields_validate_audit_and_lock_on_completion(client, db):
     assert client.put(url, json={"title": "Endo 10/09/2026 (done)"}).status_code == 200
     db.refresh(ws)
     assert (ws.endo_prep, ws.title) == ("stock", "Endo 10/09/2026 (done)")
+
+
+# --- Task 6: row fields on PATCH /worksheets/{ws}/items/{item} ---------------
+
+
+def _row_world(db):
+    """An open worksheet with one endo vial and two active cartridges. No
+    method resolves, so every active endotoxin cartridge is allowed (4.3)."""
+    ws = _ws(db)
+    item, _ = _vial_item(db, ws, 1, _service(db))
+    c05 = _cartridge(db, "Endosafe 0.05", 0.05)
+    c01 = _cartridge(db, "Endosafe 0.01", 0.01)
+    db.commit()
+    return ws, item, c05, c01
+
+
+_ROW_FIELDS = ("prep_form", "prep_water_ml", "prep_total_dilution", "prep_steps",
+               "cartridge_type_id", "result_reading", "result_entered_at",
+               "result_entered_by_user_id")
+
+
+def _row(item):
+    return {f: getattr(item, f) for f in _ROW_FIELDS}
+
+
+def test_patch_sets_and_clears_the_prep_fields_and_audits_the_cartridge(client, db):
+    ws, item, c05, _ = _row_world(db)
+    url = f"/worksheets/{ws.id}/items/{item.id}"
+    r = client.patch(url, json={"prep_form": "liquid", "prep_water_ml": 1.5,
+                                "prep_total_dilution": 500, "prep_steps": [[20, 5], None, [100]],
+                                "cartridge_type_id": c05.id})
+    assert r.status_code == 200, r.text
+    # The response keeps today's keys and adds the worksheet's endo method.
+    assert {"status", "item_id", "resolved_method", "endo_method"} <= set(r.json())
+    db.refresh(item)
+    assert (item.prep_form, item.prep_water_ml, item.prep_total_dilution, item.prep_steps,
+            item.cartridge_type_id) == ("liquid", 1.5, 500, [[20, 5], None, [100]], c05.id)
+    it = client.get(f"/worksheets/{ws.id}").json()["items"][0]
+    assert it["prep_steps"] == [[20, 5], None, [100]]
+    assert it["cartridge_sensitivity_eu_ml"] == 0.05
+
+    r = client.patch(url, json={"prep_form": None, "prep_water_ml": None,
+                                "prep_total_dilution": None, "prep_steps": None,
+                                "cartridge_type_id": None})
+    assert r.status_code == 200, r.text
+    db.refresh(item)
+    assert _row(item) == dict.fromkeys(_ROW_FIELDS)
+    assert [(a.operation, a.details["old"], a.details["new"]) for a in db.query(AuditLog)
+            .filter(AuditLog.operation == "endo_cartridge_set").order_by(AuditLog.id)] == [
+        ("endo_cartridge_set", None, c05.id), ("endo_cartridge_set", c05.id, None)]
+
+
+@pytest.mark.parametrize("payload", [
+    {"prep_form": "gel"},
+    {"prep_water_ml": 0},
+    {"prep_water_ml": -1},
+    {"prep_total_dilution": 1.5},
+    {"prep_total_dilution": 15},   # below 2 x the standard 1:10 step 1
+    {"prep_steps": [[20, 10], None]},
+    {"prep_steps": [[20, 0.5], None, None]},
+    {"prep_steps": [None, None, [0]]},
+    {"cartridge_type_id": 99999},
+    # Too big for a float (spec 10: a 400 with the reason, never a 422 or 500).
+    {"prep_water_ml": 10**400},
+    {"prep_total_dilution": 10**400},
+])
+def test_patch_refuses_bad_row_values_and_writes_nothing(client, db, payload):
+    ws, item, _, _ = _row_world(db)
+    r = client.patch(f"/worksheets/{ws.id}/items/{item.id}", json=payload)
+    assert r.status_code == 400, payload
+    db.refresh(item)
+    assert _row(item) == dict.fromkeys(_ROW_FIELDS)
+
+
+def test_patch_refuses_a_total_the_steps_cannot_make(client, db):
+    ws, item, _, _ = _row_world(db)
+    url = f"/worksheets/{ws.id}/items/{item.id}"
+    # Standard step 1 (1:10) x the fixed 1:2 step: 20 is the smallest makeable total.
+    r = client.patch(url, json={"prep_total_dilution": 19.5})
+    assert r.status_code == 400 and "prep_total_dilution" in r.json()["detail"]
+    assert client.patch(url, json={"prep_total_dilution": 20}).status_code == 200
+    # The row's own step 1 ratio moves the floor, sent with the total ...
+    assert client.patch(url, json={"prep_total_dilution": 8,
+                                   "prep_steps": [[20, 4], None, None]}).status_code == 200
+    # ... or already stored: a new ratio of 5 cannot make the stored total of 8.
+    assert client.patch(url, json={"prep_steps": [[20, 5], None, None]}).status_code == 400
+    # A step 1 with only its sample uL keeps the standard 1:10, so 20 again.
+    assert client.patch(url, json={"prep_total_dilution": 12,
+                                   "prep_steps": [[30], None, None]}).status_code == 400
+    db.refresh(item)
+    assert (item.prep_total_dilution, item.prep_steps) == (8, [[20, 4], None, None])
+
+
+def test_patch_refuses_a_cartridge_the_method_does_not_allow(client, db):
+    svc = _service(db)
+    c05 = _cartridge(db, "Endosafe 0.05", 0.05)
+    off_method = _cartridge(db, "Endosafe 0.005", 0.005)
+    _method(client, db, "Endotoxin", svc, [(c05, True)])
+    ws = _ws(db)
+    item, _ = _vial_item(db, ws, 1, svc)
+    db.commit()
+    url = f"/worksheets/{ws.id}/items/{item.id}"
+    r = client.patch(url, json={"cartridge_type_id": off_method.id})
+    assert r.status_code == 400 and r.json()["detail"] == worksheets_endo.CARTRIDGE_REFUSED
+    assert client.patch(url, json={"cartridge_type_id": c05.id}).status_code == 200
+
+
+def test_a_completed_worksheet_refuses_only_the_new_row_fields(client, db):
+    ws, item, c05, _ = _row_world(db)
+    ws.status = "completed"
+    db.commit()
+    url = f"/worksheets/{ws.id}/items/{item.id}"
+    for payload in ({"prep_form": "powder"}, {"prep_steps": None},
+                    {"result_reading": "0.8", "cartridge_type_id": c05.id}):
+        assert client.patch(url, json=payload).status_code == 409, payload
+    # Existing fields keep today's behaviour (no guard).
+    assert client.patch(url, json={"made": True}).status_code == 200
+    db.refresh(item)
+    assert item.made_at is not None
+    assert _row(item) == dict.fromkeys(_ROW_FIELDS)
+
+
+@pytest.mark.parametrize("typed, stored", [
+    ("< 0.05", "< 0.05"), (" 0.8 ", "0.8"), ("<0.05", "<0.05"), ("0", "0"),
+])
+def test_a_reading_is_stored_as_typed_after_trimming(client, db, typed, stored):
+    ws, item, c05, _ = _row_world(db)
+    r = client.patch(f"/worksheets/{ws.id}/items/{item.id}",
+                     json={"result_reading": typed, "cartridge_type_id": c05.id})
+    assert r.status_code == 200, r.text
+    db.refresh(item)
+    assert item.result_reading == stored
+    assert item.result_entered_by_user_id == 1 and item.result_entered_at is not None
+    it = client.get(f"/worksheets/{ws.id}").json()["items"][0]
+    assert it["result_reading"] == stored and it["result_entered_at"].endswith("Z")
+
+
+@pytest.mark.parametrize("typed", ["0,8", "-1", "<0", "abc", ""])
+def test_a_reading_that_does_not_parse_is_refused_with_a_reason(client, db, typed):
+    ws, item, c05, _ = _row_world(db)
+    r = client.patch(f"/worksheets/{ws.id}/items/{item.id}",
+                     json={"result_reading": typed, "cartridge_type_id": c05.id})
+    assert r.status_code == 400
+    assert "reading" in r.json()["detail"]
+    db.refresh(item)
+    assert _row(item) == dict.fromkeys(_ROW_FIELDS)
+
+
+def test_a_reading_needs_the_rows_cartridge(client, db):
+    ws, item, c05, _ = _row_world(db)
+    url = f"/worksheets/{ws.id}/items/{item.id}"
+    r = client.patch(url, json={"result_reading": "0.8"})
+    assert r.status_code == 400 and "cartridge" in r.json()["detail"]
+    assert client.patch(url, json={"result_reading": "0.8",
+                                   "cartridge_type_id": None}).status_code == 400
+    assert client.patch(url, json={"result_reading": "0.8",
+                                   "cartridge_type_id": c05.id}).status_code == 200
+    # The row now has its cartridge, so a later reading may come alone. The
+    # cartridge cannot be dropped from under a stored reading (spec 3.1).
+    assert client.patch(url, json={"result_reading": "<0.05"}).status_code == 200
+    assert client.patch(url, json={"cartridge_type_id": None}).status_code == 400
+    db.refresh(item)
+    assert (item.result_reading, item.cartridge_type_id) == ("<0.05", c05.id)
+
+
+def test_reading_set_and_clear_are_audited_and_the_first_one_pins_the_method(client, db):
+    svc = _service(db)
+    c05 = _cartridge(db, "Endosafe 0.05", 0.05)
+    mid = _method(client, db, "Endotoxin", svc, [(c05, True)])
+    ws = _ws(db)
+    item, _ = _vial_item(db, ws, 1, svc)
+    db.commit()
+    url = f"/worksheets/{ws.id}/items/{item.id}"
+
+    r = client.patch(url, json={"result_reading": "0.8", "cartridge_type_id": c05.id})
+    assert r.status_code == 200, r.text
+    assert r.json()["endo_method"]["id"] == mid
+    db.refresh(ws)
+    assert ws.endo_method_id == mid
+    assert client.patch(url, json={"result_reading": None}).status_code == 200
+    db.refresh(item)
+    assert (item.result_reading, item.result_entered_at,
+            item.result_entered_by_user_id) == (None, None, None)
+    assert item.cartridge_type_id == c05.id
+    assert [(a.operation, a.details["old"], a.details["new"]) for a in db.query(AuditLog).filter(
+        AuditLog.operation.in_(("endo_reading_set", "endo_reading_cleared"))
+    ).order_by(AuditLog.id)] == [
+        ("endo_reading_set", None, "0.8"), ("endo_reading_cleared", "0.8", None)]
+    assert db.query(AuditLog).filter(AuditLog.operation == "endo_method_pinned").count() == 1
+
+
+_IMPORTED = {"test_id": "T-1", "reader": "NX-1001", "slot": 1, "recovery": 98.0,
+             "sample_cv": 3.1, "spike_cv": 4.0, "valid": True, "why": []}
+
+
+def _imported_row(db):
+    """A row as the reader import leaves it (Task 7 writes these columns)."""
+    ws, item, c05, _ = _row_world(db)
+    item.cartridge_type_id = c05.id
+    item.result_reading = "<0.05"
+    item.result_reader = dict(_IMPORTED)
+    db.commit()
+    return ws, item
+
+
+def test_a_typed_reading_over_an_imported_one_keeps_the_reader_record(client, db):
+    # The page flags the mismatch; validity still comes from the reader's numbers.
+    ws, item = _imported_row(db)
+    r = client.patch(f"/worksheets/{ws.id}/items/{item.id}", json={"result_reading": "0.8"})
+    assert r.status_code == 200, r.text
+    db.refresh(item)
+    assert (item.result_reading, item.result_reader) == ("0.8", _IMPORTED)
+
+
+def test_clearing_the_reading_clears_the_reader_record_and_audits_it(client, db):
+    ws, item = _imported_row(db)
+    r = client.patch(f"/worksheets/{ws.id}/items/{item.id}", json={"result_reading": None})
+    assert r.status_code == 200, r.text
+    db.refresh(item)
+    assert (item.result_reading, item.result_reader) == (None, None)
+    cleared = db.query(AuditLog).filter(AuditLog.operation == "endo_reading_cleared").one()
+    assert (cleared.details["old"], cleared.details["old_reader"]) == ("<0.05", _IMPORTED)
