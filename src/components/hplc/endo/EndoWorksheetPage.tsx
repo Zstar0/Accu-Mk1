@@ -37,6 +37,7 @@ import {
   WorksheetApplyBar,
 } from '@/components/hplc/WorksheetDrawer'
 import { EndoBoxHead, type EndoBoxProps } from './EndoBox'
+import { EndoResultsBox } from './EndoResultsBox'
 import { EndoRunHeader } from './EndoRunHeader'
 import { EndoSampleDilutionBox } from './EndoSampleDilutionBox'
 
@@ -297,6 +298,7 @@ function EndoWorksheetPageBody({
         {worksheet.endo_prep === '2ml' && (
           <>
             <EndoSampleDilutionBox {...boxProps} />
+            <EndoResultsBox {...boxProps} />
           </>
         )}
       </EndoWorksheetView>

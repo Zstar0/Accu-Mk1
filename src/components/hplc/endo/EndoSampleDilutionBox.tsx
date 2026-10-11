@@ -1,4 +1,4 @@
-import { useRef, useState, type ReactNode } from 'react'
+import type { ReactNode } from 'react'
 import type { WorksheetItemPatch } from '@/lib/api'
 import { fmt, fmtUl } from '@/lib/endo-prep'
 import {
@@ -24,6 +24,7 @@ import { PrepField } from '@/components/hplc/EndoPrepLine'
 import { MONO, TH, TH_CALC, UNIT } from '@/components/hplc/EndoWorksheetTable'
 import { EndoBox, type EndoBoxProps } from './EndoBox'
 import { WorkedTip } from './EndoWorkedTip'
+import { useRowRefusals } from './use-row-refusals'
 
 // Dennis's .dilution-table cells: top-aligned, 7px top and bottom.
 const CELL = 'border-b border-border/60 px-2 py-[7px] align-top text-[13px]'
@@ -246,27 +247,13 @@ export function EndoSampleDilutionBox({
   isCompleted,
   onUpdateItem,
 }: EndoBoxProps) {
-  // The server's refusal per item id, from onUpdateItem's resolved message.
-  const [refused, setRefused] = useState<Record<number, string>>({})
-  // Each row's latest save: only its outcome may set the row's refusal, so
-  // an earlier refusal landing after a later save is dropped.
-  const latestSend = useRef<Record<number, number>>({})
+  // The server's refusal per item id, until that row's next save.
+  const { refused, send } = useRowRefusals(onUpdateItem)
   if (!rows.length) return null
   const std = standardSteps(ctx)
   const ordered = orderByTotal(rows, r => r.sample, ctx)
   const keys = ordered.map(r => totalGroupKey(r.sample, ctx))
   const stdTotal = ctx.params.stdTotalDilution
-
-  function send(row: EndoRow, data: WorksheetItemPatch) {
-    const id = row.item.id
-    const seq = (latestSend.current[id] ?? 0) + 1
-    latestSend.current[id] = seq
-    setRefused(({ [id]: _cleared, ...rest }) => rest)
-    void Promise.resolve(onUpdateItem(id, data)).then(msg => {
-      if (msg && latestSend.current[id] === seq)
-        setRefused(r => ({ ...r, [id]: msg }))
-    })
-  }
 
   function commitStep(
     row: EndoRow,
@@ -284,13 +271,13 @@ export function EndoSampleDilutionBox({
       std
     )
     if (JSON.stringify(next) === JSON.stringify(current)) return
-    send(row, { prep_steps: next })
+    send(row.item.id, { prep_steps: next })
   }
 
   function commitTotal(row: EndoRow, v: number | null) {
     const next = v === stdTotal ? null : v
     if (next === (row.item.prep_total_dilution ?? null)) return
-    send(row, { prep_total_dilution: next })
+    send(row.item.id, { prep_total_dilution: next })
   }
 
   return (

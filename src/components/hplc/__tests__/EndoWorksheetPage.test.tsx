@@ -139,6 +139,7 @@ describe('EndoWorksheetPage', () => {
     expect(
       screen.getByText('2 · Sample dilution: from the vial to the cartridge')
     ).toBeInTheDocument()
+    expect(screen.getByText('3 · Results: EU per vial')).toBeInTheDocument()
   })
 
   it('a stock run keeps the stock columns', async () => {
