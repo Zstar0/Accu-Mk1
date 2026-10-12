@@ -54,6 +54,7 @@ function renderPane() {
 
 describe('AgentsPane', () => {
   beforeEach(() => {
+    vi.clearAllMocks()
     auth.role = 'admin'
     vi.mocked(api.listAgents).mockResolvedValue([pia])
   })
@@ -106,6 +107,66 @@ describe('AgentsPane', () => {
     )
     await waitFor(() => expect(api.rotateAgentKey).toHaveBeenCalledWith(3))
     expect(await screen.findByTestId('agent-key-once')).toBeInTheDocument()
+    confirm.mockRestore()
+  })
+
+  it('does not say Copied when the clipboard write fails', async () => {
+    const writeText = vi.fn().mockRejectedValue(new Error('denied'))
+    Object.defineProperty(navigator, 'clipboard', {
+      value: { writeText },
+      configurable: true,
+    })
+    vi.mocked(api.rotateAgentKey).mockResolvedValue({ agent: pia, key: KEY })
+    const confirm = vi.spyOn(window, 'confirm').mockReturnValue(true)
+    renderPane()
+    await screen.findByText('Pia')
+    await userEvent.click(
+      screen.getByRole('button', { name: 'Rotate key for Pia' })
+    )
+    await screen.findByTestId('agent-key-once')
+    await userEvent.click(screen.getByRole('button', { name: 'Copy settings' }))
+    expect(writeText).toHaveBeenCalledWith(
+      expect.stringContaining(`LABMGR_MK1_AGENT_KEY=${KEY}`)
+    )
+    expect(screen.queryByRole('button', { name: 'Copied' })).toBeNull()
+    expect(
+      screen.getByRole('button', { name: 'Copy settings' })
+    ).toBeInTheDocument()
+    confirm.mockRestore()
+  })
+
+  it('a second issuance shows the new key and Copy settings, not Copied', async () => {
+    const writeText = vi.fn().mockResolvedValue(undefined)
+    Object.defineProperty(navigator, 'clipboard', {
+      value: { writeText },
+      configurable: true,
+    })
+    const KEY2 = 'mk1a.pia.' + 'y'.repeat(43)
+    vi.mocked(api.rotateAgentKey)
+      .mockResolvedValueOnce({ agent: pia, key: KEY })
+      .mockResolvedValueOnce({ agent: pia, key: KEY2 })
+    const confirm = vi.spyOn(window, 'confirm').mockReturnValue(true)
+    const rotate = () =>
+      userEvent.click(
+        screen.getByRole('button', { name: 'Rotate key for Pia' })
+      )
+    renderPane()
+    await screen.findByText('Pia')
+    await rotate()
+    await screen.findByTestId('agent-key-once')
+    await userEvent.click(screen.getByRole('button', { name: 'Copy settings' }))
+    expect(
+      await screen.findByRole('button', { name: 'Copied' })
+    ).toBeInTheDocument()
+    await rotate()
+    await waitFor(() =>
+      expect(screen.getByTestId('agent-key-once').textContent).toContain(KEY2)
+    )
+    expect(screen.getByTestId('agent-key-once').textContent).not.toContain(KEY)
+    expect(
+      screen.getByRole('button', { name: 'Copy settings' })
+    ).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'Copied' })).toBeNull()
     confirm.mockRestore()
   })
 

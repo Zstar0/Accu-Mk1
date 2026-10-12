@@ -62,8 +62,10 @@ function KeyOnce({
           size="sm"
           variant="outline"
           onClick={() => {
-            void navigator.clipboard.writeText(env)
-            setCopied(true)
+            navigator.clipboard.writeText(env).then(
+              () => setCopied(true),
+              () => setCopied(false)
+            )
           }}
         >
           <Copy className="mr-1 h-3 w-3" />{' '}
@@ -315,7 +317,9 @@ export function AgentsPane() {
         and write documents in the spaces it can see, and only what its switches
         allow.
       </p>
-      {shown && <KeyOnce shown={shown} onDone={() => setShown(null)} />}
+      {shown && (
+        <KeyOnce key={shown.key} shown={shown} onDone={() => setShown(null)} />
+      )}
       <NewAgent
         onCreated={s => {
           qc.setQueryData<Agent[]>(QK, old => [...(old ?? []), s.agent])
