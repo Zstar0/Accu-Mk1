@@ -8,6 +8,7 @@ import {
   SheetHeader,
   SheetTitle,
 } from '@/components/ui/sheet'
+import { EntityFlagButton } from '@/components/flags/EntityFlagButton'
 import { ResizableSheetContent } from './ResizableSheetContent'
 import {
   getSupportThread,
@@ -166,6 +167,12 @@ export function SupportThreadPanel({
                 Open in Plain
               </a>
             )}
+            {current && (
+              <EntityFlagButton
+                entityType="support_ticket"
+                entityId={`${customerKey}|${current.id}`}
+              />
+            )}
           </SheetDescription>
         </SheetHeader>
         <div className="flex min-h-0 flex-1 flex-col @min-[820px]:flex-row">
@@ -207,6 +214,11 @@ export function SupportThreadPanel({
               {q.isError && (
                 <p className="mt-4 text-sm text-red-500">
                   Could not load this conversation.
+                </p>
+              )}
+              {d?.via_flag != null && (
+                <p className="mb-2 rounded-md border border-[var(--pv-border)] bg-[var(--pv-surface)] px-3 py-2 text-xs text-[var(--pv-ink-2)]">
+                  {`You're seeing this ticket because you're on flag #${d.via_flag}.`}
                 </p>
               )}
               {d?.stale && (
@@ -263,7 +275,7 @@ export function SupportThreadPanel({
                 onMore={onMore}
               />
             )}
-            {seat.data && !hasSeat && (
+            {seat.data && !hasSeat && d?.via_flag == null && (
               <p className="px-4 pb-3 text-xs text-[var(--pv-ink-3)]">
                 Replying needs a Plain account under your Mk1 email.
               </p>

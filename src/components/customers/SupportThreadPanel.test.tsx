@@ -18,6 +18,16 @@ vi.mock('@/lib/api-support', async () => {
   }
 })
 
+vi.mock('@/components/flags/EntityFlagButton', () => ({
+  EntityFlagButton: ({
+    entityType,
+    entityId,
+  }: {
+    entityType: string
+    entityId: string
+  }) => <button type="button">{`flag ${entityType} ${entityId}`}</button>,
+}))
+
 const thread: SupportThread = {
   id: 'th_b',
   ref: 'T-482',
@@ -350,5 +360,26 @@ describe('SupportThreadPanel actions', () => {
     )
     await userEvent.click(screen.getByRole('button', { name: 'Yes, send' }))
     await waitFor(() => expect(writes).toContain(900))
+  })
+
+  it('has a Flag button for this ticket', async () => {
+    setup()
+    expect(
+      await screen.findByRole('button', {
+        name: 'flag support_ticket wc:1|th_b',
+      })
+    ).toBeInTheDocument()
+  })
+
+  it('explains flag access and hides the no-seat note', async () => {
+    vi.mocked(support.getSupportThread).mockResolvedValueOnce({
+      ...detail,
+      via_flag: 42,
+    })
+    setup(false)
+    expect(
+      await screen.findByText(/because you're on flag #42/)
+    ).toBeInTheDocument()
+    expect(screen.queryByText(/Replying needs a Plain account/)).toBeNull()
   })
 })
