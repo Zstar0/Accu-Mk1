@@ -97,6 +97,26 @@ def test_groups_are_set_on_the_agent(app_client):
     assert (r.status_code, r.json()["detail"]["code"]) == (400, "unknown_group")
 
 
+def test_a_deactivated_group_does_not_stick_the_save(app_client):
+    """I-3: only ADDED groups must be active; a kept membership in a since-deactivated group
+    must not make every later save a 400."""
+    from groups.models import UserGroup
+    c, db = app_client
+    _, admin = make_admin(db)
+    g1, g_new = UserGroup(slug="a", name="A"), UserGroup(slug="z", name="Z", is_active=False)
+    db.add_all([g1, g_new])
+    db.commit()
+    a = _create(c, admin).json()["agent"]
+    url = f"/admin/agents/{a['id']}/groups"
+    assert c.put(url, json={"group_ids": [g1.id]}, headers=admin).status_code == 200
+    g1.is_active = False
+    db.commit()
+    r = c.put(url, json={"group_ids": [g1.id]}, headers=admin)
+    assert (r.status_code, r.json()["group_ids"]) == (200, [g1.id]), r.text
+    r = c.put(url, json={"group_ids": [g1.id, g_new.id]}, headers=admin)
+    assert (r.status_code, r.json()["detail"]["code"]) == (400, "unknown_group")
+
+
 def test_a_human_id_is_not_an_agent(app_client):
     """The admin API must never edit, re-key or re-group a human account."""
     c, db = app_client

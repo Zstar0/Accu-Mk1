@@ -115,14 +115,17 @@ def group_ids(db, user_id: int) -> list[int]:
 
 
 def set_groups(db, agent_id: int, wanted: list[int]) -> list[int]:
-    """Replace the agent's group memberships. Every id must be an ACTIVE group."""
+    """Replace the agent's group memberships. Only ADDED ids must be active groups: a kept
+    membership in a since-deactivated group must not stick every later save (I-3, as in
+    groups.service.replace_members)."""
     from groups.models import UserGroup, UserGroupMember
     user, _ = get_agent(db, agent_id)
     ids = sorted(set(int(g) for g in wanted))
-    if ids:
-        ok = set(db.execute(select(UserGroup.id).where(UserGroup.id.in_(ids),
+    adding = set(ids) - set(group_ids(db, user.id))
+    if adding:
+        ok = set(db.execute(select(UserGroup.id).where(UserGroup.id.in_(adding),
                                                        UserGroup.is_active.is_(True))).scalars())
-        if set(ids) - ok:
+        if adding - ok:
             raise AgentError(400, "unknown_group")
     db.query(UserGroupMember).filter(UserGroupMember.user_id == user.id).delete()
     db.add_all([UserGroupMember(group_id=g, user_id=user.id) for g in ids])
