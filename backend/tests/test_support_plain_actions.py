@@ -203,6 +203,7 @@ def test_duplicate_reply_is_409_and_audited(api):
 @pytest.mark.parametrize("code,status,out", [("cannot_reply_to_thread", 403, "not_allowed_to_reply"),
                                              ("missing_user_auth_slack_integration_for_team", 409,
                                               "slack_not_connected"),
+                                             ("forbidden", 403, "plain_key_missing_permission"),
                                              ("something_else", 502, "support_unavailable")])
 def test_plain_error_codes_map(api, code, status, out):
     client, plain, Session = api

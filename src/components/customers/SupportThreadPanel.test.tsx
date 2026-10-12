@@ -298,4 +298,57 @@ describe('SupportThreadPanel actions', () => {
     await userEvent.click(screen.getByRole('menuitem', { name: 'Mark done' }))
     expect(await screen.findByText(/not configured/)).toBeInTheDocument()
   })
+
+  it('a key without the permission says so', async () => {
+    setup()
+    vi.mocked(support.supportAction).mockRejectedValueOnce(
+      new CrmError(403, 'plain_key_missing_permission')
+    )
+    await userEvent.click(await screen.findByRole('button', { name: 'More' }))
+    await userEvent.click(screen.getByRole('menuitem', { name: 'Mark done' }))
+    expect(await screen.findByText(/missing a permission/)).toBeInTheDocument()
+  })
+
+  it('scrolls to the new message after a send', async () => {
+    setup()
+    // Wait for the conversation to load (and its on-open scroll) before spying on scrollTop.
+    await screen.findByRole('button', { name: /Oldest first/ })
+    const scroller = screen.getByTestId('ticket-scroller')
+    const writes: number[] = []
+    Object.defineProperty(scroller, 'scrollHeight', {
+      configurable: true,
+      get: () => 900,
+    })
+    Object.defineProperty(scroller, 'scrollTop', {
+      configurable: true,
+      get: () => 0,
+      set: (v: number) => writes.push(v),
+    })
+    const sent = {
+      ...detail,
+      entries: [
+        {
+          id: 'e_new',
+          at: new Date().toISOString(),
+          kind: 'email' as const,
+          author: 'Sam Parker',
+          author_kind: 'agent' as const,
+          internal: false,
+          subject: null,
+          text: 'Thanks for waiting',
+        },
+      ],
+    }
+    vi.mocked(support.supportAction).mockResolvedValueOnce({ detail: sent })
+    await openReply()
+    await userEvent.type(
+      await screen.findByRole('textbox', { name: /Reply/ }),
+      'Thanks for waiting'
+    )
+    await userEvent.click(
+      screen.getByRole('button', { name: 'Send as Sam Parker' })
+    )
+    await userEvent.click(screen.getByRole('button', { name: 'Yes, send' }))
+    await waitFor(() => expect(writes).toContain(900))
+  })
 })
