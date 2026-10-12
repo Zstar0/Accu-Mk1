@@ -4,6 +4,8 @@ from __future__ import annotations
 import re
 from typing import Optional
 
+from fastapi import HTTPException
+
 from flags import access
 from flags.errors import BadRequestError
 
@@ -23,14 +25,28 @@ def parse(eid: object) -> Optional[tuple[str, str, str]]:
 
 def _item(eid: str) -> Optional[dict]:
     from crm_close import service
+    from crm_close.client import CrmUnavailable
     p = parse(eid)
-    return service.activity_detail(p[0], p[2], p[1]) if p else None
+    if p is None:
+        return None
+    try:
+        return service.activity_detail(p[0], p[2], p[1])
+    except CrmUnavailable as e:
+        if str(e) == "http_404":  # Close has no such activity
+            return None
+        raise
 
 
 def _can_raise(db, user, eid: str) -> bool:
+    from crm_close.client import CrmNotConfigured, CrmUnavailable
     if parse(eid) is None:
         raise BadRequestError(f"malformed crm_item id {eid!r}")
-    if _item(eid) is None:
+    try:
+        found = _item(eid)
+    except (CrmNotConfigured, CrmUnavailable):
+        # Fail closed: ownership can't be checked. flags.routes passes an HTTPException through.
+        raise HTTPException(status_code=503, detail={"code": "crm_unavailable"})
+    if found is None:
         raise BadRequestError("that item is not one of this customer's CRM items")
     return True
 

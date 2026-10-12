@@ -63,3 +63,34 @@ def test_foreign_item_is_refused(db):
     with pytest.raises(BadRequestError, match="not one of"):
         service.create_flag(db, user=USER, entity_type="crm_item", entity_id="wc:2|email|acti_8f2abc",
                             type="question", title="x")
+
+
+def test_close_404_is_a_400_not_a_500(db, monkeypatch):
+    from crm_close import service as crm
+    from crm_close.client import CrmUnavailable
+    from flags import service
+    from flags.errors import BadRequestError
+
+    def gone(key, aid, kind):
+        raise CrmUnavailable("http_404")
+
+    monkeypatch.setattr(crm, "activity_detail", gone)
+    with pytest.raises(BadRequestError, match="not one of"):
+        service.create_flag(db, user=USER, entity_type="crm_item", entity_id=EID, type="question", title="x")
+
+
+def test_close_down_on_raise_is_a_503_and_no_flag(db, monkeypatch):
+    from fastapi import HTTPException
+    from crm_close import service as crm
+    from crm_close.client import CrmUnavailable
+    from flags import service
+    from flags.models import FlagFlag
+
+    def down(key, aid, kind):
+        raise CrmUnavailable("http_503")
+
+    monkeypatch.setattr(crm, "activity_detail", down)
+    with pytest.raises(HTTPException) as e:
+        service.create_flag(db, user=USER, entity_type="crm_item", entity_id=EID, type="question", title="x")
+    assert e.value.status_code == 503
+    assert db.query(FlagFlag).count() == 0

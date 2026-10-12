@@ -28,6 +28,8 @@ def db(monkeypatch):
     types_service.seed_builtins(s)
     monkeypatch.setattr(service, "thread_detail",
                         lambda key, th, **kw: DETAIL if (key, th) == ("wc:1572", DETAIL["thread"]["id"]) else None)
+    monkeypatch.setattr(service, "customer_support",
+                        lambda key, **kw: {"threads": [DETAIL["thread"]]} if key == "wc:1572" else None)
     seams.register_mk1_entities()
     yield s
     s.close()
@@ -72,14 +74,37 @@ def test_snapshot_failure_still_raises_with_fallback_label(db, monkeypatch):
     from flags import seams, service
     from support_plain import service as support
     from support_plain.client import SupportUnavailable
-    calls = {"n": 0}
 
-    def flaky(key, th, **kw):
-        calls["n"] += 1
-        if calls["n"] == 1:
-            return DETAIL  # the raise-time ownership check passes
-        raise SupportUnavailable("http_503")  # the snapshot lookup fails
+    def down(key, th, **kw):
+        raise SupportUnavailable("http_503")  # the snapshot's timeline fetch fails; the cached listing still answers
 
-    monkeypatch.setattr(support, "thread_detail", flaky)
+    monkeypatch.setattr(support, "thread_detail", down)
     service.create_flag(db, user=USER, entity_type="support_ticket", entity_id=EID, type="question", title="x")
     assert seams.get_entity_spec("support_ticket").label(db, EID) == "Support ticket"
+
+
+def test_plain_down_on_raise_is_a_503_and_no_flag(db, monkeypatch):
+    from fastapi import HTTPException
+    from flags import service
+    from flags.models import FlagFlag
+    from support_plain import service as support
+    from support_plain.client import SupportUnavailable
+
+    def down(key, **kw):
+        raise SupportUnavailable("http_503")
+
+    monkeypatch.setattr(support, "customer_support", down)
+    with pytest.raises(HTTPException) as e:
+        service.create_flag(db, user=USER, entity_type="support_ticket", entity_id=EID, type="question", title="x")
+    assert e.value.status_code == 503
+    assert db.query(FlagFlag).count() == 0
+
+
+def test_ownership_check_uses_the_listing_not_the_timeline(db, monkeypatch):
+    from flags import service
+    from support_plain import service as support
+    seen = []
+    monkeypatch.setattr(support, "customer_support",
+                        lambda key, **kw: seen.append(kw) or {"threads": [DETAIL["thread"]]})
+    service.create_flag(db, user=USER, entity_type="support_ticket", entity_id=EID, type="question", title="x")
+    assert seen and seen[0]["refresh"] is False

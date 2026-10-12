@@ -4,6 +4,8 @@ from __future__ import annotations
 import re
 from typing import Optional
 
+from fastapi import HTTPException
+
 from flags import access
 from flags.errors import BadRequestError
 from support_plain import rules
@@ -28,9 +30,17 @@ def _detail(eid: str) -> Optional[dict]:
 
 
 def _can_raise(db, user, eid: str) -> bool:
-    if parse(eid) is None:
+    from support_plain import service
+    from support_plain.client import SupportNotConfigured, SupportUnavailable
+    p = parse(eid)
+    if p is None:
         raise BadRequestError(f"malformed support_ticket id {eid!r}")
-    if _detail(eid) is None:
+    try:  # ownership from the cached listing (stale copy on a Plain outage), never the full timeline
+        listing = service.customer_support(p[0], refresh=False, statuses=[], page=1, page_size=rules.MAX_THREADS)
+    except (SupportNotConfigured, SupportUnavailable):
+        # Fail closed: ownership can't be checked. flags.routes passes an HTTPException through.
+        raise HTTPException(status_code=503, detail={"code": "support_unavailable"})
+    if listing is None or not any(t["id"] == p[1] for t in listing["threads"]):
         raise BadRequestError("that ticket is not one of this customer's tickets")
     return True
 
