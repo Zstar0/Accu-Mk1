@@ -822,6 +822,8 @@ def register_mk1_entities() -> None:
     # --- Support tickets + CRM items (2026-10-12): closures live in each integration --------
     from support_plain.flag_entity import register_support_ticket
     register_support_ticket()
+    from crm_close.flag_entity import register_crm_item
+    register_crm_item()
 
     from groups.access import is_admin, user_group_ids
     set_membership_resolver(lambda db, user: (user_group_ids(db, user), is_admin(user)))
