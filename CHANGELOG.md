@@ -1,5 +1,10 @@
 # Changelog
 
+## v1.45.2 - 2026-10-11
+
+### Flags
+- **You can now tell when an item has had flags before.** If every flag on a sample, vial, worksheet or document is resolved or closed, a small "N past" chip appears next to the Flag button; click it to see the whole history. When there are open flags, the colored flag button also notes how many past ones there are.
+
 ## v1.45.1 - 2026-10-11
 
 ### Support tickets
