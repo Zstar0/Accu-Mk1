@@ -3,8 +3,11 @@ from tests.agents_support import app_client, make_admin, make_agent  # noqa: F40
 
 
 def test_login_refuses_agents(app_client):
+    from auth import get_password_hash
     c, db = app_client
-    make_agent(db)
+    agent, _ = make_agent(db)
+    agent.hashed_password = get_password_hash("anything")  # only the role guard can refuse now
+    db.commit()
     r = c.post("/auth/login", json={"email": "pia@agent.invalid", "password": "anything"})
     assert (r.status_code, r.json()["detail"]) == (401, "Invalid credentials")
 
