@@ -10,7 +10,7 @@ from support_plain import rules
 
 TYPE = "support_ticket"
 FALLBACK = "Support ticket"
-_KEY = re.compile(r"^wc:\d+$")
+_KEY = re.compile(r"^(wc:\d+|email:[^|\s]+)$")  # WC account or guest key (spec 3.1)
 _THREAD = re.compile(rules.THREAD_ID_PATTERN)
 
 

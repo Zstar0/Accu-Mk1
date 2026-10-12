@@ -10,7 +10,7 @@ from flags.errors import BadRequestError
 TYPE = "crm_item"
 FALLBACK = "CRM item"
 KINDS = {"email": "Email", "call": "Call", "sms": "SMS", "meeting": "Meeting", "note": "Note"}
-_KEY = re.compile(r"^wc:\d+$")
+_KEY = re.compile(r"^(wc:\d+|email:[^|\s]+)$")  # WC account or guest key (spec 3.1)
 _ID = re.compile(r"^[A-Za-z0-9_]+$")  # also keeps the id safe to splice into the Close URL path
 
 

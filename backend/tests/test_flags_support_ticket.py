@@ -36,6 +36,7 @@ def db(monkeypatch):
 def test_parse():
     from support_plain import flag_entity as fe
     assert fe.parse(EID) == ("wc:1572", "th_01KNK2DP78S9Z8P62PZV6M7F8M")
+    assert fe.parse("email:kyle@x.example|th_01A") == ("email:kyle@x.example", "th_01A")  # guest key
     for bad in ("wc:1572", "wc:1572|abc", "x:1|th_01", "wc:1572|th_01|extra", "", "wc:|th_01"):
         assert fe.parse(bad) is None, bad
 

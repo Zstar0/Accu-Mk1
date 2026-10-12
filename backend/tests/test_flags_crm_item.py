@@ -36,6 +36,7 @@ def db(monkeypatch):
 def test_parse():
     from crm_close import flag_entity as fe
     assert fe.parse(EID) == ("wc:1551", "email", "acti_8f2abc")
+    assert fe.parse("email:kyle@x.example|call|acti_1") == ("email:kyle@x.example", "call", "acti_1")  # guest key
     for bad in ("wc:1551|email", "wc:1551|fax|acti_1", "wc:1551|email|", "x|email|acti_1", "",
                 "wc:1551|email|../leads"):
         assert fe.parse(bad) is None, bad
