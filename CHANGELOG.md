@@ -1,5 +1,11 @@
 # Changelog
 
+## v1.45.1 - 2026-10-11
+
+### Support tickets
+- **After you send a reply or note, the conversation scrolls to it.** Only after your own send, so a refresh never moves you while you read.
+- **Clearer error when the Plain key is missing a permission.** Instead of "Plain is unavailable", Mk1 now says the key in Settings > Integrations needs the permission added in Plain (for example reply, note, edit or labels).
+
 ## v1.45.0 - 2026-10-11
 
 ### Support tickets look and work like Plain
