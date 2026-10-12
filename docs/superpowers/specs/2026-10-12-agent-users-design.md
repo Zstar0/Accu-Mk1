@@ -208,18 +208,28 @@ already reaches; SENAITE's own audit shows the shared account, Mk1's records sho
 - People pickers and notifications exclude agents: assignee lists, Slack notifier, stranded-work
   owners, and the other `User` queries audited in the plan. Display-name lookups (comments,
   provenance, flags) still resolve agents, shown with an "agent" tag.
-- Group member pickers **include** agents (tagged) because groups are how an agent gets a
-  restricted space. The backend types `role` as `str`, so a third value is safe there; the
-  frontend's role typing is checked in the plan.
+- **Groups are set on the agent, not in the group picker.** Groups are how an agent gets a
+  restricted space, but the group member picker reads `/worksheets/users`, the same people
+  directory as analyst assignment and planning boards, which excludes agents. So an agent's
+  groups are chosen on its row in Settings > Agents (`PUT /admin/agents/{id}/groups`). Saving a
+  group's members on the Groups page keeps any agent members (the editor starts from the full
+  member list). The backend types `role` as `str`, so a third value is safe; the frontend types it
+  as `string`.
+- Excluded from people lists: `GET /auth/users`, `/worksheets/users`, and the AI-review staff-name
+  scrub (`customer_review/names.py`), so agent names like "Devon" are never removed from
+  customer text. Every other `User` query is a lookup by id and needs no change.
 
 ## 4. API (admin login only)
 
 | Route | Does |
 |---|---|
-| `GET /api/agents` | list: id, username, display name, active, lab_tools, coa_publishing, key_hint, created_at, created_by, last_used_at |
-| `POST /api/agents` | `{username, display_name, lab_tools?, coa_publishing?}` -> 201 with the agent and **`key` (shown once)** |
-| `PATCH /api/agents/{id}` | `{display_name?, is_active?, lab_tools?, coa_publishing?}`; `coa_publishing` requires `lab_tools` |
-| `POST /api/agents/{id}/rotate-key` | new key, shown once; the old one is dead immediately |
+| `GET /admin/agents` | list: id, username, display name, active, lab_tools, coa_publishing, key_hint, created_at, created_by, rotated_at, last_used_at, group_ids |
+| `POST /admin/agents` | `{username, display_name, lab_tools?, coa_publishing?}` -> 201 with the agent and **`key` (shown once)** |
+| `PATCH /admin/agents/{id}` | `{display_name?, is_active?, lab_tools?, coa_publishing?}`; `coa_publishing` requires `lab_tools`; Lab tools off clears COA publishing; username cannot change (422) |
+| `POST /admin/agents/{id}/rotate-key` | new key, shown once; the old one is dead immediately |
+| `PUT /admin/agents/{id}/groups` | `{group_ids}`: replace the agent's group memberships (active groups only) |
+
+Under `/admin/...` like Settings > Integrations; errors are `detail: {"code": ...}`.
 
 No delete: an agent with history is deactivated, never removed (its documents and comments keep
 pointing at it). Every create, toggle, deactivate and rotate is logged with the acting admin.
@@ -233,15 +243,17 @@ Settings > **Agents** (admins), beside Users and Groups:
   generate and publish COAs that customers receive"). On save, a one-time panel shows the key,
   a Copy button, and the two MCP settings (`LABMGR_MK1_AGENT_NAME`, `LABMGR_MK1_AGENT_KEY`).
   Closing it hides the key for good.
-- Row actions: edit, deactivate/reactivate, rotate key (confirm; shows the new key once).
-- Groups page: agents appear in member pickers with an "agent" tag.
+- Row actions: switches, deactivate/reactivate, rotate key (confirm; shows the new key once),
+  and the agent's groups (checkboxes of active groups).
 
 ## 6. labmanager-mcp
 
-- New optional config: `LABMGR_MK1_AGENT_NAME` + `LABMGR_MK1_AGENT_KEY`. When both are set, every
-  request (reads and document writes) sends `Authorization: Bearer mk1a.<name>.<key>`; no
-  `/auth/login`, no `X-Service-Token`. When unset, behaviour is unchanged (email/password +
-  service token), so Jarvis/TARS keep working.
+- New optional config: `LABMGR_MK1_AGENT_NAME` + `LABMGR_MK1_AGENT_KEY`, where the key is the
+  full value Mk1 showed (`mk1a.<name>.<secret>`). When both are set, every request (reads and
+  document writes) sends `Authorization: Bearer <key>`; no `/auth/login`, no `X-Service-Token`.
+  At start the MCP refuses a key whose embedded name differs from the configured name (the
+  wrong-connection check), without echoing the key; values are stripped of whitespace. When
+  unset, behaviour is unchanged (email/password + service token), so Jarvis/TARS keep working.
 - A 403 "agent keys cannot use this endpoint" surfaces as: "this agent is not enabled for that
   (ask a Mk1 admin to turn on Lab tools / COA publishing)".
 - Fix while there: reword the `documents_create/revise` description that trips Hermes' injection
