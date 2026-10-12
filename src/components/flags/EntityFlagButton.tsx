@@ -1,4 +1,4 @@
-import { Flag, Plus } from 'lucide-react'
+import { Flag, History, Plus } from 'lucide-react'
 import type { CSSProperties } from 'react'
 import { Button } from '@/components/ui/button'
 import { cn } from '@/lib/utils'
@@ -98,6 +98,16 @@ export function EntityFlagButton({
   const { data } = useEntityFlags(entityType, entityId, { includeDescendants })
   const typesMap = useFlagTypesMap()
   const open = (data ?? []).filter(f => OPEN_STATES.has(f.status))
+  // Resolved / closed flags: invisible before, so an item with only past flags looked never-flagged.
+  const past = (data ?? []).filter(f => !OPEN_STATES.has(f.status))
+  const lastPast = latestFlag(past)
+  const pastLabel = lastPast
+    ? `${past.length} past flag${past.length === 1 ? '' : 's'} · latest ${statusLabel(lastPast.status)} ${formatDateTime(lastPast.updated_at)}. View history.`
+    : ''
+  const openHistory = () =>
+    useUIStore
+      .getState()
+      .openFlagsForEntity(entityType, entityId, { includeDescendants })
   const lg = size === 'lg'
   const watchable = WATCHABLE_ENTITY_TYPES.has(entityType)
 
@@ -123,6 +133,23 @@ export function EntityFlagButton({
             </Button>
           }
         />
+        {past.length > 0 && (
+          <Button
+            type="button"
+            variant="ghost"
+            size={lg ? 'default' : 'sm'}
+            onClick={openHistory}
+            aria-label={pastLabel}
+            title={pastLabel}
+            className={cn(
+              'gap-1 px-2 text-muted-foreground hover:text-foreground',
+              lg && 'h-9'
+            )}
+          >
+            <History className={cn(lg ? 'h-4 w-4' : 'h-3.5 w-3.5')} />
+            {past.length} past
+          </Button>
+        )}
         {watchable && (
           <WatchStateButton
             entityType={entityType}
@@ -141,10 +168,11 @@ export function EntityFlagButton({
   const count = open.length
   const latest = latestFlag(open) ?? dominant
   const subline = `${statusLabel(latest.status)} · ${formatDateTime(latest.updated_at)}`
+  const pastNote = past.length ? ` (+ ${past.length} past)` : ''
   const label =
-    count === 1
+    (count === 1
       ? `Flag (${def.label}) — ${subline}. Open it.`
-      : `${count} open flags — latest ${subline}. View all.`
+      : `${count} open flags — latest ${subline}. View all.`) + pastNote
 
   const handleClick = () => {
     const [first] = open

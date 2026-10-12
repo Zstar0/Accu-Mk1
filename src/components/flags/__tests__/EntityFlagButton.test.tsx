@@ -128,4 +128,60 @@ describe('EntityFlagButton', () => {
     // Pill still present and unchanged.
     expect(screen.getByText('Flagged')).toBeInTheDocument()
   })
+
+  it('only past flags → a history chip with the count, next to Flag', async () => {
+    useEntityFlags.mockReturnValue({
+      data: [f(1, 'blocker', 'resolved'), f(2, 'question', 'closed')],
+    })
+    const { EntityFlagButton } =
+      await import('@/components/flags/EntityFlagButton')
+    render(<EntityFlagButton entityType="sample" entityId="P-0071" />)
+    const chip = screen.getByRole('button', { name: /2 past flags/i })
+    expect(chip).toHaveTextContent('2 past')
+    expect(
+      screen.getByRole('button', { name: /raise a flag on this item/i })
+    ).toBeInTheDocument()
+  })
+
+  it('the history chip opens the flyout filtered to this item', async () => {
+    useEntityFlags.mockReturnValue({ data: [f(1, 'blocker', 'resolved')] })
+    const { EntityFlagButton } =
+      await import('@/components/flags/EntityFlagButton')
+    render(
+      <EntityFlagButton
+        entityType="sample"
+        entityId="P-0071"
+        includeDescendants
+      />
+    )
+    fireEvent.click(screen.getByRole('button', { name: /1 past flag/i }))
+    const s = useUIStore.getState()
+    expect(s.flagsFlyoutOpen).toBe(true)
+    expect(s.flagsEntityFilter).toEqual({
+      type: 'sample',
+      id: 'P-0071',
+      includeDescendants: true,
+    })
+  })
+
+  it('open flags keep the pill and mention past ones in its label', async () => {
+    useEntityFlags.mockReturnValue({
+      data: [f(1, 'blocker', 'open'), f(2, 'blocker', 'resolved')],
+    })
+    const { EntityFlagButton } =
+      await import('@/components/flags/EntityFlagButton')
+    render(<EntityFlagButton entityType="sample" entityId="P-0071" />)
+    expect(
+      screen.getByRole('button', { name: /\+ 1 past/ })
+    ).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: /past flag/i })).toBeNull()
+  })
+
+  it('no flags at all → no history chip', async () => {
+    useEntityFlags.mockReturnValue({ data: [] })
+    const { EntityFlagButton } =
+      await import('@/components/flags/EntityFlagButton')
+    render(<EntityFlagButton entityType="sample" entityId="P-0071" />)
+    expect(screen.queryByRole('button', { name: /past flag/i })).toBeNull()
+  })
 })
