@@ -7,6 +7,8 @@ const MESSAGES: Record<string, string> = {
     'This is a Slack thread and your Slack is not connected in Plain. Reply from Plain or connect Slack there.',
   duplicate_reply: 'Already sent a moment ago.',
   reply_unconfirmed: 'Not confirmed. Check the thread before sending again.',
+  plain_key_missing_permission:
+    'The Plain key in Settings > Integrations is missing a permission for this. Add it to the key in Plain (reply, note, edit or labels).',
   no_plain_seat: 'You need a Plain account under your Mk1 email to do this.',
   invalid_input: 'Plain did not accept that. Check the values and try again.',
   thread_not_found: 'This ticket is no longer on this customer.',

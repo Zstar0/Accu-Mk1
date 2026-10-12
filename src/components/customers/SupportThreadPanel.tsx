@@ -94,6 +94,15 @@ export function SupportThreadPanel({
   const [moreError, setMoreError] = useState<string | null>(null)
   const scroller = useRef<HTMLDivElement>(null)
   const loadedId = d?.thread.id
+  // Set when the viewer sends; the next growth of the conversation scrolls to their new message.
+  const pendingScroll = useRef(false)
+  const entryCount = d?.entries.length ?? 0
+  useEffect(() => {
+    const el = scroller.current
+    if (!el || !pendingScroll.current) return
+    pendingScroll.current = false
+    el.scrollTop = order === 'oldest' ? el.scrollHeight : 0
+  }, [entryCount, order])
   useEffect(() => {
     const el = scroller.current
     if (el && order === 'oldest') el.scrollTop = el.scrollHeight
@@ -189,6 +198,7 @@ export function SupportThreadPanel({
           <section className="flex min-h-0 min-w-0 flex-1 flex-col">
             <div
               ref={scroller}
+              data-testid="ticket-scroller"
               className="min-h-0 flex-1 overflow-y-auto px-4 py-3"
             >
               {q.isLoading && (
@@ -232,7 +242,15 @@ export function SupportThreadPanel({
                 sendAs={seat.data?.name ?? 'you'}
                 initialTab={composer}
                 onClose={() => setComposer(null)}
-                onSubmit={(tab, markdown) => run(tab, { markdown })}
+                onSubmit={async (tab, markdown) => {
+                  pendingScroll.current = true
+                  try {
+                    await run(tab, { markdown })
+                  } catch (e) {
+                    pendingScroll.current = false
+                    throw e
+                  }
+                }}
               />
             )}
             {moreError && (

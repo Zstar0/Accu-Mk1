@@ -15,7 +15,9 @@ from support_plain.seat import Seat
 
 logger = logging.getLogger(__name__)
 _CODES = {"cannot_reply_to_thread": (403, "not_allowed_to_reply"),
-          "missing_user_auth_slack_integration_for_team": (409, "slack_not_connected")}
+          "missing_user_auth_slack_integration_for_team": (409, "slack_not_connected"),
+          # The API key itself lacks the permission (thread:reply, note:create, thread:edit, label:*).
+          "forbidden": (403, "plain_key_missing_permission")}
 
 
 class ActionFailed(Exception):

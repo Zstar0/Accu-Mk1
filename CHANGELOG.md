@@ -11,6 +11,17 @@
 ### Read-only document embeds for Paperclip
 - **`/embed.html` shows one pinned revision** inside an allowed site (set by `MK1_EMBED_FRAME_ANCESTORS`, default none). It renders only when the document id, code, revision and content hash all match, signs in with your own Mk1 login, and shows a clear Draft or Retired badge.
 
+## v1.45.2 - 2026-10-11
+
+### Flags
+- **You can now tell when an item has had flags before.** If every flag on a sample, vial, worksheet or document is resolved or closed, a small "N past" chip appears next to the Flag button; click it to see the whole history. When there are open flags, the colored flag button also notes how many past ones there are.
+
+## v1.45.1 - 2026-10-11
+
+### Support tickets
+- **After you send a reply or note, the conversation scrolls to it.** Only after your own send, so a refresh never moves you while you read.
+- **Clearer error when the Plain key is missing a permission.** Instead of "Plain is unavailable", Mk1 now says the key in Settings > Integrations needs the permission added in Plain (for example reply, note, edit or labels).
+
 ## v1.45.0 - 2026-10-11
 
 ### Support tickets look and work like Plain
