@@ -677,7 +677,7 @@ async def login(
 ):
     """Authenticate user and return JWT access token."""
     user = db.query(User).filter(User.email == form_data.email).first()
-    if not user or not verify_password(form_data.password, user.hashed_password):
+    if not user or user.role == "agent" or not verify_password(form_data.password, user.hashed_password):
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Invalid credentials",
@@ -795,7 +795,7 @@ async def list_users(
     db: Session = Depends(get_db),
 ):
     """List all users (admin only)."""
-    users = db.query(User).order_by(User.created_at.desc()).all()
+    users = db.query(User).filter(User.role != "agent").order_by(User.created_at.desc()).all()
     return [_user_to_read(u) for u in users]
 
 
@@ -857,6 +857,8 @@ async def update_user(
     user = db.query(User).filter(User.id == user_id).first()
     if not user:
         raise HTTPException(status_code=404, detail="User not found")
+    if user.role == "agent":
+        raise HTTPException(status_code=400, detail="Agents are managed in Settings > Agents")
 
     if data.role is not None:
         if data.role not in ("standard", "admin"):
@@ -896,6 +898,8 @@ async def admin_reset_password(
     user = db.query(User).filter(User.id == user_id).first()
     if not user:
         raise HTTPException(status_code=404, detail="User not found")
+    if user.role == "agent":
+        raise HTTPException(status_code=400, detail="Agents are managed in Settings > Agents")
 
     temp_password = _secrets.token_urlsafe(12)
     user.hashed_password = get_password_hash(temp_password)
@@ -23522,7 +23526,7 @@ async def get_worksheets_users(
             SlackDmPrefs.slack_avatar_url,
         )
         .outerjoin(SlackDmPrefs, SlackDmPrefs.user_id == User.id)
-        .where(User.is_active == True)  # noqa: E712
+        .where(User.is_active == True, User.role != "agent")  # noqa: E712
         .order_by(User.email)
     ).all()
     return [
