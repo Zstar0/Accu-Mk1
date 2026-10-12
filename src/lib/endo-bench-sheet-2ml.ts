@@ -11,6 +11,8 @@
  * (a value set by hand bold and underlined, a non-standard step boxed in its
  * colour with its ratio, a step over the 1.5 mL tube or unmakeable boxed in
  * red, bac water one "50 + 950" cell), the summary page and his page fitter.
+ * From 8fae7bb: neighbouring steps with the same non-standard volumes share
+ * one outline.
  * Left out: method-rule marks and the rules list (slice 5), his print hint
  * and auto-print script (Mk1 prints through printHtmlDocument) and his em
  * dashes. Made and MCS print empty for the pen, as on the stock sheet.
@@ -201,12 +203,22 @@ const SHEET2_CSS = [
   'th.aftersteps,td.aftersteps{border-left:.75pt solid #B8C8C8}',
   'td.own{font-weight:700;text-decoration:underline;text-decoration-thickness:.75pt;text-underline-offset:2pt}',
   'td.bad{outline:1.5pt solid #8C2822;outline-offset:-3pt;color:#8C2822}',
-  'td.step.diff{outline:1.5pt solid #41595F;outline-offset:-1.5pt}',
-  'td.step.diff.s1{outline-color:#2F6DB5} td.step.diff.s2{outline-color:#2D7D4F} td.step.diff.s3{outline-color:#A2620F}',
+  // One outline per run of the same non-standard volumes (Dennis 8fae7bb):
+  // every cell draws its sides, the run's first its top, its last its
+  // bottom. Inset shadows add no height. An over-tube step keeps its own red
+  // box and is never part of a run.
+  'td.step.diff.s1{--dc:#2F6DB5} td.step.diff.s2{--dc:#2D7D4F} td.step.diff.s3{--dc:#A2620F}',
+  'td.step.diff:not(.bad){box-shadow:inset 1.5pt 0 0 var(--dc),inset -1.5pt 0 0 var(--dc)}',
+  'td.step.diff.dtop{box-shadow:inset 1.5pt 0 0 var(--dc),inset -1.5pt 0 0 var(--dc),inset 0 1.5pt 0 var(--dc)}',
+  'td.step.diff.dbot{box-shadow:inset 1.5pt 0 0 var(--dc),inset -1.5pt 0 0 var(--dc),inset 0 -1.5pt 0 var(--dc)}',
+  'td.step.diff.dtop.dbot{box-shadow:inset 1.5pt 0 0 var(--dc),inset -1.5pt 0 0 var(--dc),inset 0 1.5pt 0 var(--dc),inset 0 -1.5pt 0 var(--dc)}',
   'td.step.diff .pc:last-child .num{font-weight:700;font-size:11.5pt}',
   'td.step.diff .rat{color:#1F2A2E}',
-  'td.step.bad.diff.s1{outline-color:#8C2822} td.step.bad.diff.s2{outline-color:#8C2822} td.step.bad.diff.s3{outline-color:#8C2822}',
+  'td.step.bad.diff{outline:1.5pt solid #8C2822;outline-offset:-1.5pt}',
   'tr.newtotal td{box-shadow:inset 0 2pt 0 #41595F}',
+  // a box that starts on a total's first row: the group line, then its top just under it
+  'tr.newtotal td.step.diff.dtop{box-shadow:inset 0 2pt 0 #41595F,inset 1.5pt 0 0 var(--dc),inset -1.5pt 0 0 var(--dc),inset 0 3.5pt 0 var(--dc)}',
+  'tr.newtotal td.step.diff.dtop.dbot{box-shadow:inset 0 2pt 0 #41595F,inset 1.5pt 0 0 var(--dc),inset -1.5pt 0 0 var(--dc),inset 0 3.5pt 0 var(--dc),inset 0 -1.5pt 0 var(--dc)}',
   '.tiles.six{gap:10pt;margin:10pt 0 12pt}.tiles.six .tile{padding:8pt 10pt 9pt}.tiles.six dd{font-size:20pt}.tiles.six .tunit{font-size:10pt}',
   '.page.summary.two .cols{margin-bottom:10pt}.page.summary.two .ruleshead{margin-bottom:6pt}',
   '.note.readnote{margin:0 0 10pt;font-size:9.5pt}.note.readnote b{color:#41595F}',
@@ -487,14 +499,36 @@ export function buildEndoBenchSheet2Html(
   const prio = { expedited: 0, high: 0, default: 0 }
   const dueGroups = new Map<string, number>()
 
-  function stepPrint(st: EndoStepPlan, si: number): string {
+  // Each step's run key: its total and its non-standard volumes as printed;
+  // '' for a standard, unmakeable or over-tube step and for bac water.
+  // Neighbours on one page with the same key share one outline, so a new
+  // total, a page edge or other volumes start a new box.
+  const runKeys = ordered.map((r, i) =>
+    formOf(r.sample) === 'bac'
+      ? []
+      : dilutionPlan(r.sample, ctx).steps.map((st, si) =>
+          st.diluentUl !== null &&
+          st.sampleUl &&
+          st.fits &&
+          stepDiffers(st, std[si])
+            ? `${keys[i]}|${fmtUl(st.sampleUl)}+${fmtUl(st.diluentUl)}`
+            : ''
+        )
+  )
+  const PER = ENDO_SHEET_ROWS_PER_PAGE
+
+  function stepPrint(st: EndoStepPlan, si: number, i: number): string {
     const sn = si + 1
     if (st.diluentUl === null || !st.sampleUl)
       return `<td class="step bad s${sn}">cannot be made</td>`
     const d = std[si]
     const odd = d !== undefined && st.ratio !== d.ratio
     const diff = stepDiffers(st, d)
-    const cls = `step${st.own ? ' own' : ''}${st.fits ? '' : ' bad'}${odd ? ' odd' : ''}${diff ? ' diff' : ''} s${sn}`
+    const run = runKeys[i]?.[si] ?? ''
+    const top = run !== '' && (i % PER === 0 || runKeys[i - 1]?.[si] !== run)
+    const bot =
+      run !== '' && (i % PER === PER - 1 || runKeys[i + 1]?.[si] !== run)
+    const cls = `step${st.own ? ' own' : ''}${st.fits ? '' : ' bad'}${odd ? ' odd' : ''}${diff ? ' diff' : ''}${top ? ' dtop' : ''}${bot ? ' dbot' : ''} s${sn}`
     const ratio = escapeHtml(fmt(st.ratio))
     // the note is the ratio alone (Dennis, eb4ee43); "over 1.5 mL" for a step
     // that does not fit its tube
@@ -565,7 +599,7 @@ export function buildEndoBenchSheet2Html(
       lead +
       `<td class="m r vial${waterOwn ? ' own' : ''}">${k.water === null ? '' : escapeHtml(fmt(k.water))}` +
       `${liquid ? '<sup class="lmark">L</sup>' : ''}</td>` +
-      plan.steps.map(stepPrint).join('') +
+      plan.steps.map((st, si) => stepPrint(st, si, i)).join('') +
       ticks
     )
   }

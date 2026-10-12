@@ -100,7 +100,7 @@ describe('buildEndoBenchSheet2Html', () => {
     ).toEqual(['1', '3', '2', '4'])
     expect(html.match(/<tr class="newtotal">/g)).toHaveLength(2)
     // 1:300 makes step 2 a 1:15 (20 + 280): boxed, with its ratio
-    expect(html).toContain('<td class="step odd diff s2">')
+    expect(html).toContain('<td class="step odd diff dtop dbot s2">')
     expect(html).toContain('<span class="rat">1:15</span>')
     // bac water: one "50 + 950" cell across the three steps
     expect(html).toContain('<td class="step bwcell" colspan="3">')
@@ -119,12 +119,14 @@ describe('buildEndoBenchSheet2Html', () => {
       ]),
       { measure }
     )
-    expect(html).toContain('<td class="step own diff s1">')
+    expect(html).toContain('<td class="step own diff dtop dbot s1">')
     expect(html).toContain('<span class="rat">1:10</span>')
     expect(html).toContain('<td class="m r vial own">3</td>')
     expect(html).toContain('<td class="step own bad diff s3">')
     expect(html).toContain('<span class="rat">1:2 &middot; over 1.5 mL</span>')
-    expect(html).toContain('td.step.bad.diff.s3{outline-color:#8C2822}')
+    expect(html).toContain(
+      'td.step.bad.diff{outline:1.5pt solid #8C2822;outline-offset:-1.5pt}'
+    )
     expect(html).toContain(
       'td.step.own .num{font-weight:700;text-decoration:underline'
     )
@@ -169,6 +171,105 @@ describe('buildEndoBenchSheet2Html', () => {
     expect(buildEndoBenchSheet2Html(doc(ten), { measure })).toContain(
       'td{padding:7.0px 5pt}'
     )
+  })
+
+  describe('one outline per run of the same non-standard step (Dennis 8fae7bb)', () => {
+    /** Step `sn`'s cell classes, in print order. */
+    const stepCells = (html: string, sn: number) =>
+      [
+        ...html.matchAll(new RegExp(`<td class="(step[^"]* s${sn})">`, 'g')),
+      ].map(m => m[1])
+    const at300 = (n: number, over: Partial<EndoSample> = {}) =>
+      row(n, { totalDilution: 300, ...over })
+
+    it('draws the top on the first cell, the bottom on the last and only the sides between', () => {
+      const html = buildEndoBenchSheet2Html(
+        doc([at300(1), at300(2), at300(3)]),
+        { measure }
+      )
+      expect(stepCells(html, 2)).toEqual([
+        'step odd diff dtop s2',
+        'step odd diff s2',
+        'step odd diff dbot s2',
+      ])
+      // standard steps are not boxed
+      expect(stepCells(html, 1)).toEqual(['step s1', 'step s1', 'step s1'])
+      // inset shadows, so a box adds no height; no per-cell outline any more
+      expect(html).toContain(
+        'td.step.diff:not(.bad){box-shadow:inset 1.5pt 0 0 var(--dc),inset -1.5pt 0 0 var(--dc)}'
+      )
+      expect(html).toContain(
+        'td.step.diff.dtop{box-shadow:inset 1.5pt 0 0 var(--dc),inset -1.5pt 0 0 var(--dc),inset 0 1.5pt 0 var(--dc)}'
+      )
+      expect(html).toContain(
+        'td.step.diff.dbot{box-shadow:inset 1.5pt 0 0 var(--dc),inset -1.5pt 0 0 var(--dc),inset 0 -1.5pt 0 var(--dc)}'
+      )
+      expect(html).not.toContain('td.step.diff{outline')
+    })
+
+    it('starts a new box where the volumes change', () => {
+      // rows 3 and 4 take 40 uL into step 2: same 1:15, different volumes
+      const own: Partial<EndoSample> = {
+        steps: [null, { sampleUl: 40 }, null],
+      }
+      const html = buildEndoBenchSheet2Html(
+        doc([at300(1), at300(2), at300(3, own), at300(4, own)]),
+        { measure }
+      )
+      expect(stepCells(html, 2)).toEqual([
+        'step odd diff dtop s2',
+        'step odd diff dbot s2',
+        'step own odd diff dtop s2',
+        'step own odd diff dbot s2',
+      ])
+    })
+
+    it('starts a new box at a page edge, and the pages and their rows do not change', () => {
+      const twelve = Array.from({ length: 12 }, (_, i) => at300(i + 1))
+      const html = buildEndoBenchSheet2Html(doc(twelve), { measure })
+      const s2 = stepCells(html, 2)
+      expect(s2[0]).toBe('step odd diff dtop s2')
+      expect(s2.slice(1, 9)).toEqual(Array(8).fill('step odd diff s2'))
+      expect(s2[9]).toBe('step odd diff dbot s2')
+      expect(s2[10]).toBe('step odd diff dtop s2')
+      expect(s2[11]).toBe('step odd diff dbot s2')
+      // guard, measured before the outlines changed: two table pages of 10
+      // and 2 rows at 4 px of padding (ten three-line rows on page 1)
+      const pages = [
+        ...html.matchAll(/<section class="page">.*?<\/section>/g),
+      ].map(m => (m[0].match(/<tr[ >]/g) ?? []).length - 1)
+      expect(pages).toEqual([10, 2])
+      expect(html).toContain('td{padding:4.0px 5pt}')
+    })
+
+    it('starts a new box at a new total, its top just under the group line', () => {
+      // step 1 is 30 + 270 at both totals; the group line still splits them
+      const s1: Partial<EndoSample> = { steps: [{ sampleUl: 30 }, null, null] }
+      const html = buildEndoBenchSheet2Html(doc([row(1, s1), at300(2, s1)]), {
+        measure,
+      })
+      expect(stepCells(html, 1)).toEqual([
+        'step own diff dtop dbot s1',
+        'step own diff dtop dbot s1',
+      ])
+      expect(html).toContain('<tr class="newtotal"><td class="n">2</td>')
+      expect(html).toContain(
+        'tr.newtotal td.step.diff.dtop{box-shadow:inset 0 2pt 0 #41595F,inset 1.5pt 0 0 var(--dc),inset -1.5pt 0 0 var(--dc),inset 0 3.5pt 0 var(--dc)}'
+      )
+    })
+
+    it('keeps an over-tube step in its own red box, out of any run', () => {
+      const over: Partial<EndoSample> = {
+        steps: [null, null, { sampleUl: 800 }],
+      }
+      const html = buildEndoBenchSheet2Html(doc([row(1, over), row(2, over)]), {
+        measure,
+      })
+      expect(stepCells(html, 3)).toEqual([
+        'step own bad diff s3',
+        'step own bad diff s3',
+      ])
+    })
   })
 
   it('shows the same document as paper when previewed', () => {
