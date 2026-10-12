@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## v1.46.0 - 2026-10-12
 
 ### Documents say where they came from
 - **Every revision has a Provenance section** in the document viewer and in embedded views: who asked for it, who or what created it, and which system, task and run it came from. Switching revisions shows that revision's own provenance.
