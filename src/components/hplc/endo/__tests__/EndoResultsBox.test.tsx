@@ -113,6 +113,24 @@ function rowOf(sampleId: string): HTMLElement {
   return row
 }
 
+/** The row's cell under the column whose header starts with `header`. */
+function cellOf(sampleId: string, header: string): HTMLElement {
+  const ix = screen
+    .getAllByRole('columnheader')
+    .findIndex(th => th.textContent?.startsWith(header))
+  const cell = rowOf(sampleId).querySelectorAll('td')[ix]
+  if (ix < 0 || !cell) throw new Error(`no ${header} cell for ${sampleId}`)
+  return cell
+}
+
+/** The three reader cells as [text, red] pairs. */
+function readerCells(sampleId: string): [string, boolean][] {
+  return ['Spike rec.', 'Sample CV', 'Spike CV'].map(h => {
+    const td = cellOf(sampleId, h)
+    return [td.textContent ?? '', td.className.includes('text-red-600')]
+  })
+}
+
 describe('EndoResultsBox', () => {
   beforeEach(() => vi.clearAllMocks())
 
@@ -142,10 +160,18 @@ describe('EndoResultsBox', () => {
     expect(
       within(rowOf('P-0004-S02')).queryByRole('button')
     ).not.toBeInTheDocument()
-    // the Reader cell: spike recovery and the larger CV
-    expect(
-      within(rowOf('P-0004-S02')).getByText('44 % · 3.7')
-    ).toBeInTheDocument()
+    // the reader's three checks, each in its own column, red only on its own failure
+    expect(readerCells('P-0004-S02')).toEqual([
+      ['44', true],
+      ['3.1', false],
+      ['3.7', false],
+    ])
+    // no reader record: the three cells stay empty
+    expect(readerCells('P-0001-S02')).toEqual([
+      ['', false],
+      ['', false],
+      ['', false],
+    ])
   })
 
   it('says under the title what Mk1 reports today, read from the peptide spec tier', async () => {
@@ -157,7 +183,7 @@ describe('EndoResultsBox', () => {
     ).toBeInTheDocument()
   })
 
-  it('shows the larger CV the record carries, and "-" for what it does not', () => {
+  it('shows spike recovery, sample CV and spike CV in their own columns, and "-" for what the record lacks', () => {
     setup([
       endoItem({
         sample_id: 'P-0001-S02',
@@ -167,19 +193,98 @@ describe('EndoResultsBox', () => {
           recovery: null,
           sample_cv: null,
           spike_cv: null,
+          why: ['no spike recovery', 'no sample CV', 'no spike CV'],
         },
       }),
       endoItem({
         sample_id: 'P-0002-S02',
         result_reading: '<0.05',
-        result_reader: { ...invalidReader, recovery: 90, sample_cv: null },
+        result_reader: {
+          ...invalidReader,
+          recovery: 90,
+          sample_cv: 0,
+          spike_cv: null,
+          why: ['no spike CV'],
+        },
       }),
     ])
-    // no CV is not a CV of 0
-    expect(within(rowOf('P-0001-S02')).getByText('- · -')).toBeInTheDocument()
-    expect(
-      within(rowOf('P-0002-S02')).getByText('90 % · 3.7')
-    ).toBeInTheDocument()
+    // a missing number is "-", never red on its own; the row still reads Invalid
+    expect(readerCells('P-0001-S02')).toEqual([
+      ['-', false],
+      ['-', false],
+      ['-', false],
+    ])
+    expect(within(rowOf('P-0001-S02')).getByText('Invalid')).toBeInTheDocument()
+    // a CV of 0 is a CV of 0, not a missing one
+    expect(readerCells('P-0002-S02')).toEqual([
+      ['90', false],
+      ['0', false],
+      ['-', false],
+    ])
+    expect(within(rowOf('P-0002-S02')).getByText('Invalid')).toBeInTheDocument()
+  })
+
+  it("heads and colours the reader columns with the method's limits, not the file's or the defaults", () => {
+    const method = endoWorksheet([]).endo_method
+    if (!method) throw new Error('the fixture worksheet has a method')
+    // the file's own limits (rec_min 50, rec_max 200, cv_limit 25) would pass all of these
+    const rec = (over: Partial<EndoReaderRecord>): EndoReaderRecord => ({
+      ...invalidReader,
+      ...over,
+    })
+    setup(
+      [
+        endoItem({
+          sample_id: 'P-0001-S02',
+          result_reading: '<0.05',
+          result_reader: rec({ recovery: 55, sample_cv: 22, spike_cv: 20 }),
+        }),
+        endoItem({
+          sample_id: 'P-0002-S02',
+          result_reading: '<0.05',
+          result_reader: rec({ recovery: 60, sample_cv: 20, spike_cv: 21 }),
+        }),
+        endoItem({
+          sample_id: 'P-0003-S02',
+          result_reading: '<0.05',
+          result_reader: rec({ recovery: 150.5, sample_cv: 1, spike_cv: 2 }),
+        }),
+      ],
+      false,
+      {
+        endo_method: {
+          ...method,
+          run_parameters: {
+            endotoxin: {
+              spike_recovery_min_pct: 60,
+              spike_recovery_max_pct: 150,
+              cv_limit_pct: 20,
+            },
+          },
+        },
+      }
+    )
+    const heads = screen.getAllByRole('columnheader').map(th => th.textContent)
+    expect(heads).toContain('Spike rec.%, valid 60-150')
+    expect(heads).toContain('Sample CV%, ≤ 20')
+    expect(heads).toContain('Spike CV%, ≤ 20')
+    expect(heads.some(h => h?.startsWith('Reader'))).toBe(false)
+    // under the minimum and over the CV limit are red; at a limit is not
+    expect(readerCells('P-0001-S02')).toEqual([
+      ['55', true],
+      ['22', true],
+      ['20', false],
+    ])
+    expect(readerCells('P-0002-S02')).toEqual([
+      ['60', false],
+      ['20', false],
+      ['21', true],
+    ])
+    expect(readerCells('P-0003-S02')).toEqual([
+      ['150.5', true],
+      ['1', false],
+      ['2', false],
+    ])
   })
 
   it('flags a typed reading that differs from the reader, and keeps an invalid test Invalid', () => {
@@ -337,11 +442,14 @@ describe('EndoResultsBox', () => {
         },
       }
     )
-    await userEvent
-      .setup()
-      .hover(within(rowOf('P-0001-S02')).getByText('90 % · 3.7'))
+    // the whole record shows on each of the three cells
+    const user = userEvent.setup()
+    await user.hover(within(cellOf('P-0001-S02', 'Spike CV')).getByText('3.7'))
     expect(await screen.findByRole('tooltip')).toHaveTextContent(
       'Valid: spike recovery 60-150 %, CV under 20 %'
+    )
+    expect(screen.getByRole('tooltip')).toHaveTextContent(
+      'Spike recovery 90 % · sample CV 3.1 % · spike CV 3.7 %'
     )
   })
 

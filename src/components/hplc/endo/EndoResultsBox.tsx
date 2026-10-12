@@ -249,10 +249,16 @@ function ResultRow({
   // when the two disagree (the record's validity still governs the verdict).
   const typed = parseReading(s.reading)
   const exported = rd ? parseReading(rd.result) : null
-  // The larger CV the record carries; none is "-", never a CV of 0.
-  const cvs = [rd?.sample_cv, rd?.spike_cv].filter(
-    (v): v is number => v != null
-  )
+  // The reader's three checks (Dennis 514247f), each red only when it fails
+  // its own limit, read from the method as reader_validity does. A missing
+  // number is "-" and not red here; the record's validity still makes the
+  // row Invalid.
+  const p = ctx.params
+  const checks: [number | null | undefined, (v: number) => boolean][] = [
+    [rd?.recovery, v => v < p.spikeRecoveryMinPct || v > p.spikeRecoveryMaxPct],
+    [rd?.sample_cv, v => v > p.cvLimitPct],
+    [rd?.spike_cv, v => v > p.cvLimitPct],
+  ]
   const readerDiffers =
     rd !== null &&
     typed !== null &&
@@ -326,18 +332,19 @@ function ResultRow({
           </div>
         )}
       </td>
-      <Calc
-        tip={tips.reader}
-        className={
-          rd && !rd.valid
-            ? 'font-semibold !text-red-600 dark:!text-red-400'
-            : ''
-        }
-      >
-        {rd
-          ? `${rd.recovery == null ? '-' : `${rd.recovery} %`} · ${cvs.length ? fmt(Math.max(...cvs)) : '-'}`
-          : ''}
-      </Calc>
+      {checks.map(([v, fails], i) => (
+        <Calc
+          key={i}
+          tip={tips.reader}
+          className={
+            v != null && fails(v)
+              ? 'font-semibold !text-red-600 dark:!text-red-400'
+              : ''
+          }
+        >
+          {rd ? (v == null ? '-' : fmt(v)) : ''}
+        </Calc>
+      ))}
       <Calc tip={tips.euPerMg}>{bw ? '' : eu(rs.lt, rs.euPerMg)}</Calc>
       <Calc tip={tips.lod}>{fmt(k.lod)}</Calc>
       <Calc tip={tips.loq}>
@@ -567,7 +574,16 @@ export function EndoResultsBox({
                 <span className={UNIT}>EU/mL on the MCS, factor 1</span>
               </th>
               <th className={`${TH} ${TH_CALC}`}>
-                Reader<span className={UNIT}>spike rec. · CV</span>
+                Spike rec.
+                <span className={UNIT}>
+                  %, valid {p.spikeRecoveryMinPct}-{p.spikeRecoveryMaxPct}
+                </span>
+              </th>
+              <th className={`${TH} ${TH_CALC}`}>
+                Sample CV<span className={UNIT}>%, ≤ {p.cvLimitPct}</span>
+              </th>
+              <th className={`${TH} ${TH_CALC}`}>
+                Spike CV<span className={UNIT}>%, ≤ {p.cvLimitPct}</span>
               </th>
               <th className={`${TH} ${TH_CALC}`}>EU/mg</th>
               <th className={`${TH} ${TH_CALC}`}>
