@@ -382,4 +382,35 @@ describe('SupportThreadPanel actions', () => {
     ).toBeInTheDocument()
     expect(screen.queryByText(/Replying needs a Plain account/)).toBeNull()
   })
+
+  it('a flag link without access says so, with no made-up header', async () => {
+    vi.mocked(support.getSupportThread).mockReset()
+    vi.mocked(support.getSupportThread).mockRejectedValue(
+      new CrmError(403, null)
+    )
+    vi.mocked(support.getSupportMe).mockResolvedValue({
+      has_seat: false,
+      plain_user_id: null,
+      name: null,
+      email: null,
+      unavailable: false,
+    })
+    const qc = new QueryClient({
+      defaultOptions: { queries: { retry: false } },
+    })
+    render(
+      <QueryClientProvider client={qc}>
+        <SupportThreadPanel
+          customerKey="wc:1"
+          thread={{ ...thread, ref: '', title: '', plain_url: '' }}
+          onClose={vi.fn()}
+        />
+      </QueryClientProvider>
+    )
+    expect(
+      await screen.findByText(/don't have access to this ticket/)
+    ).toBeInTheDocument()
+    expect(screen.queryByText('Open in Plain')).toBeNull()
+    expect(screen.queryByText(/normal/)).toBeNull()
+  })
 })

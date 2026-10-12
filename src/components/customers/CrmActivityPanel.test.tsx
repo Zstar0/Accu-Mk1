@@ -60,4 +60,24 @@ describe('CrmActivityPanel', () => {
     expect(await screen.findByText('Re: COA timing')).toBeInTheDocument()
     expect(screen.getByText(/because you're on flag #7/)).toBeInTheDocument()
   })
+
+  it('a flag link without access says so', async () => {
+    vi.mocked(crm.getCrmActivity).mockReset()
+    vi.mocked(crm.getCrmActivity).mockRejectedValue(new crm.CrmError(403, null))
+    const qc = new QueryClient({
+      defaultOptions: { queries: { retry: false } },
+    })
+    render(
+      <QueryClientProvider client={qc}>
+        <CrmActivityPanel
+          customerKey="wc:1"
+          item={{ ...full, title: '', lead_name: '' }}
+          onClose={vi.fn()}
+        />
+      </QueryClientProvider>
+    )
+    expect(
+      await screen.findByText(/don't have access to this item/)
+    ).toBeInTheDocument()
+  })
 })

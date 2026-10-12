@@ -8,7 +8,7 @@ import {
 } from '@/components/ui/sheet'
 import { EntityFlagButton } from '@/components/flags/EntityFlagButton'
 import { ResizableSheetContent } from './ResizableSheetContent'
-import { getCrmActivity, type CrmItem } from '@/lib/api-crm'
+import { CrmError, getCrmActivity, type CrmItem } from '@/lib/api-crm'
 
 const when = (iso: string | null | undefined) =>
   iso
@@ -40,6 +40,7 @@ export function CrmActivityPanel({
   const d = q.data
   // A flag link opens with a bare item; the detail fills the header in.
   const shown = d ?? item
+  const noAccess = q.error instanceof CrmError && q.error.status === 403
   return (
     <Sheet open={item !== null} onOpenChange={o => !o && onClose()}>
       <ResizableSheetContent className="overflow-y-auto">
@@ -65,7 +66,11 @@ export function CrmActivityPanel({
           <Loader2 className="mx-auto mt-6 h-5 w-5 animate-spin text-muted-foreground" />
         )}
         {q.isError && (
-          <p className="mt-4 text-sm text-red-500">Could not load this item.</p>
+          <p className="mt-4 px-4 text-sm text-red-500">
+            {noAccess
+              ? "You don't have access to this item. Ask to be added to a flag about it."
+              : 'Could not load this item.'}
+          </p>
         )}
         {d && (
           <div className="mt-4 flex flex-col gap-4 px-4 text-sm">
