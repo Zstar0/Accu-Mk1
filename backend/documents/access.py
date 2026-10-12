@@ -63,6 +63,12 @@ def visible_space_ids(db: Session, user):
     return select(DocumentSpace.id).where(cond)
 
 
+def visible_space_slugs(db: Session, user) -> frozenset:
+    """Slugs of the spaces `user` can see: an agent user's write allow-list (spec 2026-10-12 3.5)."""
+    return frozenset(db.execute(select(DocumentSpace.slug)
+                                .where(DocumentSpace.id.in_(visible_space_ids(db, user)))).scalars())
+
+
 def require_view(db: Session, user, doc: Document) -> None:
     if not can_view_document(db, user, doc):
         # Same text service.get_document raises for a missing id (spec 5.2).
