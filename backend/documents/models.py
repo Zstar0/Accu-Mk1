@@ -147,6 +147,25 @@ class Document(Base):
     source_session: Mapped[Optional[str]] = mapped_column(String(200), nullable=True)
     created_by_user_id: Mapped[Optional[int]] = mapped_column(
         ForeignKey("users.id", ondelete="SET NULL"), nullable=True)
+    # Provenance (documents/provenance.py). Server-owned, never from the request body:
+    # creator_kind user|agent|service + creator_ref (user id, agent name, service id),
+    # the requester when Mk1 verified it, and who rewrote a draft's bytes in place.
+    # NULL creator_kind = written before provenance; read-time derivation, no backfill.
+    creator_kind: Mapped[Optional[str]] = mapped_column(String(20), nullable=True)
+    creator_ref: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
+    requested_by_user_id: Mapped[Optional[int]] = mapped_column(
+        ForeignKey("users.id", ondelete="SET NULL"), nullable=True)
+    content_edited_by_user_id: Mapped[Optional[int]] = mapped_column(
+        ForeignKey("users.id", ondelete="SET NULL"), nullable=True)
+    content_edited_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
+    # Where it came from: caller-ASSERTED unless source_verified (in-process Mk1 writers only).
+    source_system: Mapped[Optional[str]] = mapped_column(String(40), nullable=True)
+    source_verified: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False,
+                                                  server_default="false")
+    source_record_type: Mapped[Optional[str]] = mapped_column(String(40), nullable=True)
+    source_record_id: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
+    source_record_label: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
+    source_run_id: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
     content_type: Mapped[str] = mapped_column(String(100), nullable=False,
                                               default="text/html; charset=utf-8")
     storage_key: Mapped[str] = mapped_column(String(500), nullable=False)

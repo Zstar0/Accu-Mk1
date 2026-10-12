@@ -77,6 +77,53 @@ class SpaceGrantsOut(BaseModel):
     group_ids: List[int]
 
 
+class ProvenanceCreator(BaseModel):
+    kind: str                 # user | agent | service | unknown
+    id: Optional[str] = None  # user id, agent name or service id; None when unknown
+    label: str
+    verified: bool            # resolved from the credential (False only for unknown)
+
+
+class ProvenanceRequester(BaseModel):
+    label: str
+    user_id: Optional[int] = None
+    verified: bool            # True only when Mk1 resolved the login itself
+
+
+class ProvenanceSource(BaseModel):
+    system: str
+    system_label: str
+    verified: bool            # False = reported by the caller
+    record_type: Optional[str] = None
+    record_id: Optional[str] = None
+    record_label: Optional[str] = None
+    run_id: Optional[str] = None
+
+
+class ProvenanceContentEdit(BaseModel):
+    by: str
+    at: datetime
+
+
+class DocumentProvenance(BaseModel):
+    version: int = 1
+    creator: ProvenanceCreator
+    requested_by: Optional[ProvenanceRequester] = None
+    source: Optional[ProvenanceSource] = None
+    content_edited: Optional[ProvenanceContentEdit] = None
+
+
+class ProvenanceIn(BaseModel):
+    """Caller-ASSERTED origin of a new revision. Identity and verification are
+    server-owned and are not fields here; any other key is a 422."""
+    model_config = ConfigDict(extra="forbid")
+    source_system: Optional[str] = None
+    source_record_type: Optional[str] = None
+    source_record_id: Optional[str] = None
+    source_record_label: Optional[str] = None
+    source_run_id: Optional[str] = None
+
+
 class DocumentOut(BaseModel):
     id: int
     code: str
@@ -106,6 +153,7 @@ class DocumentOut(BaseModel):
     updated_at: datetime
     revision_count: int = 1
     open_comment_count: int = 0
+    provenance: DocumentProvenance  # of THIS revision; each revision carries its own
 
 
 class DocumentDetail(DocumentOut):
@@ -130,6 +178,7 @@ class DocumentCreate(BaseModel):
     code: Optional[str] = None           # existing code => next revision
     author: Optional[str] = None
     source_session: Optional[str] = None
+    provenance: Optional[ProvenanceIn] = None
     effective_date: Optional[date] = None
     activate: bool = True
 

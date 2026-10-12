@@ -172,9 +172,11 @@ def ensure_space_and_category(db):
 
 
 def publish(db, *, review: dict, customer_key: str, customer_name: str, author: str | None, run_id: int,
-            model: str, lookups: int, cost_usd: float, metric_cards: list[dict], code: str | None) -> tuple[int, str]:
+            model: str, lookups: int, cost_usd: float, metric_cards: list[dict], code: str | None,
+            requested_by_user_id: int | None = None) -> tuple[int, str]:
     from datetime import datetime, timezone
 
+    from documents.provenance import source_columns
     from documents.service import create_document
     space, category = ensure_space_and_category(db)
     html = render_html(review, customer_name=customer_name, customer_key=customer_key,
@@ -184,7 +186,12 @@ def publish(db, *, review: dict, customer_key: str, customer_name: str, author: 
         db, title=f"Customer review: {customer_name}", html=html, category=category,
         description=f"AI review {_marker(customer_key)} · {model} · {lookups} lookups · ${cost_usd:.2f}",
         code=code, author=author, source_session=f"ai-review-run-{run_id}",
-        space=None if code else space)  # a revision stays wherever an admin moved the document
+        space=None if code else space,  # a revision stays wherever an admin moved the document
+        # In-process, so Mk1 itself knows the origin: verified, unlike any HTTP caller's claim.
+        provenance={"creator_kind": "service", "creator_ref": "ai-review",
+                    "requested_by_user_id": requested_by_user_id,
+                    **source_columns({"source_system": "accumk1", "source_record_type": "ai_review_run",
+                                      "source_record_id": str(run_id)}, verified=True)})
     return doc.id, doc.code
 
 
