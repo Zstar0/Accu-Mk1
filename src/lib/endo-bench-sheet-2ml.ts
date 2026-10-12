@@ -168,7 +168,7 @@ export function buildEndoSheet2Doc(
 /* ---------------- the sheet ---------------- */
 
 // Dennis's 2 mL additions to the sheet CSS (buildPrintDoc at 5ef2a62), after
-// the stock SHEET_CSS. The last rule is Mk1's: spec 7 boxes an over-tube
+// the stock SHEET_CSS. td.step.bad.diff is Mk1's: spec 7 boxes an over-tube
 // step in red even when it is also off the standard.
 const SHEET2_CSS = [
   'td.r,th.r{text-align:center}',
@@ -499,21 +499,26 @@ export function buildEndoBenchSheet2Html(
   const prio = { expedited: 0, high: 0, default: 0 }
   const dueGroups = new Map<string, number>()
 
-  // Each step's run key: its total and its non-standard volumes as printed;
-  // '' for a standard, unmakeable or over-tube step and for bac water.
-  // Neighbours on one page with the same key share one outline, so a new
-  // total, a page edge or other volumes start a new box.
-  const runKeys = ordered.map((r, i) =>
-    formOf(r.sample) === 'bac'
-      ? []
-      : dilutionPlan(r.sample, ctx).steps.map((st, si) =>
-          st.diluentUl !== null &&
-          st.sampleUl &&
-          st.fits &&
-          stepDiffers(st, std[si])
-            ? `${keys[i]}|${fmtUl(st.sampleUl)}+${fmtUl(st.diluentUl)}`
-            : ''
-        )
+  // Each row's plan, once (bac water's has no steps).
+  const printed = ordered.map(r => ({ r, plan: dilutionPlan(r.sample, ctx) }))
+
+  /**
+   * A step's box (off the standard: Dennis's `diff`) and its run key: its
+   * total and its volumes as printed; '' when it cannot join a run (standard,
+   * unmakeable or over the tube, which keeps its own red box). Neighbours on
+   * one page with the same key share one outline, so a new total, a page
+   * edge or other volumes start a new box.
+   */
+  function boxOf(st: EndoStepPlan, si: number, i: number) {
+    const diff = stepDiffers(st, std[si])
+    const run =
+      diff && st.fits && st.diluentUl !== null && st.sampleUl
+        ? `${keys[i]}|${fmtUl(st.sampleUl)}+${fmtUl(st.diluentUl)}`
+        : ''
+    return { diff, run }
+  }
+  const runKeys = printed.map(({ plan }, i) =>
+    plan.steps.map((st, si) => boxOf(st, si, i).run)
   )
   const PER = ENDO_SHEET_ROWS_PER_PAGE
 
@@ -523,8 +528,7 @@ export function buildEndoBenchSheet2Html(
       return `<td class="step bad s${sn}">cannot be made</td>`
     const d = std[si]
     const odd = d !== undefined && st.ratio !== d.ratio
-    const diff = stepDiffers(st, d)
-    const run = runKeys[i]?.[si] ?? ''
+    const { diff, run } = boxOf(st, si, i)
     const top = run !== '' && (i % PER === 0 || runKeys[i - 1]?.[si] !== run)
     const bot =
       run !== '' && (i % PER === PER - 1 || runKeys[i + 1]?.[si] !== run)
@@ -545,7 +549,11 @@ export function buildEndoBenchSheet2Html(
     )
   }
 
-  function rowPrint(r: EndoSheet2Row, i: number): string {
+  function rowPrint(
+    r: EndoSheet2Row,
+    plan: ReturnType<typeof dilutionPlan>,
+    i: number
+  ): string {
     const s = r.sample
     const k = prep2Check(s, ctx)
     const pk = priorityKey(r.priority)
@@ -583,7 +591,6 @@ export function buildEndoBenchSheet2Html(
         ticks
       )
     }
-    const plan = dilutionPlan(s, ctx)
     tally.tubes += plan.steps.length
     if (plan.total !== null) {
       tally.tris += plan.steps[0]?.diluentUl ?? 0
@@ -605,7 +612,7 @@ export function buildEndoBenchSheet2Html(
   }
 
   // Rows render first: the summary below reads what they counted.
-  const body = ordered.map(rowPrint)
+  const body = printed.map(({ r, plan }, i) => rowPrint(r, plan, i))
   const pages: string[][] = []
   const rowPages: EndoSheet2Row[][] = []
   for (let i = 0; i < ordered.length; i += ENDO_SHEET_ROWS_PER_PAGE) {

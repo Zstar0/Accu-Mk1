@@ -148,7 +148,7 @@ function workedLines(
       ? null
       : [
           rd.valid
-            ? `Valid: spike recovery ${p.spikeRecoveryMinPct}-${p.spikeRecoveryMaxPct} %, CV under ${p.cvLimitPct} %`
+            ? `Valid: spike recovery ${p.spikeRecoveryMinPct}-${p.spikeRecoveryMaxPct} %, CV at most ${p.cvLimitPct} %`
             : `INVALID: ${why}`,
           `Spike recovery ${rd.recovery ?? '-'} % · sample CV ${rd.sample_cv ?? '-'} % · spike CV ${rd.spike_cv ?? '-'} %`,
           `Test ${rd.test_id} · ${rd.reader ?? '-'} (${rd.slot ?? '-'})`,

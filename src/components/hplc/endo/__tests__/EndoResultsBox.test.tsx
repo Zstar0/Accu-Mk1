@@ -249,6 +249,11 @@ describe('EndoResultsBox', () => {
           result_reading: '<0.05',
           result_reader: rec({ recovery: 150.5, sample_cv: 1, spike_cv: 2 }),
         }),
+        endoItem({
+          sample_id: 'P-0004-S02',
+          result_reading: '<0.05',
+          result_reader: rec({ recovery: 150, sample_cv: 1, spike_cv: 2 }),
+        }),
       ],
       false,
       {
@@ -282,6 +287,12 @@ describe('EndoResultsBox', () => {
     ])
     expect(readerCells('P-0003-S02')).toEqual([
       ['150.5', true],
+      ['1', false],
+      ['2', false],
+    ])
+    // at the maximum is inside the range
+    expect(readerCells('P-0004-S02')).toEqual([
+      ['150', false],
       ['1', false],
       ['2', false],
     ])
@@ -446,7 +457,7 @@ describe('EndoResultsBox', () => {
     const user = userEvent.setup()
     await user.hover(within(cellOf('P-0001-S02', 'Spike CV')).getByText('3.7'))
     expect(await screen.findByRole('tooltip')).toHaveTextContent(
-      'Valid: spike recovery 60-150 %, CV under 20 %'
+      'Valid: spike recovery 60-150 %, CV at most 20 %'
     )
     expect(screen.getByRole('tooltip')).toHaveTextContent(
       'Spike recovery 90 % · sample CV 3.1 % · spike CV 3.7 %'
