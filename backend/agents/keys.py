@@ -8,7 +8,7 @@ import secrets
 from typing import Optional
 
 PREFIX = "mk1a."
-USERNAME_RE = re.compile(r"^[a-z0-9][a-z0-9_-]{0,39}$")
+USERNAME_RE = re.compile(r"^[a-z0-9][a-z0-9_-]{0,39}\Z")
 EMAIL_DOMAIN = "agent.invalid"  # reserved TLD: never deliverable, never a person's address
 _MIN_SECRET = 40
 

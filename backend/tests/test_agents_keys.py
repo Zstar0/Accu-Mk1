@@ -20,8 +20,9 @@ def test_parse_refuses_malformed_keys():
     from agents import keys
     good = keys.new_secret()
     for bad in ("mk1a.pia", "mk1a..x" + good, "mk1a.Pia." + good, "mk1a.pia.short",
-                "eyJhbGciOiJIUzI1NiJ9.x.y", "", "mk1a.p!a." + good):
+                "eyJhbGciOiJIUzI1NiJ9.x.y", "", "mk1a.p!a." + good, "mk1a.pia\n." + good):
         assert keys.parse(bad) is None, bad
+    assert keys.USERNAME_RE.match("pia\n") is None
     assert not keys.is_agent_key("eyJhbGciOiJIUzI1NiJ9.x.y") and not keys.is_agent_key(None)
 
 
