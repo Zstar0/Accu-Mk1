@@ -121,6 +121,11 @@ the only place that answers "may this agent call this route".
   only if `(request.method, scope["route"].path)` is in the agent's enabled scopes; otherwise
   `403 agent keys cannot use this endpoint`. Every route not listed refuses agents, including all
   routes added later.
+- **Fail closed without a route.** Resolving an agent key when there is no matched route (any
+  direct call `get_current_user(token=..., db=...)` outside FastAPI's dependency injection) is
+  refused. Today's direct callers, all in documents, get explicit agent handling instead
+  (3.5): `documents/comment_routes.py:51`, `documents/routes.py:121`, `:149`, `:182`. The plan
+  re-greps `backend/` for others.
 - A JWT whose `sub` is an agent row is refused (agents never hold a JWT; defence in depth).
 - Admin-only dependencies (`require_admin` and friends) never accept an agent.
 - A boot-time/test assertion checks every template in `AGENT_ROUTES` exists in `app.routes`, so a
@@ -164,16 +169,31 @@ the test in 3.4 pins them.
 `/wizard/senaite/samples/{sample_id}/generate-coa`, `.../generate-vial-coas`, `.../publish-coa`.
 
 Within an allowed route the agent is an ordinary **standard** user: every existing per-route rule
-(ownership, visibility, state machines) applies unchanged.
+(ownership, visibility, state machines) applies unchanged. All lab and COA routes above already
+accept a standard login (`Depends(get_current_user)`, checked).
+
+**SENAITE identity.** Lab and COA routes that call SENAITE use `_get_senaite_auth(user)`: the
+user's own SENAITE password if one is stored, else the shared SENAITE service account. Agents
+never have a SENAITE password, so their SENAITE calls run as that shared account, exactly as the
+current standard-role bot's do today. The switches grant nothing beyond what a standard login
+already reaches; SENAITE's own audit shows the shared account, Mk1's records show the agent.
 
 ### 3.5 Documents: reads, writes, attribution
 
 - **Reads:** `access.can_view_document(db, agent_user, doc)` exactly as for a standard login:
   company spaces plus spaces granted to the agent's groups. Hidden stays 404.
-- **Writes:** `require_document_writer` accepts an `mk1a.` bearer and returns an agent principal.
-  It may create, revise, patch metadata, activate and retire **in spaces it can see** (ruling 2),
-  checked with the same `can_view_space` the reads use. Hidden code = 404, invisible target space
-  = 400, as today for token agents.
+- **Writes: the agent is an `AgentWriter`, never a `User`.** Today every bearer that reaches
+  `documents/routes.py` is an admin (`require_document_writer` returns `require_admin(user)`), and
+  the downstream checks lean on that: `require_document_admin_writer` refuses only `AgentWriter`,
+  the space-move check refuses only `None`/`AgentWriter`, `updated_by = writer.email`, and
+  `_reader_for` returns the user. Returning the agent's `User` row would pass all of them as an
+  admin (draft delete, category/space/grant CRUD, space moves). So for an `mk1a.` bearer,
+  `require_document_writer` (and `_space_reader`, `require_comment_actor`) return
+  `AgentWriter(name=<username>, spaces=<slugs it can see, computed per request>, user_id=<id>)`.
+  Every existing agent deny keeps working unchanged, and `require_document_admin_user` (PUT
+  content) refuses it like any non-login. Net effect: create, revise, patch metadata, activate and
+  retire **in spaces it can see** (ruling 2); hidden code = 404, invisible target space = 400, as
+  today for token agents.
 - **Provenance:** `creator_kind='agent'`, `creator_ref=<username>`, `co_author=<username>`
   (existing readers keep working), `created_by_user_id=<agent user id>`. `requested_by` is never
   verified for an agent (the `author` it sends stays "supplied"). Source fields stay "reported".
@@ -189,7 +209,8 @@ Within an allowed route the agent is an ordinary **standard** user: every existi
   owners, and the other `User` queries audited in the plan. Display-name lookups (comments,
   provenance, flags) still resolve agents, shown with an "agent" tag.
 - Group member pickers **include** agents (tagged) because groups are how an agent gets a
-  restricted space.
+  restricted space. The backend types `role` as `str`, so a third value is safe there; the
+  frontend's role typing is checked in the plan.
 
 ## 4. API (admin login only)
 
@@ -246,8 +267,11 @@ Settings > **Agents** (admins), beside Users and Groups:
 
 ## 9. Testing
 
-- Route matrix: iterate `app.routes`; an agent key is 403 on every route outside its scopes,
-  including all admin routes, and accepted on each listed template. Every listed template exists.
+- Route matrix: iterate `app.routes` and send a **real agent key** to every route (not just
+  inspect dependencies): 403 on every route outside its scopes, including all admin routes and
+  explicitly `DELETE /api/documents/{doc_id}`, category CRUD, space CRUD and grants, `PUT
+  /api/documents/{doc_id}/content`, and `PATCH /api/documents/{doc_id}` with `space_id`; accepted
+  on each listed template. Every listed template exists.
 - Keys: wrong secret, unknown name, inactive agent, rotated-away key all 401, same body; key
   never appears in logs or later responses.
 - Login refuses agents; JWT for an agent row refused; user admin cannot edit/promote agents;
