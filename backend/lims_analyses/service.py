@@ -3882,7 +3882,7 @@ def _serialize_senaite_shape_rows(
     # blend = ~14 keys); bulk-load analysis_service_specs for service_ids and
     # apply the precedence in Python if this listing ever shows up in a profile.
     from coa.identity_verdict import identity_wire_result
-    from coa.spec_rules import display_spec_fields, normalize_matrix
+    from coa.spec_rules import display_spec_fields, effective_unit, normalize_matrix
     from models import LimsSample, LimsSubSample
     _vial_pks = {r.lims_sub_sample_pk for r in rows if r.lims_sub_sample_pk}
     _parent_pk_by_vial = dict(db.execute(
@@ -3912,6 +3912,7 @@ def _serialize_senaite_shape_rows(
                 db, keyword=r.keyword, result=r.result_value,
                 analysis_service_id=r.analysis_service_id),
             cache=_spec_cache,
+            unit=effective_unit(r.result_unit, svc.unit if svc else None),
         )
         method_name = None
         if r.method_id and r.method_id in methods_by_id:

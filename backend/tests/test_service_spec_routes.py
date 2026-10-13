@@ -354,3 +354,32 @@ def test_patch_to_informational_requires_explicit_bound_clearing(client, svc):
     body = r.json()
     assert body["rule_kind"] == "informational"
     assert body["max_value"] is None and body["loq"] is None
+
+
+# ── Endo slice 3 (spec 2026-10-12 sections 6 and 8): one active spec per
+# tier AND unit; the index raises the existing duplicate message ───────────
+
+def test_eu_ml_and_eu_vial_rows_stay_active_side_by_side_in_one_tier(client, svc):
+    base = {"rule_kind": "range", "min_value": "0", "matrix": "Peptide"}
+    assert client.post(f"/analysis-services/{svc.id}/specs",
+                       json={**base, "max_value": "5", "unit": "EU/mL"}).status_code == 201
+    assert client.post(f"/analysis-services/{svc.id}/specs",
+                       json={**base, "max_value": "350", "unit": "EU/vial"}).status_code == 201
+    # The same tier and unit in another spelling is a duplicate.
+    r = client.post(f"/analysis-services/{svc.id}/specs",
+                    json={**base, "max_value": "300", "unit": " eu/VIAL "})
+    assert r.status_code == 409
+    assert r.json()["detail"].startswith("an active spec already exists for this tier")
+    assert sorted(s["unit"] for s in client.get(f"/analysis-services/{svc.id}/specs").json()) == [
+        "EU/mL", "EU/vial"]
+
+
+def test_patching_a_unit_into_an_occupied_tier_and_unit_conflicts(client, svc):
+    p = {"rule_kind": "range", "max_value": "1"}
+    client.post(f"/analysis-services/{svc.id}/specs", json={**p, "unit": "EU/mL"})
+    vial_id = client.post(f"/analysis-services/{svc.id}/specs",
+                          json={**p, "unit": "EU/vial"}).json()["id"]
+    r = client.patch(f"/analysis-service-specs/{vial_id}", json={"unit": "eu/ml"})
+    assert r.status_code == 409
+    body = client.get(f"/analysis-services/{svc.id}/specs").json()
+    assert {s["id"]: s["unit"] for s in body}[vial_id] == "EU/vial"

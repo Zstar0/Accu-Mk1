@@ -4669,10 +4669,11 @@ def patch_service_spec(spec_id: int, req: ServiceSpecPatch,
     try:
         db.flush()
     except IntegrityError:
-        # Only reachable via active False -> True: deactivating a row frees
-        # its (service, tier) slot, another row can claim it, and PATCH is
-        # the sole route that can flip a row back to active — colliding
-        # with whatever now occupies that slot.
+        # Two ways in: active False -> True (deactivating a row frees its
+        # (service, tier, unit) slot, another row can claim it, and PATCH is
+        # the sole route that can flip a row back to active), and a unit
+        # change into a slot another active row holds (endo slice 3: the
+        # uniqueness indexes key on the unit as well as the tier).
         db.rollback()
         raise HTTPException(409, "an active spec already exists for this tier — deactivate it first")
     record_spec_change(db, spec, before=before, actor_user_id=current_user.id)

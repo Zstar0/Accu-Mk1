@@ -163,6 +163,36 @@ _ENDO_V2_DDL = (
 )
 
 
+# Endo slice 3 (spec 2026-10-12 section 6): the three spec uniqueness indexes
+# gain the unit, so an EU/mL row and an EU/vial row can be active in one
+# scope. One DO block is one statement, so one transaction: the new indexes
+# are created first and the old names dropped after, and a failure rolls back
+# to the old ones (each new index is looser than the old one it replaces, so
+# it cannot fail where the old one held). Both halves are IF [NOT] EXISTS, so
+# every later boot changes nothing. LAST-BOOT-WINS, as with
+# uq_analysis_service_specs_null_matrix in _run_migrations: an older image
+# booting after this one re-creates the old names from its own list (or logs
+# migration_skipped where a scope already holds rows in two units), and the
+# next boot of this image drops them again. The rollback (spec section 9)
+# deactivates the EU/vial rows before the older image is redeployed.
+# models.AnalysisServiceSpec declares the same names with trim(), which
+# Postgres stores as btrim.
+_SPEC_UNIT_INDEX_SWAP = """DO $$ BEGIN
+    CREATE UNIQUE INDEX IF NOT EXISTS uq_analysis_service_specs_matrix_unit
+        ON analysis_service_specs (analysis_service_id, matrix, lower(btrim(coalesce(unit, ''))))
+        WHERE active AND matrix IS NOT NULL;
+    CREATE UNIQUE INDEX IF NOT EXISTS uq_analysis_service_specs_peptide_unit
+        ON analysis_service_specs (analysis_service_id, peptide_id, lower(btrim(coalesce(unit, ''))))
+        WHERE active AND peptide_id IS NOT NULL;
+    CREATE UNIQUE INDEX IF NOT EXISTS uq_analysis_service_specs_wildcard_unit
+        ON analysis_service_specs (analysis_service_id, lower(btrim(coalesce(unit, ''))))
+        WHERE active AND matrix IS NULL AND peptide_id IS NULL;
+    DROP INDEX IF EXISTS uq_analysis_service_specs_matrix;
+    DROP INDEX IF EXISTS uq_analysis_service_specs_peptide;
+    DROP INDEX IF EXISTS uq_analysis_service_specs_wildcard;
+END $$"""
+
+
 def _run_endo_v2_migrations(bind) -> None:
     """Endo worksheet v2 schema (spec 2026-10-10 section 3.8). Runs AFTER
     create_all: the new FK columns reference consumable_types, which create_all
@@ -2057,15 +2087,8 @@ def _run_migrations():
             )
         )
         """,
-        "CREATE UNIQUE INDEX IF NOT EXISTS uq_analysis_service_specs_matrix "
-        "ON analysis_service_specs (analysis_service_id, matrix) "
-        "WHERE active AND matrix IS NOT NULL",
-        "CREATE UNIQUE INDEX IF NOT EXISTS uq_analysis_service_specs_peptide "
-        "ON analysis_service_specs (analysis_service_id, peptide_id) "
-        "WHERE active AND peptide_id IS NOT NULL",
-        "CREATE UNIQUE INDEX IF NOT EXISTS uq_analysis_service_specs_wildcard "
-        "ON analysis_service_specs (analysis_service_id) "
-        "WHERE active AND matrix IS NULL AND peptide_id IS NULL",
+        # The spec uniqueness indexes come from _SPEC_UNIT_INDEX_SWAP below
+        # (endo slice 3), after the peptide_id column is sure to exist.
         # --- Task 7: activity events, parent-hosted (native parent verification) ---
         # Already-migrated DBs need explicit ALTERs; the CREATE TABLE above
         # only covers fresh installs. All three are idempotent — safe to
@@ -2200,18 +2223,17 @@ def _run_migrations():
                         CHECK (NOT (matrix IS NOT NULL AND peptide_id IS NOT NULL));
             END IF;
         END $$""",
-        "CREATE UNIQUE INDEX IF NOT EXISTS uq_analysis_service_specs_peptide "
-        "ON analysis_service_specs (analysis_service_id, peptide_id) "
-        "WHERE active AND peptide_id IS NOT NULL",
         # The old null_matrix slot must not collide peptide rows with the
         # wildcard: retire it and re-key the wildcard on BOTH columns NULL.
         # DROP IF EXISTS is idempotent; an older image booting later
         # recreates the old index (its list still carries the CREATE) —
         # accepted LAST-BOOT-WINS class, documented here.
         "DROP INDEX IF EXISTS uq_analysis_service_specs_null_matrix",
-        "CREATE UNIQUE INDEX IF NOT EXISTS uq_analysis_service_specs_wildcard "
-        "ON analysis_service_specs (analysis_service_id) "
-        "WHERE active AND matrix IS NULL AND peptide_id IS NULL",
+        # Endo slice 3 (spec section 6): one active spec per scope PER UNIT.
+        # Replaces the peptide and wildcard CREATEs that stood here, and the
+        # matrix one next to CREATE TABLE above, so no boot re-creates an old
+        # name (see _SPEC_UNIT_INDEX_SWAP for the LAST-BOOT-WINS note).
+        _SPEC_UNIT_INDEX_SWAP,
         # --- COA display fields (spec 2026-08-16): all nullable, no backfill ---
         "ALTER TABLE analysis_service_specs ADD COLUMN IF NOT EXISTS loq NUMERIC",
         # Report-only specs (2026-08-22): widen the rule-shape CHECK with the

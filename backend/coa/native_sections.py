@@ -38,7 +38,7 @@ from typing import Optional
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from coa.spec_rules import (SpecRuleError, evaluate, normalize_matrix,
+from coa.spec_rules import (SpecRuleError, effective_unit, evaluate, normalize_matrix,
                             resolve_spec, sample_peptide_id)
 from sub_samples.service import fetch_sample_services
 
@@ -358,7 +358,8 @@ def build_native_sections(db: Session, parent) -> dict:
                     "native_section_blank_unit sample=%s profile=%s keyword=%s",
                     sample_id, prof.key, svc.keyword,
                 )
-            spec = resolve_spec(db, svc.id, matrix, peptide_id=peptide_id)
+            spec = resolve_spec(db, svc.id, matrix, peptide_id=peptide_id,
+                                unit=effective_unit(row.result_unit, svc.unit))
             if spec is None:
                 # Rule 5 (relocated from COABuilder): a result must not print
                 # without a verdict. Names the service AND every tier

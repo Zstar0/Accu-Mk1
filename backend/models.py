@@ -241,15 +241,24 @@ class AnalysisService(Base):
         return f"<AnalysisService(id={self.id}, title='{self.title}')>"
 
 
+# One active spec per scope per unit (endo slice 3, spec 2026-10-12 section
+# 6). trim() here, btrim() in database._SPEC_UNIT_INDEX_SWAP: Postgres stores
+# trim(x) as btrim(x), and SQLite test databases have no btrim.
+_SPEC_UNIT_KEY = text("lower(trim(coalesce(unit, '')))")
+
+
 class AnalysisServiceSpec(Base):
     """Lab-owned pass/fail rule for a native COA row (spec-ownership slice 1,
-    peptide tier added in slice 2).
+    peptide tier added in slice 2, unit added in endo slice 3).
 
     Three tiers per service, in resolution precedence: a peptide-bound row
-    (peptide_id set, matrix NULL — the identity anchor is the peptide FK,
+    (peptide_id set, matrix NULL; the identity anchor is the peptide FK,
     never the keyword), a named-matrix row (matrix set, peptide_id NULL),
-    and the wildcard row (both NULL — applies to every matrix/peptide).
+    and the wildcard row (both NULL, applies to every matrix/peptide).
     matrix and peptide_id are mutually exclusive (ck_analysis_service_specs_tier).
+    Each tier holds one active row per unit (trimmed, case-insensitive, NULL
+    as ""), so an EU/mL row and an EU/vial row stand side by side and
+    coa.spec_rules.resolve_spec picks by the result's unit.
     The identity join is always the FK, never the keyword. Rows are
     deactivated, never deleted; every write goes through
     catalog/service_spec_audit.record_spec_change.
@@ -271,25 +280,25 @@ class AnalysisServiceSpec(Base):
         ),
         # Postgres treats NULLs as distinct in unique indexes, so each tier
         # (named matrix / peptide-bound / both-NULL wildcard) needs its own
-        # partial index — see uq_analysis_service_specs_peptide and _wildcard
-        # below for the other two.
+        # partial index, and each keys on the normalized unit as well (endo
+        # slice 3): one active row per tier per unit.
         Index(
-            "uq_analysis_service_specs_matrix",
-            "analysis_service_id", "matrix",
+            "uq_analysis_service_specs_matrix_unit",
+            "analysis_service_id", "matrix", _SPEC_UNIT_KEY,
             unique=True,
             postgresql_where=text("active AND matrix IS NOT NULL"),
             sqlite_where=text("active AND matrix IS NOT NULL"),
         ),
         Index(
-            "uq_analysis_service_specs_peptide",
-            "analysis_service_id", "peptide_id",
+            "uq_analysis_service_specs_peptide_unit",
+            "analysis_service_id", "peptide_id", _SPEC_UNIT_KEY,
             unique=True,
             postgresql_where=text("active AND peptide_id IS NOT NULL"),
             sqlite_where=text("active AND peptide_id IS NOT NULL"),
         ),
         Index(
-            "uq_analysis_service_specs_wildcard",
-            "analysis_service_id",
+            "uq_analysis_service_specs_wildcard_unit",
+            "analysis_service_id", _SPEC_UNIT_KEY,
             unique=True,
             postgresql_where=text("active AND matrix IS NULL AND peptide_id IS NULL"),
             sqlite_where=text("active AND matrix IS NULL AND peptide_id IS NULL"),
