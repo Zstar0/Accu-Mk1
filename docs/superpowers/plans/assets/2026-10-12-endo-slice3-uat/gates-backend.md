@@ -383,3 +383,41 @@ HAVING count(DISTINCT lower(btrim(coalesce(s.unit, '')))) > 1;
    - **Use `--with-eu-vial`** for UAT.
    - **The preflight may stop it.** It refuses, writing nothing, if testers have since put any chosen native vial on an open worksheet. BW-0010-S01 is the likeliest: it was on the v2 worksheet before `uat_reader.py` removed it. If that happens, swap the named vial in `VIALS`/`FILLS` for a free one.
 5. **Restaged in place.** The restage extracted over the mounted directory rather than `rm -rf` + re-mount, because removing a bind-mounted directory under a running container orphans `/app`. The tree is the same as a clean stage (Section 1).
+
+## Step 5b, retest-row race (final review I-1): PASS
+
+Run at `bf09757b`. That commit's backend change is `0aac44c8`: `_plan` re-reads the vial under `db.refresh(analysis, with_for_update=True)`.
+
+**Staging.** endos3 was restaged in place as in Section 1. No file was deleted since `da5bfc77`. `.staged-from-sha` reads `bf09757b...`. `/app/worksheets_endo_promote.py` matches `git show HEAD:` by sha256 and contains `with_for_update=True`. uvicorn reloaded; health 200; the only `migration_skipped` is the pre-existing review_state constraint. Evidence is in `~/endos3-suites/rehearsal-step5b.txt` (`rehearse.py step5b`).
+
+**Building the retest row, through the app.** The vial is P-0120-S01: native row 3619, promoted in step 5, with parent 3626 `verified` in step 6.
+1. `POST /api/lims-analyses/3619/transitions {kind: retest}`, the retest API (the generic transition endpoint), answered 200. It created retest row **3628**: `retest_of_id 3619`, `unassigned`. Parent 3626 stays `verified`, so the parent already holds a live result.
+2. `PATCH /worksheets/24/items/76 {result_reading: "0.1"}` answered 200. That is the rerun: 0.1 x 250 x 2 = 50 EU/vial.
+3. `GET /worksheets/24` now serves `endo_analysis` 3628 (`unassigned`, native) on item 76.
+
+The sample page's own vial retest (`source-retest`) was not used here. It retracts a `verified` or `parent_to_verify` parent at retest time, so the parent would no longer hold a result.
+
+**The race.** Two forked processes were released by a barrier. Each minted its own token and opened its own connection, then posted `POST /worksheets/24/promote` with item 76: 50 EU/vial, loq 25, lod 0.05.
+
+The first attempt at the harness crashed in both children before the barrier, so no request was sent. The children had inherited the parent's pooled DB connection, and the backend log shows no promote request in that window. Fix: `engine.dispose(close=False)` in each child. The race was then run once.
+
+| Process | Start | End | Answer |
+|---|---|---|---|
+| B | +0.000 s | +0.036 s | 200, promoted, parent **3629** `parent_to_verify` |
+| A | +0.000 s | +0.034 s | 200, refused **"already promoted"** |
+
+A ends before B because B still commits its provenance audit row after `run_promote`'s commit releases the lock.
+
+**SQL counts.** Parent rows of service 234 on P-0120, by state:
+
+| | Parent rows by state | `endo_worksheet_promoted` rows |
+|---|---|---|
+| Before | `{verified: 1}` (3626) | 3 |
+| After | `{parent_to_verify: 1, retracted: 1}` | 4 |
+
+- **Exactly one new parent row,** 3629: 50 EU/vial, loq 25, lod 0.05, method 21. It is the only live parent row.
+- **The old parent is superseded once.** 3626 is `retracted`, with one retract transition: "superseded by retest promotion; promoted from worksheet WS-24 row P-0120-S01". The losing request did not retract the winner's fresh parent.
+- **Exactly one new audit row.**
+- **The retest row** 3628 is `promoted`, value 50, `retest_of_id` 3619.
+
+**Logs.** In the run window, the backend log shows two `POST /worksheets/24/promote` at 200, with no 500, no traceback and no `endo_worksheet_promote_failed`. The Postgres log shows no error, no duplicate-key violation and no deadlock. Step 5's first-attempt race was caught by the unique index; this one never reached it.
