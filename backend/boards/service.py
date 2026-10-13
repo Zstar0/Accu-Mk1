@@ -58,6 +58,15 @@ def open_flag_count(db: Session, node_ids: Iterable[int]) -> int:
         FlagFlag.status.in_(OPEN_STATES))).scalar_one())
 
 
+def open_board_flag_count(db: Session, board_id: int) -> int:
+    """Open flags anchored on the board itself (entity_type 'board', spec 14 slice 4d)."""
+    from flags.catalog import OPEN_STATES
+    from flags.models import FlagFlag
+    return int(db.execute(select(func.count()).select_from(FlagFlag).where(
+        FlagFlag.entity_type == "board", FlagFlag.entity_id == str(board_id),
+        FlagFlag.status.in_(OPEN_STATES))).scalar_one())
+
+
 # --- boards ---------------------------------------------------------------------
 
 def list_boards(db: Session, user) -> list[Board]:
@@ -108,9 +117,9 @@ def delete_board(db: Session, user, slug: str) -> None:
     board = get_board(db, user, slug)
     _require_admin(user)
     node_ids = list(db.execute(select(BoardNode.id).where(BoardNode.board_id == board.id)).scalars())
-    n = open_flag_count(db, node_ids)
+    n = open_flag_count(db, node_ids) + open_board_flag_count(db, board.id)
     if n:
-        raise ConflictError(f"board has {n} open flag(s) on its nodes; resolve them first")
+        raise ConflictError(f"board has {n} open flag(s); resolve them first")
     # Explicit cascade so SQLite tests and Postgres behave the same (spec §14).
     db.query(BoardEdge).filter(BoardEdge.board_id == board.id).delete()
     db.query(BoardNode).filter(BoardNode.board_id == board.id).update({BoardNode.parent_id: None})

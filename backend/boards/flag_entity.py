@@ -164,3 +164,111 @@ def register_board_node() -> None:
                     snapshot=_snapshot,
                     audience=_audience,
                     must_exist=True)
+
+
+# --- the board itself as an anchor (spec 14, slice 4d) ------------------------------
+
+DELETED_BOARD_LABEL = "Deleted board"
+
+
+def _load_board(db: Session, eid: str):
+    from boards.models import Board
+    if db is None or not _ID_RE.fullmatch(str(eid)):
+        return None
+    return db.get(Board, int(eid))
+
+
+def _board_ctx(board) -> dict:
+    return {"label": board.name, "sample_id": None, "analyses": [], "lot": None,
+            "deep_link": {"kind": "board", "id": board.slug},
+            "board_slug": board.slug, "node_kind": None}
+
+
+def _board_label(db, eid) -> str:
+    board = _load_board(db, eid)
+    return board.name if board else DELETED_BOARD_LABEL
+
+
+def _board_context(db, eid) -> Optional[dict]:
+    board = _load_board(db, eid)
+    return _board_ctx(board) if board else None
+
+
+def _board_contexts(db, eids) -> dict:
+    from boards.models import Board
+    ids = [int(e) for e in eids if _ID_RE.fullmatch(str(e))]
+    if not ids:
+        return {}
+    rows = db.execute(select(Board).where(Board.id.in_(ids))).scalars().all()
+    return {str(b.id): _board_ctx(b) for b in rows}
+
+
+def _board_can_raise(db, user, eid) -> bool:
+    from boards.access import can_edit_board, can_view_board
+    board = _load_board(db, eid)
+    if board is None or not can_view_board(db, user, board):
+        return False  # existence is never confirmed (spec 9)
+    return can_edit_board(db, user, board)
+
+
+def _board_can_view(db, user, eid) -> bool:
+    from boards.access import can_view_board
+    from groups.access import is_admin
+    board = _load_board(db, eid)
+    if board is None:
+        return is_admin(user)  # orphaned anchor: fail closed
+    return can_view_board(db, user, board)
+
+
+def _board_visible_ids(db, user):
+    from boards.access import visible_board_ids
+    from boards.models import Board
+    from groups.access import is_admin
+    if is_admin(user):
+        return None
+    return select(cast(Board.id, String)).where(Board.id.in_(visible_board_ids(db, user)))
+
+
+def _board_search(db, user, q) -> list:
+    from boards.access import visible_board_ids
+    from boards.models import Board
+    from flags.seams import _ilike_prefix
+    pattern = _ilike_prefix(str(q))
+    rows = db.execute(select(Board).where(Board.id.in_(visible_board_ids(db, user)),
+                                          Board.name.ilike(pattern, escape="\\"))
+                      .order_by(Board.name).limit(10)).scalars().all()
+    return [{"entity_id": str(b.id), "label": b.name} for b in rows]
+
+
+def _board_snapshot(db, eid) -> Optional[dict]:
+    board = _load_board(db, eid)
+    return {"board": board.slug} if board else None
+
+
+def _board_audience(db, eid) -> Optional[dict]:
+    from boards.models import BoardGrant
+    board = _load_board(db, eid)
+    if board is None:
+        return {"groups": []}
+    if board.visibility == "company":
+        return None
+    gids = db.execute(select(BoardGrant.group_id).where(BoardGrant.board_id == board.id)
+                      .order_by(BoardGrant.group_id)).scalars().all()
+    return {"groups": [int(g) for g in gids]}
+
+
+def register_board() -> None:
+    from flags.seams import register_entity
+    register_entity("board",
+                    label=_board_label,
+                    deep_link=lambda eid: "/#boards/board",
+                    can_flag=lambda user, eid: True,   # never consulted: can_raise wins
+                    can_raise=_board_can_raise,
+                    can_view=_board_can_view,
+                    visible_entity_ids=_board_visible_ids,
+                    context=_board_context,
+                    contexts=_board_contexts,
+                    search_scoped=_board_search,
+                    snapshot=_board_snapshot,
+                    audience=_board_audience,
+                    must_exist=True)
