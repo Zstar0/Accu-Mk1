@@ -13,7 +13,7 @@ from unittest.mock import MagicMock
 
 import pytest
 from fastapi.testclient import TestClient
-from sqlalchemy import create_engine, select
+from sqlalchemy import create_engine, select, text
 from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import StaticPool
 
@@ -569,6 +569,64 @@ def test_a_later_rows_refusal_keeps_an_earlier_rows_audit(client, db, monkeypatc
     db.expire_all()
     audits = db.query(AuditLog).filter(AuditLog.operation == "endo_worksheet_promoted").all()
     assert [a.details["item_id"] for a in audits] == [first_id]
+
+
+# --- final review I-1: two requests promoting one row at once -----------------
+
+def test_plan_rereads_the_vial_under_a_row_lock_before_its_state_checks(client, db, monkeypatch):
+    """_plan re-reads the vial with SELECT ... FOR UPDATE before it judges
+    the state, so a request that waited on the lock judges the row as the
+    winner committed it. SQLite ignores the lock; the spy shows the call and
+    its order: the state it sets after the re-read decides the refusal."""
+    w = _world(client, db)
+    item, vial = _row(db, w)
+    db.commit()
+    vial_id = vial.id
+    real = db.refresh
+    locked = []
+
+    def spy(instance, *args, **kwargs):
+        real(instance, *args, **kwargs)
+        if isinstance(instance, LimsAnalysis) and kwargs.get("with_for_update") is True:
+            locked.append(instance.id)
+            instance.review_state = "promoted"     # the winner's commit, as the waiter reads it
+
+    monkeypatch.setattr(db, "refresh", spy)
+    assert _results(_promote(client, w.ws, _line(item))) == [_refused(item, "already promoted")]
+    assert locked == [vial_id]
+
+
+@pytest.mark.parametrize("winner, reason", [
+    ("review_state = 'promoted'", "already promoted"),
+    # A reviewer filled and retested it meanwhile: the live row is one this request never loaded.
+    ("review_state = 'to_be_verified', retested = 1", "the vial's endotoxin analysis is retested"),
+])
+def test_a_retest_row_changed_by_another_request_meanwhile_is_refused(client, db, monkeypatch,
+                                                                       winner, reason):
+    """Request B loaded the retest row before request A committed. The row
+    changes in the database between B's batched load and its _plan, behind
+    the session's back, as the lock waiter sees A's commit on Postgres. The
+    re-read state wins: B is refused and never retracts the parent."""
+    w = _world(client, db)
+    item, vial = _row(db, w)
+    db.commit()
+    vial_id = vial.id
+    [first] = _results(_promote(client, w.ws, _line(item)))
+    apply_transition(db, analysis_id=first["parent_analysis_id"], kind="verify", user_id=1)
+    retest_id = apply_transition(db, analysis_id=vial_id, kind="retest", user_id=1).id
+    item.result_reading = "0.1"
+    db.commit()
+    parents = [(p.id, p.review_state) for p in _parent_rows(db, "P-4001")]
+    real_plan = worksheets_endo_promote._plan
+
+    def winner_commits_first(db_, *args):
+        # Raw SQL leaves the session's loaded copy stale; a commit here would expire it.
+        db_.execute(text(f"UPDATE lims_analyses SET {winner} WHERE id = :id"), {"id": retest_id})
+        return real_plan(db_, *args)
+
+    monkeypatch.setattr(worksheets_endo_promote, "_plan", winner_commits_first)
+    assert _results(_promote(client, w.ws, _line(item, 50))) == [_refused(item, reason)]
+    assert [(p.id, p.review_state) for p in _parent_rows(db, "P-4001")] == parents
 
 
 # --- Review Focus 1: a vial retested after its reading was taken -------------

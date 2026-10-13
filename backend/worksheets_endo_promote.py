@@ -245,12 +245,20 @@ def _plan(db: Session, worksheet, item, row: EndoPromoteRowIn, ctx) -> dict:
     if len(pairs) > 1:
         raise _Refused(REASON_MANY_ENDO)
     analysis, svc = pairs[0]
+    # Re-read the vial under a row lock (final review I-1): a request that
+    # loaded it before another promote committed waits here for that commit
+    # and judges the row as committed, so it never retracts the other's fresh
+    # parent. Both worksheet requests lock the vial first: no new deadlock.
+    # SQLite ignores FOR UPDATE.
+    db.refresh(analysis, with_for_update=True)
     if svc.origin != "mk1" or svc.keyword != NATIVE_ENDO_KEYWORD:
         raise _Refused(REASON_NOT_NATIVE)
     if analysis.review_state == "promoted":
         raise _Refused(REASON_PROMOTED)
-    if analysis.review_state not in _FILLABLE_STATES:
-        raise _Refused(f"the vial's endotoxin analysis is {analysis.review_state}")
+    # Dead states are not fillable; a row retested meanwhile is no longer the live one.
+    if analysis.retested or analysis.review_state not in _FILLABLE_STATES:
+        state = "retested" if analysis.retested else analysis.review_state
+        raise _Refused(f"the vial's endotoxin analysis is {state}")
     parent = ctx.parents[ctx.parent_pk_by_sample[item.sample_id]]
     # Only a retest row's promote may supersede the parent's live result
     # (promote_to_parent); any other row would collide with it.
