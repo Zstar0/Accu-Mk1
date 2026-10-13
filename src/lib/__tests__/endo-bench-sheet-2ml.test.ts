@@ -277,6 +277,9 @@ describe('buildEndoBenchSheet2Html', () => {
     expect(height('Thymosinalpha1/Thymosinbeta4')).toBeCloseTo(4 * 15.4 + 4 / 3)
     // 140 px, 2 lines
     expect(height('Glutathionedisulfide')).toBeCloseTo(3 * 15.4 + 4 / 3)
+    // 23 x 7 = 161 px, under 2 x 81.8, but a line holds 11 whole characters
+    // (77 px): [11] [11] [1], 3 lines, as Chrome fills it
+    expect(height('Abcdefghijklmnopqrstuvw')).toBeCloseTo(4 * 15.4 + 4 / 3)
   })
 
   describe('one outline per run of the same non-standard step (Dennis 8fae7bb)', () => {

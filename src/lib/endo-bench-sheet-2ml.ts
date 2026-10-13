@@ -306,8 +306,10 @@ const PAGE_CONTENT_W = 1026 // 11in landscape minus the 4mm side margins
 const PAGE_CONTENT_H = 732 // 8.5in minus the 11mm top and bottom margins
 const SID2_COL = 0.0944 // the Sample ID column, as in COLGROUP2
 const PEP2_COL = 0.0947 // the Peptide column, as in COLGROUP2
-const SID_FONT =
-  "16.67px Consolas, 'Cascadia Mono', 'DejaVu Sans Mono', monospace"
+// the fallbacks of --num in SHEET_CSS
+const NUM_FONTS =
+  "Consolas, 'Cascadia Mono', 'DejaVu Sans Mono', ui-monospace, Menlo, 'Liberation Mono', monospace"
+const SID_FONT = `16.67px ${NUM_FONTS}`
 const SID_LINE_PX = 19.2 // one line of Sample ID at 12.5pt / 1.15
 const PEP_FONT =
   "13.33px 'Segoe UI', system-ui, -apple-system, Arial, sans-serif"
@@ -321,8 +323,7 @@ const DUE2_PX = 41 // the Due cell: the date over the priority pill
 const STEP_NOTE_PX = 53
 const STEP_NOTE2_PX = 66
 const STEP_COL = 0.1379 // a step column, as in COLGROUP2
-const NOTE_FONT =
-  "700 11.33px Consolas, 'Cascadia Mono', 'DejaVu Sans Mono', monospace"
+const NOTE_FONT = `700 11.33px ${NUM_FONTS}`
 const CHROME_FIRST = 162 // title, a one-line meta, column heads, page footer
 const CHROME_CONT = 125 // continuation heading, column heads, page footer
 const FIT_SAFETY = 10
@@ -366,8 +367,9 @@ function defaultMeasure(text: string, font: string): number {
 /**
  * Lines a text wraps to: at spaces, and after a hyphen or a slash, but not a
  * slash or hyphen after a digit (Chrome keeps "1295/Ipamorelin" whole). A
- * piece wider than the line breaks anywhere (td.pep2's overflow-wrap) and
- * takes ceil(width / line) lines of its own.
+ * piece wider than the line breaks between any two characters (td.pep2's
+ * overflow-wrap), filled character by character as Chrome fills it; its last
+ * part stays on the line for what follows.
  */
 function lineCount(
   text: string,
@@ -379,8 +381,16 @@ function lineCount(
   let lines = 1
   let cur = ''
   const start = (piece: string) => {
-    lines += Math.max(0, Math.ceil(measure(piece, font) / maxW) - 1)
     cur = piece
+    if (measure(piece, font) <= maxW) return
+    cur = ''
+    for (const ch of piece) {
+      const next = cur + ch
+      if (cur && measure(next, font) > maxW) {
+        lines++
+        cur = ch
+      } else cur = next
+    }
   }
   for (const word of text.split(/\s+/))
     word.split(/(?<=[^\d][-/])/).forEach((piece, k) => {
