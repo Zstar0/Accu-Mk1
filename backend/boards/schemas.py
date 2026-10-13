@@ -35,6 +35,7 @@ class BoardOut(BaseModel):
     created_by: Optional[int] = None
     default_viewport: Optional[dict] = None
     node_count: int = 0
+    open_flag_count: int = 0
     can_edit: bool = False
     created_at: datetime
     updated_at: datetime

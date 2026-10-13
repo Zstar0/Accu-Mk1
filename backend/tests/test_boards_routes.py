@@ -27,6 +27,7 @@ def client(monkeypatch):
     import groups.models  # noqa: F401
     import boards.models  # noqa: F401
     import flags.models  # noqa: F401
+    import documents.models  # noqa: F401  (list_flags visibility clauses join documents)
     from models import User
     from groups.models import UserGroup, UserGroupMember
     from boards import service
@@ -43,6 +44,9 @@ def client(monkeypatch):
     s.add_all([UserGroupMember(group_id=editors.id, user_id=EDITOR.id),
                UserGroupMember(group_id=viewers.id, user_id=VIEWER.id)])
     s.commit()
+    from flags import seams, types_service
+    types_service.seed_builtins(s)
+    seams.register_mk1_entities()
     monkeypatch.setattr(service, "RESTRICTED_BOARDS_ENABLED", True)
 
     def _db():
@@ -165,3 +169,52 @@ def test_for_entity_is_empty_without_nodes(client):
 def test_restricted_boards_are_enabled_by_default():
     from boards import service
     assert service.RESTRICTED_BOARDS_ENABLED is True, "slice 2 wires flag visibility; the lock is off"
+
+
+def _flag(client, entity_type, entity_id, title, type_="task", **extra):
+    r = client.post("/api/flags", json={"entity_type": entity_type, "entity_id": str(entity_id),
+                                        "type": type_, "title": title, **extra})
+    assert r.status_code == 201, r.text
+    return r.json()
+
+
+def test_board_flags_endpoint_joins_every_anchor_under_visibility(client):
+    _board(client, "org")
+    client.as_user(ADMIN)
+    bid = client.get("/api/boards/org").json()["id"]
+    frame = client.post("/api/boards/org/nodes", json={"kind": "frame", "label": "Marketing", "w": 400, "h": 200}).json()
+    note = client.post("/api/boards/org/nodes", json={"kind": "note", "label": "Q4", "parent_id": frame["id"],
+                                                      "data": {"markdown": ""}}).json()
+    ws = client.post("/api/boards/org/nodes", json={"kind": "entity", "entity_type": "worksheet", "entity_id": "1"}).json()
+    _flag(client, "board", bid, "board task")
+    _flag(client, "board_node", note["id"], "note blocker", type_="blocker")
+    _flag(client, "worksheet", "1", "worksheet task")
+    done = _flag(client, "board_node", frame["id"], "done one")
+    assert client.post(f"/api/flags/{done['id']}/status", json={"to_status": "resolved"}).status_code == 200
+    client.as_user(VIEWER)
+    rows = client.get("/api/boards/org/flags").json()
+    assert sorted(f["title"] for f in rows) == ["board task", "note blocker", "worksheet task"]
+    by_title = {f["title"]: f for f in rows}
+    assert by_title["board task"]["entity"]["label"] == "Org"
+    assert by_title["board task"]["entity"]["deep_link"] == {"kind": "board", "id": "org"}
+    assert by_title["note blocker"]["entity"]["label"] == "Org > Q4"
+    client.as_user(OUTSIDER)
+    assert client.get("/api/boards/org/flags").status_code == 200  # company board: visible
+    _board(client, "exec", "restricted", [{"group_id": client.editors, "can_edit": True}])
+    client.as_user(OUTSIDER)
+    assert client.get("/api/boards/exec/flags").status_code == 404
+
+
+def test_list_carries_open_flag_count_for_board_and_item_anchors(client):
+    _board(client, "org")
+    _board(client, "exec", "restricted", [{"group_id": client.editors, "can_edit": True}])
+    client.as_user(ADMIN)
+    bid = client.get("/api/boards/org").json()["id"]
+    note = client.post("/api/boards/org/nodes", json={"kind": "note", "label": "Q4", "data": {"markdown": ""}}).json()
+    _flag(client, "board", bid, "a")
+    _flag(client, "board_node", note["id"], "b")
+    done = _flag(client, "board_node", note["id"], "c")
+    assert client.post(f"/api/flags/{done['id']}/status", json={"to_status": "resolved"}).status_code == 200
+    rows = {b["slug"]: b for b in client.get("/api/boards").json()}
+    assert rows["org"]["open_flag_count"] == 2
+    assert rows["exec"]["open_flag_count"] == 0

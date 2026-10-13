@@ -3,7 +3,7 @@ from __future__ import annotations
 
 from typing import Iterable, Optional
 
-from sqlalchemy import func, select
+from sqlalchemy import String, and_, cast, func, or_, select
 from sqlalchemy.orm import Session
 
 from boards import access
@@ -138,6 +138,55 @@ def node_counts(db: Session, board_ids: Iterable[int]) -> dict[int, int]:
     return {bid: n for bid, n in rows}
 
 
+def open_flag_counts(db: Session, board_ids: Iterable[int]) -> dict[int, int]:
+    """Open flags per board: those on the board itself plus those on its items. Entity
+    anchors (a sample pinned to the board) are left out: their visibility is per viewer
+    and the list is one query for everyone."""
+    from flags.catalog import OPEN_STATES
+    from flags.models import FlagFlag
+    ids = list(board_ids)
+    if not ids:
+        return {}
+    out: dict[int, int] = {}
+    node_rows = db.execute(
+        select(BoardNode.board_id, func.count())
+        .select_from(FlagFlag)
+        .join(BoardNode, cast(BoardNode.id, String) == FlagFlag.entity_id)
+        .where(FlagFlag.entity_type == "board_node", FlagFlag.status.in_(OPEN_STATES),
+               BoardNode.board_id.in_(ids))
+        .group_by(BoardNode.board_id)).all()
+    for bid, n in node_rows:
+        out[bid] = out.get(bid, 0) + int(n)
+    board_rows = db.execute(
+        select(FlagFlag.entity_id, func.count())
+        .where(FlagFlag.entity_type == "board", FlagFlag.entity_id.in_([str(i) for i in ids]),
+               FlagFlag.status.in_(OPEN_STATES))
+        .group_by(FlagFlag.entity_id)).all()
+    for eid, n in board_rows:
+        out[int(eid)] = out.get(int(eid), 0) + int(n)
+    return out
+
+
+def board_open_flags(db: Session, user, slug: str) -> list:
+    """Open flags on every anchor of one board, under the caller's visibility (spec 14,
+    slice 4d): the board, its generic items, and the entities behind its entity items."""
+    from flags import seams
+    from flags.catalog import OPEN_STATES
+    from flags.models import FlagFlag
+    board = get_board(db, user, slug)
+    pairs = [("board", str(board.id))]
+    for n in db.execute(select(BoardNode).where(BoardNode.board_id == board.id)).scalars():
+        if n.kind == "entity" and n.entity_type and n.entity_id:
+            pairs.append((n.entity_type, str(n.entity_id)))
+        else:
+            pairs.append(("board_node", str(n.id)))
+    stmt = (select(FlagFlag)
+            .where(FlagFlag.status.in_(OPEN_STATES), seams.visibility_clause(db, user),
+                   or_(*[and_(FlagFlag.entity_type == et, FlagFlag.entity_id == eid) for et, eid in pairs]))
+            .order_by(FlagFlag.updated_at.desc()))
+    return list(db.execute(stmt).scalars().all())
+
+
 # --- grants -----------------------------------------------------------------------
 
 def list_grants(db: Session, board: Board) -> list[GrantOut]:
@@ -180,9 +229,11 @@ def boards_for_entity(db: Session, user, entity_type: str, entity_id: str) -> li
 
 # --- serialization -----------------------------------------------------------------
 
-def board_out(db: Session, user, board: Board, counts: Optional[dict] = None) -> BoardOut:
+def board_out(db: Session, user, board: Board, counts: Optional[dict] = None,
+              flag_counts: Optional[dict] = None) -> BoardOut:
     out = BoardOut.model_validate(board)
     out.node_count = (counts or node_counts(db, [board.id])).get(board.id, 0)
+    out.open_flag_count = (flag_counts or open_flag_counts(db, [board.id])).get(board.id, 0)
     out.can_edit = access.can_edit_board(db, user, board)
     return out
 
