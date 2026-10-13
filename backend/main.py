@@ -24448,6 +24448,16 @@ def _serialize_worksheets(db: Session, worksheets: "list[Worksheet]") -> list:
         {ws.cartridge_type_id for ws in worksheets if ws.cartridge_type_id}
         | {it.cartridge_type_id for it in all_items if it.cartridge_type_id},
     )
+    # Endo slice 3 (spec 2026-10-12 section 5.1): each endotoxin item's live
+    # vial analysis, for Box 3's checkboxes and its Promoted chip. ONE query
+    # for the whole page, endotoxin items only (none: no query at all).
+    from worksheets_endo_promote import endo_analysis_by_sample
+    endo_item_ids = {
+        it.id for it in all_items
+        if _bench_kind_for_item(sub_role_map.get(it.sample_id), it.analyses_json) == "endo"
+    }
+    endo_analysis_map = endo_analysis_by_sample(
+        db, {it.sample_id for it in all_items if it.id in endo_item_ids and it.sample_id})
 
     result = []
     for ws in worksheets:
@@ -24542,6 +24552,9 @@ def _serialize_worksheets(db: Session, worksheets: "list[Worksheet]") -> list:
                     "result_reader": it.result_reader,
                     "result_entered_at": (it.result_entered_at.isoformat() + "Z") if it.result_entered_at else None,
                     "result_entered_by_user_id": it.result_entered_by_user_id,
+                    # Endo slice 3 (spec 5.1): endotoxin items only.
+                    **({"endo_analysis": endo_analysis_map.get(it.sample_id)}
+                       if it.id in endo_item_ids else {}),
                     **_worksheet_item_parent_facts(_parent_for(it.sample_id)),
                 }
                 for it in items
@@ -25622,6 +25635,41 @@ def import_endo_reader_results(
     db.commit()
     return {"applied": len(plan), "items": _serialize_worksheets(db, [ws])[0]["items"],
             "endo_method": method}
+
+
+from worksheets_endo_promote import EndoPromoteRequest, EndoPromoteResponse  # noqa: E402
+
+
+@app.post("/worksheets/{worksheet_id}/promote", response_model=EndoPromoteResponse)
+def promote_endo_worksheet_rows(
+    worksheet_id: int,
+    data: EndoPromoteRequest,
+    background_tasks: BackgroundTasks,
+    db: Session = Depends(get_db),
+    _current_user=Depends(get_current_user),
+):
+    """Promote to Parent from Box 3 of the 2 mL endotoxin worksheet (endo
+    slice 3, spec 5.3). Open and completed worksheets; a staging one 404s. A
+    body that lists an item twice, or more rows than the worksheet has
+    items, is a 400 that writes nothing. Otherwise every row is answered on
+    its own, promoted or not and why (worksheets_endo_promote.promote_rows).
+    A POST on an id path, so it has no ordering concern against
+    GET /worksheets/{worksheet_id}."""
+    from worksheets_endo_promote import promote_rows
+
+    ws = db.execute(select(Worksheet).where(Worksheet.id == worksheet_id)).scalar_one_or_none()
+    if not ws or ws.status == "staging":
+        raise HTTPException(404, "Worksheet not found")
+    ids = [r.item_id for r in data.rows]
+    if len(ids) != len(set(ids)):
+        raise HTTPException(400, "Nothing was promoted. An item is listed more than once")
+    n_items = db.execute(select(func.count(WorksheetItem.id)).where(
+        WorksheetItem.worksheet_id == worksheet_id)).scalar_one()
+    if len(ids) > n_items:
+        raise HTTPException(400, "Nothing was promoted. The request has more rows than "
+                                 "the worksheet has items")
+    return EndoPromoteResponse(results=promote_rows(
+        db, _current_user, ws, data.rows, background_tasks=background_tasks))
 
 
 class WorksheetWellFreeze(BaseModel):

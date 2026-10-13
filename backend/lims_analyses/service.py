@@ -415,6 +415,10 @@ def apply_transition(
     method_id: Optional[int] = None,
     instrument_id: Optional[int] = None,
     processed_by_user_id: Optional[int] = None,
+    result_unit: Optional[str] = None,
+    loq: Optional[float] = None,
+    lod: Optional[float] = None,
+    lod_unit: Optional[str] = None,
     commit: bool = True,
     preserve_draft: bool = False,
 ) -> LimsAnalysis:
@@ -442,6 +446,13 @@ def apply_transition(
     If any is provided with kind != 'submit', raises BadRequestError up
     front (Task 3, 2026-08-19 bench-stamping slice) — see the guard right
     after the row load.
+    result_unit / loq / lod / lod_unit (endo slice 3): the result's unit and
+    its own limits, filled with the value by the 2 mL worksheet's Promote to
+    Parent (worksheets_endo_promote). Submit-only and applied after the
+    snapshot, like the stamps, so the amendment audit records them. None is
+    a no-op. A submit that changes result_value first clears the old limits
+    (clear_result_limits): they describe the old value, so a hand correction
+    sending none drops them and a fill sending new ones replaces them.
     """
     row = get_analysis(db, analysis_id)
 
@@ -459,6 +470,9 @@ def apply_transition(
         raise BadRequestError(
             "method_id/instrument_id/processed_by_user_id only apply to kind='submit'"
         )
+    if (result_unit is not None or loq is not None or lod is not None
+            or lod_unit is not None) and kind != "submit":
+        raise BadRequestError("result_unit/loq/lod/lod_unit only apply to kind='submit'")
 
     from_state = row.review_state
     before = _snapshot(row)
@@ -474,6 +488,16 @@ def apply_transition(
         row.instrument_id = instrument_id
     if processed_by_user_id is not None:
         row.processed_by_user_id = processed_by_user_id
+    if kind == "submit" and result_value is not None and result_value != row.result_value:
+        clear_result_limits(row)
+    if result_unit is not None:
+        row.result_unit = result_unit
+    if loq is not None:
+        row.loq = loq
+    if lod is not None:
+        row.lod = lod
+    if lod_unit is not None:
+        row.lod_unit = lod_unit
 
     if is_terminal(from_state):
         # State machine will also reject this, but we surface a clearer

@@ -6,10 +6,11 @@ validation is decoupled from internal data shapes.
 
 from __future__ import annotations
 
+import math
 from datetime import datetime
-from typing import List, Literal, Optional
+from typing import Annotated, List, Literal, Optional
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, BeforeValidator, ConfigDict, Field
 
 
 # ─── Task 5b: native parent analyses read shape ───────────────────────────────
@@ -122,6 +123,16 @@ class PromoteSourceRef(BaseModel):
     contribution_kind: Literal["chosen", "aggregated_in", "reference"]
 
 
+def _nonfinite_as_text(v):
+    """NaN or inf as its text, so the 422 echoes "nan", not a float that
+    FastAPI 0.115's error body cannot encode (that turned the 422 into a 500)."""
+    return str(v) if isinstance(v, float) and not math.isfinite(v) else v
+
+
+# A result limit (endo slice 3): finite and above zero, or None.
+_ResultLimit = Annotated[Optional[float], BeforeValidator(_nonfinite_as_text)]
+
+
 class PromoteRequest(BaseModel):
     """Phase 4a: promote one or more vial-tier rows to a single parent-tier row.
 
@@ -145,8 +156,9 @@ class PromoteRequest(BaseModel):
     reason: Optional[str] = None
     # Endo slice 3: the result's own LOQ / LOD for the new parent row. When all
     # three are omitted the result-bearing source's own are copied instead.
-    loq: Optional[float] = None
-    lod: Optional[float] = None
+    # The COA prints a stored LOQ, so NaN, inf, 0 or a negative never lands.
+    loq: _ResultLimit = Field(default=None, gt=0, allow_inf_nan=False)
+    lod: _ResultLimit = Field(default=None, gt=0, allow_inf_nan=False)
     lod_unit: Optional[str] = None
 
 
