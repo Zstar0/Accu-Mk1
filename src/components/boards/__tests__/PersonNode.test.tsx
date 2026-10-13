@@ -1,13 +1,15 @@
 import { render, screen } from '@testing-library/react'
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 
-const h = vi.hoisted(() => ({ flags: [] as unknown[] }))
+const h = vi.hoisted(() => ({ flags: [] as unknown[], zoom: 1 }))
 vi.mock('@/services/boards', () => ({
   useBoardFlags: () => ({ data: h.flags }),
 }))
 vi.mock('@xyflow/react', () => ({
   Handle: () => null,
   Position: { Top: 'top', Bottom: 'bottom' },
+  useStore: (sel: (s: { transform: number[] }) => unknown) =>
+    sel({ transform: [0, 0, h.zoom] }),
 }))
 vi.mock('@/services/groups', () => ({
   useDirectoryUsers: () => ({
@@ -53,6 +55,7 @@ const data = (d: Record<string, unknown>) => ({
 describe('PersonNode', () => {
   beforeEach(() => {
     h.flags = []
+    h.zoom = 1
   })
 
   it('shows the name and the title by default (rows without the new keys)', () => {
@@ -102,5 +105,12 @@ describe('PersonNode', () => {
     ]
     render(<PersonNode data={data({ user_id: 4 })} />)
     expect(screen.getByTestId('person-pill')).toHaveTextContent('2 assigned')
+  })
+
+  it('drops the title line when compact', () => {
+    h.zoom = 0.3
+    render(<PersonNode data={data({ user_id: 4 })} />)
+    expect(screen.getByText('Ada Lovelace')).toBeInTheDocument()
+    expect(screen.queryByText('Lab Director')).toBeNull()
   })
 })

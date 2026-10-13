@@ -127,6 +127,30 @@ function NodePanel({
         </div>
       )}
 
+      {canEdit && node.parent_id != null && (
+        <Button
+          size="sm"
+          variant="outline"
+          className="w-fit"
+          disabled={patch.isPending}
+          onClick={() => {
+            const frame = board.nodes.find(n => n.id === node.parent_id)
+            // Keep the item where it is on the canvas: relative becomes absolute.
+            patch.mutate({
+              id: node.id,
+              data: {
+                version: node.version,
+                parent_id: null,
+                x: node.x + (frame?.x ?? 0),
+                y: node.y + (frame?.y ?? 0),
+              },
+            })
+          }}
+        >
+          Remove from frame
+        </Button>
+      )}
+
       <section>
         <div className="mb-1 text-xs text-muted-foreground">
           Open flags{node.kind === 'frame' ? ' (including items inside)' : ''} (

@@ -676,3 +676,8 @@ and PR. Deploy follows the `accumark-deploy` skill; boards need no env change.
   (no endpoint for another user's groups; low value) and the 250 ms drag-end debounce (drag
   end already writes once per drop, and a debounce reintroduces the dropped-callback trap
   found in 4b).
+- Slice 4e (canvas live, 2026-10-12): `board_changed` rides the flag event sink and bus with the
+  board's audience; the stream glue refetches the open board and ignores the actor's own events.
+  Items render label-only below 0.5 zoom (frames keep title and pills). Cmd+K items are
+  registered with the open board and unregistered when it closes.
+- Access note (2026-10-12): the flags create route refuses a hidden or missing view-scoped anchor (board, board_node, document) with the same 403 before the existence check, so existence is never confirmed; board routes themselves answer 404 for invisible boards (section 9).

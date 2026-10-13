@@ -11,6 +11,8 @@ from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import StaticPool
 
+from flags import seams
+
 ADMIN = SimpleNamespace(id=1, role="admin", email="admin@x.t", is_active=True)
 EDITOR = SimpleNamespace(id=10, role="standard", email="e@x.t", is_active=True)
 VIEWER = SimpleNamespace(id=11, role="standard", email="v@x.t", is_active=True)
@@ -44,7 +46,7 @@ def client(monkeypatch):
     s.add_all([UserGroupMember(group_id=editors.id, user_id=EDITOR.id),
                UserGroupMember(group_id=viewers.id, user_id=VIEWER.id)])
     s.commit()
-    from flags import seams, types_service
+    from flags import types_service
     types_service.seed_builtins(s)
     seams.register_mk1_entities()
     monkeypatch.setattr(service, "RESTRICTED_BOARDS_ENABLED", True)
@@ -268,3 +270,31 @@ def test_board_flags_hide_anchors_the_caller_cannot_see(client):
         assert r.status_code == 200 and r.json() == []
     finally:
         seams._REGISTRY.pop("vault_item", None)
+
+
+def test_writes_emit_board_changed_with_the_board_audience(client):
+    _board(client, "org", "company", [{"group_id": client.editors, "can_edit": True}])
+    client.as_user(EDITOR)
+    sink = seams.InMemoryEventSink()
+    prev = seams.EVENT_SINK
+    seams.set_event_sink(sink)
+    try:
+        n = client.post("/api/boards/org/nodes", json={"kind": "text", "label": "T"}).json()
+        ev = [e for e in sink.events if e.get("event_type") == "board_changed"]
+        assert ev and ev[-1]["board_slug"] == "org" and ev[-1]["audience"] is None
+        assert ev[-1]["actor_id"] == EDITOR.id
+        sink.events.clear()
+        client.patch(f"/api/boards/org/nodes/{n['id']}", json={"version": n["version"], "label": "U"})
+        client.delete(f"/api/boards/org/nodes/{n['id']}")
+        assert [e["event_type"] for e in sink.events] == ["board_changed", "board_changed"]
+        sink.events.clear()
+        # Restricted board: the audience is its grant groups, so the bus never reaches an outsider.
+        client.as_user(ADMIN)
+        client.post("/api/boards", json={"slug": "exec", "name": "Exec", "visibility": "restricted"})
+        client.put("/api/boards/exec/grants", json=[{"group_id": client.editors, "can_edit": True}])
+        client.as_user(EDITOR)
+        client.post("/api/boards/exec/nodes", json={"kind": "text", "label": "T"})
+        ev = [e for e in sink.events if e.get("event_type") == "board_changed"]
+        assert ev[-1]["audience"] == {"groups": [client.editors]}
+    finally:
+        seams.set_event_sink(prev)

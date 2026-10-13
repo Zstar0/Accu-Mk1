@@ -276,4 +276,51 @@ describe('BoardSidePanel', () => {
     ).not.toBeInTheDocument()
     expect(screen.queryByRole('switch')).not.toBeInTheDocument()
   })
+  it('Remove from frame makes the item top-level at its absolute spot', async () => {
+    const user = userEvent.setup()
+    const frame = node({ id: 1, kind: 'frame', x: 100, y: 50 })
+    const child = node({
+      id: 2,
+      kind: 'note',
+      label: 'Q4',
+      parent_id: 1,
+      x: 30,
+      y: 20,
+      version: 4,
+      data: { markdown: '' },
+    })
+    render(
+      <BoardSidePanel
+        board={board(true, [frame, child])}
+        selectedId={2}
+        // eslint-disable-next-line @typescript-eslint/no-empty-function
+        onClose={() => {}}
+      />
+    )
+    await user.click(screen.getByRole('button', { name: 'Remove from frame' }))
+    expect(h.patch).toHaveBeenCalledWith({
+      id: 2,
+      data: { version: 4, parent_id: null, x: 130, y: 70 },
+    })
+  })
+  it('no Remove from frame for top-level items or viewers', () => {
+    const frame = node({ id: 1, kind: 'frame' })
+    const child = node({
+      id: 2,
+      kind: 'note',
+      parent_id: 1,
+      data: { markdown: '' },
+    })
+    render(
+      <BoardSidePanel
+        board={board(false, [frame, child])}
+        selectedId={2}
+        // eslint-disable-next-line @typescript-eslint/no-empty-function
+        onClose={() => {}}
+      />
+    )
+    expect(
+      screen.queryByRole('button', { name: 'Remove from frame' })
+    ).toBeNull()
+  })
 })

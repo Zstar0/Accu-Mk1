@@ -6,6 +6,7 @@ import { useBoardFlags } from '@/services/boards'
 import { useDirectoryUsers } from '@/services/groups'
 import { assignedCount } from '../board-flags'
 import type { BoardFlowNode } from '../board-mapping'
+import { useCompact } from './use-compact'
 
 /** `data` keys a person node stores (backend PersonData); rows made before `show` existed have only `user_id`. */
 export interface PersonNodeData extends Record<string, unknown> {
@@ -15,6 +16,7 @@ export interface PersonNodeData extends Record<string, unknown> {
 }
 
 export function PersonNode({ data }: Pick<NodeProps<BoardFlowNode>, 'data'>) {
+  const compact = useCompact()
   const d = (data.row.data ?? {}) as PersonNodeData
   const directory = useDirectoryUsers()
   const flags = useBoardFlags(data.slug ?? null)
@@ -45,7 +47,7 @@ export function PersonNode({ data }: Pick<NodeProps<BoardFlowNode>, 'data'>) {
       />
       <div className="flex flex-col leading-tight">
         <span className="font-medium">{line}</span>
-        {title && (
+        {!compact && title && (
           <span className="text-[10px] text-muted-foreground">{title}</span>
         )}
       </div>
