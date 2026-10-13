@@ -312,6 +312,7 @@ const SID_LINE_PX = 19.2 // one line of Sample ID at 12.5pt / 1.15
 const PEP_FONT =
   "13.33px 'Segoe UI', system-ui, -apple-system, Arial, sans-serif"
 const PEP_LINE_PX = 15.4 // one line of peptide name at 10pt / 1.15
+const MG_TOP_PX = 96 / 72 // the 1pt top margin of the declared mg line
 const DUE2_PX = 41 // the Due cell: the date over the priority pill
 const CHROME_FIRST = 162 // title, a one-line meta, column heads, page footer
 const CHROME_CONT = 125 // continuation heading, column heads, page footer
@@ -426,10 +427,13 @@ function rowMinFor(
 ): number {
   const w = PAGE_CONTENT_W * PEP2_COL - H_PAD_PX
   const bac = formOf(s) === 'bac'
+  const mg = !bac && s.weightMg !== null
   const pepLines =
     (s.identity ? lineCount(s.identity, w, PEP_FONT, measure) : 0) +
-    (bac || s.weightMg === null ? 0 : 1)
-  const stack = Math.max(DUE2_PX, pepLines * PEP_LINE_PX)
+    (mg ? 1 : 0)
+  // Mk1: Dennis's stack leaves out the mg line's margin, about 1 px a row,
+  // which overran the sheet on a page of wrapping names
+  const stack = Math.max(DUE2_PX, pepLines * PEP_LINE_PX + (mg ? MG_TOP_PX : 0))
   if (bac) return Math.max(42, stack)
   const p = dilutionPlan(s, ctx)
   const odd =
@@ -440,32 +444,67 @@ function rowMinFor(
   return Math.max(odd ? 58 : 42, stack)
 }
 
-/** Vertical padding (px) that makes the tallest page just fill the sheet. */
-function fitRowPadding(
-  pages: EndoSheet2Row[][],
-  rowMin: (r: EndoSheet2Row) => number,
-  metaLines: number,
+// Dennis: the floor was 7 px; grouping by total can put ten three-line rows
+// on one page, so 4 px, reached only on such a page.
+const PAD_MIN = 4
+
+/** A row's height without its padding: the taller of its cells and its Sample ID. */
+function rowHeight(
+  s: EndoSample,
+  ctx: EndoCtx,
+  std: EndoStepPlan[],
   measure: TextMeasure
 ): number {
   const sidW = PAGE_CONTENT_W * SID2_COL - H_PAD_PX
+  return Math.max(
+    rowMinFor(s, ctx, std, measure),
+    sidLineCount(s.sampleId, sidW, measure) * SID_LINE_PX
+  )
+}
+
+/** The padding (px) that makes page `pageIx`, holding these rows, just fill the sheet. */
+function padFor(heights: number[], pageIx: number, metaLines: number): number {
+  let content = 0
+  for (const h of heights) content += h
+  const base =
+    pageIx === 0 ? CHROME_FIRST + (metaLines - 1) * META_LINE_PX : CHROME_CONT
+  const budget = PAGE_CONTENT_H - FIT_SAFETY - content
+  return (budget - base) / (2 * heights.length)
+}
+
+/**
+ * Where each page starts: ENDO_SHEET_ROWS_PER_PAGE rows, or fewer when the
+ * next row would need less than the floor padding. Mk1: Dennis cuts every
+ * ten rows, and ten tall rows ran page one's foot onto a sheet of its own.
+ */
+function pageStarts(heights: number[], metaLines: number): number[] {
+  const starts = [0]
+  heights.forEach((_, i) => {
+    const at = starts[starts.length - 1] ?? 0
+    if (
+      i > at &&
+      (i - at === ENDO_SHEET_ROWS_PER_PAGE ||
+        padFor(heights.slice(at, i + 1), starts.length - 1, metaLines) <
+          PAD_MIN)
+    )
+      starts.push(i)
+  })
+  return starts
+}
+
+/** Vertical padding (px) that makes the tallest page just fill the sheet. */
+function fitRowPadding(
+  heights: number[],
+  starts: number[],
+  metaLines: number
+): number {
   let best = Infinity
-  pages.forEach((chunk, i) => {
-    if (!chunk.length) return
-    let content = 0
-    for (const r of chunk)
-      content += Math.max(
-        rowMin(r),
-        sidLineCount(r.sample.sampleId, sidW, measure) * SID_LINE_PX
-      )
-    const base =
-      i === 0 ? CHROME_FIRST + (metaLines - 1) * META_LINE_PX : CHROME_CONT
-    const budget = PAGE_CONTENT_H - FIT_SAFETY - content
-    best = Math.min(best, (budget - base) / (2 * chunk.length))
+  starts.forEach((at, i) => {
+    const page = heights.slice(at, starts[i + 1])
+    if (page.length) best = Math.min(best, padFor(page, i, metaLines))
   })
   if (!Number.isFinite(best)) best = 12
-  // Dennis: the floor was 7 px; grouping by total can put ten three-line rows
-  // on one page, so 4 px, reached only on such a page.
-  return Math.max(4, Math.min(22, best))
+  return Math.max(PAD_MIN, Math.min(22, best))
 }
 
 /* ---------------- the document ---------------- */
@@ -520,7 +559,19 @@ export function buildEndoBenchSheet2Html(
   const runKeys = printed.map(({ plan }, i) =>
     plan.steps.map((st, si) => boxOf(st, si, i).run)
   )
-  const PER = ENDO_SHEET_ROWS_PER_PAGE
+
+  // Page breaks come first: a run's box closes at a page edge.
+  const metaItems: [string, string][] = [
+    ['Analyst', doc.analyst || '-'],
+    ['Cartridge', cartridge],
+    ['Date made', doc.dateMade ? longDate(doc.dateMade) : '-'],
+    ['Samples', String(doc.rows.length)],
+    ['Orders', doc.orders || '-'],
+  ]
+  const metaLines = metaLineCount(metaItems, measure)
+  const heights = ordered.map(r => rowHeight(r.sample, ctx, std, measure))
+  const starts = pageStarts(heights, metaLines)
+  const edges = new Set(starts)
 
   function stepPrint(st: EndoStepPlan, si: number, i: number): string {
     const sn = si + 1
@@ -529,9 +580,8 @@ export function buildEndoBenchSheet2Html(
     const d = std[si]
     const odd = d !== undefined && st.ratio !== d.ratio
     const { diff, run } = boxOf(st, si, i)
-    const top = run !== '' && (i % PER === 0 || runKeys[i - 1]?.[si] !== run)
-    const bot =
-      run !== '' && (i % PER === PER - 1 || runKeys[i + 1]?.[si] !== run)
+    const top = run !== '' && (edges.has(i) || runKeys[i - 1]?.[si] !== run)
+    const bot = run !== '' && (edges.has(i + 1) || runKeys[i + 1]?.[si] !== run)
     const cls = `step${st.own ? ' own' : ''}${st.fits ? '' : ' bad'}${odd ? ' odd' : ''}${diff ? ' diff' : ''}${top ? ' dtop' : ''}${bot ? ' dbot' : ''} s${sn}`
     const ratio = escapeHtml(fmt(st.ratio))
     // the note is the ratio alone (Dennis, eb4ee43); "over 1.5 mL" for a step
@@ -613,28 +663,10 @@ export function buildEndoBenchSheet2Html(
 
   // Rows render first: the summary below reads what they counted.
   const body = printed.map(({ r, plan }, i) => rowPrint(r, plan, i))
-  const pages: string[][] = []
-  const rowPages: EndoSheet2Row[][] = []
-  for (let i = 0; i < ordered.length; i += ENDO_SHEET_ROWS_PER_PAGE) {
-    pages.push(body.slice(i, i + ENDO_SHEET_ROWS_PER_PAGE))
-    rowPages.push(ordered.slice(i, i + ENDO_SHEET_ROWS_PER_PAGE))
-  }
-  if (!pages.length) pages.push([])
+  const pages = starts.map((at, k) => body.slice(at, starts[k + 1]))
   const totalPages = pages.length + 1 // the table pages, plus the summary
 
-  const metaItems: [string, string][] = [
-    ['Analyst', doc.analyst || '-'],
-    ['Cartridge', cartridge],
-    ['Date made', doc.dateMade ? longDate(doc.dateMade) : '-'],
-    ['Samples', String(doc.rows.length)],
-    ['Orders', doc.orders || '-'],
-  ]
-  const pad = fitRowPadding(
-    rowPages,
-    r => rowMinFor(r.sample, ctx, std, measure),
-    metaLineCount(metaItems, measure),
-    measure
-  ).toFixed(1)
+  const pad = fitRowPadding(heights, starts, metaLines).toFixed(1)
   const meta =
     '<dl class="meta">' +
     metaItems
@@ -642,8 +674,8 @@ export function buildEndoBenchSheet2Html(
       .join('') +
     '</dl>'
   const footRight = (pageIx: number, chunkLen: number) => {
-    const first = pageIx * ENDO_SHEET_ROWS_PER_PAGE + 1
-    const last = pageIx * ENDO_SHEET_ROWS_PER_PAGE + chunkLen
+    const first = (starts[pageIx] ?? 0) + 1
+    const last = (starts[pageIx] ?? 0) + chunkLen
     return (
       `<span>${chunkLen ? `Samples <b>${first}&ndash;${last}</b> of ${doc.rows.length} &middot; ` : ''}` +
       `<b>Page ${pageIx + 1} of ${totalPages}</b></span>`

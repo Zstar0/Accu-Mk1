@@ -89,6 +89,9 @@ function doc(rows: EndoSheet2Row[]): EndoSheet2Doc {
   }
 }
 
+/** The row padding (px) the fitter printed. */
+const padOf = (html: string) => /td\{padding:([\d.]+)px 5pt\}/.exec(html)?.[1]
+
 describe('buildEndoBenchSheet2Html', () => {
   it('groups rows by total with a rule per group, numbered as Box 1', () => {
     const html = buildEndoBenchSheet2Html(
@@ -173,6 +176,41 @@ describe('buildEndoBenchSheet2Html', () => {
     )
   })
 
+  it('counts the 1pt margin over the declared mg in a wrapping name', () => {
+    // two name lines plus the mg line, and the mg line's 1pt top margin:
+    // (732 - 10 - 162 - 10 x (3 x 15.4 + 4/3)) / 20 = 4.23
+    const ten = Array.from({ length: 10 }, (_, i) =>
+      row(i + 1, { identity: 'Tirzepatide, Cagrilintide' })
+    )
+    expect(padOf(buildEndoBenchSheet2Html(doc(ten), { measure }))).toBe('4.2')
+  })
+
+  it('moves rows to the next page when ten tall rows would run past the sheet', () => {
+    // twelve three-line rows (58 px each): at the 4 px floor page one holds
+    // (732 - 10 - 162) / (58 + 2 x 4) = 8.5 rows, so 8, and the fitter then
+    // pads them to fill it: (560 - 8 x 58) / 16 = 6
+    const twelve = Array.from({ length: 12 }, (_, i) =>
+      row(i + 1, { totalDilution: 300 })
+    )
+    const html = buildEndoBenchSheet2Html(doc(twelve), { measure })
+    const pages = [
+      ...html.matchAll(/<section class="page">.*?<\/section>/g),
+    ].map(m => (m[0].match(/<tr[ >]/g) ?? []).length - 1)
+    expect(pages).toEqual([8, 4])
+    const pad = Number(padOf(html))
+    expect(pad).toBe(6)
+    // every page as the fitter plans it stays inside the sheet
+    pages.forEach((n, i) =>
+      expect((i ? 125 : 162) + n * (58 + 2 * pad)).toBeLessThanOrEqual(722)
+    )
+    expect(html).toContain(
+      'Samples <b>1&ndash;8</b> of 12 &middot; <b>Page 1 of 3</b>'
+    )
+    expect(html).toContain(
+      'Samples <b>9&ndash;12</b> of 12 &middot; <b>Page 2 of 3</b>'
+    )
+  })
+
   describe('one outline per run of the same non-standard step (Dennis 8fae7bb)', () => {
     /** Step `sn`'s cell classes, in print order. */
     const stepCells = (html: string, sn: number) =>
@@ -224,22 +262,17 @@ describe('buildEndoBenchSheet2Html', () => {
       ])
     })
 
-    it('starts a new box at a page edge, and the pages and their rows do not change', () => {
+    it('starts a new box at a page edge', () => {
+      // twelve three-line rows break 8 and 4 (see the page fitter test)
       const twelve = Array.from({ length: 12 }, (_, i) => at300(i + 1))
       const html = buildEndoBenchSheet2Html(doc(twelve), { measure })
       const s2 = stepCells(html, 2)
       expect(s2[0]).toBe('step odd diff dtop s2')
-      expect(s2.slice(1, 9)).toEqual(Array(8).fill('step odd diff s2'))
-      expect(s2[9]).toBe('step odd diff dbot s2')
-      expect(s2[10]).toBe('step odd diff dtop s2')
+      expect(s2.slice(1, 7)).toEqual(Array(6).fill('step odd diff s2'))
+      expect(s2[7]).toBe('step odd diff dbot s2')
+      expect(s2[8]).toBe('step odd diff dtop s2')
+      expect(s2.slice(9, 11)).toEqual(Array(2).fill('step odd diff s2'))
       expect(s2[11]).toBe('step odd diff dbot s2')
-      // guard, measured before the outlines changed: two table pages of 10
-      // and 2 rows at 4 px of padding (ten three-line rows on page 1)
-      const pages = [
-        ...html.matchAll(/<section class="page">.*?<\/section>/g),
-      ].map(m => (m[0].match(/<tr[ >]/g) ?? []).length - 1)
-      expect(pages).toEqual([10, 2])
-      expect(html).toContain('td{padding:4.0px 5pt}')
     })
 
     it('starts a new box at a new total, its top just under the group line', () => {
