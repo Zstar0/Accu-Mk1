@@ -238,6 +238,35 @@ def test_the_route_answers_the_same_bodies_as_before(world, client):
     assert missing.json() == {"detail": "source analysis not found"}
 
 
+# ── result limits are the worksheet promote's alone (final review I-3) ──────
+
+
+@pytest.mark.parametrize("field, value", [("loq", 25.0), ("lod", 0.05), ("lod_unit", "EU/mL")])
+def test_the_route_refuses_a_body_that_carries_result_limits(world, client, field, value):
+    src_id = world.rows[0].id
+
+    resp = client.post("/api/lims-analyses/promote", json={**_body(src_id), field: value})
+
+    assert resp.status_code == 400
+    assert resp.json() == {"detail": "result limits are set by the worksheet promote"}
+    assert _parent_rows(world) == []
+    assert world.db.get(LimsAnalysis, src_id).review_state == "to_be_verified"
+
+
+def test_the_route_still_promotes_without_limits_and_copies_the_sources(world, client):
+    """The sample page sends no limits; explicit nulls are no limits either."""
+    src = world.rows[0]
+    src.loq, src.lod, src.lod_unit = 25.0, 0.05, "EU/mL"
+    world.db.commit()
+
+    resp = client.post("/api/lims-analyses/promote",
+                       json={**_body(src.id), "loq": None, "lod": None, "lod_unit": None})
+
+    assert resp.status_code == 201, resp.text
+    [parent] = _parent_rows(world)
+    assert _limits(parent) == (25.0, 0.05, "EU/mL")
+
+
 # ── the side-by-side cascade ────────────────────────────────────────────────
 
 

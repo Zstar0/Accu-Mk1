@@ -320,12 +320,14 @@ def _plan(db: Session, worksheet, item, row: EndoPromoteRowIn, ctx) -> dict:
     # what this row's stored reading gives, within Box 3's 3-decimal display.
     # It confirms the browser's arithmetic and recomputes no verdict. Bac
     # water reads in EU/mL already; its LOQ is the sensitivity x 20. A liquid
-    # with no water has nothing to check against and passes as before.
-    if bac or water is not None:
-        scale = 1 if bac else total * water
-        if not (_near(row.value, reading * scale)
-                and _near(row.loq, sensitivity * (BW_DILUTION if bac else scale))):
-            raise _Refused(REASON_BAD_NUMBERS)
+    # with no water has no value (the browser's waterOf is null), so it is
+    # refused as the browser refuses it.
+    if not bac and water is None:
+        raise _Refused(REASON_BAD_NUMBERS)
+    scale = 1 if bac else total * water
+    if not (_near(row.value, reading * scale)
+            and _near(row.loq, sensitivity * (BW_DILUTION if bac else scale))):
+        raise _Refused(REASON_BAD_NUMBERS)
     # The spec the certificate will judge the result by (coa.native_sections).
     matrix = normalize_matrix(parent.sample_type_title)
     spec = resolve_spec(db, svc.id, matrix, peptide_id=sample_peptide_id(db, parent.id),

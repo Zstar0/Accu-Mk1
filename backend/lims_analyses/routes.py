@@ -568,7 +568,12 @@ def promote(
 ):
     """The body lives in promote_flow.run_promote, shared with the worksheet
     endpoint. A PromoteError carries the exact status and detail this route
-    raised before the move."""
+    raised before the move. Result limits are the worksheet promote's alone
+    (final review I-3): it checks them against the stored reading and calls
+    run_promote directly. The sample page never sends them, so a body that
+    carries one is refused; without them the source's own are copied."""
+    if req.loq is not None or req.lod is not None or req.lod_unit is not None:
+        raise HTTPException(status_code=400, detail="result limits are set by the worksheet promote")
     try:
         # run_promote schedules workflow.engine.run_cascades_bg on
         # background_tasks post-response, as this route always did.

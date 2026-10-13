@@ -13,6 +13,7 @@ from unittest.mock import MagicMock
 
 import pytest
 from fastapi.testclient import TestClient
+from pydantic import ValidationError
 from sqlalchemy import create_engine, select, text
 from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import StaticPool
@@ -23,6 +24,7 @@ from coa.native_sections import build_native_sections
 from database import Base, get_db
 from lims_analyses import promote_flow
 from lims_analyses.promote_flow import PromoteError
+from lims_analyses.schemas import PromoteRequest
 from lims_analyses.service import BadRequestError, apply_transition
 from main import app
 from models import (
@@ -741,18 +743,20 @@ def test_an_exact_row_with_an_loq_far_above_its_value_is_refused(client, db):
     assert db.get(LimsAnalysis, vial_id).result_value is None
 
 
-def test_a_liquid_row_with_no_water_keeps_its_behaviour_before_the_check(client, db):
-    """No stored water: the browser shows no value (waterOf is null), and the
-    server has nothing to check the numbers against. Pinned as it was before
-    the I-3 check (it promotes); refusing it needs the Handler's ruling."""
+def test_a_liquid_row_with_no_water_is_refused(client, db):
+    """No stored water: the browser shows no value (waterOf is null) and
+    refuses the row, so the server refuses any numbers sent for it, even the
+    ones 2 mL would give (controller ruling, 2026-10-13)."""
     w = _world(client, db)
-    item, _ = _row(db, w)
+    item, vial = _row(db, w)
     item.prep_form = "liquid"
     db.commit()
-    [res] = _results(_promote(client, w.ws, _line(item, 40, loq=40)))
-    assert res["promoted"] is True, res
-    [audit] = _audits(db)
-    assert (audit.details["water_ml"], audit.details["value"]) == (None, 40.0)
+    vial_id = vial.id
+    assert _results(_promote(client, w.ws, _line(item, 40, loq=40))) == [_refused(item, BAD)]
+    assert _results(_promote(client, w.ws, _line(item))) == [_refused(item, BAD)]
+    assert _audits(db) == []
+    db.expire_all()
+    assert db.get(LimsAnalysis, vial_id).result_value is None
 
 
 # --- the fill: apply_transition's submit-only unit and limits ----------------
@@ -818,19 +822,20 @@ def test_a_corrected_value_without_limits_clears_them_and_an_unchanged_one_keeps
         "lod_unit": {"before": "EU/mL", "after": None}}
 
 
-# --- the sample page's promote limits are bounded too ------------------------
+# --- the internal promote's limits are bounded too ---------------------------
 
 @pytest.mark.parametrize("field, value", [
-    ("loq", "NaN"), ("loq", "-1"), ("lod", "0"), ("lod", "Infinity")])
-def test_the_sample_pages_promote_refuses_an_unusable_loq_or_lod(client, field, value):
-    # The COA prints a stored LOQ (Task 4), so NaN, inf, 0 or a negative never reaches it.
-    body = ('{"keyword": "ENDOTOXIN-USP85LAL", "result_value": "25", '
-            '"sources": [{"analysis_id": 1, "contribution_kind": "chosen"}], "%s": %s}'
-            % (field, value))
-    r = client.post("/api/lims-analyses/promote", content=body,
-                    headers={"Content-Type": "application/json"})
-    assert r.status_code == 422, r.text
-    assert r.json()["detail"][0]["loc"] == ["body", field]
+    ("loq", float("nan")), ("loq", -1.0), ("lod", 0.0), ("lod", float("inf"))])
+def test_a_promote_request_refuses_an_unusable_loq_or_lod(field, value):
+    # The COA prints a stored LOQ (Task 4), so NaN, inf, 0 or a negative never
+    # reaches it. Only the worksheet promote sends limits (final review I-3),
+    # in the PromoteRequest it hands run_promote directly; the public route
+    # refuses any (test_promote_flow.py). FastAPI's json.loads gives these floats.
+    with pytest.raises(ValidationError) as caught:
+        PromoteRequest(keyword="ENDOTOXIN-USP85LAL", result_value="25",
+                       sources=[{"analysis_id": 1, "contribution_kind": "chosen"}],
+                       **{field: value})
+    assert [e["loc"] for e in caught.value.errors()] == [(field,)]
 
 
 # --- end to end: the promoted "<" result prints "< LOQ" on the COA -----------
