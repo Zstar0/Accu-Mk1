@@ -47,7 +47,7 @@ def w():
     note = BoardNode(board_id=org.id, kind="note", label="Welcome")
     s.add(note)
     s.commit()
-    return SimpleNamespace(s=s, org=org, exec_=exec_, note=note)
+    return SimpleNamespace(s=s, org=org, exec_=exec_, note=note, editors=editors, viewers=viewers)
 
 
 def test_registered_with_must_exist(w):
@@ -92,7 +92,6 @@ def test_can_view_follows_the_board(w):
 
 def test_visible_entity_ids_and_clause(w):
     from flags import seams, service as flags
-    from flags.models import FlagFlag
     spec = seams.get_entity_spec("board")
     assert spec.visible_entity_ids(w.s, ADMIN) is None
     ids = set(w.s.execute(spec.visible_entity_ids(w.s, OUTSIDER)).scalars().all())
@@ -108,15 +107,23 @@ def test_audience_and_snapshot(w):
     spec = seams.get_entity_spec("board")
     assert spec.audience(w.s, str(w.org.id)) is None
     aud = spec.audience(w.s, str(w.exec_.id))
-    assert set(aud["groups"]) == {g.id for g in w.s.execute(select(__import__("groups.models", fromlist=["UserGroup"]).UserGroup)).scalars()}
+    assert set(aud["groups"]) == {w.editors.id, w.viewers.id}
     assert spec.audience(w.s, "999") == {"groups": []}
     assert spec.snapshot(w.s, str(w.exec_.id)) == {"board": "exec"}
+
+
+def test_malformed_ids_are_rejected_not_500(w):
+    """Non-ASCII digits and over-long digit strings resolve to nothing, not an exception."""
+    from flags import seams
+    for bad in ("²", "9" * 30):
+        assert seams.resolve_context(w.s, "board", bad) is None
+        assert seams.can_view_entity(w.s, OUTSIDER, "board", bad) is False
 
 
 def test_search_is_scoped_to_visible_boards(w):
     from flags import seams
     hits = seams.resolve_entity_search(w.s, "board", "e", user=OUTSIDER)
-    assert [h["label"] for h in hits] == []   # "Exec" hidden, "Org" does not match "e" as a prefix
+    assert [h["label"] for h in hits] == []   # "Exec" matches the prefix "e" but is hidden from OUTSIDER
     hits = seams.resolve_entity_search(w.s, "board", "ex", user=VIEWER)
     assert [(h["entity_id"], h["label"]) for h in hits] == [(str(w.exec_.id), "Exec")]
 

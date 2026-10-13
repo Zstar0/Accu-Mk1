@@ -137,10 +137,16 @@ def _snapshot(db, eid) -> Optional[dict]:
 def _audience(db, eid) -> Optional[dict]:
     """Live-event audience: everyone for a company board, the granted groups (plus admins)
     for a restricted board, nobody but admins for an orphaned anchor."""
-    from boards.models import BoardGrant
     node, board = _load(db, eid)
     if node is None:
         return {"groups": []}
+    return _board_audience_of(db, board)
+
+
+def _board_audience_of(db: Session, board) -> Optional[dict]:
+    """Who hears live events about this board: everyone for a company board, the granted
+    groups (plus admins) for a restricted one. Shared by both anchors and by boards.service."""
+    from boards.models import BoardGrant
     if board.visibility == "company":
         return None
     gids = db.execute(select(BoardGrant.group_id).where(BoardGrant.board_id == board.id)
@@ -246,15 +252,10 @@ def _board_snapshot(db, eid) -> Optional[dict]:
 
 
 def _board_audience(db, eid) -> Optional[dict]:
-    from boards.models import BoardGrant
     board = _load_board(db, eid)
     if board is None:
         return {"groups": []}
-    if board.visibility == "company":
-        return None
-    gids = db.execute(select(BoardGrant.group_id).where(BoardGrant.board_id == board.id)
-                      .order_by(BoardGrant.group_id)).scalars().all()
-    return {"groups": [int(g) for g in gids]}
+    return _board_audience_of(db, board)
 
 
 def register_board() -> None:
