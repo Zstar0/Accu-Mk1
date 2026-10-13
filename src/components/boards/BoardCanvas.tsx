@@ -47,6 +47,7 @@ import {
   isDrawerKind,
   parseViewport,
   resizePatch,
+  pullThrough,
   resolveParentOnDrop,
   toFlowEdges,
   toFlowNodes,
@@ -112,7 +113,11 @@ function CanvasInner({
   const patchEdge = usePatchEdge(board.slug)
   const deleteEdge = useDeleteEdge(board.slug)
   const createNode = useCreateNode(board.slug)
-  const { fitView, screenToFlowPosition } = useReactFlow()
+  const { fitView, screenToFlowPosition, getInternalNode, getViewport } =
+    useReactFlow()
+  // Pull-through: where the pointer grabbed the dragged child (canvas units) and the frame it popped out of.
+  const grabRef = useRef<{ id: string; dx: number; dy: number } | null>(null)
+  const poppedRef = useRef<{ id: string; from: string } | null>(null)
   const flowRef = useRef<HTMLDivElement>(null)
   // Read once into state (React Compiler: no impure reads during render).
   const [initialViewport] = useState(() =>
@@ -156,10 +161,79 @@ function CanvasInner({
     [nodes, selectedId]
   )
 
+  const handleDragStart = useCallback(
+    (e: MouseEvent | TouchEvent, n: Node) => {
+      onSelect(Number(n.id))
+      grabRef.current = null
+      poppedRef.current = null
+      const abs = getInternalNode(n.id)?.internals.positionAbsolute
+      if (!n.parentId || !abs || !('clientX' in e)) return
+      const p = screenToFlowPosition({ x: e.clientX, y: e.clientY })
+      grabRef.current = { id: n.id, dx: p.x - abs.x, dy: p.y - abs.y }
+    },
+    [onSelect, getInternalNode, screenToFlowPosition]
+  )
+
+  // A child dragged against its frame edge leans toward the pointer, then pops out past POP_AT
+  // (spec 8.7): xyflow re-reads parentId/extent every move, so clearing them un-clamps the node live.
+  const handleDrag = useCallback(
+    (e: MouseEvent | TouchEvent, n: Node) => {
+      const grab = grabRef.current
+      if (!grab || grab.id !== n.id || !n.parentId || !('clientX' in e)) return
+      const abs = getInternalNode(n.id)?.internals.positionAbsolute
+      if (!abs) return
+      const p = screenToFlowPosition({ x: e.clientX, y: e.clientY })
+      const wanted = { x: p.x - grab.dx, y: p.y - grab.dy }
+      const { stretch, pop } = pullThrough(wanted, abs, getViewport().zoom)
+      if (pop) {
+        poppedRef.current = { id: n.id, from: n.parentId }
+        grabRef.current = null
+      }
+      setNodes(ns =>
+        ns.map(x => {
+          if (x.id !== n.id) return x
+          const { translate: _t, ...style } = (x.style ?? {}) as Record<
+            string,
+            unknown
+          >
+          if (pop)
+            return {
+              ...x,
+              parentId: undefined,
+              extent: undefined,
+              position: wanted,
+              style,
+            }
+          const lean = stretch.x || stretch.y
+          if (!lean && _t === undefined) return x
+          return {
+            ...x,
+            style: lean
+              ? { ...style, translate: `${stretch.x}px ${stretch.y}px` }
+              : style,
+          }
+        })
+      )
+    },
+    [getInternalNode, screenToFlowPosition, getViewport, setNodes]
+  )
+
   const handleDragStop = useCallback(
     (_: unknown, _node: Node, dragged: Node[]) => {
+      const popped = poppedRef.current
+      grabRef.current = null
+      poppedRef.current = null
+      // Spring back if it was leaning and did not pop.
+      setNodes(ns =>
+        ns.map(x => {
+          if (x.style?.translate === undefined) return x
+          const { translate: _t, ...style } = x.style
+          return { ...x, style }
+        })
+      )
       if (!canEdit) return
-      const frames = toFrameRects(nodes)
+      // A node that just popped out must not be re-adopted by the frame it left.
+      const frames = toFrameRects(nodes).filter(f => f.id !== popped?.from)
       const moved = dragged.map(n => {
         // Frames never nest: a dragged frame is resolved against no frames.
         const resolved = resolveParentOnDrop(
@@ -181,7 +255,7 @@ function CanvasInner({
       const items = toPositionItems(rows, moved)
       if (items.length) patchPositions.mutate(items)
     },
-    [canEdit, nodes, rows, patchPositions]
+    [canEdit, nodes, rows, patchPositions, setNodes]
   )
 
   const handleConnect = useCallback(
@@ -352,7 +426,8 @@ function CanvasInner({
         onNodeClick={(_, n) => onSelect(Number(n.id))}
         // Drag selects first, so xyflow's drag set is only this node (selection stays controlled).
         selectNodesOnDrag={false}
-        onNodeDragStart={(_, n) => onSelect(Number(n.id))}
+        onNodeDragStart={handleDragStart}
+        onNodeDrag={handleDrag}
         onNodeDragStop={handleDragStop}
         onConnect={handleConnect}
         onPaneClick={() => onSelect(null)}
