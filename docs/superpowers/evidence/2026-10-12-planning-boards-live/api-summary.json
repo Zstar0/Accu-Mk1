@@ -1,25 +1,25 @@
 {
-  "run": "k2hs",
+  "run": "x3gd",
   "seed": {
-    "slug": "live-k2hs",
-    "board_id": 6,
-    "frame_id": 10,
-    "note_id": 11,
+    "slug": "live-x3gd",
+    "board_id": 15,
+    "frame_id": 26,
+    "note_id": 27,
     "person_user_id": 166,
     "entity_id": null,
     "document_code": null,
     "flags": {
-      "blocker": 22,
-      "overdue": 23,
-      "board": 24,
-      "resolved": 25
+      "blocker": 46,
+      "overdue": 47,
+      "board": 48,
+      "resolved": 49
     }
   },
   "endpoint": {
     "flag_ids": [
-      22,
-      23,
-      24
+      46,
+      47,
+      48
     ],
     "open_flag_count": 3
   },
@@ -32,12 +32,48 @@
     "blocker_y": 416.375
   },
   "raise_on_board": {
-    "restricted_slug": "live-restricted-k2hs",
+    "restricted_slug": "live-restricted-x3gd",
     "outsider_status": 403,
     "missing_board_status": 403,
     "editor_status": 201
   },
   "board_card": {
-    "text": "Live flags (k2hs)\nmap\ncompany\n3 items\n3 open flags\neditor\nOpen\nShare\nDelete"
+    "text": "Live flags (x3gd)\nmap\ncompany\n3 items\n3 open flags\neditor\nOpen\nShare\nDelete"
+  },
+  "compact": {
+    "zoom_0_3_compact": true,
+    "zoom_1_body_visible": true
+  },
+  "cmd_k": {
+    "selected": 26
+  },
+  "remove_from_frame": {
+    "before": {
+      "parent_id": 26,
+      "x": 200,
+      "y": 60
+    },
+    "frame": {
+      "x": 40,
+      "y": 80
+    },
+    "after": {
+      "parent_id": null,
+      "x": 240,
+      "y": 140
+    }
+  },
+  "note_resize": {
+    "w": 300,
+    "h": 99
+  },
+  "live": {
+    "text_node_id": 29,
+    "stream_responses": [
+      {
+        "status": 200,
+        "url": "/api/api/flags/stream"
+      }
+    ]
   }
 }

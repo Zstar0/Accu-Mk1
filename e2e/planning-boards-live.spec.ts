@@ -67,10 +67,10 @@ function record(k: string, v: unknown) {
 }
 
 /** Pin zoom and pan so the frame and its pills sit in view (see the layout spec). */
-async function open(page: Page) {
+async function open(page: Page, zoom = 1) {
   await page.addInitScript(
     ({ key, vp }) => window.localStorage.setItem(key, JSON.stringify(vp)),
-    { key: VIEWPORT_KEY, vp: { x: 0, y: 0, zoom: 1 } }
+    { key: VIEWPORT_KEY, vp: { x: 0, y: 0, zoom } }
   )
   await authenticate(page)
   await page.goto(`/#boards/board?id=${SLUG}`)
@@ -83,6 +83,29 @@ let boardId = 0
 let frameId = 0
 let noteId = 0
 const flagIds: Record<string, number> = {}
+/** Test 5's editor (a second user in an editors group), reused as test 11's other actor. */
+const editorActor = { email: '', pw: '', groupId: 0 }
+
+interface NodeRow {
+  id: number
+  parent_id: number | null
+  x: number
+  y: number
+  w: number | null
+  h: number | null
+}
+async function nodeRows(request: APIRequestContext) {
+  const r = await request.get(`${BACKEND_URL}/api/boards/${SLUG}`, {
+    headers: bearer(await token(request)),
+  })
+  expect(r.ok(), await r.text()).toBeTruthy()
+  return ((await r.json()) as { nodes: NodeRow[] }).nodes
+}
+function findRow(rows: NodeRow[], id: number) {
+  const n = rows.find(r => r.id === id)
+  if (!n) throw new Error(`node ${id} not on the board`)
+  return n
+}
 
 async function raise(
   request: APIRequestContext,
@@ -330,6 +353,7 @@ test('raise on the board: editors see the button; outsiders on a restricted boar
   })
   expect(g.status(), await g.text()).toBe(201)
   const gid = ((await g.json()) as { id: number }).id
+  Object.assign(editorActor, { email: editorEmail, pw, groupId: gid })
   const m = await request.put(`${BACKEND_URL}/api/groups/${gid}/members`, {
     headers: admin,
     data: { user_ids: [editorId] },
@@ -400,4 +424,144 @@ test('board card: the overview shows 3 open flags', async ({ page }) => {
   await card.scrollIntoViewIfNeeded()
   record('board_card', { text: await card.innerText() })
   await shot(page, '03-board-card-count.png')
+})
+
+const NOTE_BODY = 'Reagent lot, artwork, newsletter.'
+
+test('compact: below 0.5 zoom the note shows its label only; at zoom 1 its body', async ({
+  page,
+}) => {
+  await open(page, 0.3)
+  const note = page.locator(`.react-flow__node[data-id="${noteId}"]`)
+  await expect(note.locator('[data-compact="true"]')).toBeVisible({
+    timeout: 15_000,
+  })
+  await expect(note).toContainText('Launch checklist')
+  await expect(note).not.toContainText(NOTE_BODY)
+  await shot(page, '04-compact.png')
+
+  // Init scripts run in order on reload, so this pin wins over the 0.3 one.
+  await page.addInitScript(
+    ({ key, vp }) => window.localStorage.setItem(key, JSON.stringify(vp)),
+    { key: VIEWPORT_KEY, vp: { x: 0, y: 0, zoom: 1 } }
+  )
+  await page.reload()
+  await expect(note).toContainText(NOTE_BODY, { timeout: 15_000 })
+  await expect(note.locator('[data-compact="true"]')).toHaveCount(0)
+  record('compact', { zoom_0_3_compact: true, zoom_1_body_visible: true })
+})
+
+test('cmd+k: the palette lists the frame; Enter selects it', async ({
+  page,
+}) => {
+  await open(page)
+  await page.keyboard.press('Control+k')
+  await page.keyboard.type('Marketing')
+  await page.keyboard.press('Enter')
+  const close = page.getByRole('button', { name: 'Close panel' })
+  await expect(close).toBeVisible({ timeout: 10_000 })
+  await expect(
+    close.locator('..').getByText('Marketing', { exact: true })
+  ).toBeVisible()
+  await expect(page.locator(`#node-label-${frameId}`)).toHaveValue('Marketing')
+  record('cmd_k', { selected: frameId })
+})
+
+test('remove from frame: the note leaves the frame and keeps its canvas spot', async ({
+  page,
+  request,
+}) => {
+  const before = await nodeRows(request)
+  const frame = findRow(before, frameId)
+  const old = findRow(before, noteId)
+  expect(old.parent_id).toBe(frameId)
+
+  await open(page)
+  await page.locator(`.react-flow__node[data-id="${noteId}"]`).click()
+  await page.getByRole('button', { name: 'Remove from frame' }).click()
+
+  const want = { parent_id: null, x: frame.x + old.x, y: frame.y + old.y }
+  await expect
+    .poll(
+      async () => {
+        const n = findRow(await nodeRows(request), noteId)
+        return { parent_id: n.parent_id, x: n.x, y: n.y }
+      },
+      { timeout: 10_000 }
+    )
+    .toEqual(want)
+  record('remove_from_frame', {
+    before: { parent_id: old.parent_id, x: old.x, y: old.y },
+    frame: { x: frame.x, y: frame.y },
+    after: want,
+  })
+})
+
+test('note resize: the corner grip sets w and h', async ({ page, request }) => {
+  await open(page)
+  const note = page.locator(`.react-flow__node[data-id="${noteId}"]`)
+  await note.click()
+  // xyflow splits the position into classes: `bottom-right` renders `.bottom.right`.
+  const grip = note.locator('.react-flow__resize-control.bottom.right')
+  await expect(grip).toBeVisible({ timeout: 10_000 })
+  const g = await grip.boundingBox()
+  if (!g) throw new Error('resize grip has no bounding box')
+  const sx = g.x + g.width / 2
+  const sy = g.y + g.height / 2
+  await page.mouse.move(sx, sy)
+  await page.mouse.down()
+  await page.mouse.move(sx + 30, sy + 20, { steps: 5 })
+  await page.mouse.move(sx + 60, sy + 40, { steps: 5 })
+  await page.mouse.up()
+
+  await expect
+    .poll(
+      async () => {
+        const n = findRow(await nodeRows(request), noteId)
+        return n.w != null && n.h != null && n.w >= 300
+      },
+      { timeout: 10_000 }
+    )
+    .toBe(true)
+  const n = findRow(await nodeRows(request), noteId)
+  record('note_resize', { w: n.w, h: n.h })
+})
+
+test('live: another editor creates a text node and it appears without a reload', async ({
+  page,
+  request,
+}) => {
+  expect(editorActor.email, 'test 5 creates the second editor').not.toBe('')
+  const admin = bearer(await token(request))
+  const gr = await request.put(`${BACKEND_URL}/api/boards/${SLUG}/grants`, {
+    headers: admin,
+    data: [{ group_id: editorActor.groupId, can_edit: true }],
+  })
+  expect(gr.status(), await gr.text()).toBe(200)
+
+  const stream: { status: number; url: string }[] = []
+  page.on('response', r => {
+    if (r.url().includes('/api/flags/stream'))
+      stream.push({ status: r.status(), url: new URL(r.url()).pathname })
+  })
+  await open(page)
+
+  const label = `Live text`
+  const created = await request.post(
+    `${BACKEND_URL}/api/boards/${SLUG}/nodes`,
+    {
+      headers: bearer(await login(request, editorActor.email, editorActor.pw)),
+      data: { kind: 'text', label, x: 300, y: 460 },
+    }
+  )
+  expect(created.status(), await created.text()).toBe(201)
+  const textId = ((await created.json()) as { id: number }).id
+
+  const node = page.locator('.react-flow__node-text', { hasText: label })
+  try {
+    await expect(node).toBeVisible({ timeout: 10_000 })
+  } finally {
+    record('live', { text_node_id: textId, stream_responses: stream })
+  }
+  await shot(page, '05-live-update.png')
 })
