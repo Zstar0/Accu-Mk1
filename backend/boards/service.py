@@ -232,8 +232,12 @@ def boards_for_entity(db: Session, user, entity_type: str, entity_id: str) -> li
 def board_out(db: Session, user, board: Board, counts: Optional[dict] = None,
               flag_counts: Optional[dict] = None) -> BoardOut:
     out = BoardOut.model_validate(board)
-    out.node_count = (counts or node_counts(db, [board.id])).get(board.id, 0)
-    out.open_flag_count = (flag_counts or open_flag_counts(db, [board.id])).get(board.id, 0)
+    if counts is None:
+        counts = node_counts(db, [board.id])
+    if flag_counts is None:
+        flag_counts = open_flag_counts(db, [board.id])
+    out.node_count = counts.get(board.id, 0)
+    out.open_flag_count = flag_counts.get(board.id, 0)
     out.can_edit = access.can_edit_board(db, user, board)
     return out
 

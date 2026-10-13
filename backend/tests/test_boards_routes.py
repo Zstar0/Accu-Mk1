@@ -218,3 +218,53 @@ def test_list_carries_open_flag_count_for_board_and_item_anchors(client):
     rows = {b["slug"]: b for b in client.get("/api/boards").json()}
     assert rows["org"]["open_flag_count"] == 2
     assert rows["exec"]["open_flag_count"] == 0
+
+
+def test_list_runs_count_queries_once_even_when_no_board_has_flags(client, monkeypatch):
+    from boards import service
+    for slug in ("aa", "bb", "cc"):
+        _board(client, slug)
+    calls = {"flags": 0, "nodes": 0}
+    real_f, real_n = service.open_flag_counts, service.node_counts
+
+    def counting_f(*a, **k):
+        calls["flags"] += 1
+        return real_f(*a, **k)
+
+    def counting_n(*a, **k):
+        calls["nodes"] += 1
+        return real_n(*a, **k)
+
+    monkeypatch.setattr(service, "open_flag_counts", counting_f)
+    monkeypatch.setattr(service, "node_counts", counting_n)
+    rows = client.get("/api/boards").json()
+    assert len(rows) == 3 and all(r["open_flag_count"] == 0 for r in rows)
+    assert calls == {"flags": 1, "nodes": 1}
+
+
+def test_board_flags_hide_anchors_the_caller_cannot_see(client):
+    from sqlalchemy import literal, select
+    from flags import seams
+
+    def _admin(u):
+        return getattr(u, "role", None) == "admin"
+
+    seams.register_entity(
+        "vault_item", label=lambda db, eid: f"Vault {eid}", deep_link=lambda eid: "/#vault",
+        can_flag=lambda user, eid: True,
+        context=lambda db, eid: {"entity_type": "vault_item", "entity_id": eid, "label": f"Vault {eid}", "deep_link": {"kind": "vault_item", "id": eid}, "sample_id": None, "analyses": [], "lot": None},
+        can_raise=lambda db, user, eid: _admin(user), can_view=lambda db, user, eid: _admin(user),
+        visible_entity_ids=lambda db, user: None if _admin(user) else select(literal("")).where(literal(False)),
+        must_exist=True)
+    try:
+        _board(client, "org")
+        client.as_user(ADMIN)
+        assert client.post("/api/boards/org/nodes", json={"kind": "entity", "entity_type": "vault_item",
+                                                          "entity_id": "1"}).status_code == 201
+        _flag(client, "vault_item", "1", "secret")
+        assert [f["title"] for f in client.get("/api/boards/org/flags").json()] == ["secret"]
+        client.as_user(VIEWER)
+        r = client.get("/api/boards/org/flags")
+        assert r.status_code == 200 and r.json() == []
+    finally:
+        seams._REGISTRY.pop("vault_item", None)
