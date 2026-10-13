@@ -52,7 +52,7 @@ A macro is `{` + a name of lowercase letters or underscores + `}`. Only `{lod}` 
   - If any macro inside it is empty, the whole segment, brackets included, is removed.
   - Otherwise the segment prints its resolved inner text, without the brackets.
 - `[` ... `]` that contains no macro prints exactly as typed, brackets included. This keeps every existing profile text byte-identical.
-- Segments do not nest: the first `]` after a `[` closes it. An unmatched `[` or `]` prints as typed.
+- A segment is a `[` ... `]` pair with no bracket inside it, so segments never nest; any other bracket, including an unmatched `[` or `]` or the outer pair around a nested one, prints as typed.
 - A macro outside any segment that is empty resolves to an empty string. The editor hint recommends brackets.
 
 ### Whitespace
