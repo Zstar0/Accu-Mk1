@@ -2227,6 +2227,13 @@ class LimsAnalysis(Base):
 
     result_value: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     result_unit: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    # Endo slice 3 (spec 2026-10-12 section 4): the result's own limit of
+    # quantitation (in result_unit) and limit of detection (in lod_unit, the
+    # cartridge sensitivity's unit). Plain floats so the amendment audit can
+    # record them. A below-LOQ result is stored as the number equal to its LOQ.
+    loq: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    lod: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    lod_unit: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
 
     review_state: Mapped[str] = mapped_column(
         Text, nullable=False, default="unassigned", server_default="unassigned",

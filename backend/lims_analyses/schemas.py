@@ -23,6 +23,10 @@ class NativeParentAnalysisRow(BaseModel):
     title: str
     result_value: Optional[str] = None
     result_unit: Optional[str] = None
+    # Endo slice 3: the result's own LOQ / LOD (None when it carries none).
+    loq: Optional[float] = None
+    lod: Optional[float] = None
+    lod_unit: Optional[str] = None
     review_state: str
     updated_at: datetime
 
@@ -167,6 +171,10 @@ class AnalysisResponse(BaseModel):
     title: str
     result_value: Optional[str]
     result_unit: Optional[str]
+    # Endo slice 3: the result's own LOQ / LOD (None when it carries none).
+    loq: Optional[float] = None
+    lod: Optional[float] = None
+    lod_unit: Optional[str] = None
     review_state: str
     method_id: Optional[int]
     instrument_id: Optional[int]
@@ -302,6 +310,11 @@ class SenaiteShapeAnalysisResponse(BaseModel):
     # result yet, an informational spec, or a rule that could not run).
     specification: Optional[dict] = None
     conforms: Optional[bool] = None
+    # Endo slice 3 (spec section 7): the result's own LOQ / LOD, straight off
+    # the row. None when the result carries none (every pre-slice row).
+    loq: Optional[float] = None
+    lod: Optional[float] = None
+    lod_unit: Optional[str] = None
 
 
 # ─── Phase 4a: promote_to_parent response shapes ─────────────────────────────

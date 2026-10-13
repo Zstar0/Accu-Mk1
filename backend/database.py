@@ -2594,6 +2594,12 @@ def _run_migrations():
         "ALTER TABLE customer_ai_reviews ADD COLUMN IF NOT EXISTS document_code VARCHAR(32)",
         "ALTER TABLE customer_ai_reviews ADD COLUMN IF NOT EXISTS names_scrubbed INTEGER NOT NULL DEFAULT 0",
         "ALTER TABLE customer_ai_reviews ADD COLUMN IF NOT EXISTS document_error TEXT",
+        # Endo slice 3 (spec 2026-10-12 section 4): a result's own LOQ and LOD.
+        # Nullable, no backfill. Kept above the retest_of_sample_id statement,
+        # which tests/test_hplc_native_schema.py pins as the list's last.
+        "ALTER TABLE lims_analyses ADD COLUMN IF NOT EXISTS loq DOUBLE PRECISION",
+        "ALTER TABLE lims_analyses ADD COLUMN IF NOT EXISTS lod DOUBLE PRECISION",
+        "ALTER TABLE lims_analyses ADD COLUMN IF NOT EXISTS lod_unit TEXT",
         # HPLC-native slice 6 (M8): links a retest's sample row back to the
         # original Mk1 row it was retested from (from signal meta
         # RetestOfSampleId). Nullable, no FK — the original may be a

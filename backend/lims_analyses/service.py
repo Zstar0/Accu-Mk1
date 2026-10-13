@@ -342,12 +342,12 @@ def own_promotions_for_source(db: Session, source_analysis_id: int) -> list:
 # ─── Amendment audit (spec 2026-08-07)───────────────────────────────────────
 # Fields whose changes are captured as before/after into
 # lims_analysis_transitions.details. Values must stay JSON-serializable
-# (str/int/bool/None) — never add a datetime here; per-state timestamps are
-# derivable from the transition rows themselves.
+# (str/int/float/bool/None); never add a datetime here, per-state timestamps
+# are derivable from the transition rows themselves.
 TRACKED_FIELDS = (
     "result_value", "result_unit", "method_id", "instrument_id",
     "reportable", "reportable_reason", "analyst_user_id", "processed_by_user_id",
-    "retested",
+    "retested", "loq", "lod", "lod_unit",
 )
 
 
@@ -364,6 +364,15 @@ def _deltas(before: dict, row) -> dict:
         f: {"before": before[f], "after": after[f]}
         for f in TRACKED_FIELDS if before[f] != after[f]
     }}
+
+
+def clear_result_limits(row) -> None:
+    """Endo slice 3: a result's LOQ and LOD go wherever its value goes. Called
+    by every path that clears result_value (reset, both un-promote paths), so
+    a regenerated COA can never print a stale "< LOQ" off a cleared result."""
+    row.loq = None
+    row.lod = None
+    row.lod_unit = None
 
 
 # ─── Transitions ─────────────────────────────────────────────────────────────
@@ -603,6 +612,7 @@ def apply_transition(
         # Clear any draft result + provenance on the way back to unassigned.
         row.result_value = None
         row.result_unit = None
+        clear_result_limits(row)
         row.method_id = None
         row.instrument_id = None
         row.captured_at = None
@@ -2054,7 +2064,7 @@ def list_analysis_change_events_for_parent(
         where = f" ({vial.sample_id})" if vial else ""
 
         rv = changed.get("result_value")
-        only_result = set(changed) <= {"result_value", "result_unit"}
+        only_result = set(changed) <= {"result_value", "result_unit", "loq", "lod", "lod_unit"}
         if rv and rv["before"] is None and rv["after"] is not None and only_result:
             event = "result_entered"
             label = f"Result entered — {a.title}: {rv['after']}{where}"
@@ -2368,6 +2378,7 @@ def cascade_parent_retest_to_sources(
         # The superseded SOURCE vial row keeps the old value for history.
         parent_analysis.result_value = None
         parent_analysis.result_unit = None
+        clear_result_limits(parent_analysis)
         parent_analysis.updated_at = datetime.utcnow()
         db.add(LimsAnalysisTransition(
             analysis_id=parent_analysis.id,
@@ -2757,6 +2768,7 @@ def vial_source_retest(
                 # state, so a retracted parent still renders otherwise.
                 parent.result_value = None
                 parent.result_unit = None
+                clear_result_limits(parent)
                 parent.updated_at = datetime.utcnow()
                 db.add(LimsAnalysisTransition(
                     analysis_id=parent.id,
@@ -3943,6 +3955,9 @@ def _serialize_senaite_shape_rows(
             reportable=r.reportable,
             peptide_id=r.peptide_id,
             slot=r.slot,
+            loq=r.loq,
+            lod=r.lod,
+            lod_unit=r.lod_unit,
             **_spec_fields,
         ))
     return out
