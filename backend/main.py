@@ -21405,6 +21405,23 @@ def _validate_coa_footnotes(value) -> None:
                 400, f"coa_footnotes[{i}] must be {{label, text}} with non-empty strings")
 
 
+def _validate_coa_text_macros(fields: dict) -> None:
+    """Endo slice 4: COA text may carry only the macros coa.text_macros knows,
+    so a typo never reaches a certificate (the COA build itself leaves an
+    unknown macro as typed)."""
+    from coa.text_macros import MACROS, unknown_macros
+    texts = [fields.get(k) for k in ("coa_basis_note", "coa_method_text", "coa_prep_text")]
+    notes = fields.get("coa_footnotes")
+    if isinstance(notes, list):
+        texts += [n.get("text") for n in notes if isinstance(n, dict)]
+    for text in texts:
+        bad = unknown_macros(text if isinstance(text, str) else None)
+        if bad:
+            supported = ", ".join("{" + m + "}" for m in MACROS)
+            raise HTTPException(
+                400, "unknown COA text macro {" + bad[0] + "}; supported: " + supported)
+
+
 @app.get("/analysis-profiles", response_model=list[AnalysisProfileResponse])
 async def get_analysis_profiles(db: Session = Depends(get_db), _current_user=Depends(get_current_user)):
     from models import AnalysisProfile
@@ -21439,6 +21456,7 @@ async def create_analysis_profile(
             "retroactive across in-flight samples)",
         )
     _validate_coa_footnotes(data.coa_footnotes)
+    _validate_coa_text_macros(data.model_dump())
     existing = db.execute(
         select(AnalysisProfile).where(AnalysisProfile.key == data.key)
     ).scalar_one_or_none()
@@ -21528,6 +21546,7 @@ async def update_analysis_profile(
         )
     if "coa_footnotes" in fields:
         _validate_coa_footnotes(fields["coa_footnotes"])
+    _validate_coa_text_macros(fields)
     # Task 11: reject an unknown sla_tier_id with a 400. An explicit null
     # (present in `fields` thanks to exclude_unset) is legal — it clears the
     # profile's own tier and falls back to inheriting the group's tier.
