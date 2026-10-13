@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+### Agents get their own Mk1 accounts
+- **Settings > Agents (admins):** create a machine user for an AI agent with a username; Mk1 shows its key once. No password, no server change, works on the next request.
+- **Least privilege by default:** an agent can read and write documents in the spaces it can see (General plus its groups) and nothing else. **Lab tools** (lab reads, reports, flags) and **COA publishing** are separate switches per agent; COA publishing needs Lab tools.
+- **Revoke instantly:** deactivate the agent or rotate its key; the old key stops on the next request. Everything an agent writes is attributed to it.
+- Agents never appear in staff lists, cannot log in, and cannot be edited as people.
+
 ### Planning boards, slice 4: flags on the board
 - **Flag a board.** Editors raise flags on the board itself from the header; board-level flags show in the attention dock and count on the board card. A board with open flags cannot be deleted.
 - **Every flag on a board, once.** `GET /api/boards/{slug}/flags` returns the open flags on the board, its items and the entities behind entity items, under the caller's visibility. Frames show blocking and open counts, entity items show an open count, person cards show how many of the board's flags are assigned to them, and board cards show the open count.

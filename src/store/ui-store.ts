@@ -88,6 +88,7 @@ export type SettingsSubSection =
   | 'checkIn'
   | 'workflow'
   | 'integrations'
+  | 'agents'
   | 'advanced'
 export type ActiveSubSection =
   | DashboardSubSection

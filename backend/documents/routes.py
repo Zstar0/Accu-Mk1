@@ -9,12 +9,13 @@ from dataclasses import dataclass
 from types import SimpleNamespace
 from typing import Dict, List, Optional
 
-from fastapi import APIRouter, Depends, Header, HTTPException, Query, Response, status
+from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request, Response, status
 from fastapi.responses import JSONResponse
 from fastapi.security import OAuth2PasswordBearer
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, object_session
 
+from agents.keys import is_agent_key, username_of
 from auth import get_current_user, require_admin, require_internal_service_token
 from database import get_db
 from documents import access, comments, provenance, service
@@ -44,11 +45,13 @@ _SLUG_LIST = re.compile(rf"^{_SLUG_ATOM}(\+{_SLUG_ATOM})*$")
 
 @dataclass(frozen=True)
 class AgentWriter:
-    """A caller holding a documents-scoped agent token. Not a user: it has no id and
-    no email, and it may author and archive but never delete. `spaces` is the slug
-    allow-list it may publish into (spec 2026-10-06 section 7.1); absent = General."""
+    """A caller holding a documents-scoped agent token, or an agent USER's key (spec 2026-10-12
+    3.5). Not a User: it has no email and is never an admin; it may author and archive but never
+    delete. `spaces` is the slug allow-list it may publish into (env token: its configured list;
+    agent user: the spaces it can see). `user_id` is set for agent users only."""
     name: str
     spaces: frozenset = frozenset({"general"})
+    user_id: Optional[int] = None
 
 
 def _agent_tokens() -> Dict[str, tuple]:
@@ -101,7 +104,17 @@ def _agent_may_see(writer, doc: Document) -> bool:
     return slug in writer.spaces
 
 
+def _agent_user_writer(db, token: str, request) -> AgentWriter:
+    """An agent user's key on these routes is an AgentWriter, never its User row: until agent
+    users existed every bearer reaching here was an admin, and the deny checks lean on that
+    (require_document_admin_writer, the space-move check, updated_by, _reader_for)."""
+    from agents.auth import agent_for_route
+    user = agent_for_route(db, token, request)
+    return AgentWriter(username_of(user), access.visible_space_slugs(db, user), user.id)
+
+
 def require_document_writer(
+    request: Request = None,  # type: ignore[assignment]  # FastAPI injects it; direct calls pass none
     x_service_token: Optional[str] = Header(None),
     token: Optional[str] = Depends(_optional_bearer),
     db: Session = Depends(get_db),
@@ -116,6 +129,8 @@ def require_document_writer(
             return agent
         require_internal_service_token(x_service_token)
         return None
+    if token and is_agent_key(token):
+        return _agent_user_writer(db, token, request)
     if not token:
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, "authentication required")
     user = get_current_user(token=token, db=db)
@@ -132,6 +147,7 @@ def require_document_admin_writer(writer=Depends(require_document_writer)):
 
 
 def _space_reader(
+    request: Request = None,  # type: ignore[assignment]  # FastAPI injects it; direct calls pass none
     x_service_token: Optional[str] = Header(None),
     token: Optional[str] = Depends(_optional_bearer),
     db: Session = Depends(get_db),
@@ -144,6 +160,8 @@ def _space_reader(
             return agent
         require_internal_service_token(x_service_token)
         return None
+    if token and is_agent_key(token):
+        return _agent_user_writer(db, token, request)
     if not token:
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, "authentication required")
     return get_current_user(token=token, db=db)
@@ -445,7 +463,7 @@ def create_document(req: DocumentCreate, response: Response, db: Session = Depen
             db, title=req.title, html=req.html, category=cat, description=req.description,
             code=req.code, author=req.author, source_session=req.source_session,
             effective_date=req.effective_date, activate=req.activate,
-            user_id=getattr(writer, "id", None),
+            user_id=writer.user_id if isinstance(writer, AgentWriter) else getattr(writer, "id", None),
             co_author=writer.name if isinstance(writer, AgentWriter) else None,
             space=space,
             # Re-checked under the row lock: the read above is unlocked, so a code minted

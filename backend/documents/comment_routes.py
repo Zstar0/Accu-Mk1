@@ -12,11 +12,12 @@ import logging
 import re
 from typing import List, Optional
 
-from fastapi import APIRouter, Depends, File, Header, HTTPException, Query, Response, UploadFile, status
+from fastapi import APIRouter, Depends, File, Header, HTTPException, Query, Request, Response, UploadFile, status
 from fastapi.responses import PlainTextResponse
 from fastapi.security import OAuth2PasswordBearer
 from sqlalchemy.orm import Session
 
+from agents.keys import is_agent_key, username_of
 from auth import get_current_user, require_internal_service_token
 from database import get_db
 from documents import access, comment_export, comments, labels, service
@@ -33,6 +34,7 @@ _optional_bearer = OAuth2PasswordBearer(tokenUrl="/auth/login", auto_error=False
 
 
 def require_comment_actor(
+    request: Request = None,  # type: ignore[assignment]  # FastAPI injects it; direct calls pass none
     x_service_token: Optional[str] = Header(None),
     token: Optional[str] = Depends(_optional_bearer),
     db: Session = Depends(get_db),
@@ -48,6 +50,11 @@ def require_comment_actor(
                             "comments need a named author: use an agent token or a login")
     if not token:
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, "authentication required")
+    if token and is_agent_key(token):
+        from agents.auth import agent_for_route
+        from documents.access import visible_space_slugs
+        user = agent_for_route(db, token, request)
+        return actor_from_agent(username_of(user), visible_space_slugs(db, user))
     return actor_from_user(get_current_user(token=token, db=db))
 
 
