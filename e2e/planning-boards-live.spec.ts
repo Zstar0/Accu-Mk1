@@ -266,6 +266,7 @@ test('dock: overdue task above the blocker, no board task, Locate selects the fr
   await open(page)
   const trigger = page.getByRole('button', { name: 'Needs attention (2)' })
   await expect(trigger).toBeVisible({ timeout: 15_000 })
+  // No test id on the panel: this depends on BoardSidePanel's root `overflow-y-auto` class.
   const panel = trigger.locator(
     'xpath=ancestor::div[contains(@class,"overflow-y-auto")][1]'
   )
@@ -279,13 +280,24 @@ test('dock: overdue task above the blocker, no board task, Locate selects the fr
   expect(a.y).toBeLessThan(b.y)
   await expect(panel.getByText(T_BOARD, { exact: true })).toHaveCount(0)
   record('dock', { overdue_y: a.y, blocker_y: b.y })
-  await shot(page, '02-attention-dock.png')
 
-  await panel.getByRole('button', { name: 'Locate' }).first().click()
-  await expect(page.getByRole('button', { name: 'Close panel' })).toBeVisible({
-    timeout: 10_000,
-  })
+  // The first Locate belongs to the overdue task's row: it sits between that title and
+  // the blocker's title.
+  const locate = panel.getByRole('button', { name: 'Locate' }).first()
+  const l = await locate.boundingBox()
+  if (!l) throw new Error('Locate has no bounding box')
+  expect(l.y).toBeGreaterThan(a.y)
+  expect(l.y).toBeLessThan(b.y)
+  await locate.click()
+
+  const close = page.getByRole('button', { name: 'Close panel' })
+  await expect(close).toBeVisible({ timeout: 10_000 })
+  // The header row holding Close panel shows the frame's label.
+  await expect(
+    close.locator('..').getByText('Marketing', { exact: true })
+  ).toBeVisible()
   await expect(page.locator(`#node-label-${frameId}`)).toHaveValue('Marketing')
+  await shot(page, '02-attention-dock.png')
 })
 
 test('raise on the board: editors see the button; outsiders on a restricted board are refused like a missing board', async ({

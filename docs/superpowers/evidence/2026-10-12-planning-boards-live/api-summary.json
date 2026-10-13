@@ -1,25 +1,25 @@
 {
-  "run": "g26l",
+  "run": "k2hs",
   "seed": {
-    "slug": "live-g26l",
-    "board_id": 4,
-    "frame_id": 7,
-    "note_id": 8,
+    "slug": "live-k2hs",
+    "board_id": 6,
+    "frame_id": 10,
+    "note_id": 11,
     "person_user_id": 166,
     "entity_id": null,
     "document_code": null,
     "flags": {
-      "blocker": 17,
-      "overdue": 18,
-      "board": 19,
-      "resolved": 20
+      "blocker": 22,
+      "overdue": 23,
+      "board": 24,
+      "resolved": 25
     }
   },
   "endpoint": {
     "flag_ids": [
-      17,
-      18,
-      19
+      22,
+      23,
+      24
     ],
     "open_flag_count": 3
   },
@@ -32,12 +32,12 @@
     "blocker_y": 416.375
   },
   "raise_on_board": {
-    "restricted_slug": "live-restricted-g26l",
+    "restricted_slug": "live-restricted-k2hs",
     "outsider_status": 403,
     "missing_board_status": 403,
     "editor_status": 201
   },
   "board_card": {
-    "text": "Live flags (g26l)\nmap\ncompany\n3 items\n3 open flags\neditor\nOpen\nShare\nDelete"
+    "text": "Live flags (k2hs)\nmap\ncompany\n3 items\n3 open flags\neditor\nOpen\nShare\nDelete"
   }
 }
