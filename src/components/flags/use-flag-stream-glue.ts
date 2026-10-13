@@ -2,6 +2,7 @@ import { useEffect, useRef } from 'react'
 import { useQueryClient, type QueryClient } from '@tanstack/react-query'
 import { useFlagStream, type FlagStreamEvent } from '@/lib/flag-stream'
 import { flagKeys } from '@/hooks/use-flags'
+import { boardKeys } from '@/services/boards'
 import { flagTypeKeys } from '@/services/flag-types'
 import { useUIStore } from '@/store/ui-store'
 import { useAuthStore } from '@/store/auth-store'
@@ -280,6 +281,15 @@ export function useFlagStreamGlue(): void {
   }, [])
 
   useFlagStream((e: FlagStreamEvent) => {
+    // A board write by someone else: refetch that board and stop; it is not a flag event.
+    if (e.event_type === 'board_changed') {
+      const me = useAuthStore.getState().user?.id ?? null
+      if (e.board_slug && e.actor_id !== me)
+        queryClient.invalidateQueries({
+          queryKey: boardKeys.detail(e.board_slug),
+        })
+      return
+    }
     // Scoped + coalesced refresh (replaces the per-event blanket): lists,
     // summary badge, unread, activity, this flag's thread, and only the affected
     // entity's button(s).
