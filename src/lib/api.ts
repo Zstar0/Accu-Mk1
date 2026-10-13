@@ -4481,6 +4481,11 @@ export interface SenaiteAnalysis {
   /** true / false, or null: no result yet, a report-only spec, or a rule that
    *  could not run. Never computed on the FE. */
   conforms?: boolean | null
+  /** The result's own LOQ (its unit) and LOD (`lod_unit`, EU/mL for
+   *  endotoxin), when it carries them (endotoxin slice 3). */
+  loq?: number | null
+  lod?: number | null
+  lod_unit?: string | null
 }
 
 /** The COA wire `specification` dict (backend coa.native_sections). */
@@ -6433,6 +6438,14 @@ export interface WorksheetListItem {
     result_reader?: EndoReaderRecord | null
     result_entered_at?: string | null
     result_entered_by_user_id?: number | null
+    /** Endotoxin items only (slice 3): the vial's live endotoxin analysis,
+     *  null when the server finds no single one; absent on other items. */
+    endo_analysis?: {
+      id: number
+      state: string
+      keyword: string
+      native: boolean
+    } | null
   }[]
 }
 
@@ -6772,6 +6785,54 @@ export async function importReaderResults(
         response,
         `Reader import failed: ${response.status}`
       )
+    )
+  return response.json()
+}
+
+/** One Box 3 row to promote (slice 3, spec 5.3): the numbers the analyst
+ *  sees. A "<" result sends its LOQ as its value; `lod` is the row's
+ *  cartridge sensitivity, always in EU/mL. */
+export interface EndoPromoteRowIn {
+  item_id: number
+  value: number
+  unit: string
+  loq: number
+  lod: number
+  lod_unit: string
+}
+
+/** A row's outcome: promoted, with the parent result's id and state, or
+ *  not, with the server's reason. */
+export interface EndoPromoteRowResult {
+  item_id: number
+  promoted: boolean
+  parent_analysis_id?: number | null
+  state?: string | null
+  reason?: string | null
+}
+
+export interface EndoPromoteResponse {
+  results: EndoPromoteRowResult[]
+}
+
+/** Fill each row's vial result and promote it to the parent. Rows are
+ *  handled one by one: a refusal comes back on its row, never as an error.
+ *  400 for a malformed body (nothing written). */
+export async function promoteWorksheetRows(
+  worksheetId: number,
+  rows: EndoPromoteRowIn[]
+): Promise<EndoPromoteResponse> {
+  const response = await fetch(
+    `${API_BASE_URL()}/worksheets/${worksheetId}/promote`,
+    {
+      method: 'POST',
+      headers: getBearerHeaders('application/json'),
+      body: JSON.stringify({ rows }),
+    }
+  )
+  if (!response.ok)
+    throw new Error(
+      await extractErrorMessage(response, `Promote failed: ${response.status}`)
     )
   return response.json()
 }
@@ -7858,6 +7919,9 @@ export interface NativeParentAnalysisRow {
   result_unit: string | null
   review_state: string
   updated_at: string
+  loq?: number | null
+  lod?: number | null
+  lod_unit?: string | null
 }
 
 /**
