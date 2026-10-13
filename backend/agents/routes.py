@@ -90,18 +90,19 @@ def create_agent(body: AgentCreate, db: Session = Depends(get_db), admin=Depends
 
 @router.patch("/{agent_id}", response_model=AgentOut)
 def update_agent(agent_id: int, body: AgentPatch, db: Session = Depends(get_db),
-                 _a=Depends(require_admin)):
+                 admin=Depends(require_admin)):
     try:
-        user, cred = service.update_agent(db, agent_id, **body.model_dump(exclude_unset=True))
+        user, cred = service.update_agent(db, agent_id, **body.model_dump(exclude_unset=True),
+                                          acting_user_id=admin.id)
     except service.AgentError as e:
         raise _http(e)
     return _out(db, user, cred)
 
 
 @router.post("/{agent_id}/rotate-key", response_model=AgentWithKey)
-def rotate_key(agent_id: int, db: Session = Depends(get_db), _a=Depends(require_admin)):
+def rotate_key(agent_id: int, db: Session = Depends(get_db), admin=Depends(require_admin)):
     try:
-        user, cred, key = service.rotate_key(db, agent_id)
+        user, cred, key = service.rotate_key(db, agent_id, acting_user_id=admin.id)
     except service.AgentError as e:
         raise _http(e)
     return AgentWithKey(agent=_out(db, user, cred), key=key)
@@ -109,9 +110,9 @@ def rotate_key(agent_id: int, db: Session = Depends(get_db), _a=Depends(require_
 
 @router.put("/{agent_id}/groups", response_model=AgentOut)
 def put_groups(agent_id: int, body: GroupsReplace, db: Session = Depends(get_db),
-               _a=Depends(require_admin)):
+               admin=Depends(require_admin)):
     try:
-        service.set_groups(db, agent_id, body.group_ids)
+        service.set_groups(db, agent_id, body.group_ids, acting_user_id=admin.id)
         user, cred = service.get_agent(db, agent_id)
     except service.AgentError as e:
         db.rollback()

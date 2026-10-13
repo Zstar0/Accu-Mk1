@@ -8,7 +8,7 @@ import { Label } from '@/components/ui/label'
 import { Switch } from '@/components/ui/switch'
 import { useAuthStore } from '@/store/auth-store'
 import { CrmError } from '@/lib/api-crm'
-import { useGroups } from '@/services/groups'
+import { groupKeys, useGroups } from '@/services/groups'
 import {
   createAgent,
   listAgents,
@@ -204,7 +204,12 @@ function AgentRow({
     const next = on
       ? [...agent.group_ids, id]
       : agent.group_ids.filter(g => g !== id)
-    void run(() => setAgentGroups(agent.id, next))
+    void run(async () => {
+      const out = await setAgentGroups(agent.id, next)
+      // The Groups page member editor saves whole lists: a stale one would undo this.
+      void qc.invalidateQueries({ queryKey: groupKeys.all })
+      return out
+    })
   }
   return (
     <div className="flex flex-col gap-2 rounded-md border p-3">
@@ -311,7 +316,7 @@ export function AgentsPane() {
       </p>
     )
   return (
-    <SettingsSection title="Agents">
+    <SettingsSection title="Machine users">
       <p className="text-sm text-muted-foreground">
         Machine users for AI agents. Each has a username and a key; it can read
         and write documents in the spaces it can see, and only what its switches

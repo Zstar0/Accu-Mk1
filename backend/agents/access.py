@@ -31,6 +31,8 @@ LAB = frozenset({
     (_G, "/api/sub-samples/{sample_id}/attachments"),
     (_G, "/api/sub-samples/{sample_id}/attachments/{attachment_id}"),
     (_G, "/api/sub-samples/{sample_id}/photo"),
+    (_G, "/hplc/analyses/{analysis_id}"), (_G, "/hplc/analyses/by-sample-prep/{sample_prep_id}"),
+    (_G, "/explorer/orders/{order_id}"), (_G, "/explorer/customers/{customer_id}"),
     (_G, "/api/flags"), (_G, "/api/flags/types"), (_P, "/api/flags"), (_P, "/api/flags/{flag_id}/comments"),
     (_G, "/explorer/coa-generations"),
     (_G, "/reports/dashboard"), (_G, "/reports/throughput"), (_G, "/reports/turnaround"),

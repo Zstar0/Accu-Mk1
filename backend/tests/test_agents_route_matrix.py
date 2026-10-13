@@ -52,7 +52,6 @@ def test_every_route_outside_the_scopes_refuses(app_client, lab, coa):
     c, db = app_client
     _, h = make_agent(db, f"m{int(lab)}{int(coa)}", lab_tools=lab, coa_publishing=coa)
     scopes = access.scopes_for(SimpleNamespace(lab_tools=lab, coa_publishing=coa))
-    checked = 0
     for method, template in _authed_routes():
         if access.allowed(scopes, method, template):
             continue
@@ -61,5 +60,43 @@ def test_every_route_outside_the_scopes_refuses(app_client, lab, coa):
             assert r.status_code in (401, 403, 422), (method, template, r.status_code)
         else:
             assert (r.status_code, r.json()) == (403, DENIED), (method, template, r.status_code, r.text[:200])
-        checked += 1
-    assert checked > 300  # the whole authenticated surface, not a handful
+
+
+# Every route the walk above does not reach, because no bearer dependency guards it. Pinned so a
+# new route outside the walk fails here until someone classifies it.
+NOT_BEARER = frozenset({
+    ("GET", "/health"),  # public liveness probe
+    ("POST", "/auth/login"),  # password login; issues the bearer
+    ("POST", "/api/slack/interactions"),  # Slack signing secret, checked in the handler
+    ("POST", "/webhooks/clickup"),  # ClickUp X-Signature, checked in the handler
+    ("GET", "/api/bench/{token}"),  # bench-station path token
+    ("POST", "/api/bench/{token}/scan"),  # bench-station path token
+    ("GET", "/api/capture/{token}"),  # phone capture path token
+    ("POST", "/api/capture/{token}/photos"),  # phone capture path token
+    ("GET", "/admin/clickup-users/unmapped"),  # X-Service-Token (require_internal_service_token)
+    ("POST", "/admin/clickup-users/{clickup_user_id}/map"),  # X-Service-Token
+    ("GET", "/peptide-requests"),  # X-Service-Token
+    ("POST", "/peptide-requests"),  # X-Service-Token
+    ("GET", "/peptide-requests/{request_id}"),  # X-Service-Token
+    ("GET", "/peptide-requests/{request_id}/history"),  # X-Service-Token
+    ("POST", "/peptide-requests/{request_id}/retract"),  # X-Service-Token
+    ("GET", "/s2s/catalog/service-keys"),  # X-Service-Token, IS bridge
+    ("POST", "/s2s/lims-samples"),  # X-Service-Token, IS bridge
+    ("POST", "/s2s/lims-samples/fields"),  # X-Service-Token, IS bridge
+    ("POST", "/s2s/lims-samples/shipping"),  # X-Service-Token, IS bridge
+    ("POST", "/s2s/lims-samples/{sample_id}/services"),  # X-Service-Token, IS bridge
+    ("POST", "/s2s/orders/upsert"),  # X-Service-Token, IS bridge
+    ("GET", "/s2s/peptides"),  # X-Service-Token, IS bridge
+    ("GET", "/s2s/samples/{sample_id}/attachments/{attachment_id}"),  # X-Service-Token, IS bridge
+    ("GET", "/samples/{sample_id}/coa-sections"),  # X-Service-Token, COA Builder
+    ("GET", "/samples/{sample_id}/variance-payload"),  # X-Service-Token, COA Builder
+})
+
+
+def test_every_route_outside_the_walk_is_pinned_not_bearer():
+    from fastapi.routing import APIRoute
+    from main import app
+    every = {(m, r.path) for r in app.routes if isinstance(r, APIRoute) for m in r.methods - {"HEAD", "OPTIONS"}}
+    rest = every - set(_authed_routes())
+    unclassified, stale = sorted(rest - NOT_BEARER), sorted(NOT_BEARER - rest)
+    assert (unclassified, stale) == ([], []), f"unclassified={unclassified} stale={stale}"

@@ -34,6 +34,19 @@ def test_rotate_kills_the_old_key_immediately(app_client):
     assert rotated["agent"]["rotated_at"] is not None
 
 
+def test_rotate_logs_the_acting_admin_and_never_the_key(app_client, caplog):
+    import logging
+    c, db = app_client
+    admin_user, admin = make_admin(db)
+    created = _create(c, admin).json()
+    caplog.set_level(logging.INFO, logger="agents.service")
+    key = c.post(f"/admin/agents/{created['agent']['id']}/rotate-key", headers=admin).json()["key"]
+    lines = [r.getMessage() for r in caplog.records if r.getMessage().startswith("agents.key_rotated")]
+    assert len(lines) == 1, caplog.text
+    assert lines[0].endswith(f"by={admin_user.id}"), lines[0]
+    assert key not in caplog.text and "mk1a." not in caplog.text
+
+
 def test_deactivate_is_immediate(app_client):
     c, db = app_client
     _, admin = make_admin(db)

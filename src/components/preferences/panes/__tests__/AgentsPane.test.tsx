@@ -14,6 +14,7 @@ vi.mock('@/store/auth-store', () => ({
 }))
 vi.mock('@/services/groups', () => ({
   useGroups: () => ({ data: [{ id: 7, name: 'Leadership', is_active: true }] }),
+  groupKeys: { all: ['groups'] },
 }))
 vi.mock('@/lib/api-agents', async () => {
   const actual = await vi.importActual<typeof api>('@/lib/api-agents')
@@ -62,6 +63,9 @@ describe('AgentsPane', () => {
   it('lists agents with their switches and key hint, never a key', async () => {
     renderPane()
     expect(await screen.findByText('Pia')).toBeInTheDocument()
+    expect(
+      screen.getByRole('heading', { name: 'Machine users' })
+    ).toBeInTheDocument()
     expect(screen.getByText(/abc123/)).toBeInTheDocument()
     expect(screen.queryByText(/mk1a\./)).toBeNull()
   })
@@ -168,6 +172,19 @@ describe('AgentsPane', () => {
     ).toBeInTheDocument()
     expect(screen.queryByRole('button', { name: 'Copied' })).toBeNull()
     confirm.mockRestore()
+  })
+
+  it('saving groups refreshes the groups cache so the Groups page is not stale', async () => {
+    vi.mocked(api.setAgentGroups).mockResolvedValue({ ...pia, group_ids: [7] })
+    const invalidate = vi.spyOn(QueryClient.prototype, 'invalidateQueries')
+    renderPane()
+    await screen.findByText('Pia')
+    await userEvent.click(screen.getByLabelText('Leadership for Pia'))
+    await waitFor(() =>
+      expect(invalidate).toHaveBeenCalledWith({ queryKey: ['groups'] })
+    )
+    expect(api.setAgentGroups).toHaveBeenCalledWith(3, [7])
+    invalidate.mockRestore()
   })
 
   it('is admin-only, in the pane and in the nav', () => {

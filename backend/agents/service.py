@@ -79,7 +79,7 @@ def list_agents(db):
 
 
 def update_agent(db, agent_id: int, *, display_name=None, is_active=None, lab_tools=None,
-                 coa_publishing=None):
+                 coa_publishing=None, acting_user_id: Optional[int] = None):
     user, cred = get_agent(db, agent_id)
     display = _clean_display(display_name) if display_name is not None else None
     lab = cred.lab_tools if lab_tools is None else bool(lab_tools)
@@ -94,17 +94,17 @@ def update_agent(db, agent_id: int, *, display_name=None, is_active=None, lab_to
         user.is_active = bool(is_active)
     cred.lab_tools, cred.coa_publishing = lab, coa
     db.commit()
-    logger.info("agents.updated username=%s active=%s lab=%s coa=%s", keys.username_of(user),
-                user.is_active, lab, coa)
+    logger.info("agents.updated username=%s active=%s lab=%s coa=%s by=%s", keys.username_of(user),
+                user.is_active, lab, coa, acting_user_id)
     return user, cred
 
 
-def rotate_key(db, agent_id: int):
+def rotate_key(db, agent_id: int, acting_user_id: Optional[int] = None):
     user, cred = get_agent(db, agent_id)
     secret = keys.new_secret()
     cred.key_hash, cred.key_hint, cred.rotated_at = keys.hash_secret(secret), keys.hint(secret), datetime.utcnow()
     db.commit()
-    logger.info("agents.key_rotated username=%s", keys.username_of(user))
+    logger.info("agents.key_rotated username=%s by=%s", keys.username_of(user), acting_user_id)
     return user, cred, keys.wire_key(keys.username_of(user), secret)
 
 
@@ -114,7 +114,7 @@ def group_ids(db, user_id: int) -> list[int]:
                              .where(UserGroupMember.user_id == user_id)).scalars())
 
 
-def set_groups(db, agent_id: int, wanted: list[int]) -> list[int]:
+def set_groups(db, agent_id: int, wanted: list[int], acting_user_id: Optional[int] = None) -> list[int]:
     """Replace the agent's group memberships. Only ADDED ids must be active groups: a kept
     membership in a since-deactivated group must not stick every later save (I-3, as in
     groups.service.replace_members)."""
@@ -130,4 +130,5 @@ def set_groups(db, agent_id: int, wanted: list[int]) -> list[int]:
     db.query(UserGroupMember).filter(UserGroupMember.user_id == user.id).delete()
     db.add_all([UserGroupMember(group_id=g, user_id=user.id) for g in ids])
     db.commit()
+    logger.info("agents.groups_set username=%s groups=%s by=%s", keys.username_of(user), ids, acting_user_id)
     return ids
