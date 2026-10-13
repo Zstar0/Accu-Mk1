@@ -91,6 +91,8 @@ export function promoteCheck(
     !(value >= 0 && loq > 0 && lod > 0)
   )
     return no('the value, LOQ or LOD does not match the worksheet row')
+  // The server re-checks value and LOQ against the stored reading, within
+  // 0.0005 + 1e-6 relative (final review I-3), so a stale tab is refused.
   return {
     eligible: true,
     payload: {

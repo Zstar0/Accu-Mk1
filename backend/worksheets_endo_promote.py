@@ -7,7 +7,8 @@ its LOD and the LOD's unit (spec D6). The server re-checks every eligibility
 rule from what the worksheet stored, fills the vial's endotoxin result,
 promotes it through the sample page's own promote function
 (lims_analyses.promote_flow.run_promote) and records where each value came
-from. It never recomputes the endotoxin maths.
+from. It never recomputes the endotoxin maths; it only confirms the sent
+value and LOQ match the stored reading (final review I-3).
 
 Rows are independent: a row's fill and promote commit together or not at
 all, and a refused or failed row never blocks the others."""
@@ -143,6 +144,12 @@ def endo_analysis_by_sample(db: Session, sample_ids) -> dict[str, Optional[dict]
 def _same(a: float, b: float) -> bool:
     """Equal within the spec's relative tolerance (1e-9)."""
     return math.isclose(a, b, rel_tol=1e-9)
+
+
+def _near(sent: float, expected: float) -> bool:
+    """Equal as Box 3 shows it: 3 decimals (0.0005), plus 1e-6 relative for
+    the browser's float steps (final review I-3)."""
+    return abs(sent - expected) <= 0.0005 + 1e-6 * abs(expected)
 
 
 def _num_text(v: float) -> str:
@@ -300,6 +307,25 @@ def _plan(db: Session, worksheet, item, row: EndoPromoteRowIn, ctx) -> dict:
             or not _same(row.lod, sensitivity)
             or (lt and not _same(row.value, row.loq))):
         raise _Refused(REASON_BAD_NUMBERS)
+    # The browser's totalOf and waterOf (src/lib/endo-prep-2ml.ts).
+    params = endo_run_params(ctx.run_params)
+    if bac:
+        total, water = BW_DILUTION, None
+    else:
+        total = (item.prep_total_dilution if (item.prep_total_dilution or 0) > 0
+                 else params["std_total_dilution"])
+        water = (item.prep_water_ml if (item.prep_water_ml or 0) > 0
+                 else None if item.prep_form == "liquid" else params["recon_water_ml"])
+    # Final review I-3 (Handler, 2026-10-13): the sent value and LOQ must be
+    # what this row's stored reading gives, within Box 3's 3-decimal display.
+    # It confirms the browser's arithmetic and recomputes no verdict. Bac
+    # water reads in EU/mL already; its LOQ is the sensitivity x 20. A liquid
+    # with no water has nothing to check against and passes as before.
+    if bac or water is not None:
+        scale = 1 if bac else total * water
+        if not (_near(row.value, reading * scale)
+                and _near(row.loq, sensitivity * (BW_DILUTION if bac else scale))):
+            raise _Refused(REASON_BAD_NUMBERS)
     # The spec the certificate will judge the result by (coa.native_sections).
     matrix = normalize_matrix(parent.sample_type_title)
     spec = resolve_spec(db, svc.id, matrix, peptide_id=sample_peptide_id(db, parent.id),
@@ -313,14 +339,6 @@ def _plan(db: Session, worksheet, item, row: EndoPromoteRowIn, ctx) -> dict:
     # A "<" result is stored as the number equal to its LOQ (spec section 4),
     # the same float, so the certificate's value <= LOQ always prints "< LOQ".
     loq = row.value if lt else row.loq
-    params = endo_run_params(ctx.run_params)
-    if bac:
-        total, water = BW_DILUTION, None
-    else:
-        total = (item.prep_total_dilution if (item.prep_total_dilution or 0) > 0
-                 else params["std_total_dilution"])
-        water = (item.prep_water_ml if (item.prep_water_ml or 0) > 0
-                 else None if item.prep_form == "liquid" else params["recon_water_ml"])
     return {
         "analysis": analysis,
         "unit": unit,

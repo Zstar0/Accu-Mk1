@@ -657,6 +657,104 @@ def test_a_retested_vial_promotes_its_current_row_and_supersedes_the_parent(clie
     assert db.get(LimsAnalysis, vial_id).result_value == "25"     # the first attempt, as it was
 
 
+# --- final review I-3: the sent numbers match the stored reading -------------
+
+def _audits(db):
+    return db.query(AuditLog).filter(AuditLog.operation == "endo_worksheet_promoted").all()
+
+
+def test_a_peptide_loq_off_the_rows_sensitivity_x_total_x_water_is_refused(client, db):
+    # 0.05 x 250 x 2 = 25 EU per vial is the only LOQ these rows can have.
+    w = _world(client, db)
+    exact, _ = _row(db, w, "P-4001-S01", reading="0.1")      # 0.1 x 250 x 2 = 50
+    below, _ = _row(db, w, "P-4002-S01")                      # <0.05: <25
+    db.commit()
+    assert _results(_promote(client, w.ws, _line(exact, 50, loq=30),
+                             _line(below, 30, loq=30))) == [_refused(exact, BAD),
+                                                            _refused(below, BAD)]
+    assert _audits(db) == []
+
+
+@pytest.mark.parametrize("field, stored, sent", [
+    ("prep_water_ml", 3.0, 37.5),          # 0.05 x 250 x 3
+    ("prep_total_dilution", 500.0, 50.0),  # 0.05 x 500 x 2
+])
+def test_a_stale_tab_whose_row_changed_since_is_refused(client, db, field, stored, sent):
+    """The browser computed 25 at 2 mL and 1:250; another analyst then
+    changed the row. The stale numbers are refused; the row's current ones
+    promote, and the audit records the inputs they came from."""
+    w = _world(client, db)
+    item, _ = _row(db, w)
+    setattr(item, field, stored)
+    db.commit()
+    assert _results(_promote(client, w.ws, _line(item))) == [_refused(item, BAD)]
+    [res] = _results(_promote(client, w.ws, _line(item, sent, loq=sent)))
+    assert res["promoted"] is True, res
+    [audit] = _audits(db)
+    assert (audit.details["total_dilution"], audit.details["water_ml"], audit.details["loq"]) == (
+        stored if field == "prep_total_dilution" else 250,
+        stored if field == "prep_water_ml" else 2, sent)
+
+
+@pytest.mark.parametrize("value, loq, ok", [
+    (0.1, 0.2, True),      # the reading itself, LOQ 0.01 x 20
+    (2.0, 0.2, False),     # the reading x 20: bac water reads in EU/mL already
+    (0.1, 0.01, False),    # the LOQ without the 20x
+])
+def test_bac_water_sends_its_reading_and_an_loq_of_sensitivity_x_20(client, db, value, loq, ok):
+    w = _world(client, db)
+    item, _ = _row(db, w, "BW-0100-S01", sample_type="Bacteriostatic Water", reading="0.1",
+                   cartridge=w.c01)
+    db.commit()
+    [res] = _results(_promote(client, w.ws, _line(item, value, unit="EU/mL", loq=loq, lod=0.01)))
+    assert res == ({**res, "promoted": True} if ok else _refused(item, BAD)), res
+
+
+@pytest.mark.parametrize("reading, cartridge, water, sent, ok", [
+    # 0.1234567 x 250 x 2 = 61.72835; Box 3 shows 61.728. 61.729 is 0.00065 off.
+    ("0.1234567", None, None, {"value": 61.728, "loq": 25}, True),
+    ("0.1234567", None, None, {"value": 61.729, "loq": 25}, False),
+    # <0.0025 x 250 x 1.7 = 1.0625, on the half: Box 3 shows 1.063.
+    ("<0.0025", 0.0025, 1.7, {"value": 1.063, "loq": 1.063, "lod": 0.0025}, True),
+])
+def test_numbers_rounded_to_box_3s_three_decimals_still_match(client, db, reading, cartridge,
+                                                               water, sent, ok):
+    w = _world(client, db)
+    c = _cartridge(db, f"Endosafe {cartridge}", cartridge) if cartridge else None
+    item, _ = _row(db, w, reading=reading, cartridge=c)
+    item.prep_water_ml = water
+    db.commit()
+    [res] = _results(_promote(client, w.ws, _line(item, **sent)))
+    assert res["promoted"] is ok, res
+    assert res["reason"] == (None if ok else BAD)
+    assert len(_audits(db)) == (1 if ok else 0)
+
+
+def test_an_exact_row_with_an_loq_far_above_its_value_is_refused(client, db):
+    # The D8 case: an LOQ of 1000 would print "< LOQ" and Pass for 50 EU per vial.
+    w = _world(client, db)
+    item, vial = _row(db, w, reading="0.1")
+    db.commit()
+    vial_id = vial.id
+    assert _results(_promote(client, w.ws, _line(item, 50, loq=1000))) == [_refused(item, BAD)]
+    db.expire_all()
+    assert db.get(LimsAnalysis, vial_id).result_value is None
+
+
+def test_a_liquid_row_with_no_water_keeps_its_behaviour_before_the_check(client, db):
+    """No stored water: the browser shows no value (waterOf is null), and the
+    server has nothing to check the numbers against. Pinned as it was before
+    the I-3 check (it promotes); refusing it needs the Handler's ruling."""
+    w = _world(client, db)
+    item, _ = _row(db, w)
+    item.prep_form = "liquid"
+    db.commit()
+    [res] = _results(_promote(client, w.ws, _line(item, 40, loq=40)))
+    assert res["promoted"] is True, res
+    [audit] = _audits(db)
+    assert (audit.details["water_ml"], audit.details["value"]) == (None, 40.0)
+
+
 # --- the fill: apply_transition's submit-only unit and limits ----------------
 
 def test_submit_alone_takes_the_unit_and_the_results_limits(client, db):
