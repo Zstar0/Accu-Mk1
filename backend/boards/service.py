@@ -85,17 +85,22 @@ def get_board(db: Session, user, slug: str) -> Board:
     return board
 
 
-def _emit_board_changed(db: Session, board: Board, user) -> None:
-    """Live hint for other open canvases (spec 8.6): rides the flag event sink and bus, stamped
-    with the board's audience like a flag event. Best effort: a sink failure never fails the write."""
+def _board_changed_event(db: Session, board: Board, user) -> dict:
+    """Live hint for other open canvases (spec 8.6), stamped with the board's audience like a flag
+    event. Built BEFORE commit so no post-commit SELECT can abort the transaction."""
     from boards.flag_entity import _board_audience_of
+    return {"event_type": "board_changed", "board_slug": board.slug, "board_id": board.id,
+            "actor_id": getattr(user, "id", None), "event_id": None,
+            "audience": _board_audience_of(db, board)}
+
+
+def _emit_board_changed(event: dict) -> None:
+    """Rides the flag event sink and bus. Best effort: a sink failure never fails the write."""
     from flags import seams
     try:
-        seams.EVENT_SINK.emit({"event_type": "board_changed", "board_slug": board.slug, "board_id": board.id,
-                               "actor_id": getattr(user, "id", None), "event_id": None,
-                               "audience": _board_audience_of(db, board)})
+        seams.EVENT_SINK.emit(event)
     except Exception:
-        log.warning("board_changed_emit_failed board=%s", board.slug, exc_info=True)
+        log.warning("board_changed_emit_failed board=%s", event["board_slug"], exc_info=True)
 
 
 def create_board(db: Session, user, *, slug: str, name: str, kind: str, visibility: str) -> Board:
@@ -124,8 +129,9 @@ def patch_board(db: Session, user, slug: str, **fields) -> Board:
     if "default_viewport" in fields:
         vp = fields["default_viewport"]
         board.default_viewport = None if vp is None else (vp if isinstance(vp, dict) else vp.model_dump())
+    ev = _board_changed_event(db, board, user)
     db.commit()
-    _emit_board_changed(db, board, user)
+    _emit_board_changed(ev)
     db.refresh(board)
     return board
 
@@ -413,8 +419,9 @@ def create_node(db: Session, user, slug: str, body) -> NodeOut:
                      entity_id=str(body.entity_id) if body.kind == "entity" else None,
                      data=clean, created_by=uid, updated_by=uid)
     db.add(node)
+    ev = _board_changed_event(db, board, user)
     db.commit()
-    _emit_board_changed(db, board, user)
+    _emit_board_changed(ev)
     db.refresh(node)
     return _node_out(db, user, node)
 
@@ -439,8 +446,9 @@ def patch_node(db: Session, user, slug: str, node_id: int, *, version: int, **fi
             setattr(node, f, fields[f])
     node.version += 1
     node.updated_by = getattr(user, "id", None)
+    ev = _board_changed_event(db, board, user)
     db.commit()
-    _emit_board_changed(db, board, user)
+    _emit_board_changed(ev)
     db.refresh(node)
     return _node_out(db, user, node)
 
@@ -467,8 +475,9 @@ def patch_positions(db: Session, user, slug: str, items) -> list[NodeOut]:
         n.x, n.y = it.x, it.y
         n.version += 1
         n.updated_by = uid
+    ev = _board_changed_event(db, board, user)
     db.commit()
-    _emit_board_changed(db, board, user)
+    _emit_board_changed(ev)
     return [_node_out(db, user, n) for n, _ in nodes]
 
 
@@ -488,8 +497,9 @@ def delete_node(db: Session, user, slug: str, node_id: int) -> None:
     db.query(BoardEdge).filter((BoardEdge.source_id == node.id) | (BoardEdge.target_id == node.id)).delete(
         synchronize_session=False)
     db.delete(node)
+    ev = _board_changed_event(db, board, user)
     db.commit()
-    _emit_board_changed(db, board, user)
+    _emit_board_changed(ev)
 
 
 # --- edges ------------------------------------------------------------------------
@@ -522,8 +532,9 @@ def create_edge(db: Session, user, slug: str, body) -> BoardEdge:
     e = BoardEdge(board_id=board.id, source_id=body.source_id, target_id=body.target_id,
                   kind=kind, label=body.label)
     db.add(e)
+    ev = _board_changed_event(db, board, user)
     db.commit()
-    _emit_board_changed(db, board, user)
+    _emit_board_changed(ev)
     db.refresh(e)
     return e
 
@@ -535,8 +546,9 @@ def patch_edge(db: Session, user, slug: str, edge_id: int, **fields) -> BoardEdg
         e.kind = _check_edge_kind(fields["kind"])
     if "label" in fields:
         e.label = fields["label"]
+    ev = _board_changed_event(db, board, user)
     db.commit()
-    _emit_board_changed(db, board, user)
+    _emit_board_changed(ev)
     db.refresh(e)
     return e
 
@@ -544,5 +556,6 @@ def patch_edge(db: Session, user, slug: str, edge_id: int, **fields) -> BoardEdg
 def delete_edge(db: Session, user, slug: str, edge_id: int) -> None:
     board = _editable(db, user, slug)
     db.delete(_edge_on_board(db, board, edge_id))
+    ev = _board_changed_event(db, board, user)
     db.commit()
-    _emit_board_changed(db, board, user)
+    _emit_board_changed(ev)

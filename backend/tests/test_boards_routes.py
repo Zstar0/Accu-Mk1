@@ -46,7 +46,7 @@ def client(monkeypatch):
     s.add_all([UserGroupMember(group_id=editors.id, user_id=EDITOR.id),
                UserGroupMember(group_id=viewers.id, user_id=VIEWER.id)])
     s.commit()
-    from flags import seams, types_service
+    from flags import types_service
     types_service.seed_builtins(s)
     seams.register_mk1_entities()
     monkeypatch.setattr(service, "RESTRICTED_BOARDS_ENABLED", True)
