@@ -6817,7 +6817,7 @@ export interface EndoPromoteResponse {
 
 /** Fill each row's vial result and promote it to the parent. Rows are
  *  handled one by one: a refusal comes back on its row, never as an error.
- *  400 for a malformed body (nothing written). */
+ *  422 for a malformed body (nothing written). */
 export async function promoteWorksheetRows(
   worksheetId: number,
   rows: EndoPromoteRowIn[]
