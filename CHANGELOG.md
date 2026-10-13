@@ -1,6 +1,10 @@
 # Changelog
 
-## Unreleased
+## v1.47.0 - 2026-10-12
+
+### Flags on Support tickets and CRM items
+- **Flag a ticket or a CRM item** from its slide-out on the customer page, and assign it to anyone (for example a tech when a ticket needs lab help). Flagged rows show a flag in the Support and CRM lists.
+- **Whoever is on the flag can read that one item**, even without a Plain seat or admin access: the flag's link opens the customer page with the ticket or item open, read-only. Lists and replies keep their usual access.
 
 ### Agents get their own Mk1 accounts
 - **Settings > Agents (admins):** create a machine user for an AI agent with a username; Mk1 shows its key once. No password, no server change, works on the next request.
