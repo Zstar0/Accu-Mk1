@@ -143,6 +143,11 @@ class PromoteRequest(BaseModel):
     instrument_id: Optional[int] = None
     sources: List[PromoteSourceRef] = Field(..., min_length=1)
     reason: Optional[str] = None
+    # Endo slice 3: the result's own LOQ / LOD for the new parent row. When all
+    # three are omitted the result-bearing source's own are copied instead.
+    loq: Optional[float] = None
+    lod: Optional[float] = None
+    lod_unit: Optional[str] = None
 
 
 class TransitionInfo(BaseModel):

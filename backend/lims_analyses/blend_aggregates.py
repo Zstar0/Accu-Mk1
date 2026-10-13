@@ -188,7 +188,7 @@ def recalc_parent_blend_aggregates(db: Session, *, parent_pk: int,
     back, when the complete branch rewrites it. Nothing can vouch for it
     meanwhile."""
     from lims_analyses.parent_placeholders import PROVENANCE_ORDERED
-    from lims_analyses.service import _deltas, _snapshot
+    from lims_analyses.service import _deltas, _snapshot, clear_result_limits
 
     rows = db.execute(
         select(LimsAnalysis).where(
@@ -232,6 +232,7 @@ def recalc_parent_blend_aggregates(db: Session, *, parent_pk: int,
         prior = row.review_state
         if new != row.result_value:
             row.captured_at = now          # a recalculated figure is captured now
+            clear_result_limits(row)       # the old figure's LOQ / LOD describe no new value
         row.result_value = new
         if prior == "verified":
             row.review_state = "parent_to_verify"

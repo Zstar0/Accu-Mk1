@@ -846,9 +846,18 @@ def promote_to_parent(
     parent_keyword: Optional[str] = None,
     parent_analysis_service_id: Optional[int] = None,
     parent_title: Optional[str] = None,
+    loq: Optional[float] = None,
+    lod: Optional[float] = None,
+    lod_unit: Optional[str] = None,
+    audit_reason: Optional[str] = None,
     commit: bool = True,
 ) -> Tuple[LimsAnalysis, List["LimsAnalysisPromotion"]]:
     """Phase 4a: create a parent-tier verified row from N vial-tier sources.
+
+    Endo slice 3: loq / lod / lod_unit are the new parent row's result limits;
+    when all three are None the result-bearing source's own are copied.
+    audit_reason, when given, is appended to every transition reason written
+    here (for example "promoted from worksheet WS-24 row P-3001-S02").
 
     sources is a list of {analysis_id: int, contribution_kind: str}. The
     parent_sample_pk is derived from the first source's host (sub-sample →
@@ -1043,6 +1052,7 @@ def promote_to_parent(
             eff_result_unit = target_svc.unit
 
     now = datetime.utcnow()
+    _audit = f"; {audit_reason}" if audit_reason else ""
 
     # ── Retest-source supersession ────────────────────────────────────────────
     # When ALL sources are retest rows (retest_of_id IS NOT NULL), the caller
@@ -1100,7 +1110,7 @@ def promote_to_parent(
                 to_state="retracted",
                 transition_kind="auto",
                 user_id=user_id,
-                reason="superseded by retest promotion",
+                reason="superseded by retest promotion" + _audit,
                 details=_deltas(old_parent_before, old_parent),
             ))
             db.flush()   # emit UPDATE before INSERT so Postgres sees vacated index slot
@@ -1111,6 +1121,16 @@ def promote_to_parent(
 
     _captured_at, _analyst_id, _processed_by_id = _carried_result_provenance(
         db, sources, source_rows, user_id)
+
+    # Result limits (endo slice 3, spec section 4): the caller's when it sends
+    # any of the three, else the result-bearing source's own (the same lead
+    # row _carried_result_provenance reads), so a vial filled with its LOQ
+    # keeps it when promoted from the sample page. Never mixed: one row's LOQ
+    # with another's LOD would describe no result.
+    if loq is None and lod is None and lod_unit is None:
+        lead = next(source_rows[s["analysis_id"]] for s in sources
+                    if s["contribution_kind"] in ("chosen", "aggregated_in"))
+        loq, lod, lod_unit = lead.loq, lead.lod, lead.lod_unit
 
     # Promotion mints the parent-tier row in 'parent_to_verify' — it is the
     # submission, not the sign-off. verified_at stays NULL until a reviewer
@@ -1124,6 +1144,9 @@ def promote_to_parent(
         title=eff_title,
         result_value=result_value,
         result_unit=eff_result_unit,
+        loq=loq,
+        lod=lod,
+        lod_unit=lod_unit,
         review_state="parent_to_verify",
         method_id=method_id,
         instrument_id=instrument_id,
@@ -1143,7 +1166,7 @@ def promote_to_parent(
         to_state="parent_to_verify",
         transition_kind="auto",
         user_id=user_id,
-        reason=f"promoted from sources {source_ids}",
+        reason=f"promoted from sources {source_ids}{_audit}",
         details={"changed": {}},
     ))
 
@@ -1178,7 +1201,7 @@ def promote_to_parent(
             to_state="promoted",
             transition_kind="auto",
             user_id=user_id,
-            reason=f"promoted to parent #{parent_row.id} (kind={kind})",
+            reason=f"promoted to parent #{parent_row.id} (kind={kind}){_audit}",
             details=_deltas(src_before, src),
         ))
 
