@@ -259,6 +259,25 @@ def test_with_background_tasks_the_cascade_is_scheduled_not_run(world, cascade_c
     assert task.args == (world.parent.id, USER.id)
 
 
+def test_the_route_hands_run_promote_the_requests_background_tasks(world, client, monkeypatch):
+    """The cascade stays post-response only while the route passes its own
+    BackgroundTasks; without them run_promote would run it inline before the 201."""
+    from lims_analyses import routes
+    seen = {}
+    real = routes.run_promote
+
+    def spy(*args, **kwargs):
+        seen.update(kwargs)
+        return real(*args, **kwargs)
+
+    monkeypatch.setattr(routes, "run_promote", spy)
+
+    resp = client.post("/api/lims-analyses/promote", json=_body(world.rows[0].id))
+
+    assert resp.status_code == 201
+    assert isinstance(seen.get("background_tasks"), BackgroundTasks)
+
+
 def test_the_cascade_kill_switch_is_honoured(world, cascade_calls, monkeypatch):
     monkeypatch.setenv("MK1_WORKFLOW_SHADOW_ENABLED", "0")
 
