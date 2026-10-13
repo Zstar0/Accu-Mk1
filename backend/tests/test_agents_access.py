@@ -18,21 +18,31 @@ def test_every_listed_template_exists_in_the_app_with_that_method():
 def test_scopes_follow_the_switches_and_coa_needs_lab():
     from agents import access
     cred = lambda lab, coa: SimpleNamespace(lab_tools=lab, coa_publishing=coa)  # noqa: E731
-    assert access.scopes_for(cred(False, False)) == {"documents"}
-    assert access.scopes_for(cred(True, False)) == {"documents", "lab"}
-    assert access.scopes_for(cred(True, True)) == {"documents", "lab", "coa"}
-    assert access.scopes_for(cred(False, True)) == {"documents"}  # COA alone is never honoured
+    base = {"documents", "reads"}  # every agent reads (Handler 2026-10-12)
+    assert access.scopes_for(cred(False, False)) == base
+    assert access.scopes_for(cred(True, False)) == base | {"lab"}
+    assert access.scopes_for(cred(True, True)) == base | {"lab", "coa"}
+    assert access.scopes_for(cred(False, True)) == base  # COA alone is never honoured
 
 
 def test_allowed_is_exact_and_deny_by_default():
     from agents import access
-    docs = frozenset({"documents"})
-    assert access.allowed(docs, "get", "/api/documents/{doc_id}")
-    assert not access.allowed(docs, "DELETE", "/api/documents/{doc_id}")
-    assert not access.allowed(docs, "GET", "/api/flags")
-    assert not access.allowed(docs | {"lab"}, "POST", "/wizard/senaite/samples/{sample_id}/publish-coa")
-    assert access.allowed(docs | {"lab", "coa"}, "POST", "/wizard/senaite/samples/{sample_id}/publish-coa")
-    assert not access.allowed(docs | {"lab", "coa"}, "GET", "/auth/users")
+    base = access.scopes_for(SimpleNamespace(lab_tools=False, coa_publishing=False))
+    assert access.allowed(base, "get", "/api/documents/{doc_id}")
+    assert access.allowed(base, "GET", "/api/flags")  # lab reads need no switch
+    assert not access.allowed(base, "DELETE", "/api/documents/{doc_id}")
+    assert not access.allowed(base, "POST", "/api/flags")  # flag writes need Lab tools
+    assert access.allowed(base | {"lab"}, "POST", "/api/flags")
+    assert not access.allowed(base | {"lab"}, "POST", "/wizard/senaite/samples/{sample_id}/publish-coa")
+    assert access.allowed(base | {"lab", "coa"}, "POST", "/wizard/senaite/samples/{sample_id}/publish-coa")
+    assert not access.allowed(base | {"lab", "coa"}, "GET", "/auth/users")
+
+
+def test_switches_gate_only_writes():
+    """Reads are open to every agent; each switch adds writes only."""
+    from agents import access
+    assert all(method == "GET" for method, _ in access.READS)
+    assert all(method != "GET" for method, _ in access.LAB | access.COA)
 
 
 # Every Mk1 route labmanager-mcp's lab tools call (C:/tmp/lmcp-agent-keys/src/labmanager_mcp/tools/
@@ -70,7 +80,7 @@ MCP_COA = [
 
 def test_every_mcp_lab_route_is_in_lab():
     from agents import access
-    assert sorted(set(MCP_LAB) - access.LAB) == []
+    assert sorted(set(MCP_LAB) - (access.READS | access.LAB)) == []
     assert sorted(set(MCP_COA) - access.COA) == []
 
 

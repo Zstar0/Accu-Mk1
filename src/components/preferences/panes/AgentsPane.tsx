@@ -318,9 +318,10 @@ export function AgentsPane() {
   return (
     <SettingsSection title="Machine users">
       <p className="text-sm text-muted-foreground">
-        Machine users for AI agents. Each has a username and a key; it can read
-        and write documents in the spaces it can see, and only what its switches
-        allow.
+        AI agents, each with its own username and key. Every agent can read lab
+        data and reports, and read and write documents in the spaces it can see.
+        Lab tools lets it raise and comment on flags; COA publishing lets it
+        generate and publish COAs.
       </p>
       {shown && (
         <KeyOnce key={shown.key} shown={shown} onDone={() => setShown(null)} />

@@ -29,8 +29,12 @@ new agent.
 ### Design call made here (Handler may overrule)
 
 The lab tools include COA generation and **publication**, which change what customers receive.
-The lab option is therefore two switches: **Lab tools** (lab reads, reports, flags) and **COA
+The lab option is therefore two switches: **Lab tools** (raise and comment on flags) and **COA
 publishing** (requires Lab tools). Both default off.
+
+Amended (Handler, 2026-10-12): read-only Mk1 data is fine for every agent. The lab tools' reads
+(samples, analyses, media, flags, reports, COA history) are open to every agent; the two switches
+gate writes only.
 
 ### Out of scope
 
@@ -146,17 +150,21 @@ Not listed, so refused: `DELETE /api/documents/{doc_id}` (draft delete), `PUT ..
 edit path), category and space administration, space moves (`PATCH` with `space_id` keeps its
 existing admin-login-only check).
 
-**Scope `lab` (switch "Lab tools"):** exactly the routes labmanager-mcp's lab tools call
-(`tools/reads.py`, `media.py`, `flags.py`, `flagging.py`, `reports.py`, and the read half of
-`coa.py`), as standard-user reads plus flag raising/commenting:
+**Scope `reads` (every agent) and scope `lab` (switch "Lab tools"):** exactly the routes
+labmanager-mcp's lab tools call (`tools/reads.py`, `media.py`, `flags.py`, `flagging.py`,
+`reports.py`, and the read half of `coa.py`). Every GET below is in `reads`; the two flag POSTs
+are `lab`:
 
 - Samples and analyses (GET): `/senaite/samples`, `/wizard/senaite/lookup`,
   `/api/lims-analyses`, `/api/lims-analyses/promotions`,
   `/api/lims-analyses/parent/{...}/native-analyses`, `/api/conformance/{sample_id}`.
 - Sub-samples and media (GET): `/api/sub-samples`, `.../{sample_id}/chromatograms`,
   `.../variance-set`, `.../attachments`, `.../attachments/{attachment_id}`, `.../photo`.
-- Flags: GET `/api/flags`, GET `/api/flags/types`, POST `/api/flags`,
-  POST `/api/flags/{flag_id}/comments`.
+- HPLC and explorer (GET): `/hplc/analyses/{analysis_id}`,
+  `/hplc/analyses/by-sample-prep/{sample_prep_id}`, `/explorer/orders/{order_id}`,
+  `/explorer/customers/{customer_id}`.
+- Flags: GET `/api/flags`, GET `/api/flags/types` (reads); POST `/api/flags`,
+  POST `/api/flags/{flag_id}/comments` (`lab`).
 - Reports (GET): the `/reports/...` routes the reports tool lists (dashboard, throughput,
   turnaround, sla-performance, checkin-times, analyte-trends, purity-trend, ready-to-publish,
   sync-status, customers summary/list/orders/cohorts/at-risk/churn-signals/changes/{key}).
