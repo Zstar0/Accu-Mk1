@@ -60,6 +60,7 @@ const ENTITY_META: Record<string, EntityMeta> = {
     canDeepLink: false,
   },
   crm_item: { Icon: Contact, label: 'CRM item', canDeepLink: false },
+  board: { Icon: Map, label: 'Board', canDeepLink: true },
 }
 
 /** Entity types with a backend `state` seam (→ watchable). Mirror of the
@@ -186,6 +187,10 @@ export function navigateToDeepLink(deepLink: DeepLink): boolean {
       store.navigateToCustomerKey(key)
       return true
     }
+    case 'board':
+      store.closeFlagsFlyout()
+      store.navigateToBoard(deepLink.id)
+      return true
     default:
       return false
   }

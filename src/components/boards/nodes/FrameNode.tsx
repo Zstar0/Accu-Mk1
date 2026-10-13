@@ -1,7 +1,9 @@
 import { NodeResizeControl } from '@xyflow/react'
 import type { NodeProps } from '@xyflow/react'
 import { cn } from '@/lib/utils'
-import { usePatchNode } from '@/services/boards'
+import { useBoard, useBoardFlags, usePatchNode } from '@/services/boards'
+import { useFlagTypes } from '@/services/flag-types'
+import { blockingTypeSet, frameRollup } from '../board-flags'
 import { resizePatch, type BoardFlowNode } from '../board-mapping'
 
 const COLOR: Record<string, string> = {
@@ -15,8 +17,20 @@ const COLOR: Record<string, string> = {
   purple: 'border-purple-400/70 bg-purple-500/5',
 }
 
-export function FrameNode({ data, selected }: NodeProps<BoardFlowNode>) {
+export function FrameNode({
+  data,
+  selected,
+}: Pick<NodeProps<BoardFlowNode>, 'data' | 'selected'>) {
   const patchNode = usePatchNode(data.slug ?? '')
+  const flags = useBoardFlags(data.slug ?? null)
+  const board = useBoard(data.slug ?? null)
+  const types = useFlagTypes({})
+  const roll = frameRollup(
+    flags.data ?? [],
+    board.data?.nodes ?? [],
+    data.row.id,
+    blockingTypeSet(types.data)
+  )
   const color = String(
     (data.row.data as { color?: string } | null)?.color ?? 'slate'
   )
@@ -39,7 +53,25 @@ export function FrameNode({ data, selected }: NodeProps<BoardFlowNode>) {
           }}
         />
       )}
-      <div className="px-3 py-2 text-sm font-medium">{data.row.label}</div>
+      <div className="flex items-center gap-2 px-3 py-2 text-sm font-medium">
+        <span className="truncate">{data.row.label}</span>
+        {roll.blocking > 0 && (
+          <span
+            data-testid="frame-pill-blocking"
+            className="rounded-full bg-red-600 px-1.5 text-[10px] font-semibold text-white"
+          >
+            {roll.blocking} blocking
+          </span>
+        )}
+        {roll.other > 0 && (
+          <span
+            data-testid="frame-pill-open"
+            className="rounded-full bg-amber-500 px-1.5 text-[10px] font-semibold text-white"
+          >
+            {roll.other} open
+          </span>
+        )}
+      </div>
     </div>
   )
 }

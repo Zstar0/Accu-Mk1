@@ -88,6 +88,16 @@ describe('board-mapping', () => {
     ).toEqual([{ id: 2, x: 1, y: 2, version: 3 }])
   })
 
+  it('a note without a stored size gets the default width so its box is resizable', () => {
+    const [note] = toFlowNodes([row({ id: 3, kind: 'note' })], true)
+    expect(note?.style).toEqual({ width: 240 })
+    const [sized] = toFlowNodes(
+      [row({ id: 4, kind: 'note', w: 320, h: 140 })],
+      true
+    )
+    expect(sized?.style).toEqual({ width: 320, height: 140 })
+  })
+
   it('a frame resize patch carries only size and the row version', () => {
     expect(
       resizePatch(row({ id: 5, kind: 'frame', version: 4 }), {

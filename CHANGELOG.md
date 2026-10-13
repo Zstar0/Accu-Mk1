@@ -1,5 +1,29 @@
 # Changelog
 
+## Unreleased
+
+### Planning boards, slice 4: flags on the board
+- **Flag a board.** Editors raise flags on the board itself from the header; board-level flags show in the attention dock and count on the board card. A board with open flags cannot be deleted.
+- **Every flag on a board, once.** `GET /api/boards/{slug}/flags` returns the open flags on the board, its items and the entities behind entity items, under the caller's visibility. Frames show blocking and open counts, entity items show an open count, person cards show how many of the board's flags are assigned to them, and board cards show the open count.
+- **Attention dock.** With nothing selected, the side panel lists the board's blocking and past-due flags, overdue first, with Locate to centre the item.
+
+### Planning boards, slice 4: canvas live
+- **Zoomed out, items show their label only** (below 0.5 zoom); frames keep their title and pills.
+- **Cmd+K lists the open board's items**; pick one to centre it.
+- **Remove from frame** in the side panel; the item keeps its spot on the canvas (drag it out of the frame's area to keep it out, a drop inside re-adopts it). **Notes resize** from their corner and keep their size.
+- **Live boards.** Another editor's change appears on your open board without a reload.
+
+## v1.46.0 - 2026-10-12
+
+### Documents say where they came from
+- **Every revision has a Provenance section** in the document viewer and in embedded views: who asked for it, who or what created it, and which system, task and run it came from. Switching revisions shows that revision's own provenance.
+- **Each fact says how it was established.** The creator comes from the login or agent token that wrote it. The requester is "verified" only when it is the Mk1 login itself; a name an agent passes on is "supplied". A source system, task or run sent by a caller is "reported". AI customer reviews carry a verified AccuMk1 source because Mk1 made them itself.
+- **Editing details never rewrites history.** Retitling, moving or re-describing a document leaves each revision's provenance as it was, and an in-place draft edit adds "Content edited by" instead of crediting the original author with new text.
+- Documents from before this release show "not recorded" for anything Mk1 cannot prove; nothing is guessed from old notes.
+
+### Read-only document embeds for Paperclip
+- **`/embed.html` shows one pinned revision** inside an allowed site (set by `MK1_EMBED_FRAME_ANCESTORS`, default none). It renders only when the document id, code, revision and content hash all match, signs in with your own Mk1 login, and shows a clear Draft or Retired badge.
+
 ## v1.45.2 - 2026-10-11
 
 ### Flags

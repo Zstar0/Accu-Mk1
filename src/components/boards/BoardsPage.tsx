@@ -82,6 +82,12 @@ function BoardCard({ board, isAdmin }: { board: Board; isAdmin: boolean }) {
           {board.visibility}
         </Badge>
         <span className="text-muted-foreground">{board.node_count} items</span>
+        {board.open_flag_count > 0 && (
+          <Badge variant="destructive">
+            {board.open_flag_count} open flag
+            {board.open_flag_count === 1 ? '' : 's'}
+          </Badge>
+        )}
         {board.can_edit && (
           <span className="text-muted-foreground">editor</span>
         )}

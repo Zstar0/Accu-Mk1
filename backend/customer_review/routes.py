@@ -109,7 +109,8 @@ def _execute(run_id: int, key: str) -> None:
                     author=_author(db, row.created_by if row else None), run_id=run_id, model=llm.MODEL,
                     lookups=len(outcome.tool_calls), cost_usd=float(outcome.cost),
                     metric_cards=document.metrics(dossier),
-                    code=store.document_code_for(db, key) or document.existing_code(db, key))
+                    code=store.document_code_for(db, key) or document.existing_code(db, key),
+                    requested_by_user_id=row.created_by if row else None)
                 doc_fields.update(document_id=doc_id, document_code=code)
             except Exception as e:
                 db.rollback()

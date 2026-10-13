@@ -13,5 +13,13 @@ class ConflictError(Exception):
     """Illegal state transition, duplicate, or referenced row."""
 
 
+class DuplicateContentError(ConflictError):
+    """New-code create whose stored (themed) bytes already exist in the category and space."""
+
+    def __init__(self, message: str, document):
+        super().__init__(message)
+        self.document = document
+
+
 class ForbiddenError(Exception):
     """The actor exists but may not do this (edit another author's comment, etc.)."""

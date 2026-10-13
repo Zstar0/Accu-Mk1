@@ -26,6 +26,7 @@ export type FlagEventType =
   | 'watcher_added'
   | 'watcher_removed'
   | 'comment_reaction'
+  | 'board_changed'
 
 /** Post-mutation flag snapshot embedded in every event — enough to render a
  *  toast / update a card without a refetch. */
@@ -55,6 +56,9 @@ export interface FlagStreamEvent {
   comment_id?: number
   emoji?: string
   action?: 'added' | 'removed'
+  /** `board_changed` only (planning boards slice 4): the board another editor just wrote to. */
+  board_slug?: string
+  board_id?: number
 }
 
 /**

@@ -191,13 +191,13 @@ def _art(db):
 
 
 def test_create_mints_code_and_activates_by_default(db):
-    from datetime import date
     from documents import service, storage
     doc, created = service.create_document(db, title=" Audit ", html=HTML, category=_art(db),
                                            author="Claude Code", source_session="sess-1")
     assert created is True
     assert (doc.code, doc.revision, doc.status, doc.title) == ("ART-0001", 1, "active", "Audit")
-    assert doc.effective_date == date.today()
+    # The lab's day, not the machine's: date.today() failed here after local midnight.
+    assert doc.effective_date == service._lab_today(db)
     assert doc.activated_at is not None and doc.supersedes_id is None
     assert doc.size_bytes == len(HTML.encode()) and len(doc.content_sha256) == 64
     assert storage.get_storage().fetch(doc.storage_key) == HTML.encode()

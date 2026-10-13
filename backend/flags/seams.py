@@ -816,8 +816,9 @@ def register_mk1_entities() -> None:
                     must_exist=True)
 
     # --- planning boards (2026-09-26): closures live in boards.flag_entity -----------
-    from boards.flag_entity import register_board_node
+    from boards.flag_entity import register_board, register_board_node
     register_board_node()
+    register_board()
 
     # --- Support tickets + CRM items (2026-10-12): closures live in each integration --------
     from support_plain.flag_entity import register_support_ticket
