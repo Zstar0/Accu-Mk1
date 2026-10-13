@@ -11,7 +11,11 @@ import {
 import userEvent from '@testing-library/user-event'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import type * as ApiModule from '@/lib/api'
-import { importReaderResults, type WorksheetListItem } from '@/lib/api'
+import {
+  importReaderResults,
+  promoteWorksheetRows,
+  type WorksheetListItem,
+} from '@/lib/api'
 import { EndoResultsBox } from '@/components/hplc/endo/EndoResultsBox'
 import type { EndoReaderRecord } from '@/lib/endo-prep-2ml'
 import type * as EndoReaderModule from '@/lib/endo-reader'
@@ -37,6 +41,7 @@ vi.mock('@/lib/api', async importOriginal => {
   return {
     ...actual,
     importReaderResults: vi.fn(),
+    promoteWorksheetRows: vi.fn(),
     getAnalysisServices: vi.fn().mockResolvedValue([
       {
         id: 61,
@@ -585,5 +590,297 @@ describe('EndoResultsBox', () => {
     expect(
       screen.queryByLabelText('Reader export file')
     ).not.toBeInTheDocument()
+  })
+})
+
+/** The vial's live native endotoxin analysis, as GET /worksheets/{id} serves it. */
+const NATIVE = {
+  id: 501,
+  state: 'to_be_verified',
+  keyword: 'ENDOTOXIN-USP85LAL',
+  native: true,
+}
+
+const promoteBox = (sampleId: string) =>
+  screen.getByRole('checkbox', { name: `Promote ${sampleId}` })
+
+/** A dialog row's cells as text. */
+function dialogRow(dialog: HTMLElement, sampleId: string): string[] {
+  const tr = within(dialog).getByText(sampleId).closest('tr')
+  if (!tr) throw new Error(`no dialog row for ${sampleId}`)
+  return [...tr.querySelectorAll('td')].map(td => td.textContent ?? '')
+}
+
+describe('EndoResultsBox: Promote to Parent', () => {
+  beforeEach(() => vi.clearAllMocks())
+
+  it('ticks eligible rows only, gives the reason on hover, and shows a promoted row as a chip', async () => {
+    setup([
+      endoItem({
+        sample_id: 'P-0001-S02',
+        result_reading: '<0.05',
+        endo_analysis: NATIVE,
+      }),
+      endoItem({ sample_id: 'P-0002-S02', endo_analysis: NATIVE }),
+      endoItem({
+        sample_id: 'P-0003-S02',
+        result_reading: '<0.05',
+        endo_analysis: { ...NATIVE, keyword: 'ENDO-LAL', native: false },
+      }),
+      endoItem({
+        sample_id: 'P-0004-S02',
+        result_reading: '<0.05',
+        endo_analysis: { ...NATIVE, state: 'promoted' },
+      }),
+    ])
+    expect(
+      screen.getByRole('columnheader', { name: 'Promote' })
+    ).toBeInTheDocument()
+    expect(promoteBox('P-0001-S02')).toBeEnabled()
+    expect(promoteBox('P-0002-S02')).toBeDisabled()
+    // SENAITE-born keeps manual entry: no checkbox at all
+    expect(
+      within(rowOf('P-0003-S02')).queryByRole('checkbox')
+    ).not.toBeInTheDocument()
+    expect(
+      within(rowOf('P-0004-S02')).getByText('Promoted')
+    ).toBeInTheDocument()
+    expect(
+      within(rowOf('P-0004-S02')).queryByRole('checkbox')
+    ).not.toBeInTheDocument()
+    const user = userEvent.setup()
+    await user.hover(within(cellOf('P-0003-S02', 'Promote')).getByText('-'))
+    expect(await screen.findByRole('tooltip')).toHaveTextContent(
+      'manual entry: SENAITE-born endotoxin'
+    )
+    // the button counts the ticked rows
+    const button = screen.getByRole('button', { name: 'Promote to Parent (0)' })
+    expect(button).toBeDisabled()
+    fireEvent.click(promoteBox('P-0001-S02'))
+    expect(
+      screen.getByRole('button', { name: 'Promote to Parent (1)' })
+    ).toBeEnabled()
+  })
+
+  it('gives a disabled checkbox its reason on hover', async () => {
+    setup([endoItem({ sample_id: 'P-0002-S02', endo_analysis: NATIVE })])
+    const target = promoteBox('P-0002-S02').parentElement
+    if (!target) throw new Error('no hover target')
+    await userEvent.setup().hover(target)
+    expect(await screen.findByRole('tooltip')).toHaveTextContent('no reading')
+  })
+
+  it('confirms exactly what is sent, sends one request, reports each row, and refetches the page', async () => {
+    const pep = endoItem({
+      sample_id: 'P-0001-S02',
+      result_reading: '<0.05',
+      endo_analysis: NATIVE,
+    })
+    const bw = endoItem({
+      sample_id: 'BW-0001',
+      sample_type: 'Bacteriostatic Water',
+      sample_identity: 'Bacteriostatic Water',
+      result_reading: '<0.2',
+      endo_analysis: { ...NATIVE, id: 502 },
+    })
+    const fail = endoItem({
+      sample_id: 'P-0003-S02',
+      result_reading: '0.8',
+      endo_analysis: { ...NATIVE, id: 503 },
+    })
+    const { qc, rerender } = setup([pep, bw, fail])
+    const invalidate = vi.spyOn(qc, 'invalidateQueries')
+    vi.mocked(promoteWorksheetRows).mockResolvedValue({
+      results: [
+        {
+          item_id: pep.id,
+          promoted: true,
+          parent_analysis_id: 9001,
+          state: 'parent_to_verify',
+        },
+        {
+          item_id: bw.id,
+          promoted: true,
+          parent_analysis_id: 9002,
+          state: 'parent_to_verify',
+        },
+        {
+          item_id: fail.id,
+          promoted: false,
+          reason:
+            'the parent already holds a result; retest the vial to replace it',
+        },
+      ],
+    })
+    for (const sid of ['P-0001-S02', 'BW-0001', 'P-0003-S02'])
+      fireEvent.click(promoteBox(sid))
+    fireEvent.click(
+      screen.getByRole('button', { name: 'Promote to Parent (3)' })
+    )
+    const dialog = await screen.findByRole('dialog')
+    // row, sample, value, LOQ, LOD, verdict: a "<" result goes as its LOQ
+    expect(dialogRow(dialog, 'P-0001-S02')).toEqual([
+      '1',
+      'P-0001-S02',
+      '25 EU/vial',
+      '25 EU/vial',
+      '0.05 EU/mL',
+      'Pass',
+    ])
+    expect(dialogRow(dialog, 'BW-0001')).toEqual([
+      '2',
+      'BW-0001',
+      '0.2 EU/mL',
+      '0.2 EU/mL',
+      '0.01 EU/mL',
+      'Pass',
+    ])
+    expect(dialogRow(dialog, 'P-0003-S02')).toEqual([
+      '3',
+      'P-0003-S02',
+      '400 EU/vial',
+      '25 EU/vial',
+      '0.05 EU/mL',
+      'Fail',
+    ])
+    expect(promoteWorksheetRows).not.toHaveBeenCalled()
+    fireEvent.click(
+      within(dialog).getByRole('button', { name: 'Promote 3 results' })
+    )
+    expect(
+      await within(dialog).findByText(
+        'Not promoted: the parent already holds a result; retest the vial to replace it'
+      )
+    ).toBeInTheDocument()
+    expect(promoteWorksheetRows).toHaveBeenCalledTimes(1)
+    expect(promoteWorksheetRows).toHaveBeenCalledWith(77, [
+      {
+        item_id: pep.id,
+        value: 25,
+        unit: 'EU/vial',
+        loq: 25,
+        lod: 0.05,
+        lod_unit: 'EU/mL',
+      },
+      {
+        item_id: bw.id,
+        value: 0.2,
+        unit: 'EU/mL',
+        loq: 0.2,
+        lod: 0.01,
+        lod_unit: 'EU/mL',
+      },
+      {
+        item_id: fail.id,
+        value: 400,
+        unit: 'EU/vial',
+        loq: 25,
+        lod: 0.05,
+        lod_unit: 'EU/mL',
+      },
+    ])
+    expect(dialogRow(dialog, 'P-0001-S02').at(-1)).toBe(
+      'Promoted: parent result To Verify'
+    )
+    expect(within(dialog).getByText(/^2 of 3 promoted/)).toBeInTheDocument()
+    expect(invalidate).toHaveBeenCalledWith({
+      queryKey: worksheetPageKey(77),
+    })
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Done' }))
+    await waitFor(() =>
+      expect(screen.queryByRole('dialog')).not.toBeInTheDocument()
+    )
+    // the ticks are spent; the refetched rows show the chip
+    expect(
+      screen.getByRole('button', { name: 'Promote to Parent (0)' })
+    ).toBeDisabled()
+    rerender(
+      <EndoResultsBox
+        {...endoBoxProps([
+          { ...pep, endo_analysis: { ...NATIVE, state: 'promoted' } },
+          bw,
+          fail,
+        ]).props}
+      />
+    )
+    expect(
+      within(rowOf('P-0001-S02')).getByText('Promoted')
+    ).toBeInTheDocument()
+  })
+
+  it('sends once while the request is in flight, and keeps the dialog with the error when it fails', async () => {
+    const a = endoItem({
+      sample_id: 'P-0001-S02',
+      result_reading: '<0.05',
+      endo_analysis: NATIVE,
+    })
+    setup([a])
+    let fail: (e: Error) => void = () => undefined
+    vi.mocked(promoteWorksheetRows).mockReturnValue(
+      new Promise((_resolve, reject) => {
+        fail = reject
+      })
+    )
+    fireEvent.click(promoteBox('P-0001-S02'))
+    fireEvent.click(
+      screen.getByRole('button', { name: 'Promote to Parent (1)' })
+    )
+    const dialog = await screen.findByRole('dialog')
+    const send = within(dialog).getByRole('button', {
+      name: 'Promote 1 result',
+    })
+    fireEvent.click(send)
+    fireEvent.click(send)
+    expect(send).toBeDisabled()
+    expect(promoteWorksheetRows).toHaveBeenCalledTimes(1)
+    await act(async () => fail(new Error('Promote failed: 500')))
+    expect(within(dialog).getByRole('alert')).toHaveTextContent(
+      'Promote failed: 500'
+    )
+    expect(send).toBeEnabled()
+    expect(dialogRow(dialog, 'P-0001-S02')[2]).toBe('25 EU/vial')
+  })
+
+  it('promotes on a completed worksheet, which has no reader drop zone', () => {
+    setup(
+      [
+        endoItem({
+          sample_id: 'P-0001-S02',
+          result_reading: '<0.05',
+          endo_analysis: NATIVE,
+        }),
+      ],
+      true
+    )
+    expect(promoteBox('P-0001-S02')).toBeEnabled()
+    expect(
+      screen.getByRole('button', { name: 'Promote to Parent (0)' })
+    ).toBeInTheDocument()
+    expect(
+      screen.queryByLabelText('Reader export file')
+    ).not.toBeInTheDocument()
+  })
+
+  it('shows no Promote column and no button on a stock worksheet', () => {
+    setup(
+      [
+        endoItem({
+          sample_id: 'P-0001-S02',
+          result_reading: '<0.05',
+          endo_analysis: NATIVE,
+        }),
+      ],
+      false,
+      { endo_prep: 'stock' }
+    )
+    expect(screen.queryByRole('checkbox')).not.toBeInTheDocument()
+    expect(
+      screen.queryByRole('button', { name: /Promote to Parent/ })
+    ).not.toBeInTheDocument()
+    expect(
+      screen.queryByRole('columnheader', { name: 'Promote' })
+    ).not.toBeInTheDocument()
+    // the reader import is unchanged
+    expect(screen.getByLabelText('Reader export file')).toBeInTheDocument()
   })
 })

@@ -1,6 +1,7 @@
-import type { ReactNode } from 'react'
+import { useState, type ReactNode } from 'react'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { toast } from 'sonner'
+import { Checkbox } from '@/components/ui/checkbox'
 import {
   Tooltip,
   TooltipContent,
@@ -28,6 +29,11 @@ import {
   type EndoRunParams,
   type EndoSample,
 } from '@/lib/endo-prep-2ml'
+import {
+  SENAITE_BORN,
+  promoteCheck,
+  type PromoteCheck,
+} from '@/lib/endo-promote'
 import type { EndoRow } from '@/lib/endo-worksheet-2ml'
 import { useAnalysisServices } from '@/services/analysis-services'
 import { resolveServiceForAnalysis } from '@/components/senaite/AnalysisServiceLink'
@@ -47,6 +53,7 @@ import {
   type ReaderImportResult,
 } from './EndoReaderImportDialog'
 import { EndoBox, type EndoBoxProps } from './EndoBox'
+import { EndoPromoteDialog, type PromotePick } from './EndoPromoteDialog'
 import { WorkedTip } from './EndoWorkedTip'
 import { useRowRefusals } from './use-row-refusals'
 
@@ -223,12 +230,59 @@ function CellUnit({ children }: { children: ReactNode }) {
   )
 }
 
+/** The Promote cell (spec 5.1): a checkbox on an eligible row, a disabled
+ *  one with the reason on hover otherwise, the chip once promoted. A
+ *  SENAITE-born row keeps manual entry and gets no checkbox at all. */
+function PromoteCell({
+  check,
+  sampleId,
+  ticked,
+  onTick,
+}: {
+  check: PromoteCheck
+  sampleId: string
+  ticked: boolean
+  onTick: (on: boolean) => void
+}) {
+  if ('promoted' in check)
+    return (
+      <span className="rounded-full border border-emerald-600/40 bg-emerald-500/10 px-1.5 py-px text-[10.5px] font-semibold text-emerald-700 dark:border-emerald-400/40 dark:bg-emerald-400/15 dark:text-emerald-300">
+        Promoted
+      </span>
+    )
+  if (check.eligible)
+    return (
+      <Checkbox
+        checked={ticked}
+        onCheckedChange={v => onTick(v === true)}
+        aria-label={`Promote ${sampleId}`}
+      />
+    )
+  if (check.reason === SENAITE_BORN)
+    return (
+      <WorkedTip tip={check.reason} className="text-muted-foreground">
+        -
+      </WorkedTip>
+    )
+  // A disabled control fires no pointer events: the span carries the hover.
+  return (
+    <WorkedTip tip={check.reason} className="inline-flex">
+      <Checkbox
+        disabled
+        aria-label={`Promote ${sampleId}`}
+        className="pointer-events-none"
+      />
+    </WorkedTip>
+  )
+}
+
 function ResultRow({
   row,
   ctx,
   isCompleted,
   refusal,
   onReading,
+  promote,
 }: {
   row: EndoRow
   ctx: EndoCtx
@@ -236,6 +290,12 @@ function ResultRow({
   /** Why the row's last save was refused, until its next save. */
   refusal: string | undefined
   onReading: (reading: string | null) => void
+  /** The row's Promote cell; null on a worksheet without one (stock). */
+  promote: {
+    check: PromoteCheck
+    ticked: boolean
+    onTick: (on: boolean) => void
+  } | null
 }) {
   const s = row.sample
   const k = prep2Check(s, ctx)
@@ -272,6 +332,16 @@ function ResultRow({
       >
         {row.n}
       </td>
+      {promote && (
+        <td className={`${TD} px-1.5 text-center`}>
+          <PromoteCell
+            check={promote.check}
+            sampleId={row.item.sample_id}
+            ticked={promote.ticked}
+            onTick={promote.onTick}
+          />
+        </td>
+      )}
       <td
         className={`${TD} ${s.sampleId ? MONO : 'text-xs italic text-muted-foreground'}`}
       >
@@ -429,7 +499,8 @@ function ResultRow({
  * Accu-Mk1 (blue, click to copy). Rows in bench order, numbered as Box 1.
  * Every computed cell shows its worked line on hover. A save refused (by the
  * server, or here when no cartridge resolves) shows its reason on the row
- * until that row's next save.
+ * until that row's next save. On a 2 mL worksheet, open or completed, the
+ * ticked rows go to their parents through Promote to Parent (slice 3).
  */
 export function EndoResultsBox({
   worksheet,
@@ -460,8 +531,49 @@ export function EndoResultsBox({
   })
   const queryClient = useQueryClient()
   const { refused, send, refuse, clear } = useRowRefusals(onUpdateItem)
+  const [ticked, setTicked] = useState<ReadonlySet<number>>(new Set())
 
   if (!rows.length) return null
+  // Stock worksheets have no Promote (Review Focus 5); the server refuses them too.
+  const promoteOn = worksheet.endo_prep === '2ml'
+  const checks = new Map(
+    promoteOn
+      ? rows.map(r => [r.item.id, promoteCheck(r, ctx, worksheet.endo_prep)])
+      : []
+  )
+  // What Promote sends: the ticked rows that are eligible now.
+  const picks: PromotePick[] = rows.flatMap(row => {
+    const c = checks.get(row.item.id)
+    const v = prep2Result(row.sample, ctx).verdict
+    return ticked.has(row.item.id) && c && 'eligible' in c && c.eligible && v
+      ? [
+          {
+            row,
+            payload: c.payload,
+            verdict: { label: VERDICT_LABEL[v], tone: VERDICT_TONE[v] },
+          },
+        ]
+      : []
+  })
+
+  function tick(itemId: number, on: boolean) {
+    setTicked(prev => {
+      const next = new Set(prev)
+      if (on) next.add(itemId)
+      else next.delete(itemId)
+      return next
+    })
+  }
+
+  // After a promote the page refetches, so promoted rows turn to the chip.
+  // A failed request may still have promoted some rows: refetch either way.
+  function promoted(replied: boolean) {
+    if (replied) setTicked(new Set())
+    void queryClient.invalidateQueries({
+      queryKey: worksheetPageKey(worksheet.id),
+    })
+  }
+
   const tier = peptideTier(specs)
   // Unit and limit come from the service's spec rows, never hardcoded: the
   // 09-01 snapshot (<= 5 EU/mL) is unverified against prod.
@@ -520,15 +632,28 @@ export function EndoResultsBox({
       n={3}
       title="Results: EU per vial"
       actions={
-        !isCompleted && (
-          <div className="pt-2.5">
-            <EndoReaderImportDialog
-              worksheet={worksheet}
-              rows={rows}
-              cartridges={cartridges}
-              params={ctx.params}
-              onApplied={applied}
-            />
+        (!isCompleted || promoteOn) && (
+          <div className="flex items-start gap-3 pt-2.5">
+            {/* A completed worksheet refuses an import (409) but still
+                promotes: the server allows it. */}
+            {!isCompleted && (
+              <div className="min-w-0 flex-1">
+                <EndoReaderImportDialog
+                  worksheet={worksheet}
+                  rows={rows}
+                  cartridges={cartridges}
+                  params={ctx.params}
+                  onApplied={applied}
+                />
+              </div>
+            )}
+            {promoteOn && (
+              <EndoPromoteDialog
+                worksheetId={worksheet.id}
+                picks={picks}
+                onSettled={promoted}
+              />
+            )}
           </div>
         )
       }
@@ -553,6 +678,7 @@ export function EndoResultsBox({
           <thead>
             <tr>
               <th className={`${TH} w-[34px]`} />
+              {promoteOn && <th className={`${TH} w-[76px]`}>Promote</th>}
               <th className={TH}>Sample ID</th>
               <th className={`${TH} !text-right`}>
                 Declared wt<span className={UNIT}>mg</span>
@@ -609,16 +735,28 @@ export function EndoResultsBox({
             </tr>
           </thead>
           <tbody>
-            {rows.map(row => (
-              <ResultRow
-                key={row.item.id}
-                row={row}
-                ctx={ctx}
-                isCompleted={isCompleted}
-                refusal={refused[row.item.id]}
-                onReading={reading => saveReading(row, reading)}
-              />
-            ))}
+            {rows.map(row => {
+              const check = checks.get(row.item.id)
+              return (
+                <ResultRow
+                  key={row.item.id}
+                  row={row}
+                  ctx={ctx}
+                  isCompleted={isCompleted}
+                  refusal={refused[row.item.id]}
+                  onReading={reading => saveReading(row, reading)}
+                  promote={
+                    check
+                      ? {
+                          check,
+                          ticked: ticked.has(row.item.id),
+                          onTick: on => tick(row.item.id, on),
+                        }
+                      : null
+                  }
+                />
+              )
+            })}
           </tbody>
         </table>
       </div>
