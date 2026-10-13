@@ -40,6 +40,7 @@ from sqlalchemy.orm import Session
 
 from coa.spec_rules import (SpecRuleError, effective_unit, evaluate, normalize_matrix,
                             resolve_spec, sample_peptide_id)
+from coa.text_macros import format_lod, resolve
 from sub_samples.service import fetch_sample_services
 
 log = logging.getLogger(__name__)
@@ -256,6 +257,25 @@ def _result_display(spec, result, loq: Optional[float]) -> Optional[str]:
     return "< LOQ" if value <= loq else None
 
 
+def _section_footnotes(raw, values: dict) -> list:
+    """The profile's footnotes with macros resolved (endo slice 4). A note
+    whose text resolves to nothing is dropped, so its label never prints
+    alone. Anything that is not a {label, text} dict passes through as
+    before (the builder's fail-open rule for rows written by SQL)."""
+    if not isinstance(raw, list):
+        return []
+    out = []
+    for note in raw:
+        if isinstance(note, dict) and isinstance(note.get("text"), str):
+            text = resolve(note["text"], values)
+            if not text:
+                continue
+            if text != note["text"]:
+                note = {**note, "text": text}
+        out.append(note)
+    return out
+
+
 def build_native_sections(db: Session, parent) -> dict:
     """Assemble the native-sections wire document for a parent LimsSample.
 
@@ -330,6 +350,9 @@ def build_native_sections(db: Session, parent) -> dict:
             continue
 
         rows = []
+        # (lod, lod_unit) of every printed row, for the profile text's {lod}
+        # (endo slice 4).
+        limits: list[tuple] = []
         for svc, row in member_rows:
             if row is None:
                 if _withdrawn_by_lab(db, parent.id, svc.id):
@@ -412,27 +435,31 @@ def build_native_sections(db: Session, parent) -> dict:
                 "conforms": conforms,
                 "result_display": _result_display(spec, row.result_value, loq),
             })
+            limits.append((row.lod, row.lod_unit))
         if not rows:
             # Rule 3 (section half): unreachable while members are required
             # non-empty in _ordered_native_profiles, kept as defence.
             raise NativeSectionsError(
                 f"native sections: profile '{prof.key}' produced zero rows on {sample_id}"
             )
+        # Endo slice 4: the profile's COA text may carry {lod} and optional
+        # [ ... ] segments, filled from this section's rows (coa.text_macros).
+        # Text with no macro comes back exactly as typed.
+        values = {"lod": format_lod(limits)}
         sections.append({
             "profile_key": prof.key,
             "title": prof.coa_section_title or prof.name,
             "archetype": prof.coa_archetype,
             "sort_order": prof.coa_sort_order,
-            "basis_note": prof.coa_basis_note,
-            "method_text": prof.coa_method_text,
-            "prep_text": prof.coa_prep_text,
+            "basis_note": resolve(prof.coa_basis_note, values),
+            "method_text": resolve(prof.coa_method_text, values),
+            "prep_text": resolve(prof.coa_prep_text, values),
             # Fail-open to [] on a malformed container is deliberate: the
             # certificate must not 500 on a bad footnote row (module's
             # NativeSectionsError-only failure surface). The validated
             # routes enforce list shape on every authored write — a non-list
             # here means seed/migration/direct SQL, not user input.
-            "footnotes": (list(prof.coa_footnotes)
-                          if isinstance(prof.coa_footnotes, list) else []),
+            "footnotes": _section_footnotes(prof.coa_footnotes, values),
             "rows": rows,
         })
 
