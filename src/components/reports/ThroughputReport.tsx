@@ -23,6 +23,7 @@ import type {
   ThroughputReport as Report,
 } from '@/lib/api'
 import { Input } from '@/components/ui/input'
+import { CustomerCombobox } from './CustomerCombobox'
 import {
   AGE_ORDER,
   RANGE_KEYS,
@@ -981,19 +982,11 @@ export function ThroughputReport() {
         )}
         {/* Filter bar */}
         <div className="flex flex-wrap items-center gap-2">
-          <select
-            aria-label="Customer"
+          <CustomerCombobox
             value={client}
-            onChange={e => setClient(e.target.value)}
-            className="h-8 max-w-64 rounded-md border border-border bg-transparent px-2 text-sm text-muted-foreground"
-          >
-            <option value="">All customers</option>
-            {(facets?.clients ?? []).map(c => (
-              <option key={c.name} value={c.name}>
-                {c.name} ({c.samples})
-              </option>
-            ))}
-          </select>
+            options={facets?.clients ?? []}
+            onChange={setClient}
+          />
           <Input
             placeholder="Order #"
             value={orderInput}
