@@ -107,7 +107,7 @@ def test_the_swap_replaces_the_old_indexes_and_a_second_boot_changes_nothing(pg)
     _boot(pg)
     first = _indexes(pg)
     assert set(first) == NEW
-    assert all("lower(btrim(" in d and "WHERE active" in d for d in first.values()), first
+    assert all("lower(btrim(" in d and "WHERE (active" in d for d in first.values()), first
     _boot(pg)
     assert _indexes(pg) == first
 
