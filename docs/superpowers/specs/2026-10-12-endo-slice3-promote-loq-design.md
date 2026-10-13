@@ -190,9 +190,37 @@ false, "reason"}]}`. Reasons are short sentences the dialog shows as they are, o
   2. add the Peptide 0 to 350 EU/vial spec row in the spec editor;
   3. promote one test sample end to end on the stack first (worksheet, review, COA preview showing "< LOQ" and
      LOQ 25).
-- **Rollback:** deactivate the EU/vial spec row(s) first (the previous code cannot choose between two units in one
-  scope and would stop COAs), then redeploy the previous image. The new columns are ignored by old code; results
-  promoted in the meantime keep their values and simply lose the LOQ override on a regenerated COA.
+- **Rollback** (corrected 2026-10-13 by final review I-2; the earlier text was unsafe). The previous image's
+  `resolve_spec` ignores units and has no per-result LOQ, so neither spec state is safe on its own once EU/vial
+  results exist:
+  - *EU/vial row deactivated:* the old image judges a regenerated EU/vial result against the EU/mL rows (a
+    per-peptide row, else the 0 to 5 catch-all). "25 EU/vial", a clean "< LOQ" result, prints as 25 against 0 to 5
+    and FAILs. That is a false FAIL on every slice 3 result, not just a lost LOQ.
+  - *EU/vial row left active:* a regenerated EU/mL peptide result with no per-peptide row resolves to the Peptide
+    0 to 350 row, so an EU/mL value between 5 and 350 falsely passes.
+  - The earlier claim that the previous code "cannot choose between two units in one scope" was wrong for a
+    Peptide-scoped EU/vial row. No Peptide EU/mL row shares its scope, so the old code does not stop; it silently
+    picks the EU/vial row.
+
+  With the row deactivated, EU/mL results are judged as they were before slice 3, so only the EU/vial samples need
+  holding. A rollback is:
+  1. Deactivate the EU/vial spec row(s) in the spec editor.
+  2. Hold COA generation and regeneration for every sample whose endotoxin parent result is in EU/vial, until
+     roll-forward. The samples (read-only; parent rows in any state, so the list errs toward holding too many):
+     ```sql
+     SELECT DISTINCT s.sample_id
+     FROM lims_analyses a
+     JOIN analysis_services svc ON svc.id = a.analysis_service_id
+     JOIN lims_samples s ON s.id = a.lims_sample_pk
+     WHERE svc.keyword = 'ENDOTOXIN-USP85LAL'
+       AND a.lims_sub_sample_pk IS NULL
+       AND lower(btrim(a.result_unit)) = 'eu/vial'
+     ORDER BY s.sample_id;
+     ```
+  3. Redeploy the previous image.
+
+  The new columns are ignored by old code, and results promoted in the meantime keep their values. Roll-forward:
+  redeploy the slice 3 image, reactivate the EU/vial row(s), then release the hold.
 
 ## 10. Testing
 
