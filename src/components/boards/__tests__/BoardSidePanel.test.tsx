@@ -47,6 +47,9 @@ vi.mock('@/services/groups', () => ({
     isLoading: false,
   }),
 }))
+vi.mock('@/components/boards/AttentionDock', () => ({
+  AttentionDock: () => <div>dock</div>,
+}))
 vi.mock('@/components/boards/DocumentPreviewFrame', () => ({
   DocumentPreviewFrame: () => <div>preview</div>,
 }))
@@ -120,6 +123,13 @@ describe('BoardSidePanel', () => {
       { id: 1, data: { version: 2, label: 'Marketing team' } },
       expect.anything()
     )
+  })
+
+  it('shows the attention dock when nothing is selected', () => {
+    render(
+      <BoardSidePanel board={board(true)} selectedId={null} onClose={vi.fn()} />
+    )
+    expect(screen.getByText('dock')).toBeInTheDocument()
   })
 
   it('viewer sees a read-only panel (Review Focus 3)', () => {

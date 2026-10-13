@@ -8,6 +8,7 @@ import {
   ResizablePanel,
   ResizablePanelGroup,
 } from '@/components/ui/resizable'
+import { RaiseFlagButton } from '@/components/flags/RaiseFlagButton'
 import { useAuthStore } from '@/store/auth-store'
 import { useUIStore } from '@/store/ui-store'
 import { useBoard, usePatchBoard } from '@/services/boards'
@@ -82,6 +83,14 @@ export function BoardPage({ slug }: { slug: string }) {
         </Badge>
         {!canEdit && (
           <span className="text-xs text-muted-foreground">view only</span>
+        )}
+        {canEdit && (
+          <RaiseFlagButton
+            entityType="board"
+            entityId={String(b.id)}
+            targetLabel={b.name}
+            variant="compact"
+          />
         )}
         <span className="flex-1" />
         <div id="board-toolbar-slot" className="flex items-center gap-2" />
