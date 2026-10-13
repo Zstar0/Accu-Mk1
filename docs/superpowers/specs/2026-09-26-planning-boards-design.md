@@ -663,3 +663,16 @@ and PR. Deploy follows the `accumark-deploy` skill; boards need no env change.
   `show` (`name` | `email`, default `name`) and `show_title` (default true); the card renders the
   chosen line with the title under it, and the side panel offers both controls to editors. Rows
   stored before these keys exist read with the defaults.
+- Slice 4d (flags on the board, 2026-10-12, Handler rulings): the board itself is a flag
+  anchor (`entity_type = "board"`, `entity_id` = board id): raise = board editors, view =
+  board viewers, audience = the board's grants, label = the board name, deep link opens the
+  board; deleting a board with an open board-level flag is refused (409) like an item.
+  `GET /api/boards/{slug}/flags` returns the open flags of every anchor on the board (the
+  board, its items, and the entities behind entity items) under the caller's visibility,
+  replacing the per-node fetch the spec left implicit in 8.3 and 8.6; the boards list carries
+  `open_flag_count` (board and item anchors). The attention dock (8.6) lives in the side
+  panel's idle state, not a third column. Cmd+K (8.3) is a "Board" group in the existing
+  command palette, not a second palette. Dropped from this slice: groups in the person panel
+  (no endpoint for another user's groups; low value) and the 250 ms drag-end debounce (drag
+  end already writes once per drop, and a debounce reintroduces the dropped-callback trap
+  found in 4b).
