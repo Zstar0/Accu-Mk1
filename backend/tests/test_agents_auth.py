@@ -40,17 +40,22 @@ def test_documents_route_accepts_the_agent(app_client):
 def test_unlisted_route_is_403_with_the_exact_text(app_client):
     c, db = app_client
     _, key = _agent(db)
-    for path in ("/api/flags/types", "/auth/me", "/worksheets/users"):
+    for path in ("/admin/agents", "/auth/me", "/worksheets/users"):
         r = c.get(path, headers=_h(key))
         assert (r.status_code, r.json()) == (403, {"detail": "agent keys cannot use this endpoint"}), path
 
 
-def test_lab_switch_opens_lab_routes_only(app_client):
+def test_lab_reads_are_open_and_the_switch_gates_flag_writes(app_client):
+    denied = {"detail": "agent keys cannot use this endpoint"}
     c, db = app_client
-    _, key = _agent(db, lab=True)
-    assert c.get("/api/flags/types", headers=_h(key)).status_code == 200
-    r = c.post("/wizard/senaite/samples/P-1/publish-coa", headers=_h(key), json={})
-    assert r.status_code == 403
+    _, plain = _agent(db)
+    assert c.get("/api/flags/types", headers=_h(plain)).status_code == 200  # reads: every agent
+    r = c.post("/api/flags", headers=_h(plain), json={})
+    assert (r.status_code, r.json()) == (403, denied)
+    _, lab = _agent(db, "lab-agent", lab=True)
+    assert c.post("/api/flags", headers=_h(lab), json={}).json() != denied  # past auth (body may 422)
+    r = c.post("/wizard/senaite/samples/P-1/publish-coa", headers=_h(lab), json={})
+    assert (r.status_code, r.json()) == (403, denied)
 
 
 def test_coa_route_passes_auth_only_with_lab_and_coa(app_client):

@@ -68,6 +68,13 @@ describe('AgentsPane', () => {
     ).toBeInTheDocument()
     expect(screen.getByText(/abc123/)).toBeInTheDocument()
     expect(screen.queryByText(/mk1a\./)).toBeNull()
+    // Reads are open to every agent; the switches add writes only.
+    expect(
+      screen.getByText(/Every agent can read lab data and reports/)
+    ).toBeInTheDocument()
+    expect(
+      screen.getByText(/Lab tools lets it raise and comment on flags/)
+    ).toBeInTheDocument()
   })
 
   it('shows a new key once, with the two MCP settings, and hides it on Done', async () => {

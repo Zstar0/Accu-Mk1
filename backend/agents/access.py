@@ -20,9 +20,10 @@ DOCUMENTS = frozenset({
     (_G, "/api/documents/comment-attachments/{attachment_id}"),
 })
 
-# Exactly what labmanager-mcp's lab tools call (tools/reads.py, media.py, flags.py, flagging.py,
-# reports.py and the read half of coa.py). Reads, plus raising and commenting on flags.
-LAB = frozenset({
+# Exactly what labmanager-mcp's lab tools READ (tools/reads.py, media.py, flags.py, flagging.py,
+# reports.py and the read half of coa.py). Every agent gets these: read-only Mk1 data is fine for
+# agents (Handler 2026-10-12); the switches below gate writes only.
+READS = frozenset({
     (_G, "/senaite/samples"), (_G, "/wizard/senaite/lookup"),
     (_G, "/api/lims-analyses"), (_G, "/api/lims-analyses/promotions"),
     (_G, "/api/lims-analyses/parent/{sample_id}/native-analyses"), (_G, "/api/conformance/{sample_id}"),
@@ -33,7 +34,7 @@ LAB = frozenset({
     (_G, "/api/sub-samples/{sample_id}/photo"),
     (_G, "/hplc/analyses/{analysis_id}"), (_G, "/hplc/analyses/by-sample-prep/{sample_prep_id}"),
     (_G, "/explorer/orders/{order_id}"), (_G, "/explorer/customers/{customer_id}"),
-    (_G, "/api/flags"), (_G, "/api/flags/types"), (_P, "/api/flags"), (_P, "/api/flags/{flag_id}/comments"),
+    (_G, "/api/flags"), (_G, "/api/flags/types"),
     (_G, "/explorer/coa-generations"),
     (_G, "/reports/dashboard"), (_G, "/reports/throughput"), (_G, "/reports/turnaround"),
     (_G, "/reports/sla-performance"), (_G, "/reports/checkin-times"), (_G, "/reports/analyte-trends"),
@@ -45,6 +46,11 @@ LAB = frozenset({
     (_G, "/reports/customers/{customer_key}"),
 })
 
+# Switch "Lab tools": the lab writes the MCP makes, raising and commenting on flags.
+LAB = frozenset({
+    (_P, "/api/flags"), (_P, "/api/flags/{flag_id}/comments"),
+})
+
 # Changes what customers receive: its own switch, honoured only with Lab tools.
 COA = frozenset({
     (_P, "/wizard/senaite/samples/{sample_id}/generate-coa"),
@@ -52,11 +58,11 @@ COA = frozenset({
     (_P, "/wizard/senaite/samples/{sample_id}/publish-coa"),
 })
 
-_BY_SCOPE = {"documents": DOCUMENTS, "lab": LAB, "coa": COA}
+_BY_SCOPE = {"documents": DOCUMENTS, "reads": READS, "lab": LAB, "coa": COA}
 
 
 def scopes_for(cred) -> frozenset:
-    scopes = {"documents"}
+    scopes = {"documents", "reads"}
     if cred.lab_tools:
         scopes.add("lab")
         if cred.coa_publishing:
@@ -70,4 +76,4 @@ def allowed(scopes, method: str, template: str) -> bool:
 
 
 def all_routes() -> frozenset:
-    return DOCUMENTS | LAB | COA
+    return DOCUMENTS | READS | LAB | COA
