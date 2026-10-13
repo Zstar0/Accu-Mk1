@@ -94,7 +94,7 @@ def _emit_board_changed(db: Session, board: Board, user) -> None:
         seams.EVENT_SINK.emit({"event_type": "board_changed", "board_slug": board.slug, "board_id": board.id,
                                "actor_id": getattr(user, "id", None), "event_id": None,
                                "audience": _board_audience_of(db, board)})
-    except Exception:  # noqa: BLE001
+    except Exception:
         log.warning("board_changed_emit_failed board=%s", board.slug, exc_info=True)
 
 

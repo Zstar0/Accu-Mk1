@@ -11,6 +11,8 @@ from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import StaticPool
 
+from flags import seams
+
 ADMIN = SimpleNamespace(id=1, role="admin", email="admin@x.t", is_active=True)
 EDITOR = SimpleNamespace(id=10, role="standard", email="e@x.t", is_active=True)
 VIEWER = SimpleNamespace(id=11, role="standard", email="v@x.t", is_active=True)
@@ -273,7 +275,6 @@ def test_board_flags_hide_anchors_the_caller_cannot_see(client):
 def test_writes_emit_board_changed_with_the_board_audience(client):
     _board(client, "org", "company", [{"group_id": client.editors, "can_edit": True}])
     client.as_user(EDITOR)
-    from flags import seams
     sink = seams.InMemoryEventSink()
     prev = seams.EVENT_SINK
     seams.set_event_sink(sink)
