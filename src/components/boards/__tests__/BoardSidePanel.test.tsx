@@ -84,6 +84,7 @@ const board = (canEdit: boolean, nodes = [node({})]): BoardDetail => ({
   created_by: 1,
   default_viewport: null,
   node_count: nodes.length,
+  open_flag_count: 0,
   can_edit: canEdit,
   created_at: '',
   updated_at: '',

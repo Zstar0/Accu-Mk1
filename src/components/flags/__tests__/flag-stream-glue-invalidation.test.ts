@@ -194,4 +194,10 @@ describe('flag stream glue — scoped + coalesced invalidation', () => {
       expect(usedRollupPredicate()).toBe(false)
     }
   })
+  it('every event refreshes mounted board flag queries (planning boards)', async () => {
+    await mountGlue()
+    handler(evt({ flag: { entity_type: 'sample', entity_id: 'P-1' } }))
+    vi.advanceTimersByTime(300)
+    expect(hasKey(['flags', 'board'])).toBe(true)
+  })
 })
