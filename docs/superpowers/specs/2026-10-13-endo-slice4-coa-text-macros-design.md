@@ -139,13 +139,94 @@ Frontend: the hint renders on the profile editor.
 
 ## 9. Launch and rollback
 
-**Launch (same after-hours window as v2 and slice 3).** Add `[LOD {lod}.]` to the method text of the peptide endotoxin profile and the bac water endotoxin profile. The Handler or the profile owner does this in the profile editor.
+### Pre-launch check (required, read-only)
 
-**Rollback.** An image without the resolver would print the macro text literally ("[LOD {lod}.]") on any COA it generates. So the rollback order is:
-1. Remove the macros from the profile texts.
-2. Then roll back the image.
+Run it before the deploy, against the production profiles, only with the Handler's approval. It runs inside the Mk1 backend container (`cd /app && python -`) and writes nothing:
 
-That is in addition to slice 3's rollback runbook.
+```python
+from sqlalchemy import text
+from database import engine
+from coa.text_macros import resolve, unknown_macros
+
+with engine.connect() as c:
+    rows = c.execute(text(
+        "SELECT id, key, coa_basis_note, coa_method_text, coa_prep_text, coa_footnotes "
+        "FROM analysis_profiles ORDER BY id")).all()
+hits = []
+for pid, key, basis, method, prep, notes in rows:
+    items = [("coa_basis_note", basis), ("coa_method_text", method), ("coa_prep_text", prep)]
+    for i, n in enumerate(notes if isinstance(notes, list) else []):
+        if isinstance(n, dict):
+            items += [(f"coa_footnotes[{i}].text", n.get("text")),
+                      (f"coa_footnotes[{i}].label", n.get("label"))]
+    for where, t in items:
+        if isinstance(t, str) and (unknown_macros(t) or resolve(t, {}) != t):
+            hits.append((pid, key, where, t))
+for h in hits:
+    print(h)
+print(len(rows), "profiles,", len(hits), "hits")
+```
+
+A text is a hit when either test holds:
+- `unknown_macros(t)` is non-empty: a lowercase `{token}` Mk1 cannot fill, or a near miss such as `{LOD}` or `{ lod }`. The editor sends every COA field on each save, so a stored token like this makes the next save of that profile a 400.
+- `resolve(t, {}) != t`: the text already holds a known `{lod}`. That is the one way existing data changes output on deploy, because text with no known macro is returned exactly as typed.
+
+Footnote labels are included because the save now refuses a macro in a label. Expect zero hits. Fix any hit in the profile before the deploy.
+
+### Launch
+
+Same after-hours window as v2 and slice 3.
+
+1. Deploy the new image and confirm it is healthy (the profile editor loads and `GET /analysis-profiles` answers).
+2. Only then add `[LOD {lod}.]` to the method text of the peptide endotoxin profile and the bac water endotoxin profile, in the profile editor. The Handler or the profile owner does this.
+
+The macro text goes in after the new image is live and healthy, never before. An image without the resolver accepts `[LOD {lod}.]` on save and prints it literally on any COA it generates.
+
+### Rollback
+
+An image without the resolver prints the macro text literally ("[LOD {lod}.]") on any COA it generates. The order is: remove the macros, then roll back the image. This is in addition to slice 3's rollback runbook.
+
+1. List every profile that holds the macro. This query is read-only; expect exactly the two launch profiles:
+
+   ```sql
+   SELECT id, key, name
+   FROM analysis_profiles
+   WHERE coa_basis_note LIKE '%{lod}%'
+      OR coa_method_text LIKE '%{lod}%'
+      OR coa_prep_text LIKE '%{lod}%'
+      OR coa_footnotes::text LIKE '%{lod}%'
+   ORDER BY id;
+   ```
+
+2. Remove the macro from each of those profiles in the profile editor.
+3. Run the query again: zero rows.
+4. Then roll back the image.
+
+**If the new image's API is down**, the editor in step 2 is not available. Clear the macro text with one UPDATE instead, run by the Handler (it is documented here and is never run as part of the slice). It removes the `[...]` segment that holds `{lod}` and any bare `{lod}`, and leaves the rest of each column:
+
+```sql
+UPDATE analysis_profiles
+SET coa_basis_note = CASE WHEN coa_basis_note LIKE '%{lod}%'
+      THEN NULLIF(btrim(regexp_replace(regexp_replace(coa_basis_note,
+        '\s*\[[^\[\]]*\{lod\}[^\[\]]*\]', '', 'g'), '\s*\{lod\}', '', 'g')), '')
+      ELSE coa_basis_note END,
+    coa_method_text = CASE WHEN coa_method_text LIKE '%{lod}%'
+      THEN NULLIF(btrim(regexp_replace(regexp_replace(coa_method_text,
+        '\s*\[[^\[\]]*\{lod\}[^\[\]]*\]', '', 'g'), '\s*\{lod\}', '', 'g')), '')
+      ELSE coa_method_text END,
+    coa_prep_text = CASE WHEN coa_prep_text LIKE '%{lod}%'
+      THEN NULLIF(btrim(regexp_replace(regexp_replace(coa_prep_text,
+        '\s*\[[^\[\]]*\{lod\}[^\[\]]*\]', '', 'g'), '\s*\{lod\}', '', 'g')), '')
+      ELSE coa_prep_text END,
+    updated_at = now() AT TIME ZONE 'utc'
+WHERE coa_basis_note LIKE '%{lod}%'
+   OR coa_method_text LIKE '%{lod}%'
+   OR coa_prep_text LIKE '%{lod}%';
+```
+
+Then run the query from step 1 again. A profile that the query lists only through `coa_footnotes` is not touched by the UPDATE: roll back the image, then remove the macro in the old editor straight away (the old editor accepts any text). Hold COA publishing until that footnote text is fixed and the step 1 query returns zero rows, because a footnote macro prints literally in the gap.
+
+**Coverage of slice 3's hold.** Slice 3's rollback hold covers COA generation only for samples whose endotoxin parent result is in EU/vial. Bac water samples and peptide samples whose endotoxin result is in EU/mL are not held. Their COAs are printed under the new image from profiles that carry the macro, so if the image is rolled back with the macros still in the profile text, regenerating any of them prints the literal `[LOD {lod}.]` in the footer. Removing the macros first (steps 1 to 3) is therefore not optional for those samples, and the slice 3 hold does not stand in for it.
 
 ## 10. Out of scope
 
