@@ -27,6 +27,11 @@ export function AttentionDock({ board }: { board: BoardDetail }) {
   const [open, setOpen] = useState(true)
   // Read once into state (React Compiler: no impure reads during render).
   const [now] = useState(() => new Date())
+  if (flags.isLoading) return null
+  if (flags.isError)
+    return (
+      <p className="text-xs text-muted-foreground">Could not load flags.</p>
+    )
   const rows = attentionList(flags.data ?? [], blockingTypeSet(types.data), now)
   return (
     <Collapsible open={open} onOpenChange={setOpen}>

@@ -2,9 +2,18 @@ import { render, screen } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 
-const h = vi.hoisted(() => ({ flags: [] as unknown[], pending: vi.fn() }))
+const h = vi.hoisted(() => ({
+  flags: [] as unknown[],
+  pending: vi.fn(),
+  isLoading: false,
+  isError: false,
+}))
 vi.mock('@/services/boards', () => ({
-  useBoardFlags: () => ({ data: h.flags, isLoading: false }),
+  useBoardFlags: () => ({
+    data: h.flags,
+    isLoading: h.isLoading,
+    isError: h.isError,
+  }),
 }))
 vi.mock('@/services/flag-types', () => ({
   useFlagTypes: () => ({
@@ -84,7 +93,11 @@ const flag = (o: object) => ({
 })
 
 describe('AttentionDock', () => {
-  beforeEach(() => h.pending.mockReset())
+  beforeEach(() => {
+    h.pending.mockReset()
+    h.isLoading = false
+    h.isError = false
+  })
 
   it('lists blocking and overdue flags, overdue first, with Locate for item anchors only', async () => {
     const user = userEvent.setup()
@@ -116,5 +129,17 @@ describe('AttentionDock', () => {
     h.flags = [flag({ id: 3, title: 'Plain task' })]
     render(<AttentionDock board={board} />)
     expect(screen.getByText(/Nothing needs attention/)).toBeInTheDocument()
+  })
+
+  it('renders nothing while flags load', () => {
+    h.isLoading = true
+    const { container } = render(<AttentionDock board={board} />)
+    expect(container).toBeEmptyDOMElement()
+  })
+
+  it('shows an error line when flags fail to load', () => {
+    h.isError = true
+    render(<AttentionDock board={board} />)
+    expect(screen.getByText('Could not load flags.')).toBeInTheDocument()
   })
 })

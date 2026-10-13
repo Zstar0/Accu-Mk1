@@ -10,7 +10,7 @@
 ### Planning boards, slice 4: canvas live
 - **Zoomed out, items show their label only** (below 0.5 zoom); frames keep their title and pills.
 - **Cmd+K lists the open board's items**; pick one to centre it.
-- **Remove from frame** in the side panel; the item keeps its spot on the canvas. **Notes resize** from their corner and keep their size.
+- **Remove from frame** in the side panel; the item keeps its spot on the canvas (drag it out of the frame's area to keep it out, a drop inside re-adopts it). **Notes resize** from their corner and keep their size.
 - **Live boards.** Another editor's change appears on your open board without a reload.
 
 ## v1.46.0 - 2026-10-12

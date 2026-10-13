@@ -17,7 +17,7 @@ export function NoteNode({
   return (
     <div
       data-compact={compact || undefined}
-      className="h-full w-full min-w-[160px] rounded-md border bg-amber-50 p-2 text-xs shadow-sm dark:bg-amber-950/40"
+      className="h-full w-full min-w-[160px] overflow-hidden rounded-md border bg-amber-50 p-2 text-xs shadow-sm dark:bg-amber-950/40"
     >
       {data.canEdit && selected && (
         <NodeResizeControl
