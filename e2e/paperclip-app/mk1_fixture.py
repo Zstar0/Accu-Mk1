@@ -5,7 +5,8 @@ service, access rules and filesystem storage. FIXTURE: a throwaway SQLite file a
 dir under MK1_FIXTURE_DIR, one synthetic reader login, one restricted space with no grants.
 `lifespan` is off (no init_db, no startup jobs); the Postgres URL points at a closed port so
 any path that bypasses get_db fails instead of reaching a real database. No .env is read.
-Secrets (JWT_SECRET, agent token, reader password) are generated per run by run.mjs.
+Secrets (JWT_SECRET, agent token, reader password, optional admin password) are generated per run
+by the calling harness.
 """
 import os
 import sys
@@ -57,6 +58,10 @@ with Session() as s:
     s.add(DocumentSpace(slug="leadership", name="Leadership", visibility="restricted"))
     s.add(models.User(email="reader@example.test", role="standard", is_active=True,
                       hashed_password=get_password_hash(os.environ["MK1_READER_PASSWORD"])))
+    if os.environ.get("MK1_FIXTURE_ADMIN_PASSWORD"):  # e2e/agents/agents-pane.mjs signs in as this admin
+        s.add(models.User(email="admin@example.test", role="admin", is_active=True,
+                          first_name="Ada", last_name="Admin",
+                          hashed_password=get_password_hash(os.environ["MK1_FIXTURE_ADMIN_PASSWORD"])))
     s.commit()
 
 uvicorn.run(main.app, host="127.0.0.1", port=8563, lifespan="off", log_level="warning")
