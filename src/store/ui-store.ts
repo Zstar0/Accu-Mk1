@@ -17,6 +17,12 @@ export type ActiveSection =
 
 // Sub-sections within each main section
 export type DashboardSubSection = 'orders' | 'analytics'
+/** A flagged Support ticket or CRM item to open on arrival at its customer
+ *  page. entityId is the flag entity id (`{customer_key}|...`). */
+export interface PendingCustomerItem {
+  kind: 'support' | 'crm'
+  entityId: string
+}
 export type SenaiteSubSection =
   | 'samples'
   | 'event-log'
@@ -135,6 +141,9 @@ interface UIState {
   // reads it via consumePendingBoardNode() to focus/select a node on arrival.
   boardTargetSlug: string | null
   pendingBoardNode: string | null
+  // Flags on Support tickets / CRM items (2026-10-12): consume-once, read by
+  // FlaggedItemOpener on the customer page to open the flagged item.
+  pendingCustomerItem: PendingCustomerItem | null
   customerListPage: number
   customerSearchTerm: string
   hideTestAccounts: boolean
@@ -192,6 +201,8 @@ interface UIState {
   navigateToBoardNode: (slug: string, nodeId: string) => void
   setPendingBoardNode: (nodeId: string | null) => void
   consumePendingBoardNode: () => string | null
+  setPendingCustomerItem: (item: PendingCustomerItem | null) => void
+  consumePendingCustomerItem: () => PendingCustomerItem | null
   navigateToCustomers: () => void
   /** Order Status with ONLY the Order ID text filter set (other text axes
    *  cleared by the page so the result is unambiguous). */
@@ -310,6 +321,7 @@ export const useUIStore = create<UIState>()(
       documentViewerEditRequested: false,
       boardTargetSlug: null,
       pendingBoardNode: null,
+      pendingCustomerItem: null,
       customerListPage: 0,
       customerSearchTerm: '',
       hideTestAccounts: true,
@@ -556,6 +568,20 @@ export const useUIStore = create<UIState>()(
         if (id != null)
           set({ pendingBoardNode: null }, undefined, 'consumePendingBoardNode')
         return id
+      },
+
+      setPendingCustomerItem: item =>
+        set({ pendingCustomerItem: item }, undefined, 'setPendingCustomerItem'),
+
+      consumePendingCustomerItem: () => {
+        const item = get().pendingCustomerItem
+        if (item != null)
+          set(
+            { pendingCustomerItem: null },
+            undefined,
+            'consumePendingCustomerItem'
+          )
+        return item
       },
 
       navigateToSamplePrep: prepId =>

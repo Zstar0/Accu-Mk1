@@ -58,6 +58,8 @@ export interface CrmEmailMessage {
 }
 
 export interface CrmActivityDetail extends CrmItem {
+  /** Set when the viewer reached this item through a flag (read-only). */
+  via_flag?: number | null
   messages?: CrmEmailMessage[] | null
   duration?: number | null
   disposition?: string | null

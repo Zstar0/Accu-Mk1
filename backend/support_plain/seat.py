@@ -58,13 +58,16 @@ def require_seat(user=Depends(get_current_user)) -> SeatUser:
     return SeatUser(user, found)
 
 
-def require_support_reader(user=Depends(get_current_user)):
-    if user.role == "admin":
-        return user
+def is_support_reader(user) -> bool:
+    if getattr(user, "role", None) == "admin":
+        return True
     try:
-        found = resolve(getattr(user, "email", None))
+        return resolve(getattr(user, "email", None)) is not None
     except (SupportNotConfigured, SupportUnavailable):
-        found = None
-    if found is None:
+        return False
+
+
+def require_support_reader(user=Depends(get_current_user)):
+    if not is_support_reader(user):
         raise HTTPException(status_code=403, detail="Admin access or a Plain seat required")
     return user

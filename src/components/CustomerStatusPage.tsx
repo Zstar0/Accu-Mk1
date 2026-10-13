@@ -89,6 +89,7 @@ import {
 import { CustomerDashboard } from '@/components/customers/CustomerDashboard'
 import { CustomerCrmTab } from '@/components/customers/CustomerCrmTab'
 import { CustomerSupportTab } from '@/components/customers/CustomerSupportTab'
+import { FlaggedItemOpener } from '@/components/customers/FlaggedItemOpener'
 import { useSupportSeat } from '@/components/customers/useSupportSeat'
 import { CustomerAiReviewTab } from '@/components/customers/CustomerAiReviewTab'
 import { useAuthStore } from '@/store/auth-store'
@@ -1118,6 +1119,7 @@ function CustomerDetailView() {
           </TabsContent>
         )}
       </Tabs>
+      <FlaggedItemOpener customerKey={`wc:${customerDetailTargetId}`} />
     </div>
   )
 }
@@ -1616,6 +1618,7 @@ function GuestCustomerDetailView({ customerKey }: { customerKey: string }) {
         customerKey={customerKey}
         onOpenAnalyte={() => navigateTo('reports', 'dashboard')}
       />
+      <FlaggedItemOpener customerKey={customerKey} />
       {isAdminUser && (
         <>
           <section className="mt-4">

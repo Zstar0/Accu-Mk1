@@ -133,7 +133,7 @@ def test_unknown_customer_404_and_no_email_is_empty(api):
 def test_detail_returns_thread_and_entries(api):
     client, _ = api
     body = client.get("/support/customers/wc:1/threads/th_b").json()
-    assert set(body) == {"thread", "entries", "fetched_at", "stale"}
+    assert set(body) == {"thread", "entries", "fetched_at", "stale", "via_flag"}
     assert body["thread"]["id"] == "th_b"
     assert body["entries"] == [{"id": "e1", "at": "2026-09-03T00:00:00.000Z", "kind": "chat", "author": "Kyle R",
                                 "author_kind": "customer", "internal": False, "subject": None, "text": "hello",
