@@ -27,6 +27,13 @@ Written 2026-09-22 from Dennis's `tools-dennis/tools/qpcr-plate-builder` (in dai
    with its author and time; the old free text shows first as an earlier note with no
    recorded author. The samples list runs full width above the plate map instead of beside
    it. The on-screen plate map follows the dark theme; the printed sheet stays on paper.
+6. **The samples list sorts by its columns and the plate follows** (Handler, 2026-09-24).
+   Order #, Sample ID, identity, Received, Due and Priority sort ascending then descending;
+   `#` is worksheet order. The sort is shared per worksheet (`bench_config.sort_key`,
+   `sort_dir`) and replaces the order-sort switch (`sort_by_order` true reads as Order #
+   ascending, false as worksheet order, and is still written in step). Ties keep worksheet
+   order; blanks sort last both ways; priority ranks expedited, high, then the rest. Locked
+   wells never move (ruling 2); order boxes only when sorted by Order #.
 
 Standing rulings carried over from endo: extend the worksheet system, keep Dennis's layout
 and way of working inside the flyout in Mk1 styling, due dates from the SLA engine.

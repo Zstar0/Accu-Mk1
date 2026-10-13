@@ -1,4 +1,5 @@
-import { X } from 'lucide-react'
+import type { ReactNode } from 'react'
+import { ArrowDown, ArrowUp, ChevronsUpDown, X } from 'lucide-react'
 import { useUIStore } from '@/store/ui-store'
 import { SampleIdBadge } from '@/components/samples/SampleIdBadge'
 import { SlaAgeIndicator } from '@/components/hplc/SlaAgeIndicator'
@@ -11,7 +12,13 @@ import type { WorksheetItemPatch, WorksheetUser } from '@/lib/api'
 import type { SlaSubjectSnapshot } from '@/services/sla-subjects'
 import { labTime, type LabCalendar } from '@/lib/endo-prep'
 import { shortLabDate, type WorksheetItemRow } from '@/lib/endo-worksheet'
-import { orderGroups, wellsOf } from '@/lib/pcr-plate'
+import {
+  nextSort,
+  orderGroups,
+  wellsOf,
+  type PcrSort,
+  type PcrSortKey,
+} from '@/lib/pcr-plate'
 import type { PcrRunDoc } from '@/lib/pcr-worksheet'
 
 const TH =
@@ -33,6 +40,11 @@ const SUBTIME =
  * right after the id, not at the far right as on endo, so they stay in view
  * when a narrow window scrolls the table sideways past the identity.
  *
+ * The columns sort (Handler, 2026-09-24) and the plate is dealt in the list's
+ * order, so the list and the plate never disagree. The sort is saved on the
+ * worksheet, shared by everyone; '#' returns to worksheet order. Locked wells
+ * never move, so after a print a sort only re-deals the unlocked samples.
+ *
  * No Reassign here (ruling 2026-09-23): a sample that has to leave a run goes
  * back to the inbox and joins the next run like a new arrival, as Dennis's
  * lab carried unrun samples into the next day's CSV.
@@ -46,6 +58,8 @@ export function PcrSampleList({
   slaLoading,
   slaError,
   isCompleted,
+  sort,
+  onSort,
   onRemove,
   onUpdateItem,
 }: {
@@ -58,6 +72,9 @@ export function PcrSampleList({
   slaLoading: boolean
   slaError: boolean
   isCompleted: boolean
+  sort: PcrSort
+  /** Absent on a completed worksheet: the headers are then plain labels. */
+  onSort?: (next: PcrSort) => void
   onRemove: (itemId: number) => void
   onUpdateItem: (itemId: number, data: WorksheetItemPatch) => void
 }) {
@@ -78,6 +95,11 @@ export function PcrSampleList({
           {L.plateCount > 1 &&
             ` on ${L.plateCount} plates (${L.plates.map(pl => pl.sampleCount).join(' + ')}); the NPC sits on every plate`}
         </span>
+        {onSort && L.frozenCount > 0 && (
+          <span className="text-xs text-amber-700 dark:text-amber-300">
+            Locked wells stay put; a sort moves only the unlocked samples.
+          </span>
+        )}
       </header>
       {groups.length >= 2 && (
         <div className="flex flex-wrap gap-1 border-b px-3.5 py-2">
@@ -121,22 +143,56 @@ export function PcrSampleList({
         <table className="w-full border-collapse">
           <thead>
             <tr>
-              <th className={`${TH} w-[34px]`} />
-              <th className={TH}>Order #</th>
-              <th className={TH}>Sample ID</th>
+              <SortTh
+                className={`${TH} w-[34px]`}
+                label="#"
+                sortKey="listed"
+                sort={sort}
+                onSort={onSort}
+              />
+              <SortTh
+                label="Order #"
+                sortKey="order"
+                sort={sort}
+                onSort={onSort}
+              />
+              <SortTh
+                label="Sample ID"
+                sortKey="sampleId"
+                sort={sort}
+                onSort={onSort}
+              />
               <th className={`${TH} text-center`}>Made</th>
               <th className={`${TH} text-center`}>Ran</th>
-              <th className={TH}>Sample identity</th>
-              <th className={TH}>Received</th>
-              <th
+              <SortTh
+                label="Sample identity"
+                sortKey="identity"
+                sort={sort}
+                onSort={onSort}
+              />
+              <SortTh
+                label="Received"
+                sortKey="received"
+                sort={sort}
+                onSort={onSort}
+              />
+              <SortTh
                 className={`${TH} bg-teal-500/10 text-teal-800 dark:text-teal-200`}
+                label="Due"
+                sortKey="due"
+                sort={sort}
+                onSort={onSort}
               >
-                Due
                 <span className="block font-mono text-[10px] font-normal normal-case tracking-[0.04em] opacity-80">
                   SLA
                 </span>
-              </th>
-              <th className={TH}>Priority</th>
+              </SortTh>
+              <SortTh
+                label="Priority"
+                sortKey="priority"
+                sort={sort}
+                onSort={onSort}
+              />
               <th className={TH}>Wells</th>
               <th className={`${TH} text-center`}>Flag</th>
               <th className={TH} />
@@ -329,3 +385,64 @@ export function PcrSampleList({
 }
 
 export default PcrSampleList
+
+/** A list header that sorts the run (and so re-deals the plate) on click. */
+function SortTh({
+  label,
+  sortKey,
+  sort,
+  onSort,
+  className = TH,
+  children,
+}: {
+  label: string
+  sortKey: PcrSortKey
+  sort: PcrSort
+  onSort?: (next: PcrSort) => void
+  className?: string
+  children?: ReactNode
+}) {
+  const active = sort.key === sortKey
+  const listed = sortKey === 'listed'
+  const Icon = !active
+    ? ChevronsUpDown
+    : sort.dir === 'asc'
+      ? ArrowUp
+      : ArrowDown
+  return (
+    <th
+      className={className}
+      aria-sort={
+        active && !listed
+          ? sort.dir === 'asc'
+            ? 'ascending'
+            : 'descending'
+          : 'none'
+      }
+    >
+      {onSort ? (
+        <button
+          type="button"
+          onClick={() => onSort(nextSort(sort, sortKey))}
+          className={`inline-flex items-center gap-1 uppercase transition-colors hover:text-foreground ${active ? 'text-foreground' : ''}`}
+          title={
+            listed
+              ? 'Worksheet order: samples as they were added. The plate follows.'
+              : `Sort by ${label.toLowerCase()}. The plate is dealt in the list's order; locked wells never move.`
+          }
+        >
+          {label}
+          {!listed && (
+            <Icon
+              className={`h-3 w-3 ${active ? '' : 'opacity-40'}`}
+              aria-hidden="true"
+            />
+          )}
+        </button>
+      ) : label === '#' ? null : (
+        label
+      )}
+      {children}
+    </th>
+  )
+}

@@ -16,11 +16,14 @@ import {
 import {
   assess,
   DEFAULT_OVERAGE,
+  DEFAULT_PCR_SORT,
   layoutPlates,
+  PCR_SORT_KEYS,
   summarize,
   type PcrLayout,
   type PcrRunMeta,
   type PcrSample,
+  type PcrSort,
   type PcrSummary,
 } from '@/lib/pcr-plate'
 import { benchKindForItem } from '@/lib/worksheet-kind'
@@ -43,14 +46,16 @@ export interface PcrConfig {
   overage: number
   curve: string
   plateType: string
-  sortByOrder: boolean
+  /** The samples-list column the plate is dealt by (shared, saved on the
+   *  worksheet so every analyst sees the plate that will be printed). */
+  sort: PcrSort
 }
 
 export const DEFAULT_PCR_CONFIG: PcrConfig = {
   overage: DEFAULT_OVERAGE,
   curve: '',
   plateType: '',
-  sortByOrder: true,
+  sort: DEFAULT_PCR_SORT,
 }
 
 /** The highest well ever frozen per plate (worksheets.well_high_water), with
@@ -81,8 +86,19 @@ export function pcrConfigOf(
       Number.isFinite(overage) && overage > 0 ? overage : DEFAULT_OVERAGE,
     curve: typeof c.curve === 'string' ? c.curve : '',
     plateType: typeof c.plate_type === 'string' ? c.plate_type : '',
-    sortByOrder: c.sort_by_order !== false,
+    sort: sortOf(c),
   }
+}
+
+/** The saved column sort; before 2026-09-24 only the on/off order switch
+ *  existed, so a worksheet without `sort_key` keeps what that switch meant. */
+function sortOf(c: Record<string, unknown>): PcrSort {
+  const key = PCR_SORT_KEYS.find(k => k === c.sort_key)
+  if (key) return { key, dir: c.sort_dir === 'desc' ? 'desc' : 'asc' }
+  if (c.sort_key !== undefined) return DEFAULT_PCR_SORT
+  return c.sort_by_order === false
+    ? { key: 'listed', dir: 'asc' }
+    : DEFAULT_PCR_SORT
 }
 
 export function pcrConfigToWire(c: PcrConfig): Record<string, unknown> {
@@ -90,7 +106,10 @@ export function pcrConfigToWire(c: PcrConfig): Record<string, unknown> {
     overage: c.overage,
     curve: c.curve,
     plate_type: c.plateType,
-    sort_by_order: c.sortByOrder,
+    sort_key: c.sort.key,
+    sort_dir: c.sort.dir,
+    // The older on/off switch, kept in step for any build that still reads it.
+    sort_by_order: c.sort.key === 'order',
   }
 }
 
@@ -160,6 +179,8 @@ export interface PcrRunOptions {
   /** SLA `due_at` per item id (null when the item has no received date). */
   dueAtByItemId: Map<number, string | null>
   notes: string
+  /** A sort just clicked but not yet saved; the saved one otherwise. */
+  sort?: PcrSort
 }
 
 /** The run document: the worksheet's PCR items laid out on plates with the
@@ -169,7 +190,8 @@ export function buildPcrRunDoc(
   opts: PcrRunOptions
 ): PcrRunDoc {
   const cal = opts.calendar
-  const cfg = pcrConfigOf(ws)
+  const saved = pcrConfigOf(ws)
+  const cfg = opts.sort ? { ...saved, sort: opts.sort } : saved
   const items = ws.items.filter(isPcrWorksheetItem)
   const samples = pcrSamplesFor(
     items,
@@ -178,7 +200,7 @@ export function buildPcrRunDoc(
     pcrRunDate(ws, cal)
   )
   const layout = layoutPlates(samples, {
-    sortByOrder: cfg.sortByOrder,
+    sort: cfg.sort,
     highWater: highWaterOf(ws),
   })
   return {
@@ -202,6 +224,7 @@ export function buildPcrRunDoc(
       total: items.length,
     },
     notes: opts.notes,
-    sortByOrder: cfg.sortByOrder,
+    // Order boxes and tints only mean something when wells run by order.
+    sortByOrder: cfg.sort.key === 'order',
   }
 }
