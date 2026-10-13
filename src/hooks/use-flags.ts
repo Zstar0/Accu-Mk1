@@ -59,6 +59,10 @@ export const flagKeys = {
   // scoping away the per-vial EntityFlagButton refetch storm.
   entityScope: (entityType: string, entityId: string) =>
     ['flags', 'entity', entityType, entityId] as const,
+  // Open flags of every anchor on one board (planning boards slice 4). Under
+  // ['flags', 'board'] so the stream glue refreshes mounted boards with its standard set.
+  boards: () => ['flags', 'board'] as const,
+  board: (slug: string) => ['flags', 'board', slug] as const,
   activity: () => ['flags', 'activity'] as const,
   unread: () => ['flags', 'unread'] as const,
   search: (q: string) => ['flags', 'search', q] as const,

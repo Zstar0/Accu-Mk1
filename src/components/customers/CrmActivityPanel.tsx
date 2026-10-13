@@ -6,8 +6,9 @@ import {
   SheetHeader,
   SheetTitle,
 } from '@/components/ui/sheet'
+import { EntityFlagButton } from '@/components/flags/EntityFlagButton'
 import { ResizableSheetContent } from './ResizableSheetContent'
-import { getCrmActivity, type CrmItem } from '@/lib/api-crm'
+import { CrmError, getCrmActivity, type CrmItem } from '@/lib/api-crm'
 
 const when = (iso: string | null | undefined) =>
   iso
@@ -37,21 +38,39 @@ export function CrmActivityPanel({
     staleTime: 300_000,
   })
   const d = q.data
+  // A flag link opens with a bare item; the detail fills the header in.
+  const shown = d ?? item
+  const noAccess = q.error instanceof CrmError && q.error.status === 403
   return (
     <Sheet open={item !== null} onOpenChange={o => !o && onClose()}>
       <ResizableSheetContent className="overflow-y-auto">
         <SheetHeader>
-          <SheetTitle>{item?.title}</SheetTitle>
+          <SheetTitle>{shown?.title}</SheetTitle>
           <SheetDescription>
-            {item?.lead_name} · {when(item?.at)}{' '}
-            {item?.who ? `· ${item.who}` : ''}
+            {shown?.lead_name} · {when(shown?.at)}{' '}
+            {shown?.who ? `· ${shown.who}` : ''}
           </SheetDescription>
+          {item && (
+            <EntityFlagButton
+              entityType="crm_item"
+              entityId={`${customerKey}|${item.type}|${item.id}`}
+            />
+          )}
         </SheetHeader>
+        {d?.via_flag != null && (
+          <p className="mx-4 rounded-md border px-3 py-2 text-xs text-muted-foreground">
+            {`You're seeing this item because you're on flag #${d.via_flag}.`}
+          </p>
+        )}
         {q.isLoading && (
           <Loader2 className="mx-auto mt-6 h-5 w-5 animate-spin text-muted-foreground" />
         )}
         {q.isError && (
-          <p className="mt-4 text-sm text-red-500">Could not load this item.</p>
+          <p className="mt-4 px-4 text-sm text-red-500">
+            {noAccess
+              ? "You don't have access to this item. Ask to be added to a flag about it."
+              : 'Could not load this item.'}
+          </p>
         )}
         {d && (
           <div className="mt-4 flex flex-col gap-4 px-4 text-sm">

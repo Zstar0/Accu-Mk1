@@ -31,6 +31,7 @@ const board = {
   created_by: 1,
   default_viewport: null,
   node_count: 0,
+  open_flag_count: 0,
   can_edit: true,
   created_at: '',
   updated_at: '',

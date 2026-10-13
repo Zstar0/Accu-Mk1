@@ -48,6 +48,12 @@ export function toFlowNodes(
           width: row.w ?? FRAME_DEFAULT.width,
           height: row.h ?? FRAME_DEFAULT.height,
         }
+      } else if (row.kind === 'note') {
+        // Notes always carry a width so the corner grip has a box to resize; height stays auto until set.
+        node.style = {
+          width: row.w ?? 240,
+          ...(row.h != null ? { height: row.h } : {}),
+        }
       } else if (row.w != null || row.h != null) {
         node.style = {
           width: row.w ?? NODE_DEFAULT.width,

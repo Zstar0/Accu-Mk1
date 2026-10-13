@@ -12,6 +12,10 @@ vi.mock('@/lib/api-support', async () => {
   return { ...actual, getCustomerSupport: vi.fn(), getSupportThread: vi.fn() }
 })
 
+vi.mock('./useItemFlagCounts', () => ({
+  useItemFlagCounts: () => new Map([['th_b', 2]]),
+}))
+
 const waitingSince = new Date(Date.now() - 2 * 3600_000).toISOString()
 const open: SupportThread = {
   id: 'th_b',
@@ -268,5 +272,11 @@ describe('support conversation order', () => {
     const panel = await openPanel()
     await within(panel).findByText('text-e3')
     expect(order(panel)).toEqual(['text-e1', 'text-e2', 'text-e3'])
+  })
+
+  it('marks rows that have open flags', async () => {
+    setup()
+    expect(await screen.findByLabelText('2 open flags')).toBeInTheDocument()
+    expect(screen.getAllByLabelText(/open flag/)).toHaveLength(1)
   })
 })

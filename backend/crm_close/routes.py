@@ -5,8 +5,10 @@ from typing import Literal, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel
+from sqlalchemy.orm import Session
 
-from auth import require_admin
+from auth import get_current_user, require_admin
+from database import get_db
 from crm_close import rules, service
 from crm_close.client import CrmNotConfigured, CrmUnavailable
 
@@ -98,6 +100,7 @@ class ActivityDetail(Item):
     starts_at: Optional[str] = None
     ends_at: Optional[str] = None
     attendees: Optional[list[str]] = None
+    via_flag: Optional[int] = None  # set only when the read was admitted through a flag (spec 2026-10-12 3.3)
 
 
 def _fail(e: Exception):
@@ -121,11 +124,18 @@ def customer_crm(customer_key: str, refresh: bool = False, types: list[ItemType]
 
 
 @router.get("/customers/{customer_key}/activities/{activity_id}", response_model=ActivityDetail)
-def activity_detail(customer_key: str, activity_id: str, type: ItemType, _u=Depends(require_admin)):
+def activity_detail(customer_key: str, activity_id: str, type: ItemType,
+                    user=Depends(get_current_user), db: Session = Depends(get_db)):
+    via_flag = None
+    if getattr(user, "role", None) != "admin":
+        from flags.access import flag_for_user
+        via_flag = flag_for_user(db, getattr(user, "id", None), "crm_item", f"{customer_key}|{type}|{activity_id}")
+        if via_flag is None:
+            raise HTTPException(status_code=403, detail="Admin access or a flag on this item required")
     try:
         out = service.activity_detail(customer_key, activity_id, type)
     except (CrmNotConfigured, CrmUnavailable) as e:
         _fail(e)
     if out is None:
         raise HTTPException(status_code=404, detail="activity not found")
-    return out
+    return {**out, "via_flag": via_flag}

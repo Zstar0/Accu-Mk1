@@ -26,6 +26,8 @@ import {
   type CustomerCrm,
 } from '@/lib/api-crm'
 import { CrmActivityPanel } from './CrmActivityPanel'
+import { ItemFlagMarker } from './ItemFlagMarker'
+import { useItemFlagCounts } from './useItemFlagCounts'
 
 const CARD = 'rounded-lg border border-border/50 bg-card/30 p-3'
 const CHIPS: { key: CrmItemType | 'all'; label: string }[] = [
@@ -76,6 +78,7 @@ export function CustomerCrmTab({ customerKey }: { customerKey: string }) {
   // Refresh is one-shot: only the first fetch after a Refresh click asks for it.
   const sentRefresh = useRef(0)
   const [open, setOpen] = useState<CrmItem | null>(null)
+  const flagCounts = useItemFlagCounts('crm_item', customerKey)
   const qc = useQueryClient()
   const types = type === 'all' ? [] : [type]
   const takeRefresh = () => {
@@ -294,6 +297,9 @@ export function CustomerCrmTab({ customerKey }: { customerKey: string }) {
                   {it.direction === 'outbound' && (
                     <ArrowUpRight className="mt-0.5 h-3 w-3 text-emerald-500" />
                   )}
+                  <ItemFlagMarker
+                    count={flagCounts.get(`${it.type}|${it.id}`) ?? 0}
+                  />
                   <span className="min-w-0 flex-1">
                     <span className="font-medium">{it.title}</span>
                     {it.support_thread_url && (

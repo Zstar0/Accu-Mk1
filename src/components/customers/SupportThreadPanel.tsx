@@ -2,12 +2,14 @@ import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { ArrowDownUp, Loader2 } from 'lucide-react'
 import { useEffect, useRef, useState } from 'react'
 import { cn } from '@/lib/utils'
+import { CrmError } from '@/lib/api-crm'
 import {
   Sheet,
   SheetDescription,
   SheetHeader,
   SheetTitle,
 } from '@/components/ui/sheet'
+import { EntityFlagButton } from '@/components/flags/EntityFlagButton'
 import { ResizableSheetContent } from './ResizableSheetContent'
 import {
   getSupportThread,
@@ -63,6 +65,9 @@ export function SupportThreadPanel({
   const seat = useSupportSeat()
   const hasSeat = seat.data?.has_seat === true
   const current = d?.thread ?? thread
+  // A flag link opens with a placeholder row (no plain_url); show nothing from it until the detail loads.
+  const known = d?.thread ?? (thread?.plain_url ? thread : null)
+  const noAccess = q.error instanceof CrmError && q.error.status === 403
   const run = async (action: SupportAction, body: Record<string, unknown>) => {
     if (!thread) return
     const key = ['support', 'thread', customerKey, thread.id]
@@ -152,19 +157,27 @@ export function SupportThreadPanel({
             {current?.title}
           </SheetTitle>
           <SheetDescription className="flex flex-wrap items-center gap-2 text-[var(--pv-ink-2)]">
-            <span>
-              {statusLabel(current?.status_detail) ?? current?.status}
-            </span>
-            <span>· {current?.priority}</span>
-            {current && (
+            {known && (
+              <>
+                <span>{statusLabel(known.status_detail) ?? known.status}</span>
+                <span>· {known.priority}</span>
+              </>
+            )}
+            {known && (
               <a
                 className="text-[var(--pv-accent)] hover:underline"
-                href={current.plain_url}
+                href={known.plain_url}
                 target="_blank"
                 rel="noreferrer"
               >
                 Open in Plain
               </a>
+            )}
+            {current && (
+              <EntityFlagButton
+                entityType="support_ticket"
+                entityId={`${customerKey}|${current.id}`}
+              />
             )}
           </SheetDescription>
         </SheetHeader>
@@ -182,9 +195,9 @@ export function SupportThreadPanel({
               details ? 'block border-b' : 'hidden'
             )}
           >
-            {current && (
+            {known && (
               <TicketSidebar
-                thread={current}
+                thread={known}
                 threads={threads ?? []}
                 canEdit={hasSeat}
                 run={run}
@@ -206,7 +219,14 @@ export function SupportThreadPanel({
               )}
               {q.isError && (
                 <p className="mt-4 text-sm text-red-500">
-                  Could not load this conversation.
+                  {noAccess
+                    ? "You don't have access to this ticket. Ask to be added to a flag about it."
+                    : 'Could not load this conversation.'}
+                </p>
+              )}
+              {d?.via_flag != null && (
+                <p className="mb-2 rounded-md border border-[var(--pv-border)] bg-[var(--pv-surface)] px-3 py-2 text-xs text-[var(--pv-ink-2)]">
+                  {`You're seeing this ticket because you're on flag #${d.via_flag}.`}
                 </p>
               )}
               {d?.stale && (
@@ -263,7 +283,7 @@ export function SupportThreadPanel({
                 onMore={onMore}
               />
             )}
-            {seat.data && !hasSeat && (
+            {seat.data && !hasSeat && d?.via_flag == null && (
               <p className="px-4 pb-3 text-xs text-[var(--pv-ink-3)]">
                 Replying needs a Plain account under your Mk1 email.
               </p>

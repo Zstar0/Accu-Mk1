@@ -18,6 +18,16 @@ vi.mock('@/lib/api-support', async () => {
   }
 })
 
+vi.mock('@/components/flags/EntityFlagButton', () => ({
+  EntityFlagButton: ({
+    entityType,
+    entityId,
+  }: {
+    entityType: string
+    entityId: string
+  }) => <button type="button">{`flag ${entityType} ${entityId}`}</button>,
+}))
+
 const thread: SupportThread = {
   id: 'th_b',
   ref: 'T-482',
@@ -350,5 +360,57 @@ describe('SupportThreadPanel actions', () => {
     )
     await userEvent.click(screen.getByRole('button', { name: 'Yes, send' }))
     await waitFor(() => expect(writes).toContain(900))
+  })
+
+  it('has a Flag button for this ticket', async () => {
+    setup()
+    expect(
+      await screen.findByRole('button', {
+        name: 'flag support_ticket wc:1|th_b',
+      })
+    ).toBeInTheDocument()
+  })
+
+  it('explains flag access and hides the no-seat note', async () => {
+    vi.mocked(support.getSupportThread).mockResolvedValueOnce({
+      ...detail,
+      via_flag: 42,
+    })
+    setup(false)
+    expect(
+      await screen.findByText(/because you're on flag #42/)
+    ).toBeInTheDocument()
+    expect(screen.queryByText(/Replying needs a Plain account/)).toBeNull()
+  })
+
+  it('a flag link without access says so, with no made-up header', async () => {
+    vi.mocked(support.getSupportThread).mockReset()
+    vi.mocked(support.getSupportThread).mockRejectedValue(
+      new CrmError(403, null)
+    )
+    vi.mocked(support.getSupportMe).mockResolvedValue({
+      has_seat: false,
+      plain_user_id: null,
+      name: null,
+      email: null,
+      unavailable: false,
+    })
+    const qc = new QueryClient({
+      defaultOptions: { queries: { retry: false } },
+    })
+    render(
+      <QueryClientProvider client={qc}>
+        <SupportThreadPanel
+          customerKey="wc:1"
+          thread={{ ...thread, ref: '', title: '', plain_url: '' }}
+          onClose={vi.fn()}
+        />
+      </QueryClientProvider>
+    )
+    expect(
+      await screen.findByText(/don't have access to this ticket/)
+    ).toBeInTheDocument()
+    expect(screen.queryByText('Open in Plain')).toBeNull()
+    expect(screen.queryByText(/normal/)).toBeNull()
   })
 })

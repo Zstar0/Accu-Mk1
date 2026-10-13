@@ -62,6 +62,8 @@ export interface SupportThreadDetail {
   entries: SupportEntry[]
   fetched_at: string
   stale: boolean
+  /** Set when the viewer reached this ticket through a flag (read-only). */
+  via_flag?: number | null
 }
 
 export function getCustomerSupport(

@@ -14,7 +14,7 @@ vi.mock('@/store/ui-store', () => ({
   useUIStore: mockUIStore,
 }))
 
-const { registerCommands, getAllCommands, executeCommand } =
+const { registerCommands, unregisterCommands, getAllCommands, executeCommand } =
   await import('./registry')
 const { navigationCommands } = await import('./navigation-commands')
 
@@ -149,5 +149,23 @@ describe('Simplified Command System', () => {
       expect(result.success).toBe(false)
       expect(result.error).toContain('Test error')
     })
+  })
+
+  it('a literal label is searched and unregister removes commands (Review Focus 5)', () => {
+    registerCommands([
+      {
+        id: 'board:org:node:1',
+        labelKey: 'commands.boardItem.label',
+        label: 'Marketing frame',
+        group: 'board',
+        execute: vi.fn(),
+      },
+    ])
+    const ctx = createMockContext()
+    expect(getAllCommands(ctx, 'marketing', mockT).map(c => c.id)).toEqual([
+      'board:org:node:1',
+    ])
+    unregisterCommands(['board:org:node:1'])
+    expect(getAllCommands(ctx, 'marketing', mockT)).toEqual([])
   })
 })

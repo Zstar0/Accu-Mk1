@@ -98,11 +98,11 @@ export function CommandPalette() {
             {groupCommands.map(command => (
               <CommandItem
                 key={command.id}
-                value={command.id}
+                value={`${command.id} ${command.label ?? t(command.labelKey)}`}
                 onSelect={() => handleCommandSelect(command.id)}
               >
                 {command.icon && <command.icon className="mr-2 h-4 w-4" />}
-                <span>{t(command.labelKey)}</span>
+                <span>{command.label ?? t(command.labelKey)}</span>
                 {command.descriptionKey && (
                   <span className="ml-auto text-xs text-muted-foreground">
                     {t(command.descriptionKey)}

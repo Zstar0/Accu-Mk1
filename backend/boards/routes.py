@@ -13,6 +13,8 @@ from boards.schemas import (BoardCreate, BoardDetail, BoardOut, BoardPatch, Edge
                             EdgeOut, EdgePatch, EntityBoardRef, GrantIn, GrantOut, NodeCreate,
                             NodeOut, NodePatch, PositionItem)
 from database import get_db
+from flags.routes import _with_entities as with_entities
+from flags.schemas import FlagResponse
 from groups.routes import http_error
 
 router = APIRouter(prefix="/api/boards", tags=["boards"])
@@ -21,8 +23,10 @@ router = APIRouter(prefix="/api/boards", tags=["boards"])
 @router.get("", response_model=List[BoardOut])
 def list_boards(db: Session = Depends(get_db), user=Depends(get_current_user)):
     boards = service.list_boards(db, user)
-    counts = service.node_counts(db, [b.id for b in boards])
-    return [service.board_out(db, user, b, counts) for b in boards]
+    ids = [b.id for b in boards]
+    counts = service.node_counts(db, ids)
+    flag_counts = service.open_flag_counts(db, ids)
+    return [service.board_out(db, user, b, counts, flag_counts) for b in boards]
 
 
 @router.post("", response_model=BoardOut, status_code=201)
@@ -50,6 +54,15 @@ def get_board(slug: str, db: Session = Depends(get_db), user=Depends(get_current
     try:
         board = service.get_board(db, user, slug)
         return service.board_detail_payload(db, user, board)
+    except Exception as e:
+        raise http_error(e)
+
+
+@router.get("/{slug}/flags", response_model=List[FlagResponse])
+def board_flags(slug: str, db: Session = Depends(get_db), user=Depends(get_current_user)):
+    """Open flags on every anchor of the board, for the rollups, pills and the dock."""
+    try:
+        return with_entities(db, service.board_open_flags(db, user, slug))
     except Exception as e:
         raise http_error(e)
 
