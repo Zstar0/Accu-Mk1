@@ -100,3 +100,16 @@ def test_unknown_macros_lists_each_unknown_name_once():
     assert unknown_macros("Lot {lot} {lod} {lot} {batch_no}") == ["lot", "batch_no"]
     assert unknown_macros("{lod} [1] {Upper} {}") == []
     assert unknown_macros(None) == []
+
+
+def test_unknown_macros_reports_near_misses_of_a_known_macro():
+    # {LOD} and { lod } are typos of {lod}; save validation must refuse them.
+    assert unknown_macros("[LOD {LOD}.]") == ["LOD"]
+    assert unknown_macros("{ lod }") == [" lod "]
+    assert unknown_macros("{Lod} {lod}") == ["Lod"]
+    assert unknown_macros("{LOD} {Lod} {LOD} {lot}") == ["LOD", "Lod", "lot"]
+
+
+def test_a_near_miss_prints_as_typed_at_build_time():
+    # resolve is unchanged: only save validation refuses a near miss.
+    assert resolve("[LOD {LOD}.]", {"lod": "0.05 EU/mL"}) == "[LOD {LOD}.]"

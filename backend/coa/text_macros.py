@@ -16,17 +16,26 @@ from typing import Iterable, Mapping, Optional
 MACROS: tuple[str, ...] = ("lod",)
 
 _MACRO = re.compile(r"\{([a-z_]+)\}")
+# Any brace token, for save validation: {LOD} and { lod } are typos of {lod}.
+_BRACE = re.compile(r"\{([^{}]*)\}")
+_NAME = re.compile(r"[a-z_]+")
 # A segment is a bracket pair with no bracket inside it, so segments never nest.
 _SEGMENT = re.compile(r"\[([^\[\]]*)\]")
 _SPACES = re.compile(r" {2,}")
 
 
 def unknown_macros(text: Optional[str]) -> list[str]:
-    """Macro names in text that Mk1 does not know, in order, each once."""
+    """Brace tokens in text that Mk1 cannot fill, in order, each once: a
+    lowercase name it does not know ("lot"), or a near miss of a known macro
+    that only differs by case or spaces ("LOD", " lod "), reported as typed.
+    Other brace text ({Upper}, {}) is allowed. resolve() leaves all of these
+    as typed; this is for save validation."""
     out: list[str] = []
-    for name in _MACRO.findall(text or ""):
-        if name not in MACROS and name not in out:
-            out.append(name)
+    for inner in _BRACE.findall(text or ""):
+        if inner in MACROS or inner in out:
+            continue
+        if _NAME.fullmatch(inner) or inner.strip().lower() in MACROS:
+            out.append(inner)
     return out
 
 
