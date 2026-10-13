@@ -5,9 +5,11 @@ import { useBoardFlags } from '@/services/boards'
 import { useFlagTypes } from '@/services/flag-types'
 import { blockingTypeSet, flagsByAnchor, nodeAnchor } from '../board-flags'
 import type { BoardFlowNode } from '../board-mapping'
+import { useCompact } from './use-compact'
 
 export function EntityNode({ data }: NodeProps<BoardFlowNode>) {
   const { row } = data
+  const compact = useCompact()
   const meta = entityMeta(row.entity_type)
   const Icon = meta.Icon
   const label = row.context?.label ?? row.label
@@ -33,9 +35,9 @@ export function EntityNode({ data }: NodeProps<BoardFlowNode>) {
       <Icon className="h-3.5 w-3.5 text-teal-600" />
       <div>
         <div className="font-medium">{label}</div>
-        <div className="text-muted-foreground">{meta.label}</div>
+        {!compact && <div className="text-muted-foreground">{meta.label}</div>}
       </div>
-      {mine.length > 0 && (
+      {!compact && mine.length > 0 && (
         <span
           data-testid="entity-pill"
           className={`ml-1 rounded-full px-1.5 text-[10px] font-semibold text-white ${hasBlocking ? 'bg-red-600' : 'bg-amber-500'}`}
