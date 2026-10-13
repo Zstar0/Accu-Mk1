@@ -314,6 +314,15 @@ const PEP_FONT =
 const PEP_LINE_PX = 15.4 // one line of peptide name at 10pt / 1.15
 const MG_TOP_PX = 96 / 72 // the 1pt top margin of the declared mg line
 const DUE2_PX = 41 // the Due cell: the date over the priority pill
+// Mk1, measured in Chromium's print layout (2026-10-12): a step cell with its
+// note line is 51.4 px, 64.4 px when an over-tube note wraps to two lines.
+// Each carries the 1.6 px the 42 px standard row has over its 40.4 px.
+// Dennis had 58 for both.
+const STEP_NOTE_PX = 53
+const STEP_NOTE2_PX = 66
+const STEP_COL = 0.1379 // a step column, as in COLGROUP2
+const NOTE_FONT =
+  "700 11.33px Consolas, 'Cascadia Mono', 'DejaVu Sans Mono', monospace"
 const CHROME_FIRST = 162 // title, a one-line meta, column heads, page footer
 const CHROME_CONT = 125 // continuation heading, column heads, page footer
 const FIT_SAFETY = 10
@@ -354,6 +363,12 @@ function defaultMeasure(text: string, font: string): number {
   return text.length * px * 0.5
 }
 
+/**
+ * Lines a text wraps to: at spaces, and after a hyphen or a slash, but not a
+ * slash or hyphen after a digit (Chrome keeps "1295/Ipamorelin" whole). A
+ * piece wider than the line breaks anywhere (td.pep2's overflow-wrap) and
+ * takes ceil(width / line) lines of its own.
+ */
 function lineCount(
   text: string,
   maxW: number,
@@ -363,14 +378,20 @@ function lineCount(
   if (!text) return 1
   let lines = 1
   let cur = ''
-  for (const word of text.split(/\s+/)) {
-    const next = cur ? `${cur} ${word}` : word
-    if (measure(next, font) <= maxW || !cur) cur = next
-    else {
-      lines++
-      cur = word
-    }
+  const start = (piece: string) => {
+    lines += Math.max(0, Math.ceil(measure(piece, font) / maxW) - 1)
+    cur = piece
   }
+  for (const word of text.split(/\s+/))
+    word.split(/(?<=[^\d][-/])/).forEach((piece, k) => {
+      if (!cur) return start(piece)
+      const next = `${cur}${k ? '' : ' '}${piece}`
+      if (measure(next, font) <= maxW) cur = next
+      else {
+        lines++
+        start(piece)
+      }
+    })
   return lines
 }
 
@@ -441,7 +462,22 @@ function rowMinFor(
     p.steps.some(
       (st, si) => st.ratio !== std[si]?.ratio || stepDiffers(st, std[si])
     )
-  return Math.max(odd ? 58 : 42, stack)
+  if (!odd) return Math.max(42, stack)
+  // an over-tube note, as stepPrint prints it, can wrap under its numbers
+  const noteW = PAGE_CONTENT_W * STEP_COL - H_PAD_PX
+  const wraps = p.steps.some(
+    st =>
+      !st.fits &&
+      st.diluentUl !== null &&
+      !!st.sampleUl &&
+      lineCount(
+        `1:${fmt(st.ratio)} \u00b7 over ${fmt(TUBE_UL / 1000)} mL`,
+        noteW,
+        NOTE_FONT,
+        measure
+      ) > 1
+  )
+  return Math.max(wraps ? STEP_NOTE2_PX : STEP_NOTE_PX, stack)
 }
 
 // Dennis: the floor was 7 px; grouping by total can put ten three-line rows
@@ -462,12 +498,18 @@ function rowHeight(
   )
 }
 
+/** Page `pageIx`'s heading, column heads and footer (px). */
+function chromePx(pageIx: number, metaLines: number): number {
+  return pageIx === 0
+    ? CHROME_FIRST + (metaLines - 1) * META_LINE_PX
+    : CHROME_CONT
+}
+
 /** The padding (px) that makes page `pageIx`, holding these rows, just fill the sheet. */
 function padFor(heights: number[], pageIx: number, metaLines: number): number {
   let content = 0
   for (const h of heights) content += h
-  const base =
-    pageIx === 0 ? CHROME_FIRST + (metaLines - 1) * META_LINE_PX : CHROME_CONT
+  const base = chromePx(pageIx, metaLines)
   const budget = PAGE_CONTENT_H - FIT_SAFETY - content
   return (budget - base) / (2 * heights.length)
 }
@@ -507,6 +549,66 @@ function fitRowPadding(
   return Math.max(PAD_MIN, Math.min(22, best))
 }
 
+const cartridgeOf = (doc: EndoSheet2Doc) =>
+  doc.runLambda === null ? '-' : `${fmt(doc.runLambda)} EU/mL`
+
+/** Page one's meta strip, as printed and as the fitter measures it. */
+function metaItemsOf(doc: EndoSheet2Doc): [string, string][] {
+  return [
+    ['Analyst', doc.analyst || '-'],
+    ['Cartridge', cartridgeOf(doc)],
+    ['Date made', doc.dateMade ? longDate(doc.dateMade) : '-'],
+    ['Samples', String(doc.rows.length)],
+    ['Orders', doc.orders || '-'],
+  ]
+}
+
+/** The fitter's layout: rows in print order, where pages start, the printed padding. */
+function fitSheet(doc: EndoSheet2Doc, measure: TextMeasure) {
+  const { ctx } = doc
+  const std = standardSteps(ctx)
+  const ordered = orderByTotal(doc.rows, r => r.sample, ctx)
+  const metaItems = metaItemsOf(doc)
+  const metaLines = metaLineCount(metaItems, measure)
+  const heights = ordered.map(r => rowHeight(r.sample, ctx, std, measure))
+  const starts = pageStarts(heights, metaLines)
+  // rounded down, so the printed padding never exceeds the fitted one
+  const pad = Math.floor(fitRowPadding(heights, starts, metaLines) * 10) / 10
+  return { std, ordered, metaItems, metaLines, heights, starts, pad }
+}
+
+export interface EndoSheet2Plan {
+  /** Each row's estimated height (px) without its padding, in print order. */
+  rowHeights: number[]
+  /** Rows on each table page. */
+  rows: number[]
+  /** The printed row padding (px). */
+  pad: number
+  /** Each table page's estimated height (px) at that padding. */
+  pageHeights: number[]
+  /** What a page may fill: the printable height less the fitter's safety. */
+  budget: number
+}
+
+/** How the sheet's table pages are cut and padded, as the fitter plans them. */
+export function planEndoSheet2(
+  doc: EndoSheet2Doc,
+  measure: TextMeasure = defaultMeasure
+): EndoSheet2Plan {
+  const { metaLines, heights, starts, pad } = fitSheet(doc, measure)
+  const pages = starts.map((at, i) => heights.slice(at, starts[i + 1]))
+  return {
+    rowHeights: heights,
+    rows: pages.map(p => p.length),
+    pad,
+    pageHeights: pages.map(
+      (p, i) =>
+        chromePx(i, metaLines) + p.reduce((sum, h) => sum + h + 2 * pad, 0)
+    ),
+    budget: PAGE_CONTENT_H - FIT_SAFETY,
+  }
+}
+
 /* ---------------- the document ---------------- */
 
 export function buildEndoBenchSheet2Html(
@@ -515,14 +617,15 @@ export function buildEndoBenchSheet2Html(
 ): string {
   const { ctx } = doc
   const measure = opts.measure ?? defaultMeasure
-  const std = standardSteps(ctx)
-  const ordered = orderByTotal(doc.rows, r => r.sample, ctx)
+  // Page breaks come first: a run's box closes at a page edge.
+  const { std, ordered, metaItems, starts, pad } = fitSheet(doc, measure)
+  const edges = new Set(starts)
   const keys = ordered.map(r => totalGroupKey(r.sample, ctx))
   const title = escapeHtml(doc.title)
   const name = escapeHtml(doc.runName)
   const stamp = escapeHtml(doc.printedAt)
   const analyst = escapeHtml(doc.analyst || '-')
-  const cartridge = doc.runLambda === null ? '-' : `${fmt(doc.runLambda)} EU/mL`
+  const cartridge = cartridgeOf(doc)
   const reconMl = ctx.params.reconWaterMl
   const tally = {
     tubes: 0,
@@ -559,19 +662,6 @@ export function buildEndoBenchSheet2Html(
   const runKeys = printed.map(({ plan }, i) =>
     plan.steps.map((st, si) => boxOf(st, si, i).run)
   )
-
-  // Page breaks come first: a run's box closes at a page edge.
-  const metaItems: [string, string][] = [
-    ['Analyst', doc.analyst || '-'],
-    ['Cartridge', cartridge],
-    ['Date made', doc.dateMade ? longDate(doc.dateMade) : '-'],
-    ['Samples', String(doc.rows.length)],
-    ['Orders', doc.orders || '-'],
-  ]
-  const metaLines = metaLineCount(metaItems, measure)
-  const heights = ordered.map(r => rowHeight(r.sample, ctx, std, measure))
-  const starts = pageStarts(heights, metaLines)
-  const edges = new Set(starts)
 
   function stepPrint(st: EndoStepPlan, si: number, i: number): string {
     const sn = si + 1
@@ -666,7 +756,6 @@ export function buildEndoBenchSheet2Html(
   const pages = starts.map((at, k) => body.slice(at, starts[k + 1]))
   const totalPages = pages.length + 1 // the table pages, plus the summary
 
-  const pad = fitRowPadding(heights, starts, metaLines).toFixed(1)
   const meta =
     '<dl class="meta">' +
     metaItems
@@ -686,7 +775,7 @@ export function buildEndoBenchSheet2Html(
   let out =
     '<!doctype html><html lang="en"><head><meta charset="utf-8">' +
     `<title>${title} endotoxin prep</title><style>${SHEET_CSS}${SHEET2_CSS}` +
-    `td{padding:${pad}px 5pt}${opts.preview ? PREVIEW_CSS : ''}</style></head><body>`
+    `td{padding:${pad.toFixed(1)}px 5pt}${opts.preview ? PREVIEW_CSS : ''}</style></head><body>`
 
   pages.forEach((chunk, pageIx) => {
     const of = `page ${pageIx + 1} of ${totalPages}`

@@ -3,6 +3,7 @@ import {
   buildEndoBenchSheet2Html,
   buildEndoCsv2,
   buildEndoSheet2Doc,
+  planEndoSheet2,
   productIdentity,
   type EndoSheet2Doc,
   type EndoSheet2Row,
@@ -180,35 +181,102 @@ describe('buildEndoBenchSheet2Html', () => {
     // two name lines plus the mg line, and the mg line's 1pt top margin:
     // (732 - 10 - 162 - 10 x (3 x 15.4 + 4/3)) / 20 = 4.23
     const ten = Array.from({ length: 10 }, (_, i) =>
-      row(i + 1, { identity: 'Tirzepatide, Cagrilintide' })
+      row(i + 1, { identity: 'Ipamorelin, Sermorelin' })
     )
     expect(padOf(buildEndoBenchSheet2Html(doc(ten), { measure }))).toBe('4.2')
   })
 
+  /** Table pages' row counts as printed. */
+  const printedPages = (html: string) =>
+    [...html.matchAll(/<section class="page">.*?<\/section>/g)].map(
+      m => (m[0].match(/<tr[ >]/g) ?? []).length - 1
+    )
+
+  /** Plan and print one document; the printout must follow the plan. */
+  function planned(d: EndoSheet2Doc) {
+    const plan = planEndoSheet2(d, measure)
+    const html = buildEndoBenchSheet2Html(d, { measure })
+    expect(printedPages(html)).toEqual(plan.rows)
+    expect(padOf(html)).toBe(plan.pad.toFixed(1))
+    // every page, as the fitter plans it, stays inside the sheet
+    for (const h of plan.pageHeights) expect(h).toBeLessThanOrEqual(plan.budget)
+    return { plan, html }
+  }
+
+  it('estimates a step row from its cells as measured in print', () => {
+    const one = (over: Partial<EndoSample>) =>
+      planEndoSheet2(doc([row(1, over)]), measure).rowHeights
+    // the standard row keeps Dennis's 42; a boxed step with its note line
+    // measures 51.4 px, so 53; an over-tube note that wraps, 64.4, so 66
+    expect(one({})).toEqual([42])
+    expect(one({ totalDilution: 300 })).toEqual([53])
+    expect(one({ steps: [null, null, { sampleUl: 800 }] })).toEqual([53])
+    expect(one({ totalDilution: 3333 })).toEqual([66])
+  })
+
   it('moves rows to the next page when ten tall rows would run past the sheet', () => {
-    // twelve three-line rows (58 px each): at the 4 px floor page one holds
-    // (732 - 10 - 162) / (58 + 2 x 4) = 8.5 rows, so 8, and the fitter then
-    // pads them to fill it: (560 - 8 x 58) / 16 = 6
+    // twelve boxed-step rows (53 px each): at the 4 px floor page one holds
+    // (732 - 10 - 162) / (53 + 2 x 4) = 9.2 rows, so 9, padded to fill it:
+    // (560 - 9 x 53) / 18 = 4.61, printed 4.6
     const twelve = Array.from({ length: 12 }, (_, i) =>
       row(i + 1, { totalDilution: 300 })
     )
-    const html = buildEndoBenchSheet2Html(doc(twelve), { measure })
-    const pages = [
-      ...html.matchAll(/<section class="page">.*?<\/section>/g),
-    ].map(m => (m[0].match(/<tr[ >]/g) ?? []).length - 1)
-    expect(pages).toEqual([8, 4])
-    const pad = Number(padOf(html))
-    expect(pad).toBe(6)
-    // every page as the fitter plans it stays inside the sheet
-    pages.forEach((n, i) =>
-      expect((i ? 125 : 162) + n * (58 + 2 * pad)).toBeLessThanOrEqual(722)
+    const { plan, html } = planned(doc(twelve))
+    expect(plan.rows).toEqual([9, 3])
+    expect(plan.pad).toBe(4.6)
+    expect(html).toContain(
+      'Samples <b>1&ndash;9</b> of 12 &middot; <b>Page 1 of 3</b>'
     )
     expect(html).toContain(
-      'Samples <b>1&ndash;8</b> of 12 &middot; <b>Page 1 of 3</b>'
+      'Samples <b>10&ndash;12</b> of 12 &middot; <b>Page 2 of 3</b>'
     )
-    expect(html).toContain(
-      'Samples <b>9&ndash;12</b> of 12 &middot; <b>Page 2 of 3</b>'
+  })
+
+  it('keeps ten rows with five boxed steps on one sheet, the padding rounded down', () => {
+    // (560 - 5 x 53 - 5 x 42) / 20 = 4.25: one page, printed 4.2, never 4.3
+    const ten = Array.from({ length: 10 }, (_, i) =>
+      row(i + 1, i < 5 ? { totalDilution: 300 } : {})
     )
+    const { plan } = planned(doc(ten))
+    expect(plan.rows).toEqual([10])
+    expect(plan.pad).toBe(4.2)
+  })
+
+  it('pays for a two-line meta strip on page one', () => {
+    // the Orders list wraps the strip: page one's chrome is 162 + 26.94, so
+    // (722 - 188.94) / 61 = 8.7 rows, 8, padded (533.06 - 8 x 53) / 16 = 6.8
+    const twelve = Array.from({ length: 12 }, (_, i) =>
+      row(i + 1, { totalDilution: 300 })
+    )
+    const { plan } = planned({
+      ...doc(twelve),
+      orders: '8860, 8861, 8862, 8863, 8864, 8865',
+    })
+    expect(plan.rows).toEqual([8, 4])
+    expect(plan.pad).toBe(6.8)
+  })
+
+  it('breaks the page where rows of wrapping names would run past the sheet', () => {
+    // three name lines and the mg line: 4 x 15.4 + 4/3 = 62.93 a row, so
+    // (722 - 162) / (62.93 + 8) = 7.9 rows on page one
+    const twelve = Array.from({ length: 12 }, (_, i) =>
+      row(i + 1, { identity: 'CJC-1295 (no DAC), Ipamorelin' })
+    )
+    const { plan } = planned(doc(twelve))
+    expect(plan.rowHeights[0]).toBeCloseTo(4 * 15.4 + 4 / 3)
+    expect(plan.rows).toEqual([7, 5])
+  })
+
+  it('counts a long spaceless name as the lines it wraps to on paper', () => {
+    const height = (identity: string) =>
+      planEndoSheet2(doc([row(1, { identity })]), measure).rowHeights[0]
+    // breaks after a hyphen or a slash, not a slash after a digit:
+    // [BPC-157/TB-] [500/GHK-Cu/] [KPV], then the mg line
+    expect(height('BPC-157/TB-500/GHK-Cu/KPV')).toBeCloseTo(4 * 15.4 + 4 / 3)
+    // no break at all: 28 x 7 = 196 px over an 81.8 px column, 3 lines
+    expect(height('Thymosinalpha1/Thymosinbeta4')).toBeCloseTo(4 * 15.4 + 4 / 3)
+    // 140 px, 2 lines
+    expect(height('Glutathionedisulfide')).toBeCloseTo(3 * 15.4 + 4 / 3)
   })
 
   describe('one outline per run of the same non-standard step (Dennis 8fae7bb)', () => {
@@ -263,15 +331,15 @@ describe('buildEndoBenchSheet2Html', () => {
     })
 
     it('starts a new box at a page edge', () => {
-      // twelve three-line rows break 8 and 4 (see the page fitter test)
+      // twelve boxed-step rows break 9 and 3 (see the page fitter test)
       const twelve = Array.from({ length: 12 }, (_, i) => at300(i + 1))
       const html = buildEndoBenchSheet2Html(doc(twelve), { measure })
       const s2 = stepCells(html, 2)
       expect(s2[0]).toBe('step odd diff dtop s2')
-      expect(s2.slice(1, 7)).toEqual(Array(6).fill('step odd diff s2'))
-      expect(s2[7]).toBe('step odd diff dbot s2')
-      expect(s2[8]).toBe('step odd diff dtop s2')
-      expect(s2.slice(9, 11)).toEqual(Array(2).fill('step odd diff s2'))
+      expect(s2.slice(1, 8)).toEqual(Array(7).fill('step odd diff s2'))
+      expect(s2[8]).toBe('step odd diff dbot s2')
+      expect(s2[9]).toBe('step odd diff dtop s2')
+      expect(s2[10]).toBe('step odd diff s2')
       expect(s2[11]).toBe('step odd diff dbot s2')
     })
 
