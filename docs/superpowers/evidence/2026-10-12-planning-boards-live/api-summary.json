@@ -1,0 +1,43 @@
+{
+  "run": "k2hs",
+  "seed": {
+    "slug": "live-k2hs",
+    "board_id": 6,
+    "frame_id": 10,
+    "note_id": 11,
+    "person_user_id": 166,
+    "entity_id": null,
+    "document_code": null,
+    "flags": {
+      "blocker": 22,
+      "overdue": 23,
+      "board": 24,
+      "resolved": 25
+    }
+  },
+  "endpoint": {
+    "flag_ids": [
+      22,
+      23,
+      24
+    ],
+    "open_flag_count": 3
+  },
+  "pills": {
+    "blocking": "1 blocking",
+    "open": "1 open"
+  },
+  "dock": {
+    "overdue_y": 258.984375,
+    "blocker_y": 416.375
+  },
+  "raise_on_board": {
+    "restricted_slug": "live-restricted-k2hs",
+    "outsider_status": 403,
+    "missing_board_status": 403,
+    "editor_status": 201
+  },
+  "board_card": {
+    "text": "Live flags (k2hs)\nmap\ncompany\n3 items\n3 open flags\neditor\nOpen\nShare\nDelete"
+  }
+}

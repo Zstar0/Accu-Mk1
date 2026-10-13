@@ -47,6 +47,9 @@ vi.mock('@/services/groups', () => ({
     isLoading: false,
   }),
 }))
+vi.mock('@/components/boards/AttentionDock', () => ({
+  AttentionDock: () => <div>dock</div>,
+}))
 vi.mock('@/components/boards/DocumentPreviewFrame', () => ({
   DocumentPreviewFrame: () => <div>preview</div>,
 }))
@@ -84,6 +87,7 @@ const board = (canEdit: boolean, nodes = [node({})]): BoardDetail => ({
   created_by: 1,
   default_viewport: null,
   node_count: nodes.length,
+  open_flag_count: 0,
   can_edit: canEdit,
   created_at: '',
   updated_at: '',
@@ -119,6 +123,13 @@ describe('BoardSidePanel', () => {
       { id: 1, data: { version: 2, label: 'Marketing team' } },
       expect.anything()
     )
+  })
+
+  it('shows the attention dock when nothing is selected', () => {
+    render(
+      <BoardSidePanel board={board(true)} selectedId={null} onClose={vi.fn()} />
+    )
+    expect(screen.getByText('dock')).toBeInTheDocument()
   })
 
   it('viewer sees a read-only panel (Review Focus 3)', () => {

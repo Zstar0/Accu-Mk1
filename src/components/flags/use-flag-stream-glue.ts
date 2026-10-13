@@ -220,6 +220,8 @@ export function useFlagStreamGlue(): void {
     mark(flagKeys.summary())
     mark(flagKeys.unread())
     mark(flagKeys.activity())
+    // Mounted board pages (at most one) hold every flag on that board: refresh them too.
+    mark(flagKeys.boards())
     if (typeof e.flag_id === 'number') mark(flagKeys.detail(e.flag_id))
 
     const et = e.flag?.entity_type

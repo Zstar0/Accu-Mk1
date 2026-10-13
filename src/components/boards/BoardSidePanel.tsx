@@ -18,6 +18,7 @@ import {
 import { useDirectoryUsers } from '@/services/groups'
 import { displayName } from '@/lib/user-display'
 import type { BoardDetail, BoardNode } from '@/lib/api-boards'
+import { AttentionDock } from './AttentionDock'
 import { DocumentPreviewFrame } from './DocumentPreviewFrame'
 import type { PersonNodeData } from './nodes/PersonNode'
 import { isSafeHttpUrl, openExternal } from './open-external'
@@ -42,8 +43,11 @@ export function BoardSidePanel({
   const node = board.nodes.find(n => n.id === selectedId) ?? null
   if (!node) {
     return (
-      <div className="p-3 text-sm text-muted-foreground">
-        Select a node to see its flags and details.
+      <div className="flex h-full flex-col gap-3 overflow-y-auto p-3 text-sm">
+        <AttentionDock board={board} />
+        <p className="text-xs text-muted-foreground">
+          Select an item to see its flags and details.
+        </p>
       </div>
     )
   }

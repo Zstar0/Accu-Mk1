@@ -50,6 +50,7 @@ const ENTITY_META: Record<string, EntityMeta> = {
   // Planning boards node (slice 3). deep_link.id is "<board slug>:<node id>",
   // parsed by the navigateToDeepLink case below.
   board_node: { Icon: Map, label: 'Board item', canDeepLink: true },
+  board: { Icon: Map, label: 'Board', canDeepLink: true },
 }
 
 /** Entity types with a backend `state` seam (→ watchable). Mirror of the
@@ -161,6 +162,10 @@ export function navigateToDeepLink(deepLink: DeepLink): boolean {
       )
       return true
     }
+    case 'board':
+      store.closeFlagsFlyout()
+      store.navigateToBoard(deepLink.id)
+      return true
     default:
       return false
   }

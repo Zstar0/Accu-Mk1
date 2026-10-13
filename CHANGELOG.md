@@ -1,5 +1,12 @@
 # Changelog
 
+## Unreleased
+
+### Planning boards, slice 4: flags on the board
+- **Flag a board.** Editors raise flags on the board itself from the header; board-level flags show in the attention dock and count on the board card. A board with open flags cannot be deleted.
+- **Every flag on a board, once.** `GET /api/boards/{slug}/flags` returns the open flags on the board, its items and the entities behind entity items, under the caller's visibility. Frames show blocking and open counts, entity items show an open count, person cards show how many of the board's flags are assigned to them, and board cards show the open count.
+- **Attention dock.** With nothing selected, the side panel lists the board's blocking and past-due flags, overdue first, with Locate to centre the item.
+
 ## v1.46.0 - 2026-10-12
 
 ### Documents say where they came from
