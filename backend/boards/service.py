@@ -1,6 +1,7 @@
 """Boards, grants, reverse lookup (spec §4.8, §5, §7.2). Nodes and edges: Task 6."""
 from __future__ import annotations
 
+import logging
 from typing import Iterable, Optional
 
 from sqlalchemy import String, and_, cast, func, or_, select
@@ -18,6 +19,8 @@ from groups.service import clean_slug
 # (slice 2: point-read gate, list clause, target guards, SSE audience). Left as a constant
 # so a stack can lock them off again with a one-line change.
 RESTRICTED_BOARDS_ENABLED = True
+
+log = logging.getLogger(__name__)
 
 
 def _require_admin(user) -> None:
@@ -82,6 +85,19 @@ def get_board(db: Session, user, slug: str) -> Board:
     return board
 
 
+def _emit_board_changed(db: Session, board: Board, user) -> None:
+    """Live hint for other open canvases (spec 8.6): rides the flag event sink and bus, stamped
+    with the board's audience like a flag event. Best effort: a sink failure never fails the write."""
+    from boards.flag_entity import _board_audience_of
+    from flags import seams
+    try:
+        seams.EVENT_SINK.emit({"event_type": "board_changed", "board_slug": board.slug, "board_id": board.id,
+                               "actor_id": getattr(user, "id", None), "event_id": None,
+                               "audience": _board_audience_of(db, board)})
+    except Exception:  # noqa: BLE001
+        log.warning("board_changed_emit_failed board=%s", board.slug, exc_info=True)
+
+
 def create_board(db: Session, user, *, slug: str, name: str, kind: str, visibility: str) -> Board:
     _require_admin(user)
     slug = clean_slug(slug)
@@ -109,6 +125,7 @@ def patch_board(db: Session, user, slug: str, **fields) -> Board:
         vp = fields["default_viewport"]
         board.default_viewport = None if vp is None else (vp if isinstance(vp, dict) else vp.model_dump())
     db.commit()
+    _emit_board_changed(db, board, user)
     db.refresh(board)
     return board
 
@@ -397,6 +414,7 @@ def create_node(db: Session, user, slug: str, body) -> NodeOut:
                      data=clean, created_by=uid, updated_by=uid)
     db.add(node)
     db.commit()
+    _emit_board_changed(db, board, user)
     db.refresh(node)
     return _node_out(db, user, node)
 
@@ -422,6 +440,7 @@ def patch_node(db: Session, user, slug: str, node_id: int, *, version: int, **fi
     node.version += 1
     node.updated_by = getattr(user, "id", None)
     db.commit()
+    _emit_board_changed(db, board, user)
     db.refresh(node)
     return _node_out(db, user, node)
 
@@ -449,6 +468,7 @@ def patch_positions(db: Session, user, slug: str, items) -> list[NodeOut]:
         n.version += 1
         n.updated_by = uid
     db.commit()
+    _emit_board_changed(db, board, user)
     return [_node_out(db, user, n) for n, _ in nodes]
 
 
@@ -469,6 +489,7 @@ def delete_node(db: Session, user, slug: str, node_id: int) -> None:
         synchronize_session=False)
     db.delete(node)
     db.commit()
+    _emit_board_changed(db, board, user)
 
 
 # --- edges ------------------------------------------------------------------------
@@ -502,6 +523,7 @@ def create_edge(db: Session, user, slug: str, body) -> BoardEdge:
                   kind=kind, label=body.label)
     db.add(e)
     db.commit()
+    _emit_board_changed(db, board, user)
     db.refresh(e)
     return e
 
@@ -514,6 +536,7 @@ def patch_edge(db: Session, user, slug: str, edge_id: int, **fields) -> BoardEdg
     if "label" in fields:
         e.label = fields["label"]
     db.commit()
+    _emit_board_changed(db, board, user)
     db.refresh(e)
     return e
 
@@ -522,3 +545,4 @@ def delete_edge(db: Session, user, slug: str, edge_id: int) -> None:
     board = _editable(db, user, slug)
     db.delete(_edge_on_board(db, board, edge_id))
     db.commit()
+    _emit_board_changed(db, board, user)

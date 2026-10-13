@@ -268,3 +268,32 @@ def test_board_flags_hide_anchors_the_caller_cannot_see(client):
         assert r.status_code == 200 and r.json() == []
     finally:
         seams._REGISTRY.pop("vault_item", None)
+
+
+def test_writes_emit_board_changed_with_the_board_audience(client):
+    _board(client, "org", "company", [{"group_id": client.editors, "can_edit": True}])
+    client.as_user(EDITOR)
+    from flags import seams
+    sink = seams.InMemoryEventSink()
+    prev = seams.EVENT_SINK
+    seams.set_event_sink(sink)
+    try:
+        n = client.post("/api/boards/org/nodes", json={"kind": "text", "label": "T"}).json()
+        ev = [e for e in sink.events if e.get("event_type") == "board_changed"]
+        assert ev and ev[-1]["board_slug"] == "org" and ev[-1]["audience"] is None
+        assert ev[-1]["actor_id"] == EDITOR.id
+        sink.events.clear()
+        client.patch(f"/api/boards/org/nodes/{n['id']}", json={"version": n["version"], "label": "U"})
+        client.delete(f"/api/boards/org/nodes/{n['id']}")
+        assert [e["event_type"] for e in sink.events] == ["board_changed", "board_changed"]
+        sink.events.clear()
+        # Restricted board: the audience is its grant groups, so the bus never reaches an outsider.
+        client.as_user(ADMIN)
+        client.post("/api/boards", json={"slug": "exec", "name": "Exec", "visibility": "restricted"})
+        client.put("/api/boards/exec/grants", json=[{"group_id": client.editors, "can_edit": True}])
+        client.as_user(EDITOR)
+        client.post("/api/boards/exec/nodes", json={"kind": "text", "label": "T"})
+        ev = [e for e in sink.events if e.get("event_type") == "board_changed"]
+        assert ev[-1]["audience"] == {"groups": [client.editors]}
+    finally:
+        seams.set_event_sink(prev)
