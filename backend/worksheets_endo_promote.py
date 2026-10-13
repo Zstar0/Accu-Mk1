@@ -11,6 +11,7 @@ from. It never recomputes the endotoxin maths.
 
 Rows are independent: a row's fill and promote commit together or not at
 all, and a refused or failed row never blocks the others."""
+import json
 import logging
 import math
 import re
@@ -25,6 +26,7 @@ from sqlalchemy.orm import Session
 from coa.spec_rules import normalize_matrix, normalize_unit, resolve_spec, sample_peptide_id
 from models import (
     AnalysisService, AuditLog, LimsAnalysis, LimsSample, LimsSubSample, WorksheetItem,
+    service_group_members,
 )
 from worksheets_endo import (
     _DEAD_STATES, ENDO_FORMS, cartridge_sensitivities, endo_run_params, parse_reading,
@@ -165,17 +167,52 @@ def _positive(v) -> Optional[float]:
     return float(v) if ok else None
 
 
-def _sample_is_bac(item, parent) -> bool:
+def _served_peptide_names(db: Session, items) -> dict[int, list[str]]:
+    """Each item's distinct analysis peptide names, in order, from what the
+    worksheet item serializer serves as `analyses` (main._serialize_worksheets):
+    the item's own analyses_json, else its service group's members. One
+    query at most, for the group-only items."""
+    group_ids = {it.service_group_id for it in items
+                 if not it.analyses_json and it.service_group_id}
+    by_group: dict[int, list] = {}
+    if group_ids:
+        for gid, name in db.execute(
+            select(service_group_members.c.service_group_id, AnalysisService.peptide_name)
+            .join(AnalysisService,
+                  AnalysisService.id == service_group_members.c.analysis_service_id)
+            .where(service_group_members.c.service_group_id.in_(group_ids))
+            .order_by(service_group_members.c.service_group_id, AnalysisService.id)
+        ).all():
+            by_group.setdefault(gid, []).append({"peptide_name": name})
+    out = {}
+    for it in items:
+        if it.analyses_json:
+            try:
+                analyses = json.loads(it.analyses_json)
+            except ValueError:
+                analyses = []
+        else:
+            analyses = by_group.get(it.service_group_id, [])
+        names = [a.get("peptide_name") for a in analyses if isinstance(a, dict)] \
+            if isinstance(analyses, list) else []
+        out[it.id] = list(dict.fromkeys(n for n in names if isinstance(n, str) and n))
+    return out
+
+
+def _sample_is_bac(item, parent, peptide_names: list[str]) -> bool:
     """The browser's isBacWaterSample (src/lib/endo-prep-2ml.ts): a BW-
     sample id, or a sample type or identity that mentions bacteriostatic
-    water, from the same parent facts the worksheet item serves. The row's
-    form plays no part."""
+    water, from the same parent facts the worksheet item serves. The identity
+    is endoIdentityFor's (src/lib/endo-worksheet.ts): the parent's, else the
+    item's analysis peptide names joined with ", ". The row's form plays no
+    part."""
     from main import _worksheet_item_parent_facts  # lazy: main imports this module
 
     facts = _worksheet_item_parent_facts(parent)
+    identity = facts["sample_identity"] or ", ".join(peptide_names)
     return ((item.sample_id or "").upper().startswith("BW-")
             or bool(_BAC_WORDS.search(facts["sample_type"] or ""))
-            or bool(_BAC_WORDS.search(facts["sample_identity"] or "")))
+            or bool(_BAC_WORDS.search(identity)))
 
 
 def _parent_holds(db: Session, parent_pk: int, service_id: int) -> bool:
@@ -229,7 +266,7 @@ def _plan(db: Session, worksheet, item, row: EndoPromoteRowIn, ctx) -> dict:
             raise _Refused("Invalid: " + "; ".join(why))
     # The browser's unit rule: the row's form (formOf) must agree with the
     # sample (isBacWaterSample), and the unit follows the form.
-    sample_bac = _sample_is_bac(item, parent)
+    sample_bac = _sample_is_bac(item, parent, ctx.peptide_names.get(item.id, []))
     bac = item.prep_form == "bac" if item.prep_form in ENDO_FORMS else sample_bac
     if bac != sample_bac:
         raise _Refused(REASON_PEPTIDE_UNIT if bac else REASON_BAC_UNIT)
@@ -365,6 +402,7 @@ def promote_rows(db: Session, current_user, worksheet, rows: list[EndoPromoteRow
     ctx = SimpleNamespace(
         user_id=getattr(current_user, "id", None),
         live=vial_endo_analyses(db, sample_ids),
+        peptide_names=_served_peptide_names(db, items.values()),
         parent_pk_by_sample=parent_pk_by_sample,
         parents=parents,
         run_params=method["run_parameters"] if method else None,

@@ -6,6 +6,7 @@ supersession (Review Focus 1), rows promoted twice (Review Focus 2), stock
 worksheets (Review Focus 5) and the endo_analysis key on worksheet items.
 In-memory SQLite + dependency overrides, test_endo_v2_worksheets.py's
 pattern and helpers."""
+import json
 from decimal import Decimal
 from types import SimpleNamespace
 from unittest.mock import MagicMock
@@ -26,7 +27,8 @@ from lims_analyses.service import BadRequestError, apply_transition
 from main import app
 from models import (
     AnalysisProfile, AnalysisServiceSpec, AuditLog, LimsAnalysis, LimsAnalysisPromotion,
-    LimsAnalysisTransition, LimsSample, LimsSubSample, WorksheetItem, analysis_profile_members,
+    LimsAnalysisTransition, LimsSample, LimsSubSample, ServiceGroup, WorksheetItem,
+    analysis_profile_members, service_group_members,
 )
 from tests.test_endo_v2_worksheets import _cartridge, _count_sql, _method, _record, _service, _ws
 
@@ -422,6 +424,36 @@ def test_a_bw_sample_set_to_the_powder_form_is_refused(client, db):
     db.commit()
     assert _results(_promote(client, w.ws, _line(item))) == [
         _refused(item, "bac water promotes in EU/mL")]
+
+
+@pytest.mark.parametrize("source", ["analyses_json", "service_group"])
+def test_bac_water_named_only_by_its_analyses_promotes_in_eu_ml(client, db, source):
+    # The browser's endoIdentityFor: no sample identity, so the identity is
+    # the item's analysis peptide names, as GET /worksheets serves them.
+    w = _world(client, db)
+    item, _ = _row(db, w, "P-4700-S01", sample_type=None, reading="<0.2", cartridge=w.c01)
+    if source == "analyses_json":
+        item.analyses_json = json.dumps([{"title": w.svc.title, "keyword": w.svc.keyword,
+                                          "peptide_name": "Bacteriostatic Water", "method": None}])
+    else:
+        member = _service(db, "ENDOTOXIN-BW")
+        member.peptide_name = "Bacteriostatic Water"
+        group = ServiceGroup(name="Endotoxin bac water")
+        db.add(group)
+        db.flush()
+        db.execute(service_group_members.insert().values(service_group_id=group.id,
+                                                         analysis_service_id=member.id))
+        item.service_group_id = group.id
+    db.commit()
+    item_id = item.id
+    [served] = [it for it in client.get(f"/worksheets/{w.ws.id}").json()["items"]
+                if it["id"] == item_id]
+    assert (served["sample_identity"], served["prep_form"]) == (None, None)
+    assert [a["peptide_name"] for a in served["analyses"]] == ["Bacteriostatic Water"]
+    [res] = _results(_promote(client, w.ws, _line(item, 0.2, unit="EU/mL", loq=0.2, lod=0.01)))
+    assert res["promoted"] is True, res
+    [parent] = _parent_rows(db, "P-4700")
+    assert (parent.result_value, parent.result_unit, parent.loq) == ("0.2", "EU/mL", 0.2)
 
 
 # --- reason numbers print like the browser's fmt (preflight ruling F3) -------
