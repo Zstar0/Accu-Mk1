@@ -1,4 +1,4 @@
-import { lazy, Suspense, useState, type ComponentProps } from 'react'
+import { lazy, Suspense, useEffect, useState, type ComponentProps } from 'react'
 import { ArrowLeft, Loader2, Plus } from 'lucide-react'
 import { toast } from 'sonner'
 import { Badge } from '@/components/ui/badge'
@@ -11,6 +11,8 @@ import {
 import { RaiseFlagButton } from '@/components/flags/RaiseFlagButton'
 import { useAuthStore } from '@/store/auth-store'
 import { useUIStore } from '@/store/ui-store'
+import { registerCommands, unregisterCommands } from '@/lib/commands/registry'
+import { boardNodeCommands } from './board-commands'
 import { useBoard, usePatchBoard } from '@/services/boards'
 import { ShareBoardDialog } from './ShareBoardDialog'
 import { BoardSidePanel } from './BoardSidePanel'
@@ -41,6 +43,15 @@ export function BoardPage({ slug }: { slug: string }) {
   const [addDropAt, setAddDropAt] = useState(HEADER_DROP_AT)
   // undefined = the header Add button: parent is whichever frame is selected.
   const [addParentId, setAddParentId] = useState<number | null>()
+
+  // Cmd+K: this board's items while it is open; gone when it unmounts.
+  useEffect(() => {
+    const detail = board.data
+    if (!detail) return
+    const cmds = boardNodeCommands(detail)
+    registerCommands(cmds)
+    return () => unregisterCommands(cmds.map(c => c.id))
+  }, [board.data])
 
   if (board.isLoading) {
     return (
