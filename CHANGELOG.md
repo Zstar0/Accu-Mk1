@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## v1.47.1 - 2026-10-13
 
 ### Agents can read lab data without a switch
 - **Every agent can now read lab data and reports** (samples, analyses, media, flags, reports, COA history): read-only Mk1 data is fine for agents. The switches gate writes only: **Lab tools** lets an agent raise and comment on flags, and **COA publishing** lets it generate and publish COAs (still needs Lab tools).
