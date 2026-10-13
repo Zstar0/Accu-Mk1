@@ -4,7 +4,9 @@ import math
 
 import pytest
 
-from coa.text_macros import MACROS, format_lod, format_number, resolve, unknown_macros
+from coa.text_macros import (
+    MACROS, format_lod, format_number, resolve, unbalanced_brackets, unknown_macros,
+)
 
 LOD = {"lod": "0.05 EU/mL"}
 NONE = {"lod": ""}
@@ -113,3 +115,26 @@ def test_unknown_macros_reports_near_misses_of_a_known_macro():
 def test_a_near_miss_prints_as_typed_at_build_time():
     # resolve is unchanged: only save validation refuses a near miss.
     assert resolve("[LOD {LOD}.]", {"lod": "0.05 EU/mL"}) == "[LOD {LOD}.]"
+
+
+def test_a_filled_value_is_never_expanded_again():
+    # One pass: a value that holds the macro name prints as filled, once.
+    assert resolve("[LOD {lod}.]", {"lod": "0.05 {lod}"}) == "LOD 0.05 {lod}."
+    assert resolve("LOD {lod}", {"lod": "{lod}"}) == "LOD {lod}"
+    assert resolve("{lod} and [{lod}]", {"lod": "a {lod}"}) == "a {lod} and a {lod}"
+
+
+@pytest.mark.parametrize("text, flagged", [
+    ("[LOD {lod}.", True),
+    ("LOD {lod}.]", True),
+    ("[LOD {lod}.]", False),
+    ("See [1 {see}", False),          # no known macro: never flagged
+    ("An unmatched [ bracket", False),
+    ("[a [LOD {lod}.] b]", True),     # the outer pair is not an innermost pair
+    ("See [1]. [LOD {lod}.]", False),
+    ("LOD {lod}", False),
+    ("", False),
+    (None, False),
+])
+def test_unbalanced_brackets_only_around_a_known_macro(text, flagged):
+    assert unbalanced_brackets(text) is flagged

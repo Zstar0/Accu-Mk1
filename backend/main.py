@@ -21409,17 +21409,28 @@ def _validate_coa_text_macros(fields: dict) -> None:
     """Endo slice 4: COA text may carry only the macros coa.text_macros knows,
     so a typo never reaches a certificate (the COA build itself leaves an
     unknown macro as typed)."""
-    from coa.text_macros import MACROS, unknown_macros
+    from coa.text_macros import MACROS, unbalanced_brackets, unknown_macros
     texts = [fields.get(k) for k in ("coa_basis_note", "coa_method_text", "coa_prep_text")]
+    labels = []
     notes = fields.get("coa_footnotes")
     if isinstance(notes, list):
         texts += [n.get("text") for n in notes if isinstance(n, dict)]
+        labels = [n.get("label") for n in notes if isinstance(n, dict)]
+    texts = [t if isinstance(t, str) else None for t in texts]
     for text in texts:
-        bad = unknown_macros(text if isinstance(text, str) else None)
+        bad = unknown_macros(text)
         if bad:
             supported = ", ".join("{" + m + "}" for m in MACROS)
             raise HTTPException(
                 400, "unknown COA text macro {" + bad[0] + "}; supported: " + supported)
+    if any(unbalanced_brackets(t) for t in texts):
+        raise HTTPException(400, "unbalanced [ ] around a COA text macro")
+    # Labels print as typed and are never filled, so a macro (or a near miss)
+    # in one would reach the certificate literally.
+    for label in labels:
+        if isinstance(label, str) and (
+                unknown_macros(label) or any("{" + m + "}" in label for m in MACROS)):
+            raise HTTPException(400, "COA text macros are not filled in footnote labels")
 
 
 @app.get("/analysis-profiles", response_model=list[AnalysisProfileResponse])

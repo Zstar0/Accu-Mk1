@@ -245,3 +245,37 @@ def test_a_near_miss_of_a_known_coa_text_macro_is_refused_as_typed():
     })
     assert r.status_code == 400, r.text
     assert r.json()["detail"] == "unknown COA text macro {LOD}; supported: {lod}"
+
+
+def test_an_unclosed_bracket_around_a_known_coa_text_macro_is_refused():
+    pid = _new_profile("endo_s4_macro_unbalanced_test")
+    bodies = [
+        {"coa_method_text": "Per vial. [LOD {lod}."},
+        {"coa_basis_note": "LOD {lod}.]"},
+        {"coa_footnotes": [{"label": "LOD", "text": "[{lod}"}]},
+    ]
+    for body in bodies:
+        r = client.patch(f"/analysis-profiles/{pid}", json=body)
+        assert r.status_code == 400, body
+        assert r.json()["detail"] == "unbalanced [ ] around a COA text macro"
+
+
+def test_a_stray_bracket_without_a_known_coa_text_macro_still_saves():
+    pid = _new_profile("endo_s4_macro_stray_bracket_test")
+    r = client.patch(f"/analysis-profiles/{pid}", json={"coa_method_text": "See [1 {Upper}"})
+    assert r.status_code == 200, r.text
+
+
+def test_a_coa_text_macro_in_a_footnote_label_is_refused():
+    pid = _new_profile("endo_s4_macro_label_test")
+    for label in ("LOD {lod}", "LOD {LOD}", "Lot {lot}"):
+        r = client.patch(f"/analysis-profiles/{pid}", json={
+            "coa_footnotes": [{"label": label, "text": "x"}],
+        })
+        assert r.status_code == 400, label
+        assert r.json()["detail"] == "COA text macros are not filled in footnote labels"
+    # Labels with other braces still save: only a macro or a near miss is refused.
+    r = client.patch(f"/analysis-profiles/{pid}", json={
+        "coa_footnotes": [{"label": "{Upper} [1]", "text": "x"}],
+    })
+    assert r.status_code == 200, r.text
