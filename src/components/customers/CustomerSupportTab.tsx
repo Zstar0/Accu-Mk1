@@ -15,6 +15,8 @@ import {
   type SupportThread,
 } from '@/lib/api-support'
 import { SupportThreadPanel } from './SupportThreadPanel'
+import { ItemFlagMarker } from './ItemFlagMarker'
+import { useItemFlagCounts } from './useItemFlagCounts'
 
 const CARD = 'rounded-lg border border-border/50 bg-card/30 p-3'
 const CHIPS: { key: SupportStatus | 'all'; label: string }[] = [
@@ -57,6 +59,7 @@ export function CustomerSupportTab({ customerKey }: { customerKey: string }) {
   // Refresh is one-shot: only the first fetch after a Refresh click asks for it.
   const sentRefresh = useRef(0)
   const [open, setOpen] = useState<SupportThread | null>(null)
+  const flagCounts = useItemFlagCounts('support_ticket', customerKey)
   const qc = useQueryClient()
   const statuses = status === 'all' ? [] : [status]
   const takeRefresh = () => {
@@ -195,6 +198,7 @@ export function CustomerSupportTab({ customerKey }: { customerKey: string }) {
             <span className="flex flex-wrap items-center gap-2">
               <span className="text-xs text-muted-foreground">{t.ref}</span>
               <span className="font-medium">{t.title}</span>
+              <ItemFlagMarker count={flagCounts.get(t.id) ?? 0} />
               <span
                 className={cn(
                   'rounded-full px-2 text-[10px] capitalize',

@@ -25,6 +25,8 @@ import {
   Tag,
   ListTodo,
   Map,
+  LifeBuoy,
+  Contact,
 } from 'lucide-react'
 import type { LucideIcon } from 'lucide-react'
 import { useUIStore } from '@/store/ui-store'
@@ -50,6 +52,14 @@ const ENTITY_META: Record<string, EntityMeta> = {
   // Planning boards node (slice 3). deep_link.id is "<board slug>:<node id>",
   // parsed by the navigateToDeepLink case below.
   board_node: { Icon: Map, label: 'Board item', canDeepLink: true },
+  // Plain ticket / Close activity (2026-10-12). Navigation needs the server
+  // deep_link (kind "customer_item"), so the type-only fallback cannot.
+  support_ticket: {
+    Icon: LifeBuoy,
+    label: 'Support ticket',
+    canDeepLink: false,
+  },
+  crm_item: { Icon: Contact, label: 'CRM item', canDeepLink: false },
   board: { Icon: Map, label: 'Board', canDeepLink: true },
 }
 
@@ -71,6 +81,8 @@ export const CODE_ENTITY_TYPES: ReadonlySet<string> = new Set([
   'sub_sample',
   'worksheet',
   'document',
+  'support_ticket',
+  'crm_item',
 ])
 
 /** Meta for a null-anchor general task (Phase 2). */
@@ -160,6 +172,19 @@ export function navigateToDeepLink(deepLink: DeepLink): boolean {
         deepLink.id.slice(0, sep),
         deepLink.id.slice(sep + 1)
       )
+      return true
+    }
+    case 'customer_item': {
+      // id is "support:<entity id>" or "crm:<entity id>"; the entity id
+      // starts with the customer key.
+      const sep = deepLink.id.indexOf(':')
+      const kind = deepLink.id.slice(0, sep)
+      const entityId = deepLink.id.slice(sep + 1)
+      const key = entityId.split('|')[0]
+      if ((kind !== 'support' && kind !== 'crm') || !key) return false
+      store.closeFlagsFlyout()
+      store.setPendingCustomerItem({ kind, entityId })
+      store.navigateToCustomerKey(key)
       return true
     }
     case 'board':

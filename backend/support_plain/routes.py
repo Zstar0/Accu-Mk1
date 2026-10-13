@@ -132,6 +132,7 @@ class ThreadDetail(BaseModel):
     entries: list[Entry]
     fetched_at: str
     stale: bool
+    via_flag: Optional[int] = None  # set only when the read was admitted through a flag (spec 2026-10-12 3.3)
 
 
 def _fail(e: Exception):
@@ -157,14 +158,20 @@ def customer_support(customer_key: str, refresh: bool = False, status: list[Stat
 
 @router.get("/customers/{customer_key}/threads/{thread_id}", response_model=ThreadDetail)
 def thread_detail(customer_key: str, thread_id: str = Path(pattern=rules.THREAD_ID_PATTERN), refresh: bool = False,
-                  _u=Depends(require_support_reader)):
+                  user=Depends(get_current_user), db: Session = Depends(get_db)):
+    via_flag = None
+    if not seat.is_support_reader(user):
+        from flags.access import flag_for_user
+        via_flag = flag_for_user(db, getattr(user, "id", None), "support_ticket", f"{customer_key}|{thread_id}")
+        if via_flag is None:
+            raise HTTPException(status_code=403, detail="Admin access, a Plain seat, or a flag on this ticket required")
     try:
         out = service.thread_detail(customer_key, thread_id, refresh=refresh)
     except (SupportNotConfigured, SupportUnavailable) as e:
         _fail(e)
     if out is None:
         raise HTTPException(status_code=404, detail="thread not found")
-    return out
+    return {**out, "via_flag": via_flag}
 
 
 class SupportMe(BaseModel):
