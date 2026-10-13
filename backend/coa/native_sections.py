@@ -226,12 +226,22 @@ def _spec_wire_dict(spec) -> dict:
     }
 
 
-def _result_display(spec, result) -> Optional[str]:
-    """Mk1's applied lab-reporting convention for the PRINTED result — the
+def effective_loq(row, spec) -> Optional[float]:
+    """The LOQ a result is reported against (endo slice 3, spec section 7):
+    the result's own (lims_analyses.loq, filled by the worksheet promote)
+    when it carries one, else the spec row's. Heavy metals carry none, so
+    theirs stays the spec's."""
+    loq = row.loq if row.loq is not None else spec.loq
+    return float(loq) if loq is not None else None
+
+
+def _result_display(spec, result, loq: Optional[float]) -> Optional[str]:
+    """Mk1's applied lab-reporting convention for the PRINTED result; the
     verdict never reads it. Only convention today: LOQ censoring on range
-    rows. Runs after evaluate(), which guarantees a finite numeric for
-    range rows; the guards here are belt-and-braces, not policy."""
-    if spec.rule_kind != "range" or spec.loq is None:
+    rows, against the effective LOQ (effective_loq). Runs after evaluate(),
+    which guarantees a finite numeric for range rows; the guards here are
+    belt-and-braces, not policy."""
+    if spec.rule_kind != "range" or loq is None:
         return None
     try:
         value = float(str(result or "").strip())
@@ -240,9 +250,10 @@ def _result_display(spec, result) -> Optional[str]:
     if not math.isfinite(value):
         return None
     # At-or-below the LOQ prints "< LOQ" (Handler ruling 2026-09-14: a result
-    # reported AT the LOQ is the reporting floor, not a quantified figure —
+    # reported AT the LOQ is the reporting floor, not a quantified figure,
     # Endotoxin USP85 2.50 vs LOQ 2.5). The verdict still uses the raw number.
-    return "< LOQ" if value <= float(spec.loq) else None
+    # A "<25 EU/vial" result is stored as 25 with LOQ 25 (endo slice 3).
+    return "< LOQ" if value <= loq else None
 
 
 def build_native_sections(db: Session, parent) -> dict:
@@ -362,15 +373,18 @@ def build_native_sections(db: Session, parent) -> dict:
                                 unit=effective_unit(row.result_unit, svc.unit))
             if spec is None:
                 # Rule 5 (relocated from COABuilder): a result must not print
-                # without a verdict. Names the service AND every tier
-                # consulted (peptide/matrix/wildcard) so the lab knows
-                # exactly which analysis_service_specs row to file.
+                # without a verdict. Names the service, every tier consulted
+                # (peptide/matrix/wildcard) and the unit (endo slice 3: a
+                # result is judged only by a spec in its own unit), so the lab
+                # knows exactly which analysis_service_specs row to file.
                 raise NativeSectionsError(
                     f"native sections: profile '{prof.key}' member service "
                     f"'{svc.keyword}' (id={svc.id}) has no active spec "
                     f"(tiers consulted: peptide={peptide_id!r}, "
-                    f"matrix={matrix!r}, wildcard) on {sample_id} — file one "
-                    f"in analysis_service_specs"
+                    f"matrix={matrix!r}, wildcard) on {sample_id}: No active "
+                    f"{svc.title} spec in {unit or 'no unit'} for "
+                    f"{matrix or 'any sample type'}. File one in "
+                    f"analysis_service_specs"
                 )
             try:
                 conforms = evaluate(spec, row.result_value)
@@ -379,15 +393,24 @@ def build_native_sections(db: Session, parent) -> dict:
                     f"native sections: profile '{prof.key}' row "
                     f"'{svc.keyword}' on {sample_id}: {e.detail}"
                 ) from e
+            # The result's own LOQ wins over the spec's (endo slice 3, spec
+            # section 7): it decides "< LOQ" and rides specification.loq, the
+            # field coabuilder's LOQ column and the digital COA already read.
+            # Range rows only, as _spec_wire_dict publishes it. A row without
+            # its own LOQ (every heavy metal) keeps the spec's, byte for byte.
+            loq = effective_loq(row, spec)
+            specification = _spec_wire_dict(spec)
+            if spec.rule_kind == "range":
+                specification["loq"] = loq
             rows.append({
                 "keyword": svc.keyword,
                 "name": svc.title,
                 "result": row.result_value,
                 "unit": unit,
                 "method": _method_label(db, row.method_id),
-                "specification": _spec_wire_dict(spec),
+                "specification": specification,
                 "conforms": conforms,
-                "result_display": _result_display(spec, row.result_value),
+                "result_display": _result_display(spec, row.result_value, loq),
             })
         if not rows:
             # Rule 3 (section half): unreachable while members are required
