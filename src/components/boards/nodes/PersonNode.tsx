@@ -2,7 +2,9 @@ import { Handle, Position } from '@xyflow/react'
 import type { NodeProps } from '@xyflow/react'
 import { FlagAvatar } from '@/components/flags/FlagAvatar'
 import { displayName } from '@/lib/user-display'
+import { useBoardFlags } from '@/services/boards'
 import { useDirectoryUsers } from '@/services/groups'
+import { assignedCount } from '../board-flags'
 import type { BoardFlowNode } from '../board-mapping'
 
 /** `data` keys a person node stores (backend PersonData); rows made before `show` existed have only `user_id`. */
@@ -15,6 +17,8 @@ export interface PersonNodeData extends Record<string, unknown> {
 export function PersonNode({ data }: Pick<NodeProps<BoardFlowNode>, 'data'>) {
   const d = (data.row.data ?? {}) as PersonNodeData
   const directory = useDirectoryUsers()
+  const flags = useBoardFlags(data.slug ?? null)
+  const assigned = assignedCount(flags.data ?? [], Number(d.user_id) || null)
   const u = directory.data?.find(x => x.id === Number(d.user_id))
   const name = u ? displayName(u) : data.row.label
   const line = d.show === 'email' && u ? u.email : name
@@ -45,6 +49,14 @@ export function PersonNode({ data }: Pick<NodeProps<BoardFlowNode>, 'data'>) {
           <span className="text-[10px] text-muted-foreground">{title}</span>
         )}
       </div>
+      {assigned > 0 && (
+        <span
+          data-testid="person-pill"
+          className="rounded-full bg-amber-500 px-1.5 text-[10px] font-semibold text-white"
+        >
+          {assigned} assigned
+        </span>
+      )}
       <Handle
         type="source"
         position={Position.Bottom}
