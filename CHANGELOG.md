@@ -4,7 +4,7 @@
 
 ### Agents get their own Mk1 accounts
 - **Settings > Agents (admins):** create a machine user for an AI agent with a username; Mk1 shows its key once. No password, no server change, works on the next request.
-- **Least privilege by default:** an agent can read and write documents in the spaces it can see (General plus its groups) and nothing else. **Lab tools** (lab reads, reports, flags) and **COA publishing** are separate switches per agent; COA publishing needs Lab tools.
+- **Least privilege by default:** every agent can read lab data and reports, and read and write documents in the spaces it can see (General plus its groups). Writes beyond documents are separate switches per agent: **Lab tools** lets it raise and comment on flags, and **COA publishing** lets it generate and publish COAs (needs Lab tools).
 - **Revoke instantly:** deactivate the agent or rotate its key; the old key stops on the next request. Everything an agent writes is attributed to it.
 - Agents never appear in staff lists, cannot log in, and cannot be edited as people.
 
