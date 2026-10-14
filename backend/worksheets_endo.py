@@ -496,10 +496,11 @@ def apply_item_endo_fields(db: Session, worksheet, item, values: dict,
     switching it back locks it at once to today's match once the sheet is
     printed or the row has a result, so it never follows an edit the bench
     did not see. A first reading locks the row; clearing the reading
-    releases only a lock its result took, and only before the first print.
-    Callers commit."""
+    releases only a lock its result took, only before the first print, and
+    never on a promoted row. Callers commit."""
     # Lazy: endo_prep_rules imports this module.
-    from endo_prep_rules import append_history, lock_rows, release_on_clear, row_effective
+    from endo_prep_rules import (append_history, lock_rows, promoted_sample_ids,
+                                 release_on_clear, row_effective)
 
     base = {"user_id": user_id, "worksheet_id": worksheet.id, "sample_id": item.sample_id}
 
@@ -539,8 +540,9 @@ def apply_item_endo_fields(db: Session, worksheet, item, values: dict,
             audit("endo_reading_cleared", item.result_reading, None, old_reader=item.result_reader)
             item.result_reader = None
             # A printed sheet keeps even a result's lock: the bench preps any
-            # rerun from that paper (spec 6).
-            if worksheet.printed_at is None:
+            # rerun from that paper (spec 6). So does a promoted row: its lock
+            # is what it was promoted on (review S3).
+            if worksheet.printed_at is None and not promoted_sample_ids(db, [item.sample_id]):
                 release_on_clear(item)
         else:
             audit("endo_reading_set", item.result_reading, new)

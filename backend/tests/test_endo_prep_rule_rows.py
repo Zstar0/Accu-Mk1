@@ -647,3 +647,61 @@ def test_a_promoted_row_still_takes_readings_and_other_fields(client, db):
     db.refresh(done)
     assert (done.result_reading, done.prep_water_ml, done.cartridge_type_id) == ("0.8", 2.5, w.c05.id)
     assert done.made_at is not None
+
+
+# --- Task 4 fix round 1: promoted-row integrity (review S1, S3, I5) -----------
+
+def test_a_reader_import_skips_a_promoted_row_and_still_applies_the_rest(client, db):
+    """Review S1: the import never changes a promoted row's reading, record or
+    cartridge. It skips the row, says why, and the other rows still apply."""
+    w = _world(client, db)
+    done, _ = _row(db, w, "P-4001-S01", state="promoted")
+    live, _ = _row(db, w, "P-4002-S01", reading=None)
+    db.commit()
+    r = _import(client, w.ws, _reader_line(done, "0.8", w.c01, replace=True, test_id="T-1"),
+                _reader_line(live, "0.8", w.c05, test_id="T-2"))
+    assert r.status_code == 200, r.text
+    assert (r.json()["applied"], r.json()["skipped"]) == (1, [
+        {"item_id": done.id, "sample_id": "P-4001-S01",
+         "reason": "the row is promoted; its prep is final"}])
+    db.refresh(done)
+    db.refresh(live)
+    assert (done.result_reading, done.cartridge_type_id, done.result_reader, done.ran_at) == (
+        "<0.05", w.c05.id, None, None)
+    assert (live.result_reading, live.result_reader["test_id"]) == ("0.8", "T-2")
+
+
+def test_clearing_a_promoted_rows_reading_keeps_its_lock(client, db):
+    """Review S3: before the first print a cleared reading releases a result
+    lock, but never a promoted row's: the lock is what it was promoted on."""
+    w = _world(client, db)
+    done, _ = _row(db, w, "P-4001-S01", state="promoted")
+    done.prep_rule = lock = _lock(None, "result")
+    db.commit()
+    assert client.patch(f"/worksheets/{w.ws.id}/items/{done.id}",
+                        json={"result_reading": None}).status_code == 200
+    db.refresh(done)
+    assert (done.result_reading, done.prep_rule) == (None, lock)
+
+
+def test_a_reader_import_that_moves_a_read_rows_cartridge_is_an_override(client, db):
+    """Review I5 (ruled an override): the run the import replaces goes to the
+    row's history first, with an endo_prep_override audit, as the item PATCH does."""
+    w = _locks_world(client, db)
+    assert _import(client, w.ws, _reader_line(w.a, "<0.05", w.c05, test_id="T-1")).status_code == 200
+    db.refresh(w.a)
+    lock, entered = w.a.prep_rule, w.a.result_entered_at
+    # Same reading, a new test on the 0.01 cartridge: no replace needed.
+    r = _import(client, w.ws, _reader_line(w.a, "<0.05", w.c01, test_id="T-2"))
+    assert (r.status_code, r.json()["applied"]) == (200, 1), r.text
+    db.refresh(w.a)
+    [run] = w.a.prep_history
+    assert run == {"at": run["at"], "by": 1, "why": "override", "lock": lock,
+                   "total_dilution": 300, "step1_ratio": 10, "cartridge_type_id": w.c05.id,
+                   "result_reading": "<0.05", "reader_test_id": "T-1",
+                   "result_entered_at": entered.isoformat() + "Z"}
+    assert (w.a.cartridge_type_id, w.a.result_reader["test_id"]) == (w.c01.id, "T-2")
+    assert [a.details for a in db.query(AuditLog).filter(
+        AuditLog.operation == "endo_prep_override")] == [
+        {"user_id": 1, "worksheet_id": w.ws.id, "sample_id": w.a.sample_id,
+         "old": {"cartridge_type_id": w.c05.id}, "new": {"cartridge_type_id": w.c01.id}}]

@@ -25769,6 +25769,9 @@ class EndoReaderImportOut(BaseModel):
     applied: int
     items: list[dict]  # every item on the worksheet, in the GET /worksheets/{id} shape
     endo_method: Optional[dict] = None
+    # Rows the import left unchanged, each {item_id, sample_id, reason}: a
+    # promoted row (endo slice 5, review S1), whose prep is final.
+    skipped: list[dict] = []
 
 
 @app.post("/worksheets/{worksheet_id}/reader-import", response_model=EndoReaderImportOut)
@@ -25781,12 +25784,18 @@ def import_endo_reader_results(
     """Apply an EndoScan-V export that the browser parsed and matched to rows
     (endo v2, spec 8.2). All or nothing: every row is checked first and the
     writes share one commit, so a refused row writes nothing at all. A test
-    already on its row (same reading, same test id) is skipped. A POST on an
+    already on its row (same reading, same test id) is skipped. Endo slice 5:
+    a test that would change a promoted row is skipped too, and listed in
+    `skipped` with PREP_FINAL, while the other rows apply (review S1); a test
+    that moves the cartridge of a row with a result is an override, so the
+    replaced run goes to the row's history first (review I5). A POST on an
     id path, so it has no ordering concern against GET /worksheets/{worksheet_id}."""
-    from worksheets_endo import (CARTRIDGE_REFUSED, cartridge_ids_allowed_by, check_reader_record,
-                                 check_storable, instrument_id_for_serial, parse_reading,
-                                 pin_endo_method, reader_shows, reader_validity,
-                                 resolve_endo_method)
+    from endo_prep_rules import (append_history, load_rules, lock_rows, promoted_sample_ids,
+                                 row_effective, row_facts)
+    from worksheets_endo import (CARTRIDGE_REFUSED, PREP_FINAL, cartridge_ids_allowed_by,
+                                 check_reader_record, check_storable, endo_run_params,
+                                 instrument_id_for_serial, parse_reading, pin_endo_method,
+                                 reader_shows, reader_validity, resolve_endo_method)
 
     ws = db.execute(select(Worksheet).where(Worksheet.id == worksheet_id)).scalar_one_or_none()
     if not ws or ws.status == "staging":
@@ -25810,8 +25819,13 @@ def import_endo_reader_results(
     allowed = cartridge_ids_allowed_by(db, method)
     run_params = method["run_parameters"] if method else None
 
+    # One query for every row the import names (spec 8: a promoted row's prep is final).
+    promoted = promoted_sample_ids(
+        db, {items[t.item_id].sample_id for t in data.tests if t.item_id in endo_ids})
+
     errors: list[str] = []
     plan: list[tuple["WorksheetItem", EndoReaderTest, str]] = []
+    skipped: list[dict] = []
     seen: set[int] = set()
     for t in data.tests:
         item = items.get(t.item_id)
@@ -25840,6 +25854,10 @@ def import_endo_reader_results(
             held = parse_reading(item.result_reading) if item.result_reading is not None else None
             if held == parsed and (item.result_reader or {}).get("test_id") == test_id:
                 continue  # this test is already on the row
+            if item.sample_id in promoted:
+                skipped.append({"item_id": item.id, "sample_id": item.sample_id,
+                                "reason": PREP_FINAL})
+                continue
             if held is not None and held != parsed and not t.replace:
                 raise ValueError(f"already holds the reading {item.result_reading}; "
                                  "tick replace to overwrite it")
@@ -25855,7 +25873,28 @@ def import_endo_reader_results(
         pin_endo_method(db, ws, user_id)
     # Naive UTC, as the item PATCH stamps result_entered_at; the serializer appends the Z.
     now = datetime.now(timezone.utc).replace(tzinfo=None)
+    # Review I5: the rows whose cartridge a test moves under a result. Their
+    # lines, standard and facts are read once for all of them, never per row.
+    moved = {item.id for item, t, _reading in plan
+             if item.result_reading is not None and t.cartridge_type_id != item.cartridge_type_id}
+    if moved:
+        rules = load_rules(db)
+        facts = row_facts(db, ws, [item for item, _t, _reading in plan if item.id in moved])
+        std_total = endo_run_params(run_params)["std_total_dilution"]
     for item, t, reading in plan:
+        if item.id in moved:
+            # Before any write to the row, as the item PATCH keeps an override.
+            _, effective = row_effective(db, ws, item, rules=rules, std_total=std_total,
+                                         facts=facts.get(item.id))
+            append_history(item, why="override", user_id=user_id, effective=effective)
+            db.add(AuditLog(
+                operation="endo_prep_override",
+                entity_type="worksheet_item",
+                entity_id=str(item.id),
+                details={"user_id": user_id, "worksheet_id": ws.id, "sample_id": item.sample_id,
+                         "old": {"cartridge_type_id": item.cartridge_type_id},
+                         "new": {"cartridge_type_id": t.cartridge_type_id}},
+            ))
         db.add(AuditLog(
             operation="endo_reader_imported",
             entity_type="worksheet_item",
@@ -25884,11 +25923,10 @@ def import_endo_reader_results(
         _apply_bench_ticks(db, ws.id, item, made=None, ran=True, user_id=user_id,
                            instrument_id=instrument_id_for_serial(db, t.record.get("reader")))
     # Endo slice 5 (spec 6): a reading locks its row's rule, as a typed one does.
-    from endo_prep_rules import lock_rows
     lock_rows(db, ws, [item for item, _t, _reading in plan], event="result", user_id=user_id)
     db.commit()
     return {"applied": len(plan), "items": _serialize_worksheets(db, [ws])[0]["items"],
-            "endo_method": method}
+            "endo_method": method, "skipped": skipped}
 
 
 from worksheets_endo_promote import EndoPromoteRequest, EndoPromoteResponse  # noqa: E402
