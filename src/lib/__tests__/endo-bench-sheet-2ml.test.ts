@@ -433,7 +433,11 @@ describe('buildEndoBenchSheet2Html', () => {
         '<div><span class="st validated">validated</span><span class="rl">Retatrutide above 30 mg · 1:300 total</span>' +
           '<span class="rn">1 sample</span></div>'
       )
-      expect(html).toContain('A ratio marked <b>rule</b>')
+      // short, so a read note with all four of its sentences stays at two
+      // lines (fix round 2: 6 due dates and 4 rules then fit one sheet)
+      expect(html).toContain(
+        'next total. Marked <b>rule</b> or <b>R</b>: a method rule set it.</p>'
+      )
       expect(html).toContain('A <b>boxed step</b> is not the standard prep')
       // a ruled ratio is not a value set by hand: not underlined
       expect(html).not.toContain('<b>Underlined</b>')
@@ -472,7 +476,9 @@ describe('buildEndoBenchSheet2Html', () => {
         '<td class="cart set">0.01<sup class="rmark">R</sup></td>'
       )
       expect(html).toContain('sup.rmark{')
-      expect(html).toContain('a cartridge marked <b>R</b>')
+      expect(html).toContain(
+        'Marked <b>rule</b> or <b>R</b>: a method rule set it.</p>'
+      )
     })
 
     it("prints a special prep's note under its peptide, and the fitter counts its lines", () => {

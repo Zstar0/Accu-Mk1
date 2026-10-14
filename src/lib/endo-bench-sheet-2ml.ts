@@ -261,9 +261,11 @@ const SHEET2_CSS = [
 // so the list keeps a fixed height: two rows of one line each, cut at the
 // end with an ellipsis (the note goes first, the status and the rule's
 // text last), and a summary that lists rules (.used) closes up the space
-// around the read note. Rendered in Chromium's print layout, six due dates
-// and a holiday note with four rules or more stay on one sheet (724 of
-// 733 px); seven due dates spill.
+// around the read note. Rendered in Chromium's print layout, a summary of up
+// to six due dates, a holiday note and four rules or more stays on one
+// sheet (724 of 733 px) while the read note is at most two lines, as it is
+// with all four of its sentences (the rule one is kept short for that);
+// a third line, or a seventh due date, spills.
 const SHEET2_RULES_CSS = [
   "sup.rmark{font:700 7pt 'Segoe UI',system-ui,sans-serif;color:#8F5A06;margin-left:1pt;line-height:0;vertical-align:.6em}",
   'td.pep2 .sp{display:block;margin-top:1pt;color:#8F5A06}',
@@ -915,7 +917,7 @@ export function buildEndoBenchSheet2Html(
           ? `A <b>boxed step</b> is not the standard prep: read its numbers and the ratio under them rather than assuming ${fmtUl(std[1]?.diluentUl)}. A line across the table starts the next total.`
           : '') +
         (tally.ruled
-          ? ' A ratio marked <b>rule</b>, or a cartridge marked <b>R</b>, was set by a method rule listed below.'
+          ? ' Marked <b>rule</b> or <b>R</b>: a method rule set it.'
           : '') +
         '</p>'
       : ''
