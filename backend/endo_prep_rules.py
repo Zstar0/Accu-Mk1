@@ -504,9 +504,13 @@ def lock_items_for_update(db: Session, worksheet, item_ids) -> None:
     writes the worksheet row and also analyses or items takes the worksheet
     first (main._worksheet_for_update): the endo item PATCH and the reader
     import (their first reading pins the method), the analyst change and
-    completion (a flush writes analyses before the worksheet). Print writes
-    no analyses, and its flush writes the worksheet before the items.
-    Promote and Re-apply never write the worksheet row."""
+    completion (a flush writes analyses before the worksheet). Re-apply's
+    apply writes no worksheet row but takes it first too, so a completion,
+    whose flush writes analyses in item order, never crosses it on two
+    analyses. Print writes no analyses, and its flush writes the worksheet
+    before the items. Promote never writes the worksheet row: it locks one
+    analysis, then reads its item, row by row, the order completion's
+    flush keeps."""
     from worksheets_endo_promote import vial_endo_analyses  # lazy: it imports this module
 
     on_sheet = (WorksheetItem.worksheet_id == worksheet.id, WorksheetItem.id.in_(set(item_ids)))
@@ -535,9 +539,9 @@ def apply_reapply(db: Session, worksheet, item_ids: list[int], current_user) -> 
     one waited is seen. Does not commit."""
     from worksheets_endo import endo_run_params, resolve_endo_method  # lazy: it imports this module
 
+    # The caller holds the worksheet row lock (main._worksheet_for_update),
+    # taken and re-read before these, so its status is as committed.
     lock_items_for_update(db, worksheet, item_ids)
-    # Completion takes no row lock, so the status is a plain re-read.
-    db.refresh(worksheet)
     found, rules, facts = _reapply_rows(db, worksheet)
     rows = {it.id: (it, reason, new) for it, reason, new in found}
     user_id = getattr(current_user, "id", None)

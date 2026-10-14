@@ -903,7 +903,7 @@ def test_reapply_locks_the_analysis_then_the_item_and_leaves_a_row_promoted_mean
         "UPDATE lims_analyses SET review_state = 'promoted' WHERE id = :id", {"id": m.analysis.id})
     assert _reapply(client, m.ws, m.item).json()["results"] == [
         {"item_id": m.item.id, "applied": False, "reason": "already promoted"}]
-    assert locked == ["lims_analyses", "worksheet_items"]
+    assert locked == ["worksheets", "lims_analyses", "worksheet_items"]
     db.expire_all()
     assert (m.item.prep_rule, m.item.prep_history) == (m.lock, None)
     assert db.query(AuditLog).filter(AuditLog.operation == "endo_prep_rule_reapplied").count() == 0
@@ -1013,19 +1013,20 @@ def test_a_reader_import_skips_a_row_promoted_while_it_waited_on_the_lock(
 
 def test_worksheet_writers_lock_the_worksheet_before_any_analysis_or_item(client, db, monkeypatch):
     """The global order (lock_items_for_update): the worksheet row, then the
-    vial analyses, then the items. The endo item PATCH and the reader import
-    lock all three; the analyst change and completion, which flush analyses
-    before the worksheet, take the worksheet first too. SQLite ignores FOR
-    UPDATE; the spy shows each locking read and its order."""
+    vial analyses, then the items. The endo item PATCH, the reader import
+    and Re-apply lock all three; the analyst change and completion, which
+    flush analyses before the worksheet, take the worksheet first too. SQLite
+    ignores FOR UPDATE; the spy shows each locking read and its order."""
     w = _locks_world(client, db)
     locked = _commit_lands_while_waiting(db, monkeypatch, "worksheets", "SELECT 1", {})
     assert client.patch(w.url_a, json={"result_reading": "<0.05",
                                        "cartridge_type_id": w.c05.id}).status_code == 200
     assert _import(client, w.ws, _reader_line(w.b, "0.8", w.c05)).status_code == 200
+    assert _reapply(client, w.ws, w.a, w.b).status_code == 200
     assert client.put(f"/worksheets/{w.ws.id}", json={"assigned_analyst": 0}).status_code == 200
     assert client.post(f"/worksheets/{w.ws.id}/complete").status_code == 200
     every_row = ["worksheets", "lims_analyses", "worksheet_items"]
-    assert locked == [*every_row, *every_row, "worksheets", "worksheets"]
+    assert locked == [*every_row, *every_row, *every_row, "worksheets", "worksheets"]
 
 
 def test_an_endo_patch_reads_the_worksheet_status_under_its_lock(client, db, monkeypatch):

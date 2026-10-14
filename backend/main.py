@@ -26042,7 +26042,10 @@ def apply_prep_rules_reapply(
     applied ones share one commit."""
     from endo_prep_rules import apply_reapply
 
-    ws = db.execute(select(Worksheet).where(Worksheet.id == worksheet_id)).scalar_one_or_none()
+    # Worksheet first, then the rows' analyses and items (the lock order,
+    # _worksheet_for_update): a completion, which flushes analyses in its own
+    # order, waits here instead of crossing this request on two analyses.
+    ws = _worksheet_for_update(db, worksheet_id)
     if not ws or ws.status == "staging":
         raise HTTPException(404, "Worksheet not found")
     results = apply_reapply(db, ws, data.item_ids, _current_user)
