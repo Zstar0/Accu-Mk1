@@ -511,6 +511,34 @@ describe('buildEndoBenchSheet2Html', () => {
       expect(planned(doc(twelve)).plan.rows).toEqual([7, 5])
     })
 
+    it('lists at most four rules on one line each, else three and "and K more"', () => {
+      /** Rows 1 to `count`, each under its own line. */
+      const ruled = (count: number) =>
+        doc(
+          Array.from({ length: count }, (_, i) =>
+            row(i + 1, {
+              rule: { ...valid300, id: i + 1, min_mg: (i + 1) * 10 },
+              weightMg: (i + 1) * 10 + 5,
+            })
+          )
+        )
+      const lines = (html: string) =>
+        (html.match(/<div><span class="st /g) ?? []).length
+      const four = buildEndoBenchSheet2Html(ruled(4), { measure })
+      expect(lines(four)).toBe(4)
+      expect(four).not.toContain('class="more"')
+      const six = buildEndoBenchSheet2Html(ruled(6), { measure })
+      expect(lines(six)).toBe(3)
+      expect(six).toContain(
+        '<div class="more">and 3 more rules (see the Prep rules page)</div></div>'
+      )
+      // one line each, cut at the end; the summary closes up around it
+      expect(six).toContain(
+        'white-space:nowrap;overflow:hidden;text-overflow:ellipsis}'
+      )
+      expect(six).toContain('<section class="page summary two used">')
+    })
+
     it('a sheet without a rule or a special prep carries none of their CSS', () => {
       const html = buildEndoBenchSheet2Html(doc([row(1), row(2)]), {
         measure,
@@ -519,6 +547,7 @@ describe('buildEndoBenchSheet2Html', () => {
       expect(html).not.toContain('usedrules')
       expect(html).not.toContain('Method rules used')
       expect(html).not.toContain('class="sp"')
+      expect(html).toContain('<section class="page summary two">')
     })
   })
 

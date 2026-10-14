@@ -257,21 +257,28 @@ const SHEET2_CSS = [
 // ruled cartridge, a special prep's line under its peptide at the name's
 // own 10pt (so the fitter measures it as a name line), and the "Method
 // rules used" list. Added only to a sheet with a rule or a special prep, so
-// a sheet without stays byte for byte as before.
+// a sheet without stays byte for byte as before. The summary is not fitted,
+// so the list keeps a fixed height: two rows of one line each, cut at the
+// end with an ellipsis (the note goes first, the status and the rule's
+// text last), and a summary that lists rules (.used) closes up the space
+// around the read note. Rendered in Chromium's print layout, six due dates
+// and a holiday note with four rules or more stay on one sheet (724 of
+// 733 px); seven due dates spill.
 const SHEET2_RULES_CSS = [
   "sup.rmark{font:700 7pt 'Segoe UI',system-ui,sans-serif;color:#8F5A06;margin-left:1pt;line-height:0;vertical-align:.6em}",
   'td.pep2 .sp{display:block;margin-top:1pt;color:#8F5A06}',
-  '.usedrules{width:100%;margin:0 auto 10pt;page-break-inside:avoid;display:grid;grid-template-columns:1fr 1fr;gap:3pt 18pt}',
-  '.usedrules div{display:flex;gap:6pt;align-items:baseline;font-size:9.5pt;color:#26424A;min-width:0}',
-  '.usedrules div.wide{grid-column:1 / -1}',
-  '.usedrules .rl{font-family:var(--num);font-weight:600}',
-  '.usedrules .rn{color:#7C9095;font-size:9.5pt}',
-  '.usedrules .st{font-size:8.5pt;font-weight:700;letter-spacing:.06em;text-transform:uppercase;padding:0 4pt;border:.75pt solid;border-radius:2pt}',
+  '.page.summary.used .cols{margin-bottom:6pt}.page.summary.used .readnote{margin-bottom:6pt}',
+  '.usedrules{width:100%;margin:0 auto 6pt;page-break-inside:avoid;display:grid;grid-template-columns:1fr 1fr;gap:2pt 18pt}',
+  '.usedrules div{font-size:9.5pt;line-height:1.2;color:#26424A;min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}',
+  '.usedrules .rl{font-family:var(--num);font-weight:600;margin-left:6pt}',
+  '.usedrules .rn{color:#7C9095;margin-left:6pt}.usedrules .more{color:#7C9095}',
+  '.usedrules .st{display:inline-block;line-height:1.1;font-size:8.5pt;font-weight:700;letter-spacing:.06em;text-transform:uppercase;padding:0 4pt;border:.75pt solid;border-radius:2pt}',
   '.usedrules .st.trial{color:#8F5A06;border-color:#BD8930;background:#FAEBD3}.usedrules .st.validated{color:#0D6E70;border-color:#7FB8B9;background:#EAF4F4}',
 ].join('')
 
-/** At most this many rules are listed, so the summary stays one sheet. */
-const RULES_LISTED = 6
+/** The list's cells, two rows of two: past this many rules, the last cell
+ *  says how many more there are. */
+const RULES_LISTED = 4
 
 // Dennis's 2 mL colgroup (sums to 100%). The fitter's column fractions
 // below must match the Sample ID and Peptide widths.
@@ -932,10 +939,12 @@ export function buildEndoBenchSheet2Html(
     used.set(key, u)
   }
   const usedList = [...used.values()]
+  const listed =
+    usedList.length > RULES_LISTED ? RULES_LISTED - 1 : usedList.length
   const rulesUsed = usedList.length
     ? '<h2 class="ruleshead">Method rules used in this run</h2><div class="usedrules">' +
       usedList
-        .slice(0, RULES_LISTED)
+        .slice(0, listed)
         .map(
           u =>
             `<div><span class="st ${escapeHtml(u.rule.status)}">${escapeHtml(u.rule.status)}</span>` +
@@ -944,8 +953,9 @@ export function buildEndoBenchSheet2Html(
             `${u.rule.note ? ` &middot; ${escapeHtml(u.rule.note)}` : ''}</span></div>`
         )
         .join('') +
-      (usedList.length > RULES_LISTED
-        ? `<div class="rn wide">and ${usedList.length - RULES_LISTED} more</div>`
+      // two or more, so always "rules"
+      (listed < usedList.length
+        ? `<div class="more">and ${usedList.length - listed} more rules (see the Prep rules page)</div>`
         : '') +
       '</div>'
     : ''
@@ -960,7 +970,7 @@ export function buildEndoBenchSheet2Html(
     : ''
 
   out +=
-    '<section class="page summary two">' +
+    `<section class="page summary two${rulesUsed ? ' used' : ''}">` +
     `<div class="cont">${title}: run summary<span>${name}  &middot;  printed ${stamp}</span></div>` +
     '<dl class="meta">' +
     `<div><dt>Analyst</dt><dd>${analyst}</dd></div>` +
