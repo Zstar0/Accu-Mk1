@@ -299,6 +299,21 @@ function EndoWorksheetPageBody({
             }. Tick Made and MCS as you go.`}
           />
         }
+        headerAction={
+          twoMl && (
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() =>
+                useUIStore
+                  .getState()
+                  .navigateTo('hplc-analysis', 'endo-prep-rules')
+              }
+            >
+              Prep rules
+            </Button>
+          )
+        }
         runHeader={
           <EndoRunHeader
             worksheet={worksheet}

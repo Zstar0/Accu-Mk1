@@ -14,6 +14,7 @@ import VialRolesPage from '@/components/hplc/VialRolesPage'
 import WorksheetsInboxPage from '@/components/hplc/WorksheetsInboxPage'
 import WorksheetsListPage from '@/components/hplc/WorksheetsListPage'
 import { EndoWorksheetPage } from '@/components/hplc/endo/EndoWorksheetPage'
+import { EndoPrepRulesPage } from '@/components/hplc/endo/EndoPrepRulesPage'
 import { OrderDashboard } from '@/components/dashboard/OrderDashboard'
 import { AnalyticsDashboard } from '@/components/dashboard/AnalyticsDashboard'
 import { SenaiteDashboard } from '@/components/senaite/SenaiteDashboard'
@@ -85,6 +86,7 @@ export function MainWindowContent({
         if (activeSubSection === 'inbox') return <WorksheetsInboxPage />
         if (activeSubSection === 'worksheets') return <WorksheetsListPage />
         if (activeSubSection === 'worksheet') return <EndoWorksheetPage />
+        if (activeSubSection === 'endo-prep-rules') return <EndoPrepRulesPage />
         return <HPLCAnalysis />
       case 'reports':
         if (activeSubSection === 'sync-debug') return <ReportsSyncDebug />

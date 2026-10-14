@@ -115,6 +115,7 @@ const navItems: NavItem[] = [
       { id: 'sample-preps', label: 'Sample Preps' },
       { id: 'inbox', label: 'Inbox' },
       { id: 'worksheets', label: 'Worksheets' },
+      { id: 'endo-prep-rules', label: 'Endo prep rules' },
     ],
   },
   {

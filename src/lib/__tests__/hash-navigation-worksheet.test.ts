@@ -56,4 +56,10 @@ describe('the endo worksheet page in the hash', () => {
     expect(useUIStore.getState().worksheetDrawerOpen).toBe(true)
     expect(useUIStore.getState().worksheetPageId).toBeNull()
   })
+
+  it('round-trips the prep rules page (slice 5)', () => {
+    applyHash('#hplc-analysis/endo-prep-rules')
+    expect(useUIStore.getState().activeSubSection).toBe('endo-prep-rules')
+    expect(currentHash()).toBe('#hplc-analysis/endo-prep-rules')
+  })
 })

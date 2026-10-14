@@ -49,6 +49,7 @@ export function EndoWorksheetView({
   twoMl,
   heading,
   runHeader,
+  headerAction,
   children,
 }: {
   worksheet: WorksheetListItem
@@ -76,6 +77,8 @@ export function EndoWorksheetView({
   twoMl?: EndoTwoMl
   heading?: ReactNode
   runHeader?: ReactNode
+  /** The page's own header button (the 2 mL "Prep rules" link, slice 5). */
+  headerAction?: ReactNode
   children?: ReactNode
 }) {
   useRegisterActiveFlagEntity(
@@ -154,6 +157,7 @@ export function EndoWorksheetView({
             entityId={String(worksheet.id)}
           />
           <EndoWorksheetActions worksheet={worksheet} users={users} />
+          {headerAction}
           {!isCompleted && (
             <>
               <Button

@@ -336,4 +336,21 @@ describe('EndoWorksheetPage', () => {
       await screen.findByRole('button', { name: 'Open in flyout' })
     ).toBeInTheDocument()
   })
+
+  it('opens the prep rules from the header of a 2 mL run (slice 5)', async () => {
+    vi.mocked(getWorksheet).mockResolvedValue(worksheet('endo'))
+    renderPage()
+    fireEvent.click(await screen.findByRole('button', { name: 'Prep rules' }))
+    expect(useUIStore.getState().activeSection).toBe('hplc-analysis')
+    expect(useUIStore.getState().activeSubSection).toBe('endo-prep-rules')
+  })
+
+  it('a stock run has no Prep rules button: stock is never ruled', async () => {
+    vi.mocked(getWorksheet).mockResolvedValue(
+      worksheet('endo', { endo_prep: 'stock' })
+    )
+    renderPage()
+    expect(await screen.findByText(/Sample volume/)).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'Prep rules' })).toBeNull()
+  })
 })

@@ -43,6 +43,7 @@ export type HPLCAnalysisSubSection =
   | 'worksheets'
   | 'worksheet-detail'
   | 'worksheet'
+  | 'endo-prep-rules'
 export type WorksheetSubSection = 'inbox' | 'worksheets' | 'worksheet-detail'
 export type AccuMarkToolsSubSection =
   | 'overview'
