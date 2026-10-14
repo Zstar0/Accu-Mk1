@@ -2,6 +2,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest'
 import type { ReactNode } from 'react'
 import { act, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
+import { toast } from 'sonner'
 import { EndoWorksheetActions } from '@/components/hplc/EndoWorksheetActions'
 import {
   getEndoPrepRules,
@@ -12,6 +13,7 @@ import {
   type EndoPrepRuleOut,
   type WorksheetListItem,
 } from '@/lib/api'
+import type { EndoPrepRule } from '@/lib/endo-prep-rules'
 import { printHtmlDocument } from '@/lib/print-document'
 import type * as ApiModule from '@/lib/api'
 import type * as SlaSubjects from '@/services/sla-subjects'
@@ -92,6 +94,9 @@ describe('EndoWorksheetActions', () => {
   beforeEach(() => {
     vi.mocked(getWorksheet).mockReset()
     vi.mocked(listConsumables).mockReset().mockResolvedValue([])
+    vi.mocked(getEndoPrepRules).mockReset().mockResolvedValue([])
+    vi.mocked(recordWorksheetPrinted).mockReset()
+    vi.mocked(printHtmlDocument).mockClear()
     sla.isLoading = false
   })
 
@@ -190,7 +195,7 @@ describe('EndoWorksheetActions', () => {
       expect(screen.getByRole('button', { name })).toBeEnabled()
   })
 
-  it('prints from the rules read at Print, not the list it loaded with', async () => {
+  describe('Print records first, then prints the rows as the server locked them', () => {
     const r300: EndoPrepRuleOut = {
       id: 1,
       peptide_id: 7,
@@ -207,25 +212,97 @@ describe('EndoWorksheetActions', () => {
       cartridge_name: null,
       updated_at: null,
     }
-    vi.mocked(getEndoPrepRules)
-      .mockResolvedValueOnce([])
-      .mockResolvedValueOnce([r300])
-    vi.mocked(recordWorksheetPrinted).mockResolvedValue({
-      printed_at: '2026-10-14T15:00:00Z',
-      print_count: 1,
+    const recorded = { printed_at: '2026-10-14T15:00:00Z', print_count: 1 }
+    const lockedTo = (rule: EndoPrepRule | null) => ({
+      rule,
+      locked_at: '2026-10-14T15:00:00Z',
+      locked_by: 'print' as const,
+      user_id: 5,
     })
-    renderActions(endoWorksheet([endoItem({ sample_peptide_id: 7 })]))
-    const print = screen.getByRole('button', { name: 'Print' })
-    await waitFor(() => expect(print).toBeEnabled())
-    // loaded with no rules: the preview is the standard 1:250
-    expect(previewHtml()).not.toContain('<span class="rat">1:15')
-    fireEvent.click(print)
-    await waitFor(() => expect(printHtmlDocument).toHaveBeenCalledTimes(1))
-    // read again at Print: 1:300 makes step 2 a 1:15
-    expect(vi.mocked(printHtmlDocument).mock.calls[0]?.[0]).toContain(
-      '<span class="rat">1:15'
-    )
-    expect(recordWorksheetPrinted).toHaveBeenCalledWith(77)
+    const firstCall = (f: { mock: { invocationCallOrder: number[] } }) =>
+      f.mock.invocationCallOrder[0] ?? -1
+
+    it('calls /printed, then reads the worksheet back, then opens the print window', async () => {
+      const item = endoItem({ sample_peptide_id: 7 })
+      vi.mocked(recordWorksheetPrinted).mockResolvedValue(recorded)
+      vi.mocked(getWorksheet).mockResolvedValue(
+        endoWorksheet([{ ...item, prep_rule: lockedTo(null) }])
+      )
+      renderActions(endoWorksheet([item]))
+      const print = screen.getByRole('button', { name: 'Print' })
+      await waitFor(() => expect(print).toBeEnabled())
+      fireEvent.click(print)
+      await waitFor(() => expect(printHtmlDocument).toHaveBeenCalledTimes(1))
+      expect(recordWorksheetPrinted).toHaveBeenCalledWith(77)
+      expect(getWorksheet).toHaveBeenCalledWith(77)
+      expect(firstCall(vi.mocked(recordWorksheetPrinted))).toBeLessThan(
+        firstCall(vi.mocked(getWorksheet))
+      )
+      expect(firstCall(vi.mocked(getWorksheet))).toBeLessThan(
+        firstCall(vi.mocked(printHtmlDocument))
+      )
+    })
+
+    it('prints a row locked to 1:300 at 1:300, though the cached rules list says 1:250', async () => {
+      const r250: EndoPrepRuleOut = {
+        ...r300,
+        id: 2,
+        total_dilution: 250,
+        status: 'validated',
+      }
+      vi.mocked(getEndoPrepRules).mockResolvedValue([r250])
+      vi.mocked(recordWorksheetPrinted).mockResolvedValue(recorded)
+      const item = endoItem({ sample_peptide_id: 7 })
+      vi.mocked(getWorksheet).mockResolvedValue(
+        endoWorksheet([{ ...item, prep_rule: lockedTo(r300) }])
+      )
+      renderActions(endoWorksheet([item]))
+      const print = screen.getByRole('button', { name: 'Print' })
+      await waitFor(() => expect(print).toBeEnabled())
+      // the cached list: 1:250, the standard steps, so no ratio prints
+      expect(previewHtml()).not.toContain('<span class="rat">1:15')
+      fireEvent.click(print)
+      await waitFor(() => expect(printHtmlDocument).toHaveBeenCalledTimes(1))
+      // the row read back carries its lock: 1:300 makes step 2 a 1:15
+      const html = vi.mocked(printHtmlDocument).mock.calls[0]?.[0]
+      expect(html).toContain(
+        '<span class="rat">1:15 &middot; rule (trial)</span>'
+      )
+      expect(html).toContain('<span class="rn">1 sample (1 locked)</span>')
+      // the lock decides, so the rules are not read again at Print
+      expect(getEndoPrepRules).toHaveBeenCalledTimes(1)
+    })
+
+    it('prints nothing when /printed fails, or the worksheet cannot be read back', async () => {
+      const toastError = vi.spyOn(toast, 'error')
+      vi.mocked(recordWorksheetPrinted).mockRejectedValue(
+        new Error('Record print failed: 500')
+      )
+      renderActions(endoWorksheet([endoItem()]))
+      const print = screen.getByRole('button', { name: 'Print' })
+      await waitFor(() => expect(print).toBeEnabled())
+      fireEvent.click(print)
+      await waitFor(() =>
+        expect(toastError).toHaveBeenCalledWith(
+          'Not printed: Record print failed: 500'
+        )
+      )
+      expect(getWorksheet).not.toHaveBeenCalled()
+      expect(printHtmlDocument).not.toHaveBeenCalled()
+      // recorded, but the read back fails
+      vi.mocked(recordWorksheetPrinted).mockResolvedValue(recorded)
+      vi.mocked(getWorksheet).mockRejectedValue(
+        new Error('Get worksheet failed: 500')
+      )
+      fireEvent.click(print)
+      await waitFor(() =>
+        expect(toastError).toHaveBeenCalledWith(
+          'Not printed: Get worksheet failed: 500'
+        )
+      )
+      expect(printHtmlDocument).not.toHaveBeenCalled()
+      toastError.mockRestore()
+    })
   })
 
   it('waits for the SLA due dates on stock and 2 mL alike', () => {

@@ -12,10 +12,15 @@
  * colour with its ratio, a step over the 1.5 mL tube or unmakeable boxed in
  * red, bac water one "50 + 950" cell), the summary page and his page fitter.
  * From 8fae7bb: neighbouring steps with the same non-standard volumes share
- * one outline.
- * Left out: method-rule marks and the rules list (slice 5), his print hint
- * and auto-print script (Mk1 prints through printHtmlDocument) and his em
- * dashes. Made and MCS print empty for the pen, as on the stock sheet.
+ * one outline. From efbc160 (slice 5): a ratio a method rule set prints
+ * "1:15 · rule" ("rule (trial)" while the line is on trial), boxed as any
+ * step off the standard is, a cartridge a rule set carries a small R, and
+ * the summary lists the rules used; Mk1 adds a special-prep row's note under
+ * its peptide.
+ * Left out: his blend notes (a rule here keys on a catalog peptide, which a
+ * blend never has), his print hint and auto-print script (Mk1 prints
+ * through printHtmlDocument) and his em dashes. Made and MCS print empty
+ * for the pen, as on the stock sheet.
  *
  * Pure string building; every value goes through escapeHtml.
  */
@@ -49,12 +54,14 @@ import {
   type EndoSample,
   type EndoStepPlan,
 } from '@/lib/endo-prep-2ml'
-import type { EndoPrepRule } from '@/lib/endo-prep-rules'
+import { ruleTag, ruleText, type EndoPrepRule } from '@/lib/endo-prep-rules'
 import { splitIdentity } from '@/lib/endo-reader'
 import {
   BW_LAL_UL,
   BW_SAMPLE_UL,
+  allowedCartridges,
   bacWaterLast,
+  cartridgeLabel,
   endoCtxFor,
   endoRowsFor,
   runCartridgeFor,
@@ -82,6 +89,13 @@ export interface EndoSheet2Row {
   identityAsReceived: string
   /** The row as the 2 mL maths reads it, the identity cut to the product. */
   sample: EndoSample
+  /** Slice 5: the row's rule is its lock (counted on the summary). */
+  locked?: boolean
+  /** Slice 5: a "no rule" row, and its special-prep note. */
+  rulesOff?: boolean
+  note?: string | null
+  /** Slice 5: the cartridge came from the row's rule (its R). */
+  cartridgeRuled?: boolean
 }
 
 export interface EndoSheet2Doc {
@@ -97,6 +111,8 @@ export interface EndoSheet2Doc {
   /** Rows in Box 1 (bench) order; the sheet regroups them by total. */
   rows: EndoSheet2Row[]
   holidayNotes: { iso: string; name: string }[]
+  /** Slice 5: cartridge type id to its label, for the rules listed. */
+  cartridgeLabels?: Record<number, string>
 }
 
 /** Text width in px for a CSS font shorthand (the fitter's ruler). */
@@ -153,8 +169,14 @@ export function buildEndoSheet2Doc(
       order,
       identityAsReceived: raw,
       sample: { ...r.sample, identity: productIdentity(raw) },
+      locked: item.prep_rule != null,
+      rulesOff: item.prep_rules_off === true,
+      note: item.prep_note ?? null,
+      cartridgeRuled: !!r.ruleCartridge && item.cartridge_type_id == null,
     }
   })
+  const allowed = allowedCartridges(ws, catalog)
+  const label = cartridgeLabel(allowed)
   return {
     title: ws.title,
     runName: `worksheet ${ws.id}`,
@@ -166,6 +188,7 @@ export function buildEndoSheet2Doc(
     ctx: endoCtxFor(ws, catalog),
     rows,
     holidayNotes: [...holidays].map(([iso, name]) => ({ iso, name })),
+    cartridgeLabels: Object.fromEntries(allowed.map(c => [c.id, label(c.id)])),
   }
 }
 
@@ -230,6 +253,26 @@ const SHEET2_CSS = [
   '.rules.seven dd{font-size:10.5pt;line-height:1.35}',
 ].join('')
 
+// Slice 5 (Dennis efbc160, on paper only, so no dark variants): the R on a
+// ruled cartridge, a special prep's line under its peptide at the name's
+// own 10pt (so the fitter measures it as a name line), and the "Method
+// rules used" list. Added only to a sheet with a rule or a special prep, so
+// a sheet without stays byte for byte as before.
+const SHEET2_RULES_CSS = [
+  "sup.rmark{font:700 7pt 'Segoe UI',system-ui,sans-serif;color:#8F5A06;margin-left:1pt;line-height:0;vertical-align:.6em}",
+  'td.pep2 .sp{display:block;margin-top:1pt;color:#8F5A06}',
+  '.usedrules{width:100%;margin:0 auto 10pt;page-break-inside:avoid;display:grid;grid-template-columns:1fr 1fr;gap:3pt 18pt}',
+  '.usedrules div{display:flex;gap:6pt;align-items:baseline;font-size:9.5pt;color:#26424A;min-width:0}',
+  '.usedrules div.wide{grid-column:1 / -1}',
+  '.usedrules .rl{font-family:var(--num);font-weight:600}',
+  '.usedrules .rn{color:#7C9095;font-size:9.5pt}',
+  '.usedrules .st{font-size:8.5pt;font-weight:700;letter-spacing:.06em;text-transform:uppercase;padding:0 4pt;border:.75pt solid;border-radius:2pt}',
+  '.usedrules .st.trial{color:#8F5A06;border-color:#BD8930;background:#FAEBD3}.usedrules .st.validated{color:#0D6E70;border-color:#7FB8B9;background:#EAF4F4}',
+].join('')
+
+/** At most this many rules are listed, so the summary stays one sheet. */
+const RULES_LISTED = 6
+
 // Dennis's 2 mL colgroup (sums to 100%). The fitter's column fractions
 // below must match the Sample ID and Peptide widths.
 const COLGROUP2 =
@@ -293,6 +336,21 @@ function stepDiffers(st: EndoStepPlan, d: EndoStepPlan | undefined): boolean {
     d.diluentUl === null ||
     Math.abs(st.diluentUl - d.diluentUl) > 1e-9
   )
+}
+
+/** A ruled step's mark after its ratio: "rule", or "rule (trial)" while
+ *  its line is on trial; '' for any other step. */
+function ruleMark(
+  st: EndoStepPlan,
+  rule: EndoPrepRule | null | undefined
+): string {
+  return st.ruled && rule ? ruleTag(rule) : ''
+}
+
+/** A "no rule" row's line under its peptide; null for any other row. */
+function specialPrepOf(r: EndoSheet2Row): string | null {
+  if (!r.rulesOff) return null
+  return r.note ? `special prep: ${r.note}` : 'special prep'
 }
 
 /** The Cart. cell: the cartridge, or a pill when the prep cannot read the limit. */
@@ -451,24 +509,30 @@ function metaLineCount(
 /**
  * A row's minimum height: two lines for the step cells (units over the
  * numbers), three when a step is off the standard or over the tube (its note
- * adds a line); the Peptide cell (name plus the declared mg) and the Due cell
- * can be taller still.
+ * adds a line); the Peptide cell (name plus the declared mg, and a special
+ * prep's line) and the Due cell can be taller still.
  */
 function rowMinFor(
   s: EndoSample,
   ctx: EndoCtx,
   std: EndoStepPlan[],
-  measure: TextMeasure
+  measure: TextMeasure,
+  special: string | null = null
 ): number {
   const w = PAGE_CONTENT_W * PEP2_COL - H_PAD_PX
   const bac = formOf(s) === 'bac'
   const mg = !bac && s.weightMg !== null
   const pepLines =
     (s.identity ? lineCount(s.identity, w, PEP_FONT, measure) : 0) +
-    (mg ? 1 : 0)
+    (mg ? 1 : 0) +
+    (special ? lineCount(special, w, PEP_FONT, measure) : 0)
   // Mk1: Dennis's stack leaves out the mg line's margin, about 1 px a row,
-  // which overran the sheet on a page of wrapping names
-  const stack = Math.max(DUE2_PX, pepLines * PEP_LINE_PX + (mg ? MG_TOP_PX : 0))
+  // which overran the sheet on a page of wrapping names; the special prep
+  // line has the same 1pt margin
+  const stack = Math.max(
+    DUE2_PX,
+    pepLines * PEP_LINE_PX + (mg ? MG_TOP_PX : 0) + (special ? MG_TOP_PX : 0)
+  )
   if (bac) return Math.max(42, stack)
   const p = dilutionPlan(s, ctx)
   const odd =
@@ -477,20 +541,20 @@ function rowMinFor(
       (st, si) => st.ratio !== std[si]?.ratio || stepDiffers(st, std[si])
     )
   if (!odd) return Math.max(42, stack)
-  // an over-tube note, as stepPrint prints it, can wrap under its numbers
+  // an over-tube note, or a ruled one ("1:15 · rule (trial)"), as stepPrint
+  // prints it, can wrap under its numbers
   const noteW = PAGE_CONTENT_W * STEP_COL - H_PAD_PX
-  const wraps = p.steps.some(
-    st =>
-      !st.fits &&
-      st.diluentUl !== null &&
-      !!st.sampleUl &&
-      lineCount(
-        `1:${fmt(st.ratio)} \u00b7 over ${fmt(TUBE_UL / 1000)} mL`,
-        noteW,
-        NOTE_FONT,
-        measure
-      ) > 1
-  )
+  const wraps = p.steps.some((st, si) => {
+    const mark = ruleMark(st, s.rule)
+    const note = !st.fits
+      ? st.diluentUl !== null && !!st.sampleUl
+        ? `1:${fmt(st.ratio)} \u00b7 over ${fmt(TUBE_UL / 1000)} mL`
+        : ''
+      : mark && (st.ratio !== std[si]?.ratio || stepDiffers(st, std[si]))
+        ? `1:${fmt(st.ratio)} \u00b7 ${mark}`
+        : ''
+    return note !== '' && lineCount(note, noteW, NOTE_FONT, measure) > 1
+  })
   return Math.max(wraps ? STEP_NOTE2_PX : STEP_NOTE_PX, stack)
 }
 
@@ -500,15 +564,15 @@ const PAD_MIN = 4
 
 /** A row's height without its padding: the taller of its cells and its Sample ID. */
 function rowHeight(
-  s: EndoSample,
+  r: EndoSheet2Row,
   ctx: EndoCtx,
   std: EndoStepPlan[],
   measure: TextMeasure
 ): number {
   const sidW = PAGE_CONTENT_W * SID2_COL - H_PAD_PX
   return Math.max(
-    rowMinFor(s, ctx, std, measure),
-    sidLineCount(s.sampleId, sidW, measure) * SID_LINE_PX
+    rowMinFor(r.sample, ctx, std, measure, specialPrepOf(r)),
+    sidLineCount(r.sample.sampleId, sidW, measure) * SID_LINE_PX
   )
 }
 
@@ -584,7 +648,7 @@ function fitSheet(doc: EndoSheet2Doc, measure: TextMeasure) {
   const ordered = orderByTotal(doc.rows, r => r.sample, ctx)
   const metaItems = metaItemsOf(doc)
   const metaLines = metaLineCount(metaItems, measure)
-  const heights = ordered.map(r => rowHeight(r.sample, ctx, std, measure))
+  const heights = ordered.map(r => rowHeight(r, ctx, std, measure))
   const starts = pageStarts(heights, metaLines)
   // rounded down, so the printed padding never exceeds the fitted one
   const pad = Math.floor(fitRowPadding(heights, starts, metaLines) * 10) / 10
@@ -651,6 +715,7 @@ export function buildEndoBenchSheet2Html(
     tris: 0,
     water: 0,
     bg: 0,
+    ruled: 0,
   }
   const prio = { expedited: 0, high: 0, default: 0 }
   const dueGroups = new Map<string, number>()
@@ -663,7 +728,8 @@ export function buildEndoBenchSheet2Html(
    * total and its volumes as printed; '' when it cannot join a run (standard,
    * unmakeable or over the tube, which keeps its own red box). Neighbours on
    * one page with the same key share one outline, so a new total, a page
-   * edge or other volumes start a new box.
+   * edge or other volumes start a new box. A step a rule set is boxed too
+   * (slice 5, Dennis): the box marks a non-standard tube, whoever set it.
    */
   function boxOf(st: EndoStepPlan, si: number, i: number) {
     const diff = stepDiffers(st, std[si])
@@ -689,13 +755,15 @@ export function buildEndoBenchSheet2Html(
     const cls = `step${st.own ? ' own' : ''}${st.fits ? '' : ' bad'}${odd ? ' odd' : ''}${diff ? ' diff' : ''}${top ? ' dtop' : ''}${bot ? ' dbot' : ''} s${sn}`
     const ratio = escapeHtml(fmt(st.ratio))
     // the note is the ratio alone (Dennis, eb4ee43); "over 1.5 mL" for a step
-    // that does not fit its tube
+    // that does not fit its tube; " · rule" after a ratio a rule set (efbc160)
+    const mark = ruleMark(st, printed[i]?.r.sample.rule)
     const note = !st.fits
       ? `1:${ratio} &middot; over ${fmt(TUBE_UL / 1000)} mL`
       : odd || diff
-        ? `1:${ratio}`
+        ? `1:${ratio}${mark ? ` &middot; ${escapeHtml(mark)}` : ''}`
         : ''
     if (odd || diff) tally.odd++
+    if (st.fits && (odd || diff) && mark) tally.ruled++
     const [capA, capB] = STEP_CAPS[si] ?? ['sample', '']
     return (
       `<td class="${cls}">${pair(st.sampleUl, capA, st.diluentUl, capB, si ? String(si) : 'v', String(sn))}` +
@@ -722,15 +790,19 @@ export function buildEndoBenchSheet2Html(
       s.lambda !== null &&
       doc.runLambda !== null &&
       s.lambda !== doc.runLambda
+    const cartR = r.cartridgeRuled && k.lambda !== null
+    if (cartR) tally.ruled++
+    const special = specialPrepOf(r)
     const lead =
       `<tr${i > 0 && keys[i] !== keys[i - 1] ? ' class="newtotal"' : ''}>` +
       `<td class="n">${r.n}</td>` +
       `<td class="m due">${r.due ? escapeHtml(shortDate(r.due)) : ''}${r.dueHoliday ? '<sup>*</sup>' : ''}` +
       `<span class="duepill"><span class="pill ${pk}">${PRIORITY_LABEL[pk]}</span></span></td>` +
-      `<td class="cart${cartOwn ? ' set' : ''}">${cartPrint(k)}</td>` +
+      `<td class="cart${cartOwn ? ' set' : ''}">${cartPrint(k)}${cartR ? '<sup class="rmark">R</sup>' : ''}</td>` +
       `<td class="m">${escapeHtml(r.order)}</td>` +
       `<td class="m sid">${escapeHtml(s.sampleId)}</td>` +
-      `<td class="pep2">${escapeHtml(s.identity)}${weight ? `<span class="mg">${escapeHtml(weight)}</span>` : ''}</td>`
+      `<td class="pep2">${escapeHtml(s.identity)}${weight ? `<span class="mg">${escapeHtml(weight)}</span>` : ''}` +
+      `${special ? `<span class="sp">${escapeHtml(special)}</span>` : ''}</td>`
     const ticks =
       '<td class="c aftersteps"><span class="bx"></span></td><td class="c"><span class="bx"></span></td></tr>'
     if (bac) {
@@ -786,9 +858,10 @@ export function buildEndoBenchSheet2Html(
   }
   const footLeft = `<span>${title} &middot; ${name}${doc.analyst ? ` &middot; ${analyst}` : ''}</span>`
 
+  const withRules = doc.rows.some(r => r.sample.rule || r.rulesOff)
   let out =
     '<!doctype html><html lang="en"><head><meta charset="utf-8">' +
-    `<title>${title} endotoxin prep</title><style>${SHEET_CSS}${SHEET2_CSS}` +
+    `<title>${title} endotoxin prep</title><style>${SHEET_CSS}${SHEET2_CSS}${withRules ? SHEET2_RULES_CSS : ''}` +
     `td{padding:${pad.toFixed(1)}px 5pt}${opts.preview ? PREVIEW_CSS : ''}</style></head><body>`
 
   pages.forEach((chunk, pageIx) => {
@@ -823,7 +896,7 @@ export function buildEndoBenchSheet2Html(
       : ''
   }
   const readnote =
-    tally.typed || tally.odd || tally.liquid
+    tally.typed || tally.odd || tally.liquid || tally.ruled
       ? '<p class="note readnote">' +
         (tally.liquid
           ? "<b>L</b> after the recon water: the vial arrived reconstituted; that is the customer's water, add nothing. "
@@ -834,8 +907,48 @@ export function buildEndoBenchSheet2Html(
         (tally.odd
           ? `A <b>boxed step</b> is not the standard prep: read its numbers and the ratio under them rather than assuming ${fmtUl(std[1]?.diluentUl)}. A line across the table starts the next total.`
           : '') +
+        (tally.ruled
+          ? ' A ratio marked <b>rule</b>, or a cartridge marked <b>R</b>, was set by a method rule listed below.'
+          : '') +
         '</p>'
       : ''
+  // The lines this run used (Dennis efbc160): each with its status, the
+  // rows it covered and how many of those hold it as their lock, and its
+  // note.
+  const cartLabel = (id: number) =>
+    doc.cartridgeLabels?.[id] ?? `cartridge #${id}`
+  const used = new Map<
+    string,
+    { rule: EndoPrepRule; line: string; rows: number; locked: number }
+  >()
+  for (const r of doc.rows) {
+    const rule = r.sample.rule
+    if (!rule) continue
+    const line = ruleText(rule, r.sample.identity, cartLabel)
+    const key = `${rule.id}|${line}`
+    const u = used.get(key) ?? { rule, line, rows: 0, locked: 0 }
+    u.rows++
+    if (r.locked) u.locked++
+    used.set(key, u)
+  }
+  const usedList = [...used.values()]
+  const rulesUsed = usedList.length
+    ? '<h2 class="ruleshead">Method rules used in this run</h2><div class="usedrules">' +
+      usedList
+        .slice(0, RULES_LISTED)
+        .map(
+          u =>
+            `<div><span class="st ${escapeHtml(u.rule.status)}">${escapeHtml(u.rule.status)}</span>` +
+            `<span class="rl">${escapeHtml(u.line)}</span>` +
+            `<span class="rn">${u.rows} ${u.rows === 1 ? 'sample' : 'samples'}${u.locked ? ` (${u.locked} locked)` : ''}` +
+            `${u.rule.note ? ` &middot; ${escapeHtml(u.rule.note)}` : ''}</span></div>`
+        )
+        .join('') +
+      (usedList.length > RULES_LISTED
+        ? `<div class="rn wide">and ${usedList.length - RULES_LISTED} more</div>`
+        : '') +
+      '</div>'
+    : ''
   const holidayNote = doc.holidayNotes.length
     ? `<p class="note">* Due date pushed past ${escapeHtml(
         doc.holidayNotes
@@ -875,6 +988,7 @@ export function buildEndoBenchSheet2Html(
     `<section class="col"><h2>Due</h2>${dueList || '<p class="colnote">No due dates set.</p>'}</section>` +
     '</div>' +
     readnote +
+    rulesUsed +
     '<h2 class="ruleshead">How each figure is worked out</h2>' +
     '<dl class="rules seven">' +
     '<div><dt>Due date</dt><dd>received + 3 business days<br><i>weekends and lab holidays skipped</i></dd></div>' +

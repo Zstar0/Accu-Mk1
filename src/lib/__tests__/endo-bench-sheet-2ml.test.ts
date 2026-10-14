@@ -13,6 +13,7 @@ import {
   type EndoCtx,
   type EndoSample,
 } from '@/lib/endo-prep-2ml'
+import type { EndoPrepRule } from '@/lib/endo-prep-rules'
 import { buildEndoSheetDoc } from '@/lib/endo-worksheet'
 import {
   endoItem,
@@ -376,6 +377,151 @@ describe('buildEndoBenchSheet2Html', () => {
     })
   })
 
+  describe('method rules (slice 5, Dennis efbc160)', () => {
+    const trial300: EndoPrepRule = {
+      id: 1,
+      peptide_id: 7,
+      min_mg: null,
+      max_mg: null,
+      total_dilution: 300,
+      step1_ratio: null,
+      cartridge_type_id: null,
+      status: 'trial',
+      note: '60 mg PPC low at 1:250',
+      sort_order: 0,
+      active: true,
+    }
+    const valid300: EndoPrepRule = {
+      ...trial300,
+      id: 2,
+      min_mg: 30,
+      status: 'validated',
+      note: null,
+    }
+
+    it('marks a ruled ratio "rule (trial)" or "rule", and lists the lines used on the summary', () => {
+      const html = buildEndoBenchSheet2Html(
+        doc([
+          row(1, { rule: trial300 }, { locked: true }),
+          row(2, { rule: trial300 }),
+          row(3, { rule: valid300, weightMg: 60 }),
+        ]),
+        { measure }
+      )
+      // 1:300 makes step 2 a 1:15: the rule set it
+      expect(html).toContain(
+        '<span class="rat">1:15 &middot; rule (trial)</span>'
+      )
+      expect(html).toContain('<span class="rat">1:15 &middot; rule</span>')
+      // a ruled step off the standard is boxed as any other (A.0 item 6,
+      // Dennis): one outline down the run of 20 + 280
+      expect(
+        [...html.matchAll(/<td class="(step[^"]* s2)">/g)].map(m => m[1])
+      ).toEqual([
+        'step odd diff dtop s2',
+        'step odd diff s2',
+        'step odd diff dbot s2',
+      ])
+      expect(html).toContain(
+        '<h2 class="ruleshead">Method rules used in this run</h2>'
+      )
+      expect(html).toContain(
+        '<div><span class="st trial">trial</span><span class="rl">Retatrutide any weight · 1:300 total</span>' +
+          '<span class="rn">2 samples (1 locked) &middot; 60 mg PPC low at 1:250</span></div>'
+      )
+      expect(html).toContain(
+        '<div><span class="st validated">validated</span><span class="rl">Retatrutide above 30 mg · 1:300 total</span>' +
+          '<span class="rn">1 sample</span></div>'
+      )
+      expect(html).toContain('A ratio marked <b>rule</b>')
+      expect(html).toContain('A <b>boxed step</b> is not the standard prep')
+      // a ruled ratio is not a value set by hand: not underlined
+      expect(html).not.toContain('<b>Underlined</b>')
+      expect(html).not.toMatch(new RegExp('\u2014|&' + 'mdash;'))
+    })
+
+    it('boxes a ruled 1:300 step 2 as 20 + 280, with its "1:15 · rule" and the R on its cartridge', () => {
+      const r300c4: EndoPrepRule = {
+        ...valid300,
+        min_mg: null,
+        cartridge_type_id: 4,
+      }
+      const html = buildEndoBenchSheet2Html(
+        doc([row(1, { rule: r300c4, lambda: 0.01 }, { cartridgeRuled: true })]),
+        { measure }
+      )
+      expect(html).toContain(
+        '<td class="step odd diff dtop dbot s2"><span class="pair">' +
+          '<span class="pc k1"><span class="cap c1">step 1</span><span class="num">20</span></span>' +
+          '<span class="plus">+</span>' +
+          '<span class="pc k2"><span class="cap c2">water</span><span class="num">280</span></span></span>' +
+          '<span class="rat">1:15 &middot; rule</span></td>'
+      )
+      expect(html).toContain(
+        '<td class="cart set">0.01<sup class="rmark">R</sup></td>'
+      )
+    })
+
+    it('puts an R on a cartridge a rule set', () => {
+      const r4 = { ...trial300, total_dilution: null, cartridge_type_id: 4 }
+      const html = buildEndoBenchSheet2Html(
+        doc([row(1, { rule: r4, lambda: 0.01 }, { cartridgeRuled: true })]),
+        { measure }
+      )
+      expect(html).toContain(
+        '<td class="cart set">0.01<sup class="rmark">R</sup></td>'
+      )
+      expect(html).toContain('sup.rmark{')
+      expect(html).toContain('a cartridge marked <b>R</b>')
+    })
+
+    it("prints a special prep's note under its peptide, and the fitter counts its lines", () => {
+      const html = buildEndoBenchSheet2Html(
+        doc([
+          row(1, {}, { rulesOff: true, note: '4 mL' }),
+          row(2, {}, { rulesOff: true }),
+        ]),
+        { measure }
+      )
+      expect(html).toContain(
+        '<td class="pep2">Retatrutide<span class="mg">10 mg</span><span class="sp">special prep: 4 mL</span></td>'
+      )
+      expect(html).toContain('<span class="sp">special prep</span>')
+      // the name, the mg and "special prep: 4 mL" on two lines of the 81.8 px
+      // column, each extra line with its 1pt margin
+      expect(
+        planEndoSheet2(
+          doc([row(1, {}, { rulesOff: true, note: '4 mL' })]),
+          measure
+        ).rowHeights[0]
+      ).toBeCloseTo(4 * 15.4 + 8 / 3)
+    })
+
+    it('measures a ruled note that wraps, so twelve such rows still fit their pages', () => {
+      const one = (rule: EndoPrepRule) =>
+        planEndoSheet2(doc([row(1, { rule })]), measure).rowHeights
+      // "1:15 · rule" is 77 px of the 126 px step column: one note line;
+      // "1:15 · rule (trial)" is 133 px: two, as an over-tube note's
+      expect(one(valid300)).toEqual([53])
+      expect(one(trial300)).toEqual([66])
+      // (722 - 162) / (66 + 2 x 4) = 7.6 rows on page one
+      const twelve = Array.from({ length: 12 }, (_, i) =>
+        row(i + 1, { rule: trial300 })
+      )
+      expect(planned(doc(twelve)).plan.rows).toEqual([7, 5])
+    })
+
+    it('a sheet without a rule or a special prep carries none of their CSS', () => {
+      const html = buildEndoBenchSheet2Html(doc([row(1), row(2)]), {
+        measure,
+      })
+      expect(html).not.toContain('rmark')
+      expect(html).not.toContain('usedrules')
+      expect(html).not.toContain('Method rules used')
+      expect(html).not.toContain('class="sp"')
+    })
+  })
+
   it('shows the same document as paper when previewed', () => {
     const d = doc([row(1)])
     const printed = buildEndoBenchSheet2Html(d, { measure })
@@ -511,6 +657,72 @@ describe('buildEndoSheet2Doc order', () => {
       opts
     )
     expect(d.rows.map(r => r.sampleId)).toEqual(['BW-0114-S02', 'P-0200-S02'])
+  })
+})
+
+describe('buildEndoSheet2Doc under method rules (slice 5)', () => {
+  it('carries the rule, the lock, the special prep and the ruled cartridge from the worksheet', () => {
+    const r4: EndoPrepRule = {
+      id: 1,
+      peptide_id: 7,
+      min_mg: null,
+      max_mg: null,
+      total_dilution: null,
+      step1_ratio: null,
+      cartridge_type_id: 4,
+      status: 'trial',
+      note: null,
+      sort_order: 0,
+      active: true,
+    }
+    const d = buildEndoSheet2Doc(
+      endoWorksheet([
+        endoItem({ sample_id: 'P-0001-S02', sample_peptide_id: 7 }),
+        endoItem({
+          sample_id: 'P-0002-S02',
+          sample_peptide_id: 7,
+          prep_rule: {
+            rule: r4,
+            locked_at: '2026-10-14T15:00:00Z',
+            locked_by: 'print',
+            user_id: 5,
+          },
+        }),
+        endoItem({
+          sample_id: 'P-0003-S02',
+          sample_peptide_id: 7,
+          prep_rules_off: true,
+          prep_note: '4 mL',
+        }),
+      ]),
+      {
+        analystName: 'Test Analyst',
+        calendar: null,
+        printedAt: 'now',
+        dueAtByItemId: new Map(),
+      },
+      [],
+      [r4]
+    )
+    expect(
+      d.rows.map(r => [
+        r.sample.sampleId,
+        r.sample.rule?.id ?? null,
+        r.sample.lambda,
+        r.locked,
+        r.rulesOff,
+        r.note,
+        r.cartridgeRuled,
+      ])
+    ).toEqual([
+      ['P-0001-S02', 1, 0.01, false, false, null, true],
+      ['P-0002-S02', 1, 0.01, true, false, null, true],
+      ['P-0003-S02', null, 0.05, false, true, '4 mL', false],
+    ])
+    expect(d.cartridgeLabels).toEqual({
+      3: '0.05 cartridge',
+      4: '0.01 cartridge',
+    })
   })
 })
 

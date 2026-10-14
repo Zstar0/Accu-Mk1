@@ -10,14 +10,12 @@ import {
   DialogTitle,
 } from '@/components/ui/dialog'
 import {
-  getEndoPrepRules,
   getWorksheet,
   listConsumables,
   recordWorksheetPrinted,
   type WorksheetListItem,
   type WorksheetUser,
 } from '@/lib/api'
-import type { EndoPrepRule } from '@/lib/endo-prep-rules'
 import { buildEndoBenchSheetHtml, buildEndoCsv } from '@/lib/endo-bench-sheet'
 import {
   buildEndoBenchSheet2Html,
@@ -34,10 +32,7 @@ import { downloadTextFile, printHtmlDocument } from '@/lib/print-document'
 import { displayName } from '@/lib/user-display'
 import { useLabCalendar } from '@/hooks/use-lab-calendar'
 import { worksheetPageKey } from '@/hooks/use-worksheet-drawer'
-import {
-  ENDO_PREP_RULES_KEY,
-  useEndoPrepRules,
-} from '@/services/endo-prep-rules'
+import { useEndoPrepRules } from '@/services/endo-prep-rules'
 import { useSlaForSubjects } from '@/services/sla-subjects'
 
 /**
@@ -95,7 +90,7 @@ export function EndoWorksheetActions({
     )
   )
   // The browser never says whether the print dialog was confirmed, so the
-  // click is what gets recorded. A failed record must not block the printout.
+  // click is what gets recorded (print() says when it blocks the printout).
   const recordPrint = useMutation({
     mutationFn: () => recordWorksheetPrinted(worksheet.id),
     onSuccess: () => {
@@ -126,13 +121,10 @@ export function EndoWorksheetActions({
       ])
     ),
   })
-  const sheetHtml = (
-    preview: boolean,
-    ruleLines: EndoPrepRule[] = rules ?? []
-  ) =>
-    twoMl && sheetWorksheet
+  const sheetHtml = (preview: boolean, ws = sheetWorksheet) =>
+    twoMl && ws
       ? buildEndoBenchSheet2Html(
-          buildEndoSheet2Doc(sheetWorksheet, opts(), catalog, ruleLines),
+          buildEndoSheet2Doc(ws, opts(), catalog, rules ?? []),
           { preview }
         )
       : buildEndoBenchSheetHtml(buildEndoSheetDoc(worksheet, opts()), {
@@ -164,27 +156,38 @@ export function EndoWorksheetActions({
             ? 'Loading the prep rules…'
             : undefined
 
-  // The print locks every row not yet locked to the rule the server matches
-  // at that moment (spec 6), so the paper is built from the rules read now,
-  // never from a cached list that may be minutes old.
+  // Record, then print (spec 6). On a 2 mL run the record locks every row
+  // not locked yet to the rule the server matches at that moment, so the
+  // paper is built from the worksheet read back after it, each row on its
+  // lock, never from a rules list that may be seconds old. A failed record
+  // or read back prints nothing; a print cancelled in the dialog still
+  // counts as recorded. A stock sheet has no locks: it prints first, and a
+  // failed record does not block it.
   async function print() {
-    let ruleLines: EndoPrepRule[] = []
-    if (twoMl) {
-      try {
-        ruleLines = await queryClient.fetchQuery({
-          queryKey: ENDO_PREP_RULES_KEY,
-          queryFn: getEndoPrepRules,
-          staleTime: 0,
-        })
-      } catch (err) {
-        toast.error(
-          `Not printed: ${err instanceof Error ? err.message : 'the prep rules did not load'}`
-        )
-        return
-      }
+    if (!twoMl) {
+      printHtmlDocument(sheetHtml(false))
+      recordPrint.mutate()
+      return
     }
-    printHtmlDocument(sheetHtml(false, ruleLines))
-    recordPrint.mutate()
+    let locked: WorksheetListItem
+    try {
+      await recordPrint.mutateAsync()
+      // a GET already in flight may predate the locks
+      await queryClient.cancelQueries({
+        queryKey: worksheetPageKey(worksheet.id),
+      })
+      locked = await queryClient.fetchQuery({
+        queryKey: worksheetPageKey(worksheet.id),
+        queryFn: () => getWorksheet(worksheet.id),
+        staleTime: 0,
+      })
+    } catch (err) {
+      toast.error(
+        `Not printed: ${err instanceof Error ? err.message : 'the print was not recorded'}`
+      )
+      return
+    }
+    printHtmlDocument(sheetHtml(false, locked))
   }
 
   return (
