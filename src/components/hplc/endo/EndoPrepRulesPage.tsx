@@ -125,6 +125,19 @@ function bodyOf(d: Draft): EndoPrepRuleIn | string {
   }
 }
 
+/** The draft moved onto a newer server line: a field the user has not touched
+ *  since the last sync (it still equals `from`) takes the new server value, a
+ *  field the user edited keeps the user's text. So a colleague's change never
+ *  shows stale, and Save never sends the old value back over it. */
+function rebased(draft: Draft, from: Draft, to: Draft): Draft {
+  return Object.fromEntries(
+    Object.entries(draft).map(([key, value]) => [
+      key,
+      value === from[key as keyof Draft] ? to[key as keyof Draft] : value,
+    ])
+  ) as Draft
+}
+
 /** The PATCH body: only the fields that differ from the stored line. */
 function changedFields(
   body: EndoPrepRuleIn,
@@ -226,6 +239,15 @@ function RuleRow({
   onCancel?: () => void
 }) {
   const [draft, setDraft] = useState(() => draftOf(rule))
+  // The line the draft was last synced with. The list is rewritten from the
+  // server on every Move and every save, so `rule` can change under an
+  // unsaved draft; rebase it (setting state in render is React's pattern for
+  // state that follows a prop).
+  const [base, setBase] = useState(rule)
+  if (rule !== base) {
+    setBase(rule)
+    setDraft(rebased(draft, draftOf(base), draftOf(rule)))
+  }
   const [error, setError] = useState<string | null>(null)
   const [saving, setSaving] = useState(false)
   const dirty =

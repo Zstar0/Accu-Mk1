@@ -116,6 +116,7 @@ describe('EndoPrepRulesPage', () => {
       peptide(1, 'Retatrutide', 'RETA'),
       peptide(2, 'Tesamorelin', 'TESA'),
       { ...peptide(3, 'BPC-157 + TB-500', 'BLEND'), is_blend: true },
+      { ...peptide(4, 'Semaglutide', 'SEMA'), active: false },
     ])
     vi.mocked(listConsumables).mockResolvedValue([cartridge])
   })
@@ -161,8 +162,6 @@ describe('EndoPrepRulesPage', () => {
     const row = rowOf('new')
     await user.click(within(row).getByRole('combobox', { name: 'Peptide' }))
     await user.type(screen.getByPlaceholderText('Search the catalog…'), 'tesa')
-    // a blend is never offered: it can never match (spec D2)
-    expect(screen.queryByText('BPC-157 + TB-500')).not.toBeInTheDocument()
     await user.click(await screen.findByText('Tesamorelin'))
     fireEvent.change(within(row).getByLabelText('Total 1:N'), {
       target: { value: '300' },
@@ -186,6 +185,30 @@ describe('EndoPrepRulesPage', () => {
     expect(
       within(rowOf(3)).getByRole('combobox', { name: 'Peptide' })
     ).toHaveTextContent('Tesamorelin')
+  })
+
+  it('offers only active single peptides in the catalog search (spec D2)', async () => {
+    setup()
+    await screen.findByText('2 rules, 1 on trial')
+    const user = userEvent.setup()
+    await user.click(screen.getByRole('button', { name: 'Add rule' }))
+    await user.click(
+      within(rowOf('new')).getByRole('combobox', { name: 'Peptide' })
+    )
+    const search = screen.getByPlaceholderText('Search the catalog…')
+    // each search matches the excluded peptide's own text, so only the page's
+    // filter can be hiding it (a search that matched nothing proves nothing)
+    await user.type(search, 'bpc')
+    expect(await screen.findByText('No matching peptide.')).toBeInTheDocument()
+    expect(screen.queryByText('BPC-157 + TB-500')).not.toBeInTheDocument()
+    await user.clear(search)
+    await user.type(search, 'glut')
+    expect(await screen.findByText('No matching peptide.')).toBeInTheDocument()
+    expect(screen.queryByText('Semaglutide')).not.toBeInTheDocument()
+    // and the search itself works: an active single peptide is offered
+    await user.clear(search)
+    await user.type(search, 'reta')
+    expect(await screen.findByText('RETA')).toBeInTheDocument()
   })
 
   it("shows the server's 400 text on the row, then a save's warning as a chip (Review Focus 5)", async () => {
@@ -276,5 +299,44 @@ describe('EndoPrepRulesPage', () => {
         )
       ).toEqual(['2', '1'])
     )
+  })
+
+  it("rebases a row onto a colleague's change, keeping the user's own typing, so Save sends only what the user changed", async () => {
+    // A colleague moved line 2's total from 300 to 250 after this page
+    // loaded; the user's Move click brings the server's list in.
+    const colleague = { ...RETA_OVER_30, total_dilution: 250, sort_order: 0 }
+    vi.mocked(reorderEndoPrepRules).mockResolvedValue([
+      colleague,
+      { ...RETA_30, sort_order: 1 },
+    ])
+    vi.mocked(updateEndoPrepRule).mockResolvedValue({
+      rule: { ...colleague, note: 'my note' },
+      warnings: [],
+    })
+    setup()
+    await screen.findByText('2 rules, 1 on trial')
+    fireEvent.change(within(rowOf(2)).getByLabelText('Note'), {
+      target: { value: 'my note' },
+    })
+    fireEvent.click(within(rowOf(2)).getByRole('button', { name: 'Move up' }))
+    expect(reorderEndoPrepRules).toHaveBeenCalledWith([2, 1])
+    // the colleague's total shows, the user's note is still being typed
+    await waitFor(() =>
+      expect(within(rowOf(2)).getByLabelText('Total 1:N')).toHaveValue('250')
+    )
+    expect(within(rowOf(2)).getByLabelText('Note')).toHaveValue('my note')
+    // a line nobody edited stays clean
+    expect(
+      within(rowOf(1)).getByRole('button', { name: 'Save' })
+    ).toBeDisabled()
+    fireEvent.click(within(rowOf(2)).getByRole('button', { name: 'Save' }))
+    // the stale 300 is not sent back over the colleague's 250
+    expect(updateEndoPrepRule).toHaveBeenCalledWith(2, { note: 'my note' })
+    await waitFor(() =>
+      expect(
+        within(rowOf(2)).getByRole('button', { name: 'Save' })
+      ).toBeDisabled()
+    )
+    expect(within(rowOf(2)).getByLabelText('Total 1:N')).toHaveValue('250')
   })
 })
