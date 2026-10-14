@@ -497,7 +497,16 @@ def lock_items_for_update(db: Session, worksheet, item_ids) -> None:
     promote takes them (worksheets_endo_promote._plan): a promote holds one
     analysis lock at a time, takes it before it writes and commits per row,
     so there is no lock cycle, and every caller locks in the same order.
-    SQLite ignores FOR UPDATE."""
+    SQLite ignores FOR UPDATE.
+
+    The one lock order for a worksheet's rows: the worksheet row, then the
+    vial analyses in id order, then the items in id order. A request that
+    writes the worksheet row and also analyses or items takes the worksheet
+    first (main._worksheet_for_update): the endo item PATCH and the reader
+    import (their first reading pins the method), the analyst change and
+    completion (a flush writes analyses before the worksheet). Print writes
+    no analyses, and its flush writes the worksheet before the items.
+    Promote and Re-apply never write the worksheet row."""
     from worksheets_endo_promote import vial_endo_analyses  # lazy: it imports this module
 
     on_sheet = (WorksheetItem.worksheet_id == worksheet.id, WorksheetItem.id.in_(set(item_ids)))

@@ -24973,6 +24973,15 @@ class WorksheetUpdate(BaseModel):
     cartridge_type_id: Optional[int] = None
 
 
+def _worksheet_for_update(db: Session, worksheet_id: int) -> Optional["Worksheet"]:
+    """The worksheet row under SELECT ... FOR UPDATE, re-read. Taken first by
+    every request that writes the worksheet row and also analyses or items,
+    so all keep one lock order: the worksheet, then the vial analyses, then
+    the items (endo_prep_rules.lock_items_for_update). SQLite ignores FOR UPDATE."""
+    return db.execute(select(Worksheet).where(Worksheet.id == worksheet_id).with_for_update()
+                      .execution_options(populate_existing=True)).scalar_one_or_none()
+
+
 @app.put("/worksheets/{worksheet_id}")
 async def update_worksheet(
     worksheet_id: int,
@@ -24981,9 +24990,9 @@ async def update_worksheet(
     _current_user=Depends(get_current_user),
 ):
     """Update worksheet title and/or assigned analyst."""
-    ws = db.execute(
-        select(Worksheet).where(Worksheet.id == worksheet_id)
-    ).scalar_one_or_none()
+    # Worksheet first: the analyst change re-stamps analyses, and a flush
+    # writes them before the worksheet row (the lock order, _worksheet_for_update).
+    ws = _worksheet_for_update(db, worksheet_id)
     if not ws:
         raise HTTPException(404, "Worksheet not found")
 
@@ -25453,7 +25462,9 @@ async def complete_worksheet(
     current_user=Depends(get_current_user),
 ):
     """Transition a worksheet from open to completed. Records who completed it and when."""
-    ws = db.execute(select(Worksheet).where(Worksheet.id == worksheet_id)).scalar_one_or_none()
+    # Worksheet first: the release below flushes analyses before the
+    # worksheet row (the lock order, _worksheet_for_update).
+    ws = _worksheet_for_update(db, worksheet_id)
     if not ws:
         raise HTTPException(404, "Worksheet not found")
     if ws.status != "open":
@@ -25797,7 +25808,9 @@ def import_endo_reader_results(
                                  instrument_id_for_serial, parse_reading, pin_endo_method,
                                  reader_shows, reader_validity, resolve_endo_method)
 
-    ws = db.execute(select(Worksheet).where(Worksheet.id == worksheet_id)).scalar_one_or_none()
+    # Worksheet first, then each row's analysis and item (the lock order,
+    # _worksheet_for_update): a first reading pins the method on the worksheet.
+    ws = _worksheet_for_update(db, worksheet_id)
     if not ws or ws.status == "staging":
         raise HTTPException(404, "Worksheet not found")
     if ws.status == "completed":
@@ -26248,18 +26261,20 @@ async def update_worksheet_item(
     from worksheets_endo import (ENDO_ITEM_FIELDS, PREP_FINAL, PREP_FINAL_FIELDS,
                                  apply_item_endo_fields, check_item_endo_fields,
                                  resolve_endo_method)
-    ws = db.execute(select(Worksheet).where(Worksheet.id == worksheet_id)).scalar_one()
     endo_values = {f: getattr(data, f) for f in ENDO_ITEM_FIELDS if f in data.model_fields_set}
+    # Endo slice 5: with endo fields, the worksheet row, then the row's live
+    # vial analysis, then the item, under row locks and re-read (the lock
+    # order, _worksheet_for_update): a first reading pins the method on the
+    # worksheet. The status, the checks, the promoted guard and the override
+    # history below then judge the row as committed: an override never writes
+    # over a history entry a Re-apply added meanwhile, and a promote or a
+    # completion that committed meanwhile is seen. Before anything here writes.
+    ws = (_worksheet_for_update(db, worksheet_id) if endo_values else
+          db.execute(select(Worksheet).where(Worksheet.id == worksheet_id)).scalar_one())
     if endo_values:
+        lock_items_for_update(db, ws, [item.id])
         if ws.status == "completed":
             raise HTTPException(409, "Worksheet is completed")
-        # Endo slice 5: the row's live vial analysis, then the item, under
-        # row locks and re-read, as promote and Re-apply take them. The checks,
-        # the promoted guard and the override history below then judge the
-        # row as committed: an override never writes over a history entry a
-        # Re-apply added meanwhile, and a promote that committed meanwhile is
-        # seen. Before anything in this route writes.
-        lock_items_for_update(db, ws, [item.id])
         try:
             endo_values = check_item_endo_fields(db, ws, item, endo_values)
         except ValueError as exc:

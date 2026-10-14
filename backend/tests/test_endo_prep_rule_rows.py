@@ -944,7 +944,7 @@ def test_an_override_patch_locks_the_analysis_then_the_item_and_keeps_a_run_land
         "UPDATE worksheet_items SET prep_history = :h WHERE id = :id",
         {"h": json.dumps([landed]), "id": w.a.id})
     assert client.patch(w.url_a, json={"prep_total_dilution": 500}).status_code == 200
-    assert locked == ["lims_analyses", "worksheet_items"]
+    assert locked == ["worksheets", "lims_analyses", "worksheet_items"]
     db.expire_all()
     assert [(e["why"], e.get("total_dilution")) for e in w.a.prep_history] == [
         ("reapply", None), ("override", 300)]
@@ -1004,6 +1004,38 @@ def test_a_reader_import_skips_a_row_promoted_while_it_waited_on_the_lock(
     assert (r.json()["applied"], r.json()["skipped"]) == (0, [
         {"item_id": item.id, "sample_id": item.sample_id,
          "reason": "the row is promoted; its prep is final"}])
-    assert locked == ["lims_analyses", "worksheet_items"]
+    assert locked == ["worksheets", "lims_analyses", "worksheet_items"]
     db.expire_all()
     assert (item.result_reading, item.result_reader, item.ran_at) == (None, None, None)
+
+
+# --- Locking follow-up round 2: one lock order, worksheet then analysis then item
+
+def test_worksheet_writers_lock_the_worksheet_before_any_analysis_or_item(client, db, monkeypatch):
+    """The global order (lock_items_for_update): the worksheet row, then the
+    vial analyses, then the items. The endo item PATCH and the reader import
+    lock all three; the analyst change and completion, which flush analyses
+    before the worksheet, take the worksheet first too. SQLite ignores FOR
+    UPDATE; the spy shows each locking read and its order."""
+    w = _locks_world(client, db)
+    locked = _commit_lands_while_waiting(db, monkeypatch, "worksheets", "SELECT 1", {})
+    assert client.patch(w.url_a, json={"result_reading": "<0.05",
+                                       "cartridge_type_id": w.c05.id}).status_code == 200
+    assert _import(client, w.ws, _reader_line(w.b, "0.8", w.c05)).status_code == 200
+    assert client.put(f"/worksheets/{w.ws.id}", json={"assigned_analyst": 0}).status_code == 200
+    assert client.post(f"/worksheets/{w.ws.id}/complete").status_code == 200
+    every_row = ["worksheets", "lims_analyses", "worksheet_items"]
+    assert locked == [*every_row, *every_row, "worksheets", "worksheets"]
+
+
+def test_an_endo_patch_reads_the_worksheet_status_under_its_lock(client, db, monkeypatch):
+    """A side effect of the worksheet lock: a completion that commits while
+    the PATCH waits on the worksheet row is seen, so the PATCH is refused."""
+    w = _locks_world(client, db)
+    _commit_lands_while_waiting(
+        db, monkeypatch, "worksheets",
+        "UPDATE worksheets SET status = 'completed' WHERE id = :id", {"id": w.ws.id})
+    r = client.patch(w.url_a, json={"result_reading": "<0.05", "cartridge_type_id": w.c05.id})
+    assert (r.status_code, r.json()["detail"]) == (409, "Worksheet is completed")
+    db.expire_all()
+    assert (w.a.result_reading, w.a.prep_rule) == (None, None)
