@@ -2622,6 +2622,28 @@ def _run_migrations():
         "ALTER TABLE lims_analyses ADD COLUMN IF NOT EXISTS loq DOUBLE PRECISION",
         "ALTER TABLE lims_analyses ADD COLUMN IF NOT EXISTS lod DOUBLE PRECISION",
         "ALTER TABLE lims_analyses ADD COLUMN IF NOT EXISTS lod_unit TEXT",
+        # Endo slice 5 (spec 2026-10-14 section 3): the prep rules table, the
+        # same shape as models.EndoPrepRule, which is the source of truth. On
+        # a database that has no consumable_types yet (the first boot of the
+        # release that also ships v2) this fails as migration_skipped and
+        # create_all builds the table from the model. Kept above the
+        # retest_of_sample_id statement, which tests pin as the list's last.
+        """CREATE TABLE IF NOT EXISTS endo_prep_rules (
+        id                SERIAL PRIMARY KEY,
+        peptide_id        INTEGER NOT NULL REFERENCES peptides(id),
+        min_mg            DOUBLE PRECISION,
+        max_mg            DOUBLE PRECISION,
+        total_dilution    DOUBLE PRECISION,
+        step1_ratio       DOUBLE PRECISION,
+        cartridge_type_id INTEGER REFERENCES consumable_types(id),
+        status            VARCHAR(10) NOT NULL DEFAULT 'trial',
+        note              TEXT,
+        active            BOOLEAN NOT NULL DEFAULT TRUE,
+        sort_order        INTEGER NOT NULL DEFAULT 0,
+        created_at        TIMESTAMP,
+        updated_at        TIMESTAMP,
+        updated_by_id     INTEGER REFERENCES users(id) ON DELETE SET NULL
+    )""",
         # HPLC-native slice 6 (M8): links a retest's sample row back to the
         # original Mk1 row it was retested from (from signal meta
         # RetestOfSampleId). Nullable, no FK — the original may be a

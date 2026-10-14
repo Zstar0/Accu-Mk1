@@ -753,6 +753,42 @@ method_consumables = Table(
 )
 
 
+class EndoPrepRule(Base):
+    """A 2 mL endotoxin prep rule (endo slice 5, spec 2026-10-14 section 3).
+    For one catalog peptide and a weight band (weight > min_mg and <= max_mg,
+    a null bound meaning none) it sets the row's default total dilution,
+    step 1 ratio and cartridge; a null value means the standard. status is a
+    label only (D4). Never deleted: active=False retires a line. Matching and
+    the row lock read endo_prep_rules.snapshot(), never this row."""
+    __tablename__ = "endo_prep_rules"
+
+    id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
+    # No ON DELETE, as analysis_service_specs.peptide_id: a peptide that has a
+    # rule cannot be deleted.
+    peptide_id: Mapped[int] = mapped_column(ForeignKey("peptides.id"), nullable=False)
+    min_mg: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    max_mg: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    total_dilution: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    step1_ratio: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    cartridge_type_id: Mapped[Optional[int]] = mapped_column(
+        ForeignKey("consumable_types.id"), nullable=True)
+    status: Mapped[str] = mapped_column(String(10), nullable=False, default="trial",
+                                        server_default="trial")
+    note: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True,
+                                         server_default=text("true"))
+    sort_order: Mapped[int] = mapped_column(Integer, nullable=False, default=0,
+                                            server_default="0")
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow,
+                                                 onupdate=datetime.utcnow)
+    updated_by_id: Mapped[Optional[int]] = mapped_column(
+        ForeignKey("users.id", ondelete="SET NULL"), nullable=True)
+
+    def __repr__(self) -> str:
+        return f"<EndoPrepRule(id={self.id}, peptide_id={self.peptide_id})>"
+
+
 class MethodAttachment(Base):
     """Controlled-document file on a method revision (slice 3). storage='s3'
     only (R0) — via photo_storage, which is filesystem-backed in dev/tests.

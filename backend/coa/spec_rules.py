@@ -163,6 +163,39 @@ def sample_peptide_id(db: Session, parent_pk: int) -> Optional[int]:
     return ids[0] if len(ids) == 1 else None
 
 
+def sample_peptide_ids(db: Session, parent_pks: list[int]) -> dict[int, Optional[int]]:
+    """sample_peptide_id for many parents in ONE query (endo slice 5: the
+    worksheet item serializer, never one query per row). The same anchor,
+    joins and retracted filter; each row counts for every requested parent it
+    belongs to, through its own lims_sample_pk or its vial's parent, exactly
+    as the single-parent OR does. Every requested pk is a key: its one
+    distinct anchor, else None (none, or a blend). No pks, no query."""
+    from models import AnalysisService, LimsAnalysis, LimsSubSample
+
+    pks = sorted(set(parent_pks))
+    if not pks:
+        return {}
+    anchors: dict[int, set] = {pk: set() for pk in pks}
+    anchor = func.coalesce(LimsAnalysis.peptide_id, AnalysisService.peptide_id)
+    rows = db.execute(
+        select(LimsAnalysis.lims_sample_pk, LimsSubSample.parent_sample_pk, anchor)
+        .select_from(AnalysisService)
+        .join(LimsAnalysis, LimsAnalysis.analysis_service_id == AnalysisService.id)
+        .outerjoin(LimsSubSample, LimsSubSample.id == LimsAnalysis.lims_sub_sample_pk)
+        .where(
+            anchor.is_not(None),
+            LimsAnalysis.review_state != "retracted",
+            LimsAnalysis.lims_sample_pk.in_(pks) | LimsSubSample.parent_sample_pk.in_(pks),
+        )
+        .distinct()
+    ).all()
+    for host_pk, vial_parent_pk, peptide_id in rows:
+        for pk in (host_pk, vial_parent_pk):
+            if pk in anchors:
+                anchors[pk].add(peptide_id)
+    return {pk: next(iter(ids)) if len(ids) == 1 else None for pk, ids in anchors.items()}
+
+
 def evaluate(spec, result: str) -> Optional[bool]:
     """Verdict of a result string against a spec (any object with rule_kind,
     equals_value, min_value, max_value). Pure. Raises SpecRuleError whenever
