@@ -25790,8 +25790,8 @@ def import_endo_reader_results(
     that moves the cartridge of a row with a result is an override, so the
     replaced run goes to the row's history first (review I5). A POST on an
     id path, so it has no ordering concern against GET /worksheets/{worksheet_id}."""
-    from endo_prep_rules import (append_history, load_rules, lock_rows, promoted_sample_ids,
-                                 row_effective, row_facts)
+    from endo_prep_rules import (append_history, load_rules, lock_items_for_update, lock_rows,
+                                 promoted_sample_ids, row_effective, row_facts)
     from worksheets_endo import (CARTRIDGE_REFUSED, PREP_FINAL, cartridge_ids_allowed_by,
                                  check_reader_record, check_storable, endo_run_params,
                                  instrument_id_for_serial, parse_reading, pin_endo_method,
@@ -25819,9 +25819,15 @@ def import_endo_reader_results(
     allowed = cartridge_ids_allowed_by(db, method)
     run_params = method["run_parameters"] if method else None
 
+    # The rows this import would change, under row locks and re-read before
+    # any is judged or written: each live vial analysis, then the item, as
+    # promote, Re-apply and the item PATCH take them. So a promote that
+    # committed while this waited is seen, and skipped below.
+    named = {t.item_id for t in data.tests if t.item_id in endo_ids}
+    if named:
+        lock_items_for_update(db, ws, named)
     # One query for every row the import names (spec 8: a promoted row's prep is final).
-    promoted = promoted_sample_ids(
-        db, {items[t.item_id].sample_id for t in data.tests if t.item_id in endo_ids})
+    promoted = promoted_sample_ids(db, {items[i].sample_id for i in named})
 
     errors: list[str] = []
     plan: list[tuple["WorksheetItem", EndoReaderTest, str]] = []

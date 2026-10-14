@@ -986,3 +986,24 @@ def test_promote_judges_its_item_as_committed_not_as_loaded(client, db, monkeypa
     assert _results(_promote(client, w.ws, _promote_line(item))) == [
         _refused(item, worksheets_endo_promote.REASON_NO_READING)]
     assert [(p.id, p.review_state) for p in _parent_rows(db, "P-4001")] == parents
+
+
+def test_a_reader_import_skips_a_row_promoted_while_it_waited_on_the_lock(
+        client, db, monkeypatch):
+    """A promote commits while the import waits on the vial's analysis lock.
+    The import locks the analysis, then the item, before it judges any row,
+    so it skips the row as promoted and writes nothing to it."""
+    w = _world(client, db)
+    item, analysis = _row(db, w, reading=None)
+    db.commit()
+    locked = _commit_lands_while_waiting(
+        db, monkeypatch, "lims_analyses",
+        "UPDATE lims_analyses SET review_state = 'promoted' WHERE id = :id", {"id": analysis.id})
+    r = _import(client, w.ws, _reader_line(item, "0.8", w.c05, test_id="T-1"))
+    assert r.status_code == 200, r.text
+    assert (r.json()["applied"], r.json()["skipped"]) == (0, [
+        {"item_id": item.id, "sample_id": item.sample_id,
+         "reason": "the row is promoted; its prep is final"}])
+    assert locked == ["lims_analyses", "worksheet_items"]
+    db.expire_all()
+    assert (item.result_reading, item.result_reader, item.ran_at) == (None, None, None)
