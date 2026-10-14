@@ -370,6 +370,13 @@ def cartridge_sensitivities(db: Session, ids) -> dict[int, Optional[float]]:
 _PREP_FIELDS = ("prep_form", "prep_water_ml", "prep_total_dilution", "prep_steps",
                 "prep_rules_off", "prep_note")
 ENDO_ITEM_FIELDS = (*_PREP_FIELDS, "cartridge_type_id", "result_reading")
+# The fields whose change on a row with a result is an override (slice 5,
+# spec 8): the replaced run goes to the row's history first.
+_OVERRIDE_FIELDS = ("prep_total_dilution", "prep_steps", "cartridge_type_id", "prep_rules_off")
+# A typed value is allowed until the row is promoted (spec 8): then these
+# refuse a change with 409 and PREP_FINAL, and the row's prep is final.
+PREP_FINAL_FIELDS = (*_OVERRIDE_FIELDS, "prep_note")
+PREP_FINAL = "the row is promoted; its prep is final"
 # The fixed parts of the 2 mL steps that stay in code (spec 4.4): step 1's
 # standard ratio (endo_prep_rules.STEP1_RATIO mirrors it; a row's rule can
 # set its own, slice 5) and the fixed 1:2 of step 3.
@@ -481,7 +488,19 @@ def apply_item_endo_fields(db: Session, worksheet, item, values: dict,
     The reader record (lead decision 2026-10-10) is handled two ways. A typed
     reading keeps result_reader: the page flags the mismatch, and validity
     still comes from the record. Clearing the reading clears the record too,
-    and the audit row keeps the cleared record as old_reader. Callers commit."""
+    and the audit row keeps the cleared record as old_reader.
+
+    Slice 5 (spec 2026-10-14 sections 6 and 8). An override on a row that has
+    a result first keeps the run it replaces in the row's history, audited
+    as endo_prep_override. Switching the row to "no rule" drops its lock;
+    switching it back locks it at once to today's match once the sheet is
+    printed or the row has a result, so it never follows an edit the bench
+    did not see. A first reading locks the row; clearing the reading
+    releases only a lock its result took, and only before the first print.
+    Callers commit."""
+    # Lazy: endo_prep_rules imports this module.
+    from endo_prep_rules import append_history, lock_rows, release_on_clear, row_effective
+
     base = {"user_id": user_id, "worksheet_id": worksheet.id, "sample_id": item.sample_id}
 
     def audit(operation: str, old, new, **extra) -> None:
@@ -489,6 +508,15 @@ def apply_item_endo_fields(db: Session, worksheet, item, values: dict,
                         entity_id=str(item.id),
                         details={**base, "old": old, "new": new, **extra}))
 
+    # Before anything below writes: the history keeps the run as stored, its
+    # lock included (the switch to "no rule" drops it just after).
+    overridden = [f for f in _OVERRIDE_FIELDS if f in values and values[f] != getattr(item, f)]
+    if overridden and item.result_reading is not None:
+        _, effective = row_effective(db, worksheet, item)
+        append_history(item, why="override", user_id=user_id, effective=effective)
+        audit("endo_prep_override", {f: getattr(item, f) for f in overridden},
+              {f: values[f] for f in overridden})
+    rules_off_before = item.prep_rules_off
     # The prep inputs (spec 9): one row for what this PATCH changes, if anything.
     changed = [f for f in _PREP_FIELDS if f in values and values[f] != getattr(item, f)]
     if changed:
@@ -497,6 +525,11 @@ def apply_item_endo_fields(db: Session, worksheet, item, values: dict,
     for field in _PREP_FIELDS:
         if field in values:
             setattr(item, field, values[field])
+    if item.prep_rules_off != rules_off_before:
+        item.prep_rule = None
+        if not item.prep_rules_off and (worksheet.printed_at is not None
+                                        or item.result_reading is not None):
+            lock_rows(db, worksheet, [item], event="switch", user_id=user_id)
     if "cartridge_type_id" in values and values["cartridge_type_id"] != item.cartridge_type_id:
         audit("endo_cartridge_set", item.cartridge_type_id, values["cartridge_type_id"])
         item.cartridge_type_id = values["cartridge_type_id"]
@@ -505,6 +538,10 @@ def apply_item_endo_fields(db: Session, worksheet, item, values: dict,
         if new is None:
             audit("endo_reading_cleared", item.result_reading, None, old_reader=item.result_reader)
             item.result_reader = None
+            # A printed sheet keeps even a result's lock: the bench preps any
+            # rerun from that paper (spec 6).
+            if worksheet.printed_at is None:
+                release_on_clear(item)
         else:
             audit("endo_reading_set", item.result_reading, new)
         item.result_reading = new
@@ -514,3 +551,4 @@ def apply_item_endo_fields(db: Session, worksheet, item, values: dict,
         item.result_entered_by_user_id = user_id if new is not None else None
     if values.get("result_reading") is not None:
         pin_endo_method(db, worksheet, user_id)
+        lock_rows(db, worksheet, [item], event="result", user_id=user_id)

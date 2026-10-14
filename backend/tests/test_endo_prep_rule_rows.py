@@ -18,7 +18,10 @@ from auth import get_current_user
 from database import Base, get_db
 from main import app
 from models import AuditLog, EndoPrepRule, LimsAnalysis, LimsSample
-from tests.test_endo_v2_worksheets import _count_sql, _row_world, _service, _vial_item, _ws
+from tests.test_endo_v2_worksheets import (
+    _count_sql, _import, _reader_world, _row_world, _service, _vial_item, _ws,
+)
+from tests.test_endo_v2_worksheets import _line as _reader_line
 from tests.test_endo_worksheet_promote import BAD, _promote, _refused, _results, _row, _world
 from tests.test_endo_worksheet_promote import _line as _promote_line
 from tests.test_hplc_native_schema import _captured
@@ -428,3 +431,219 @@ def test_a_patch_with_the_form_and_a_floor_field_is_checked_on_the_new_form(clie
     assert (r.status_code, r.json()["detail"]) == (400, _floor(100))
     db.refresh(w.item)
     assert w.item.prep_form == "bac"
+
+
+# --- Task 4: lock events, release, override history ---------------------------
+
+def _locks_world(client, db, **line):
+    """_reader_world's open 2 mL worksheet on the active Endotoxin method
+    (vials P-3001-S01 and -S02, 10 mg declared; the 0.05 and 0.01
+    cartridges), the parent anchored to Retatrutide, and one Retatrutide
+    line for any weight, 1:300 unless `line` says otherwise."""
+    w = _reader_world(client, db)
+    pep = _peptide(db)
+    _anchor(db, "P-3001", pep)
+    w.rule = _rule(db, pep, **(line or {"total_dilution": 300}))
+    db.commit()
+    w.url_a = f"/worksheets/{w.ws.id}/items/{w.a.id}"
+    w.url_b = f"/worksheets/{w.ws.id}/items/{w.b.id}"
+    return w
+
+
+def test_every_print_locks_the_unlocked_2ml_endotoxin_rows(client, db):
+    w = _locks_world(client, db)
+    hplc, _ = _vial_item(db, w.ws, 3, _service(db, "BPC157-PURITY"), role="hplc")
+    w.b.prep_rules_off = True
+    db.commit()
+    assert client.post(f"/worksheets/{w.ws.id}/printed").status_code == 200
+    for x in (w.a, w.b, hplc):
+        db.refresh(x)
+    first = w.a.prep_rule
+    assert first == {"rule": endo_prep_rules.snapshot(w.rule), "locked_at": first["locked_at"],
+                     "locked_by": "print", "user_id": 1}
+    assert first["locked_at"].endswith("Z")
+    # A "no rule" row needs no lock; another bench's row is never ruled.
+    assert (w.b.prep_rule, hplc.prep_rule) == (None, None)
+    # Review Focus 1: the line is edited after the print, and a row is added.
+    w.rule.total_dilution = 400
+    late, _ = _vial_item(db, w.ws, 4, w.svc)
+    db.commit()
+    assert client.post(f"/worksheets/{w.ws.id}/printed").status_code == 200
+    db.refresh(w.a)
+    db.refresh(late)
+    assert w.a.prep_rule == first     # the printed row keeps the 1:300 the bench prepped
+    assert (late.prep_rule["locked_by"], late.prep_rule["rule"]["total_dilution"]) == ("print", 400)
+    items = {it["id"]: it for it in client.get(f"/worksheets/{w.ws.id}").json()["items"]}
+    assert items[w.a.id]["prep_rule"] == first
+
+
+def test_a_row_with_no_matching_line_locks_to_the_standard(client, db):
+    w = _reader_world(client, db)     # no lines at all
+    assert client.post(f"/worksheets/{w.ws.id}/printed").status_code == 200
+    db.refresh(w.a)
+    assert (w.a.prep_rule["rule"], w.a.prep_rule["locked_by"]) == (None, "print")
+
+
+def test_stock_and_completed_worksheets_never_lock(client, db):
+    w = _locks_world(client, db)
+    w.ws.endo_prep = "stock"
+    done = _ws(db, "Completed before slice 5", status="completed")
+    old, _ = _vial_item(db, done, 5, w.svc)
+    db.commit()
+    assert client.post(f"/worksheets/{w.ws.id}/printed").status_code == 200
+    assert client.patch(w.url_a, json={"result_reading": "0.8",
+                                       "cartridge_type_id": w.c05.id}).status_code == 200
+    assert _import(client, w.ws, _reader_line(w.b, "0.8", w.c05)).status_code == 200
+    assert client.post(f"/worksheets/{w.ws.id}/complete").status_code == 200
+    assert client.post(f"/worksheets/{done.id}/printed").status_code == 200
+    for x in (w.a, w.b, old):
+        db.refresh(x)
+    assert (w.a.prep_rule, w.b.prep_rule, old.prep_rule) == (None, None, None)
+
+
+def test_the_first_reading_locks_its_row_and_clearing_releases_only_a_result_lock(client, db):
+    w = _locks_world(client, db)
+    assert client.patch(w.url_a, json={"result_reading": "<0.05",
+                                       "cartridge_type_id": w.c05.id}).status_code == 200
+    db.refresh(w.a)
+    db.refresh(w.b)
+    first = w.a.prep_rule
+    assert (first["locked_by"], first["rule"]["id"]) == ("result", w.rule.id)
+    assert w.b.prep_rule is None
+    w.rule.total_dilution = 400
+    db.commit()
+    assert client.patch(w.url_a, json={"result_reading": "0.8"}).status_code == 200
+    db.refresh(w.a)
+    assert w.a.prep_rule == first     # a later reading keeps the first result's lock
+    # Cleared, a result lock is released: the row follows today's rules again.
+    assert client.patch(w.url_a, json={"result_reading": None}).status_code == 200
+    db.refresh(w.a)
+    assert w.a.prep_rule is None
+    # Once the sheet is printed nothing is released: the bench preps any rerun
+    # from that paper. Row b takes a result lock before the print, row a a print lock.
+    assert client.patch(w.url_b, json={"result_reading": "0.8",
+                                       "cartridge_type_id": w.c05.id}).status_code == 200
+    assert client.post(f"/worksheets/{w.ws.id}/printed").status_code == 200
+    for url in (w.url_a, w.url_b):
+        for payload in ({"result_reading": "0.8", "cartridge_type_id": w.c05.id},
+                        {"result_reading": None}):
+            assert client.patch(url, json=payload).status_code == 200
+    db.refresh(w.a)
+    db.refresh(w.b)
+    assert (w.a.prep_rule["locked_by"], w.a.prep_rule["rule"]["total_dilution"]) == ("print", 400)
+    assert (w.b.prep_rule["locked_by"], w.b.prep_rule["rule"]["total_dilution"]) == ("result", 400)
+
+
+def test_a_reader_import_locks_the_rows_it_gave_a_reading(client, db):
+    w = _locks_world(client, db)
+    r = _import(client, w.ws, _reader_line(w.a, "<0.05", w.c05))
+    assert r.status_code == 200, r.text
+    items = {it["id"]: it for it in r.json()["items"]}
+    assert items[w.a.id]["prep_rule"]["locked_by"] == "result"
+    assert items[w.a.id]["prep_rule"]["rule"] == endo_prep_rules.snapshot(w.rule)
+    assert items[w.b.id]["prep_rule"] is None
+
+
+def test_completion_locks_every_row_not_locked_yet(client, db):
+    w = _locks_world(client, db)
+    assert client.patch(w.url_a, json={"result_reading": "<0.05",
+                                       "cartridge_type_id": w.c05.id}).status_code == 200
+    assert client.post(f"/worksheets/{w.ws.id}/complete").status_code == 200
+    db.refresh(w.a)
+    db.refresh(w.b)
+    assert (w.a.prep_rule["locked_by"], w.b.prep_rule["locked_by"]) == ("result", "complete")
+
+
+def test_an_override_on_a_row_with_a_result_keeps_the_replaced_run(client, db):
+    w = _locks_world(client, db)
+    assert client.patch(w.url_a, json={"result_reading": "<0.05",
+                                       "cartridge_type_id": w.c05.id}).status_code == 200
+    db.refresh(w.a)
+    lock = w.a.prep_rule
+    run = {"by": 1, "why": "override", "lock": lock, "result_reading": "<0.05",
+           "reader_test_id": None, "result_entered_at": w.a.result_entered_at.isoformat() + "Z",
+           "step1_ratio": 10, "cartridge_type_id": w.c05.id}
+    assert client.patch(w.url_a, json={"prep_total_dilution": 500}).status_code == 200
+    db.refresh(w.a)
+    [first] = w.a.prep_history
+    assert first == {**run, "at": first["at"], "total_dilution": 300}
+    assert (w.a.prep_total_dilution, w.a.prep_rule) == (500, lock)
+    # The switch is an override too: the typed 1:500 run is kept, and "no rule" drops the lock.
+    assert client.patch(w.url_a, json={"prep_rules_off": True}).status_code == 200
+    db.refresh(w.a)
+    second = w.a.prep_history[1]
+    assert second == {**run, "at": second["at"], "total_dilution": 500}
+    assert (w.a.prep_rules_off, w.a.prep_rule) == (True, None)
+    base = {"user_id": 1, "worksheet_id": w.ws.id, "sample_id": w.a.sample_id}
+    assert [a.details for a in db.query(AuditLog).filter(
+        AuditLog.operation == "endo_prep_override").order_by(AuditLog.id)] == [
+        {**base, "old": {"prep_total_dilution": None}, "new": {"prep_total_dilution": 500}},
+        {**base, "old": {"prep_rules_off": False}, "new": {"prep_rules_off": True}},
+    ]
+    # Without a result, a typed change is no override: no history, no override audit.
+    assert client.patch(w.url_b, json={"prep_total_dilution": 500}).status_code == 200
+    db.refresh(w.b)
+    assert w.b.prep_history is None
+    assert db.query(AuditLog).filter(AuditLog.operation == "endo_prep_override").count() == 2
+
+
+def test_switching_back_to_rules_locks_at_once_once_printed_or_read(client, db):
+    w = _locks_world(client, db)
+    assert client.post(f"/worksheets/{w.ws.id}/printed").status_code == 200
+    assert client.patch(w.url_a, json={"prep_rules_off": True}).status_code == 200
+    db.refresh(w.a)
+    assert (w.a.prep_rules_off, w.a.prep_rule) == (True, None)
+    w.rule.total_dilution = 400       # edited while the row was on "no rule"
+    db.commit()
+    assert client.patch(w.url_a, json={"prep_rules_off": False}).status_code == 200
+    db.refresh(w.a)
+    assert (w.a.prep_rule["locked_by"], w.a.prep_rule["rule"]["total_dilution"]) == ("switch", 400)
+    # On a sheet not printed yet: a row with a result locks, a row without one follows today's rules.
+    fresh = _ws(db, "Not printed")
+    read, _ = _vial_item(db, fresh, 5, w.svc)
+    unread, _ = _vial_item(db, fresh, 6, w.svc)
+    read.result_reading, read.cartridge_type_id = "0.8", w.c05.id
+    read.prep_rules_off = unread.prep_rules_off = True
+    db.commit()
+    for row in (read, unread):
+        assert client.patch(f"/worksheets/{fresh.id}/items/{row.id}",
+                            json={"prep_rules_off": False}).status_code == 200
+        db.refresh(row)
+    assert read.prep_rule["locked_by"] == "switch"
+    assert (unread.prep_rules_off, unread.prep_rule) == (False, None)
+
+
+@pytest.mark.parametrize("field, value", [
+    ("prep_total_dilution", 500), ("prep_steps", [[20, 5], None, None]),
+    ("cartridge_type_id", "c01"), ("prep_rules_off", True), ("prep_note", "special: 1:500"),
+])
+def test_a_promoted_rows_prep_is_final(client, db, field, value):
+    """Spec 8 (ruling on deviation B4): a typed value is allowed until the row is promoted."""
+    w = _world(client, db)
+    done, _ = _row(db, w, "P-4001-S01", state="promoted")
+    live, _ = _row(db, w, "P-4002-S01")
+    db.commit()
+    body = {field: w.c01.id if value == "c01" else value}
+    before = getattr(done, field)
+    r = client.patch(f"/worksheets/{w.ws.id}/items/{done.id}", json=body)
+    assert (r.status_code, r.json()["detail"]) == (409, "the row is promoted; its prep is final")
+    db.refresh(done)
+    assert getattr(done, field) == before
+    # The same change saves on a row that is not promoted.
+    assert client.patch(f"/worksheets/{w.ws.id}/items/{live.id}", json=body).status_code == 200
+    db.refresh(live)
+    assert getattr(live, field) == body[field]
+
+
+def test_a_promoted_row_still_takes_readings_and_other_fields(client, db):
+    w = _world(client, db)
+    done, _ = _row(db, w, "P-4001-S01", state="promoted")
+    db.commit()
+    url = f"/worksheets/{w.ws.id}/items/{done.id}"
+    for payload in ({"result_reading": "0.8"}, {"made": True}, {"prep_water_ml": 2.5},
+                    # Sent as stored: no change, so no refusal.
+                    {"cartridge_type_id": w.c05.id, "prep_note": None}):
+        assert client.patch(url, json=payload).status_code == 200, payload
+    db.refresh(done)
+    assert (done.result_reading, done.prep_water_ml, done.cartridge_type_id) == ("0.8", 2.5, w.c05.id)
+    assert done.made_at is not None

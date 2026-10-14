@@ -11,6 +11,7 @@ identical answers.
 worksheets_endo imports this module, so this module imports worksheets_endo
 (and main) only inside functions."""
 import math
+from datetime import datetime, timezone
 from typing import Optional
 
 from sqlalchemy import select
@@ -335,3 +336,78 @@ def row_effective(db: Session, worksheet, item, *, rules: Optional[list] = None,
         std_total = endo_run_params(
             method["run_parameters"] if method else None)["std_total_dilution"]
     return rule, effective_values(row, rule, std_total=std_total)
+
+
+# --- Locks, release and history (spec sections 6 to 8) ----------------------
+
+def _iso_now() -> str:
+    """Naive UTC with a Z, as the reader import stamps imported_at."""
+    return datetime.now(timezone.utc).replace(tzinfo=None).isoformat() + "Z"
+
+
+def _new_lock(rule: Optional[dict], event: str, user_id: Optional[int]) -> dict:
+    """A lock snapshot (spec 6). The line is copied, so a later edit or
+    deactivation of it never reaches the row; None locks to the standard."""
+    return {"rule": dict(rule) if rule is not None else None, "locked_at": _iso_now(),
+            "locked_by": event, "user_id": user_id}
+
+
+def lock_rows(db: Session, worksheet, items, *, event: str, user_id: Optional[int]) -> int:
+    """Lock every endotoxin row of `items` that is not locked yet and not
+    switched to "no rule" (spec 6) to today's match, or to the standard when
+    no line matches. Only on an open 2 mL worksheet: a stock one is never
+    ruled, and nothing on a completed one changes (the complete route locks
+    before it completes). Returns how many rows it locked. Does not commit."""
+    if event not in LOCK_EVENTS:
+        raise ValueError(f"unknown lock event {event!r}")
+    if worksheet.endo_prep != "2ml" or worksheet.status == "completed":
+        return 0
+    todo = [it for it in items if it.prep_rule is None and not it.prep_rules_off]
+    facts = row_facts(db, worksheet, todo) if todo else {}
+    if not facts:
+        return 0
+    rules = load_rules(db)
+    for it in todo:
+        if it.id in facts:
+            it.prep_rule = _new_lock(match_rule(rules, endo_prep=worksheet.endo_prep,
+                                                rules_off=False, **facts[it.id]),
+                                     event, user_id)
+    return len(facts)
+
+
+def release_on_clear(item) -> None:
+    """A cleared reading releases a lock its result took, so the row follows
+    today's rules again (spec 6). A lock from a print, completion, Re-apply
+    or the switch stays: the bench prepped from that paper."""
+    if (item.prep_rule or {}).get("locked_by") == "result":
+        item.prep_rule = None
+
+
+def append_history(item, *, why: str, user_id: Optional[int], effective: dict) -> None:
+    """Keep the row's current run before a Re-apply or an override replaces
+    it (spec 7): stored facts only, from which the row's history view
+    recomputes EU per vial and the verdict. `effective` is
+    effective_values() as the row stands. A new list every time: the JSON
+    column misses in-place edits."""
+    entry = {
+        "at": _iso_now(), "by": user_id, "why": why, "lock": item.prep_rule,
+        "total_dilution": effective["total_dilution"],
+        "step1_ratio": effective["step1_ratio"],
+        "cartridge_type_id": effective["cartridge_type_id"],
+        "result_reading": item.result_reading,
+        "reader_test_id": (item.result_reader or {}).get("test_id"),
+        "result_entered_at": (item.result_entered_at.isoformat() + "Z"
+                              if item.result_entered_at else None),
+    }
+    item.prep_history = [*(item.prep_history or []), entry]
+
+
+def promoted_sample_ids(db: Session, sample_ids) -> set[str]:
+    """The rows (by sample id) whose vial's live endotoxin analysis is
+    promoted: slice 3's promoted state, read through
+    worksheets_endo_promote.vial_endo_analyses in one query. A promoted
+    row's prep is final (spec 8) and Re-apply never moves it (spec 7)."""
+    from worksheets_endo_promote import vial_endo_analyses  # lazy: it imports this module
+
+    return {sid for sid, pairs in vial_endo_analyses(db, set(sample_ids)).items()
+            if any(analysis.review_state == "promoted" for analysis, _svc in pairs)}

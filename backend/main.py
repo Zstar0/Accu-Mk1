@@ -25458,6 +25458,13 @@ async def complete_worksheet(
         raise HTTPException(404, "Worksheet not found")
     if ws.status != "open":
         raise HTTPException(400, f"Worksheet is already {ws.status}")
+    # Endo slice 5 (spec 2026-10-14 section 6): completion locks every 2 mL
+    # endotoxin row not locked yet, while the worksheet is still open; after
+    # this nothing on it changes.
+    from endo_prep_rules import lock_rows
+    lock_rows(db, ws, db.execute(select(WorksheetItem).where(
+        WorksheetItem.worksheet_id == ws.id)).scalars().all(),
+        event="complete", user_id=current_user.id)
     ws.status = "completed"
     ws.completed_by = current_user.id
     ws.completed_at = datetime.utcnow()
@@ -25711,6 +25718,13 @@ def record_worksheet_printed(
     # worksheet's endo method revision (a no-op once pinned or unresolvable).
     from worksheets_endo import pin_endo_method
     pin_endo_method(db, ws, _current_user.id)
+    # Endo slice 5 (spec 2026-10-14 section 6): every print locks the rule of
+    # each 2 mL endotoxin row not locked yet, rows added since the last print
+    # included, so a later rule edit never moves what the bench prepped.
+    from endo_prep_rules import lock_rows
+    lock_rows(db, ws, db.execute(select(WorksheetItem).where(
+        WorksheetItem.worksheet_id == ws.id)).scalars().all(),
+        event="print", user_id=_current_user.id)
     db.add(AuditLog(
         operation="worksheet_printed",
         entity_type="worksheet",
@@ -25869,6 +25883,9 @@ def import_endo_reader_results(
         item.cartridge_type_id = t.cartridge_type_id
         _apply_bench_ticks(db, ws.id, item, made=None, ran=True, user_id=user_id,
                            instrument_id=instrument_id_for_serial(db, t.record.get("reader")))
+    # Endo slice 5 (spec 6): a reading locks its row's rule, as a typed one does.
+    from endo_prep_rules import lock_rows
+    lock_rows(db, ws, [item for item, _t, _reading in plan], event="result", user_id=user_id)
     db.commit()
     return {"applied": len(plan), "items": _serialize_worksheets(db, [ws])[0]["items"],
             "endo_method": method}
@@ -26116,8 +26133,10 @@ async def update_worksheet_item(
 
     # Endo v2 row fields, validated before anything below writes. A completed
     # worksheet refuses them (409); the older fields keep today's behaviour.
-    from worksheets_endo import (ENDO_ITEM_FIELDS, apply_item_endo_fields,
-                                 check_item_endo_fields, resolve_endo_method)
+    from endo_prep_rules import promoted_sample_ids
+    from worksheets_endo import (ENDO_ITEM_FIELDS, PREP_FINAL, PREP_FINAL_FIELDS,
+                                 apply_item_endo_fields, check_item_endo_fields,
+                                 resolve_endo_method)
     ws = db.execute(select(Worksheet).where(Worksheet.id == worksheet_id)).scalar_one()
     endo_values = {f: getattr(data, f) for f in ENDO_ITEM_FIELDS if f in data.model_fields_set}
     if endo_values:
@@ -26127,6 +26146,12 @@ async def update_worksheet_item(
             endo_values = check_item_endo_fields(db, ws, item, endo_values)
         except ValueError as exc:
             raise HTTPException(400, str(exc))
+        # Endo slice 5 (spec 8): a promoted row's prep is final. A value sent
+        # as stored is no change; readings and the other fields keep today's
+        # behaviour. One query, and only when a final field would change.
+        if (any(f in endo_values and endo_values[f] != getattr(item, f) for f in PREP_FINAL_FIELDS)
+                and promoted_sample_ids(db, [item.sample_id])):
+            raise HTTPException(409, PREP_FINAL)
 
     resolved_method = None
     if data.instrument_uid is not None:
