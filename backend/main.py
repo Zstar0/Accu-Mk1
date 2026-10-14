@@ -26238,7 +26238,7 @@ async def update_worksheet_item(
 
     # Endo v2 row fields, validated before anything below writes. A completed
     # worksheet refuses them (409); the older fields keep today's behaviour.
-    from endo_prep_rules import promoted_sample_ids
+    from endo_prep_rules import lock_items_for_update, promoted_sample_ids
     from worksheets_endo import (ENDO_ITEM_FIELDS, PREP_FINAL, PREP_FINAL_FIELDS,
                                  apply_item_endo_fields, check_item_endo_fields,
                                  resolve_endo_method)
@@ -26247,6 +26247,13 @@ async def update_worksheet_item(
     if endo_values:
         if ws.status == "completed":
             raise HTTPException(409, "Worksheet is completed")
+        # Endo slice 5: the row's live vial analysis, then the item, under
+        # row locks and re-read, as promote and Re-apply take them. The checks,
+        # the promoted guard and the override history below then judge the
+        # row as committed: an override never writes over a history entry a
+        # Re-apply added meanwhile, and a promote that committed meanwhile is
+        # seen. Before anything in this route writes.
+        lock_items_for_update(db, ws, [item.id])
         try:
             endo_values = check_item_endo_fields(db, ws, item, endo_values)
         except ValueError as exc:

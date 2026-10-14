@@ -487,15 +487,17 @@ def reapply_candidates(db: Session, worksheet) -> list[dict]:
             for it, reason, new in rows if reason is None]
 
 
-def _lock_reapply_rows(db: Session, worksheet, item_ids) -> None:
-    """Lock the sent rows before Re-apply judges them (review I-1): each
-    row's live vial endotoxin analysis, then the worksheet item, each one
-    SELECT ... FOR UPDATE in id order and re-read, so the judge sees what a
-    request holding the lock committed. Analyses first, as promote takes
-    them (worksheets_endo_promote._plan): a promote holds one analysis lock
-    at a time, takes it before it writes and commits per row, so there is no
-    lock cycle, and two Re-applies lock in the same order. SQLite ignores
-    FOR UPDATE."""
+def lock_items_for_update(db: Session, worksheet, item_ids) -> None:
+    """Lock rows of `worksheet` before a write judges them: Re-apply's sent
+    rows (review I-1) and the item PATCH's row when it carries endo fields
+    (Task 4 locking follow-up). Each row's live vial endotoxin analysis,
+    then the worksheet item, each one SELECT ... FOR UPDATE in id order and
+    re-read, so the judge sees what a request holding the lock committed. A
+    row with no live analysis locks only its item. Analyses first, as
+    promote takes them (worksheets_endo_promote._plan): a promote holds one
+    analysis lock at a time, takes it before it writes and commits per row,
+    so there is no lock cycle, and every caller locks in the same order.
+    SQLite ignores FOR UPDATE."""
     from worksheets_endo_promote import vial_endo_analyses  # lazy: it imports this module
 
     on_sheet = (WorksheetItem.worksheet_id == worksheet.id, WorksheetItem.id.in_(set(item_ids)))
@@ -524,7 +526,7 @@ def apply_reapply(db: Session, worksheet, item_ids: list[int], current_user) -> 
     one waited is seen. Does not commit."""
     from worksheets_endo import endo_run_params, resolve_endo_method  # lazy: it imports this module
 
-    _lock_reapply_rows(db, worksheet, item_ids)
+    lock_items_for_update(db, worksheet, item_ids)
     # Completion takes no row lock, so the status is a plain re-read.
     db.refresh(worksheet)
     found, rules, facts = _reapply_rows(db, worksheet)

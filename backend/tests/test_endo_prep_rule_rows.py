@@ -15,6 +15,7 @@ from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import StaticPool
 
 import endo_prep_rules
+import worksheets_endo_promote
 from auth import get_current_user
 from database import Base, get_db
 from main import app
@@ -23,7 +24,9 @@ from tests.test_endo_v2_worksheets import (
     _count_sql, _import, _reader_world, _row_world, _service, _vial_item, _ws,
 )
 from tests.test_endo_v2_worksheets import _line as _reader_line
-from tests.test_endo_worksheet_promote import BAD, _promote, _refused, _results, _row, _world
+from tests.test_endo_worksheet_promote import (
+    BAD, _parent_rows, _promote, _refused, _results, _row, _world,
+)
 from tests.test_endo_worksheet_promote import _line as _promote_line
 from tests.test_hplc_native_schema import _captured
 from tests.test_spec_rules import _mk_identity_service, _mk_peptide
@@ -922,3 +925,64 @@ def test_a_second_reapply_that_waited_on_the_first_finds_nothing_to_move(client,
     db.expire_all()
     assert (m.item.prep_rule, m.item.prep_history) == (first, None)
     assert db.query(AuditLog).filter(AuditLog.operation == "endo_prep_rule_reapplied").count() == 0
+
+
+# --- Task 4 locking follow-up: the item PATCH and promote under row locks -----
+
+def test_an_override_patch_locks_the_analysis_then_the_item_and_keeps_a_run_landed_meanwhile(
+        client, db, monkeypatch):
+    """Gap (a): a Re-apply commits a history entry while the override PATCH
+    waits on the row's locks. The PATCH locks the live vial analysis, then
+    the item, and re-reads the item, so it appends to that history, never
+    over it."""
+    w = _locks_world(client, db)
+    assert client.patch(w.url_a, json={"result_reading": "<0.05",
+                                       "cartridge_type_id": w.c05.id}).status_code == 200
+    landed = {"why": "reapply", "at": "2026-10-14T09:00:00Z"}
+    locked = _commit_lands_while_waiting(
+        db, monkeypatch, "worksheet_items",
+        "UPDATE worksheet_items SET prep_history = :h WHERE id = :id",
+        {"h": json.dumps([landed]), "id": w.a.id})
+    assert client.patch(w.url_a, json={"prep_total_dilution": 500}).status_code == 200
+    assert locked == ["lims_analyses", "worksheet_items"]
+    db.expire_all()
+    assert [(e["why"], e.get("total_dilution")) for e in w.a.prep_history] == [
+        ("reapply", None), ("override", 300)]
+
+
+def test_a_patch_judges_the_promoted_guard_on_the_locked_analysis(client, db, monkeypatch):
+    """Gap (b): a promote commits while the PATCH waits on the vial's
+    analysis lock. The guard reads the re-read analysis: 409, nothing saved."""
+    w = _world(client, db)
+    item, analysis = _row(db, w)
+    db.commit()
+    _commit_lands_while_waiting(
+        db, monkeypatch, "lims_analyses",
+        "UPDATE lims_analyses SET review_state = 'promoted' WHERE id = :id", {"id": analysis.id})
+    r = client.patch(f"/worksheets/{w.ws.id}/items/{item.id}", json={"prep_total_dilution": 500})
+    assert (r.status_code, r.json()["detail"]) == (409, "the row is promoted; its prep is final")
+    db.expire_all()
+    assert (item.prep_total_dilution, item.prep_history) == (None, None)
+    assert db.query(AuditLog).filter(AuditLog.operation == "endo_prep_override").count() == 0
+
+
+def test_promote_judges_its_item_as_committed_not_as_loaded(client, db, monkeypatch):
+    """A PATCH that cleared the reading commits between promote's batched
+    load and its _plan. _plan re-reads the item after the analysis lock, so
+    the row is refused for no reading and the parent is untouched."""
+    w = _world(client, db)
+    item, _ = _row(db, w)
+    db.commit()
+    parents = [(p.id, p.review_state) for p in _parent_rows(db, "P-4001")]
+    real_plan = worksheets_endo_promote._plan
+
+    def cleared_meanwhile(db_, *args):
+        # Raw SQL leaves the session's loaded copy stale; a commit here would expire it.
+        db_.execute(text("UPDATE worksheet_items SET result_reading = NULL WHERE id = :id"),
+                    {"id": item.id})
+        return real_plan(db_, *args)
+
+    monkeypatch.setattr(worksheets_endo_promote, "_plan", cleared_meanwhile)
+    assert _results(_promote(client, w.ws, _promote_line(item))) == [
+        _refused(item, worksheets_endo_promote.REASON_NO_READING)]
+    assert [(p.id, p.review_state) for p in _parent_rows(db, "P-4001")] == parents

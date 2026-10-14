@@ -259,6 +259,10 @@ def _plan(db: Session, worksheet, item, row: EndoPromoteRowIn, ctx) -> dict:
     # parent. Both worksheet requests lock the vial first: no new deadlock.
     # SQLite ignores FOR UPDATE.
     db.refresh(analysis, with_for_update=True)
+    # The item too, read after that lock (Task 4 locking follow-up): the item
+    # PATCH and Re-apply take the analysis lock before they write the item,
+    # so this reads the row as committed, never as the batch loaded it.
+    db.refresh(item)
     if svc.origin != "mk1" or svc.keyword != NATIVE_ENDO_KEYWORD:
         raise _Refused(REASON_NOT_NATIVE)
     if analysis.review_state == "promoted":
