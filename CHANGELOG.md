@@ -1,5 +1,10 @@
 # Changelog
 
+## v1.48.0 - 2026-10-14
+
+### Planning boards: pull items out of frames
+- **Pull an item through its frame edge to pop it out.** Drag it against the edge and it leans toward the pointer; pull about 50 px past the edge and it pops out of the frame and follows the mouse. Let go earlier and it springs back inside. The side panel's Remove from frame button still works, and dropping an item into a frame still adopts it.
+
 ## v1.47.1 - 2026-10-13
 
 ### Agents can read lab data without a switch
