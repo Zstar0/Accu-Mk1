@@ -4274,8 +4274,9 @@ async def update_endo_prep_rule(rule_id: int, data: EndoPrepRulePatch,
                                 db: Session = Depends(get_db),
                                 current_user=Depends(get_current_user)):
     """Edit or (de)activate a line; there is no delete. Only the fields sent
-    change. The checks run on the line as it will be stored, and a save that
-    changes nothing writes no audit row."""
+    change. The checks run on the line as it will be stored (every check when
+    the line is turned back on), and a save that changes nothing writes no
+    audit row."""
     from endo_prep_rules import check_rule, snapshot
     rule = db.get(EndoPrepRule, rule_id)
     if rule is None:
@@ -4284,8 +4285,11 @@ async def update_endo_prep_rule(rule_id: int, data: EndoPrepRulePatch,
     if "note" in fields:
         fields["note"] = _blank_to_none(fields["note"])
     old = snapshot(rule)
+    # Turning a line on again re-checks every field: a cartridge retired or a
+    # standard raised while it was off must not slip back into the matcher.
+    sent = set(old) if fields.get("active") is True and not old["active"] else fields
     try:
-        warnings = check_rule(db, {**old, **fields}, fields, rule_id=rule_id)
+        warnings = check_rule(db, {**old, **fields}, sent, rule_id=rule_id)
     except ValueError as e:
         raise HTTPException(400, str(e))
     for name, value in fields.items():

@@ -286,6 +286,62 @@ def test_a_line_whose_cartridge_was_retired_can_still_be_deactivated(client, db,
              f"cartridge {c01.id} is not an active endotoxin cartridge")
 
 
+def test_reactivating_a_line_whose_cartridge_was_retired_is_refused(client, db, reta):
+    c01 = _cartridge(db, "Endosafe 0.01", 0.01)
+    db.commit()
+    rid = _post(client, peptide_id=reta.id, cartridge_type_id=c01.id).json()["rule"]["id"]
+    client.patch(f"/endo-prep-rules/{rid}", json={"active": False})
+    c01.active = False
+    db.commit()
+    _refused(client.patch(f"/endo-prep-rules/{rid}", json={"active": True}),
+             f"cartridge {c01.id} is not an active endotoxin cartridge")
+    assert db.get(EndoPrepRule, rid).active is False
+    # Clearing the cartridge in the same request makes the line valid again.
+    res = client.patch(f"/endo-prep-rules/{rid}", json={"active": True, "cartridge_type_id": None})
+    assert res.status_code == 200 and res.json()["rule"]["active"] is True
+
+
+def test_reactivating_a_line_that_no_longer_passes_the_other_checks_is_refused(client, db, reta):
+    # Rows a past standard allowed: 1:130 needs 1:260, above today's 1:250.
+    for values, detail in [
+        ({"step1_ratio": 130},
+         "step1_ratio 1:130 needs a total of at least 1:260, above the standard 1:250; "
+         "set total_dilution too"),
+        ({"total_dilution": 15},
+         "total_dilution 1:15 is below 2 x the step 1 ratio 1:10, so step 2 cannot be made"),
+        ({"min_mg": 30, "max_mg": 30}, "min_mg must be below max_mg"),
+        ({"total_dilution": 0}, "total_dilution must be greater than zero"),
+        ({"step1_ratio": 0.5}, "step1_ratio must be at least 1"),
+    ]:
+        stale = EndoPrepRule(peptide_id=reta.id, active=False, sort_order=0, **values)
+        db.add(stale)
+        db.commit()
+        _refused(client.patch(f"/endo-prep-rules/{stale.id}", json={"active": True}), detail)
+        assert db.get(EndoPrepRule, stale.id).active is False
+        # Still inactive, such a line can be re-noted.
+        assert client.patch(f"/endo-prep-rules/{stale.id}",
+                            json={"note": "old"}).status_code == 200
+
+
+def test_reactivating_a_valid_line_saves_with_the_warnings(client, db, reta):
+    c05 = _cartridge(db, "Endosafe 0.05", 0.05)
+    c01 = _cartridge(db, "Endosafe 0.01", 0.01)
+    _method(client, db, "Endotoxin", _service(db), [(c05, True)])
+    e = _post(client, peptide_id=reta.id, max_mg=10, cartridge_type_id=c01.id).json()["rule"]["id"]
+    f = _post(client, peptide_id=reta.id, total_dilution=300).json()["rule"]["id"]
+    client.patch(f"/endo-prep-rules/{e}", json={"active": False})
+    res = client.patch(f"/endo-prep-rules/{e}", json={"active": True})
+    assert res.status_code == 200 and res.json()["rule"]["active"] is True
+    assert res.json()["warnings"] == [
+        f"overlaps rule {f} (any weight) {OVERLAP_RULE}",
+        "cartridge 'Endosafe 0.01' is not allowed by the active method 'Endotoxin' rev 1; "
+        "its rows keep their usual cartridge"]
+    # An already-active line sent active=true again is no reactivation: only its own field checks run.
+    c01.active = False
+    db.commit()
+    assert client.patch(f"/endo-prep-rules/{e}", json={"active": True}).status_code == 200
+
+
 # --- audit and reorder -------------------------------------------------------------
 
 
@@ -307,6 +363,12 @@ def test_create_and_update_are_audited_with_old_and_new(client, db, reta):
         "user_id": 1, "old": {k: second[k] for k in SNAPSHOT_KEYS},
         "new": {**{k: second[k] for k in SNAPSHOT_KEYS}, "total_dilution": 350.0}}
     assert db.get(EndoPrepRule, second["id"]).updated_by_id == 1
+
+    # Turning a line off is an update too: one row, old active and new inactive.
+    client.patch(f"/endo-prep-rules/{first['id']}", json={"active": False})
+    off = _audits(db, "endo_prep_rule_updated")[-1]
+    assert (len(_audits(db, "endo_prep_rule_updated")), off.entity_id) == (2, str(first["id"]))
+    assert (off.details["old"]["active"], off.details["new"]["active"]) == (True, False)
 
 
 def test_reorder_sets_the_list_order_and_needs_every_rule_once(client, db, reta):
