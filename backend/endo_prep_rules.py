@@ -18,7 +18,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from coa.spec_rules import sample_peptide_ids
-from models import EndoPrepRule, LimsSubSample
+from models import AuditLog, EndoPrepRule, LimsSubSample, WorksheetItem
 
 # Step 1's standard Tris ratio 1:N. Mirrors src/lib/endo-prep-2ml.ts
 # STEP1_RATIO; tests/test_endo_prep_rules.py pins it to
@@ -411,3 +411,124 @@ def promoted_sample_ids(db: Session, sample_ids) -> set[str]:
 
     return {sid for sid, pairs in vial_endo_analyses(db, set(sample_ids)).items()
             if any(analysis.review_state == "promoted" for analysis, _svc in pairs)}
+
+
+# --- Re-apply (spec section 7) ------------------------------------------------
+
+# Why Re-apply leaves a row as it is; the dialog shows them as they are. A
+# promoted row answers worksheets_endo_promote.REASON_PROMOTED ("already promoted").
+REAPPLY_NOT_ON_WORKSHEET = "not on this worksheet"
+REAPPLY_COMPLETED = "the worksheet is completed"
+REAPPLY_STOCK = "prep rules are for 2 mL worksheets"
+REAPPLY_RULES_OFF = "the row is set to no rule"
+REAPPLY_NOT_LOCKED = "the row is not locked; it already follows today's rules"
+REAPPLY_UNCHANGED = "nothing to re-apply: the row already matches today's rule"
+
+
+def _moves(item, old: Optional[dict], new: Optional[dict]) -> bool:
+    """Re-apply would change the row (spec 7, D6): another line, a line
+    against none, or another value on a field the row does not type. A
+    typed value is never touched, and a band, status, note or order edit
+    alone changes nothing."""
+    old, new = old or {}, new or {}
+    typed = _typed_values(item)
+    return old.get("id") != new.get("id") or any(
+        typed[f] is None and old.get(f) != new.get(f) for f in _VALUE_FIELDS)
+
+
+def _reapply_rows(db: Session, worksheet) -> tuple[list[tuple], list[dict], dict[int, dict]]:
+    """Every row of the worksheet, in bench order, as (item, reason, line):
+    why Re-apply leaves it (None: it qualifies) and the line that matches it
+    today (None: the standard). Spec 7's conditions, judged alike by the
+    preview and the apply. The row's old line is row_rule's, so a bac row,
+    never ruled even when locked (preflight F2, A.0 item 8), reads none
+    against today's none and is never listed; nor is a row of another bench.
+    Also returns the lines and the locked rows' facts it read, which
+    apply_reapply hands to row_effective. A fixed number of queries whatever
+    the row count."""
+    from worksheets_endo_promote import REASON_PROMOTED  # lazy: it imports this module
+
+    items = db.execute(select(WorksheetItem).where(WorksheetItem.worksheet_id == worksheet.id)
+                       .order_by(WorksheetItem.sort_order, WorksheetItem.id)).scalars().all()
+    if worksheet.status == "completed":
+        return [(it, REAPPLY_COMPLETED, None) for it in items], [], {}
+    if worksheet.endo_prep != "2ml":
+        return [(it, REAPPLY_STOCK, None) for it in items], [], {}
+    locked = [it for it in items if it.prep_rule is not None and not it.prep_rules_off]
+    promoted = promoted_sample_ids(db, {it.sample_id for it in locked})
+    facts = row_facts(db, worksheet, locked)
+    rules = load_rules(db) if locked else []
+    out = []
+    for it in items:
+        new = None
+        if it.prep_rules_off:
+            reason = REAPPLY_RULES_OFF
+        elif it.prep_rule is None:
+            reason = REAPPLY_NOT_LOCKED
+        elif it.sample_id in promoted:
+            reason = REASON_PROMOTED
+        else:
+            # No facts: another bench's row, never ruled (as row_effective reads it).
+            f = facts.get(it.id)
+            old = row_rule(it, rules=rules, endo_prep=worksheet.endo_prep, **f) if f else None
+            new = (match_rule(rules, endo_prep=worksheet.endo_prep, rules_off=False, **f)
+                   if f else None)
+            reason = None if _moves(it, old, new) else REAPPLY_UNCHANGED
+        out.append((it, reason, new))
+    return out, rules, facts
+
+
+def reapply_candidates(db: Session, worksheet) -> list[dict]:
+    """GET .../prep-rules/reapply (spec 7): each row Re-apply would move,
+    with its lock and the line that matches it now (None: the standard). The
+    browser shows old against new from these."""
+    rows, _rules, _facts = _reapply_rows(db, worksheet)
+    return [{"item_id": it.id, "sample_id": it.sample_id, "old": it.prep_rule, "new_rule": new}
+            for it, reason, new in rows if reason is None]
+
+
+def apply_reapply(db: Session, worksheet, item_ids: list[int], current_user) -> list[dict]:
+    """POST .../prep-rules/reapply (spec 7): each confirmed row, in the order
+    sent, re-checked against the preview's conditions. A row that qualifies
+    keeps its current run in its history, takes today's line as a new lock
+    (locked_by "reapply") and gets an endo_prep_rule_reapplied audit row
+    with the old and new locks. Typed values and the reading stay as they
+    are. A row that no longer qualifies is refused with its reason; one that
+    changed since the preview so that Re-apply would change nothing now is
+    REAPPLY_UNCHANGED, and one whose line moved again takes today's
+    (preflight F12, deviation B2). Does not commit."""
+    from worksheets_endo import endo_run_params, resolve_endo_method  # lazy: it imports this module
+
+    found, rules, facts = _reapply_rows(db, worksheet)
+    rows = {it.id: (it, reason, new) for it, reason, new in found}
+    user_id = getattr(current_user, "id", None)
+    std_total = None
+    results = []
+    for item_id in item_ids:
+        if item_id not in rows:
+            results.append({"item_id": item_id, "applied": False,
+                            "reason": REAPPLY_NOT_ON_WORKSHEET})
+            continue
+        it, reason, new = rows[item_id]
+        if reason is not None:
+            results.append({"item_id": item_id, "applied": False, "reason": reason})
+            continue
+        if std_total is None:
+            method = resolve_endo_method(db, worksheet)
+            std_total = endo_run_params(
+                method["run_parameters"] if method else None)["std_total_dilution"]
+        old = it.prep_rule
+        # Before the new lock: the history keeps the run the old one gave
+        # (preflight F8: the shared helper, on the facts already read).
+        _, effective = row_effective(db, worksheet, it, rules=rules, std_total=std_total,
+                                     facts=facts.get(it.id, {}))
+        append_history(it, why="reapply", user_id=user_id, effective=effective)
+        it.prep_rule = _new_lock(new, "reapply", user_id)
+        db.add(AuditLog(operation="endo_prep_rule_reapplied", entity_type="worksheet_item",
+                        entity_id=str(it.id),
+                        details={"user_id": user_id, "worksheet_id": worksheet.id,
+                                 "sample_id": it.sample_id, "old": old, "new": it.prep_rule}))
+        # Listed twice, the second is refused: the row now has today's line.
+        rows[item_id] = (it, REAPPLY_UNCHANGED, new)
+        results.append({"item_id": item_id, "applied": True, "reason": None})
+    return results

@@ -705,3 +705,118 @@ def test_a_reader_import_that_moves_a_read_rows_cartridge_is_an_override(client,
         AuditLog.operation == "endo_prep_override")] == [
         {"user_id": 1, "worksheet_id": w.ws.id, "sample_id": w.a.sample_id,
          "old": {"cartridge_type_id": w.c05.id}, "new": {"cartridge_type_id": w.c01.id}}]
+
+
+# --- Task 5: Re-apply ------------------------------------------------------------
+
+def _preview(client, ws):
+    return client.get(f"/worksheets/{ws.id}/prep-rules/reapply")
+
+
+def _reapply(client, ws, *items):
+    return client.post(f"/worksheets/{ws.id}/prep-rules/reapply",
+                       json={"item_ids": [it.id for it in items]})
+
+
+def test_reapply_moves_only_the_ruled_row_and_never_a_typed_value(client, db):
+    """Review Focus 2: a typed total, a "no rule" row and a ruled row on one sheet."""
+    w = _locks_world(client, db)
+    ruled, _ = _vial_item(db, w.ws, 3, w.svc)
+    w.a.prep_total_dilution = 500     # typed: the line's total never reaches it
+    w.b.prep_rules_off = True         # special prep
+    db.commit()
+    assert client.post(f"/worksheets/{w.ws.id}/printed").status_code == 200
+    w.rule.total_dilution = 400       # the lab moves the line after the print
+    db.commit()
+    db.refresh(w.a)
+    db.refresh(ruled)
+    typed_lock, old = w.a.prep_rule, ruled.prep_rule
+    r = _preview(client, w.ws)
+    assert r.status_code == 200, r.text
+    assert r.json() == {"candidates": [{"item_id": ruled.id, "sample_id": ruled.sample_id,
+                                        "old": old, "new_rule": endo_prep_rules.snapshot(w.rule)}]}
+    r = _reapply(client, w.ws, w.a, w.b, ruled)
+    assert r.status_code == 200, r.text
+    assert r.json() == {"results": [
+        {"item_id": w.a.id, "applied": False, "reason": endo_prep_rules.REAPPLY_UNCHANGED},
+        {"item_id": w.b.id, "applied": False, "reason": endo_prep_rules.REAPPLY_RULES_OFF},
+        {"item_id": ruled.id, "applied": True, "reason": None}]}
+    for x in (w.a, w.b, ruled):
+        db.refresh(x)
+    assert (w.a.prep_total_dilution, w.a.prep_rule, w.a.prep_history) == (500, typed_lock, None)
+    assert (w.b.prep_rule, w.b.prep_history) == (None, None)
+    assert (ruled.prep_total_dilution, ruled.prep_steps, ruled.cartridge_type_id) == (None, None, None)
+    new = ruled.prep_rule
+    assert (new["rule"], new["locked_by"], new["user_id"]) == (
+        endo_prep_rules.snapshot(w.rule), "reapply", 1)
+    [entry] = ruled.prep_history
+    assert entry == {"at": entry["at"], "by": 1, "why": "reapply", "lock": old,
+                     "total_dilution": 300, "step1_ratio": 10, "cartridge_type_id": None,
+                     "result_reading": None, "reader_test_id": None, "result_entered_at": None}
+    audit = db.query(AuditLog).filter(AuditLog.operation == "endo_prep_rule_reapplied").one()
+    assert (audit.entity_id, audit.details) == (str(ruled.id), {
+        "user_id": 1, "worksheet_id": w.ws.id, "sample_id": ruled.sample_id,
+        "old": old, "new": new})
+    assert _preview(client, w.ws).json() == {"candidates": []}
+
+
+def test_reapply_refuses_each_row_that_does_not_qualify(client, db):
+    w = _world(client, db)
+    promoted, _ = _row(db, w, "P-4001-S01", state="promoted")
+    moved, _ = _row(db, w, "P-4001-S02", reading=None)
+    stray, _ = _row(db, w, "P-4002-S01", reading=None, ws=_ws(db, "Another run"))
+    pep = _peptide(db)
+    _anchor(db, "P-4001", pep)
+    rule = _rule(db, pep, total_dilution=300)
+    db.commit()
+    assert client.post(f"/worksheets/{w.ws.id}/printed").status_code == 200
+    late, _ = _row(db, w, "P-4001-S03", reading=None)   # added after the print: not locked
+    rule.total_dilution = 400
+    db.commit()
+    assert [c["item_id"] for c in _preview(client, w.ws).json()["candidates"]] == [moved.id]
+    assert _reapply(client, w.ws, promoted, late, stray, moved, moved).json()["results"] == [
+        {"item_id": promoted.id, "applied": False, "reason": "already promoted"},
+        {"item_id": late.id, "applied": False, "reason": endo_prep_rules.REAPPLY_NOT_LOCKED},
+        {"item_id": stray.id, "applied": False,
+         "reason": endo_prep_rules.REAPPLY_NOT_ON_WORKSHEET},
+        {"item_id": moved.id, "applied": True, "reason": None},
+        # Listed twice: the row already has today's line.
+        {"item_id": moved.id, "applied": False, "reason": endo_prep_rules.REAPPLY_UNCHANGED},
+    ]
+    # A stock or completed worksheet lists nothing and moves nothing.
+    rule.total_dilution = 500
+    db.commit()
+    for status, prep, reason in (("open", "stock", endo_prep_rules.REAPPLY_STOCK),
+                                 ("completed", "2ml", endo_prep_rules.REAPPLY_COMPLETED)):
+        w.ws.status, w.ws.endo_prep = status, prep
+        db.commit()
+        assert _preview(client, w.ws).json() == {"candidates": []}
+        assert _reapply(client, w.ws, moved).json()["results"] == [
+            {"item_id": moved.id, "applied": False, "reason": reason}]
+    assert db.query(AuditLog).filter(AuditLog.operation == "endo_prep_rule_reapplied").count() == 1
+    assert _preview(client, SimpleNamespace(id=99999)).status_code == 404
+    assert _reapply(client, SimpleNamespace(id=99999)).status_code == 404
+    assert client.post(f"/worksheets/{w.ws.id}/prep-rules/reapply",
+                       json={"item_ids": list(range(501))}).status_code == 422
+
+
+def test_reapply_never_lists_a_bac_row_even_one_locked_before_its_form_was_set(client, db):
+    """Preflight F2 (A.0 item 8): a bac row is never ruled, so its locked
+    line reads as none (row_rule), today's match is none, and Re-apply has
+    nothing to move. Row b, locked to the same line as powder, still moves."""
+    w = _locks_world(client, db)
+    w.a.prep_form = "powder"
+    db.commit()
+    assert client.post(f"/worksheets/{w.ws.id}/printed").status_code == 200
+    db.refresh(w.a)
+    lock = w.a.prep_rule
+    assert lock["rule"]["id"] == w.rule.id
+    w.a.prep_form = "bac"
+    w.rule.total_dilution = 400
+    db.commit()
+    assert [c["item_id"] for c in _preview(client, w.ws).json()["candidates"]] == [w.b.id]
+    assert _reapply(client, w.ws, w.a).json()["results"] == [
+        {"item_id": w.a.id, "applied": False, "reason": endo_prep_rules.REAPPLY_UNCHANGED}]
+    db.refresh(w.a)
+    assert (w.a.prep_rule, w.a.prep_history) == (lock, None)
+    assert db.query(AuditLog).filter(AuditLog.operation == "endo_prep_rule_reapplied").count() == 0

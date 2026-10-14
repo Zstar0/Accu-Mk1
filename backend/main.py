@@ -25964,6 +25964,73 @@ def promote_endo_worksheet_rows(
         db, _current_user, ws, data.rows, background_tasks=background_tasks))
 
 
+class PrepRuleReapplyCandidate(BaseModel):
+    """One row Re-apply would move (endo slice 5, spec 7). `old` is the row's
+    lock ({"rule", "locked_at", "locked_by", "user_id"}) and `new_rule` the
+    line that matches it now (None: the standard), each as stored, every key
+    kept."""
+    item_id: int
+    sample_id: str
+    old: dict
+    new_rule: Optional[dict] = None
+
+
+class PrepRuleReapplyPreview(BaseModel):
+    candidates: list[PrepRuleReapplyCandidate]
+
+
+class PrepRuleReapplyRequest(BaseModel):
+    # The promote's bound.
+    item_ids: list[int] = Field(max_length=500)
+
+
+class PrepRuleReapplyResult(BaseModel):
+    item_id: int
+    applied: bool
+    reason: Optional[str] = None
+
+
+class PrepRuleReapplyResponse(BaseModel):
+    results: list[PrepRuleReapplyResult]
+
+
+@app.get("/worksheets/{worksheet_id}/prep-rules/reapply", response_model=PrepRuleReapplyPreview)
+def preview_prep_rules_reapply(
+    worksheet_id: int,
+    db: Session = Depends(get_db),
+    _current_user=Depends(get_current_user),
+):
+    """The 2 mL rows whose locked rule differs from today's match, for the
+    Re-apply dialog (endo slice 5, spec 7). Writes nothing. A staging
+    worksheet 404s; a completed or stock one lists none."""
+    from endo_prep_rules import reapply_candidates
+
+    ws = db.execute(select(Worksheet).where(Worksheet.id == worksheet_id)).scalar_one_or_none()
+    if not ws or ws.status == "staging":
+        raise HTTPException(404, "Worksheet not found")
+    return {"candidates": reapply_candidates(db, ws)}
+
+
+@app.post("/worksheets/{worksheet_id}/prep-rules/reapply", response_model=PrepRuleReapplyResponse)
+def apply_prep_rules_reapply(
+    worksheet_id: int,
+    data: PrepRuleReapplyRequest,
+    db: Session = Depends(get_db),
+    _current_user=Depends(get_current_user),
+):
+    """Move the rows the analyst confirmed to today's rule (endo slice 5,
+    spec 7). Every row is answered on its own, applied or not and why; the
+    applied ones share one commit."""
+    from endo_prep_rules import apply_reapply
+
+    ws = db.execute(select(Worksheet).where(Worksheet.id == worksheet_id)).scalar_one_or_none()
+    if not ws or ws.status == "staging":
+        raise HTTPException(404, "Worksheet not found")
+    results = apply_reapply(db, ws, data.item_ids, _current_user)
+    db.commit()
+    return {"results": results}
+
+
 class WorksheetWellFreeze(BaseModel):
     item_id: int
     plate_no: int
