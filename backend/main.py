@@ -63,6 +63,7 @@ from sla_perf import (  # noqa: E402
 )
 from models import AuditLog, Settings, Job, Sample, Result, Instrument, AnalysisService, AnalysisServiceSpec, HplcMethod, Peptide, PeptideAnalyte, CalibrationCurve, HPLCAnalysis, User, SharePointFileCache, WizardSession, WizardMeasurement, peptide_methods, blend_components, ServiceGroup, service_group_members, SamplePriority, Worksheet, WorksheetItem, WorksheetNote, instrument_methods, SampleAnalyteAlias, SlaTier, SlaPriorityTier, BusinessHoursConfig, LabHoliday, LimsSample, LimsSampleRemark, LimsSubSample, LimsBox, FlagType, LimsParentAttachment, MethodAttachment, method_services, LimsOrder
 from models import ConsumableType, method_consumables  # endo worksheet v2
+from models import EndoPrepRule  # endo slice 5
 from catalog.change_log import apply_and_log, log_create, log_delete, log_members
 from auth import (
     get_current_user, require_admin, create_access_token,
@@ -4156,6 +4157,173 @@ async def update_consumable(type_id: int, data: ConsumableTypeUpdate, db: Sessio
     db.commit()
     db.refresh(row)
     return _consumable_out(row, consumable_in_use(db, type_id))
+
+
+# ─── Endotoxin prep rules (endo slice 5, spec 2026-10-14 section 3) ───
+#
+# The same permission as the consumables catalog and the method editor above:
+# any signed-in user (get_current_user). Audited in audit_logs with old and
+# new snapshots, the worksheets_endo.py idiom.
+
+
+class EndoPrepRuleIn(BaseModel):
+    """A rule as the rules page creates it. sort_order is never sent: a new
+    line goes to the end of the list, and POST /endo-prep-rules/reorder moves it."""
+    peptide_id: int
+    min_mg: Optional[float] = None
+    max_mg: Optional[float] = None
+    total_dilution: Optional[float] = None
+    step1_ratio: Optional[float] = None
+    cartridge_type_id: Optional[int] = None
+    status: Literal["trial", "validated"] = "trial"
+    note: Optional[str] = None
+    active: bool = True
+
+
+class EndoPrepRulePatch(BaseModel):
+    """PATCH body: sent = set, an explicit null clears (back to the standard),
+    omitted = untouched. peptide_id, status and active cannot be cleared."""
+    peptide_id: Optional[int] = None
+    min_mg: Optional[float] = None
+    max_mg: Optional[float] = None
+    total_dilution: Optional[float] = None
+    step1_ratio: Optional[float] = None
+    cartridge_type_id: Optional[int] = None
+    status: Optional[Literal["trial", "validated"]] = None
+    note: Optional[str] = None
+    active: Optional[bool] = None
+
+
+class EndoPrepRuleOut(BaseModel):
+    """endo_prep_rules.snapshot() plus what the page shows. Every key is
+    declared, because response_model drops undeclared ones."""
+    id: int
+    peptide_id: int
+    min_mg: Optional[float] = None
+    max_mg: Optional[float] = None
+    total_dilution: Optional[float] = None
+    step1_ratio: Optional[float] = None
+    cartridge_type_id: Optional[int] = None
+    status: str
+    note: Optional[str] = None
+    sort_order: int
+    active: bool
+    peptide_name: Optional[str] = None
+    cartridge_name: Optional[str] = None
+    updated_at: Optional[datetime] = None
+
+
+class EndoPrepRuleSaveOut(BaseModel):
+    rule: EndoPrepRuleOut
+    warnings: list[str]
+
+
+class EndoPrepRuleReorderIn(BaseModel):
+    ids: list[int]
+
+
+def _endo_prep_rules_out(db: Session, rule_id: Optional[int] = None) -> list[EndoPrepRuleOut]:
+    """Every rule (or the one rule_id names) with its peptide and cartridge
+    names, inactive ones included, in list order (sort_order, then id). One query."""
+    from endo_prep_rules import snapshot
+    q = (select(EndoPrepRule, Peptide.name, ConsumableType.name)
+         .outerjoin(Peptide, Peptide.id == EndoPrepRule.peptide_id)
+         .outerjoin(ConsumableType, ConsumableType.id == EndoPrepRule.cartridge_type_id)
+         .order_by(EndoPrepRule.sort_order, EndoPrepRule.id))
+    if rule_id is not None:
+        q = q.where(EndoPrepRule.id == rule_id)
+    return [EndoPrepRuleOut(**snapshot(rule), peptide_name=peptide_name,
+                            cartridge_name=cartridge_name, updated_at=rule.updated_at)
+            for rule, peptide_name, cartridge_name in db.execute(q).all()]
+
+
+@app.get("/endo-prep-rules", response_model=list[EndoPrepRuleOut])
+async def list_endo_prep_rules(db: Session = Depends(get_db),
+                               _current_user=Depends(get_current_user)):
+    """Every prep rule, inactive ones included, in list order."""
+    return _endo_prep_rules_out(db)
+
+
+@app.post("/endo-prep-rules", response_model=EndoPrepRuleSaveOut, status_code=201)
+async def create_endo_prep_rule(data: EndoPrepRuleIn, db: Session = Depends(get_db),
+                                current_user=Depends(get_current_user)):
+    """Add a line at the end of the list. A refusal is a 400 with the reason;
+    the warnings come back with the saved line (spec section 3)."""
+    from endo_prep_rules import check_rule, snapshot
+    fields = data.model_dump()
+    fields["note"] = _blank_to_none(fields["note"])
+    try:
+        warnings = check_rule(db, {**fields, "id": None}, fields)
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    user_id = getattr(current_user, "id", None)
+    next_order = db.execute(
+        select(func.coalesce(func.max(EndoPrepRule.sort_order), -1) + 1)).scalar_one()
+    rule = EndoPrepRule(**fields, sort_order=next_order, updated_by_id=user_id)
+    db.add(rule)
+    db.flush()
+    db.add(AuditLog(operation="endo_prep_rule_created", entity_type="endo_prep_rule",
+                    entity_id=str(rule.id),
+                    details={"user_id": user_id, "old": None, "new": snapshot(rule)}))
+    db.commit()
+    return {"rule": _endo_prep_rules_out(db, rule.id)[0], "warnings": warnings}
+
+
+@app.patch("/endo-prep-rules/{rule_id}", response_model=EndoPrepRuleSaveOut)
+async def update_endo_prep_rule(rule_id: int, data: EndoPrepRulePatch,
+                                db: Session = Depends(get_db),
+                                current_user=Depends(get_current_user)):
+    """Edit or (de)activate a line; there is no delete. Only the fields sent
+    change. The checks run on the line as it will be stored, and a save that
+    changes nothing writes no audit row."""
+    from endo_prep_rules import check_rule, snapshot
+    rule = db.get(EndoPrepRule, rule_id)
+    if rule is None:
+        raise HTTPException(404, f"prep rule {rule_id} not found")
+    fields = data.model_dump(exclude_unset=True)
+    if "note" in fields:
+        fields["note"] = _blank_to_none(fields["note"])
+    old = snapshot(rule)
+    try:
+        warnings = check_rule(db, {**old, **fields}, fields, rule_id=rule_id)
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    for name, value in fields.items():
+        setattr(rule, name, value)
+    new = snapshot(rule)
+    if new != old:
+        user_id = getattr(current_user, "id", None)
+        rule.updated_by_id = user_id
+        db.add(AuditLog(operation="endo_prep_rule_updated", entity_type="endo_prep_rule",
+                        entity_id=str(rule.id),
+                        details={"user_id": user_id, "old": old, "new": new}))
+    db.commit()
+    return {"rule": _endo_prep_rules_out(db, rule_id)[0], "warnings": warnings}
+
+
+@app.post("/endo-prep-rules/reorder", response_model=list[EndoPrepRuleOut])
+async def reorder_endo_prep_rules(data: EndoPrepRuleReorderIn, db: Session = Depends(get_db),
+                                  current_user=Depends(get_current_user)):
+    """Set the list order, the matcher's tie-break (spec section 4). ids lists
+    every rule, inactive ones included, exactly once; position i becomes
+    sort_order i. Sending the current order changes nothing."""
+    rules = db.execute(select(EndoPrepRule)
+                       .order_by(EndoPrepRule.sort_order, EndoPrepRule.id)).scalars().all()
+    old = [r.id for r in rules]
+    if sorted(data.ids) != sorted(old):
+        raise HTTPException(400, "ids must list every rule exactly once")
+    if data.ids != old:
+        user_id = getattr(current_user, "id", None)
+        by_id = {r.id: r for r in rules}
+        for position, rule_id in enumerate(data.ids):
+            if by_id[rule_id].sort_order != position:
+                by_id[rule_id].sort_order = position
+                by_id[rule_id].updated_by_id = user_id
+        db.add(AuditLog(operation="endo_prep_rules_reordered", entity_type="endo_prep_rule",
+                        entity_id=None,
+                        details={"user_id": user_id, "old": old, "new": data.ids}))
+        db.commit()
+    return _endo_prep_rules_out(db)
 
 
 # ─── Analysis Service Endpoints ───
