@@ -4,12 +4,13 @@ docs/superpowers/specs/2026-10-14-endo-slice5-method-rules-design.md, sections
 checks, the lock events, release, override history and Re-apply.
 In-memory SQLite + dependency overrides, with test_endo_v2_worksheets.py's
 and test_endo_worksheet_promote.py's helpers."""
+import json
 from types import SimpleNamespace
 from unittest.mock import MagicMock
 
 import pytest
 from fastapi.testclient import TestClient
-from sqlalchemy import create_engine, inspect, select
+from sqlalchemy import create_engine, inspect, select, text
 from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import StaticPool
 
@@ -843,3 +844,81 @@ def test_reapply_lists_a_new_line_even_when_its_numbers_are_the_same(client, db)
     db.refresh(w.a)
     assert (w.a.prep_rule["rule"], w.a.prep_history[0]["total_dilution"]) == (
         endo_prep_rules.snapshot(narrow), 300)
+
+
+# --- Task 5 review I-1: Re-apply against a concurrent promote or Re-apply ------
+
+def _movable(client, db):
+    """_world's open 2 mL worksheet with row P-4001-S01 (no reading yet),
+    locked at print to a 1:300 Retatrutide line that then moves to 1:400:
+    a Re-apply candidate. Returns the row, its analysis, its lock and the
+    line. Holding the analysis keeps it in the session, loaded, as a request
+    that read it before waiting on its lock does."""
+    w = _world(client, db)
+    item, analysis = _row(db, w, "P-4001-S01", reading=None)
+    pep = _peptide(db)
+    _anchor(db, "P-4001", pep)
+    rule = _rule(db, pep, total_dilution=300)
+    db.commit()
+    assert client.post(f"/worksheets/{w.ws.id}/printed").status_code == 200
+    rule.total_dilution = 400
+    db.commit()
+    db.refresh(item)
+    assert [c["item_id"] for c in _preview(client, w.ws).json()["candidates"]] == [item.id]
+    return SimpleNamespace(ws=w.ws, item=item, analysis=analysis, lock=item.prep_rule,
+                           rule=rule)
+
+
+def _commit_lands_while_waiting(db, monkeypatch, table, sql, params):
+    """Spy on the session's execute. Just before the first SELECT ... FOR
+    UPDATE on `table` it runs `sql` behind the session's back, as another
+    request's commit lands while this one waits on the row lock (SQLite
+    ignores the lock). Returns the tables of the locking reads, in order."""
+    real = db.execute
+    locked = []
+
+    def spy(stmt, *args, **kwargs):
+        if getattr(stmt, "_for_update_arg", None) is not None:
+            name = stmt.get_final_froms()[0].name
+            if name == table and table not in locked:
+                real(text(sql), params)
+            locked.append(name)
+        return real(stmt, *args, **kwargs)
+
+    monkeypatch.setattr(db, "execute", spy)
+    return locked
+
+
+def test_reapply_locks_the_analysis_then_the_item_and_leaves_a_row_promoted_meanwhile(
+        client, db, monkeypatch):
+    """Review I-1: a promote that commits while the Re-apply waits on the
+    vial's analysis lock wins. The apply locks the live analysis, then the
+    item, before it judges the row, so it reads the row as promoted."""
+    m = _movable(client, db)
+    locked = _commit_lands_while_waiting(
+        db, monkeypatch, "lims_analyses",
+        "UPDATE lims_analyses SET review_state = 'promoted' WHERE id = :id", {"id": m.analysis.id})
+    assert _reapply(client, m.ws, m.item).json()["results"] == [
+        {"item_id": m.item.id, "applied": False, "reason": "already promoted"}]
+    assert locked == ["lims_analyses", "worksheet_items"]
+    db.expire_all()
+    assert (m.item.prep_rule, m.item.prep_history) == (m.lock, None)
+    assert db.query(AuditLog).filter(AuditLog.operation == "endo_prep_rule_reapplied").count() == 0
+
+
+def test_a_second_reapply_that_waited_on_the_first_finds_nothing_to_move(client, db, monkeypatch):
+    """Review I-1 and M3: two Re-apply requests for one row. The second
+    waits on the row locks while the first commits its new lock, then reads
+    the row as the first left it: nothing to re-apply, no second history
+    entry and no second audit row."""
+    m = _movable(client, db)
+    first = {**m.lock, "rule": endo_prep_rules.snapshot(m.rule), "locked_by": "reapply"}
+    _commit_lands_while_waiting(
+        db, monkeypatch, "worksheet_items",
+        "UPDATE worksheet_items SET prep_rule = :lock WHERE id = :id",
+        {"lock": json.dumps(first), "id": m.item.id})
+    assert _reapply(client, m.ws, m.item).json()["results"] == [
+        {"item_id": m.item.id, "applied": False, "reason": endo_prep_rules.REAPPLY_UNCHANGED}]
+    db.expire_all()
+    assert (m.item.prep_rule, m.item.prep_history) == (first, None)
+    assert db.query(AuditLog).filter(AuditLog.operation == "endo_prep_rule_reapplied").count() == 0

@@ -18,7 +18,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from coa.spec_rules import sample_peptide_ids
-from models import AuditLog, EndoPrepRule, LimsSubSample, WorksheetItem
+from models import AuditLog, EndoPrepRule, LimsAnalysis, LimsSubSample, WorksheetItem
 
 # Step 1's standard Tris ratio 1:N. Mirrors src/lib/endo-prep-2ml.ts
 # STEP1_RATIO; tests/test_endo_prep_rules.py pins it to
@@ -487,6 +487,29 @@ def reapply_candidates(db: Session, worksheet) -> list[dict]:
             for it, reason, new in rows if reason is None]
 
 
+def _lock_reapply_rows(db: Session, worksheet, item_ids) -> None:
+    """Lock the sent rows before Re-apply judges them (review I-1): each
+    row's live vial endotoxin analysis, then the worksheet item, each one
+    SELECT ... FOR UPDATE in id order and re-read, so the judge sees what a
+    request holding the lock committed. Analyses first, as promote takes
+    them (worksheets_endo_promote._plan): a promote holds one analysis lock
+    at a time, takes it before it writes and commits per row, so there is no
+    lock cycle, and two Re-applies lock in the same order. SQLite ignores
+    FOR UPDATE."""
+    from worksheets_endo_promote import vial_endo_analyses  # lazy: it imports this module
+
+    on_sheet = (WorksheetItem.worksheet_id == worksheet.id, WorksheetItem.id.in_(set(item_ids)))
+    sample_ids = set(db.execute(select(WorksheetItem.sample_id).where(*on_sheet)).scalars())
+    analysis_ids = sorted({analysis.id for pairs in vial_endo_analyses(db, sample_ids).values()
+                           for analysis, _svc in pairs})
+    if analysis_ids:
+        db.execute(select(LimsAnalysis).where(LimsAnalysis.id.in_(analysis_ids))
+                   .order_by(LimsAnalysis.id).with_for_update()
+                   .execution_options(populate_existing=True)).scalars().all()
+    db.execute(select(WorksheetItem).where(*on_sheet).order_by(WorksheetItem.id)
+               .with_for_update().execution_options(populate_existing=True)).scalars().all()
+
+
 def apply_reapply(db: Session, worksheet, item_ids: list[int], current_user) -> list[dict]:
     """POST .../prep-rules/reapply (spec 7): each confirmed row, in the order
     sent, re-checked against the preview's conditions. A row that qualifies
@@ -496,9 +519,14 @@ def apply_reapply(db: Session, worksheet, item_ids: list[int], current_user) -> 
     are. A row that no longer qualifies is refused with its reason; one that
     changed since the preview so that Re-apply would change nothing now is
     REAPPLY_UNCHANGED, and one whose line moved again takes today's
-    (preflight F12, deviation B2). Does not commit."""
+    (preflight F12, deviation B2). The rows are judged under their row locks
+    (review I-1), so a promote or another Re-apply that committed while this
+    one waited is seen. Does not commit."""
     from worksheets_endo import endo_run_params, resolve_endo_method  # lazy: it imports this module
 
+    _lock_reapply_rows(db, worksheet, item_ids)
+    # Completion takes no row lock, so the status is a plain re-read.
+    db.refresh(worksheet)
     found, rules, facts = _reapply_rows(db, worksheet)
     rows = {it.id: (it, reason, new) for it, reason, new in found}
     user_id = getattr(current_user, "id", None)
