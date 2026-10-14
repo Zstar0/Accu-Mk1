@@ -6,6 +6,7 @@ import {
   waitFor,
   within,
 } from '@testing-library/react'
+import { toast } from 'sonner'
 import { EndoReaderImportDialog } from '@/components/hplc/endo/EndoReaderImportDialog'
 import type * as ApiModule from '@/lib/api'
 import {
@@ -23,7 +24,9 @@ import {
 import type { WorksheetItemRow } from '@/lib/endo-worksheet'
 import { endoBoxProps, endoItem, readerTest } from './endo-fixtures'
 
-vi.mock('sonner', () => ({ toast: { error: vi.fn(), success: vi.fn() } }))
+vi.mock('sonner', () => ({
+  toast: { error: vi.fn(), success: vi.fn(), warning: vi.fn() },
+}))
 
 // Only the file parser is stubbed: matching, validity, the cartridge range
 // and the stored record run for real (Task 9).
@@ -419,6 +422,40 @@ describe('EndoReaderImportDialog', () => {
         },
       ],
     })
+  })
+
+  it('names each row the server skipped, with its reason, beside the applied count (slice 5)', async () => {
+    const a = endoItem({ sample_id: 'P-0001-S02' })
+    const b = endoItem({ sample_id: 'P-0002-S02' })
+    setup([a, b])
+    vi.mocked(importReaderResults).mockResolvedValue({
+      applied: 1,
+      items: [a, b],
+      endo_method: null,
+      skipped: [
+        {
+          item_id: b.id,
+          sample_id: 'P-0002-S02',
+          reason: 'the row is promoted; its prep is final',
+        },
+      ],
+    })
+    const dialog = await drop([
+      readerTest({ testId: 'T1', sampleId: 'P-0001-S02' }),
+      readerTest({ testId: 'T2', sampleId: 'P-0002-S02' }),
+    ])
+    fireEvent.click(
+      within(dialog).getByRole('button', { name: 'Apply 2 readings' })
+    )
+    await waitFor(() =>
+      expect(toast.warning).toHaveBeenCalledWith(
+        `1 reading applied from ${FILE}; 1 not applied`,
+        {
+          description: 'P-0002-S02 (the row is promoted; its prep is final)',
+        }
+      )
+    )
+    expect(toast.success).not.toHaveBeenCalled()
   })
 
   it('lists a test with no usable reading as skipped and never sends it', async () => {

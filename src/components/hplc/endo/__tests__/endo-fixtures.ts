@@ -1,5 +1,6 @@
 import { vi } from 'vitest'
 import type { WorksheetListItem } from '@/lib/api'
+import type { EndoPrepRule } from '@/lib/endo-prep-rules'
 import type { WorksheetItemRow } from '@/lib/endo-worksheet'
 import type { ReaderTest } from '@/lib/endo-reader'
 import {
@@ -125,18 +126,20 @@ export function endoWorksheet(
   }
 }
 
-/** The props the page hands Boxes 2 and 3, for these items in this order. */
+/** The props the page hands Boxes 2 and 3, for these items in this order,
+ *  under these live rule lines (slice 5). */
 export function endoBoxProps(
   items: WorksheetItemRow[],
   over: Partial<WorksheetListItem> = {},
-  isCompleted = false
+  isCompleted = false,
+  rules: EndoPrepRule[] = []
 ): { props: EndoBoxProps; onUpdateItem: ReturnType<typeof vi.fn> } {
   const worksheet = endoWorksheet(items, over)
   const onUpdateItem = vi.fn()
   return {
     props: {
       worksheet,
-      rows: endoRowsFor(items, worksheet),
+      rows: endoRowsFor(items, worksheet, [], rules),
       ctx: endoCtxFor(worksheet),
       cartridges: allowedCartridges(worksheet),
       isCompleted,

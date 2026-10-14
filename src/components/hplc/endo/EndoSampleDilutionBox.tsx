@@ -9,6 +9,7 @@ import {
   formOf,
   orderByTotal,
   prep2Check,
+  targetDilutionOf,
   type EndoCheck,
   type EndoSample,
   type EndoStepPlan,
@@ -23,6 +24,12 @@ import {
 import { PrepField } from '@/components/hplc/EndoPrepLine'
 import { MONO, TH, TH_CALC, UNIT } from '@/components/hplc/EndoWorksheetTable'
 import { EndoBox, type EndoBoxProps } from './EndoBox'
+import {
+  NoRuleEditor,
+  PrepHistory,
+  ReapplyRules,
+  RuleTags,
+} from './EndoPrepRuleBits'
 import { WorkedTip } from './EndoWorkedTip'
 import { useRowRefusals } from './use-row-refusals'
 
@@ -69,7 +76,10 @@ type PrepSteps = WorksheetItemPatch['prep_steps']
  * [sample_ul, ratio] (step 1) or [sample_ul] (steps 2 and 3); null is the
  * standard. The server wants a sample volume in every entry, so a ratio
  * typed alone carries the step's current sample volume with it. An entry
- * back at the standard becomes null; all three standard sends null.
+ * back at the standard becomes null; all three standard sends null. `std`
+ * is the row's own default (its rule's step 1 ratio, slice 5): step 1
+ * carries only a ratio typed by hand, and a ratio equal to the default
+ * goes as null, so a ruled row keeps following its rule.
  */
 function nextPrepSteps(
   current: PrepSteps,
@@ -84,10 +94,10 @@ function nextPrepSteps(
   if (!p || !d) return current ?? null
   const next = [0, 1, 2].map(j => current?.[j] ?? null)
   const dSample = d.sampleUl ?? 0
-  const dRatio = d.ratio ?? 1
   const sample = field === 'sample' ? (v ?? dSample) : (p.sampleUl ?? dSample)
-  const ratio = field === 'ratio' ? (v ?? dRatio) : (p.ratio ?? dRatio)
-  const standard = sample === dSample && (i !== 0 || ratio === dRatio)
+  const typed = field === 'ratio' ? v : (current?.[0]?.[1] ?? null)
+  const ratio = typed === d.ratio ? null : typed
+  const standard = sample === dSample && (i !== 0 || ratio === null)
   next[i] = standard ? null : i === 0 ? [sample, ratio] : [sample]
   return next.every(e => e === null) ? null : next
 }
@@ -242,10 +252,16 @@ function StepCell({
  * step 1 ratio, say) shows its reason on the row until that row's next save.
  */
 export function EndoSampleDilutionBox({
+  worksheet,
   rows,
   ctx,
+  cartridges,
   isCompleted,
   onUpdateItem,
+  catalog = [],
+  reapplyCandidates,
+  onReapply,
+  rulesFailed,
 }: EndoBoxProps) {
   // The server's refusal per item id, until that row's next save.
   const { refused, send } = useRowRefusals(onUpdateItem)
@@ -254,6 +270,11 @@ export function EndoSampleDilutionBox({
   const ordered = orderByTotal(rows, r => r.sample, ctx)
   const keys = ordered.map(r => totalGroupKey(r.sample, ctx))
   const stdTotal = ctx.params.stdTotalDilution
+  // A row's defaults: its rule's total and step 1 ratio, else the standard.
+  const defaultSteps = (s: EndoSample) =>
+    dilutionPlan({ ...s, steps: null }, ctx).steps
+  const defaultTotal = (s: EndoSample) =>
+    targetDilutionOf({ ...s, totalDilution: null }, ctx) ?? stdTotal
 
   function commitStep(
     row: EndoRow,
@@ -268,14 +289,14 @@ export function EndoSampleDilutionBox({
       field,
       v,
       dilutionPlan(row.sample, ctx).steps,
-      std
+      defaultSteps(row.sample)
     )
     if (JSON.stringify(next) === JSON.stringify(current)) return
     send(row.item.id, { prep_steps: next })
   }
 
   function commitTotal(row: EndoRow, v: number | null) {
-    const next = v === stdTotal ? null : v
+    const next = v === defaultTotal(row.sample) ? null : v
     if (next === (row.item.prep_total_dilution ?? null)) return
     send(row.item.id, { prep_total_dilution: next })
   }
@@ -284,6 +305,21 @@ export function EndoSampleDilutionBox({
     <EndoBox
       n={2}
       title="Sample dilution: from the vial to the cartridge"
+      actions={
+        !isCompleted &&
+        reapplyCandidates &&
+        onReapply && (
+          <ReapplyRules
+            worksheet={worksheet}
+            rows={rows}
+            ctx={ctx}
+            cartridges={cartridges}
+            catalog={catalog}
+            candidates={reapplyCandidates}
+            onReapply={onReapply}
+          />
+        )
+      }
       sub={
         <>
           Type the total you want (1:{fmt(stdTotal)} standard). Step 1 is Tris
@@ -291,6 +327,11 @@ export function EndoSampleDilutionBox({
           works out step 2 in LAL water to land on your total. Type the µL you
           take at each step; the amount to add is worked out. Every step is made
           in a {fmt(TUBE_UL / 1000)} mL tube. The MCS factor stays at 1.
+          {rulesFailed && (
+            <span className="mt-1 block">
+              Prep rules did not load; rows show the standard.
+            </span>
+          )}
         </>
       }
     >
@@ -355,6 +396,13 @@ export function EndoSampleDilutionBox({
                     className={`${cell} pl-2 ${s.sampleId ? MONO : 'text-xs italic text-muted-foreground'}`}
                   >
                     {s.sampleId || 'no ID yet'}
+                    <RuleTags row={row} cartridges={cartridges} />
+                    <PrepHistory
+                      row={row}
+                      ctx={ctx}
+                      cartridges={cartridges}
+                      catalog={catalog}
+                    />
                   </td>
                 </>
               )
@@ -402,7 +450,9 @@ export function EndoSampleDilutionBox({
               }
 
               const k = prep2Check(s, ctx)
-              const ownTotal = plan.target !== stdTotal
+              const rowTotal = defaultTotal(s)
+              const rowSteps = defaultSteps(s)
+              const ownTotal = plan.target !== rowTotal
               const refusal = refused[row.item.id]
               const totalTip =
                 plan.total === null
@@ -410,7 +460,7 @@ export function EndoSampleDilutionBox({
                   : `${plan.steps.map(st => `1:${fmt(st.ratio)}`).join(' × ')} = 1:${fmt(plan.total)}` +
                     `\nMCS factor 1: type the reading as it prints and the sheet multiplies by ${fmt(plan.target)}` +
                     (ownTotal
-                      ? `\nThe standard is 1:${fmt(stdTotal)}; clear the cell to use it`
+                      ? `\nThe ${rowTotal === stdTotal ? 'standard' : "rule's total"} is 1:${fmt(rowTotal)}; clear the cell to use it`
                       : '')
               return (
                 <tr key={row.item.id} data-group-start={newGroup || undefined}>
@@ -430,7 +480,7 @@ export function EndoSampleDilutionBox({
                           unit="1 in N"
                           value={row.item.prep_total_dilution ?? null}
                           overridden={row.item.prep_total_dilution != null}
-                          computed={stdTotal}
+                          computed={rowTotal}
                           disabled={isCompleted}
                           onCommit={v => commitTotal(row, v)}
                         />
@@ -449,12 +499,18 @@ export function EndoSampleDilutionBox({
                         Not saved: {refusal}
                       </div>
                     )}
+                    {!isCompleted && (
+                      <NoRuleEditor
+                        row={row}
+                        onSend={data => send(row.item.id, data)}
+                      />
+                    )}
                   </td>
                   {plan.steps.map((st, si) => (
                     <StepCell
                       key={si}
                       st={st}
-                      d={std[si] ?? st}
+                      d={rowSteps[si] ?? st}
                       si={si}
                       cell={cell}
                       isCompleted={isCompleted}

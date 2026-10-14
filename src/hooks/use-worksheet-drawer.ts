@@ -127,6 +127,11 @@ export function mergeItemPatch(
     ...(data.result_reading !== undefined
       ? { result_reading: data.result_reading }
       : {}),
+    // Slice 5: the "no rule" switch and the special-prep note.
+    ...(data.prep_rules_off !== undefined
+      ? { prep_rules_off: data.prep_rules_off }
+      : {}),
+    ...(data.prep_note !== undefined ? { prep_note: data.prep_note } : {}),
   })
 }
 

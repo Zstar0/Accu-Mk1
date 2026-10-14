@@ -1,5 +1,11 @@
 import type { ReactNode } from 'react'
-import type { WorksheetItemPatch, WorksheetListItem } from '@/lib/api'
+import type {
+  ConsumableType,
+  PrepRulesReapplyCandidate,
+  PrepRulesReapplyResult,
+  WorksheetItemPatch,
+  WorksheetListItem,
+} from '@/lib/api'
 import type { EndoCtx } from '@/lib/endo-prep-2ml'
 import type { EndoCartridgeOption, EndoRow } from '@/lib/endo-worksheet-2ml'
 
@@ -88,4 +94,14 @@ export interface EndoBoxProps {
     itemId: number,
     data: WorksheetItemPatch
   ) => Promise<string | null> | undefined
+  /** Slice 5, Box 2: every endotoxin cartridge type, retired ones too (a
+   *  past run and Re-apply's new side resolve through it). */
+  catalog?: ConsumableType[]
+  /** Slice 5, Box 2: the server's Re-apply preview, and the apply call,
+   *  which resolves to each row's outcome. Absent: no Re-apply button. */
+  reapplyCandidates?: PrepRulesReapplyCandidate[]
+  onReapply?: (itemIds: number[]) => Promise<PrepRulesReapplyResult[]>
+  /** Slice 5, Box 2: the rule lines never loaded, so rows that are not
+   *  locked show the standard; Box 2 says so. */
+  rulesFailed?: boolean
 }

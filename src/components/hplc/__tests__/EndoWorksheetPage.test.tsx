@@ -1,5 +1,12 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
-import { act, fireEvent, render, screen, within } from '@testing-library/react'
+import {
+  act,
+  fireEvent,
+  render,
+  screen,
+  waitFor,
+  within,
+} from '@testing-library/react'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import type * as ApiModule from '@/lib/api'
 import type { WorksheetListItem } from '@/lib/api'
@@ -17,6 +24,8 @@ vi.mock('@/lib/api', async importOriginal => ({
   listConsumables: vi.fn().mockResolvedValue([]),
   updateWorksheetItem: vi.fn(),
   getEndoPrepRules: vi.fn().mockResolvedValue([]),
+  getPrepRulesReapply: vi.fn().mockResolvedValue({ candidates: [] }),
+  applyPrepRulesReapply: vi.fn(),
 }))
 vi.mock('@/hooks/use-lab-calendar', () => ({
   useLabCalendar: () => ({ calendar: null, isLoading: false }),
@@ -52,7 +61,13 @@ vi.mock('@/components/hplc/SlaAgeIndicator', () => ({
 }))
 vi.mock('@/components/hplc/AddSamplesModal', () => ({ default: () => null }))
 
-import { getWorksheet, updateWorksheetItem } from '@/lib/api'
+import {
+  applyPrepRulesReapply,
+  getEndoPrepRules,
+  getPrepRulesReapply,
+  getWorksheet,
+  updateWorksheetItem,
+} from '@/lib/api'
 import { useUIStore } from '@/store/ui-store'
 import { EndoWorksheetPage } from '@/components/hplc/endo/EndoWorksheetPage'
 
@@ -343,6 +358,66 @@ describe('EndoWorksheetPage', () => {
     fireEvent.click(await screen.findByRole('button', { name: 'Prep rules' }))
     expect(useUIStore.getState().activeSection).toBe('hplc-analysis')
     expect(useUIStore.getState().activeSubSection).toBe('endo-prep-rules')
+  })
+
+  it('says in Box 2 when the prep rules did not load (slice 5)', async () => {
+    vi.mocked(getWorksheet).mockResolvedValue(worksheet('endo'))
+    vi.mocked(getEndoPrepRules).mockRejectedValueOnce(new Error('offline'))
+    renderPage()
+    const box = await screen.findByRole('region', {
+      name: 'Sample dilution: from the vial to the cartridge',
+    })
+    expect(
+      await within(box).findByText(
+        'Prep rules did not load; rows show the standard.'
+      )
+    ).toBeInTheDocument()
+  })
+
+  it("re-applies the preview's rows and refetches the page (slice 5)", async () => {
+    vi.mocked(getWorksheet).mockResolvedValue(worksheet('endo'))
+    vi.mocked(getPrepRulesReapply).mockClear()
+    vi.mocked(getPrepRulesReapply).mockResolvedValueOnce({
+      candidates: [
+        {
+          item_id: 10,
+          sample_id: 'P-0001-S01',
+          old: {
+            rule: null,
+            locked_at: '2026-10-14T15:00:00Z',
+            locked_by: 'print',
+            user_id: 5,
+          },
+          new_rule: {
+            id: 1,
+            peptide_id: 7,
+            min_mg: null,
+            max_mg: null,
+            total_dilution: 300,
+            step1_ratio: null,
+            cartridge_type_id: null,
+            status: 'validated',
+            note: null,
+            sort_order: 0,
+            active: true,
+          },
+        },
+      ],
+    })
+    vi.mocked(applyPrepRulesReapply).mockResolvedValue({
+      results: [{ item_id: 10, applied: true, reason: null }],
+    })
+    renderPage()
+    fireEvent.click(
+      await screen.findByRole('button', { name: 'Re-apply rules (1)' })
+    )
+    fireEvent.click(
+      await screen.findByRole('button', { name: 'Re-apply 1 row' })
+    )
+    expect(await screen.findByText('Re-applied')).toBeInTheDocument()
+    expect(applyPrepRulesReapply).toHaveBeenCalledWith(42, [10])
+    await waitFor(() => expect(getWorksheet).toHaveBeenCalledTimes(2))
+    expect(getPrepRulesReapply).toHaveBeenCalledTimes(2)
   })
 
   it('a stock run has no Prep rules button: stock is never ruled', async () => {

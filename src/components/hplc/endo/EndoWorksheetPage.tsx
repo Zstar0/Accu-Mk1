@@ -1,11 +1,13 @@
 import { useState, type ReactNode } from 'react'
-import { useQuery } from '@tanstack/react-query'
+import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { toast } from 'sonner'
 import { Button } from '@/components/ui/button'
 import { Skeleton } from '@/components/ui/skeleton'
 import {
+  applyPrepRulesReapply,
   getInstruments,
   getMethods,
+  getPrepRulesReapply,
   getWorksheet,
   getWorksheetUsers,
   listConsumables,
@@ -120,6 +122,7 @@ function EndoWorksheetPageBody({
   const id = worksheet.id
   const isCompleted = worksheet.status === 'completed'
   const drawer = useWorksheetDrawer()
+  const queryClient = useQueryClient()
   const [addSamplesOpen, setAddSamplesOpen] = useState(false)
   const { data: users = [] } = useQuery({
     queryKey: ['worksheet-users'],
@@ -163,8 +166,19 @@ function EndoWorksheetPageBody({
     ),
     calendar
   )
-  // The rule lines (slice 5): a row that is not locked follows them.
-  const { data: rules = [] } = useEndoPrepRules(twoMl)
+  // The rule lines (slice 5): a row that is not locked follows them. Only a
+  // first load that failed leaves the rows on the standard; a failed
+  // refetch keeps the lines already held.
+  const { data: rules = [], isLoadingError: rulesFailed } =
+    useEndoPrepRules(twoMl)
+  // Re-apply's preview (spec 7), under the page's key: every refetch of the
+  // page (a print, a reading, an item save) refreshes it too.
+  const { data: reapply } = useQuery({
+    queryKey: [...worksheetPageKey(id), 'prep-rules-reapply'],
+    queryFn: () => getPrepRulesReapply(id),
+    enabled: twoMl && !isCompleted,
+    staleTime: 0,
+  })
   const cartridges = allowedCartridges(worksheet, catalog)
   const ctx = endoCtxFor(worksheet, catalog)
   const rows = endoRowsFor(
@@ -180,6 +194,10 @@ function EndoWorksheetPageBody({
     cartridges,
     isCompleted,
     onUpdateItem: updateItem,
+    catalog,
+    reapplyCandidates: reapply?.candidates,
+    onReapply: reapplyRules,
+    rulesFailed,
   }
   const { userNotes } = parseWorksheetNotes(worksheet.notes ?? '')
 
@@ -210,6 +228,16 @@ function EndoWorksheetPageBody({
         (err: unknown) =>
           err instanceof Error ? err.message : 'Update item failed'
       )
+  }
+
+  // Moves the ticked rows to today's line; each row's outcome comes back.
+  // The page, and with it the preview, refetches either way.
+  async function reapplyRules(itemIds: number[]) {
+    try {
+      return (await applyPrepRulesReapply(id, itemIds)).results
+    } finally {
+      void queryClient.invalidateQueries({ queryKey: worksheetPageKey(id) })
+    }
   }
 
   function applyToAll(methodId: number, instrumentId: number) {

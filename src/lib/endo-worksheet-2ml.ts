@@ -120,6 +120,17 @@ export function allowedCartridges(
     .sort((a, b) => b.sensitivity_eu_ml - a.sensitivity_eu_ml)
 }
 
+/** A cartridge type id as the lab reads it, its sensitivity ("0.05
+ *  cartridge"); an id outside `cartridges` by its number. */
+export function cartridgeLabel(
+  cartridges: EndoCartridgeOption[]
+): (id: number) => string {
+  return id => {
+    const c = cartridges.find(o => o.id === id)
+    return c ? `${fmt(c.sensitivity_eu_ml)} cartridge` : `cartridge #${id}`
+  }
+}
+
 /** The maths' context for this worksheet (contract name). */
 export function endoCtxFor(
   ws: WorksheetRow,

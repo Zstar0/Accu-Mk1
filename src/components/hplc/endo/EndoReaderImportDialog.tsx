@@ -293,9 +293,16 @@ export function EndoReaderImportDialog({
         res,
         chosen.map(r => r.item.id)
       )
-      toast.success(
-        `${res.applied} ${res.applied === 1 ? 'reading' : 'readings'} applied from ${staged.fileName}`
-      )
+      const applied = `${res.applied} ${res.applied === 1 ? 'reading' : 'readings'} applied from ${staged.fileName}`
+      // Slice 5: rows the server left alone (a promoted row), each with why.
+      const skipped = res.skipped ?? []
+      if (skipped.length)
+        toast.warning(`${applied}; ${skipped.length} not applied`, {
+          description: skipped
+            .map(s => `${s.sample_id} (${s.reason})`)
+            .join(', '),
+        })
+      else toast.success(applied)
       close()
     } catch (e) {
       setError(
