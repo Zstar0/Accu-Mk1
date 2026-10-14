@@ -19,6 +19,7 @@ import {
   worksheetPageKey,
 } from '@/hooks/use-worksheet-drawer'
 import { useLabCalendar } from '@/hooks/use-lab-calendar'
+import { useEndoPrepRules } from '@/services/endo-prep-rules'
 import { useSlaForSubjects } from '@/services/sla-subjects'
 import { worksheetItemSlaSubjects } from '@/lib/worksheet-sla-subjects'
 import { endoItemsInBenchOrder } from '@/lib/endo-worksheet'
@@ -162,12 +163,15 @@ function EndoWorksheetPageBody({
     ),
     calendar
   )
+  // The rule lines (slice 5): a row that is not locked follows them.
+  const { data: rules = [] } = useEndoPrepRules(twoMl)
   const cartridges = allowedCartridges(worksheet, catalog)
   const ctx = endoCtxFor(worksheet, catalog)
   const rows = endoRowsFor(
     twoMl ? bacWaterLast(bench) : bench,
     worksheet,
-    catalog
+    catalog,
+    rules
   )
   const boxProps: EndoBoxProps = {
     worksheet,

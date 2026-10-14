@@ -4,11 +4,15 @@ import { act, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { EndoWorksheetActions } from '@/components/hplc/EndoWorksheetActions'
 import {
+  getEndoPrepRules,
   getWorksheet,
   listConsumables,
+  recordWorksheetPrinted,
   type ConsumableType,
+  type EndoPrepRuleOut,
   type WorksheetListItem,
 } from '@/lib/api'
+import { printHtmlDocument } from '@/lib/print-document'
 import type * as ApiModule from '@/lib/api'
 import type * as SlaSubjects from '@/services/sla-subjects'
 import {
@@ -21,6 +25,11 @@ vi.mock('@/lib/api', async importOriginal => ({
   getWorksheet: vi.fn(),
   listConsumables: vi.fn(),
   recordWorksheetPrinted: vi.fn(),
+  getEndoPrepRules: vi.fn().mockResolvedValue([]),
+}))
+vi.mock('@/lib/print-document', () => ({
+  printHtmlDocument: vi.fn(),
+  downloadTextFile: vi.fn(),
 }))
 vi.mock('@/hooks/use-lab-calendar', () => ({
   useLabCalendar: () => ({
@@ -179,6 +188,44 @@ describe('EndoWorksheetActions', () => {
     )
     for (const name of ['Preview', 'Print', 'CSV'])
       expect(screen.getByRole('button', { name })).toBeEnabled()
+  })
+
+  it('prints from the rules read at Print, not the list it loaded with', async () => {
+    const r300: EndoPrepRuleOut = {
+      id: 1,
+      peptide_id: 7,
+      min_mg: null,
+      max_mg: null,
+      total_dilution: 300,
+      step1_ratio: null,
+      cartridge_type_id: null,
+      status: 'trial',
+      note: null,
+      sort_order: 1,
+      active: true,
+      peptide_name: 'Retatrutide',
+      cartridge_name: null,
+      updated_at: null,
+    }
+    vi.mocked(getEndoPrepRules)
+      .mockResolvedValueOnce([])
+      .mockResolvedValueOnce([r300])
+    vi.mocked(recordWorksheetPrinted).mockResolvedValue({
+      printed_at: '2026-10-14T15:00:00Z',
+      print_count: 1,
+    })
+    renderActions(endoWorksheet([endoItem({ sample_peptide_id: 7 })]))
+    const print = screen.getByRole('button', { name: 'Print' })
+    await waitFor(() => expect(print).toBeEnabled())
+    // loaded with no rules: the preview is the standard 1:250
+    expect(previewHtml()).not.toContain('<span class="rat">1:15')
+    fireEvent.click(print)
+    await waitFor(() => expect(printHtmlDocument).toHaveBeenCalledTimes(1))
+    // read again at Print: 1:300 makes step 2 a 1:15
+    expect(vi.mocked(printHtmlDocument).mock.calls[0]?.[0]).toContain(
+      '<span class="rat">1:15'
+    )
+    expect(recordWorksheetPrinted).toHaveBeenCalledWith(77)
   })
 
   it('waits for the SLA due dates on stock and 2 mL alike', () => {

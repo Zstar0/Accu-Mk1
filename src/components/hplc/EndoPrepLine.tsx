@@ -23,9 +23,11 @@ import {
   fmtConc,
   formOf,
   prep2Check,
+  targetDilutionOf,
   waterOf,
   type EndoForm,
 } from '@/lib/endo-prep-2ml'
+import type { EndoPrepRule } from '@/lib/endo-prep-rules'
 import {
   endoPrepFor,
   shortLabDate,
@@ -38,6 +40,7 @@ import {
 } from '@/lib/endo-worksheet-2ml'
 import { useLabCalendar } from '@/hooks/use-lab-calendar'
 import { worksheetPageKey } from '@/hooks/use-worksheet-drawer'
+import { useEndoPrepRules } from '@/services/endo-prep-rules'
 
 // Radix Select holds no empty value: Form Auto and the inherited cartridge
 // ride on these and go out as null, as the blank option did.
@@ -95,6 +98,8 @@ export function EndoPrepLine({
     enabled: twoMl,
     staleTime: 5 * 60_000,
   })
+  // A row that is not locked follows the live rules (slice 5), as on the page.
+  const { data: rules = [] } = useEndoPrepRules(twoMl)
   const prep = endoPrepFor(item)
   const received = calendar ? labDate(item.date_received, calendar) : null
   const due = calendar ? labDate(dueAt, calendar) : null
@@ -118,6 +123,7 @@ export function EndoPrepLine({
           item={item}
           worksheet={runWs}
           catalog={catalog}
+          rules={rules}
           disabled={isCompleted || pending}
           onUpdate={onUpdate}
         />
@@ -220,18 +226,21 @@ export function EndoPrep2mlFields({
   item,
   worksheet,
   catalog,
+  rules,
   disabled,
   onUpdate,
 }: {
   item: WorksheetItemRow
   worksheet: WorksheetListItem
   catalog: ConsumableType[]
+  /** The live rule lines (slice 5). */
+  rules: EndoPrepRule[]
   /** A completed worksheet, or the run settings still loading. */
   disabled: boolean
   onUpdate: (data: WorksheetItemPatch) => void
 }) {
   const ctx = endoCtxFor(worksheet, catalog)
-  const [row] = endoRowsFor([item], worksheet, catalog)
+  const [row] = endoRowsFor([item], worksheet, catalog, rules)
   if (!row) return null
   const s = row.sample
   const form = formOf(s)
@@ -240,15 +249,19 @@ export function EndoPrep2mlFields({
   const bac = form === 'bac'
   const k = prep2Check(s, ctx)
   const plan = dilutionPlan(s, ctx)
-  const stdTotal = ctx.params.stdTotalDilution
+  // The row's total without one of its own: its rule's, else the method's.
+  const defaultTotal =
+    targetDilutionOf({ ...s, totalDilution: null }, ctx) ??
+    ctx.params.stdTotalDilution
   const cartridges = allowedCartridges(worksheet, catalog)
   const own = item.cartridge_type_id ?? null
   const unlisted = own != null && !cartridges.some(c => c.id === own)
 
-  // Box 2's rule: the standard is stored as null, and a total already stored
-  // is not sent again.
+  // Box 2's rule: the row's default total is stored as null, and a total
+  // already stored is not sent again. On a ruled row the method's standard
+  // is a value of its own, which beats the rule.
   function commitTotal(v: number | null) {
-    const next = v === stdTotal ? null : v
+    const next = v === defaultTotal ? null : v
     if (next === (item.prep_total_dilution ?? null)) return
     onUpdate({ prep_total_dilution: next })
   }
@@ -309,7 +322,7 @@ export function EndoPrep2mlFields({
           unit="1:N"
           value={item.prep_total_dilution ?? null}
           overridden={item.prep_total_dilution != null}
-          computed={stdTotal}
+          computed={defaultTotal}
           disabled={disabled}
           onCommit={commitTotal}
         />
@@ -333,7 +346,7 @@ export function EndoPrep2mlFields({
           </SelectTrigger>
           <SelectContent>
             <SelectItem value={INHERIT}>
-              {`${bac ? 'bac water' : 'run'} (${row.inherited ? fmt(row.inherited.sensitivity) : '-'})`}
+              {`${bac ? 'bac water' : row.ruleCartridge ? 'rule' : 'run'} (${row.inherited ? fmt(row.inherited.sensitivity) : '-'})`}
             </SelectItem>
             {unlisted && (
               <SelectItem value={String(own)}>

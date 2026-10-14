@@ -1,6 +1,7 @@
 import { useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { Download, Eye, Printer } from 'lucide-react'
+import { toast } from 'sonner'
 import { Button } from '@/components/ui/button'
 import {
   Dialog,
@@ -9,12 +10,14 @@ import {
   DialogTitle,
 } from '@/components/ui/dialog'
 import {
+  getEndoPrepRules,
   getWorksheet,
   listConsumables,
   recordWorksheetPrinted,
   type WorksheetListItem,
   type WorksheetUser,
 } from '@/lib/api'
+import type { EndoPrepRule } from '@/lib/endo-prep-rules'
 import { buildEndoBenchSheetHtml, buildEndoCsv } from '@/lib/endo-bench-sheet'
 import {
   buildEndoBenchSheet2Html,
@@ -31,6 +34,10 @@ import { downloadTextFile, printHtmlDocument } from '@/lib/print-document'
 import { displayName } from '@/lib/user-display'
 import { useLabCalendar } from '@/hooks/use-lab-calendar'
 import { worksheetPageKey } from '@/hooks/use-worksheet-drawer'
+import {
+  ENDO_PREP_RULES_KEY,
+  useEndoPrepRules,
+} from '@/services/endo-prep-rules'
 import { useSlaForSubjects } from '@/services/sla-subjects'
 
 /**
@@ -74,6 +81,8 @@ export function EndoWorksheetActions({
     staleTime: 5 * 60_000,
   })
   const needsCatalog = twoMl && !sheetWorksheet?.endo_method?.cartridges.length
+  // The rule lines a row that is not locked yet prints under (slice 5).
+  const { data: rules, isError: rulesFailed } = useEndoPrepRules(twoMl)
   // Due dates key on the items the sheet is built from.
   const sheetItems = (sheetWorksheet ?? worksheet).items
   const endoItems = sheetItems.filter(isEndoWorksheetItem)
@@ -117,10 +126,13 @@ export function EndoWorksheetActions({
       ])
     ),
   })
-  const sheetHtml = (preview: boolean) =>
+  const sheetHtml = (
+    preview: boolean,
+    ruleLines: EndoPrepRule[] = rules ?? []
+  ) =>
     twoMl && sheetWorksheet
       ? buildEndoBenchSheet2Html(
-          buildEndoSheet2Doc(sheetWorksheet, opts(), catalog),
+          buildEndoSheet2Doc(sheetWorksheet, opts(), catalog, ruleLines),
           { preview }
         )
       : buildEndoBenchSheetHtml(buildEndoSheetDoc(worksheet, opts()), {
@@ -128,7 +140,9 @@ export function EndoWorksheetActions({
         })
   const sheetCsv = () =>
     twoMl && sheetWorksheet
-      ? buildEndoCsv2(buildEndoSheet2Doc(sheetWorksheet, opts(), catalog))
+      ? buildEndoCsv2(
+          buildEndoSheet2Doc(sheetWorksheet, opts(), catalog, rules ?? [])
+        )
       : buildEndoCsv(buildEndoSheetDoc(worksheet, opts()))
   const fileStem = worksheet.title.replace(/[^A-Za-z0-9._-]+/g, '_')
   // A failed refetch keeps the data it had (react-query): only a read with
@@ -136,7 +150,8 @@ export function EndoWorksheetActions({
   const runSettingsFailed =
     twoMl &&
     ((needsFull && fullFailed && !full) ||
-      (needsCatalog && catalogFailed && !catalog))
+      (needsCatalog && catalogFailed && !catalog) ||
+      (rulesFailed && !rules))
   const waiting = !calendar
     ? 'Loading the lab calendar…'
     : runSettingsFailed
@@ -145,10 +160,30 @@ export function EndoWorksheetActions({
         ? 'Loading the run settings…'
         : slaLoading
           ? 'Loading the SLA due dates…'
-          : undefined
+          : twoMl && !rules
+            ? 'Loading the prep rules…'
+            : undefined
 
-  function print() {
-    printHtmlDocument(sheetHtml(false))
+  // The print locks every row not yet locked to the rule the server matches
+  // at that moment (spec 6), so the paper is built from the rules read now,
+  // never from a cached list that may be minutes old.
+  async function print() {
+    let ruleLines: EndoPrepRule[] = []
+    if (twoMl) {
+      try {
+        ruleLines = await queryClient.fetchQuery({
+          queryKey: ENDO_PREP_RULES_KEY,
+          queryFn: getEndoPrepRules,
+          staleTime: 0,
+        })
+      } catch (err) {
+        toast.error(
+          `Not printed: ${err instanceof Error ? err.message : 'the prep rules did not load'}`
+        )
+        return
+      }
+    }
+    printHtmlDocument(sheetHtml(false, ruleLines))
     recordPrint.mutate()
   }
 
@@ -169,7 +204,7 @@ export function EndoWorksheetActions({
         size="sm"
         disabled={waiting !== undefined}
         title={waiting ?? 'Print the bench sheet to take to the bench'}
-        onClick={print}
+        onClick={() => void print()}
       >
         <Printer className="h-3.5 w-3.5" />
         Print
@@ -207,7 +242,7 @@ export function EndoWorksheetActions({
               className="bg-teal-600 text-white hover:bg-teal-600/90"
               onClick={() => {
                 setPreviewHtml(null)
-                print()
+                void print()
               }}
             >
               <Printer className="h-3.5 w-3.5" />

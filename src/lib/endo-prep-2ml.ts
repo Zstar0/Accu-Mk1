@@ -11,11 +11,14 @@
  *   water's 0.01) and passes the method's allowed lambdas for `needs`.
  * - The standard total dilution and the reconstitution water come from the
  *   method's run parameters (ctx.params), never module constants (spec 4.4).
- * - Method rules and their rule lock are not here (slice 5).
+ * - A row's method rule (slice 5) arrives resolved on `rule` (matching and
+ *   the lock are endo-prep-rules.ts): per field, a typed value beats the
+ *   rule, which beats the standard.
  * - A reading whose reader test failed spike recovery or CV is 'invalid'.
  * Pure: no DOM, no fetch, no storage. Stock worksheets keep endo-prep.ts.
  */
 import { DEFAULT_DILUTION, fmt, isBacWater } from '@/lib/endo-prep'
+import type { EndoPrepRule } from '@/lib/endo-prep-rules'
 
 export type EndoForm = 'powder' | 'liquid' | 'bac'
 export type EndoVerdict = 'pass' | 'fail' | 'inconclusive' | 'invalid' | null
@@ -90,6 +93,10 @@ export interface EndoSample {
   lambda: number | null
   reading: string | null
   reader: EndoReaderRecord | null
+  /** The method rule the row runs under (slice 5): its lock, else the live
+   *  match; null or absent for none. Its total and step 1 ratio sit between
+   *  the row's own values and the standard. */
+  rule?: EndoPrepRule | null
 }
 
 export interface EndoCtx {
@@ -229,12 +236,26 @@ export function mvcFor(lambda: number | null, s: EndoSample): number | null {
 
 /* ---------------- the bench steps ---------------- */
 
-function totalOf(s: EndoSample, ctx: EndoCtx): number {
-  const own = fin(s.totalDilution)
-  return own !== null && own > 0 ? own : ctx.params.stdTotalDilution
+/** The rule's total when it sets one (> 0), else null. */
+function ruleTotalOf(s: EndoSample): number | null {
+  const r = fin(s.rule?.total_dilution)
+  return r !== null && r > 0 ? r : null
 }
 
-/** The row's desired total: its own when > 0, else the method's. Bac: null. */
+/** The rule's step 1 ratio when it sets one (>= 1), else null. */
+function ruleRatioOf(s: EndoSample): number | null {
+  const r = fin(s.rule?.step1_ratio)
+  return r !== null && r >= 1 ? r : null
+}
+
+function totalOf(s: EndoSample, ctx: EndoCtx): number {
+  const own = fin(s.totalDilution)
+  if (own !== null && own > 0) return own
+  return ruleTotalOf(s) ?? ctx.params.stdTotalDilution
+}
+
+/** The row's desired total: its own when > 0, else its rule's, else the
+ *  method's. Bac: null. */
 export function targetDilutionOf(s: EndoSample, ctx: EndoCtx): number | null {
   return formOf(s) === 'bac' ? null : totalOf(s, ctx)
 }
@@ -273,6 +294,9 @@ export interface EndoStepPlan {
   totalUl: number | null
   running: number | null
   own: boolean
+  /** The ratio came from the row's rule (step 1 its ratio; step 2 derived
+   *  from a ruled total or a ruled step 1), not typed and not the standard. */
+  ruled: boolean
   fits: boolean
   diluent: string
 }
@@ -288,7 +312,15 @@ export function stepsOf(s: EndoSample, ctx: EndoCtx): EndoStepPlan[] {
   const own = s.steps ?? [null, null, null]
   const target = totalOf(s, ctx)
   const typedR1 = fin(own[0]?.ratio)
-  const r1 = typedR1 ?? STEP1_RATIO
+  // The rule's ratio is this row's standard (Dennis's r1Std): typing it is
+  // not a value set by hand.
+  const ruleR1 = ruleRatioOf(s)
+  const r1Std = ruleR1 ?? STEP1_RATIO
+  const r1 = typedR1 ?? r1Std
+  const step1Ruled = ruleR1 !== null && (typedR1 === null || typedR1 === r1Std)
+  const ownTotal = fin(s.totalDilution)
+  const totalRuled =
+    !(ownTotal !== null && ownTotal > 0) && ruleTotalOf(s) !== null
   const out: EndoStepPlan[] = []
   let running = 1
   DILUTION_STEPS.forEach((def, i) => {
@@ -314,7 +346,10 @@ export function stepsOf(s: EndoSample, ctx: EndoCtx): EndoStepPlan[] {
       running: factor === null ? null : running,
       own:
         sampleUl !== def.sampleUl ||
-        (!!def.byRatio && typedR1 !== null && typedR1 !== STEP1_RATIO),
+        (!!def.byRatio && typedR1 !== null && typedR1 !== r1Std),
+      ruled: def.byRatio
+        ? step1Ruled
+        : !!def.derived && (totalRuled || step1Ruled),
       fits: totalUl !== null && totalUl <= TUBE_UL,
       diluent: def.diluent,
     })
@@ -341,7 +376,8 @@ export function vialDilutionOf(s: EndoSample, ctx: EndoCtx): number | null {
 /**
  * target: the desired total; total: what the steps make (null when they
  * cannot); fits: every step fits its tube; standard: the method's total and
- * no step set by hand. Bac water: no steps, its 20x as target and total.
+ * no step set by hand or by a rule. Bac water: no steps, its 20x as target
+ * and total.
  */
 export function dilutionPlan(
   s: EndoSample,
@@ -369,7 +405,8 @@ export function dilutionPlan(
     total: vialDilutionOf(s, ctx),
     fits: steps.every(st => st.fits),
     standard:
-      target === ctx.params.stdTotalDilution && steps.every(st => !st.own),
+      target === ctx.params.stdTotalDilution &&
+      steps.every(st => !st.own && !st.ruled),
   }
 }
 

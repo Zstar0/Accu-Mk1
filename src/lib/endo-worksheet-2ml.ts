@@ -2,8 +2,9 @@
  * Glue between a worksheet as GET /worksheets/{id} serves it and the 2 mL
  * maths (src/lib/endo-prep-2ml.ts), resolved as spec 2026-10-10 sections 4.2
  * to 4.4 say: the run parameters, the allowed cartridges and each row's
- * sample with its cartridge. Pure, so the page, its three boxes and the paper
- * resolve the same cartridge and the same numbers.
+ * sample with its cartridge and its method rule (slice 5). Pure, so the
+ * page, its three boxes and the paper resolve the same cartridge and the
+ * same numbers.
  */
 import type {
   ConsumableType,
@@ -28,6 +29,7 @@ import {
   type EndoStepOverride,
   type EndoStepPlan,
 } from '@/lib/endo-prep-2ml'
+import { rowRule, type EndoPrepRule } from '@/lib/endo-prep-rules'
 import { endoIdentityFor, type WorksheetItemRow } from '@/lib/endo-worksheet'
 
 export type { WorksheetItemRow }
@@ -59,8 +61,10 @@ export interface EndoRow {
    *  every reading saved on the row (spec 9). */
   cartridge: EndoCartridgeRef | null
   /** What the row gets without a pick of its own: bac water's 0.01, else
-   *  the run cartridge. */
+   *  its rule's cartridge when the method allows it, else the run cartridge. */
   inherited: EndoCartridgeRef | null
+  /** `inherited` is the row's rule's cartridge (slice 5). */
+  ruleCartridge?: boolean
 }
 
 const sameLambda = (a: number, b: number) => Math.abs(a - b) < 1e-9
@@ -171,7 +175,10 @@ function stepsFrom(wire: WorksheetItemRow['prep_steps']): EndoSample['steps'] {
 }
 
 /** The row as the maths reads it, before a cartridge is resolved. */
-function baseSample(item: WorksheetItemRow): EndoSample {
+function baseSample(
+  item: WorksheetItemRow,
+  rule: EndoPrepRule | null = null
+): EndoSample {
   return {
     sampleId: item.sample_id,
     identity: endoIdentityFor(item),
@@ -184,7 +191,29 @@ function baseSample(item: WorksheetItemRow): EndoSample {
     lambda: null,
     reading: item.result_reading ?? null,
     reader: item.result_reader ?? null,
+    rule,
   }
+}
+
+/**
+ * The method rule a row runs under (spec 4, 5): none for bac water, which is
+ * never ruled (formOf, so a form typed on the row decides, as the server's
+ * promote check does), else rowRule on the parent's single catalog peptide
+ * and the weight Box 2 reads.
+ */
+function ruleFor(
+  item: WorksheetItemRow,
+  ws: WorksheetRow,
+  rules: EndoPrepRule[]
+): EndoPrepRule | null {
+  const base = baseSample(item)
+  if (formOf(base) === 'bac') return null
+  return rowRule(item, rules, {
+    peptideId: item.sample_peptide_id ?? null,
+    weightMg: base.weightMg,
+    isBac: false,
+    endoPrep: ws.endo_prep ?? null,
+  })
 }
 
 /**
@@ -202,10 +231,11 @@ export function bacWaterLast(items: WorksheetItemRow[]): WorksheetItemRow[] {
 function resolveRow(
   item: WorksheetItemRow,
   ws: WorksheetRow,
-  catalog: ConsumableType[]
-): Pick<EndoRow, 'sample' | 'cartridge' | 'inherited'> {
+  catalog: ConsumableType[],
+  rule: EndoPrepRule | null
+): Pick<EndoRow, 'sample' | 'cartridge' | 'inherited' | 'ruleCartridge'> {
   const allowed = allowedCartridges(ws, catalog)
-  const base = baseSample(item)
+  const base = baseSample(item, rule)
   // Bac water runs on the allowed 0.01 unless its row says otherwise
   // (Dennis, 2026-10-09; spec 4.3). Of two allowed 0.01 types, the row's own.
   const bacTypes =
@@ -214,9 +244,17 @@ function resolveRow(
       : []
   const bacType =
     bacTypes.find(c => c.id === item.cartridge_type_id) ?? bacTypes[0]
+  // The rule's cartridge only when the method allows it (spec 5); else the
+  // chain goes on as before.
+  const ruleType =
+    rule?.cartridge_type_id != null
+      ? allowed.find(c => c.id === rule.cartridge_type_id)
+      : undefined
   const inherited = bacType
     ? { id: bacType.id, sensitivity: bacType.sensitivity_eu_ml }
-    : runCartridgeFor(ws, catalog)
+    : ruleType
+      ? { id: ruleType.id, sensitivity: ruleType.sensitivity_eu_ml }
+      : runCartridgeFor(ws, catalog)
   const cartridge =
     item.cartridge_type_id != null
       ? refFor(
@@ -229,30 +267,44 @@ function resolveRow(
     sample: { ...base, lambda: cartridge?.sensitivity ?? null },
     cartridge,
     inherited,
+    ruleCartridge: !bacType && !!ruleType,
   }
 }
 
 /** The row as the 2 mL maths reads it (4.2, 4.3). `catalog` is the allowed
- *  list's source when no method resolves. */
+ *  list's source when no method resolves; `rules` the live rule lines
+ *  (slice 5), which reach only rows that are not locked. */
 export function endoSampleFor(
   item: WorksheetItemRow,
   ws: WorksheetRow,
-  catalog: ConsumableType[] = []
+  catalog: ConsumableType[] = [],
+  rules: EndoPrepRule[] = []
 ): EndoSample {
-  return resolveRow(item, ws, catalog).sample
+  return resolveRow(item, ws, catalog, ruleFor(item, ws, rules)).sample
 }
 
 /** The page's rows, numbered in the order given (Box 1's order, bacWaterLast). */
 export function endoRowsFor(
   ordered: WorksheetItemRow[],
   ws: WorksheetRow,
-  catalog: ConsumableType[] = []
+  catalog: ConsumableType[] = [],
+  rules: EndoPrepRule[] = []
 ): EndoRow[] {
   return ordered.map((item, i) => ({
     item,
     n: i + 1,
-    ...resolveRow(item, ws, catalog),
+    ...resolveRow(item, ws, catalog, ruleFor(item, ws, rules)),
   }))
+}
+
+/** A row resolved under another rule: Re-apply's "new" side (spec 7). */
+export function endoRowUnderRule(
+  row: EndoRow,
+  ws: WorksheetRow,
+  catalog: ConsumableType[],
+  rule: EndoPrepRule | null
+): EndoRow {
+  return { ...row, ...resolveRow(row.item, ws, catalog, rule) }
 }
 
 /** Dennis's fmtConc lives with the maths (Task 8); re-exported here so the

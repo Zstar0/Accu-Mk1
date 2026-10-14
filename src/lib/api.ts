@@ -6,6 +6,11 @@ import { getApiBaseUrl } from './config'
 import { getAuthToken } from '@/store/auth-store'
 import type { EffectivePriority } from '@/lib/api-priorities'
 import type { EndoForm, EndoReaderRecord } from '@/lib/endo-prep-2ml'
+import type {
+  EndoPrepRule,
+  PrepHistoryEntry,
+  PrepRuleLock,
+} from '@/lib/endo-prep-rules'
 
 // Helper to get current API base URL (called dynamically)
 export const API_BASE_URL = () => getApiBaseUrl()
@@ -6446,6 +6451,15 @@ export interface WorksheetListItem {
       keyword: string
       native: boolean
     } | null
+    /** Slice 5, 2 mL worksheets only: the rule lock (null: following the
+     *  live rules), the "no rule" switch, the special-prep note, the row's
+     *  past runs, and the parent's single catalog peptide (null: a blend or
+     *  none), which rules match on. */
+    prep_rule?: PrepRuleLock | null
+    prep_rules_off?: boolean
+    prep_note?: string | null
+    prep_history?: PrepHistoryEntry[] | null
+    sample_peptide_id?: number | null
   }[]
 }
 
@@ -6604,6 +6618,9 @@ export interface WorksheetItemPatch {
   prep_steps?: EndoPrepStepsWire | null
   cartridge_type_id?: number | null
   result_reading?: string | null
+  /** Slice 5: the "no rule" switch and the special-prep note (null clears). */
+  prep_rules_off?: boolean
+  prep_note?: string | null
 }
 
 /** One worksheet in a bench kind's run log (no items). */
@@ -6770,6 +6787,9 @@ export async function importReaderResults(
   applied: number
   items: WorksheetListItem['items']
   endo_method: EndoMethodInfo | null
+  /** Slice 5: rows the import left unchanged, with why (a promoted row:
+   *  "the row is promoted; its prep is final"). */
+  skipped?: { item_id: number; sample_id: string; reason: string }[]
 }> {
   const response = await fetch(
     `${API_BASE_URL()}/worksheets/${worksheetId}/reader-import`,
@@ -6833,6 +6853,169 @@ export async function promoteWorksheetRows(
   if (!response.ok)
     throw new Error(
       await extractErrorMessage(response, `Promote failed: ${response.status}`)
+    )
+  return response.json()
+}
+
+/** A rule line as GET /endo-prep-rules lists it (slice 5). */
+export interface EndoPrepRuleOut extends EndoPrepRule {
+  peptide_name: string | null
+  cartridge_name: string | null
+  updated_at: string | null
+}
+
+/** POST body; PATCH takes any subset. The server sets sort_order. */
+export interface EndoPrepRuleIn {
+  peptide_id: number
+  min_mg: number | null
+  max_mg: number | null
+  total_dilution: number | null
+  step1_ratio: number | null
+  cartridge_type_id: number | null
+  status: EndoPrepRule['status']
+  note: string | null
+  active: boolean
+}
+
+/** A save's result: the line, and warnings that did not stop it. */
+export interface EndoPrepRuleSaved {
+  rule: EndoPrepRuleOut
+  warnings: string[]
+}
+
+/** A locked row whose snapshot differs from today's match (spec 7). */
+export interface PrepRulesReapplyCandidate {
+  item_id: number
+  sample_id: string
+  old: PrepRuleLock
+  new_rule: EndoPrepRule | null
+}
+
+/** Why Re-apply left a row as it was, word for word as the server sends it
+ *  (backend/endo_prep_rules.py REAPPLY_*, and the promote's REASON_PROMOTED). */
+export type PrepRulesReapplyReason =
+  | 'not on this worksheet'
+  | 'the worksheet is completed'
+  | 'prep rules are for 2 mL worksheets'
+  | 'the row is set to no rule'
+  | "the row is not locked; it already follows today's rules"
+  | "nothing to re-apply: the row already matches today's rule"
+  | 'already promoted'
+
+export interface PrepRulesReapplyResult {
+  item_id: number
+  applied: boolean
+  reason: PrepRulesReapplyReason | null
+}
+
+/** Every line, inactive ones included, by sort_order then id. */
+export async function getEndoPrepRules(): Promise<EndoPrepRuleOut[]> {
+  const response = await fetch(`${API_BASE_URL()}/endo-prep-rules`, {
+    headers: getBearerHeaders(),
+  })
+  if (!response.ok)
+    throw new Error(
+      await extractErrorMessage(
+        response,
+        `Load prep rules failed: ${response.status}`
+      )
+    )
+  return response.json()
+}
+
+/** 400 carries the save check that refused it, word for word. */
+export async function createEndoPrepRule(
+  body: EndoPrepRuleIn
+): Promise<EndoPrepRuleSaved> {
+  const response = await fetch(`${API_BASE_URL()}/endo-prep-rules`, {
+    method: 'POST',
+    headers: getBearerHeaders('application/json'),
+    body: JSON.stringify(body),
+  })
+  if (!response.ok)
+    throw new Error(
+      await extractErrorMessage(
+        response,
+        `Save prep rule failed: ${response.status}`
+      )
+    )
+  return response.json()
+}
+
+export async function updateEndoPrepRule(
+  id: number,
+  body: Partial<EndoPrepRuleIn>
+): Promise<EndoPrepRuleSaved> {
+  const response = await fetch(`${API_BASE_URL()}/endo-prep-rules/${id}`, {
+    method: 'PATCH',
+    headers: getBearerHeaders('application/json'),
+    body: JSON.stringify(body),
+  })
+  if (!response.ok)
+    throw new Error(
+      await extractErrorMessage(
+        response,
+        `Save prep rule failed: ${response.status}`
+      )
+    )
+  return response.json()
+}
+
+/** The whole list in its new order; returns it as GET does. */
+export async function reorderEndoPrepRules(
+  ids: number[]
+): Promise<EndoPrepRuleOut[]> {
+  const response = await fetch(`${API_BASE_URL()}/endo-prep-rules/reorder`, {
+    method: 'POST',
+    headers: getBearerHeaders('application/json'),
+    body: JSON.stringify({ ids }),
+  })
+  if (!response.ok)
+    throw new Error(
+      await extractErrorMessage(
+        response,
+        `Reorder prep rules failed: ${response.status}`
+      )
+    )
+  return response.json()
+}
+
+export async function getPrepRulesReapply(
+  worksheetId: number
+): Promise<{ candidates: PrepRulesReapplyCandidate[] }> {
+  const response = await fetch(
+    `${API_BASE_URL()}/worksheets/${worksheetId}/prep-rules/reapply`,
+    { headers: getBearerHeaders() }
+  )
+  if (!response.ok)
+    throw new Error(
+      await extractErrorMessage(
+        response,
+        `Load re-apply preview failed: ${response.status}`
+      )
+    )
+  return response.json()
+}
+
+/** Each row is re-checked on the server; a refusal comes back on its row. */
+export async function applyPrepRulesReapply(
+  worksheetId: number,
+  itemIds: number[]
+): Promise<{ results: PrepRulesReapplyResult[] }> {
+  const response = await fetch(
+    `${API_BASE_URL()}/worksheets/${worksheetId}/prep-rules/reapply`,
+    {
+      method: 'POST',
+      headers: getBearerHeaders('application/json'),
+      body: JSON.stringify({ item_ids: itemIds }),
+    }
+  )
+  if (!response.ok)
+    throw new Error(
+      await extractErrorMessage(
+        response,
+        `Re-apply rules failed: ${response.status}`
+      )
     )
   return response.json()
 }

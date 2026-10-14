@@ -16,6 +16,7 @@ vi.mock('@/lib/api', async importOriginal => ({
   getMethods: vi.fn().mockResolvedValue([]),
   listConsumables: vi.fn().mockResolvedValue([]),
   updateWorksheetItem: vi.fn(),
+  getEndoPrepRules: vi.fn().mockResolvedValue([]),
 }))
 vi.mock('@/hooks/use-lab-calendar', () => ({
   useLabCalendar: () => ({ calendar: null, isLoading: false }),

@@ -49,6 +49,7 @@ import {
   type EndoSample,
   type EndoStepPlan,
 } from '@/lib/endo-prep-2ml'
+import type { EndoPrepRule } from '@/lib/endo-prep-rules'
 import { splitIdentity } from '@/lib/endo-reader'
 import {
   BW_LAL_UL,
@@ -118,12 +119,14 @@ export function productIdentity(raw: string): string {
  * The 2 mL sheet's document for a worksheet as GET /worksheets/{id} serves
  * it: its endo rows in Box 1 order through endoRowsFor (so paper and screen
  * resolve the same cartridge), each with its due date, and the run cartridge.
- * `catalog` is the allowed list's source when no method resolves.
+ * `catalog` is the allowed list's source when no method resolves; `rules`
+ * the live rule lines, which reach the rows that are not locked yet.
  */
 export function buildEndoSheet2Doc(
   ws: WorksheetListItem,
   opts: EndoSheetOptions,
-  catalog: ConsumableType[] = []
+  catalog: ConsumableType[] = [],
+  rules: EndoPrepRule[] = []
 ): EndoSheet2Doc {
   const cal = opts.calendar
   const holidays = new Map<string, string>()
@@ -131,7 +134,8 @@ export function buildEndoSheet2Doc(
   const bench = bacWaterLast(
     endoItemsInBenchOrder(ws.items, opts.dueAtByItemId, cal)
   )
-  const rows: EndoSheet2Row[] = endoRowsFor(bench, ws, catalog).map(r => {
+  const resolved = endoRowsFor(bench, ws, catalog, rules)
+  const rows: EndoSheet2Row[] = resolved.map(r => {
     const item = r.item
     const received = cal ? labDate(item.date_received, cal) : null
     const due = endoDueFor(opts.dueAtByItemId.get(item.id), cal)

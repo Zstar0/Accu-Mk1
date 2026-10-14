@@ -960,7 +960,7 @@ function TwoMlPrepCells({
           </SelectTrigger>
           <SelectContent>
             <SelectItem value={INHERIT}>
-              {`${bac ? 'bac water' : 'run'} (${row.inherited ? fmt(row.inherited.sensitivity) : '-'})`}
+              {`${bac ? 'bac water' : row.ruleCartridge ? 'rule' : 'run'} (${row.inherited ? fmt(row.inherited.sensitivity) : '-'})`}
             </SelectItem>
             {unlisted && (
               <SelectItem value={String(own)}>

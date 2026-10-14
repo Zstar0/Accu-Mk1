@@ -4,6 +4,7 @@ import { fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { EndoPrepLine } from '@/components/hplc/EndoPrepLine'
 import {
+  getEndoPrepRules,
   getWorksheet,
   listConsumables,
   type WorksheetListItem,
@@ -19,6 +20,7 @@ vi.mock('@/lib/api', async importOriginal => ({
   ...(await importOriginal<typeof ApiModule>()),
   getWorksheet: vi.fn(),
   listConsumables: vi.fn().mockResolvedValue([]),
+  getEndoPrepRules: vi.fn().mockResolvedValue([]),
 }))
 vi.mock('@/hooks/use-lab-calendar', () => ({
   useLabCalendar: () => ({ calendar: null, isLoading: false }),
@@ -206,5 +208,39 @@ describe('EndoPrepLine on a mixed worksheet', () => {
     expect(cartridgePicker()).toHaveTextContent(/^0\.1 \(not in the list\)$/)
     await pick(cartridgePicker(), 'run (0.05)')
     expect(second.onUpdate).toHaveBeenCalledWith({ cartridge_type_id: null })
+  })
+
+  // Slice 5: the rule's total and cartridge are the row's defaults; the
+  // method's 1:250 typed on a ruled row is a value of its own (D6).
+  it("shows a ruled row's total and cartridge, and keeps the standard typed over the rule", async () => {
+    vi.mocked(getEndoPrepRules).mockResolvedValueOnce([
+      {
+        id: 1,
+        peptide_id: 7,
+        min_mg: null,
+        max_mg: null,
+        total_dilution: 300,
+        step1_ratio: null,
+        cartridge_type_id: 4,
+        status: 'trial',
+        note: null,
+        sort_order: 1,
+        active: true,
+        peptide_name: 'Retatrutide',
+        cartridge_name: 'Endosafe 0.01',
+        updated_at: null,
+      },
+    ])
+    const item = endoItem({ sample_id: 'P-0001-S02', sample_peptide_id: 7 })
+    const { onUpdate } = setup(endoWorksheet([item]), item)
+    const total = screen.getByLabelText('Total (1:N)')
+    await waitFor(() => expect(total).toHaveAttribute('placeholder', '300'))
+    expect(cartridgePicker()).toHaveTextContent(/^rule \(0\.01\)$/)
+    fireEvent.change(total, { target: { value: '300' } })
+    fireEvent.blur(total)
+    expect(onUpdate).not.toHaveBeenCalled()
+    fireEvent.change(total, { target: { value: '250' } })
+    fireEvent.blur(total)
+    expect(onUpdate).toHaveBeenCalledWith({ prep_total_dilution: 250 })
   })
 })
