@@ -820,3 +820,26 @@ def test_reapply_never_lists_a_bac_row_even_one_locked_before_its_form_was_set(c
     db.refresh(w.a)
     assert (w.a.prep_rule, w.a.prep_history) == (lock, None)
     assert db.query(AuditLog).filter(AuditLog.operation == "endo_prep_rule_reapplied").count() == 0
+
+
+def test_reapply_lists_a_new_line_even_when_its_numbers_are_the_same(client, db):
+    """A.0 item 2: a row whose locked line differs from today's match by id
+    is listed with every number the same, so it can take the new line."""
+    w = _locks_world(client, db)
+    w.b.prep_rules_off = True
+    db.commit()
+    assert client.post(f"/worksheets/{w.ws.id}/printed").status_code == 200
+    db.refresh(w.a)
+    old = w.a.prep_rule
+    # A narrower band for the 10 mg row at the same 1:300: it wins today.
+    narrow = _rule(db, SimpleNamespace(id=w.rule.peptide_id), min_mg=5, max_mg=15,
+                   total_dilution=300)
+    db.commit()
+    assert _preview(client, w.ws).json() == {"candidates": [
+        {"item_id": w.a.id, "sample_id": w.a.sample_id, "old": old,
+         "new_rule": endo_prep_rules.snapshot(narrow)}]}
+    assert _reapply(client, w.ws, w.a).json()["results"] == [
+        {"item_id": w.a.id, "applied": True, "reason": None}]
+    db.refresh(w.a)
+    assert (w.a.prep_rule["rule"], w.a.prep_history[0]["total_dilution"]) == (
+        endo_prep_rules.snapshot(narrow), 300)
