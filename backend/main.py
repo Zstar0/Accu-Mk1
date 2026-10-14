@@ -24301,6 +24301,33 @@ async def create_worksheet(
     }
 
 
+def _worksheet_item_parents(db: Session, sample_ids,
+                            parent_pk_by_sample: "dict[str, Optional[int]]") -> "dict[str, LimsSample]":
+    """Each worksheet item's parent sample, sample_id -> LimsSample. A vial
+    item's is its vial's parent (parent_pk_by_sample, from the caller's own
+    vial query); a parent-sample item (legacy "<order> E" worksheets hold
+    P-XXXX ids) is the sample with its own id. An id with no parent is left
+    out. ONE query, none without ids. The one resolver the serializer,
+    endo_prep_rules.row_facts and the endotoxin promote share (endo slice 5
+    review I2), so the browser's sample_peptide_id and the server's rule
+    checks always read the same parent."""
+    sample_ids = set(sample_ids)
+    if not sample_ids:
+        return {}
+    pks = {parent_pk_by_sample.get(s) for s in sample_ids} - {None}
+    rows = db.execute(select(LimsSample).where(or_(
+        LimsSample.id.in_(pks or [0]), LimsSample.sample_id.in_(sample_ids)))).scalars().all()
+    by_pk = {p.id: p for p in rows}
+    by_sample_id = {p.sample_id: p for p in rows}
+    out = {}
+    for s in sample_ids:
+        pk = parent_pk_by_sample.get(s)
+        parent = by_pk.get(pk) if pk else by_sample_id.get(s)
+        if parent is not None:
+            out[s] = parent
+    return out
+
+
 def _worksheet_item_parent_facts(parent: "Optional[LimsSample]") -> dict:
     """Parent-sample facts the endotoxin bench needs on a worksheet item
     (spec 2026-09-18-endo-worksheet-design §4). None-safe: every key is
@@ -24549,22 +24576,10 @@ def _serialize_worksheets(db: Session, worksheets: "list[Worksheet]") -> list:
     # and identity ride on the item. Vial items go through the vial's parent;
     # parent-sample items (legacy "<order> E" worksheets hold P-XXXX ids) match
     # by their own sample id. ONE query for the whole page.
-    parent_pks = {pk for pk in sub_parent_pk_map.values() if pk}
-    parent_by_pk: dict[int, LimsSample] = {}
-    parent_by_sample_id: dict[str, LimsSample] = {}
-    if parent_pks or item_sample_ids:
-        parent_rows = db.execute(
-            select(LimsSample).where(or_(
-                LimsSample.id.in_(parent_pks or [0]),
-                LimsSample.sample_id.in_(item_sample_ids or ["-"]),
-            ))
-        ).scalars().all()
-        parent_by_pk = {p.id: p for p in parent_rows}
-        parent_by_sample_id = {p.sample_id: p for p in parent_rows}
+    parent_by_sample = _worksheet_item_parents(db, item_sample_ids, sub_parent_pk_map)
 
     def _parent_for(sample_id: str) -> Optional[LimsSample]:
-        pk = sub_parent_pk_map.get(sample_id)
-        return parent_by_pk.get(pk) if pk else parent_by_sample_id.get(sample_id)
+        return parent_by_sample.get(sample_id)
 
     # Resolve per-item stamped method/instrument names (bench-stamping
     # slice 2, task 5): the DISTINCT non-null stamped values across a

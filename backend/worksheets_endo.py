@@ -379,6 +379,14 @@ STEP3_RATIO = 2
 _PREP_NOTE_MAX = 200
 
 
+def form_is_bac(prep_form: Optional[str], sample_bac: bool) -> bool:
+    """Bac water as the browser's formOf reads a row: its form when set, else
+    the sample's bac rule (worksheets_endo_promote._sample_is_bac, identity
+    fallback included). The one form rule the promote's unit check and the
+    prep rules' bac guard share."""
+    return prep_form == "bac" if prep_form in ENDO_FORMS else sample_bac
+
+
 def check_item_endo_fields(db: Session, worksheet, item, values: dict) -> dict:
     """Validate the row fields one PATCH sent. Writes nothing. Returns the
     values to store (a reading and a note trimmed) or raises ValueError with
@@ -390,8 +398,9 @@ def check_item_endo_fields(db: Session, worksheet, item, values: dict) -> dict:
     its own, else its rule's (the locked line, else today's match, none when
     switched to "no rule" or for bac water), else the standard (the method's
     std_total_dilution, 250 when unset; step 1 at 1:10). So the floor is
-    checked again when the switch moves. Tube overflow is only a screen
-    warning."""
+    checked again when the switch moves, or when a form change moves the
+    row's bac decision, on the form the PATCH leaves. Tube overflow is only
+    a screen warning."""
     out = dict(values)
     form = values.get("prep_form")
     if form is not None and form not in ENDO_FORMS:
@@ -414,12 +423,25 @@ def check_item_endo_fields(db: Session, worksheet, item, values: dict) -> dict:
         out["prep_note"] = note or None
     total_after = out.get("prep_total_dilution", item.prep_total_dilution)
     floor_check = any(f in values for f in ("prep_total_dilution", "prep_steps", "prep_rules_off"))
+    # The form is a rule input too (bac water is never ruled, A.0 item 8), so
+    # the rule is matched on the form this PATCH leaves, and a form change
+    # that moves the bac decision re-checks the floor (review I1). {}: a row
+    # of another bench, never ruled.
+    facts: dict = {}
+    if floor_check or ("prep_form" in values and values["prep_form"] != item.prep_form):
+        # Lazy: endo_prep_rules imports this module.
+        from endo_prep_rules import _facts_with_form, _row_inputs
+
+        inputs = _row_inputs(db, [item]).get(item.id)
+        if inputs is not None:
+            facts = _facts_with_form(inputs, out.get("prep_form", item.prep_form))
+            floor_check = floor_check or (
+                facts["is_bac"] != form_is_bac(item.prep_form, inputs["sample_bac"]))
     cartridge = values.get("cartridge_type_id")
     # Resolved once, and only when a check below needs it.
     method = (resolve_endo_method(db, worksheet)
               if cartridge is not None or (floor_check and total_after is None) else None)
     if floor_check:
-        # Lazy: endo_prep_rules imports this module.
         from endo_prep_rules import row_effective
 
         # The row as this PATCH leaves it.
@@ -428,8 +450,12 @@ def check_item_endo_fields(db: Session, worksheet, item, values: dict) -> dict:
             cartridge_type_id=out.get("cartridge_type_id", item.cartridge_type_id),
             prep_rule=item.prep_rule,
             prep_rules_off=out.get("prep_rules_off", item.prep_rules_off))
-        _, effective = row_effective(db, worksheet, item, view=after, std_total=endo_run_params(
-            method["run_parameters"] if method else None)["std_total_dilution"])
+        # Without a method resolved here the row has a total of its own, which
+        # wins below, so this standard (endo_run_params' default) is never read.
+        _, effective = row_effective(db, worksheet, item, view=after, facts=facts,
+                                     std_total=endo_run_params(
+                                         method["run_parameters"] if method else None
+                                     )["std_total_dilution"])
         # A total of the row's own is checked as sent, so zero or below is refused.
         total = total_after if total_after is not None else effective["total_dilution"]
         floor = STEP3_RATIO * effective["step1_ratio"]

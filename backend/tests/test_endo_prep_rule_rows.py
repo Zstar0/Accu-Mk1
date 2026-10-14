@@ -388,3 +388,43 @@ def test_a_bac_row_is_never_ruled_even_one_locked_before_its_form_was_set(client
     # The server floor reads the standard 1:250, so 1:140 (x 2 = 280) no longer fits.
     r = client.patch(w.url, json={"prep_steps": [[20, 140], None, None]})
     assert (r.status_code, r.json()["detail"]) == (400, _floor(280))
+
+
+# --- Task 3 review I1: the form is a rule input, so it moves the floor ---------
+
+def test_a_form_change_that_brings_a_rule_in_is_refused_below_its_floor(client, db):
+    """A bac row is never ruled (F2), so its 1:90 is makeable at the standard
+    1:10 (floor 20). Powder brings in the line's 1:50 (floor 100), and so
+    does clearing the form: the sample rule then decides, and P-3001 is a
+    peptide. Both are refused with the floor text and write nothing."""
+    w = _ruled_world(db, step1_ratio=50)
+    w.item.prep_form = "bac"
+    db.commit()
+    assert client.patch(w.url, json={"prep_total_dilution": 90}).status_code == 200
+    for form in ("powder", None):
+        r = client.patch(w.url, json={"prep_form": form})
+        assert (r.status_code, r.json()["detail"]) == (400, _floor(100)), form
+    db.refresh(w.item)
+    assert (w.item.prep_form, w.item.prep_total_dilution) == ("bac", 90)
+
+
+def test_a_form_change_that_keeps_the_floor_makeable_saves(client, db):
+    w = _ruled_world(db, step1_ratio=50)
+    w.item.prep_form = "bac"
+    db.commit()
+    assert client.patch(w.url, json={"prep_total_dilution": 100}).status_code == 200
+    assert client.patch(w.url, json={"prep_form": "powder"}).status_code == 200
+    db.refresh(w.item)
+    assert w.item.prep_form == "powder"
+
+
+def test_a_patch_with_the_form_and_a_floor_field_is_checked_on_the_new_form(client, db):
+    w = _ruled_world(db, step1_ratio=50)
+    # Ruled 1:50 as stored; going bac drops the line, so 1:90 fits the standard.
+    assert client.patch(w.url, json={"prep_form": "bac",
+                                     "prep_total_dilution": 90}).status_code == 200
+    # Going back to powder brings the line in again: 1:90 is below its floor.
+    r = client.patch(w.url, json={"prep_form": "powder", "prep_total_dilution": 90})
+    assert (r.status_code, r.json()["detail"]) == (400, _floor(100))
+    db.refresh(w.item)
+    assert w.item.prep_form == "bac"

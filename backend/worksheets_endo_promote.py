@@ -27,11 +27,11 @@ from sqlalchemy.orm import Session
 from coa.spec_rules import normalize_matrix, normalize_unit, resolve_spec, sample_peptide_id
 from endo_prep_rules import effective_values, load_rules, row_facts, row_rule
 from models import (
-    AnalysisService, AuditLog, LimsAnalysis, LimsSample, LimsSubSample, WorksheetItem,
+    AnalysisService, AuditLog, LimsAnalysis, LimsSubSample, WorksheetItem,
     service_group_members,
 )
 from worksheets_endo import (
-    _DEAD_STATES, ENDO_FORMS, cartridge_sensitivities, endo_run_params, parse_reading,
+    _DEAD_STATES, cartridge_sensitivities, endo_run_params, form_is_bac, parse_reading,
     reader_shows, reader_validity, resolve_endo_method,
 )
 
@@ -267,7 +267,7 @@ def _plan(db: Session, worksheet, item, row: EndoPromoteRowIn, ctx) -> dict:
     if analysis.retested or analysis.review_state not in _FILLABLE_STATES:
         state = "retested" if analysis.retested else analysis.review_state
         raise _Refused(f"the vial's endotoxin analysis is {state}")
-    parent = ctx.parents[ctx.parent_pk_by_sample[item.sample_id]]
+    parent = ctx.parent_by_sample[item.sample_id]
     # Only a retest row's promote may supersede the parent's live result
     # (promote_to_parent); any other row would collide with it.
     if analysis.retest_of_id is None and _parent_holds(db, parent.id, svc.id):
@@ -283,7 +283,7 @@ def _plan(db: Session, worksheet, item, row: EndoPromoteRowIn, ctx) -> dict:
     # The browser's unit rule: the row's form (formOf) must agree with the
     # sample (isBacWaterSample), and the unit follows the form.
     sample_bac = _sample_is_bac(item, parent, ctx.peptide_names.get(item.id, []))
-    bac = item.prep_form == "bac" if item.prep_form in ENDO_FORMS else sample_bac
+    bac = form_is_bac(item.prep_form, sample_bac)
     if bac != sample_bac:
         raise _Refused(REASON_PEPTIDE_UNIT if bac else REASON_BAC_UNIT)
     unit = UNIT_BAC if bac else UNIT_PEPTIDE
@@ -427,8 +427,9 @@ def promote_rows(db: Session, current_user, worksheet, rows: list[EndoPromoteRow
     parent_pk_by_sample = dict(db.execute(
         select(LimsSubSample.sample_id, LimsSubSample.parent_sample_pk)
         .where(LimsSubSample.sample_id.in_(sample_ids))).all()) if sample_ids else {}
-    parents = {p.id: p for p in db.execute(select(LimsSample).where(
-        LimsSample.id.in_(set(parent_pk_by_sample.values())))).scalars()} if parent_pk_by_sample else {}
+    # The serializer's own parent resolver (review I2): one query.
+    from main import _worksheet_item_parents  # lazy: main imports this module
+    parent_by_sample = _worksheet_item_parents(db, sample_ids, parent_pk_by_sample)
     method = resolve_endo_method(db, worksheet)
     default_cartridge_id = next(
         (c["id"] for c in (method["cartridges"] if method else []) if c["is_default"]), None)
@@ -438,8 +439,7 @@ def promote_rows(db: Session, current_user, worksheet, rows: list[EndoPromoteRow
         user_id=getattr(current_user, "id", None),
         live=vial_endo_analyses(db, sample_ids),
         peptide_names=_served_peptide_names(db, items.values()),
-        parent_pk_by_sample=parent_pk_by_sample,
-        parents=parents,
+        parent_by_sample=parent_by_sample,
         run_params=method["run_parameters"] if method else None,
         default_cartridge_id=default_cartridge_id,
         sensitivities=cartridge_sensitivities(db, cartridge_ids),

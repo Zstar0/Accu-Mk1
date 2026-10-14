@@ -13,11 +13,11 @@ worksheets_endo imports this module, so this module imports worksheets_endo
 import math
 from typing import Optional
 
-from sqlalchemy import or_, select
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from coa.spec_rules import sample_peptide_ids
-from models import EndoPrepRule, LimsSample, LimsSubSample
+from models import EndoPrepRule, LimsSubSample
 
 # Step 1's standard Tris ratio 1:N. Mirrors src/lib/endo-prep-2ml.ts
 # STEP1_RATIO; tests/test_endo_prep_rules.py pins it to
@@ -243,23 +243,21 @@ def effective_values(item, rule: Optional[dict], *, std_total: float) -> dict:
     return {**values, "ruled": ruled}
 
 
-def row_facts(db: Session, worksheet, items) -> dict[int, dict]:
-    """What matching reads off each endotoxin row (spec 4), item id ->
-    {"peptide_id", "weight_mg", "is_bac"}:
+def _row_inputs(db: Session, items) -> dict[int, dict]:
+    """What matching reads off each endotoxin row before its form, item id ->
+    {"peptide_id", "weight_mg", "sample_bac"}:
     - the parent's single catalog peptide (coa.spec_rules.sample_peptide_ids;
       None for a blend or none);
     - the weight as Box 2 reads it, prep_weight_mg else the parent's
       declared weight (main._worksheet_item_parent_facts);
-    - bac water as the browser's formOf reads it: the row's form, else the
-      sample's bac rule (worksheets_endo_promote._sample_is_bac, identity
-      fallback included).
-    Rows of other benches are left out: they are never ruled or locked. A
-    vial row's parent is the vial's; a legacy bare parent id is its own
-    (main._serialize_worksheets' _parent_for). At most four queries whatever
-    the row count, one of them the batched peptide lookup."""
+    - the sample's bac rule (worksheets_endo_promote._sample_is_bac, identity
+      fallback included), which the row's form overrides (form_is_bac).
+    Rows of other benches are left out: they are never ruled or locked. The
+    parent is main._worksheet_item_parents', the serializer's own resolver.
+    At most four queries whatever the row count, one of them the batched
+    peptide lookup."""
     # Lazy: main and worksheets_endo_promote import this module.
-    from main import _bench_kind_for_item, _worksheet_item_parent_facts
-    from worksheets_endo import ENDO_FORMS
+    from main import _bench_kind_for_item, _worksheet_item_parent_facts, _worksheet_item_parents
     from worksheets_endo_promote import _sample_is_bac, _served_peptide_names
 
     items = list(items)
@@ -275,49 +273,61 @@ def row_facts(db: Session, worksheet, items) -> dict[int, dict]:
         it.analyses_json) == "endo"]
     if not endo:
         return {}
-    parent_pks = {vials[it.sample_id].parent_sample_pk for it in endo
-                  if it.sample_id in vials} - {None}
-    parents = db.execute(select(LimsSample).where(or_(
-        LimsSample.id.in_(parent_pks or [0]),
-        LimsSample.sample_id.in_({it.sample_id for it in endo})))).scalars().all()
-    by_pk = {p.id: p for p in parents}
-    by_sample_id = {p.sample_id: p for p in parents}
-
-    def parent_of(it):
-        pk = vials[it.sample_id].parent_sample_pk if it.sample_id in vials else None
-        return by_pk.get(pk) if pk else by_sample_id.get(it.sample_id)
-
-    parent_by_item = {it.id: parent_of(it) for it in endo}
-    pks = sorted({p.id for p in parent_by_item.values() if p is not None})
+    parents = _worksheet_item_parents(
+        db, {it.sample_id for it in endo if it.sample_id},
+        {sid: v.parent_sample_pk for sid, v in vials.items()})
+    # Only real parent pks: sample_peptide_ids cannot sort a None among ints.
+    pks = sorted({p.id for p in parents.values()})
     peptide_by_parent = sample_peptide_ids(db, pks) if pks else {}
     names = _served_peptide_names(db, endo)
     out = {}
     for it in endo:
-        parent = parent_by_item[it.id]
-        sample_bac = _sample_is_bac(it, parent, names.get(it.id, []))
+        parent = parents.get(it.sample_id)
         out[it.id] = {
             "peptide_id": peptide_by_parent.get(parent.id) if parent is not None else None,
             "weight_mg": (it.prep_weight_mg if it.prep_weight_mg is not None
                           else _worksheet_item_parent_facts(parent)["declared_weight_mg"]),
-            "is_bac": it.prep_form == "bac" if it.prep_form in ENDO_FORMS else sample_bac,
+            "sample_bac": _sample_is_bac(it, parent, names.get(it.id, [])),
         }
     return out
 
 
+def _facts_with_form(inputs: dict, prep_form: Optional[str]) -> dict:
+    """A row's facts from its _row_inputs entry and the form it reads:
+    is_bac is worksheets_endo.form_is_bac, the browser's formOf."""
+    from worksheets_endo import form_is_bac  # lazy: it imports this module
+
+    return {"peptide_id": inputs["peptide_id"], "weight_mg": inputs["weight_mg"],
+            "is_bac": form_is_bac(prep_form, inputs["sample_bac"])}
+
+
+def row_facts(db: Session, worksheet, items) -> dict[int, dict]:
+    """What matching reads off each endotoxin row (spec 4), item id ->
+    {"peptide_id", "weight_mg", "is_bac"}: _row_inputs with bac water as
+    the browser's formOf reads it, the row's form, else the sample's bac
+    rule. Rows of other benches are left out."""
+    items = list(items)
+    inputs = _row_inputs(db, items)
+    return {it.id: _facts_with_form(inputs[it.id], it.prep_form)
+            for it in items if it.id in inputs}
+
+
 def row_effective(db: Session, worksheet, item, *, rules: Optional[list] = None,
-                  view=None, std_total: Optional[float] = None
-                  ) -> tuple[Optional[dict], dict]:
-    """One row's rule and effective values (preflight F8): row_facts off the
-    stored row, then row_rule and effective_values. `rules` defaults to
-    today's lines (load_rules); `view` is the row as a pending change leaves
-    it (check_item_endo_fields), read for the rule and the values in place
-    of `item`; `std_total` defaults to the worksheet method's
-    std_total_dilution, resolved only when not given. A row of another bench
-    has no rule."""
+                  view=None, std_total: Optional[float] = None,
+                  facts: Optional[dict] = None) -> tuple[Optional[dict], dict]:
+    """One row's rule and effective values (preflight F8): row_facts, then
+    row_rule and effective_values. `rules` defaults to today's lines
+    (load_rules); `view` is the row as a pending change leaves it
+    (check_item_endo_fields), read for the rule and the values in place of
+    `item`; `std_total` defaults to the worksheet method's
+    std_total_dilution, resolved only when not given; `facts` is the row's
+    facts when the caller has them ({} for a row of another bench, which
+    has no rule), else read off the stored row."""
     from worksheets_endo import endo_run_params, resolve_endo_method  # lazy: it imports this module
 
     row = view if view is not None else item
-    facts = row_facts(db, worksheet, [item]).get(item.id)
+    if facts is None:
+        facts = row_facts(db, worksheet, [item]).get(item.id)
     rule = (row_rule(row, rules=load_rules(db) if rules is None else rules,
                      endo_prep=worksheet.endo_prep, **facts) if facts else None)
     if std_total is None:
