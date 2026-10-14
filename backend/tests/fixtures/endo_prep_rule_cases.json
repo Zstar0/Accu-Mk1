@@ -43,6 +43,7 @@
     {"name": "a closed band beats an open one listed before it", "rules": "main", "query": {"peptide_id": 8, "weight_mg": 60, "is_bac": false, "endo_prep": "2ml", "rules_off": false}, "expect": 11},
     {"name": "above the closed band only the open line matches", "rules": "main", "query": {"peptide_id": 8, "weight_mg": 600, "is_bac": false, "endo_prep": "2ml", "rules_off": false}, "expect": 10},
     {"name": "equal width and sort_order: the lower id wins", "rules": "main", "query": {"peptide_id": 9, "weight_mg": 18, "is_bac": false, "endo_prep": "2ml", "rules_off": false}, "expect": 12},
-    {"name": "0 mg is a weight, not a missing one", "rules": "main", "query": {"peptide_id": 1, "weight_mg": 0, "is_bac": false, "endo_prep": "2ml", "rules_off": false}, "expect": 1}
+    {"name": "0 mg is a weight, not a missing one", "rules": "main", "query": {"peptide_id": 1, "weight_mg": 0, "is_bac": false, "endo_prep": "2ml", "rules_off": false}, "expect": 1},
+    {"name": "the lower bound is exclusive: a weight equal to min_mg does not match (KPV 10 mg)", "rules": "main", "query": {"peptide_id": 9, "weight_mg": 10, "is_bac": false, "endo_prep": "2ml", "rules_off": false}, "expect": null}
   ]
 }
