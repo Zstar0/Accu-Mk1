@@ -306,3 +306,34 @@ export function resizePatch(
     data: { w: p.width, h: p.height, version: row.version },
   }
 }
+
+/** Screen pixels the pointer must overshoot a frame edge before a clamped child pops out of it. */
+export const POP_AT = 50
+/** How far a clamped child leans toward the pointer while it resists (fraction of the overshoot). */
+export const PULL_STRETCH = 0.35
+
+/** Pull-through: `wanted` is where the pointer would put the node (canvas units); `frame` is the
+ *  parent's absolute rectangle and `size` the node's measured size, so `clamped` is where the frame
+ *  holds it (xyflow's own rule). Under the threshold the node leans; at it, the caller pops it out. */
+export function pullThrough(
+  wanted: XYPosition,
+  frame: { x: number; y: number; width: number; height: number },
+  size: { width: number; height: number },
+  zoom: number
+): { stretch: XYPosition; pop: boolean } {
+  const clamped = {
+    x: Math.min(
+      Math.max(wanted.x, frame.x),
+      frame.x + frame.width - size.width
+    ),
+    y: Math.min(
+      Math.max(wanted.y, frame.y),
+      frame.y + frame.height - size.height
+    ),
+  }
+  const dx = wanted.x - clamped.x
+  const dy = wanted.y - clamped.y
+  if (Math.hypot(dx, dy) * zoom >= POP_AT)
+    return { stretch: { x: 0, y: 0 }, pop: true }
+  return { stretch: { x: dx * PULL_STRETCH, y: dy * PULL_STRETCH }, pop: false }
+}

@@ -5,6 +5,8 @@ import {
   edgeCreateFor,
   edgeIdsToDelete,
   parseViewport,
+  pullThrough,
+  POP_AT,
   resizePatch,
   resolveParentOnDrop,
   toFlowEdges,
@@ -263,5 +265,38 @@ describe('reporting lines', () => {
         row({ id: 9, x: 1, y: 1, version: 2 }),
       ])
     ).toEqual([{ id: 2, x: 5, y: 6, version: 4 }])
+  })
+})
+
+describe('pull-through', () => {
+  const frame = { x: 0, y: 0, width: 400, height: 200 }
+  const size = { width: 100, height: 50 }
+  it('is inert while the node fits inside the frame', () => {
+    expect(pullThrough({ x: 50, y: 20 }, frame, size, 1)).toEqual({
+      stretch: { x: 0, y: 0 },
+      pop: false,
+    })
+  })
+  it('leans toward the pointer while the overshoot is under the threshold', () => {
+    // Right edge is at x = 300 for a 100 wide node; the pointer wants it 30 past that.
+    const r = pullThrough({ x: 330, y: 20 }, frame, size, 1)
+    expect(r.pop).toBe(false)
+    expect(r.stretch.x).toBeGreaterThan(0)
+    expect(r.stretch.x).toBeLessThan(30)
+    expect(r.stretch.y).toBe(0)
+  })
+  it('pops once the pointer is past the threshold in screen pixels', () => {
+    expect(pullThrough({ x: 300 + POP_AT, y: 20 }, frame, size, 1).pop).toBe(
+      true
+    )
+    // Zoomed out, the same canvas distance is fewer screen pixels: no pop yet.
+    expect(pullThrough({ x: 300 + POP_AT, y: 20 }, frame, size, 0.5).pop).toBe(
+      false
+    )
+    expect(
+      pullThrough({ x: 300 + POP_AT * 2, y: 20 }, frame, size, 0.5).pop
+    ).toBe(true)
+    // Any edge counts: pulling up past the top.
+    expect(pullThrough({ x: 50, y: -POP_AT }, frame, size, 1).pop).toBe(true)
   })
 })
