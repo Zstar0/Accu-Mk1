@@ -317,10 +317,10 @@ The table page shows the ruled steps boxed, with `1:15 · rule (trial)` on step 
    - **Verified on this stack** (one uvicorn process): while the PATCH waited on a held worksheet row, a `GET /health` sent 1 s later was answered only when the lock was released, 3.7 s later.
    - **Effect on the checks.** The async request queues behind any lock wait, so checks a, b and c could only produce the sync-request-first order.
    - **Not checked:** production's worker count.
-   - **Why it matters little today:** a normal competing transaction is short. Moving those two routes to `def` would remove the stall.
+   - **How long it lasts.** The stall lasts as long as the competing transaction. That was not measured for promote, Re-apply or the reader import. Moving those two routes to `def` would remove the stall.
 2. **Rows read before slice 5 take today's rules at their first print.** Worksheet 24's rows had readings entered before slice 5 and no lock. Its print locked row 71 (P-0144-S02, promoted at 1:250) and the SENAITE-born row 79 to rule 1's 1:300 (B5, as designed).
    - Production has no such rows, because v2 ships in the same release.
-   - The UAT stack does have them. A row promoted there before the deploy can show a rule's total on its next print.
+   - endov2 was not checked. Any 2 mL row there that has a reading from before slice 5 and no lock will take today's rule at its next print, including a row already promoted.
 3. **An orphan worktree admin directory.** `Accu-Mk1/.git/worktrees/mk1-s5-base` was left behind after `git worktree remove` (Windows refused the delete: Permission denied), beside the existing `s5-draft-A` one. The working tree itself is gone, and no prune was run.
 
 ### UAT notes for Dennis
