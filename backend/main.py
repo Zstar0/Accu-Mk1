@@ -24660,6 +24660,21 @@ def _serialize_worksheets(db: Session, worksheets: "list[Worksheet]") -> list:
     }
     endo_analysis_map = endo_analysis_by_sample(
         db, {it.sample_id for it in all_items if it.id in endo_item_ids and it.sample_id})
+    # Endo slice 5 (spec 2026-10-14 sections 4 and 6): the endotoxin items of
+    # 2 mL worksheets carry their rule lock, "no rule" switch, note and
+    # history, and the parent's single catalog peptide (None for a blend).
+    # The endo_analysis lookup above reads vial analyses only; the peptide
+    # anchor reads the whole family, so it is its own query: ONE for the
+    # whole page, none without such items.
+    from coa.spec_rules import sample_peptide_ids
+    rule_ws_ids = {ws.id for ws in worksheets if ws.endo_prep == "2ml"}
+    rule_parent_pk: dict[int, Optional[int]] = {}
+    for it in all_items:
+        if it.id in endo_item_ids and it.worksheet_id in rule_ws_ids:
+            parent = _parent_for(it.sample_id)
+            rule_parent_pk[it.id] = parent.id if parent else None
+    rule_pks = sorted({pk for pk in rule_parent_pk.values() if pk})
+    peptide_by_parent = sample_peptide_ids(db, rule_pks) if rule_pks else {}
 
     result = []
     for ws in worksheets:
@@ -24757,6 +24772,11 @@ def _serialize_worksheets(db: Session, worksheets: "list[Worksheet]") -> list:
                     # Endo slice 3 (spec 5.1): endotoxin items only.
                     **({"endo_analysis": endo_analysis_map.get(it.sample_id)}
                        if it.id in endo_item_ids else {}),
+                    # Endo slice 5: the 2 mL endotoxin items only.
+                    **({"prep_rule": it.prep_rule, "prep_rules_off": it.prep_rules_off,
+                        "prep_note": it.prep_note, "prep_history": it.prep_history,
+                        "sample_peptide_id": peptide_by_parent.get(rule_parent_pk[it.id])}
+                       if it.id in rule_parent_pk else {}),
                     **_worksheet_item_parent_facts(_parent_for(it.sample_id)),
                 }
                 for it in items
@@ -26055,6 +26075,10 @@ class WorksheetItemUpdate(BaseModel):
     prep_steps: Optional[list] = None
     cartridge_type_id: Optional[int] = None
     result_reading: Optional[str] = None
+    # Endo slice 5 (spec 2026-10-14 sections 6 and 8): the "no rule" switch
+    # and the optional special-prep note, on the same terms as the v2 fields.
+    prep_rules_off: Optional[bool] = None
+    prep_note: Optional[str] = None
 
 
 @app.patch("/worksheets/{worksheet_id}/items/{item_id}")

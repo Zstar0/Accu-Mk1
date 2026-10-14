@@ -2644,6 +2644,13 @@ def _run_migrations():
         updated_at        TIMESTAMP,
         updated_by_id     INTEGER REFERENCES users(id) ON DELETE SET NULL
     )""",
+        # Endo slice 5 (spec 2026-10-14 section 6): a 2 mL row's rule lock,
+        # "no rule" switch, special-prep note and history. Nullable or
+        # defaulted, no backfill. Kept above the retest_of_sample_id statement.
+        "ALTER TABLE worksheet_items ADD COLUMN IF NOT EXISTS prep_rule JSON",
+        "ALTER TABLE worksheet_items ADD COLUMN IF NOT EXISTS prep_rules_off BOOLEAN NOT NULL DEFAULT FALSE",
+        "ALTER TABLE worksheet_items ADD COLUMN IF NOT EXISTS prep_note TEXT",
+        "ALTER TABLE worksheet_items ADD COLUMN IF NOT EXISTS prep_history JSON",
         # HPLC-native slice 6 (M8): links a retest's sample row back to the
         # original Mk1 row it was retested from (from signal meta
         # RetestOfSampleId). Nullable, no FK — the original may be a

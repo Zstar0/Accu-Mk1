@@ -13,10 +13,11 @@ worksheets_endo imports this module, so this module imports worksheets_endo
 import math
 from typing import Optional
 
-from sqlalchemy import select
+from sqlalchemy import or_, select
 from sqlalchemy.orm import Session
 
-from models import EndoPrepRule
+from coa.spec_rules import sample_peptide_ids
+from models import EndoPrepRule, LimsSample, LimsSubSample
 
 # Step 1's standard Tris ratio 1:N. Mirrors src/lib/endo-prep-2ml.ts
 # STEP1_RATIO; tests/test_endo_prep_rules.py pins it to
@@ -186,3 +187,141 @@ def check_rule(db: Session, values: dict, sent, *, rule_id: Optional[int] = None
             for m in methods if cartridge_id not in cartridge_ids_allowed_by(db, m)
         ]
     return warnings
+
+
+# --- A row's rule and its effective values (spec sections 4 and 5) ----------
+
+# The three values a rule sets on a row; snapshot() and effective_values()
+# use the same names.
+_VALUE_FIELDS = ("total_dilution", "step1_ratio", "cartridge_type_id")
+
+
+def _typed_values(item) -> dict:
+    """The row's own values (spec 5), None where it types none: a total
+    above zero (the browser's totalOf), step 1's ratio prep_steps[0][1]
+    (stepsOf) and the row's cartridge."""
+    first = item.prep_steps[0] if isinstance(item.prep_steps, list) and item.prep_steps else None
+    ratio = first[1] if isinstance(first, list) and len(first) == 2 else None
+    return {
+        "total_dilution": (item.prep_total_dilution
+                           if (item.prep_total_dilution or 0) > 0 else None),
+        # float(): a huge int ratio (10**308 passed _finite) would make an int
+        # floor that the :g message cannot format (500); as a float it is inf.
+        "step1_ratio": float(ratio) if ratio is not None else None,
+        "cartridge_type_id": item.cartridge_type_id,
+    }
+
+
+def row_rule(item, *, rules: list[dict], peptide_id: Optional[int], weight_mg: Optional[float],
+             is_bac: bool, endo_prep: Optional[str]) -> Optional[dict]:
+    """The line a row computes with (spec 5). None when the row is switched
+    to "no rule", and None for bac water even on a row locked before its
+    form became bac (lead decision A.0 item 8, the browser's ruleFor). A
+    locked row's own copy of its line (None: locked to the standard), so a
+    later edit never reaches it. Else today's match."""
+    if item.prep_rules_off or is_bac:
+        return None
+    if item.prep_rule is not None:
+        return item.prep_rule.get("rule")
+    return match_rule(rules, peptide_id=peptide_id, weight_mg=weight_mg, is_bac=is_bac,
+                      endo_prep=endo_prep, rules_off=False)
+
+
+def effective_values(item, rule: Optional[dict], *, std_total: float) -> dict:
+    """A row's total dilution, step 1 ratio and cartridge (spec 5), field by
+    field: typed beats rule beats standard. `rule` is row_rule's answer. The
+    standard is the method's std_total_dilution, STEP1_RATIO, and for the
+    cartridge None, meaning the usual chain (bac water's 0.01, the run's,
+    the method default), which callers resolve as before. `ruled` names
+    the values the rule supplied."""
+    typed = _typed_values(item)
+    standard = {"total_dilution": std_total, "step1_ratio": STEP1_RATIO,
+                "cartridge_type_id": None}
+    ruled = {f: typed[f] is None and (rule or {}).get(f) is not None for f in _VALUE_FIELDS}
+    values = {f: typed[f] if typed[f] is not None else rule[f] if ruled[f] else standard[f]
+              for f in _VALUE_FIELDS}
+    return {**values, "ruled": ruled}
+
+
+def row_facts(db: Session, worksheet, items) -> dict[int, dict]:
+    """What matching reads off each endotoxin row (spec 4), item id ->
+    {"peptide_id", "weight_mg", "is_bac"}:
+    - the parent's single catalog peptide (coa.spec_rules.sample_peptide_ids;
+      None for a blend or none);
+    - the weight as Box 2 reads it, prep_weight_mg else the parent's
+      declared weight (main._worksheet_item_parent_facts);
+    - bac water as the browser's formOf reads it: the row's form, else the
+      sample's bac rule (worksheets_endo_promote._sample_is_bac, identity
+      fallback included).
+    Rows of other benches are left out: they are never ruled or locked. A
+    vial row's parent is the vial's; a legacy bare parent id is its own
+    (main._serialize_worksheets' _parent_for). At most four queries whatever
+    the row count, one of them the batched peptide lookup."""
+    # Lazy: main and worksheets_endo_promote import this module.
+    from main import _bench_kind_for_item, _worksheet_item_parent_facts
+    from worksheets_endo import ENDO_FORMS
+    from worksheets_endo_promote import _sample_is_bac, _served_peptide_names
+
+    items = list(items)
+    sample_ids = {it.sample_id for it in items if it.sample_id}
+    if not sample_ids:
+        return {}
+    vials = {r.sample_id: r for r in db.execute(
+        select(LimsSubSample.sample_id, LimsSubSample.parent_sample_pk,
+               LimsSubSample.assignment_role)
+        .where(LimsSubSample.sample_id.in_(sample_ids))).all()}
+    endo = [it for it in items if _bench_kind_for_item(
+        vials[it.sample_id].assignment_role if it.sample_id in vials else None,
+        it.analyses_json) == "endo"]
+    if not endo:
+        return {}
+    parent_pks = {vials[it.sample_id].parent_sample_pk for it in endo
+                  if it.sample_id in vials} - {None}
+    parents = db.execute(select(LimsSample).where(or_(
+        LimsSample.id.in_(parent_pks or [0]),
+        LimsSample.sample_id.in_({it.sample_id for it in endo})))).scalars().all()
+    by_pk = {p.id: p for p in parents}
+    by_sample_id = {p.sample_id: p for p in parents}
+
+    def parent_of(it):
+        pk = vials[it.sample_id].parent_sample_pk if it.sample_id in vials else None
+        return by_pk.get(pk) if pk else by_sample_id.get(it.sample_id)
+
+    parent_by_item = {it.id: parent_of(it) for it in endo}
+    pks = sorted({p.id for p in parent_by_item.values() if p is not None})
+    peptide_by_parent = sample_peptide_ids(db, pks) if pks else {}
+    names = _served_peptide_names(db, endo)
+    out = {}
+    for it in endo:
+        parent = parent_by_item[it.id]
+        sample_bac = _sample_is_bac(it, parent, names.get(it.id, []))
+        out[it.id] = {
+            "peptide_id": peptide_by_parent.get(parent.id) if parent is not None else None,
+            "weight_mg": (it.prep_weight_mg if it.prep_weight_mg is not None
+                          else _worksheet_item_parent_facts(parent)["declared_weight_mg"]),
+            "is_bac": it.prep_form == "bac" if it.prep_form in ENDO_FORMS else sample_bac,
+        }
+    return out
+
+
+def row_effective(db: Session, worksheet, item, *, rules: Optional[list] = None,
+                  view=None, std_total: Optional[float] = None
+                  ) -> tuple[Optional[dict], dict]:
+    """One row's rule and effective values (preflight F8): row_facts off the
+    stored row, then row_rule and effective_values. `rules` defaults to
+    today's lines (load_rules); `view` is the row as a pending change leaves
+    it (check_item_endo_fields), read for the rule and the values in place
+    of `item`; `std_total` defaults to the worksheet method's
+    std_total_dilution, resolved only when not given. A row of another bench
+    has no rule."""
+    from worksheets_endo import endo_run_params, resolve_endo_method  # lazy: it imports this module
+
+    row = view if view is not None else item
+    facts = row_facts(db, worksheet, [item]).get(item.id)
+    rule = (row_rule(row, rules=load_rules(db) if rules is None else rules,
+                     endo_prep=worksheet.endo_prep, **facts) if facts else None)
+    if std_total is None:
+        method = resolve_endo_method(db, worksheet)
+        std_total = endo_run_params(
+            method["run_parameters"] if method else None)["std_total_dilution"]
+    return rule, effective_values(row, rule, std_total=std_total)

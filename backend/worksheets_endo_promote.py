@@ -25,6 +25,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from coa.spec_rules import normalize_matrix, normalize_unit, resolve_spec, sample_peptide_id
+from endo_prep_rules import effective_values, load_rules, row_facts, row_rule
 from models import (
     AnalysisService, AuditLog, LimsAnalysis, LimsSample, LimsSubSample, WorksheetItem,
     service_group_members,
@@ -307,13 +308,19 @@ def _plan(db: Session, worksheet, item, row: EndoPromoteRowIn, ctx) -> dict:
             or not _same(row.lod, sensitivity)
             or (lt and not _same(row.value, row.loq))):
         raise _Refused(REASON_BAD_NUMBERS)
-    # The browser's totalOf and waterOf (src/lib/endo-prep-2ml.ts).
+    # The browser's totalOf and waterOf (src/lib/endo-prep-2ml.ts). The total
+    # is the row's effective one (slice 5, spec 5): its own, else its rule's,
+    # else the method's standard. A result locks the row, so the rule is the
+    # line the row locked, never one edited since.
     params = endo_run_params(ctx.run_params)
     if bac:
         total, water = BW_DILUTION, None
     else:
-        total = (item.prep_total_dilution if (item.prep_total_dilution or 0) > 0
-                 else params["std_total_dilution"])
+        facts = ctx.facts.get(item.id)
+        rule = (row_rule(item, rules=ctx.rules, endo_prep=worksheet.endo_prep, **facts)
+                if facts else None)
+        total = effective_values(item, rule,
+                                 std_total=params["std_total_dilution"])["total_dilution"]
         water = (item.prep_water_ml if (item.prep_water_ml or 0) > 0
                  else None if item.prep_form == "liquid" else params["recon_water_ml"])
     # Final review I-3 (Handler, 2026-10-13): the sent value and LOQ must be
@@ -436,6 +443,9 @@ def promote_rows(db: Session, current_user, worksheet, rows: list[EndoPromoteRow
         run_params=method["run_parameters"] if method else None,
         default_cartridge_id=default_cartridge_id,
         sensitivities=cartridge_sensitivities(db, cartridge_ids),
+        # Slice 5: the rows' match inputs and today's lines, once per request.
+        facts=row_facts(db, worksheet, items.values()),
+        rules=load_rules(db),
     )
     results = []
     for row in rows:

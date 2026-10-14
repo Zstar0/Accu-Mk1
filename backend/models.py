@@ -1281,6 +1281,17 @@ class WorksheetItem(Base):
     result_entered_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
     result_entered_by_user_id: Mapped[Optional[int]] = mapped_column(
         ForeignKey("users.id", ondelete="SET NULL"), nullable=True)
+    # Endo slice 5 (spec 2026-10-14 sections 6 to 8), 2 mL rows only. The
+    # method prep rule locked onto the row, {"rule": <a copy of the line, or
+    # null for the standard>, "locked_at", "locked_by", "user_id"}; the "no
+    # rule" switch; the optional special-prep note; and the append-only list
+    # of runs a Re-apply or an override replaced. Server-owned JSON: always
+    # assigned a new dict or list, a plain JSON column misses in-place edits.
+    prep_rule: Mapped[Optional[dict]] = mapped_column(JSON, nullable=True)
+    prep_rules_off: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=False, server_default="false")
+    prep_note: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    prep_history: Mapped[Optional[list]] = mapped_column(JSON, nullable=True)
 
     def __repr__(self) -> str:
         return f"<WorksheetItem(id={self.id}, worksheet_id={self.worksheet_id}, sample_uid='{self.sample_uid}')>"

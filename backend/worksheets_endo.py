@@ -11,6 +11,7 @@ never writes a method onto analyses or worksheet items."""
 import math
 import re
 from datetime import datetime, timezone
+from types import SimpleNamespace
 from typing import Optional
 
 from sqlalchemy import select
@@ -363,36 +364,34 @@ def cartridge_sensitivities(db: Session, ids) -> dict[int, Optional[float]]:
     }
 
 
-# The endo v2 row fields the item PATCH accepts (spec 3.7). Sent = set; an
-# explicit null clears; omitted = untouched (model_fields_set).
-_PREP_FIELDS = ("prep_form", "prep_water_ml", "prep_total_dilution", "prep_steps")
+# The endo v2 row fields the item PATCH accepts (spec 3.7), with slice 5's
+# "no rule" switch and special-prep note (spec 2026-10-14 sections 6 and 8).
+# Sent = set; an explicit null clears; omitted = untouched (model_fields_set).
+_PREP_FIELDS = ("prep_form", "prep_water_ml", "prep_total_dilution", "prep_steps",
+                "prep_rules_off", "prep_note")
 ENDO_ITEM_FIELDS = (*_PREP_FIELDS, "cartridge_type_id", "result_reading")
 # The fixed parts of the 2 mL steps that stay in code (spec 4.4): step 1's
-# standard ratio and the fixed 1:2 of step 3.
+# standard ratio (endo_prep_rules.STEP1_RATIO mirrors it; a row's rule can
+# set its own, slice 5) and the fixed 1:2 of step 3.
 STEP1_STANDARD_RATIO = 10
 STEP3_RATIO = 2
-
-
-def _step1_ratio(steps) -> float:
-    """The row's step 1 ratio: its own (prep_steps[0][1]) when set, else 1:10."""
-    first = steps[0] if isinstance(steps, list) and steps else None
-    if isinstance(first, list) and len(first) == 2 and first[1] is not None:
-        # float(): a huge int ratio (10**308 passed _finite) would make an int
-        # floor that the :g message cannot format (500); as a float it is inf.
-        return float(first[1])
-    return STEP1_STANDARD_RATIO
+# A special-prep note prints on the row of the bench sheet.
+_PREP_NOTE_MAX = 200
 
 
 def check_item_endo_fields(db: Session, worksheet, item, values: dict) -> dict:
     """Validate the row fields one PATCH sent. Writes nothing. Returns the
-    values to store (a reading trimmed) or raises ValueError with the reason.
-    Saving a reading always stores the row's cartridge (spec 3.1), so a
-    reading needs one, sent now or already on the row. For the same reason a
-    cartridge cannot be cleared from under a stored reading. A total below
-    step 1's ratio x 2 cannot be made, because step 2 would need a ratio
-    under 1:1. A row with no total of its own runs on the method's standard
-    total (std_total_dilution, 250 when unset), so that one is checked the
-    same way. Tube overflow is only a screen warning."""
+    values to store (a reading and a note trimmed) or raises ValueError with
+    the reason. Saving a reading always stores the row's cartridge (spec
+    3.1), so a reading needs one, sent now or already on the row. For the
+    same reason a cartridge cannot be cleared from under a stored reading. A
+    total below step 1's ratio x 2 cannot be made, because step 2 would need
+    a ratio under 1:1. Both are the row's effective values (slice 5, spec 5):
+    its own, else its rule's (the locked line, else today's match, none when
+    switched to "no rule" or for bac water), else the standard (the method's
+    std_total_dilution, 250 when unset; step 1 at 1:10). So the floor is
+    checked again when the switch moves. Tube overflow is only a screen
+    warning."""
     out = dict(values)
     form = values.get("prep_form")
     if form is not None and form not in ENDO_FORMS:
@@ -405,18 +404,36 @@ def check_item_endo_fields(db: Session, worksheet, item, values: dict) -> dict:
         raise ValueError("prep_total_dilution must be a number")
     if values.get("prep_steps") is not None:
         out["prep_steps"] = validate_prep_steps(values["prep_steps"])
+    if "prep_rules_off" in values and not isinstance(values["prep_rules_off"], bool):
+        raise ValueError("prep_rules_off must be true or false")
+    if values.get("prep_note") is not None:
+        note = values["prep_note"].strip()
+        # Never echoed: a lone surrogate in the reason could not be encoded (a 500).
+        if not _clean_text(note) or len(note) > _PREP_NOTE_MAX:
+            raise ValueError(f"prep_note must be plain text of at most {_PREP_NOTE_MAX} characters")
+        out["prep_note"] = note or None
     total_after = out.get("prep_total_dilution", item.prep_total_dilution)
-    floor_check = "prep_total_dilution" in values or "prep_steps" in values
+    floor_check = any(f in values for f in ("prep_total_dilution", "prep_steps", "prep_rules_off"))
     cartridge = values.get("cartridge_type_id")
     # Resolved once, and only when a check below needs it.
     method = (resolve_endo_method(db, worksheet)
               if cartridge is not None or (floor_check and total_after is None) else None)
     if floor_check:
-        if total_after is None:
-            total_after = endo_run_params(
-                method["run_parameters"] if method else None)["std_total_dilution"]
-        floor = STEP3_RATIO * _step1_ratio(out.get("prep_steps", item.prep_steps))
-        if total_after < floor:
+        # Lazy: endo_prep_rules imports this module.
+        from endo_prep_rules import row_effective
+
+        # The row as this PATCH leaves it.
+        after = SimpleNamespace(
+            prep_total_dilution=total_after, prep_steps=out.get("prep_steps", item.prep_steps),
+            cartridge_type_id=out.get("cartridge_type_id", item.cartridge_type_id),
+            prep_rule=item.prep_rule,
+            prep_rules_off=out.get("prep_rules_off", item.prep_rules_off))
+        _, effective = row_effective(db, worksheet, item, view=after, std_total=endo_run_params(
+            method["run_parameters"] if method else None)["std_total_dilution"])
+        # A total of the row's own is checked as sent, so zero or below is refused.
+        total = total_after if total_after is not None else effective["total_dilution"]
+        floor = STEP3_RATIO * effective["step1_ratio"]
+        if total < floor:
             raise ValueError(f"prep_total_dilution must be at least {floor:g} (the step 1 "
                              f"ratio x the fixed 1:{STEP3_RATIO} step) or step 2 cannot be made")
     if cartridge is not None and cartridge not in cartridge_ids_allowed_by(db, method):
