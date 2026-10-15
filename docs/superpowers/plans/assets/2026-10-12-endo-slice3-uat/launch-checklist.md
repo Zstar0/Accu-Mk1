@@ -14,6 +14,18 @@ Run these against production first. **Blocking** means any row returned stops th
 | 4 | Endotoxin vials by normalized sample type, including empty. This decides whether the 350 EU/vial row is Peptide-scoped or a wildcard. | `gates.md` "Still open before deploy" | decision |
 | 5 | Profile COA texts that save validation would refuse, or that already hold a macro: `unknown_macros(t)` non-empty, OR `resolve(t, {}) != t`, over the basis note, method, prep and every footnote text | slice 4 spec section 9 | **yes** |
 
+**Results, 2026-10-14 (run with the Handler's approval, read-only, on production v1.48.0).**
+
+All five queries ran in one script. Each ran in its own `SET TRANSACTION READ ONLY` transaction and was rolled back.
+
+| # | Result | Verdict |
+|---|---|---|
+| 1 | 2 rows: `PH-MEASURE` specs 61 (Bacteriostatic Water) and 62 (wildcard), with no unit, against catalog unit `pH` | No impact. When no spec row is filed in the result's unit and that unit is the catalog unit, `resolve_spec` runs today's lookup (`coa/spec_rules.py:116-124`), so pH results keep these specs |
+| 2 | 0 rows | **PASS** |
+| 3 | 0 rows | **PASS** |
+| 4 | `ENDOTOXIN-USP85LAL` vials: Peptide 323, Peptide Blend 88, Bacteriostatic Water 36, and none with an empty sample type. `ENDO-LAL`, the SENAITE-born service: Peptide 638, Peptide Blend 151, Bacteriostatic Water 54 | **Decision: scope the 350 EU/vial row to Peptide.** Peptide Blend folds into the Peptide matrix (`coa/spec_rules.py:21`), and bac water stays EU/mL, so no wildcard row is needed |
+| 5 | 12 profiles, 0 hits | **PASS** |
+
 **How to run query 5.** Production's current image has no `coa.text_macros`. Pipe the module's source in first, then the check script without its import line:
 `cat backend/coa/text_macros.py check.py | ssh root@100.120.92.93 'docker exec -i -w /app accu-mk1-backend python -'`
 The module must come first because it begins with `from __future__ import annotations`.
@@ -46,7 +58,7 @@ The module must come first because it begins with `from __future__ import annota
    - Before flipping the default, check that method 26's run parameters match Dennis's current method.
    - Make the "Endotoxin" method revision (method 26) the **default** for `ENDOTOXIN-USP85LAL` (281). Without the default, no worksheet resolves a method on production.
    - Link the cartridges, set the run parameters, then activate the revision.
-4. **Spec.** In the spec editor for 281, add the 0 to 350 EU/vial row, scoped to Peptide or as a wildcard per query 4, with LOQ left empty. Leave every EU/mL row active, because bac water stays EU/mL.
+4. **Spec.** In the spec editor for 281, add the 0 to 350 EU/vial row scoped to Peptide (query 4, 2026-10-14), with LOQ left empty. Leave every EU/mL row active, because bac water stays EU/mL.
 5. **Profile text.** Only after steps 1-4 and a healthy image: add `[LOD {lod}.]` to the method text of the peptide endotoxin profile and the bac water endotoxin profile.
 6. **Prep rules.** The rules table ships empty, so every 2 mL row preps at the standard until Dennis adds lines on the rules page. Nothing to do at launch.
 7. **Smoke test.** Run one test sample end to end:
