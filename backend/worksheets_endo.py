@@ -374,12 +374,14 @@ ENDO_ITEM_FIELDS = (*_PREP_FIELDS, "cartridge_type_id", "result_reading")
 # spec 8): the replaced run goes to the row's history first.
 _OVERRIDE_FIELDS = ("prep_total_dilution", "prep_steps", "cartridge_type_id", "prep_rules_off")
 # A typed value is allowed until the row is promoted (spec 8): then every
-# endo field refuses a change with 409 and PREP_FINAL, the form, water and
-# reading included, since each moves the EU/vial or LOQ already on the
-# parent; a promoted row is corrected by retest (Handler ruling 2026-10-14,
-# final review I3). The weight, the stock bench fields and the ticks stay
-# editable: none of them enters a promoted row's EU/vial or LOQ.
-PREP_FINAL_FIELDS = ENDO_ITEM_FIELDS
+# endo field refuses a change with 409 and PREP_FINAL, the form, water,
+# reading and weight included, since each moves the EU/vial, LOQ or EU/mg
+# already on the parent; a promoted row is corrected by retest (Handler
+# ruling 2026-10-14, final review I3, then the weight). The weight is the
+# stock bench field the item PATCH saves outside ENDO_ITEM_FIELDS, so the
+# PATCH judges it here too. The other stock bench fields and the ticks stay
+# editable: none of them enters a promoted row's result.
+PREP_FINAL_FIELDS = (*ENDO_ITEM_FIELDS, "prep_weight_mg")
 PREP_FINAL = "the row is promoted; its prep is final"
 # The fixed parts of the 2 mL steps that stay in code (spec 4.4): step 1's
 # standard ratio (endo_prep_rules.STEP1_RATIO mirrors it; a row's rule can

@@ -26300,12 +26300,17 @@ def update_worksheet_item(
         raise HTTPException(404, "Worksheet item not found")
 
     # Endo v2 row fields, validated before anything below writes. A completed
-    # worksheet refuses them (409); the older fields keep today's behaviour.
+    # worksheet refuses them (409); the older fields keep today's behaviour,
+    # except the weight, final on a promoted row.
     from endo_prep_rules import lock_items_for_update, promoted_sample_ids
     from worksheets_endo import (ENDO_ITEM_FIELDS, PREP_FINAL, PREP_FINAL_FIELDS,
                                  apply_item_endo_fields, check_item_endo_fields,
                                  resolve_endo_method)
     endo_values = {f: getattr(data, f) for f in ENDO_ITEM_FIELDS if f in data.model_fields_set}
+    # The weight is a stock bench field, saved below, but final on a promoted
+    # row like the endo fields (PREP_FINAL_FIELDS), so it takes the locks and
+    # the guard too; it gets no completed-worksheet 409 and no endo check.
+    weight_sent = "prep_weight_mg" in data.model_fields_set
     # Endo slice 5: with endo fields, the worksheet row, then the row's live
     # vial analysis, then the item, under row locks and re-read (the lock
     # order, _worksheet_for_update): a first reading pins the method on the
@@ -26313,21 +26318,23 @@ def update_worksheet_item(
     # history below then judge the row as committed: an override never writes
     # over a history entry a Re-apply added meanwhile, and a promote or a
     # completion that committed meanwhile is seen. Before anything here writes.
-    ws = (_worksheet_for_update(db, worksheet_id) if endo_values else
+    ws = (_worksheet_for_update(db, worksheet_id) if endo_values or weight_sent else
           db.execute(select(Worksheet).where(Worksheet.id == worksheet_id)).scalar_one())
-    if endo_values:
+    if endo_values or weight_sent:
         lock_items_for_update(db, ws, [item.id])
-        if ws.status == "completed":
-            raise HTTPException(409, "Worksheet is completed")
-        try:
-            endo_values = check_item_endo_fields(db, ws, item, endo_values)
-        except ValueError as exc:
-            raise HTTPException(400, str(exc))
+        if endo_values:
+            if ws.status == "completed":
+                raise HTTPException(409, "Worksheet is completed")
+            try:
+                endo_values = check_item_endo_fields(db, ws, item, endo_values)
+            except ValueError as exc:
+                raise HTTPException(400, str(exc))
         # Endo slice 5 (spec 8): a promoted row's prep is final, every endo
-        # field (final review I3). A value sent as stored is no change; the
-        # fields outside ENDO_ITEM_FIELDS keep today's behaviour. One query,
-        # and only when a final field would change.
-        if (any(f in endo_values and endo_values[f] != getattr(item, f) for f in PREP_FINAL_FIELDS)
+        # field (final review I3) and the weight. A value sent as stored is no
+        # change; the other fields outside ENDO_ITEM_FIELDS keep today's
+        # behaviour. One query, and only when a final field would change.
+        final_values = {**endo_values, **({"prep_weight_mg": data.prep_weight_mg} if weight_sent else {})}
+        if (any(f in final_values and final_values[f] != getattr(item, f) for f in PREP_FINAL_FIELDS)
                 and promoted_sample_ids(db, [item.sample_id])):
             raise HTTPException(409, PREP_FINAL)
 

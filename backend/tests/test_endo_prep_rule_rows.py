@@ -20,7 +20,7 @@ import worksheets_endo_promote
 from auth import get_current_user
 from database import Base, get_db
 from main import app
-from models import AuditLog, EndoPrepRule, LimsAnalysis, LimsSample
+from models import AuditLog, EndoPrepRule, Instrument, LimsAnalysis, LimsSample
 from tests.test_endo_v2_worksheets import (
     _count_sql, _import, _reader_world, _row_world, _service, _vial_item, _ws,
 )
@@ -678,28 +678,43 @@ def test_a_promoted_rows_prep_is_final(client, db, field, value):
     assert getattr(live, field) == body[field]
 
 
-def test_a_promoted_rows_form_water_and_reading_are_final_and_other_fields_still_save(client, db):
-    """Handler ruling 2026-10-14 (final review I3): every endo field of a
-    promoted row is final, the form, water and reading included, since each
-    moves the EU/vial or LOQ already on the parent; retest corrects it. The
-    fields that never enter them, the weight and the ticks, still save."""
+def test_a_promoted_rows_form_water_weight_and_reading_are_final_and_other_fields_still_save(client, db):
+    """Handler ruling 2026-10-14 (final review I3, then the weight): every
+    endo field of a promoted row is final, the form, water, weight and reading
+    included, since each moves the EU/vial, LOQ or EU/mg already on the parent;
+    retest corrects it. The ticks, the instrument and prep_status still save."""
     w = _world(client, db)
     done, _ = _row(db, w, "P-4001-S01", state="promoted")
+    inst = Instrument(name="Nexgen-MCS 1", origin="mk1", active=True, serial_number="NX-1001")
+    db.add(inst)
     db.commit()
     url = f"/worksheets/{w.ws.id}/items/{done.id}"
-    for payload in ({"result_reading": "0.8"}, {"prep_form": "liquid"}, {"prep_water_ml": 2.5}):
+    # A weight beside a tick is refused whole, as combined endo payloads are.
+    for payload in ({"result_reading": "0.8"}, {"prep_form": "liquid"}, {"prep_water_ml": 2.5},
+                    {"prep_weight_mg": 12.5}, {"prep_weight_mg": 12.5, "made": True}):
         r = client.patch(url, json=payload)
         assert (r.status_code, r.json()["detail"]) == (
             409, "the row is promoted; its prep is final"), payload
     db.refresh(done)
-    assert (done.result_reading, done.prep_form, done.prep_water_ml) == ("<0.05", None, None)
-    for payload in ({"made": True}, {"prep_weight_mg": 12.5},
+    assert (done.result_reading, done.prep_form, done.prep_water_ml, done.prep_weight_mg,
+            done.made_at) == ("<0.05", None, None, None, None)
+    done.prep_weight_mg = 12.5
+    db.commit()
+    for payload in ({"made": True}, {"instrument_id": inst.id}, {"prep_status": "complete"},
                     # Sent as stored: no change, so no refusal.
-                    {"cartridge_type_id": w.c05.id, "prep_note": None, "result_reading": "<0.05"}):
+                    {"prep_weight_mg": 12.5, "cartridge_type_id": w.c05.id, "prep_note": None,
+                     "result_reading": "<0.05"}):
         assert client.patch(url, json=payload).status_code == 200, payload
     db.refresh(done)
-    assert (done.made_at is not None, done.prep_weight_mg, done.result_reading) == (
-        True, 12.5, "<0.05")
+    assert (done.made_at is not None, done.instrument_id, done.prep_status, done.prep_weight_mg,
+            done.result_reading) == (True, inst.id, "complete", 12.5, "<0.05")
+    # The weight saves on a row that is not promoted.
+    live, _ = _row(db, w, "P-4002-S01")
+    db.commit()
+    assert client.patch(f"/worksheets/{w.ws.id}/items/{live.id}",
+                        json={"prep_weight_mg": 12.5}).status_code == 200
+    db.refresh(live)
+    assert live.prep_weight_mg == 12.5
 
 
 # --- Task 4 fix round 1: promoted-row integrity (review S1, S3, I5) -----------
