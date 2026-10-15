@@ -162,6 +162,18 @@ describe('Box 2 under method rules', () => {
     })
   })
 
+  it("keeps a typed step 1 ratio equal to the rule's through a sample-only edit (D6, final review L148)", () => {
+    const item = pep({
+      sample_id: 'P-0001-S02',
+      prep_steps: [[20, 15], null, null],
+    })
+    const { onUpdateItem } = setup([item], [rule({ step1_ratio: 15 })])
+    commit(rowOf('P-0001-S02'), 'Step 1 sample (µL)', '30')
+    expect(onUpdateItem).toHaveBeenLastCalledWith(item.id, {
+      prep_steps: [[30, 15], null, null],
+    })
+  })
+
   it("keeps a typed 1:250 over a 1:300 rule, and the rule's total or a cleared cell goes back to the rule (D6)", () => {
     const item = pep({ sample_id: 'P-0001-S02', prep_total_dilution: 250 })
     const { onUpdateItem } = setup([item], [rule({ total_dilution: 300 })])

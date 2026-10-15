@@ -78,8 +78,8 @@ type PrepSteps = WorksheetItemPatch['prep_steps']
  * typed alone carries the step's current sample volume with it. An entry
  * back at the standard becomes null; all three standard sends null. `std`
  * is the row's own default (its rule's step 1 ratio, slice 5): step 1
- * carries only a ratio typed by hand, and a ratio equal to the default
- * goes as null, so a ruled row keeps following its rule.
+ * carries only a ratio typed by hand, and a ratio typed equal to the
+ * default goes as null, so a ruled row keeps following its rule.
  */
 function nextPrepSteps(
   current: PrepSteps,
@@ -95,8 +95,10 @@ function nextPrepSteps(
   const next = [0, 1, 2].map(j => current?.[j] ?? null)
   const dSample = d.sampleUl ?? 0
   const sample = field === 'sample' ? (v ?? dSample) : (p.sampleUl ?? dSample)
-  const typed = field === 'ratio' ? v : (current?.[0]?.[1] ?? null)
-  const ratio = typed === d.ratio ? null : typed
+  // A sample-only edit keeps a stored typed ratio as it is, even one equal
+  // to today's default: only the ratio cell undoes it (D6).
+  const ratio =
+    field === 'ratio' ? (v === d.ratio ? null : v) : (current?.[0]?.[1] ?? null)
   const standard = sample === dSample && (i !== 0 || ratio === null)
   next[i] = standard ? null : i === 0 ? [sample, ratio] : [sample]
   return next.every(e => e === null) ? null : next
