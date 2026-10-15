@@ -6787,8 +6787,10 @@ export async function importReaderResults(
   applied: number
   items: WorksheetListItem['items']
   endo_method: EndoMethodInfo | null
-  /** Slice 5: rows the import left unchanged, with why (a promoted row:
-   *  "the row is promoted; its prep is final"). */
+  /** Slice 5: rows the import left unchanged, with why: a promoted row
+   *  ("the row is promoted; its prep is final"), or a run whose reading
+   *  Re-apply moved to the row's history ("this run's reading was moved to
+   *  history by Re-apply; enter the re-run"). */
   skipped?: { item_id: number; sample_id: string; reason: string }[]
 }> {
   const response = await fetch(

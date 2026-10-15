@@ -452,6 +452,8 @@ describe('EndoReaderImportDialog', () => {
         `1 reading applied from ${FILE}; 1 not applied`,
         {
           description: 'P-0002-S02 (the row is promoted; its prep is final)',
+          // stays until dismissed (final review Minor 8)
+          duration: Infinity,
         }
       )
     )

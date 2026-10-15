@@ -294,13 +294,16 @@ export function EndoReaderImportDialog({
         chosen.map(r => r.item.id)
       )
       const applied = `${res.applied} ${res.applied === 1 ? 'reading' : 'readings'} applied from ${staged.fileName}`
-      // Slice 5: rows the server left alone (a promoted row), each with why.
+      // Slice 5: rows the server left alone (a promoted row, or a run whose
+      // reading Re-apply moved), each with why. A normal path now, so it
+      // stays until dismissed (final review Minor 8).
       const skipped = res.skipped ?? []
       if (skipped.length)
         toast.warning(`${applied}; ${skipped.length} not applied`, {
           description: skipped
             .map(s => `${s.sample_id} (${s.reason})`)
             .join(', '),
+          duration: Infinity,
         })
       else toast.success(applied)
       close()
