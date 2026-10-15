@@ -959,6 +959,7 @@ def test_reapply_moves_a_read_rows_reading_into_its_history_and_clears_it(client
     assert entry == {"at": entry["at"], "by": 1, "why": "reapply", "lock": m.lock,
                      "total_dilution": 300, "step1_ratio": 10, "cartridge_type_id": m.c05.id,
                      "result_reading": "0.8", "reader_test_id": "T-1",
+                     "reader_tested_at": "2026-10-09T14:02:00",
                      "result_entered_at": m.entered.isoformat() + "Z",
                      "result_reader": m.reader, "result_entered_by_user_id": 1,
                      "reading_moved": True, "ticks": m.ticks}
@@ -972,8 +973,9 @@ def test_reapply_moves_a_read_rows_reading_into_its_history_and_clears_it(client
 
 def test_a_reader_import_never_restores_a_reading_reapply_moved(client, db):
     """Re-importing the old reader file would put the run read at 1:300 back
-    at 1:400. Its test is skipped with READING_MOVED, before the re-run is
-    read and after it, replace ticked or not; a new run imports as usual."""
+    at 1:400. The same run (test id and tested_at) is skipped with
+    READING_MOVED, before the re-run is read and after it, replace ticked or
+    not; a new run imports as usual, a re-run that reuses the test id too."""
     m = _read_then_reapplied(client, db)
     skip = [{"item_id": m.item.id, "sample_id": m.item.sample_id,
              "reason": endo_prep_rules.READING_MOVED}]
@@ -987,6 +989,21 @@ def test_a_reader_import_never_restores_a_reading_reapply_moved(client, db):
     assert (r.status_code, r.json()["applied"], r.json()["skipped"]) == (200, 0, skip), r.text
     db.refresh(m.item)
     assert (m.item.result_reading, m.item.result_reader["test_id"]) == ("<0.05", "T-2")
+    # A run is its test id and tested_at (residual ruling 2026-10-14): a re-run
+    # that reuses the moved test id, tested later, imports.
+    rerun = _reader_line(m.item, "0.8", m.c05, test_id="T-1", replace=True)
+    rerun["record"]["tested_at"] = "2026-10-10T09:30:00"
+    r = _import(client, m.ws, rerun)
+    assert (r.status_code, r.json()["applied"], r.json()["skipped"]) == (200, 1, []), r.text
+    db.refresh(m.item)
+    assert (m.item.result_reading, m.item.result_reader["tested_at"]) == ("0.8", "2026-10-10T09:30:00")
+    # Without a tested_at on either side, the test id alone decides.
+    entry = {"reading_moved": True, "reader_test_id": "T-1", "reader_tested_at": None}
+    was_moved = endo_prep_rules.reading_was_moved
+    assert was_moved(SimpleNamespace(prep_history=[entry]), {"test_id": "T-1", "tested_at": "x"})
+    assert was_moved(SimpleNamespace(prep_history=[{**entry, "reader_tested_at": "y"}]),
+                     {"test_id": "T-1"})
+    assert not was_moved(SimpleNamespace(prep_history=[entry]), {"test_id": "T-2"})
 
 
 # --- Task 5 review I-1: Re-apply against a concurrent promote or Re-apply ------

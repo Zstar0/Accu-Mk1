@@ -25830,8 +25830,8 @@ def import_endo_reader_results(
     replaced run goes to the row's history first (review I5). A POST on an
     id path, so it has no ordering concern against GET /worksheets/{worksheet_id}."""
     from endo_prep_rules import (READING_MOVED, append_history, load_rules,
-                                 lock_items_for_update, lock_rows, moved_test_ids,
-                                 promoted_sample_ids, row_effective, row_facts)
+                                 lock_items_for_update, lock_rows, promoted_sample_ids,
+                                 reading_was_moved, row_effective, row_facts)
     from worksheets_endo import (CARTRIDGE_REFUSED, PREP_FINAL, cartridge_ids_allowed_by,
                                  check_reader_record, check_storable, endo_run_params,
                                  instrument_id_for_serial, parse_reading, pin_endo_method,
@@ -25908,7 +25908,7 @@ def import_endo_reader_results(
                 continue
             # Final review I2: a run Re-apply moved off the row was read at
             # the old prep, so it never comes back, replace ticked or not.
-            if test_id in moved_test_ids(item):
+            if reading_was_moved(item, t.record):
                 skipped.append({"item_id": item.id, "sample_id": item.sample_id,
                                 "reason": READING_MOVED})
                 continue

@@ -133,7 +133,7 @@ Typed values stay as they are. Re-apply moves the reading to the row's history a
 - the history entry keeps the reading in full and is marked `reading_moved`, and the audit row keeps the old reading and reader record;
 - every reading field on the row is cleared (`result_reading`, `result_reader`, `result_entered_at`, `result_entered_by_user_id`), while the new lock and the cartridge stay;
 - the prep at the old dilution is stale, so the Made and Ran ticks clear too and `prep_status` goes back to `ready`, with the entry keeping them as `ticks` (residual ruling 2026-10-14);
-- the reader import never restores a moved reading: a test whose id a moved entry holds is skipped and listed in `skipped` ("this run's reading was moved to history by Re-apply; enter the re-run"), replace ticked or not;
+- the reader import never restores a moved reading: a run a moved entry holds is skipped and listed in `skipped` ("this run's reading was moved to history by Re-apply; enter the re-run"), replace ticked or not. A run is its test id and its `tested_at` when the entry and the incoming record both carry one, else the test id alone, so a re-run that reuses a test id still imports (residual ruling 2026-10-14);
 - a row with no reading moves as before, its ticks kept.
 
 **History entry** (in `prep_history`):
@@ -143,7 +143,7 @@ Typed values stay as they are. Re-apply moves the reading to the row's history a
 - `result_reading`;
 - the reader test id;
 - `result_entered_at`;
-- for a reading Re-apply moved, also `result_reader`, `result_entered_by_user_id`, `reading_moved: true` and the cleared `ticks`.
+- for a reading Re-apply moved, also the reader's `tested_at` (`reader_tested_at`), `result_reader`, `result_entered_by_user_id`, `reading_moved: true` and the cleared `ticks`.
 
 It holds stored facts only. The row's history view recomputes EU per vial and the verdict from them with the pinned method, so a failed run stays on record (D3).
 

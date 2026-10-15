@@ -433,11 +433,18 @@ def _ticks(item) -> dict:
             "prep_status": item.prep_status}
 
 
-def moved_test_ids(item) -> set[str]:
-    """The reader test ids of the readings Re-apply moved off this row into
-    its history (final review I2): the reader import never puts one back."""
-    return {e["reader_test_id"] for e in item.prep_history or []
-            if e.get("reading_moved") and isinstance(e.get("reader_test_id"), str)}
+def reading_was_moved(item, record: dict) -> bool:
+    """Whether Re-apply moved this reader run's reading off the row into its
+    history (final review I2), so the reader import never puts it back. A
+    run is its test id and, when both the entry and the record carry one,
+    its tested_at, so a re-run that reuses a test id still imports; else
+    the test id alone (residual ruling 2026-10-14)."""
+    test_id, tested_at = record.get("test_id"), record.get("tested_at")
+    return isinstance(test_id, str) and any(
+        e.get("reading_moved") and e.get("reader_test_id") == test_id
+        and (e.get("reader_tested_at") is None or tested_at is None
+             or e["reader_tested_at"] == tested_at)
+        for e in item.prep_history or [])
 
 
 def promoted_sample_ids(db: Session, sample_ids) -> set[str]:
@@ -614,7 +621,8 @@ def apply_reapply(db: Session, worksheet, item_ids: list[int], current_user) -> 
         # (preflight F8: the shared helper, on the facts already read).
         _, effective = row_effective(db, worksheet, it, rules=rules, std_total=std_total,
                                      facts=facts.get(it.id, {}))
-        moved = ({"result_reader": it.result_reader,
+        moved = ({"reader_tested_at": (it.result_reader or {}).get("tested_at"),
+                  "result_reader": it.result_reader,
                   "result_entered_by_user_id": it.result_entered_by_user_id,
                   "reading_moved": True, "ticks": _ticks(it)} if _has_result(it) else {})
         append_history(it, why="reapply", user_id=user_id, effective=effective, **moved)
