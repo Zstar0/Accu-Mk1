@@ -18,6 +18,47 @@ router = APIRouter(prefix="/support", tags=["support"])
 Status = Literal["open", "snoozed", "done"]
 
 
+class StatusDetail(BaseModel):
+    kind: str
+    label: str
+    until: Optional[str] = None
+
+
+class Assignee(BaseModel):
+    plain_user_id: Optional[str] = None
+    name: str
+    avatar_url: Optional[str] = None
+    primary: bool = False
+
+
+class Tier(BaseModel):
+    name: str
+    color: Optional[str] = None
+
+
+class ThreadFieldValue(BaseModel):
+    key: str
+    label: str
+    value: Optional[str] = None
+
+
+class CustomerBlock(BaseModel):
+    name: str
+    email: Optional[str] = None
+    external_id: Optional[str] = None
+    avatar_url: Optional[str] = None
+    company: Optional[str] = None
+    created_at: Optional[str] = None
+    updated_at: Optional[str] = None
+    wp_profile_url: Optional[str] = None
+
+
+class EventInfo(BaseModel):
+    icon: Literal["status", "label", "assign", "priority"]
+    actor: str
+    text: str
+
+
 class LabelRef(BaseModel):
     id: str
     type_id: str
@@ -40,6 +81,11 @@ class Thread(BaseModel):
     assignee_id: Optional[str] = None
     customer_plain_id: Optional[str] = None
     label_refs: list[LabelRef] = []
+    status_detail: Optional[StatusDetail] = None
+    assignees: list[Assignee] = []
+    tier: Optional[Tier] = None
+    fields: list[ThreadFieldValue] = []
+    customer: Optional[CustomerBlock] = None
 
 
 class Counts(BaseModel):
@@ -73,6 +119,12 @@ class Entry(BaseModel):
     internal: bool
     subject: Optional[str] = None
     text: str
+    author_avatar_url: Optional[str] = None
+    automated: bool = False
+    email_to: Optional[str] = None
+    email_from: Optional[str] = None
+    markdown: Optional[str] = None
+    event: Optional[EventInfo] = None
 
 
 class ThreadDetail(BaseModel):
@@ -80,6 +132,7 @@ class ThreadDetail(BaseModel):
     entries: list[Entry]
     fetched_at: str
     stale: bool
+    via_flag: Optional[int] = None  # set only when the read was admitted through a flag (spec 2026-10-12 3.3)
 
 
 def _fail(e: Exception):
@@ -105,14 +158,20 @@ def customer_support(customer_key: str, refresh: bool = False, status: list[Stat
 
 @router.get("/customers/{customer_key}/threads/{thread_id}", response_model=ThreadDetail)
 def thread_detail(customer_key: str, thread_id: str = Path(pattern=rules.THREAD_ID_PATTERN), refresh: bool = False,
-                  _u=Depends(require_support_reader)):
+                  user=Depends(get_current_user), db: Session = Depends(get_db)):
+    via_flag = None
+    if not seat.is_support_reader(user):
+        from flags.access import flag_for_user
+        via_flag = flag_for_user(db, getattr(user, "id", None), "support_ticket", f"{customer_key}|{thread_id}")
+        if via_flag is None:
+            raise HTTPException(status_code=403, detail="Admin access, a Plain seat, or a flag on this ticket required")
     try:
         out = service.thread_detail(customer_key, thread_id, refresh=refresh)
     except (SupportNotConfigured, SupportUnavailable) as e:
         _fail(e)
     if out is None:
         raise HTTPException(status_code=404, detail="thread not found")
-    return out
+    return {**out, "via_flag": via_flag}
 
 
 class SupportMe(BaseModel):
@@ -164,7 +223,7 @@ class TextBody(BaseModel):
 
 
 class StatusBody(BaseModel):
-    status: Literal["todo", "done", "snoozed"]
+    status: Literal["todo", "done", "snoozed", "waiting_for_customer", "waiting"]
     until: Optional[datetime] = None
 
 
@@ -232,3 +291,14 @@ def priority(customer_key: str, body: PriorityBody, thread_id: str = _TH, su=Dep
 def labels(customer_key: str, body: LabelsBody, thread_id: str = _TH, su=Depends(require_seat),
            db: Session = Depends(get_db)):
     return _act("labels", customer_key, thread_id, body, su, db)
+
+
+class AssigneesBody(BaseModel):
+    add: list[str] = []
+    remove: list[str] = []
+
+
+@router.post("/customers/{customer_key}/threads/{thread_id}/assignees", response_model=ActionResult)
+def assignees(customer_key: str, body: AssigneesBody, thread_id: str = _TH, su=Depends(require_seat),
+              db: Session = Depends(get_db)):
+    return _act("assignees", customer_key, thread_id, body, su, db)

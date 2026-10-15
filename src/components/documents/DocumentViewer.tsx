@@ -44,6 +44,7 @@ import {
   resolveDocTheme,
 } from '@/components/documents/documents-utils'
 import { RetitleDialog } from '@/components/documents/RetitleDialog'
+import { DocumentProvenanceDetails } from '@/components/documents/DocumentProvenance'
 import { useQueryClient } from '@tanstack/react-query'
 import { toast } from 'sonner'
 import { ToggleGroup, ToggleGroupItem } from '@/components/ui/toggle-group'
@@ -676,6 +677,9 @@ export function DocumentViewer({
           </>
         )}
       </div>
+
+      {/* The selected revision's own provenance: switching revisions re-keys `doc`. */}
+      {doc && <DocumentProvenanceDetails doc={doc} />}
 
       {editMode && (
         <EditModeBar

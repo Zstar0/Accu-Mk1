@@ -23,9 +23,36 @@ THREADS = """query CustomerThreads($customerIds: [ID!]!, $after: String) {
 }""" % _THREAD_FIELDS
 
 _ACTOR = """__typename
-        ... on UserActor { userId user { fullName } }
-        ... on CustomerActor { customer { fullName } }
+        ... on UserActor { userId user { fullName avatarUrl } }
+        ... on CustomerActor { customer { fullName avatarUrl } }
+        ... on SystemActor { systemId }
         ... on MachineUserActor { machineUser { fullName } }"""
+
+_DETAIL_FIELDS = """id status
+      statusDetail { __typename
+        ... on ThreadStatusDetailWaitingForDuration { waitingUntil { iso8601 } }
+        ... on ThreadStatusDetailSnoozed { snoozedUntil { iso8601 } } }
+      assignedTo { __typename ... on User { id fullName avatarUrl } ... on MachineUser { id fullName } }
+      additionalAssignees { __typename ... on User { id fullName avatarUrl } ... on MachineUser { id fullName } }
+      tier { name color }
+      threadFields { key stringValue numberValue booleanValue dateValue { iso8601 } }
+      customer { id fullName externalId avatarUrl email { email } company { name }
+        createdAt { iso8601 } updatedAt { iso8601 } }"""
+
+# Sidebar-only fields in their own query: if the key lacks a permission (tier, company, thread fields),
+# only the sidebar degrades; the conversation and every write keep working.
+THREAD_EXTRAS = """query ThreadExtras($threadId: ID!) {
+  thread(threadId: $threadId) {
+    %s
+  }
+}""" % _DETAIL_FIELDS
+
+THREAD_FIELD_SCHEMAS = """query ThreadFieldSchemas($after: String) {
+  threadFieldSchemas(first: 100, after: $after) {
+    pageInfo { hasNextPage endCursor }
+    edges { node { key label order } }
+  }
+}"""
 
 # `text` is aliased per entry type: Plain declares it String on some and String! on others,
 # which GraphQL rejects as a field conflict in one selection.
@@ -40,7 +67,7 @@ THREAD = """query Thread($threadId: ID!, $after: String) {
         actor { %s }
         entry {
           __typename
-          ... on EmailEntry { subject textContent hasMoreTextContent fullTextContent from { name email } }
+          ... on EmailEntry { subject textContent hasMoreTextContent fullTextContent markdownContent hasMoreMarkdownContent fullMarkdownContent from { name email } to { name email } }
           ... on ChatEntry { chatText: text }
           ... on NoteEntry { noteText: text }
           ... on SlackMessageEntry { slackText: text }
@@ -75,7 +102,8 @@ LABEL_TYPES = """query LabelTypes($after: String) {
   }
 }"""
 
-ALL = frozenset({WORKSPACE, CUSTOMER_BY_EMAIL, THREADS, THREAD, USER_BY_EMAIL, USERS, LABEL_TYPES})
+ALL = frozenset({WORKSPACE, CUSTOMER_BY_EMAIL, THREADS, THREAD, USER_BY_EMAIL, USERS, LABEL_TYPES,
+                 THREAD_FIELD_SCHEMAS, THREAD_EXTRAS})
 
 _ERR = "error { message type code }"
 
@@ -94,6 +122,8 @@ UNASSIGN = _m("UnassignThread", "unassignThread", "UnassignThreadInput")
 PRIORITY = _m("ChangeThreadPriority", "changeThreadPriority", "ChangeThreadPriorityInput")
 ADD_LABELS = _m("AddLabels", "addLabels", "AddLabelsInput")
 REMOVE_LABELS = _m("RemoveLabels", "removeLabels", "RemoveLabelsInput")
+ADD_ASSIGNEES = _m("AddAdditionalAssignees", "addAdditionalAssignees", "AddAdditionalAssigneesInput")
+REMOVE_ASSIGNEES = _m("RemoveAdditionalAssignees", "removeAdditionalAssignees", "RemoveAdditionalAssigneesInput")
 
 MUTATIONS = frozenset({REPLY, NOTE, MARK_DONE, MARK_TODO, SNOOZE, ASSIGN, UNASSIGN, PRIORITY, ADD_LABELS,
-                       REMOVE_LABELS})
+                       REMOVE_LABELS, ADD_ASSIGNEES, REMOVE_ASSIGNEES})

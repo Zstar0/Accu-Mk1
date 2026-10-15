@@ -18,6 +18,11 @@ export interface SupportThread {
   assignee_id?: string | null
   customer_plain_id?: string | null
   label_refs?: SupportLabelRef[]
+  status_detail?: SupportStatusDetail | null
+  assignees?: SupportAssignee[]
+  tier?: { name: string; color: string | null } | null
+  fields?: SupportField[]
+  customer?: SupportCustomerBlock | null
 }
 
 export interface CustomerSupport {
@@ -44,6 +49,12 @@ export interface SupportEntry {
   internal: boolean
   subject: string | null
   text: string
+  author_avatar_url?: string | null
+  automated?: boolean
+  email_to?: string | null
+  email_from?: string | null
+  markdown?: string | null
+  event?: SupportEventInfo | null
 }
 
 export interface SupportThreadDetail {
@@ -51,6 +62,8 @@ export interface SupportThreadDetail {
   entries: SupportEntry[]
   fetched_at: string
   stale: boolean
+  /** Set when the viewer reached this ticket through a flag (read-only). */
+  via_flag?: number | null
 }
 
 export function getCustomerSupport(
@@ -103,6 +116,7 @@ export type SupportAction =
   | 'assign'
   | 'priority'
   | 'labels'
+  | 'assignees'
 
 export function getSupportMe(): Promise<SupportMe> {
   return crmFetch('/support/me', new URLSearchParams())
@@ -127,4 +141,36 @@ export function supportAction(
       body: JSON.stringify(body),
     }
   )
+}
+
+export interface SupportStatusDetail {
+  kind: string
+  label: string
+  until: string | null
+}
+export interface SupportAssignee {
+  plain_user_id: string | null
+  name: string
+  avatar_url: string | null
+  primary: boolean
+}
+export interface SupportField {
+  key: string
+  label: string
+  value: string | null
+}
+export interface SupportCustomerBlock {
+  name: string
+  email: string | null
+  external_id: string | null
+  avatar_url: string | null
+  company: string | null
+  created_at: string | null
+  updated_at: string | null
+  wp_profile_url: string | null
+}
+export interface SupportEventInfo {
+  icon: 'status' | 'label' | 'assign' | 'priority'
+  actor: string
+  text: string
 }

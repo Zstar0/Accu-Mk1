@@ -18,7 +18,7 @@ from typing import Callable, Optional
 from sqlalchemy import and_, case, func, or_, select
 from sqlalchemy.orm import Session, lazyload
 
-from documents.errors import BadRequestError, ConflictError, NotFoundError
+from documents.errors import BadRequestError, ConflictError, DuplicateContentError, NotFoundError
 from documents.models import (Document, DocumentCategory, DocumentCodeCounter, DocumentSpace,
                               DocumentSpaceGrant, SPACE_VISIBILITIES)
 from documents.storage import get_storage
@@ -467,9 +467,13 @@ def create_document(db: Session, *, title: str = "", html, category: Optional[Do
                     user_id: Optional[int] = None,
                     co_author: Optional[str] = None,
                     space: Optional[DocumentSpace] = None,
-                    may_revise: Optional[Callable[[Document], bool]] = None) -> tuple[Document, bool]:
+                    may_revise: Optional[Callable[[Document], bool]] = None,
+                    provenance: Optional[dict] = None) -> tuple[Document, bool]:
     """Create revision 1 of a new code, or the next revision of an existing one.
     Identical bytes on an existing code => metadata patch, no new row (§5.5).
+    `provenance` is a dict of the new row's provenance columns, already validated
+    (documents/provenance.py). It lands only on a NEW row: the identical-bytes branch
+    keeps the existing revision's provenance untouched.
     `may_revise` is checked under the row lock: False reads as an unknown code, so a
     code minted into a hidden space between the caller's check and this lock is never
     revised (or named) by a caller who cannot see it."""
@@ -526,13 +530,13 @@ def create_document(db: Session, *, title: str = "", html, category: Optional[Do
                     f"code prefix must be {cat.code_prefix} for category {cat.name}")
         else:
             existing = db.execute(
-                select(Document.code, Document.revision)
+                select(Document)
                 .where(Document.content_sha256 == sha,
                        Document.category_id == cat.id,
                        (or_(Document.space_id == space_id, Document.space_id.is_(None))
                         if space_id == general_space(db).id else Document.space_id == space_id))
                 .order_by(Document.id).limit(1)
-            ).first()
+            ).scalars().first()
             if existing is not None:
                 # Without this a retry mints a SECOND controlled document holding
                 # identical content, which is how ART-0002 was born. Dedupe on an
@@ -544,10 +548,10 @@ def create_document(db: Session, *, title: str = "", html, category: Optional[Do
                 # Scoped to the category AND the space: a 409 that named a code in a
                 # space the caller cannot see would confirm that document exists
                 # (spec 5.2).
-                raise ConflictError(
-                    f"this content is already published as {existing[0]} "
-                    f"r{existing[1]}; pass code={existing[0]} to publish it as a new "
-                    f"revision, or change the content to mint a new document")
+                raise DuplicateContentError(
+                    f"this content is already published as {existing.code} "
+                    f"r{existing.revision}; pass code={existing.code} to publish it as a new "
+                    f"revision, or change the content to mint a new document", existing)
             code = mint_code(db, cat.code_prefix)
         revision = 1
         supersedes_id = None
@@ -560,7 +564,7 @@ def create_document(db: Session, *, title: str = "", html, category: Optional[Do
                    co_author=co_author,
                    source_session=source_session,
                    created_by_user_id=user_id, storage_key=key, size_bytes=len(data),
-                   content_sha256=sha)
+                   content_sha256=sha, **(provenance or {}))
     db.add(doc)
     db.flush()
     if activate:
@@ -787,7 +791,8 @@ def read_content(doc: Document) -> bytes:
 
 
 def replace_draft_content(db: Session, doc_id: int, *, html, updated_by: Optional[str],
-                          expected_sha256: Optional[str] = None) -> tuple[Document, bool]:
+                          expected_sha256: Optional[str] = None,
+                          edited_by_user_id: Optional[int] = None) -> tuple[Document, bool]:
     """In-place content replace for a DRAFT only (spec §10.3). Anything that was
     ever active is immutable: an edit to it is a new revision through
     create_document. Blob ordering mirrors delete_document: write the new
@@ -816,6 +821,9 @@ def replace_draft_content(db: Session, doc_id: int, *, html, updated_by: Optiona
     if updated_by:
         doc.updated_by = updated_by
     doc.updated_at = datetime.utcnow()
+    # The bytes are no longer only the creator's: provenance says who rewrote them.
+    doc.content_edited_by_user_id = edited_by_user_id
+    doc.content_edited_at = doc.updated_at
     db.commit()
     db.refresh(doc)
     if old_key != doc.storage_key:

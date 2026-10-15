@@ -1,0 +1,31 @@
+/* Plain's palette, scoped to the Support ticket view (spec 4.4). Mk1's .dark class switches the set. */
+.plain-view {
+  --pv-bg: #ffffff;
+  --pv-surface: #f7f7f8;
+  --pv-card: #f4f4f5;
+  --pv-card-team: #eef2fb;
+  --pv-card-note: #fdf6e3;
+  --pv-note-ink: #9a6700;
+  --pv-border: #e4e4e7;
+  --pv-ink: #18181b;
+  --pv-ink-2: #52525b;
+  --pv-ink-3: #a1a1aa;
+  --pv-accent: #4f46e5;
+  --pv-chip: #eef0ff;
+  background: var(--pv-bg);
+  color: var(--pv-ink);
+}
+.dark .plain-view {
+  --pv-bg: #18181b;
+  --pv-surface: #1f1f23;
+  --pv-card: #26262b;
+  --pv-card-team: #0f1626;
+  --pv-card-note: #2a2312;
+  --pv-note-ink: #e8b04a;
+  --pv-border: #2e2e33;
+  --pv-ink: #ececf1;
+  --pv-ink-2: #a1a1aa;
+  --pv-ink-3: #71717a;
+  --pv-accent: #8b9cff;
+  --pv-chip: #252a45;
+}

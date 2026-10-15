@@ -9,19 +9,22 @@ from dataclasses import dataclass
 from types import SimpleNamespace
 from typing import Dict, List, Optional
 
-from fastapi import APIRouter, Depends, Header, HTTPException, Query, Response, status
+from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request, Response, status
+from fastapi.responses import JSONResponse
 from fastapi.security import OAuth2PasswordBearer
 from sqlalchemy.exc import IntegrityError
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, object_session
 
+from agents.keys import is_agent_key, username_of
 from auth import get_current_user, require_admin, require_internal_service_token
 from database import get_db
-from documents import access, comments, service
-from documents.errors import BadRequestError, ConflictError, ForbiddenError, NotFoundError
+from documents import access, comments, provenance, service
+from documents.errors import (BadRequestError, ConflictError, DuplicateContentError,
+                              ForbiddenError, NotFoundError)
 from documents.models import Document, DocumentCategory, DocumentSpace
 from documents.schemas import (CategoryCreate, CategoryOut, CategoryUpdate, DocumentContentReplace,
                                DocumentCreate, DocumentDetail, DocumentListOut, DocumentOut,
-                               DocumentPatch, SpaceCreate, SpaceGrantsOut, SpaceGrantsReplace,
+                               DocumentPatch, DocumentProvenance, SpaceCreate, SpaceGrantsOut, SpaceGrantsReplace,
                                SpaceOut, SpaceUpdate)
 from documents.storage import DocumentNotFound
 from groups.access import is_admin
@@ -42,11 +45,13 @@ _SLUG_LIST = re.compile(rf"^{_SLUG_ATOM}(\+{_SLUG_ATOM})*$")
 
 @dataclass(frozen=True)
 class AgentWriter:
-    """A caller holding a documents-scoped agent token. Not a user: it has no id and
-    no email, and it may author and archive but never delete. `spaces` is the slug
-    allow-list it may publish into (spec 2026-10-06 section 7.1); absent = General."""
+    """A caller holding a documents-scoped agent token, or an agent USER's key (spec 2026-10-12
+    3.5). Not a User: it has no email and is never an admin; it may author and archive but never
+    delete. `spaces` is the slug allow-list it may publish into (env token: its configured list;
+    agent user: the spaces it can see). `user_id` is set for agent users only."""
     name: str
     spaces: frozenset = frozenset({"general"})
+    user_id: Optional[int] = None
 
 
 def _agent_tokens() -> Dict[str, tuple]:
@@ -99,7 +104,17 @@ def _agent_may_see(writer, doc: Document) -> bool:
     return slug in writer.spaces
 
 
+def _agent_user_writer(db, token: str, request) -> AgentWriter:
+    """An agent user's key on these routes is an AgentWriter, never its User row: until agent
+    users existed every bearer reaching here was an admin, and the deny checks lean on that
+    (require_document_admin_writer, the space-move check, updated_by, _reader_for)."""
+    from agents.auth import agent_for_route
+    user = agent_for_route(db, token, request)
+    return AgentWriter(username_of(user), access.visible_space_slugs(db, user), user.id)
+
+
 def require_document_writer(
+    request: Request = None,  # type: ignore[assignment]  # FastAPI injects it; direct calls pass none
     x_service_token: Optional[str] = Header(None),
     token: Optional[str] = Depends(_optional_bearer),
     db: Session = Depends(get_db),
@@ -114,6 +129,8 @@ def require_document_writer(
             return agent
         require_internal_service_token(x_service_token)
         return None
+    if token and is_agent_key(token):
+        return _agent_user_writer(db, token, request)
     if not token:
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, "authentication required")
     user = get_current_user(token=token, db=db)
@@ -130,6 +147,7 @@ def require_document_admin_writer(writer=Depends(require_document_writer)):
 
 
 def _space_reader(
+    request: Request = None,  # type: ignore[assignment]  # FastAPI injects it; direct calls pass none
     x_service_token: Optional[str] = Header(None),
     token: Optional[str] = Depends(_optional_bearer),
     db: Session = Depends(get_db),
@@ -142,6 +160,8 @@ def _space_reader(
             return agent
         require_internal_service_token(x_service_token)
         return None
+    if token and is_agent_key(token):
+        return _agent_user_writer(db, token, request)
     if not token:
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, "authentication required")
     return get_current_user(token=token, db=db)
@@ -219,7 +239,22 @@ def _space_out(sp: DocumentSpace, count: int, can_write: bool) -> SpaceOut:
     return out
 
 
-def _doc_out(doc: Document, revision_count: int, open_comments: int = 0) -> DocumentOut:
+def _creator_columns(writer, author: Optional[str]) -> dict:
+    """Server-owned provenance from the credential. The request body never reaches these:
+    an agent token names the agent (not its channel), the internal token names no one."""
+    if isinstance(writer, AgentWriter):
+        return {"creator_kind": "agent", "creator_ref": writer.name}
+    if writer is None:
+        return {"creator_kind": "service", "creator_ref": "internal-token"}
+    return {"creator_kind": "user", "creator_ref": str(writer.id),
+            "requested_by_user_id": writer.id if provenance.requester_is_self(writer, author) else None}
+
+
+def _doc_out(doc: Document, revision_count: int, open_comments: int = 0,
+             names: Optional[dict] = None) -> DocumentOut:
+    """`names` is a batched user-id -> display-name map; list/detail pass one."""
+    if names is None:
+        names = provenance.user_names(object_session(doc), [doc])
     return DocumentOut(
         id=doc.id, code=doc.code, revision=doc.revision, title=doc.title,
         description=doc.description, category_id=doc.category_id,
@@ -234,7 +269,7 @@ def _doc_out(doc: Document, revision_count: int, open_comments: int = 0) -> Docu
         content_type=doc.content_type, size_bytes=doc.size_bytes,
         content_sha256=doc.content_sha256, created_at=doc.created_at,
         updated_at=doc.updated_at, revision_count=revision_count,
-        open_comment_count=open_comments)
+        open_comment_count=open_comments, provenance=provenance.provenance_out(doc, names))
 
 
 # --- categories -------------------------------------------------------------------------
@@ -355,9 +390,11 @@ def list_documents(q: Optional[str] = None, category_id: Optional[int] = None,
                                              page=page, page_size=page_size, space_id=space_id,
                                              visible_spaces=access.visible_space_ids(db, user))
         counts = comments.open_comment_counts(db, [d.code for d, _ in rows])
+        names = provenance.user_names(db, [d for d, _ in rows])
     except Exception as e:
         raise _http(e)
-    return DocumentListOut(items=[_doc_out(d, n, counts.get(d.code, 0)) for d, n in rows], total=total,
+    return DocumentListOut(items=[_doc_out(d, n, counts.get(d.code, 0), names) for d, n in rows],
+                           total=total,
                            page=max(1, page), page_size=max(1, min(200, page_size)))
 
 
@@ -368,12 +405,14 @@ def get_document(doc_id: int, db: Session = Depends(get_db), user=Depends(get_cu
         access.require_view(db, user, doc)
         revisions = service.get_revisions(db, doc.code)
         counts = comments.open_comment_counts(db, [doc.code])
+        names = provenance.user_names(db, revisions)
     except Exception as e:
         raise _http(e)
     n = len(revisions)
     open_n = counts.get(doc.code, 0)  # comments live on the code, so every revision shares it
-    out = _doc_out(doc, n, open_n)
-    return DocumentDetail(**out.model_dump(), revisions=[_doc_out(r, n, open_n) for r in revisions])
+    out = _doc_out(doc, n, open_n, names)
+    return DocumentDetail(**out.model_dump(),
+                          revisions=[_doc_out(r, n, open_n, names) for r in revisions])
 
 
 @router.get("/documents/{doc_id}/content")
@@ -398,6 +437,10 @@ def get_document_content(doc_id: int, db: Session = Depends(get_db),
 def create_document(req: DocumentCreate, response: Response, db: Session = Depends(get_db),
                     writer=Depends(require_document_writer)):
     try:
+        # Validated before anything is resolved or written. Over HTTP the source is
+        # always the caller's claim (verified=False), whoever the caller is.
+        prov = {**_creator_columns(writer, req.author),
+                **provenance.source_columns(req.provenance.model_dump() if req.provenance else None)}
         cat = None
         if req.category_id is not None or req.category:
             cat = service.resolve_category(db, category=req.category,
@@ -420,14 +463,31 @@ def create_document(req: DocumentCreate, response: Response, db: Session = Depen
             db, title=req.title, html=req.html, category=cat, description=req.description,
             code=req.code, author=req.author, source_session=req.source_session,
             effective_date=req.effective_date, activate=req.activate,
-            user_id=getattr(writer, "id", None),
+            user_id=writer.user_id if isinstance(writer, AgentWriter) else getattr(writer, "id", None),
             co_author=writer.name if isinstance(writer, AgentWriter) else None,
             space=space,
             # Re-checked under the row lock: the read above is unlocked, so a code minted
             # into a hidden space in between must still read as missing.
             may_revise=lambda d: _agent_may_see(writer, d) and access.can_view_document(
-                db, _reader_for(writer), d))
+                db, _reader_for(writer), d),
+            provenance=prov)
         n = service.revision_count(db, doc.code)
+    except DuplicateContentError as e:
+        # Reference-safe fields of the existing row, for a writer that could already
+        # see it, so a publisher can reconcile a create whose response was lost.
+        # `detail` stays the same human string the UI shows.
+        dup = e.document
+        if _agent_may_see(writer, dup) and access.can_view_document(db, _reader_for(writer), dup):
+            return JSONResponse(status_code=409, content={"detail": str(e), "existing": {
+                "id": dup.id, "code": dup.code, "revision": dup.revision,
+                "content_sha256": dup.content_sha256, "title": dup.title, "status": dup.status,
+                "space_slug": dup.space.slug if dup.space is not None else "general",
+                "author": dup.author, "co_author": dup.co_author,
+                "source_session": dup.source_session,
+                # A matching body does not prove a matching origin: the publisher compares these.
+                "provenance": DocumentProvenance(**provenance.provenance_out(
+                    dup, provenance.user_names(db, [dup]))).model_dump(mode="json")}})
+        raise _http(e)
     except Exception as e:
         raise _http(e)
     if created:
@@ -492,7 +552,8 @@ def replace_document_content(doc_id: int, req: DocumentContentReplace,
         access.require_view(db, admin, service.get_document(db, doc_id))
         doc, changed = service.replace_draft_content(db, doc_id, html=req.html,
                                                      updated_by=admin.email,
-                                                     expected_sha256=req.expected_sha256)
+                                                     expected_sha256=req.expected_sha256,
+                                                     edited_by_user_id=admin.id)
         n = service.revision_count(db, doc.code)
     except Exception as e:
         raise _http(e)

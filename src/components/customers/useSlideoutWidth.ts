@@ -10,26 +10,29 @@ const maxFor = (vw: number) => vw * 0.9
 const clamp = (w: number, vw: number) =>
   Math.max(MIN_WIDTH, Math.min(maxFor(vw), w))
 
-function readStored(): number {
+function readStored(key: string, fallback: number): number {
   try {
-    const n = Number(localStorage.getItem(KEY))
-    return Number.isFinite(n) && n > 0 ? n : DEFAULT_WIDTH
+    const n = Number(localStorage.getItem(key))
+    return Number.isFinite(n) && n > 0 ? n : fallback
   } catch {
-    return DEFAULT_WIDTH
+    return fallback
   }
 }
 
-function writeStored(w: number) {
+function writeStored(key: string, w: number) {
   try {
-    localStorage.setItem(KEY, String(w))
+    localStorage.setItem(key, String(w))
   } catch {
     // storage blocked: width just won't persist
   }
 }
 
 /** Shared, persisted width for the customer-page slide-outs. */
-export function useSlideoutWidth() {
-  const [raw, setRaw] = React.useState(readStored)
+export function useSlideoutWidth({
+  key = KEY,
+  defaultWidth = DEFAULT_WIDTH,
+}: { key?: string; defaultWidth?: number } = {}) {
+  const [raw, setRaw] = React.useState(() => readStored(key, defaultWidth))
   const [vw, setVw] = React.useState(() => window.innerWidth)
   const latest = React.useRef(raw)
 
@@ -44,7 +47,7 @@ export function useSlideoutWidth() {
     const next = clamp(w, window.innerWidth)
     latest.current = next
     setRaw(next)
-    if (persist) writeStored(next)
+    if (persist) writeStored(key, next)
   }
   return {
     width,
@@ -52,8 +55,8 @@ export function useSlideoutWidth() {
     min: MIN_WIDTH,
     max: maxFor(vw),
     drag: (w: number) => set(w, false),
-    commit: () => writeStored(latest.current),
+    commit: () => writeStored(key, latest.current),
     nudge: (delta: number) => set(width + delta, true),
-    reset: () => set(DEFAULT_WIDTH, true),
+    reset: () => set(defaultWidth, true),
   }
 }

@@ -130,3 +130,12 @@ def test_sample_flags_match_the_human_sample_id(db_session):
     db_session.commit()
     titles = sorted(f["title"] for f in tools._flags_for(db_session, "P-2390", 77))
     assert titles == ["Legacy pk flag", "On hold"]
+
+
+def test_read_ticket_passes_only_the_ai_contract_keys(ctx, monkeypatch):
+    monkeypatch.setattr(tools, "_support_detail", lambda key, tid: {"thread": THREAD, "entries": [{
+        "id": "e1", "at": "t", "kind": "email", "author": "Kyle", "author_kind": "customer", "internal": False,
+        "subject": "s", "text": "hello", "markdown": "x" * 50_000, "email_to": "kyle@example.com",
+        "email_from": "support@x", "author_avatar_url": "https://a/x.png", "automated": False, "event": None}]})
+    entry = tools.call(ctx, "read_ticket", {"ref": "T-948"})["entries"][0]
+    assert set(entry) == {"id", "at", "kind", "author", "author_kind", "internal", "subject", "text"}

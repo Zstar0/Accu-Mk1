@@ -1,5 +1,68 @@
 # Changelog
 
+## v1.48.0 - 2026-10-14
+
+### Planning boards: pull items out of frames
+- **Pull an item through its frame edge to pop it out.** Drag it against the edge and it leans toward the pointer; pull about 50 px past the edge and it pops out of the frame and follows the mouse. Let go earlier and it springs back inside. The side panel's Remove from frame button still works, and dropping an item into a frame still adopts it.
+
+## v1.47.1 - 2026-10-13
+
+### Agents can read lab data without a switch
+- **Every agent can now read lab data and reports** (samples, analyses, media, flags, reports, COA history): read-only Mk1 data is fine for agents. The switches gate writes only: **Lab tools** lets an agent raise and comment on flags, and **COA publishing** lets it generate and publish COAs (still needs Lab tools).
+
+## v1.47.0 - 2026-10-12
+
+### Flags on Support tickets and CRM items
+- **Flag a ticket or a CRM item** from its slide-out on the customer page, and assign it to anyone (for example a tech when a ticket needs lab help). Flagged rows show a flag in the Support and CRM lists.
+- **Whoever is on the flag can read that one item**, even without a Plain seat or admin access: the flag's link opens the customer page with the ticket or item open, read-only. Lists and replies keep their usual access.
+
+### Agents get their own Mk1 accounts
+- **Settings > Agents (admins):** create a machine user for an AI agent with a username; Mk1 shows its key once. No password, no server change, works on the next request.
+- **Least privilege by default:** an agent can read and write documents in the spaces it can see (General plus its groups) and nothing else. **Lab tools** (lab reads, reports, flags) and **COA publishing** are separate switches per agent; COA publishing needs Lab tools.
+- **Revoke instantly:** deactivate the agent or rotate its key; the old key stops on the next request. Everything an agent writes is attributed to it.
+- Agents never appear in staff lists, cannot log in, and cannot be edited as people.
+
+### Planning boards, slice 4: flags on the board
+- **Flag a board.** Editors raise flags on the board itself from the header; board-level flags show in the attention dock and count on the board card. A board with open flags cannot be deleted.
+- **Every flag on a board, once.** `GET /api/boards/{slug}/flags` returns the open flags on the board, its items and the entities behind entity items, under the caller's visibility. Frames show blocking and open counts, entity items show an open count, person cards show how many of the board's flags are assigned to them, and board cards show the open count.
+- **Attention dock.** With nothing selected, the side panel lists the board's blocking and past-due flags, overdue first, with Locate to centre the item.
+
+### Planning boards, slice 4: canvas live
+- **Zoomed out, items show their label only** (below 0.5 zoom); frames keep their title and pills.
+- **Cmd+K lists the open board's items**; pick one to centre it.
+- **Remove from frame** in the side panel; the item keeps its spot on the canvas (drag it out of the frame's area to keep it out, a drop inside re-adopts it). **Notes resize** from their corner and keep their size.
+- **Live boards.** Another editor's change appears on your open board without a reload.
+
+## v1.46.0 - 2026-10-12
+
+### Documents say where they came from
+- **Every revision has a Provenance section** in the document viewer and in embedded views: who asked for it, who or what created it, and which system, task and run it came from. Switching revisions shows that revision's own provenance.
+- **Each fact says how it was established.** The creator comes from the login or agent token that wrote it. The requester is "verified" only when it is the Mk1 login itself; a name an agent passes on is "supplied". A source system, task or run sent by a caller is "reported". AI customer reviews carry a verified AccuMk1 source because Mk1 made them itself.
+- **Editing details never rewrites history.** Retitling, moving or re-describing a document leaves each revision's provenance as it was, and an in-place draft edit adds "Content edited by" instead of crediting the original author with new text.
+- Documents from before this release show "not recorded" for anything Mk1 cannot prove; nothing is guessed from old notes.
+
+### Read-only document embeds for Paperclip
+- **`/embed.html` shows one pinned revision** inside an allowed site (set by `MK1_EMBED_FRAME_ANCESTORS`, default none). It renders only when the document id, code, revision and content hash all match, signs in with your own Mk1 login, and shows a clear Draft or Retired badge.
+
+## v1.45.2 - 2026-10-11
+
+### Flags
+- **You can now tell when an item has had flags before.** If every flag on a sample, vial, worksheet or document is resolved or closed, a small "N past" chip appears next to the Flag button; click it to see the whole history. When there are open flags, the colored flag button also notes how many past ones there are.
+
+## v1.45.1 - 2026-10-11
+
+### Support tickets
+- **After you send a reply or note, the conversation scrolls to it.** Only after your own send, so a refresh never moves you while you read.
+- **Clearer error when the Plain key is missing a permission.** Instead of "Plain is unavailable", Mk1 now says the key in Settings > Integrations needs the permission added in Plain (for example reply, note, edit or labels).
+
+## v1.45.0 - 2026-10-11
+
+### Support tickets look and work like Plain
+- **Two columns:** the conversation on the left and Plain's details sidebar on the right, in Plain's colors (light and dark follow Mk1's theme). The slide-out opens wider and remembers its own width; on a narrow window the details fold behind a Details button.
+- **Easier to follow:** team replies, customer messages and internal notes each have their own card, notes say who they are hidden from, automatic replies are collapsed, status and label changes are one-line events, and days are separated. Oldest first, scrolled to the latest.
+- **Action bar like Plain's:** Reply (R), Add note (N) and More (mark done, waiting for customer, snooze, back to todo). Esc closes the composer and keeps the draft.
+- **Details sidebar:** status in Plain's words (including Waiting for customer), assignee plus additional assignees you can add or remove, priority, labels, tier, the thread fields (WP user, orders, spent, sales rep and the rest), customer details with a link to their WordPress profile, and the customer's other tickets.
+
 ## v1.44.0 - 2026-10-10
 
 ### Answer and manage support tickets from Mk1

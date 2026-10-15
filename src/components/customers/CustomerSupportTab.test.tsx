@@ -12,6 +12,10 @@ vi.mock('@/lib/api-support', async () => {
   return { ...actual, getCustomerSupport: vi.fn(), getSupportThread: vi.fn() }
 })
 
+vi.mock('./useItemFlagCounts', () => ({
+  useItemFlagCounts: () => new Map([['th_b', 2]]),
+}))
+
 const waitingSince = new Date(Date.now() - 2 * 3600_000).toISOString()
 const open: SupportThread = {
   id: 'th_b',
@@ -146,17 +150,12 @@ describe('CustomerSupportTab', () => {
     await userEvent.click(await screen.findByRole('button', { name: /T-482/ }))
     const panel = await screen.findByRole('dialog')
     expect(within(panel).getByText(/<b>not html<\/b>/)).toBeInTheDocument()
-    expect(within(panel).getByText('Internal')).toBeInTheDocument()
+    expect(within(panel).getByText(/Not visible to/)).toBeInTheDocument()
     expect(
-      within(panel)
-        .getByText('Retest promised')
-        .closest('[data-internal="true"]')
+      within(panel).getByText('Retest promised').closest('[data-card="note"]')
     ).not.toBeNull()
     expect(within(panel).getByText(/Marked done by Lauren/)).toBeInTheDocument()
     expect(panel.textContent).not.toContain(String.fromCharCode(0xfffd))
-    expect(
-      within(panel).getByText(/Marked done by Lauren · /)
-    ).toBeInTheDocument()
     expect(
       within(panel).getByRole('link', { name: /Open in Plain/ })
     ).toHaveAttribute('href', open.plain_url)
@@ -247,25 +246,25 @@ describe('support conversation order', () => {
     localStorage.clear()
   })
 
-  it('shows newest first by default, events included', async () => {
+  it('shows oldest first by default, events included', async () => {
     const panel = await openPanel()
     await within(panel).findByText('text-e3')
-    expect(order(panel)).toEqual(['text-e3', 'text-e2', 'text-e1'])
-    expect(
-      within(panel).getByRole('button', { name: /Newest first/ })
-    ).toBeInTheDocument()
-  })
-
-  it('toggles to oldest first and persists', async () => {
-    const panel = await openPanel()
-    await userEvent.click(
-      await within(panel).findByRole('button', { name: /Newest first/ })
-    )
     expect(order(panel)).toEqual(['text-e1', 'text-e2', 'text-e3'])
     expect(
       within(panel).getByRole('button', { name: /Oldest first/ })
     ).toBeInTheDocument()
-    expect(localStorage.getItem(KEY)).toBe('oldest')
+  })
+
+  it('toggles to newest first and persists', async () => {
+    const panel = await openPanel()
+    await userEvent.click(
+      await within(panel).findByRole('button', { name: /Oldest first/ })
+    )
+    expect(order(panel)).toEqual(['text-e3', 'text-e2', 'text-e1'])
+    expect(
+      within(panel).getByRole('button', { name: /Newest first/ })
+    ).toBeInTheDocument()
+    expect(localStorage.getItem(KEY)).toBe('newest')
   })
 
   it('restores oldest from storage', async () => {
@@ -273,5 +272,11 @@ describe('support conversation order', () => {
     const panel = await openPanel()
     await within(panel).findByText('text-e3')
     expect(order(panel)).toEqual(['text-e1', 'text-e2', 'text-e3'])
+  })
+
+  it('marks rows that have open flags', async () => {
+    setup()
+    expect(await screen.findByLabelText('2 open flags')).toBeInTheDocument()
+    expect(screen.getAllByLabelText(/open flag/)).toHaveLength(1)
   })
 })

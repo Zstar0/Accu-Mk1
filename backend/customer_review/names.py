@@ -17,7 +17,7 @@ def staff_names(db, ctx) -> set[str]:
     out: set[str] = set()
     full_names = set(getattr(ctx, "memo", {}).get("staff", set()))
     if db is not None:
-        for first, last in db.execute(select(User.first_name, User.last_name)).all():
+        for first, last in db.execute(select(User.first_name, User.last_name).where(User.role != "agent")).all():
             full_names.add(" ".join(p for p in (first, last) if p))
     for full in full_names:
         full = (full or "").strip()
