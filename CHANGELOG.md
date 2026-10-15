@@ -1,5 +1,23 @@
 # Changelog
 
+## v1.49.0 - 2026-10-15
+
+### Endotoxin: the 2 mL worksheet, promote, LOD on the COA, and prep rules
+- **2 mL Endotoxin worksheet.** A three-box bench flow: prep, dilution and results. It adds a reader import, cartridges as consumables, and a printable bench sheet.
+- **Promote to Parent from the worksheet.**
+  - Each result carries its LOQ, LOD and LOD unit.
+  - Promote checks each value against its LOQ, and the parent lands in "to verify".
+  - Peptide endotoxin is judged per vial (0 to 350 EU/vial). Bacteriostatic water stays EU/mL.
+- **Unit-aware spec matching.** A result in its service's catalog unit keeps today's spec. A result in another unit is judged only against specs filed in that unit.
+- **LOD on the COA.** A profile's COA text can carry `{lod}`, which is filled from the section's results. The profile editor refuses unknown macros.
+- **Endotoxin prep rules** (HPLC Automation > Endo prep rules).
+  - For each peptide and weight band, a rule sets the default total dilution, step 1 ratio and cartridge.
+  - Rows lock to their rule at print, at the first result and at completion.
+  - Re-apply moves locked rows onto today's rules. A row that already has a reading moves that reading to its history, to be re-run.
+  - Overrides are recorded in the row's history.
+- **A promoted endotoxin row is final.** Correct it by retest.
+- **Worksheet edits no longer stall the server** while another edit holds the same worksheet.
+
 ## v1.48.0 - 2026-10-14
 
 ### Planning boards: pull items out of frames
