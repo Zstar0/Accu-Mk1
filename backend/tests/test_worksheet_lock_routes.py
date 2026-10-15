@@ -53,6 +53,9 @@ def client(db):
     ("POST", "/worksheets/{worksheet_id}/items/{item_id}/reassign"),
     ("POST", "/worksheets/{worksheet_id}/apply-method-instrument"),
     ("PUT", "/worksheets/{worksheet_id}/reorder"),
+    # Implicit row locks at flush, and wrapped (final re-review Observation 2).
+    ("POST", "/worksheets/{worksheet_id}/printed"),
+    ("POST", "/worksheets/{worksheet_id}/bench-ticks"),
 ])
 def test_the_lock_taking_routes_run_in_the_threadpool(method, path):
     [route] = [r for r in app.routes
@@ -70,6 +73,9 @@ def test_the_lock_taking_routes_run_in_the_threadpool(method, path):
     ("completed", "POST", "/worksheets/{ws}/reader-import",
      {"file_name": "EndoScanV-Export.csv", "tests": []}, 409),
     ("staging", "POST", "/worksheets/{ws}/prep-rules/reapply", {"item_ids": []}, 404),
+    # Their writes take implicit row locks at flush (final re-review Observation 2).
+    ("staging", "POST", "/worksheets/{ws}/printed", None, 404),
+    ("completed", "POST", "/worksheets/{ws}/bench-ticks", {"made": True}, 409),
 ])
 def test_a_refusal_after_a_lock_leaves_no_transaction_open(client, db, status, method, path,
                                                           body, code):

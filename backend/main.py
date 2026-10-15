@@ -25705,6 +25705,7 @@ class WorksheetBenchTicks(BaseModel):
 
 
 @app.post("/worksheets/{worksheet_id}/bench-ticks")
+@_rollback_on_error
 def bulk_bench_ticks(
     worksheet_id: int,
     data: WorksheetBenchTicks,
@@ -25733,6 +25734,7 @@ def bulk_bench_ticks(
 
 
 @app.post("/worksheets/{worksheet_id}/printed")
+@_rollback_on_error
 def record_worksheet_printed(
     worksheet_id: int,
     db: Session = Depends(get_db),
