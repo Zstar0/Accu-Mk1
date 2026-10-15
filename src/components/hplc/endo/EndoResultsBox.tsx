@@ -40,6 +40,7 @@ import { resolveServiceForAnalysis } from '@/components/senaite/AnalysisServiceL
 import { ruleLabel } from '@/components/hplc/ServiceSpecsSection'
 import {
   MONO,
+  SampleLink,
   TD,
   TD_CALC,
   TH,
@@ -345,7 +346,7 @@ function ResultRow({
       <td
         className={`${TD} ${s.sampleId ? MONO : 'text-xs italic text-muted-foreground'}`}
       >
-        {s.sampleId || 'no ID yet'}
+        {s.sampleId ? <SampleLink id={s.sampleId} /> : 'no ID yet'}
       </td>
       <td className={`${TD} ${MONO} text-right text-foreground/80`}>
         {bw ? '' : fmt(s.weightMg)}

@@ -1,6 +1,12 @@
-import { describe, it, expect, vi } from 'vitest'
-import { fireEvent, render, screen } from '@testing-library/react'
-import type { ComponentProps } from 'react'
+import { beforeEach, describe, it, expect, vi } from 'vitest'
+import {
+  fireEvent,
+  render,
+  screen,
+  type RenderOptions,
+} from '@testing-library/react'
+import type { ComponentProps, ReactNode } from 'react'
+import { useUIStore } from '@/store/ui-store'
 import type { WorksheetListItem } from '@/lib/api'
 import { ENDO_RUN_PARAM_DEFAULTS } from '@/lib/endo-prep-2ml'
 import type { EndoRow } from '@/lib/endo-worksheet-2ml'
@@ -86,7 +92,8 @@ const TWO_ML: EndoTwoMl = {
 }
 
 function renderTable(
-  props: Partial<ComponentProps<typeof EndoWorksheetTable>> = {}
+  props: Partial<ComponentProps<typeof EndoWorksheetTable>> = {},
+  options: RenderOptions = {}
 ) {
   return render(
     <EndoWorksheetTable
@@ -104,7 +111,8 @@ function renderTable(
       onUpdateItem={vi.fn()}
       onTickAll={vi.fn()}
       {...props}
-    />
+    />,
+    options
   )
 }
 
@@ -258,5 +266,54 @@ describe('Box 1 on a 2 mL row', () => {
     })
     expect(formPicker()).toBeDisabled()
     expect(cartridgePicker()).toBeDisabled()
+  })
+})
+
+describe('Box 1 links', () => {
+  beforeEach(() =>
+    useUIStore.setState({
+      activeSubSection: 'worksheet',
+      sampleDetailsTargetId: null,
+      orderStatusPrefill: null,
+    })
+  )
+
+  // A clickable row around the table: a link's click must never reach it.
+  const onRow = vi.fn()
+  const row = ({ children }: { children: ReactNode }) => (
+    <div onClick={onRow}>{children}</div>
+  )
+
+  it('the vial ID opens the sub-sample and its parent ID the sample', () => {
+    renderTable({ items: [ITEM] }, { wrapper: row })
+    fireEvent.click(screen.getByRole('button', { name: /^P-0001-S01/ }))
+    expect(useUIStore.getState().activeSubSection).toBe('sample-details')
+    expect(useUIStore.getState().sampleDetailsTargetId).toBe('P-0001-S01')
+    fireEvent.click(screen.getByRole('button', { name: 'P-0001' }))
+    expect(useUIStore.getState().sampleDetailsTargetId).toBe('P-0001')
+    expect(onRow).not.toHaveBeenCalled()
+  })
+
+  it('the order # (row and meta strip) opens Order Status on that order', () => {
+    renderTable({ items: [ITEM] }, { wrapper: row })
+    const links = screen.getAllByRole('button', { name: 'Order 9001' })
+    expect(links).toHaveLength(2)
+    for (const link of links) {
+      expect(link).toHaveTextContent(/^9001$/)
+      useUIStore.setState({ orderStatusPrefill: null })
+      fireEvent.click(link)
+      expect(useUIStore.getState().activeSubSection).toBe('order-status')
+      expect(useUIStore.getState().orderStatusPrefill).toEqual({
+        orderId: '9001',
+      })
+    }
+    expect(onRow).not.toHaveBeenCalled()
+  })
+
+  it('a row without an order keeps the plain dash', () => {
+    renderTable({ items: [{ ...ITEM, client_order_number: null }] })
+    expect(
+      screen.queryByRole('button', { name: /^Order / })
+    ).not.toBeInTheDocument()
   })
 })

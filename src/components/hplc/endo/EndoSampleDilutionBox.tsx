@@ -22,7 +22,13 @@ import {
   type EndoRow,
 } from '@/lib/endo-worksheet-2ml'
 import { PrepField } from '@/components/hplc/EndoPrepLine'
-import { MONO, TH, TH_CALC, UNIT } from '@/components/hplc/EndoWorksheetTable'
+import {
+  MONO,
+  SampleLink,
+  TH,
+  TH_CALC,
+  UNIT,
+} from '@/components/hplc/EndoWorksheetTable'
 import { EndoBox, type EndoBoxProps } from './EndoBox'
 import {
   NoRuleEditor,
@@ -397,7 +403,7 @@ export function EndoSampleDilutionBox({
                   <td
                     className={`${cell} pl-2 ${s.sampleId ? MONO : 'text-xs italic text-muted-foreground'}`}
                   >
-                    {s.sampleId || 'no ID yet'}
+                    {s.sampleId ? <SampleLink id={s.sampleId} /> : 'no ID yet'}
                     <RuleTags row={row} cartridges={cartridges} />
                     <PrepHistory
                       row={row}

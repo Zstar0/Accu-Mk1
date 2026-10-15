@@ -29,7 +29,12 @@ import { useLabCalendar } from '@/hooks/use-lab-calendar'
 import { useSlaForSubjects } from '@/services/sla-subjects'
 import { useUIStore } from '@/store/ui-store'
 import { EndoWorksheetActions } from '@/components/hplc/EndoWorksheetActions'
-import { MONO, Meta, STATUS_CHIP } from '@/components/hplc/EndoWorksheetTable'
+import {
+  MONO,
+  Meta,
+  SampleLink,
+  STATUS_CHIP,
+} from '@/components/hplc/EndoWorksheetTable'
 import { VERDICT_LABEL, VERDICT_TONE } from './EndoResultsBox'
 
 function Count({ label, children }: { label: string; children: ReactNode }) {
@@ -228,7 +233,7 @@ export function EndoFlyoutSummary({
                 {i + 1}
               </span>
               <span className="w-[120px] shrink-0 font-mono text-[12.5px]">
-                {it.sample_id}
+                <SampleLink id={it.sample_id} />
               </span>
               <span
                 className="min-w-0 flex-1 truncate text-muted-foreground"

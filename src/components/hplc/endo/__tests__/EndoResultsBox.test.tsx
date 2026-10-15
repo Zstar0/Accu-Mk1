@@ -22,6 +22,7 @@ import type * as EndoReaderModule from '@/lib/endo-reader'
 import { parseEndoScan } from '@/lib/endo-reader'
 import { worksheetPageKey } from '@/hooks/use-worksheet-drawer'
 import type { WorksheetItemRow } from '@/lib/endo-worksheet'
+import { useUIStore } from '@/store/ui-store'
 import {
   endoBoxProps,
   endoItem,
@@ -163,7 +164,7 @@ describe('EndoResultsBox', () => {
       })
     ).toBeInTheDocument()
     expect(
-      within(rowOf('P-0004-S02')).queryByRole('button')
+      within(rowOf('P-0004-S02')).queryByRole('button', { name: /^Copy / })
     ).not.toBeInTheDocument()
     // the reader's three checks, each in its own column, red only on its own failure
     expect(readerCells('P-0004-S02')).toEqual([
@@ -905,5 +906,26 @@ describe('EndoResultsBox: Promote to Parent', () => {
     ).not.toBeInTheDocument()
     // the reader import is unchanged
     expect(screen.getByLabelText('Reader export file')).toBeInTheDocument()
+  })
+})
+
+describe('EndoResultsBox sample link', () => {
+  it('opens the vial page without ticking the row for promotion', () => {
+    useUIStore.setState({ sampleDetailsTargetId: null })
+    setup([
+      endoItem({
+        sample_id: 'P-0001-S02',
+        result_reading: '<0.05',
+        endo_analysis: NATIVE,
+      }),
+    ])
+    expect(promoteBox('P-0001-S02')).not.toBeChecked()
+    fireEvent.click(screen.getByRole('button', { name: 'P-0001-S02' }))
+    expect(useUIStore.getState().activeSubSection).toBe('sample-details')
+    expect(useUIStore.getState().sampleDetailsTargetId).toBe('P-0001-S02')
+    expect(promoteBox('P-0001-S02')).not.toBeChecked()
+    expect(
+      screen.getByRole('button', { name: 'Promote to Parent (0)' })
+    ).toBeInTheDocument()
   })
 })

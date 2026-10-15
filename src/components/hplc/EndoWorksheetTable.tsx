@@ -1,4 +1,4 @@
-import type { ReactNode } from 'react'
+import { Fragment, type ReactNode } from 'react'
 import { Check, Flag, X } from 'lucide-react'
 import { useUIStore } from '@/store/ui-store'
 import { SampleIdBadge } from '@/components/samples/SampleIdBadge'
@@ -100,10 +100,12 @@ export interface EndoTwoMl {
 
 export const TH =
   'sticky top-0 z-[2] bg-muted/60 px-2 pb-[7px] pt-2 text-left align-bottom text-[9.5px] font-semibold uppercase tracking-[0.09em] text-muted-foreground whitespace-nowrap border-b'
-export const TH_CALC = 'bg-teal-500/10 text-teal-800 dark:text-teal-200 text-right'
+export const TH_CALC =
+  'bg-teal-500/10 text-teal-800 dark:text-teal-200 text-right'
 export const UNIT =
   'block font-mono text-[10px] font-normal normal-case tracking-[0.04em] opacity-80'
-export const TD = 'border-b border-border/60 px-2 py-[5px] align-middle text-[13px]'
+export const TD =
+  'border-b border-border/60 px-2 py-[5px] align-middle text-[13px]'
 export const MONO = 'font-mono text-[12.5px] tabular-nums'
 export const TD_CALC = `${TD} ${MONO} bg-teal-500/[0.06] text-right text-foreground/80 whitespace-nowrap group-hover/item:bg-teal-500/10`
 
@@ -137,7 +139,11 @@ const PRIORITY_LABEL: Record<string, string> = {
 }
 
 /** The priority as a chip, in the same words as the inbox. */
-export function PriorityChip({ priority }: { priority: string | null | undefined }) {
+export function PriorityChip({
+  priority,
+}: {
+  priority: string | null | undefined
+}) {
   const key = (priority ?? 'normal').toLowerCase()
   return (
     <span
@@ -145,6 +151,48 @@ export function PriorityChip({ priority }: { priority: string | null | undefined
     >
       {PRIORITY_LABEL[key] ?? key}
     </span>
+  )
+}
+
+// The worksheet's link look (the sample ID cell's): text as it was,
+// underlined on hover.
+const LINK = 'text-left transition-colors hover:text-primary hover:underline'
+
+/** A sample or vial ID that opens its page; a vial ID opens the sub-sample.
+ *  The click stops here, so a row or label around it never sees it. */
+export function SampleLink({ id }: { id: string }) {
+  return (
+    <button
+      type="button"
+      className={LINK}
+      onClick={e => {
+        e.stopPropagation()
+        useUIStore.getState().navigateToSample(id)
+      }}
+    >
+      {id}
+    </button>
+  )
+}
+
+/** An order number, shown without WP-, that opens Order Status filtered to
+ *  that order (the page's consume-once prefill, as the header quick nav
+ *  uses). '-' when the row has none. */
+export function OrderLink({ order }: { order: string | null | undefined }) {
+  const n = shortOrder(order)
+  if (!n) return '-'
+  return (
+    <button
+      type="button"
+      className={LINK}
+      aria-label={`Order ${n}`}
+      onClick={e => {
+        e.stopPropagation()
+        useUIStore.getState().navigateToOrderStatus(n)
+      }}
+    >
+      {n}
+    </button>
   )
 }
 
@@ -199,11 +247,12 @@ export function EndoWorksheetTable({
     .map(r => r.due)
     .filter((d): d is string => !!d)
     .sort()[0]
-  const orders = [
+  const orderList = [
     ...new Set(
       rows.map(r => shortOrder(r.item.client_order_number)).filter(Boolean)
     ),
-  ].join(', ')
+  ]
+  const orders = orderList.join(', ')
 
   return (
     <div className="overflow-hidden rounded-[5px] border bg-card shadow-sm">
@@ -220,7 +269,14 @@ export function EndoWorksheetTable({
         </Meta>
         <Meta label="Orders">
           <span className={`${MONO} block truncate`} title={orders}>
-            {orders || '-'}
+            {orderList.length
+              ? orderList.map((o, i) => (
+                  <Fragment key={o}>
+                    {i > 0 && ', '}
+                    <OrderLink order={o} />
+                  </Fragment>
+                ))
+              : '-'}
           </span>
         </Meta>
         {metaExtra}
@@ -378,14 +434,15 @@ export function EndoWorksheetTable({
                     <PriorityChip priority={item.priority} />
                   </td>
                   <td className={`${TD} ${MONO}`}>
-                    {shortOrder(item.client_order_number) || '-'}
+                    <OrderLink order={item.client_order_number} />
                   </td>
                   <td className={TD}>
                     <button
                       className="text-left transition-colors hover:text-primary hover:underline"
-                      onClick={() =>
+                      onClick={e => {
+                        e.stopPropagation()
                         useUIStore.getState().navigateToSample(item.sample_id)
-                      }
+                      }}
                     >
                       <SampleIdBadge
                         stacked

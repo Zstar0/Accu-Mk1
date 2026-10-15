@@ -186,6 +186,14 @@ describe('EndoFlyoutSummary', () => {
     expect(ui.worksheetDrawerOpen).toBe(false)
   })
 
+  it("links each row's sample ID to the vial page", () => {
+    setup(fullWorksheet())
+    useUIStore.setState({ sampleDetailsTargetId: null })
+    fireEvent.click(screen.getByRole('button', { name: 'P-0002-S02' }))
+    expect(useUIStore.getState().activeSubSection).toBe('sample-details')
+    expect(useUIStore.getState().sampleDetailsTargetId).toBe('P-0002-S02')
+  })
+
   it('shows no results counts on a stock worksheet', () => {
     setup(fullWorksheet({ endo_prep: 'stock' }))
     expect(screen.getByText('1 mg/mL stock')).toBeInTheDocument()

@@ -3,6 +3,7 @@ import { fireEvent, render, screen } from '@testing-library/react'
 import type { WorksheetListItem, WorksheetUser } from '@/lib/api'
 import { buildPcrRunDoc } from '@/lib/pcr-worksheet'
 import { PcrSampleList } from '@/components/hplc/PcrSampleList'
+import { useUIStore } from '@/store/ui-store'
 
 // The flag cell reads live flags and the SLA badge the lab clock; neither is
 // under test here, so both render as nothing.
@@ -146,5 +147,19 @@ describe('PcrSampleList per-row ticks', () => {
     expect(made).toBeDisabled()
     fireEvent.click(made)
     expect(onUpdateItem).not.toHaveBeenCalled()
+  })
+})
+
+describe('PcrSampleList order link', () => {
+  it('opens Order Status on the row order, without the WP- prefix', () => {
+    useUIStore.setState({ orderStatusPrefill: null })
+    renderList([item(1)])
+    const link = screen.getByRole('button', { name: 'Order 8120' })
+    expect(link).toHaveTextContent(/^8120$/)
+    fireEvent.click(link)
+    expect(useUIStore.getState().activeSubSection).toBe('order-status')
+    expect(useUIStore.getState().orderStatusPrefill).toEqual({
+      orderId: '8120',
+    })
   })
 })
