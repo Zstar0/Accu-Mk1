@@ -4,6 +4,7 @@ Provides REST API for scientific calculations, database access, and audit loggin
 """
 
 import asyncio
+import functools
 import json
 import os
 import re
@@ -24982,8 +24983,27 @@ def _worksheet_for_update(db: Session, worksheet_id: int) -> Optional["Worksheet
                       .execution_options(populate_existing=True)).scalar_one_or_none()
 
 
+def _rollback_on_error(endpoint):
+    """For a sync route that takes row locks (endo slice 5 final review C1):
+    any exception rolls the session back before it leaves the route. FastAPI
+    closes the session only after the route, through a worker thread it
+    reaches past an await, so a refused request would hold its FOR UPDATE
+    locks across that gap, and an async route waiting on the same row then
+    blocks the event loop with no timeout. Goes under @app.<verb>; FastAPI
+    passes `db` by keyword."""
+    @functools.wraps(endpoint)
+    def wrapper(*args, **kwargs):
+        try:
+            return endpoint(*args, **kwargs)
+        except Exception:
+            kwargs["db"].rollback()
+            raise
+    return wrapper
+
+
 @app.put("/worksheets/{worksheet_id}")
-async def update_worksheet(
+@_rollback_on_error
+def update_worksheet(
     worksheet_id: int,
     data: WorksheetUpdate,
     db: Session = Depends(get_db),
@@ -25355,15 +25375,16 @@ async def create_worksheet_from_drop(
 
 
 @app.delete("/worksheets/{worksheet_id}")
-async def delete_worksheet(
+@_rollback_on_error
+def delete_worksheet(
     worksheet_id: int,
     db: Session = Depends(get_db),
     _current_user=Depends(get_current_user),
 ):
     """Delete a worksheet. Items are removed (analyses return to inbox on next poll)."""
-    ws = db.execute(
-        select(Worksheet).where(Worksheet.id == worksheet_id)
-    ).scalar_one_or_none()
+    # Worksheet first: the stamp clears below write analyses (the lock order,
+    # _worksheet_for_update; final review L110).
+    ws = _worksheet_for_update(db, worksheet_id)
     if not ws:
         raise HTTPException(404, "Worksheet not found")
 
@@ -25456,7 +25477,8 @@ class ReassignRequest(BaseModel):
 
 
 @app.post("/worksheets/{worksheet_id}/complete")
-async def complete_worksheet(
+@_rollback_on_error
+def complete_worksheet(
     worksheet_id: int,
     db: Session = Depends(get_db),
     current_user=Depends(get_current_user),
@@ -25786,6 +25808,7 @@ class EndoReaderImportOut(BaseModel):
 
 
 @app.post("/worksheets/{worksheet_id}/reader-import", response_model=EndoReaderImportOut)
+@_rollback_on_error
 def import_endo_reader_results(
     worksheet_id: int,
     data: EndoReaderImport,
@@ -26031,6 +26054,7 @@ def preview_prep_rules_reapply(
 
 
 @app.post("/worksheets/{worksheet_id}/prep-rules/reapply", response_model=PrepRuleReapplyResponse)
+@_rollback_on_error
 def apply_prep_rules_reapply(
     worksheet_id: int,
     data: PrepRuleReapplyRequest,
@@ -26241,7 +26265,8 @@ class WorksheetItemUpdate(BaseModel):
 
 
 @app.patch("/worksheets/{worksheet_id}/items/{item_id}")
-async def update_worksheet_item(
+@_rollback_on_error
+def update_worksheet_item(
     worksheet_id: int,
     item_id: int,
     data: WorksheetItemUpdate,
