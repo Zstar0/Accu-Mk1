@@ -96,13 +96,18 @@ describe('rowRule', () => {
       result_entered_at: '2026-10-01T09:00:00Z',
     }
     expect(rowRule(read, live, q)).toBeNull()
-    expect(rowRule({ result_reading: '0.8' }, live, q)).toBeNull()
     expect(
       rowRule({ result_entered_at: '2026-10-01T09:00:00Z' }, live, q)
     ).toBeNull()
     // a lock still wins
     const old = rule({ id: 1, total_dilution: 400 })
     expect(rowRule({ ...read, prep_rule: lock(old) }, live, q)).toEqual(old)
+  })
+
+  it('an optimistic first reading, not yet stamped by the server, follows the live match', () => {
+    // use-worksheet-drawer merges result_reading alone until the save settles.
+    const optimistic = { result_reading: '0.8', result_entered_at: null }
+    expect(rowRule(optimistic, live, q)?.id).toBe(1)
   })
 
   it('a "no rule" row has none, locked or not', () => {

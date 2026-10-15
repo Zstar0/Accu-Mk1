@@ -111,21 +111,24 @@ export function matchRule(
 /**
  * The line a row runs under: none for a "no rule" row, the locked snapshot
  * once the row is locked (a rule edit never reaches it), none for a row
- * with a reading and no lock (data from before slice 5: read at the
+ * with a stored result and no lock (data from before slice 5: read at the
  * standard, it stays there, as the server's row_rule reads it; final review
- * I1), else the live match.
+ * I1), else the live match. "Stored" means result_entered_at, which only the
+ * server sets, always together with the reading. An optimistic first reading
+ * sets result_reading alone until the save settles, and must keep following
+ * the live match meanwhile.
  */
 export function rowRule(
   item: Pick<
     WorksheetItemRow,
-    'prep_rule' | 'prep_rules_off' | 'result_reading' | 'result_entered_at'
+    'prep_rule' | 'prep_rules_off' | 'result_entered_at'
   >,
   rules: EndoPrepRule[],
   q: Omit<MatchQuery, 'rulesOff'>
 ): EndoPrepRule | null {
   if (item.prep_rules_off) return null
   if (item.prep_rule) return item.prep_rule.rule
-  if (item.result_entered_at != null || item.result_reading != null) return null
+  if (item.result_entered_at != null) return null
   return matchRule(rules, { ...q, rulesOff: false })
 }
 
