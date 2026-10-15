@@ -90,6 +90,21 @@ describe('rowRule', () => {
     expect(rowRule({ prep_rule: lock(null) }, live, q)).toBeNull()
   })
 
+  it('a row read before it was locked reads the standard, as the server does (final review I1)', () => {
+    const read = {
+      result_reading: '<0.05',
+      result_entered_at: '2026-10-01T09:00:00Z',
+    }
+    expect(rowRule(read, live, q)).toBeNull()
+    expect(rowRule({ result_reading: '0.8' }, live, q)).toBeNull()
+    expect(
+      rowRule({ result_entered_at: '2026-10-01T09:00:00Z' }, live, q)
+    ).toBeNull()
+    // a lock still wins
+    const old = rule({ id: 1, total_dilution: 400 })
+    expect(rowRule({ ...read, prep_rule: lock(old) }, live, q)).toEqual(old)
+  })
+
   it('a "no rule" row has none, locked or not', () => {
     expect(rowRule({ prep_rules_off: true }, live, q)).toBeNull()
     expect(

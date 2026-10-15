@@ -213,17 +213,29 @@ def _typed_values(item) -> dict:
     }
 
 
+def _has_result(item) -> bool:
+    """The row holds a reading, as stored (getattr: a test's bare view may
+    carry neither field)."""
+    return (getattr(item, "result_entered_at", None) is not None
+            or getattr(item, "result_reading", None) is not None)
+
+
 def row_rule(item, *, rules: list[dict], peptide_id: Optional[int], weight_mg: Optional[float],
              is_bac: bool, endo_prep: Optional[str]) -> Optional[dict]:
     """The line a row computes with (spec 5). None when the row is switched
     to "no rule", and None for bac water even on a row locked before its
     form became bac (lead decision A.0 item 8, the browser's ruleFor). A
     locked row's own copy of its line (None: locked to the standard), so a
-    later edit never reaches it. Else today's match."""
+    later edit never reaches it. None for a row with a reading and no lock
+    (data from before slice 5): it was read at the standard, and stays there
+    (Dennis's freeze-to-standard, final review I1, superseding deviation B5;
+    the browser's rowRule reads it the same way). Else today's match."""
     if item.prep_rules_off or is_bac:
         return None
     if item.prep_rule is not None:
         return item.prep_rule.get("rule")
+    if _has_result(item):
+        return None
     return match_rule(rules, peptide_id=peptide_id, weight_mg=weight_mg, is_bac=is_bac,
                       endo_prep=endo_prep, rules_off=False)
 
@@ -355,9 +367,13 @@ def _new_lock(rule: Optional[dict], event: str, user_id: Optional[int]) -> dict:
 def lock_rows(db: Session, worksheet, items, *, event: str, user_id: Optional[int]) -> int:
     """Lock every endotoxin row of `items` that is not locked yet and not
     switched to "no rule" (spec 6) to today's match, or to the standard when
-    no line matches. Only on an open 2 mL worksheet: a stock one is never
-    ruled, and nothing on a completed one changes (the complete route locks
-    before it completes). Returns how many rows it locked. Does not commit."""
+    no line matches. A row that already holds a reading locks to the
+    standard, as row_rule reads it (final review I1), except on the switch,
+    a deliberate move to today's match (A.0 item 3). So the result event
+    runs before its reading is written: a first reading locks today's match.
+    Only on an open 2 mL worksheet: a stock one is never ruled, and nothing
+    on a completed one changes (the complete route locks before it
+    completes). Returns how many rows it locked. Does not commit."""
     if event not in LOCK_EVENTS:
         raise ValueError(f"unknown lock event {event!r}")
     if worksheet.endo_prep != "2ml" or worksheet.status == "completed":
@@ -369,9 +385,10 @@ def lock_rows(db: Session, worksheet, items, *, event: str, user_id: Optional[in
     rules = load_rules(db)
     for it in todo:
         if it.id in facts:
-            it.prep_rule = _new_lock(match_rule(rules, endo_prep=worksheet.endo_prep,
-                                                rules_off=False, **facts[it.id]),
-                                     event, user_id)
+            frozen = event != "switch" and _has_result(it)
+            it.prep_rule = _new_lock(None if frozen else match_rule(
+                rules, endo_prep=worksheet.endo_prep, rules_off=False, **facts[it.id]),
+                event, user_id)
     return len(facts)
 
 

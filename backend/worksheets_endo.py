@@ -451,12 +451,18 @@ def check_item_endo_fields(db: Session, worksheet, item, values: dict) -> dict:
     if floor_check:
         from endo_prep_rules import row_effective
 
-        # The row as this PATCH leaves it.
+        # The row as this PATCH leaves it. Its reading is the stored one
+        # (none when this PATCH clears it), not a new one: a first reading
+        # locks today's match, so the floor is judged on that (row_rule,
+        # lock_rows; final review I1).
+        cleared = "result_reading" in values and values["result_reading"] is None
         after = SimpleNamespace(
             prep_total_dilution=total_after, prep_steps=out.get("prep_steps", item.prep_steps),
             cartridge_type_id=out.get("cartridge_type_id", item.cartridge_type_id),
             prep_rule=item.prep_rule,
-            prep_rules_off=out.get("prep_rules_off", item.prep_rules_off))
+            prep_rules_off=out.get("prep_rules_off", item.prep_rules_off),
+            result_reading=None if cleared else item.result_reading,
+            result_entered_at=None if cleared else item.result_entered_at)
         # Without a method resolved here the row has a total of its own, which
         # wins below, so this standard (endo_run_params' default) is never read.
         _, effective = row_effective(db, worksheet, item, view=after, facts=facts,
@@ -534,6 +540,11 @@ def apply_item_endo_fields(db: Session, worksheet, item, values: dict,
     if "cartridge_type_id" in values and values["cartridge_type_id"] != item.cartridge_type_id:
         audit("endo_cartridge_set", item.cartridge_type_id, values["cartridge_type_id"])
         item.cartridge_type_id = values["cartridge_type_id"]
+    # A reading locks the row, judged on the reading it held before this
+    # PATCH (final review I1): a first one locks today's match, one that
+    # replaces a reading from before slice 5 locks the standard.
+    if values.get("result_reading") is not None:
+        lock_rows(db, worksheet, [item], event="result", user_id=user_id)
     if "result_reading" in values and values["result_reading"] != item.result_reading:
         new = values["result_reading"]
         if new is None:
@@ -553,4 +564,3 @@ def apply_item_endo_fields(db: Session, worksheet, item, values: dict,
         item.result_entered_by_user_id = user_id if new is not None else None
     if values.get("result_reading") is not None:
         pin_endo_method(db, worksheet, user_id)
-        lock_rows(db, worksheet, [item], event="result", user_id=user_id)

@@ -5,6 +5,7 @@ checks, the lock events, release, override history and Re-apply.
 In-memory SQLite + dependency overrides, with test_endo_v2_worksheets.py's
 and test_endo_worksheet_promote.py's helpers."""
 import json
+from datetime import datetime, timezone
 from types import SimpleNamespace
 from unittest.mock import MagicMock
 
@@ -81,6 +82,10 @@ def _rule(db, peptide, *, sort_order=1, **values):
     db.add(rule)
     db.flush()
     return rule
+
+
+# A reading's stamp as the server stores it: naive UTC.
+_ENTERED = datetime(2026, 10, 1, 9, 0, tzinfo=timezone.utc).replace(tzinfo=None)
 
 
 def _lock(rule, locked_by="result"):
@@ -161,7 +166,11 @@ def test_row_rule_reads_the_switch_then_the_lock_then_todays_match(monkeypatch):
     assert endo_prep_rules.row_rule(_r(prep_rule=locked), **q)["total_dilution"] == 400.0
     assert endo_prep_rules.row_rule(_r(prep_rule={**locked, "rule": None}), **q) is None
     assert endo_prep_rules.row_rule(_r(prep_rules_off=True, prep_rule=locked), **q) is None
-    assert len(asked) == 1  # a lock or the switch never asks for today's match
+    # Final review I1: a reading and no lock reads the standard; a lock still wins.
+    for read in ({"result_reading": "0.8"}, {"result_entered_at": "2026-10-01T09:00:00"}):
+        assert endo_prep_rules.row_rule(_r(**read), **q) is None
+        assert endo_prep_rules.row_rule(_r(prep_rule=locked, **read), **q)["total_dilution"] == 400.0
+    assert len(asked) == 1  # a lock, the switch or a reading never asks for today's match
 
 
 def test_row_facts_reads_peptide_weight_and_bac_for_endotoxin_rows_only(client, db):
@@ -607,14 +616,44 @@ def test_switching_back_to_rules_locks_at_once_once_printed_or_read(client, db):
     read, _ = _vial_item(db, fresh, 5, w.svc)
     unread, _ = _vial_item(db, fresh, 6, w.svc)
     read.result_reading, read.cartridge_type_id = "0.8", w.c05.id
+    read.result_entered_at = _ENTERED
     read.prep_rules_off = unread.prep_rules_off = True
     db.commit()
     for row in (read, unread):
         assert client.patch(f"/worksheets/{fresh.id}/items/{row.id}",
                             json={"prep_rules_off": False}).status_code == 200
         db.refresh(row)
-    assert read.prep_rule["locked_by"] == "switch"
+    # The switch is a deliberate move to today's line, a reading or not (A.0
+    # item 3; final review I1 freezes a read row on every other event).
+    assert (read.prep_rule["locked_by"], read.prep_rule["rule"]) == (
+        "switch", endo_prep_rules.snapshot(w.rule))
     assert (unread.prep_rules_off, unread.prep_rule) == (False, None)
+
+
+def test_a_row_read_before_it_was_locked_locks_to_the_standard(client, db):
+    """Final review I1 (Dennis's freeze-to-standard, superseding deviation
+    B5): a row with a reading and no lock, data from before slice 5, was read
+    at the standard and stays there, promoted or not, whatever today's line
+    says. A typed reading or an import that replaces its reading, and the
+    print, lock it to the standard; a first reading still locks today's line
+    (test_the_first_reading_locks_its_row...)."""
+    w = _locks_world(client, db)          # a 1:300 line for any weight
+    promoted, _ = _vial_item(db, w.ws, 3, w.svc, state="promoted")
+    for row in (w.a, w.b, promoted):
+        row.result_reading, row.cartridge_type_id = "<0.05", w.c05.id
+        row.result_entered_at = _ENTERED
+    db.commit()
+    # The method's standard 1:250, not the line's 1:300, before any lock too.
+    assert endo_prep_rules.row_effective(db, w.ws, promoted)[1]["total_dilution"] == 250
+    assert client.patch(w.url_a, json={"result_reading": "0.8"}).status_code == 200
+    r = _import(client, w.ws, _reader_line(w.b, "0.8", w.c05, replace=True))
+    assert r.status_code == 200, r.text
+    assert client.post(f"/worksheets/{w.ws.id}/printed").status_code == 200
+    for row in (w.a, w.b, promoted):
+        db.refresh(row)
+    assert [(row.prep_rule["rule"], row.prep_rule["locked_by"])
+            for row in (w.a, w.b, promoted)] == [(None, "result"), (None, "result"), (None, "print")]
+    assert endo_prep_rules.row_effective(db, w.ws, promoted)[1]["total_dilution"] == 250
 
 
 @pytest.mark.parametrize("field, value", [

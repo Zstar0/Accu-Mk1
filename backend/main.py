@@ -25923,7 +25923,7 @@ def import_endo_reader_results(
         rules = load_rules(db)
         facts = row_facts(db, ws, [item for item, _t, _reading in plan if item.id in moved])
         std_total = endo_run_params(run_params)["std_total_dilution"]
-    for item, t, reading in plan:
+    for item, t, _reading in plan:
         if item.id in moved:
             # Before any write to the row, as the item PATCH keeps an override.
             _, effective = row_effective(db, ws, item, rules=rules, std_total=std_total,
@@ -25937,6 +25937,12 @@ def import_endo_reader_results(
                          "old": {"cartridge_type_id": item.cartridge_type_id},
                          "new": {"cartridge_type_id": t.cartridge_type_id}},
             ))
+    # Endo slice 5 (spec 6): a reading locks its row's rule, as a typed one
+    # does, judged on the reading the row held before this import (final
+    # review I1): a first one locks today's match, a replaced one from
+    # before slice 5 the standard. After the history, so it keeps the row as stored.
+    lock_rows(db, ws, [item for item, _t, _reading in plan], event="result", user_id=user_id)
+    for item, t, reading in plan:
         db.add(AuditLog(
             operation="endo_reader_imported",
             entity_type="worksheet_item",
@@ -25964,8 +25970,6 @@ def import_endo_reader_results(
         item.cartridge_type_id = t.cartridge_type_id
         _apply_bench_ticks(db, ws.id, item, made=None, ran=True, user_id=user_id,
                            instrument_id=instrument_id_for_serial(db, t.record.get("reader")))
-    # Endo slice 5 (spec 6): a reading locks its row's rule, as a typed one does.
-    lock_rows(db, ws, [item for item, _t, _reading in plan], event="result", user_id=user_id)
     db.commit()
     return {"applied": len(plan), "items": _serialize_worksheets(db, [ws])[0]["items"],
             "endo_method": method, "skipped": skipped}
