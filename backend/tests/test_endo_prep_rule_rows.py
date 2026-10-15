@@ -678,18 +678,28 @@ def test_a_promoted_rows_prep_is_final(client, db, field, value):
     assert getattr(live, field) == body[field]
 
 
-def test_a_promoted_row_still_takes_readings_and_other_fields(client, db):
+def test_a_promoted_rows_form_water_and_reading_are_final_and_other_fields_still_save(client, db):
+    """Handler ruling 2026-10-14 (final review I3): every endo field of a
+    promoted row is final, the form, water and reading included, since each
+    moves the EU/vial or LOQ already on the parent; retest corrects it. The
+    fields that never enter them, the weight and the ticks, still save."""
     w = _world(client, db)
     done, _ = _row(db, w, "P-4001-S01", state="promoted")
     db.commit()
     url = f"/worksheets/{w.ws.id}/items/{done.id}"
-    for payload in ({"result_reading": "0.8"}, {"made": True}, {"prep_water_ml": 2.5},
+    for payload in ({"result_reading": "0.8"}, {"prep_form": "liquid"}, {"prep_water_ml": 2.5}):
+        r = client.patch(url, json=payload)
+        assert (r.status_code, r.json()["detail"]) == (
+            409, "the row is promoted; its prep is final"), payload
+    db.refresh(done)
+    assert (done.result_reading, done.prep_form, done.prep_water_ml) == ("<0.05", None, None)
+    for payload in ({"made": True}, {"prep_weight_mg": 12.5},
                     # Sent as stored: no change, so no refusal.
-                    {"cartridge_type_id": w.c05.id, "prep_note": None}):
+                    {"cartridge_type_id": w.c05.id, "prep_note": None, "result_reading": "<0.05"}):
         assert client.patch(url, json=payload).status_code == 200, payload
     db.refresh(done)
-    assert (done.result_reading, done.prep_water_ml, done.cartridge_type_id) == ("0.8", 2.5, w.c05.id)
-    assert done.made_at is not None
+    assert (done.made_at is not None, done.prep_weight_mg, done.result_reading) == (
+        True, 12.5, "<0.05")
 
 
 # --- Task 4 fix round 1: promoted-row integrity (review S1, S3, I5) -----------
@@ -714,17 +724,17 @@ def test_a_reader_import_skips_a_promoted_row_and_still_applies_the_rest(client,
     assert (live.result_reading, live.result_reader["test_id"]) == ("0.8", "T-2")
 
 
-def test_clearing_a_promoted_rows_reading_keeps_its_lock(client, db):
-    """Review S3: before the first print a cleared reading releases a result
-    lock, but never a promoted row's: the lock is what it was promoted on."""
+def test_clearing_a_promoted_rows_reading_is_refused_and_keeps_its_lock(client, db):
+    """Review S3, then final review I3: a promoted row's reading is final, so
+    clearing it is refused (409) and the lock it was promoted on stays."""
     w = _world(client, db)
     done, _ = _row(db, w, "P-4001-S01", state="promoted")
     done.prep_rule = lock = _lock(None, "result")
     db.commit()
-    assert client.patch(f"/worksheets/{w.ws.id}/items/{done.id}",
-                        json={"result_reading": None}).status_code == 200
+    r = client.patch(f"/worksheets/{w.ws.id}/items/{done.id}", json={"result_reading": None})
+    assert (r.status_code, r.json()["detail"]) == (409, "the row is promoted; its prep is final")
     db.refresh(done)
-    assert (done.result_reading, done.prep_rule) == (None, lock)
+    assert (done.result_reading, done.prep_rule) == ("<0.05", lock)
 
 
 def test_a_reader_import_that_moves_a_read_rows_cartridge_is_an_override(client, db):

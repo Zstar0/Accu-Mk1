@@ -26311,9 +26311,10 @@ def update_worksheet_item(
             endo_values = check_item_endo_fields(db, ws, item, endo_values)
         except ValueError as exc:
             raise HTTPException(400, str(exc))
-        # Endo slice 5 (spec 8): a promoted row's prep is final. A value sent
-        # as stored is no change; readings and the other fields keep today's
-        # behaviour. One query, and only when a final field would change.
+        # Endo slice 5 (spec 8): a promoted row's prep is final, every endo
+        # field (final review I3). A value sent as stored is no change; the
+        # fields outside ENDO_ITEM_FIELDS keep today's behaviour. One query,
+        # and only when a final field would change.
         if (any(f in endo_values and endo_values[f] != getattr(item, f) for f in PREP_FINAL_FIELDS)
                 and promoted_sample_ids(db, [item.sample_id])):
             raise HTTPException(409, PREP_FINAL)

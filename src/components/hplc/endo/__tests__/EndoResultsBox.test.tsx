@@ -360,6 +360,29 @@ describe('EndoResultsBox', () => {
     ).not.toBeInTheDocument()
   })
 
+  it("shows the server's 409 for a reading typed on a promoted row (final review I3)", async () => {
+    const promoted = 'the row is promoted; its prep is final'
+    const item = endoItem({
+      sample_id: 'P-0001-S02',
+      result_reading: '<0.05',
+      result_entered_at: '2026-10-09T18:00:00Z',
+      cartridge_type_id: 3,
+      cartridge_sensitivity_eu_ml: 0.05,
+      endo_analysis: { ...NATIVE, state: 'promoted' },
+    })
+    const { onUpdateItem } = setup([item])
+    onUpdateItem.mockResolvedValue(promoted)
+    const cell = screen.getByLabelText('Reading for P-0001-S02')
+    fireEvent.change(cell, { target: { value: '0.8' } })
+    fireEvent.blur(cell)
+    expect(onUpdateItem).toHaveBeenCalledWith(item.id, {
+      result_reading: '0.8',
+    })
+    expect(
+      await within(rowOf('P-0001-S02')).findByText(`Not saved: ${promoted}`)
+    ).toHaveAttribute('role', 'alert')
+  })
+
   it('refuses a reading on the client, on its row, when no cartridge resolves', () => {
     const { onUpdateItem } = setup(
       [endoItem({ sample_id: 'P-0001-S02' })],

@@ -144,6 +144,7 @@ It holds stored facts only. The row's history view recomputes EU per vial and th
 ## 8. Overrides (D6)
 
 - **Typing a value** on any of the three fields beats the rule on that field. The other fields keep following the rule. A typed value is allowed until the row is promoted, after print and after a result too.
+- **A promoted row is final.** Every endo field the item PATCH takes refuses a change with 409 ("the row is promoted; its prep is final"), the form, the water and the reading included, because each one moves the EU/vial or LOQ already on the parent. A promoted row is corrected by retest. The weight, the stock bench fields and the bench ticks stay editable, because none of them enters a promoted row's EU/vial or LOQ (Handler ruling 2026-10-14, final review I3).
 - **The "no rule" switch** (`prep_rules_off`) makes the row ignore rules entirely. Re-apply never lists it.
 - **When a row already has a result**, changing a typed value or the switch appends a history entry (`why: "override"`) before the change, so the replaced run is kept.
 - **Every override** is audited: who, when, old and new.
