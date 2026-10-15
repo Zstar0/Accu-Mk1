@@ -23136,6 +23136,7 @@ def _build_native_vial_inbox_items(
     assignment_map: dict,
     keyword_to_peptide: dict,
     container_mode: bool = True,
+    only_unassigned: bool = False,
 ) -> "list[InboxVialItem]":
     """Inbox rows for the Mk1-native vials of one family.
 
@@ -23173,6 +23174,10 @@ def _build_native_vial_inbox_items(
             db, sub.id, role, keyword_to_peptide,
         )
         analyses = [a for a in analyses if (uid, a.group_id) not in assigned_pairs]
+        if only_unassigned:
+            # waiting_for_addon_results parents: open work only, never a
+            # sibling in to_be_verified / assigned / cancelled or the like.
+            analyses = [a for a in analyses if a.review_state == "unassigned"]
         if not analyses:
             continue
         analyses.sort(key=lambda a: (a.group_name.lower(), a.title.lower()))
@@ -23714,6 +23719,7 @@ async def get_worksheets_inbox(
                 assignment_map=assignment_map,
                 keyword_to_peptide=keyword_to_peptide,
                 container_mode=bool(vial_meta.get("container_mode")),
+                only_unassigned=it.get("review_state") == WAITING_FOR_ADDON_RESULTS,
             ))
 
         # A waiting_for_addon_results parent contributes its open native vials

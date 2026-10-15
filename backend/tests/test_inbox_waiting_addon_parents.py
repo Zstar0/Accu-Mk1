@@ -246,6 +246,45 @@ def test_waiting_parent_with_no_open_vial_contributes_nothing(
     assert not {"P-5322", "P-5322-S01", "P-5322-S02"} & set(rows)
 
 
+def _sibling(db, svcs, parent, seq, state):
+    """One more endo vial (S0<seq>) on `parent`, on no worksheet."""
+    sub = LimsSubSample(parent_sample_pk=parent.id,
+                        external_lims_uid=f"mk1://{parent.sample_id}-{seq:03d}",
+                        sample_id=f"{parent.sample_id}-S{seq:02d}",
+                        vial_sequence=seq, assignment_role="endo")
+    db.add(sub)
+    db.flush()
+    svc = svcs["ENDOTOXIN-USP85LAL"]
+    db.add(LimsAnalysis(lims_sub_sample_pk=sub.id, analysis_service_id=svc.id,
+                        keyword=svc.keyword, title=svc.title, review_state=state))
+    db.commit()
+
+
+SIBLING_STATES = ["to_be_verified", "assigned", "cancelled", "registered"]
+
+
+@pytest.mark.parametrize("state", SIBLING_STATES)
+def test_waiting_parent_shows_only_unassigned_vials(db, svcs, client, state):
+    """Once a waiting parent loads (its S02 is unassigned), a sibling vial in
+    any other state stays out, even though the per-vial loop would show it
+    for a received parent."""
+    parent, _ = _family(db, svcs, "P-5309", status=WAITING)
+    _sibling(db, svcs, parent, 3, state)
+    rows = _inbox(client)
+    assert "P-5309-S02" in rows
+    assert "P-5309-S03" not in rows
+
+
+@pytest.mark.parametrize("state", ["to_be_verified", "cancelled", "registered"])
+def test_received_parent_sibling_states_unchanged(db, svcs, client, state):
+    """Received parents keep today's per-vial rule: only rejected/retracted
+    and done states drop a vial, so these siblings still show."""
+    parent, _ = _family(db, svcs, "P-6000", status="sample_received",
+                        hplc_state="unassigned")
+    _sibling(db, svcs, parent, 3, state)
+    assert "P-6000-S03" in _inbox(client)
+
+
 def test_published_parent_open_vial_stays_out(db, svcs, client):
     _family(db, svcs, "P-4100", status="published")
     items, _ = inbox_candidates_from_registry(db)
