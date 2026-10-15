@@ -23445,10 +23445,17 @@ async def get_worksheets_inbox(
         except Exception:
             pass  # If mk1 DB is unavailable, show all samples
 
-    # Filter out samples that already have preps (by SENAITE sample ID e.g. "P-0085")
+    # Filter out samples that already have preps (by SENAITE sample ID e.g. "P-0085").
+    # A waiting_for_addon_results parent (mk1 source only) is exempt: a prep
+    # under its own ID is the published primary work, and only its vials are
+    # emitted, each checked against the vial-level preps in
+    # _build_native_vial_inbox_items.
+    from sub_samples.registry_inbox import WAITING_FOR_ADDON_RESULTS
     filtered_items = [
         it for it in senaite_items
-        if not hide_prepped or str(it.get("id", "")) not in prepped_senaite_ids
+        if not hide_prepped
+        or str(it.get("id", "")) not in prepped_senaite_ids
+        or it.get("review_state") == WAITING_FOR_ADDON_RESULTS
     ]
 
     # Step 3: Build keyword → department map (the service's own department
@@ -23708,6 +23715,11 @@ async def get_worksheets_inbox(
                 keyword_to_peptide=keyword_to_peptide,
                 container_mode=bool(vial_meta.get("container_mode")),
             ))
+
+        # A waiting_for_addon_results parent contributes its open native vials
+        # (just above) and never its own row, container or not.
+        if vial_meta.get("is_parent") and it.get("review_state") == WAITING_FOR_ADDON_RESULTS:
+            continue
 
         # Depository suppression: a CONTAINER parent with any vials is a pure
         # depository — suppress its own row. Gated on container_mode (NOT on
