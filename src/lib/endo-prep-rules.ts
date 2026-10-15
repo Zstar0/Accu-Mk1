@@ -55,6 +55,10 @@ export interface PrepHistoryEntry {
   result_reading: string | null
   reader_test_id: string | null
   result_entered_at: string | null
+  /** Re-apply moved this reading off the row, which it then cleared
+   *  (final review I2); such an entry also keeps the reader record and who
+   *  entered the reading. */
+  reading_moved?: boolean
 }
 
 export interface MatchQuery {

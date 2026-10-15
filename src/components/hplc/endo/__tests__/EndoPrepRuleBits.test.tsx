@@ -283,7 +283,8 @@ describe('Box 2 under method rules', () => {
               result_reading: '<0.05',
               why: 'override',
             }),
-            past({}),
+            // the reading Re-apply moved off the row (final review I2)
+            past({ reading_moved: true }),
           ],
         }),
       ],
@@ -293,8 +294,11 @@ describe('Box 2 under method rules', () => {
     const dialog = await screen.findByRole('dialog')
     const [, newest, oldest] = within(dialog).getAllByRole('row')
     if (!newest || !oldest) throw new Error('two past runs')
+    // the moved reading shows in its entry, marked as moved
+    expect(within(newest).getAllByRole('cell')[6]).toHaveTextContent(/^0\.8$/)
+    expect(newest).toHaveTextContent('Re-apply (reading moved)')
+    expect(oldest).not.toHaveTextContent('reading moved')
     // 0.8 x 300 x 2 mL = 480 EU per vial: over 350, a fail
-    expect(newest).toHaveTextContent('Re-apply')
     expect(newest).toHaveTextContent(
       'Retatrutide any weight · 1:300 total (trial)'
     )
@@ -307,7 +311,7 @@ describe('Box 2 under method rules', () => {
     expect(oldest).toHaveTextContent('Pass')
   })
 
-  it("lists exactly the preview's candidates, with old against new for each (A.0 item 2)", async () => {
+  it("lists exactly the preview's candidates, with old against new for each (A.0 item 2), and starts a read row unticked (final review I2)", async () => {
     const old = rule({ id: 1, total_dilution: 300 })
     const next = rule({ id: 2, total_dilution: 400 })
     const ruled = pep({
@@ -316,6 +320,7 @@ describe('Box 2 under method rules', () => {
       cartridge_type_id: 3,
       cartridge_sensitivity_eu_ml: 0.05,
       result_reading: '<0.05',
+      result_entered_at: '2026-10-13T18:00:00Z',
     })
     // a typed 1:500 beats both lines: only its line moves
     const typed = pep({
@@ -336,7 +341,7 @@ describe('Box 2 under method rules', () => {
       new_rule: next,
     }))
     const onReapply = vi.fn().mockResolvedValue(
-      [ruled, typed, standard].map(it => ({
+      [typed, standard].map(it => ({
         item_id: it.id,
         applied: true,
         reason: null,
@@ -351,11 +356,23 @@ describe('Box 2 under method rules', () => {
       if (!tr) throw new Error(`no dialog row for ${sampleId}`)
       return tr
     }
-    // old against new: 0.05 x 300 x 2 = 30, x 400 x 2 = 40
+    const tick = (sampleId: string) =>
+      within(dialog).getByRole('checkbox', { name: `Re-apply ${sampleId}` })
+    // Re-apply moves a reading to the history and clears it: the read row
+    // starts unticked, the unread ones ticked
+    expect(tick('P-0001-S02')).not.toBeChecked()
+    expect(tick('P-0002-S02')).toBeChecked()
+    expect(tick('P-0003-S02')).toBeChecked()
+    // the prep, old against new: 0.05 x 300 x 2 = 30, x 400 x 2 = 40 (LOQ)
     const one = inDialog('P-0001-S02')
     expect(one).toHaveTextContent('1:300 to 1:400')
     expect(one).toHaveTextContent('30 to 40')
-    expect(one).toHaveTextContent('<30 to <40')
+    // never a result worked out again for the old reading: the line instead
+    expect(one).toHaveTextContent(
+      'Its reading (<0.05) moves to history; re-run the sample'
+    )
+    expect(one).not.toHaveTextContent('<30')
+    expect(one).not.toHaveTextContent(/Pass|Fail/)
     // figures that do not change still show, with the old and new line
     const two = inDialog('P-0002-S02')
     expect(two).toHaveTextContent(
@@ -368,11 +385,12 @@ describe('Box 2 under method rules', () => {
       'the standardto Retatrutide any weight · 1:400 total (trial)'
     )
     expect(three).toHaveTextContent('1:250 to 1:400')
+    expect(three).not.toHaveTextContent('moves to history')
     fireEvent.click(
-      within(dialog).getByRole('button', { name: 'Re-apply 3 rows' })
+      within(dialog).getByRole('button', { name: 'Re-apply 2 rows' })
     )
-    expect(onReapply).toHaveBeenCalledWith([ruled.id, typed.id, standard.id])
-    expect(await within(dialog).findAllByText('Re-applied')).toHaveLength(3)
+    expect(onReapply).toHaveBeenCalledWith([typed.id, standard.id])
+    expect(await within(dialog).findAllByText('Re-applied')).toHaveLength(2)
   })
 
   it('lists a candidate whose row is not on the page yet, by its sample id', async () => {
@@ -392,6 +410,8 @@ describe('Box 2 under method rules', () => {
     const dialog = await screen.findByRole('dialog')
     expect(within(dialog).getByText('P-0009-S02')).toBeInTheDocument()
     expect(within(dialog).getAllByRole('checkbox')).toHaveLength(1)
+    // it cannot say whether it holds a reading, so it starts unticked
+    expect(within(dialog).getByRole('checkbox')).not.toBeChecked()
   })
 
   it('shows a row the server refused, with its reason', async () => {

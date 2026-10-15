@@ -265,7 +265,7 @@ export function PrepHistory({
           <DialogDescription className="text-xs">
             Each run as it was stored when it was replaced, newest first. EU per
             vial and the verdict are worked out again from those values; the
-            validity checks of the reader are not kept with a past run.
+            validity checks of the reader are not shown for a past run.
           </DialogDescription>
           <div className="min-h-0 overflow-auto">
             <table className="w-full border-collapse text-[12.5px]">
@@ -297,7 +297,11 @@ export function PrepHistory({
                         {when(e.at)}
                       </td>
                       <td className={HCELL}>
-                        {e.why === 'reapply' ? 'Re-apply' : 'override'}
+                        {e.why === 'reapply'
+                          ? e.reading_moved
+                            ? 'Re-apply (reading moved)'
+                            : 'Re-apply'
+                          : 'override'}
                       </td>
                       <td className={HCELL}>
                         {lineLabel(
@@ -337,6 +341,19 @@ export function PrepHistory({
 }
 
 const FIGURES = ['Total', 'Step 1', 'Cartridge', 'LOQ', 'EU/vial', 'Verdict']
+/** Where the figures worked out from the reading start. */
+const FROM_READING = FIGURES.indexOf('EU/vial')
+
+/** Re-apply moves a row's reading to its history and clears it (final
+ *  review I2), so such a row starts unticked. A row the page does not hold
+ *  yet cannot say, so it starts unticked too. */
+function hasReading(row: EndoRow | undefined): boolean {
+  return (
+    !row ||
+    row.item.result_reading != null ||
+    row.item.result_entered_at != null
+  )
+}
 
 /** Old against new, as Box 2 and Box 3 would show them; dashes for a row
  *  the page does not hold yet. */
@@ -408,13 +425,16 @@ export function ReapplyRules({
   const [error, setError] = useState<string | null>(null)
 
   function openList() {
-    setListed(
-      candidates.map(candidate => ({
-        candidate,
-        row: rows.find(r => r.item.id === candidate.item_id),
-      }))
+    const next = candidates.map(candidate => ({
+      candidate,
+      row: rows.find(r => r.item.id === candidate.item_id),
+    }))
+    setListed(next)
+    setPicked(
+      new Set(
+        next.filter(l => !hasReading(l.row)).map(l => l.candidate.item_id)
+      )
     )
-    setPicked(new Set(candidates.map(c => c.item_id)))
   }
 
   function close() {
@@ -463,9 +483,11 @@ export function ReapplyRules({
             <DialogDescription className="text-xs">
               These rows are locked to a line that differs from the current
               rules. Re-applying moves a ticked row to the current line and
-              keeps its current run in its history; typed values and the reading
-              stay as they are. Promoted rows and completed worksheets are never
-              changed.
+              keeps its current run in its history; typed values stay as they
+              are. A reading was read at the old line, so it moves to the
+              history and is cleared, and the sample is re-run: rows with a
+              reading start unticked. Promoted rows and completed worksheets are
+              never changed.
             </DialogDescription>
             <div className="min-h-0 overflow-auto">
               <table className="w-full border-collapse text-[12.5px]">
@@ -497,6 +519,10 @@ export function ReapplyRules({
                         ),
                       ctx
                     )
+                    // A read row shows what happens to its reading, never a
+                    // verdict worked out again for it under the new line.
+                    const moves = row !== undefined && hasReading(row)
+                    const reading = row?.item.result_reading
                     return (
                       <tr key={id} data-item={id}>
                         <td className={HCELL}>
@@ -528,23 +554,34 @@ export function ReapplyRules({
                             )}
                           </span>
                         </td>
-                        {before.map((b, i) => (
+                        {(moves ? before.slice(0, FROM_READING) : before).map(
+                          (b, i) => (
+                            <td
+                              key={FIGURES[i]}
+                              className={`${HCELL} whitespace-nowrap font-mono`}
+                            >
+                              {b === after[i] ? (
+                                b
+                              ) : (
+                                <>
+                                  {b}
+                                  <span className="font-semibold text-teal-700 dark:text-teal-300">
+                                    {` to ${after[i]}`}
+                                  </span>
+                                </>
+                              )}
+                            </td>
+                          )
+                        )}
+                        {moves && (
                           <td
-                            key={FIGURES[i]}
-                            className={`${HCELL} whitespace-nowrap font-mono`}
+                            colSpan={FIGURES.length - FROM_READING}
+                            className={`${HCELL} text-amber-700 dark:text-amber-300`}
                           >
-                            {b === after[i] ? (
-                              b
-                            ) : (
-                              <>
-                                {b}
-                                <span className="font-semibold text-teal-700 dark:text-teal-300">
-                                  {` to ${after[i]}`}
-                                </span>
-                              </>
-                            )}
+                            Its reading{reading ? ` (${reading})` : ''} moves to
+                            history; re-run the sample
                           </td>
-                        ))}
+                        )}
                         {results && (
                           <td className={HCELL}>
                             <Outcome result={results.get(id)} />

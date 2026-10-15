@@ -122,14 +122,18 @@ A row switched to "no rule" is not locked; it needs no lock. Switching a row bac
 - the row is not switched to "no rule";
 - the row's snapshot differs from today's match: a different line, different values, or rule against none.
 
-Each candidate carries its old snapshot and the new match. The browser computes and shows old against new for the effective total, ratio and cartridge, the LOQ, EU per vial and the verdict, using the same maths it already runs.
+Each candidate carries its old snapshot and the new match. The browser computes and shows old against new for the effective total, ratio and cartridge, the LOQ, EU per vial and the verdict, using the same maths it already runs. A row with a reading shows instead of EU per vial and the verdict that its reading moves to the history and the sample is re-run, never a result worked out again for the old reading, and it starts unticked; a row without one starts ticked (Handler ruling 2026-10-14, final review I2).
 
 **Apply.** `POST /worksheets/{id}/prep-rules/reapply {item_ids: [...]}`. For each confirmed row the server re-checks the preview's conditions; a row that no longer qualifies is refused per row with a reason. For a row that qualifies, it then:
 1. appends a history entry;
 2. replaces `prep_rule` with the current match (`locked_by: "reapply"`);
 3. writes an audit row `endo_prep_rule_reapplied` with the old and new snapshots.
 
-Typed values and the reading stay as they are. A row that was actually re-run gets its new reading the usual way.
+Typed values stay as they are. Re-apply moves the reading to the row's history and clears it, and the re-run's reading is entered the usual way (Handler ruling 2026-10-14, final review I2):
+- the history entry keeps the reading in full and is marked `reading_moved`, and the audit row keeps the old reading and reader record;
+- every reading field on the row is cleared (`result_reading`, `result_reader`, `result_entered_at`, `result_entered_by_user_id`), while the new lock, the cartridge and the Ran tick stay;
+- the reader import never restores a moved reading: a test whose id a moved entry holds is skipped and listed in `skipped` ("this run's reading was moved to history by Re-apply; enter the re-run"), replace ticked or not;
+- a row with no reading moves as before.
 
 **History entry** (in `prep_history`):
 - `at`, `by`, `why` (`reapply`, or `override` per section 8);
@@ -137,7 +141,8 @@ Typed values and the reading stay as they are. A row that was actually re-run ge
 - the effective total, ratio and cartridge before the change;
 - `result_reading`;
 - the reader test id;
-- `result_entered_at`.
+- `result_entered_at`;
+- for a reading Re-apply moved, also `result_reader`, `result_entered_by_user_id` and `reading_moved: true`.
 
 It holds stored facts only. The row's history view recomputes EU per vial and the verdict from them with the pinned method, so a failed run stays on record (D3).
 
@@ -189,6 +194,7 @@ It holds stored facts only. The row's history view recomputes EU per vial and th
 - Apply refuses promoted rows, completed worksheets, "no rule" rows and rows that changed since the preview.
 - Apply writes history and audit.
 - Typed values survive.
+- A read row's reading moves to its history and is cleared, a re-import of that run is skipped, and the dialog starts the row unticked.
 
 **Overrides.** A typed change and a switch on a row with a result append history and an audit row.
 
