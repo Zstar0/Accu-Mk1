@@ -366,3 +366,44 @@ The rules table is empty. Worksheet 25 keeps its pre-slice-5 readings, for the R
 **UAT notes added for Dennis:**
 - Re-apply on a read row moves its reading to History and needs a re-run. That happens even when only the rule's line changes and the numbers stay the same, so the row starts unticked.
 - Made and Ran ticks clear only when a reading moves.
+
+## Post-merge gates (origin/master v1.48.0, merge b727782b)
+
+Branch `b727782b`: `feat/endo-slice3` after `origin/master` `fbc8ab72` (v1.48.0, 104 commits) was merged in. The merge had one conflict, `src/store/ui-store.ts`, where both sides' fields were kept. Base is `fbc8ab72`. Every gate is a failure-set diff.
+
+- The run started 2026-10-15 02:45Z, and the backend suites finished at 03:00Z.
+- The devbox then went offline, so the record was finished after it came back.
+
+**Frontend** (base: a throwaway `git worktree add --detach` at `fbc8ab72` with `npm ci`, since removed).
+
+| Check | Branch | Base | Extra on branch | Verdict |
+|---|---|---|---|---|
+| typecheck | exit 0 | exit 0 | none | PASS |
+| eslint | 999 problems (896 errors, 103 warnings) | 999 (896, 103) | 0. The only difference is the same 25 findings moving from `AnalysisServicesPage.tsx:440` to `:441`, one line lower | PASS |
+| ast:lint | 3 (`hooks-in-hooks-dir`) | 3 | 0 | PASS |
+| format:check | 890 files | 877 files | 14 files: 13 docs, plus the fixture `backend/tests/fixtures/endo_prep_rule_cases.json`. No source file | PASS (docs and fixture only) |
+| vitest | 8 failed, 2883 passed | 5 failed, 2533 passed | 3, all in the flags suites: `FlagsFlyout` (tab switch), `RaiseFlagButton` ("Which sample?"), `flag-stream-glue-invalidation` (board_changed) | PASS, flaky under load. Re-run alone, all 3 files pass on both trees: the branch 3 times, plus 3 more times on 2026-10-15 (21 of 21 each time); base 3 times. Untouched by this release |
+
+**Backend** (endos3 container, scratch DB `accumark_mk1_pytest`, built by each side's own `init_db`; never `accumark_mk1`).
+
+| Run | Branch | Base | Verdict |
+|---|---|---|---|
+| Full suite | 159 failed, 5305 passed, 6 errors | 159 failed, 4781 passed, 6 errors | **PASS.** 164 failing ids on each side, and the sets are identical: 0 extra, 0 fixed |
+| Host-DB files | `test_priority_migration` 1 failed and `test_priority_embed` 1 failed; the other three pass or skip | the same two failing ids | PASS |
+| `test_worksheets_inbox -m integration` | 4 passed, 19 errors | 4 passed, 19 errors | PASS |
+| Slice 5 files and `test_worksheet_lock_routes` | all pass: 20, 29, 30, 55, 42, 17, 62 and 121 | 6 of the files are absent; `spec_rules` 40 passed and `worksheet_endo_prep` 17 passed | PASS |
+| Postgres-only | `test_hplc_native_schema` 1 failed (`test_slice1_boot_statements_execute_against_live_db`, pre-existing); `test_endo_v2_migration_pg` 1 passed; `test_spec_unit_indexes_pg` 3 passed | the same `hplc_native_schema` failure; the other two files are absent | PASS |
+
+**Restage at the merge.**
+- **Staging:** endos3 was staged in place at `b727782b`. The one file the merge deletes, `src/components/customers/SupportThreadControls.tsx`, was removed by its path.
+- **Boot:** the reload logged the same 2 pre-existing `lims_analyses_review_state_check` `migration_skipped` lines as the previous boot. Master's migrations applied cleanly, and `Application startup complete`.
+- **After the devbox reboot:** the stack came back healthy at `b727782b`, version 1.48.0.
+
+**Smoke and C1 probe** (2026-10-15, after the reboot).
+- `GET /worksheets/27` and `GET /endo-prep-rules` both return 200.
+- `race.sh loop` held `worksheets` 27 for 7 s:
+  - `GET /health` was sent at 21.206 and answered at 21.216, 10 ms, while the PATCH waited;
+  - the PATCH then got 409 `the row is promoted; its prep is final`;
+  - afterwards, 0 sessions were idle in a transaction.
+
+**Production read-only checks 1 to 5:** all pass. See the launch checklist, section A.
