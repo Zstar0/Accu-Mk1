@@ -36,6 +36,9 @@ interface EsRow {
   cv: string
   spikeEu?: string
   tid: string
+  /** The operator's free-text fields: '1009' (identity, type, ID), '1014' (ID, product, short name). */
+  ids?: '1009' | '1014'
+  short?: string
 }
 function esRow(o: EsRow): string {
   const r = new Array<string>(79).fill('')
@@ -47,9 +50,15 @@ function esRow(o: EsRow): string {
   set(2, o.oq)
   set(3, o.onset)
   set(10, o.kind)
-  set(11, o.identity)
-  set(12, 'Peptide')
-  set(13, o.sid)
+  if (o.ids === '1014') {
+    set(11, o.sid)
+    set(12, o.identity)
+    set(13, o.short ?? 'short')
+  } else {
+    set(11, o.identity)
+    set(12, 'Peptide')
+    set(13, o.sid)
+  }
   set(14, 'mL')
   set(16, o.kind === 'SPK1' ? 0.8 : 1)
   set(18, o.rec)
@@ -83,7 +92,9 @@ function esTest(
   sid: string,
   identity: string,
   rec: number,
-  spikeCv: string
+  spikeCv: string,
+  ids: '1009' | '1014' = '1009',
+  short?: string
 ): string {
   const spikeEu = (rec * 0.008).toFixed(3)
   return [
@@ -96,6 +107,8 @@ function esTest(
       identity,
       cv: '0.0',
       tid,
+      ids,
+      short,
     }),
     esRow({
       ch: 2,
@@ -107,6 +120,8 @@ function esTest(
       cv: spikeCv,
       spikeEu,
       tid,
+      ids,
+      short,
     }),
     esRow({
       ch: 3,
@@ -117,6 +132,8 @@ function esTest(
       identity,
       cv: '0.0',
       tid,
+      ids,
+      short,
     }),
     esRow({
       ch: 4,
@@ -128,6 +145,8 @@ function esTest(
       cv: spikeCv,
       spikeEu,
       tid,
+      ids,
+      short,
     }),
     '',
     '_Cartridge,5 - 0.05,1111111111,2028-06-01T00:00:00-07:00,222222222222',
@@ -142,6 +161,46 @@ const EXPORT =
   esTest('CRL-T-003', 'PB-9003', 'Blend A + Blend B', 75, '26.0')
 
 const params = ENDO_RUN_PARAM_DEFAULTS
+
+describe("the operator's ID fields in either order", () => {
+  it('finds the Sample ID by its shape in the 2026-10-14 order (ID, product, short name)', () => {
+    const file =
+      esTest('CRL-T-101', 'P-5397-S02', 'MOTS-c', 133, '6.1', '1014', 'mot-c') +
+      '\r\n' +
+      esTest(
+        'CRL-T-102',
+        'PB-1081-S02',
+        'BPC-157 + TB500 (17-23 Fragment)',
+        120,
+        '4.1',
+        '1014',
+        '"BPC-157, TB500"'
+      )
+    const { tests } = parseEndoScan(file)
+    expect(tests.map(t => [t.sampleId, t.identity, t.result])).toEqual([
+      ['P-5397-S02', 'MOTS-c', '<0.05'],
+      ['PB-1081-S02', 'BPC-157 + TB500 (17-23 Fragment)', '<0.05'],
+    ])
+    const m = matchReaderTests(tests, [
+      { itemId: 1, sampleId: 'P-5397-S02' },
+      { itemId: 2, sampleId: 'PB-1081-S02' },
+    ])
+    expect(m.matched.map(x => [x.itemId, x.via])).toEqual([
+      [1, 'exact'],
+      [2, 'exact'],
+    ])
+    expect(m.unmatched).toEqual([])
+  })
+
+  it('never takes a peptide name for the Sample ID in the 2026-10-09 order', () => {
+    for (const name of ['BPC-157', 'PT-141', 'AOD-9604', 'CJC-1295']) {
+      const [t] = parseEndoScan(
+        esTest('CRL-T-103', 'P-9004', name, 90, '2.0')
+      ).tests
+      expect([t?.sampleId, t?.identity]).toEqual(['P-9004', name])
+    }
+  })
+})
 const three = (tests: ReaderTest[]) =>
   tests as [ReaderTest, ReaderTest, ReaderTest]
 

@@ -50,6 +50,7 @@ const ES = {
   recMin: 6, // spike recovery acceptance, % (on the spike rows)
   recMax: 7,
   kind: 10, // "SPL1" sample, "SPK1" spike
+  // 11-13 are the operator's free-text fields; see idFields for their order
   identity: 11,
   sampleType: 12,
   sampleId: 13,
@@ -119,6 +120,42 @@ function slotOf(v: string): number | null {
   return m ? Number(m[1]) : null
 }
 
+/**
+ * A lab sample ID: P-5309, PB-1075-S02, BW-0156-S02, P-5309-R01. Only the
+ * lab's prefixes and 4+ digits, so a peptide name (BPC-157, PT-141, AOD-9604,
+ * CJC-1295) is never taken for one.
+ */
+const LAB_ID = /^(?:P|PB|BW)-\d{4,}(?:-[SR]\d{1,3})*$/i
+
+/**
+ * The Sample ID, identity and sample type from the operator's three free-text
+ * fields (11-13). Their order depends on how the run was typed in: Dennis's
+ * 2026-10-09 export has the identity, "Peptide", then the Sample ID; a
+ * 2026-10-14 export has the Sample ID, the product, then a short name. The
+ * Sample ID is the field shaped like a lab ID; with none, the third field, as
+ * in the 10-09 layout.
+ */
+function idFields(r: string[]): {
+  sampleId: string
+  identity: string
+  sampleType: string
+} {
+  const f = [cell(r, ES.identity), cell(r, ES.sampleType), cell(r, ES.sampleId)]
+  const at = f.findIndex(v => LAB_ID.test(v))
+  if (at === -1 || at === 2)
+    return {
+      sampleId: f[2] ?? '',
+      identity: f[0] ?? '',
+      sampleType: f[1] ?? '',
+    }
+  const rest = f.filter((_, i) => i !== at)
+  return {
+    sampleId: f[at] ?? '',
+    identity: rest[0] ?? '',
+    sampleType: rest[1] ?? '',
+  }
+}
+
 const NOT_A_READER_EXPORT =
   'This is not a reader export: no test rows (channel 1-4, 79 columns) were found.'
 
@@ -172,9 +209,7 @@ export function parseEndoScan(input: string): {
     const cart = cartridges.find(c => c.lot === lot)
     tests.push({
       testId,
-      sampleId: cell(spl, ES.sampleId),
-      identity: cell(spl, ES.identity),
-      sampleType: cell(spl, ES.sampleType),
+      ...idFields(spl),
       result: understood && value === null ? '' : qual + raw,
       lt,
       value,
