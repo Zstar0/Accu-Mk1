@@ -329,3 +329,40 @@ The table page shows the ruled steps boxed, with `1:15 · rule (trial)` on step 
 - A ruled total prints as step 2's derived ratio, for example `1:15 · rule` for a 1:300 total, because the 2 mL sheet has no total column. Ask whether that label suits him.
 - In Box 2, typing the ruled value on a row with a typed override returns the row to following the rule (spec D6).
 - Print records first and prints from the server's locks, so a cancelled print still counts as printed.
+
+## Slice 5 final review fixes (2026-10-14)
+
+The whole-branch review returned 1 Critical and 3 Important findings. All are fixed or ruled, and two scoped re-reviews closed them (`.superpowers/sdd/2026-10-14-endo-slice5/final-rereview.md` and `final-rereview-2.md`).
+
+| Finding | Fix | Commits |
+|---|---|---|
+| C1: lock-taking worksheet routes were `async def`, so a lock wait stalled the event loop, and a 4xx after a lock could hang the backend | The item PATCH, PUT, complete, delete, item remove, reassign, apply-method-instrument and reorder routes are plain `def`. `_rollback_on_error` wraps every lock-taking route. `delete_worksheet` takes the worksheet lock first | `ae28727c`, `b2b33f7a`, `472eb5fe` |
+| I1: an unlocked row with a reading took today's rule at its next print | Such a row freezes to the standard on both sides; the browser keys on `result_entered_at` | `04b83246`, `9bb14697` |
+| I2 (Handler: option B): Re-apply re-priced an old reading under the new prep | Re-apply moves the reading into the row's history and clears it, along with the Made and Ran ticks. Read rows start unticked in the dialog. The reader import skips a moved run (test id plus `tested_at`) | `23bbc414`, `b678967c`, `5e6a4350`, `5c29a19b`, `9794bc93` |
+| I3 (Handler: yes): a promoted row's form, water, reading and weight were editable | Every endo field and the weight are final on a promoted row (409 `the row is promoted; its prep is final`); correct by retest | `3b640fea`, `b791641d` |
+| Minors | A typed step 1 ratio survives a sample-only edit; the import's skipped toast stays | `d04d33d8`, `9794bc93` |
+
+**C1 on real Postgres (endos3, restaged at `9794bc93`).**
+- **Probe:** `race.sh loop`. A third session holds `worksheets` 27 `FOR UPDATE` for 7 s, while two processes send `PATCH /worksheets/27/items/90` (a promoted row) and, 1 s later, `GET /health`.
+
+| Run | `/health` sent | `/health` answered | PATCH |
+|---|---|---|---|
+| Before the fix (`4c892267`) | 03.775 | 07.476 (blocked 3.7 s, until the holder released) | 409 at 07.476 |
+| After the fix (`9794bc93`) | 50.570 | 50.578 (8 ms, while the PATCH waited on the lock) | 409 at 54.338, after the release |
+
+- **After the 409:**
+  - no session was left idle in a transaction;
+  - `FOR UPDATE NOWAIT` on `worksheets` 27 and `worksheet_items` 90 both succeeded.
+
+**Restage.** endos3 and endov2 are at `b791641d`. The main.py sha256 matches HEAD, and health returns 200 on both.
+
+**endov2 UAT data.** Worksheet 26, "Endo s5 UAT rules (2 mL)", is unprinted and has no readings:
+- items 88 to 95;
+- BPC-157 at 10 and 50 mg, AOD-9604 at 5 and 20 mg, and P-0145-S01 with no peptide anchor;
+- native analyses 3624 to 3631.
+
+The rules table is empty. Worksheet 25 keeps its pre-slice-5 readings, for the Re-apply tests.
+
+**UAT notes added for Dennis:**
+- Re-apply on a read row moves its reading to History and needs a re-run. That happens even when only the rule's line changes and the numbers stay the same, so the row starts unticked.
+- Made and Ran ticks clear only when a reading moves.
