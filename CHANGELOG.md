@@ -1,5 +1,12 @@
 # Changelog
 
+## v1.49.1 - 2026-10-15
+
+### Fixes: inbox, reader import, worksheet links
+- **Open vials on a partially published sample show in the inbox.** When a sample's first COA is published while an add-on test (such as endotoxin) is still open, the sample is "Partially Published". Its open vials now appear in the worksheet inbox. Before, they never did.
+- **The endotoxin reader import reads either field order.** It finds the Sample ID in whichever of the reader's typed fields holds one, so an export with the Sample ID typed first now matches its worksheet rows.
+- **Sample IDs and order numbers are links on the worksheet.** A vial ID opens its sub-sample page, a sample ID opens the sample page, and an order number opens Order Status with that order filled in.
+
 ## v1.49.0 - 2026-10-15
 
 ### Endotoxin: the 2 mL worksheet, promote, LOD on the COA, and prep rules
