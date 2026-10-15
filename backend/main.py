@@ -25422,7 +25422,7 @@ def delete_worksheet(
 
 
 @app.delete("/worksheets/{worksheet_id}/items/{item_id}")
-async def remove_worksheet_item_by_id(
+def remove_worksheet_item_by_id(
     worksheet_id: int,
     item_id: int,
     db: Session = Depends(get_db),
@@ -25517,7 +25517,7 @@ def complete_worksheet(
 
 
 @app.post("/worksheets/{worksheet_id}/items/{item_id}/reassign")
-async def reassign_worksheet_item_by_id(
+def reassign_worksheet_item_by_id(
     worksheet_id: int,
     item_id: int,
     data: ReassignRequest,
@@ -26412,7 +26412,7 @@ class WorksheetApplyMethodInstrument(BaseModel):
 
 
 @app.post("/worksheets/{worksheet_id}/apply-method-instrument")
-async def apply_worksheet_method_instrument(
+def apply_worksheet_method_instrument(
     worksheet_id: int,
     data: WorksheetApplyMethodInstrument,
     db: Session = Depends(get_db),
@@ -26472,7 +26472,7 @@ class ReorderRequest(BaseModel):
 
 
 @app.put("/worksheets/{worksheet_id}/reorder")
-async def reorder_worksheet_items(
+def reorder_worksheet_items(
     worksheet_id: int,
     data: ReorderRequest,
     db: Session = Depends(get_db),

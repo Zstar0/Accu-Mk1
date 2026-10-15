@@ -48,6 +48,11 @@ def client(db):
     ("DELETE", "/worksheets/{worksheet_id}"),
     ("POST", "/worksheets/{worksheet_id}/reader-import"),
     ("POST", "/worksheets/{worksheet_id}/prep-rules/reapply"),
+    # Not lock takers themselves, but their writes wait on the locks above (final re-review Q1).
+    ("DELETE", "/worksheets/{worksheet_id}/items/{item_id}"),
+    ("POST", "/worksheets/{worksheet_id}/items/{item_id}/reassign"),
+    ("POST", "/worksheets/{worksheet_id}/apply-method-instrument"),
+    ("PUT", "/worksheets/{worksheet_id}/reorder"),
 ])
 def test_the_lock_taking_routes_run_in_the_threadpool(method, path):
     [route] = [r for r in app.routes
