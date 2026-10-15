@@ -779,11 +779,16 @@ def test_reapply_moves_only_the_ruled_row_and_never_a_typed_value(client, db):
     w.b.prep_rules_off = True         # special prep
     db.commit()
     assert client.post(f"/worksheets/{w.ws.id}/printed").status_code == 200
+    # Made and Ran with no reading yet: a row with no reading keeps its ticks.
+    assert client.patch(f"/worksheets/{w.ws.id}/items/{ruled.id}",
+                        json={"made": True, "ran": True}).status_code == 200
     w.rule.total_dilution = 400       # the lab moves the line after the print
     db.commit()
     db.refresh(w.a)
     db.refresh(ruled)
     typed_lock, old = w.a.prep_rule, ruled.prep_rule
+    ticks = (ruled.made_at, ruled.ran_at, ruled.prep_status)
+    assert None not in ticks
     r = _preview(client, w.ws)
     assert r.status_code == 200, r.text
     assert r.json() == {"candidates": [{"item_id": ruled.id, "sample_id": ruled.sample_id,
@@ -799,6 +804,7 @@ def test_reapply_moves_only_the_ruled_row_and_never_a_typed_value(client, db):
     assert (w.a.prep_total_dilution, w.a.prep_rule, w.a.prep_history) == (500, typed_lock, None)
     assert (w.b.prep_rule, w.b.prep_history) == (None, None)
     assert (ruled.prep_total_dilution, ruled.prep_steps, ruled.cartridge_type_id) == (None, None, None)
+    assert (ruled.made_at, ruled.ran_at, ruled.prep_status) == ticks
     new = ruled.prep_rule
     assert (new["rule"], new["locked_by"], new["user_id"]) == (
         endo_prep_rules.snapshot(w.rule), "reapply", 1)
@@ -902,9 +908,10 @@ def test_reapply_lists_a_new_line_even_when_its_numbers_are_the_same(client, db)
 
 def _read_then_reapplied(client, db):
     """_world's row P-4001-S01, locked at print to a 1:300 Retatrutide line,
-    then read through the reader import (test T-1, 0.8 on the 0.05). The line
-    moves to 1:400 and the row is re-applied. Returns the row with its lock,
-    reader record and entered-at from before the Re-apply."""
+    ticked Made, then read through the reader import (test T-1, 0.8 on the
+    0.05), which ticks Ran. The line moves to 1:400 and the row is
+    re-applied. Returns the row with its lock, reader record, entered-at and
+    ticks from before the Re-apply."""
     w = _world(client, db)
     item, _ = _row(db, w, "P-4001-S01", reading=None)
     pep = _peptide(db)
@@ -912,11 +919,16 @@ def _read_then_reapplied(client, db):
     rule = _rule(db, pep, total_dilution=300)
     db.commit()
     assert client.post(f"/worksheets/{w.ws.id}/printed").status_code == 200
+    assert client.patch(f"/worksheets/{w.ws.id}/items/{item.id}",
+                        json={"made": True}).status_code == 200
     r = _import(client, w.ws, _reader_line(item, "0.8", w.c05, test_id="T-1"))
     assert (r.status_code, r.json()["applied"]) == (200, 1), r.text
     db.refresh(item)
     read = SimpleNamespace(ws=w.ws, c05=w.c05, item=item, lock=item.prep_rule,
-                           reader=item.result_reader, entered=item.result_entered_at)
+                           reader=item.result_reader, entered=item.result_entered_at,
+                           ticks={"made_at": item.made_at.isoformat() + "Z", "made_by_user_id": 1,
+                                  "ran_at": item.ran_at.isoformat() + "Z", "ran_by_user_id": 1,
+                                  "prep_status": "complete"})
     assert (read.lock["locked_by"], read.reader["test_id"]) == ("print", "T-1")
     rule.total_dilution = 400
     db.commit()
@@ -929,14 +941,18 @@ def _read_then_reapplied(client, db):
 def test_reapply_moves_a_read_rows_reading_into_its_history_and_clears_it(client, db):
     """The reading was read at the old prep, so Re-apply moves it, in full,
     into the history entry, marked reading_moved, and clears every reading
-    field on the row. The row keeps its new lock and its cartridge, and has
-    nothing to promote until the re-run is read (the existing refusal). A
-    row with no reading moves as before
+    field on the row. Its prep at the old dilution is stale, so the Made and
+    Ran ticks clear and prep_status goes back to "ready", kept in the entry.
+    The row keeps its new lock and its cartridge, and has nothing to promote
+    until the re-run is read (the existing refusal). A row with no reading
+    moves as before, ticks kept
     (test_reapply_moves_only_the_ruled_row_and_never_a_typed_value)."""
     m = _read_then_reapplied(client, db)
     it = m.item
     assert (it.result_reading, it.result_reader, it.result_entered_at,
             it.result_entered_by_user_id) == (None, None, None, None)
+    assert (it.made_at, it.made_by_user_id, it.ran_at, it.ran_by_user_id, it.prep_status) == (
+        None, None, None, None, "ready")
     assert (it.prep_rule["locked_by"], it.prep_rule["rule"]["total_dilution"],
             it.cartridge_type_id) == ("reapply", 400, m.c05.id)
     [entry] = it.prep_history
@@ -945,11 +961,11 @@ def test_reapply_moves_a_read_rows_reading_into_its_history_and_clears_it(client
                      "result_reading": "0.8", "reader_test_id": "T-1",
                      "result_entered_at": m.entered.isoformat() + "Z",
                      "result_reader": m.reader, "result_entered_by_user_id": 1,
-                     "reading_moved": True}
+                     "reading_moved": True, "ticks": m.ticks}
     audit = db.query(AuditLog).filter(AuditLog.operation == "endo_prep_rule_reapplied").one()
     assert audit.details == {"user_id": 1, "worksheet_id": m.ws.id, "sample_id": it.sample_id,
                              "old": m.lock, "new": it.prep_rule,
-                             "old_reading": "0.8", "old_reader": m.reader}
+                             "old_reading": "0.8", "old_reader": m.reader, "old_ticks": m.ticks}
     assert _results(_promote(client, m.ws, _promote_line(it))) == [
         _refused(it, worksheets_endo_promote.REASON_NO_READING)]
 

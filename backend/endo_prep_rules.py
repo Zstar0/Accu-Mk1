@@ -422,6 +422,17 @@ def append_history(item, *, why: str, user_id: Optional[int], effective: dict,
     item.prep_history = [*(item.prep_history or []), entry]
 
 
+def _ticks(item) -> dict:
+    """A row's Made and Ran ticks and its prep_status, as a history entry
+    keeps them when Re-apply clears them (naive UTC with a Z)."""
+    def at(dt):
+        return dt.isoformat() + "Z" if dt else None
+
+    return {"made_at": at(item.made_at), "made_by_user_id": item.made_by_user_id,
+            "ran_at": at(item.ran_at), "ran_by_user_id": item.ran_by_user_id,
+            "prep_status": item.prep_status}
+
+
 def moved_test_ids(item) -> set[str]:
     """The reader test ids of the readings Re-apply moved off this row into
     its history (final review I2): the reader import never puts one back."""
@@ -565,8 +576,10 @@ def apply_reapply(db: Session, worksheet, item_ids: list[int], current_user) -> 
     full (marked reading_moved, its reader record and who entered it
     included; the audit row keeps it too) and is cleared on the row, which
     keeps its new lock: the re-run's reading is entered the usual way
-    (Handler ruling 2026-10-14, final review I2). A row with no reading
-    writes the entry and the audit row as before. A row that no longer
+    (Handler ruling 2026-10-14, final review I2). Such a row's Made and Ran
+    ticks clear too, prep_status back to "ready", and the entry keeps them.
+    A row with no reading keeps its ticks and writes the entry and the audit
+    row as before. A row that no longer
     qualifies is refused with its reason; one that
     changed since the preview so that Re-apply would change nothing now is
     REAPPLY_UNCHANGED, and one whose line moved again takes today's
@@ -603,17 +616,24 @@ def apply_reapply(db: Session, worksheet, item_ids: list[int], current_user) -> 
                                      facts=facts.get(it.id, {}))
         moved = ({"result_reader": it.result_reader,
                   "result_entered_by_user_id": it.result_entered_by_user_id,
-                  "reading_moved": True} if _has_result(it) else {})
+                  "reading_moved": True, "ticks": _ticks(it)} if _has_result(it) else {})
         append_history(it, why="reapply", user_id=user_id, effective=effective, **moved)
         details = {"user_id": user_id, "worksheet_id": worksheet.id, "sample_id": it.sample_id,
                    "old": old}
         if moved:
             # Every field the item PATCH and the reader import write for a
             # reading, as the PATCH clears them. The cartridge is a typed
-            # value, and the Ran tick a bench tick: both stay.
-            details.update(old_reading=it.result_reading, old_reader=it.result_reader)
+            # value and stays.
+            details.update(old_reading=it.result_reading, old_reader=it.result_reader,
+                           old_ticks=moved["ticks"])
             it.result_reading = it.result_reader = None
             it.result_entered_at = it.result_entered_by_user_id = None
+            # The prep at the old dilution is stale and the sample is re-run,
+            # so the row is unmade again: its Made and Ran ticks clear and
+            # prep_status goes back to an unmade row's (residual ruling
+            # 2026-10-14 on the Ran tick). The entry keeps what they were.
+            it.made_at = it.made_by_user_id = it.ran_at = it.ran_by_user_id = None
+            it.prep_status = "ready"
         it.prep_rule = _new_lock(new, "reapply", user_id)
         db.add(AuditLog(operation="endo_prep_rule_reapplied", entity_type="worksheet_item",
                         entity_id=str(it.id), details={**details, "new": it.prep_rule}))
