@@ -5,6 +5,12 @@
 import { getApiBaseUrl } from './config'
 import { getAuthToken } from '@/store/auth-store'
 import type { EffectivePriority } from '@/lib/api-priorities'
+import type { EndoForm, EndoReaderRecord } from '@/lib/endo-prep-2ml'
+import type {
+  EndoPrepRule,
+  PrepHistoryEntry,
+  PrepRuleLock,
+} from '@/lib/endo-prep-rules'
 
 // Helper to get current API base URL (called dynamically)
 export const API_BASE_URL = () => getApiBaseUrl()
@@ -2347,6 +2353,8 @@ export interface Instrument {
   model: string | null
   active: boolean
   department_id: number | null
+  /** The reader's serial; the reader import stamps the instrument by it. */
+  serial_number?: string | null
   origin: string
   created_at: string
   updated_at: string
@@ -2364,6 +2372,8 @@ export interface InstrumentInput {
   brand?: string | null
   model?: string | null
   department_id?: number | null
+  /** The reader's serial; the reader import stamps the instrument by it. */
+  serial_number?: string | null
 }
 
 // ─── HPLC Method types ───
@@ -2387,6 +2397,31 @@ export interface MethodServiceLink {
   keyword: string | null
   title: string
   is_default: boolean
+}
+
+/** Endotoxin run parameters on a method (spec 2026-10-10 3.4). Every key is
+ *  optional; a missing one falls back to Dennis's value. */
+export interface EndoRunParamsWire {
+  std_total_dilution: number
+  recon_water_ml: number
+  spike_recovery_min_pct: number
+  spike_recovery_max_pct: number
+  cv_limit_pct: number
+}
+
+export interface MethodRunParameters {
+  endotoxin?: Partial<EndoRunParamsWire>
+}
+
+/** One consumable type a method allows; names come from listConsumables. */
+export interface MethodConsumableLink {
+  consumable_type_id: number
+  kind: string
+  is_default: boolean
+  /** Also on the server's rows; optional so minimal fixtures still type. */
+  name?: string
+  specs?: Record<string, number>
+  active?: boolean
 }
 
 export interface HplcMethod {
@@ -2416,6 +2451,8 @@ export interface HplcMethod {
   updated_at: string
   common_peptides: PeptideBrief[]
   services: MethodServiceLink[]
+  /** Revision-locked like the other content fields. */
+  run_parameters?: MethodRunParameters | null
 }
 
 export interface MethodAttachment {
@@ -2439,6 +2476,8 @@ export interface HplcMethodInput {
   department_id?: number | null
   reference?: string | null
   procedure_summary?: string | null
+  /** Revision-locked like the other content fields. */
+  run_parameters?: MethodRunParameters | null
 }
 
 // ─── Peptide types ───
@@ -2680,10 +2719,13 @@ export async function createInstrument(
     headers: getBearerHeaders('application/json'),
     body: JSON.stringify(data),
   })
-  if (!response.ok) {
-    const err = await response.json().catch(() => null)
-    throw new Error(err?.detail || `Create instrument failed: ${response.status}`)
-  }
+  if (!response.ok)
+    throw new Error(
+      await extractErrorMessage(
+        response,
+        `Create instrument failed: ${response.status}`
+      )
+    )
   return response.json()
 }
 
@@ -2696,10 +2738,131 @@ export async function updateInstrument(
     headers: getBearerHeaders('application/json'),
     body: JSON.stringify(data),
   })
-  if (!response.ok) {
-    const err = await response.json().catch(() => null)
-    throw new Error(err?.detail || `Update instrument failed: ${response.status}`)
-  }
+  if (!response.ok)
+    throw new Error(
+      await extractErrorMessage(
+        response,
+        `Update instrument failed: ${response.status}`
+      )
+    )
+  return response.json()
+}
+
+// ─── Consumables catalog (endo worksheet v2, spec 2026-10-10 3.1, 3.2) ───
+
+export interface ConsumableType {
+  id: number
+  kind: string
+  name: string
+  manufacturer: string | null
+  part_number: string | null
+  instrument_id: number | null
+  /** The kind's numbers, e.g. { sensitivity_eu_ml: 0.05 }. */
+  specs: Record<string, number>
+  /** false = retired; types are never deleted. */
+  active: boolean
+  /** A worksheet or item references it: kind and specs are locked. */
+  in_use: boolean
+  /** Also on the server's rows; optional so minimal fixtures still type. */
+  origin?: string
+  created_at?: string
+  updated_at?: string
+}
+
+export interface ConsumableTypeInput {
+  kind: string
+  name: string
+  manufacturer?: string | null
+  part_number?: string | null
+  instrument_id?: number | null
+  specs: Record<string, number>
+}
+
+export interface ConsumableKindSpec {
+  key: string
+  label: string
+  unit: string | null
+  type: string
+  required: boolean
+}
+
+/** One entry of the server's kind registry: what a type of this kind holds. */
+export interface ConsumableKind {
+  key: string
+  label: string
+  specs: ConsumableKindSpec[]
+}
+
+export async function listConsumables(
+  filters: { kind?: string; active?: boolean } = {}
+): Promise<ConsumableType[]> {
+  const params = new URLSearchParams()
+  if (filters.kind) params.set('kind', filters.kind)
+  if (filters.active !== undefined) params.set('active', String(filters.active))
+  const qs = params.toString()
+  const response = await fetch(
+    `${API_BASE_URL()}/consumables${qs ? `?${qs}` : ''}`,
+    { headers: getBearerHeaders() }
+  )
+  if (!response.ok)
+    throw new Error(
+      await extractErrorMessage(
+        response,
+        `List consumables failed: ${response.status}`
+      )
+    )
+  return response.json()
+}
+
+export async function listConsumableKinds(): Promise<ConsumableKind[]> {
+  const response = await fetch(`${API_BASE_URL()}/consumables/kinds`, {
+    headers: getBearerHeaders(),
+  })
+  if (!response.ok)
+    throw new Error(
+      await extractErrorMessage(
+        response,
+        `List consumable kinds failed: ${response.status}`
+      )
+    )
+  return response.json()
+}
+
+export async function createConsumable(
+  data: ConsumableTypeInput
+): Promise<ConsumableType> {
+  const response = await fetch(`${API_BASE_URL()}/consumables`, {
+    method: 'POST',
+    headers: getBearerHeaders('application/json'),
+    body: JSON.stringify(data),
+  })
+  if (!response.ok)
+    throw new Error(
+      await extractErrorMessage(
+        response,
+        `Create consumable failed: ${response.status}`
+      )
+    )
+  return response.json()
+}
+
+/** Send only what changed: the server refuses kind or specs on a used type (409). */
+export async function updateConsumable(
+  id: number,
+  data: Partial<ConsumableTypeInput & { active: boolean }>
+): Promise<ConsumableType> {
+  const response = await fetch(`${API_BASE_URL()}/consumables/${id}`, {
+    method: 'PATCH',
+    headers: getBearerHeaders('application/json'),
+    body: JSON.stringify(data),
+  })
+  if (!response.ok)
+    throw new Error(
+      await extractErrorMessage(
+        response,
+        `Update consumable failed: ${response.status}`
+      )
+    )
   return response.json()
 }
 
@@ -3000,7 +3163,13 @@ export async function updateMethod(
     headers: getBearerHeaders('application/json'),
     body: JSON.stringify(data),
   })
-  if (!response.ok) throw new Error(`Update method failed: ${response.status}`)
+  if (!response.ok)
+    throw new Error(
+      await extractErrorMessage(
+        response,
+        `Update method failed: ${response.status}`
+      )
+    )
   return response.json()
 }
 
@@ -3048,6 +3217,46 @@ export async function putMethodServices(
       err?.detail || `Update method services failed: ${response.status}`
     )
   }
+  return response.json()
+}
+
+export async function getMethodConsumables(
+  methodId: number
+): Promise<MethodConsumableLink[]> {
+  const response = await fetch(
+    `${API_BASE_URL()}/hplc/methods/${methodId}/consumables`,
+    { headers: getBearerHeaders() }
+  )
+  if (!response.ok)
+    throw new Error(
+      await extractErrorMessage(
+        response,
+        `Get method consumables failed: ${response.status}`
+      )
+    )
+  return response.json()
+}
+
+/** Replace-set, draft methods only (409 otherwise). */
+export async function putMethodConsumables(
+  methodId: number,
+  links: { consumable_type_id: number; is_default: boolean }[]
+): Promise<MethodConsumableLink[]> {
+  const response = await fetch(
+    `${API_BASE_URL()}/hplc/methods/${methodId}/consumables`,
+    {
+      method: 'PUT',
+      headers: getBearerHeaders('application/json'),
+      body: JSON.stringify(links),
+    }
+  )
+  if (!response.ok)
+    throw new Error(
+      await extractErrorMessage(
+        response,
+        `Update method consumables failed: ${response.status}`
+      )
+    )
   return response.json()
 }
 
@@ -4277,6 +4486,11 @@ export interface SenaiteAnalysis {
   /** true / false, or null: no result yet, a report-only spec, or a rule that
    *  could not run. Never computed on the FE. */
   conforms?: boolean | null
+  /** The result's own LOQ (its unit) and LOD (`lod_unit`, EU/mL for
+   *  endotoxin), when it carries them (endotoxin slice 3). */
+  loq?: number | null
+  lod?: number | null
+  lod_unit?: string | null
 }
 
 /** The COA wire `specification` dict (backend coa.native_sections). */
@@ -6094,6 +6308,32 @@ export async function createWorksheet(data: {
   return response.json()
 }
 
+/** How an endo worksheet's vials are prepped (spec 2026-10-10 3.6). */
+export type EndoPrepModel = '2ml' | 'stock'
+
+export interface EndoMethodCartridge {
+  id: number
+  name: string
+  sensitivity_eu_ml: number
+  is_default: boolean
+  active: boolean
+}
+
+/** The worksheet's endo method revision: pinned at first print or first
+ *  reading, else the current active one (spec 4.1). */
+export interface EndoMethodInfo {
+  id: number
+  name: string
+  revision: number
+  status: 'draft' | 'active' | 'retired'
+  run_parameters: MethodRunParameters | null
+  cartridges: EndoMethodCartridge[]
+}
+
+/** Stored steps: [[sample_ul, ratio] or null, [sample_ul] or null,
+ *  [sample_ul] or null]; a null entry is the standard step. */
+export type EndoPrepStepsWire = ((number | null)[] | null)[]
+
 export interface WorksheetListItem {
   id: number
   title: string
@@ -6116,6 +6356,15 @@ export interface WorksheetListItem {
   /** Append-only notes, oldest first, each stamped by the server with who
    *  wrote it and when. The old free-text `notes` field is left as it is. */
   note_log?: WorksheetNote[]
+  /** Endo worksheet v2 (spec 2026-10-10 3.6): the prep model, the run's own
+   *  cartridge and its sensitivity (null = the method default), and the
+   *  pinned method revision. `endo_method` is on GET /worksheets/{id}, the
+   *  item PATCH and the reader import only, never on the list. */
+  endo_prep?: EndoPrepModel | null
+  cartridge_type_id?: number | null
+  cartridge_sensitivity_eu_ml?: number | null
+  endo_method_id?: number | null
+  endo_method?: EndoMethodInfo | null
   items: {
     id: number
     sample_id: string
@@ -6180,6 +6429,37 @@ export interface WorksheetListItem {
     sample_type?: string | null
     client_order_number?: string | null
     sample_identity?: string | null
+    /** 2 mL prep inputs (spec 3.7); null = the standard or worked out. */
+    prep_form?: EndoForm | null
+    prep_water_ml?: number | null
+    prep_total_dilution?: number | null
+    prep_steps?: EndoPrepStepsWire | null
+    /** The row's own cartridge (null = inherited) and its sensitivity. */
+    cartridge_type_id?: number | null
+    cartridge_sensitivity_eu_ml?: number | null
+    /** The reading as the instrument shows it ("<0.05", "0.8"), the
+     *  reader's record when imported, and who entered it when. */
+    result_reading?: string | null
+    result_reader?: EndoReaderRecord | null
+    result_entered_at?: string | null
+    result_entered_by_user_id?: number | null
+    /** Endotoxin items only (slice 3): the vial's live endotoxin analysis,
+     *  null when the server finds no single one; absent on other items. */
+    endo_analysis?: {
+      id: number
+      state: string
+      keyword: string
+      native: boolean
+    } | null
+    /** Slice 5, 2 mL worksheets only: the rule lock (null: following the
+     *  live rules), the "no rule" switch, the special-prep note, the row's
+     *  past runs, and the parent's single catalog peptide (null: a blend or
+     *  none), which rules match on. */
+    prep_rule?: PrepRuleLock | null
+    prep_rules_off?: boolean
+    prep_note?: string | null
+    prep_history?: PrepHistoryEntry[] | null
+    sample_peptide_id?: number | null
   }[]
 }
 
@@ -6224,21 +6504,34 @@ export async function deleteWorksheet(worksheetId: number): Promise<void> {
   if (!response.ok) throw new Error(`Delete worksheet failed: ${response.status}`)
 }
 
+/** PUT body for a worksheet. Omitted = untouched. The endo run fields (spec
+ *  2026-10-10 3.6): `endo_prep` switches the prep model, `cartridge_type_id`
+ *  picks the run cartridge (null = the method default). */
+export interface WorksheetUpdate {
+  title?: string
+  assigned_analyst?: number
+  notes?: string
+  bench_config?: Record<string, unknown>
+  endo_prep?: EndoPrepModel
+  cartridge_type_id?: number | null
+}
+
 export async function updateWorksheet(
   worksheetId: number,
-  data: {
-    title?: string
-    assigned_analyst?: number
-    notes?: string
-    bench_config?: Record<string, unknown>
-  }
+  data: WorksheetUpdate
 ): Promise<void> {
   const response = await fetch(`${API_BASE_URL()}/worksheets/${worksheetId}`, {
     method: 'PUT',
     headers: getBearerHeaders('application/json'),
     body: JSON.stringify(data),
   })
-  if (!response.ok) throw new Error(`Update worksheet failed: ${response.status}`)
+  if (!response.ok)
+    throw new Error(
+      await extractErrorMessage(
+        response,
+        `Update worksheet failed: ${response.status}`
+      )
+    )
 }
 
 /** Body shared by both add paths (`/add-group` and `/create-from-drop`).
@@ -6316,6 +6609,18 @@ export interface WorksheetItemPatch {
   /** Bench ticks: true stamps the caller and now, false clears. */
   made?: boolean
   ran?: boolean
+  /** 2 mL prep and the reading (spec 3.7, 6.1.1); null clears. Setting
+   *  `result_reading` on a row with no cartridge of its own must send the
+   *  row's resolved `cartridge_type_id` in the same PATCH. */
+  prep_form?: EndoForm | null
+  prep_water_ml?: number | null
+  prep_total_dilution?: number | null
+  prep_steps?: EndoPrepStepsWire | null
+  cartridge_type_id?: number | null
+  result_reading?: string | null
+  /** Slice 5: the "no rule" switch and the special-prep note (null clears). */
+  prep_rules_off?: boolean
+  prep_note?: string | null
 }
 
 /** One worksheet in a bench kind's run log (no items). */
@@ -6443,13 +6748,277 @@ export async function updateWorksheetItem(
   worksheetId: number,
   itemId: number,
   data: WorksheetItemPatch
-): Promise<{ status: string; item_id: number }> {
+): Promise<{
+  status: string
+  item_id: number
+  /** The worksheet's endo method, as GET /worksheets/{id} has it. */
+  endo_method?: EndoMethodInfo | null
+}> {
   const response = await fetch(`${API_BASE_URL()}/worksheets/${worksheetId}/items/${itemId}`, {
     method: 'PATCH',
     headers: getBearerHeaders('application/json'),
     body: JSON.stringify(data),
   })
-  if (!response.ok) throw new Error(`Update item failed: ${response.status}`)
+  if (!response.ok)
+    throw new Error(
+      await extractErrorMessage(
+        response,
+        `Update item failed: ${response.status}`
+      )
+    )
+  return response.json()
+}
+
+/** One reader test applied to a row (spec 8.2). */
+export interface ReaderImportTest {
+  item_id: number
+  reading: string
+  record: EndoReaderRecord
+  cartridge_type_id: number
+  /** Overwrite a different reading already on the row. */
+  replace: boolean
+}
+
+/** All or nothing: 400 names every refused row, 409 on a completed worksheet. */
+export async function importReaderResults(
+  worksheetId: number,
+  body: { file_name: string; tests: ReaderImportTest[] }
+): Promise<{
+  applied: number
+  items: WorksheetListItem['items']
+  endo_method: EndoMethodInfo | null
+  /** Slice 5: rows the import left unchanged, with why: a promoted row
+   *  ("the row is promoted; its prep is final"), or a run whose reading
+   *  Re-apply moved to the row's history ("this run's reading was moved to
+   *  history by Re-apply; enter the re-run"). */
+  skipped?: { item_id: number; sample_id: string; reason: string }[]
+}> {
+  const response = await fetch(
+    `${API_BASE_URL()}/worksheets/${worksheetId}/reader-import`,
+    {
+      method: 'POST',
+      headers: getBearerHeaders('application/json'),
+      body: JSON.stringify(body),
+    }
+  )
+  if (!response.ok)
+    throw new Error(
+      await extractErrorMessage(
+        response,
+        `Reader import failed: ${response.status}`
+      )
+    )
+  return response.json()
+}
+
+/** One Box 3 row to promote (slice 3, spec 5.3): the numbers the analyst
+ *  sees. A "<" result sends its LOQ as its value; `lod` is the row's
+ *  cartridge sensitivity, always in EU/mL. */
+export interface EndoPromoteRowIn {
+  item_id: number
+  value: number
+  unit: string
+  loq: number
+  lod: number
+  lod_unit: string
+}
+
+/** A row's outcome: promoted, with the parent result's id and state, or
+ *  not, with the server's reason. */
+export interface EndoPromoteRowResult {
+  item_id: number
+  promoted: boolean
+  parent_analysis_id?: number | null
+  state?: string | null
+  reason?: string | null
+}
+
+export interface EndoPromoteResponse {
+  results: EndoPromoteRowResult[]
+}
+
+/** Fill each row's vial result and promote it to the parent. Rows are
+ *  handled one by one: a refusal comes back on its row, never as an error.
+ *  422 for a malformed body (nothing written). */
+export async function promoteWorksheetRows(
+  worksheetId: number,
+  rows: EndoPromoteRowIn[]
+): Promise<EndoPromoteResponse> {
+  const response = await fetch(
+    `${API_BASE_URL()}/worksheets/${worksheetId}/promote`,
+    {
+      method: 'POST',
+      headers: getBearerHeaders('application/json'),
+      body: JSON.stringify({ rows }),
+    }
+  )
+  if (!response.ok)
+    throw new Error(
+      await extractErrorMessage(response, `Promote failed: ${response.status}`)
+    )
+  return response.json()
+}
+
+/** A rule line as GET /endo-prep-rules lists it (slice 5). */
+export interface EndoPrepRuleOut extends EndoPrepRule {
+  peptide_name: string | null
+  cartridge_name: string | null
+  updated_at: string | null
+}
+
+/** POST body; PATCH takes any subset. The server sets sort_order. */
+export interface EndoPrepRuleIn {
+  peptide_id: number
+  min_mg: number | null
+  max_mg: number | null
+  total_dilution: number | null
+  step1_ratio: number | null
+  cartridge_type_id: number | null
+  status: EndoPrepRule['status']
+  note: string | null
+  active: boolean
+}
+
+/** A save's result: the line, and warnings that did not stop it. */
+export interface EndoPrepRuleSaved {
+  rule: EndoPrepRuleOut
+  warnings: string[]
+}
+
+/** A locked row whose snapshot differs from today's match (spec 7). */
+export interface PrepRulesReapplyCandidate {
+  item_id: number
+  sample_id: string
+  old: PrepRuleLock
+  new_rule: EndoPrepRule | null
+}
+
+/** Why Re-apply left a row as it was, word for word as the server sends it
+ *  (backend/endo_prep_rules.py REAPPLY_*, and the promote's REASON_PROMOTED). */
+export type PrepRulesReapplyReason =
+  | 'not on this worksheet'
+  | 'the worksheet is completed'
+  | 'prep rules are for 2 mL worksheets'
+  | 'the row is set to no rule'
+  | "the row is not locked; it already follows today's rules"
+  | "nothing to re-apply: the row already matches today's rule"
+  | 'already promoted'
+
+export interface PrepRulesReapplyResult {
+  item_id: number
+  applied: boolean
+  reason: PrepRulesReapplyReason | null
+}
+
+/** Every line, inactive ones included, by sort_order then id. */
+export async function getEndoPrepRules(): Promise<EndoPrepRuleOut[]> {
+  const response = await fetch(`${API_BASE_URL()}/endo-prep-rules`, {
+    headers: getBearerHeaders(),
+  })
+  if (!response.ok)
+    throw new Error(
+      await extractErrorMessage(
+        response,
+        `Load prep rules failed: ${response.status}`
+      )
+    )
+  return response.json()
+}
+
+/** 400 carries the save check that refused it, word for word. */
+export async function createEndoPrepRule(
+  body: EndoPrepRuleIn
+): Promise<EndoPrepRuleSaved> {
+  const response = await fetch(`${API_BASE_URL()}/endo-prep-rules`, {
+    method: 'POST',
+    headers: getBearerHeaders('application/json'),
+    body: JSON.stringify(body),
+  })
+  if (!response.ok)
+    throw new Error(
+      await extractErrorMessage(
+        response,
+        `Save prep rule failed: ${response.status}`
+      )
+    )
+  return response.json()
+}
+
+export async function updateEndoPrepRule(
+  id: number,
+  body: Partial<EndoPrepRuleIn>
+): Promise<EndoPrepRuleSaved> {
+  const response = await fetch(`${API_BASE_URL()}/endo-prep-rules/${id}`, {
+    method: 'PATCH',
+    headers: getBearerHeaders('application/json'),
+    body: JSON.stringify(body),
+  })
+  if (!response.ok)
+    throw new Error(
+      await extractErrorMessage(
+        response,
+        `Save prep rule failed: ${response.status}`
+      )
+    )
+  return response.json()
+}
+
+/** The whole list in its new order; returns it as GET does. */
+export async function reorderEndoPrepRules(
+  ids: number[]
+): Promise<EndoPrepRuleOut[]> {
+  const response = await fetch(`${API_BASE_URL()}/endo-prep-rules/reorder`, {
+    method: 'POST',
+    headers: getBearerHeaders('application/json'),
+    body: JSON.stringify({ ids }),
+  })
+  if (!response.ok)
+    throw new Error(
+      await extractErrorMessage(
+        response,
+        `Reorder prep rules failed: ${response.status}`
+      )
+    )
+  return response.json()
+}
+
+export async function getPrepRulesReapply(
+  worksheetId: number
+): Promise<{ candidates: PrepRulesReapplyCandidate[] }> {
+  const response = await fetch(
+    `${API_BASE_URL()}/worksheets/${worksheetId}/prep-rules/reapply`,
+    { headers: getBearerHeaders() }
+  )
+  if (!response.ok)
+    throw new Error(
+      await extractErrorMessage(
+        response,
+        `Load re-apply preview failed: ${response.status}`
+      )
+    )
+  return response.json()
+}
+
+/** Each row is re-checked on the server; a refusal comes back on its row. */
+export async function applyPrepRulesReapply(
+  worksheetId: number,
+  itemIds: number[]
+): Promise<{ results: PrepRulesReapplyResult[] }> {
+  const response = await fetch(
+    `${API_BASE_URL()}/worksheets/${worksheetId}/prep-rules/reapply`,
+    {
+      method: 'POST',
+      headers: getBearerHeaders('application/json'),
+      body: JSON.stringify({ item_ids: itemIds }),
+    }
+  )
+  if (!response.ok)
+    throw new Error(
+      await extractErrorMessage(
+        response,
+        `Re-apply rules failed: ${response.status}`
+      )
+    )
   return response.json()
 }
 
@@ -7535,6 +8104,9 @@ export interface NativeParentAnalysisRow {
   result_unit: string | null
   review_state: string
   updated_at: string
+  loq?: number | null
+  lod?: number | null
+  lod_unit?: string | null
 }
 
 /**

@@ -327,7 +327,8 @@ def test_senaite_shape_excludes_shadow_and_senaite_origin_and_subsample_rows(cli
 
 
 def test_default_shape_unchanged(client, db_session):
-    """Back-compat pin: without ?as= the response is still the 6-field rows."""
+    """Back-compat pin: without ?as= the response is still the thin card rows
+    (the 6 original fields plus endo slice 3's loq / lod / lod_unit)."""
     from models import LimsAnalysis, LimsSample
 
     parent = LimsSample(sample_id="P-9104")
@@ -346,6 +347,7 @@ def test_default_shape_unchanged(client, db_session):
     assert r.status_code == 200, r.text
     assert set(r.json()[0].keys()) == {
         "keyword", "title", "result_value", "result_unit", "review_state", "updated_at",
+        "loq", "lod", "lod_unit",
     }
 
 

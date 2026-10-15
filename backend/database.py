@@ -133,6 +133,98 @@ def _ensure_documents_space_column(bind) -> None:
                 conn.execute(text("CREATE INDEX ix_documents_space_id ON documents (space_id)"))
 
 
+# Endo worksheet v2 (spec 2026-10-10 section 3.8), steps 1 and 2. The new
+# tables come from create_all; their partial indexes are repeated here so a
+# table create_all built before an index was declared still gets it. Columns
+# are added WITHOUT defaults: a default here would fill every existing
+# worksheet with '2ml'.
+_ENDO_V2_DDL = (
+    "CREATE UNIQUE INDEX IF NOT EXISTS uq_consumable_types_part_number "
+    "ON consumable_types (coalesce(manufacturer, ''), part_number) WHERE part_number IS NOT NULL",
+    "CREATE UNIQUE INDEX IF NOT EXISTS uq_method_consumable_default "
+    "ON method_consumables (method_id, kind) WHERE is_default",
+    "ALTER TABLE hplc_methods ADD COLUMN IF NOT EXISTS run_parameters JSON",
+    "ALTER TABLE instruments ADD COLUMN IF NOT EXISTS serial_number VARCHAR(100)",
+    "CREATE UNIQUE INDEX IF NOT EXISTS uq_instruments_serial_number "
+    "ON instruments (serial_number) WHERE serial_number IS NOT NULL",
+    "ALTER TABLE worksheets ADD COLUMN IF NOT EXISTS endo_prep VARCHAR(10)",
+    "ALTER TABLE worksheets ADD COLUMN IF NOT EXISTS cartridge_type_id INTEGER REFERENCES consumable_types(id)",
+    "ALTER TABLE worksheets ADD COLUMN IF NOT EXISTS endo_method_id INTEGER REFERENCES hplc_methods(id)",
+    "ALTER TABLE worksheet_items ADD COLUMN IF NOT EXISTS prep_form VARCHAR(10)",
+    "ALTER TABLE worksheet_items ADD COLUMN IF NOT EXISTS prep_water_ml FLOAT",
+    "ALTER TABLE worksheet_items ADD COLUMN IF NOT EXISTS prep_total_dilution FLOAT",
+    "ALTER TABLE worksheet_items ADD COLUMN IF NOT EXISTS prep_steps JSON",
+    "ALTER TABLE worksheet_items ADD COLUMN IF NOT EXISTS cartridge_type_id INTEGER REFERENCES consumable_types(id)",
+    "ALTER TABLE worksheet_items ADD COLUMN IF NOT EXISTS result_reading VARCHAR(40)",
+    "ALTER TABLE worksheet_items ADD COLUMN IF NOT EXISTS result_reader JSON",
+    "ALTER TABLE worksheet_items ADD COLUMN IF NOT EXISTS result_entered_at TIMESTAMP",
+    "ALTER TABLE worksheet_items ADD COLUMN IF NOT EXISTS result_entered_by_user_id INTEGER "
+    "REFERENCES users(id) ON DELETE SET NULL",
+)
+
+
+# Endo slice 3 (spec 2026-10-12 section 6): the three spec uniqueness indexes
+# gain the unit, so an EU/mL row and an EU/vial row can be active in one
+# scope. One DO block is one statement, so one transaction: the new indexes
+# are created first and the old names dropped after, and a failure rolls back
+# to the old ones (each new index is looser than the old one it replaces, so
+# it cannot fail where the old one held). Both halves are IF [NOT] EXISTS, so
+# every later boot changes nothing. LAST-BOOT-WINS, as with
+# uq_analysis_service_specs_null_matrix in _run_migrations: an older image
+# booting after this one re-creates the old names from its own list (or logs
+# migration_skipped where a scope already holds rows in two units), and the
+# next boot of this image drops them again. The rollback (spec section 9)
+# deactivates the EU/vial rows before the older image is redeployed.
+# models.AnalysisServiceSpec declares the same names with trim(), which
+# Postgres stores as btrim.
+_SPEC_UNIT_INDEX_SWAP = """DO $$ BEGIN
+    CREATE UNIQUE INDEX IF NOT EXISTS uq_analysis_service_specs_matrix_unit
+        ON analysis_service_specs (analysis_service_id, matrix, lower(btrim(coalesce(unit, ''))))
+        WHERE active AND matrix IS NOT NULL;
+    CREATE UNIQUE INDEX IF NOT EXISTS uq_analysis_service_specs_peptide_unit
+        ON analysis_service_specs (analysis_service_id, peptide_id, lower(btrim(coalesce(unit, ''))))
+        WHERE active AND peptide_id IS NOT NULL;
+    CREATE UNIQUE INDEX IF NOT EXISTS uq_analysis_service_specs_wildcard_unit
+        ON analysis_service_specs (analysis_service_id, lower(btrim(coalesce(unit, ''))))
+        WHERE active AND matrix IS NULL AND peptide_id IS NULL;
+    DROP INDEX IF EXISTS uq_analysis_service_specs_matrix;
+    DROP INDEX IF EXISTS uq_analysis_service_specs_peptide;
+    DROP INDEX IF EXISTS uq_analysis_service_specs_wildcard;
+END $$"""
+
+
+def _run_endo_v2_migrations(bind) -> None:
+    """Endo worksheet v2 schema (spec 2026-10-10 section 3.8). Runs AFTER
+    create_all: the new FK columns reference consumable_types, which create_all
+    builds (the _ensure_documents_space_column precedent). One transaction, so
+    the 2 mL switch is all or nothing. A failure raises: the ORM maps every
+    column added here.
+
+    Step 3, the one-time switch, is guarded on endo_prep IS NULL: open and
+    staging worksheets made on or after the lab date 2026-10-08 go to '2ml',
+    every other row to 'stock'. Step 4 sets the '2ml' default last. After the
+    first boot no row is NULL, so later boots change nothing and a worksheet
+    switched back to stock stays there. SQLite test fixtures get everything
+    from create_all, so this is Postgres-only."""
+    if bind.dialect.name != "postgresql":
+        return
+    from sqlalchemy import text
+    from scheduled_publish import DEFAULT_TZ
+    with bind.begin() as conn:
+        for sql in _ENDO_V2_DDL:
+            conn.execute(text(sql))
+        # The lab time zone, as scheduled_publish.lab_tz reads it.
+        lab_tz = conn.execute(text(
+            "SELECT timezone FROM business_hours_config WHERE id = 1")).scalar() or DEFAULT_TZ
+        conn.execute(text(
+            "UPDATE worksheets SET endo_prep = '2ml' "
+            "WHERE endo_prep IS NULL AND status <> 'completed' "
+            "AND (created_at AT TIME ZONE 'UTC' AT TIME ZONE :lab_tz)::date >= DATE '2026-10-08'"),
+            {"lab_tz": lab_tz})
+        conn.execute(text("UPDATE worksheets SET endo_prep = 'stock' WHERE endo_prep IS NULL"))
+        conn.execute(text("ALTER TABLE worksheets ALTER COLUMN endo_prep SET DEFAULT '2ml'"))
+
+
 def init_db():
     """Initialize database tables."""
     # Import models to register them with Base
@@ -147,6 +239,9 @@ def init_db():
     Base.metadata.create_all(bind=engine)
     # Document spaces (spec 2026-10-06 section 4.4): the FK column after the table exists.
     _ensure_documents_space_column(engine)
+    # Endo worksheet v2: new columns, partial indexes and the one-time 2 mL
+    # switch, after create_all and before any seed reads these tables.
+    _run_endo_v2_migrations(engine)
     # Documents library: seed the Artifact/SOP categories (spec 2026-09-15 §3.1).
     try:
         from documents.service import seed_categories
@@ -1993,15 +2088,8 @@ def _run_migrations():
             )
         )
         """,
-        "CREATE UNIQUE INDEX IF NOT EXISTS uq_analysis_service_specs_matrix "
-        "ON analysis_service_specs (analysis_service_id, matrix) "
-        "WHERE active AND matrix IS NOT NULL",
-        "CREATE UNIQUE INDEX IF NOT EXISTS uq_analysis_service_specs_peptide "
-        "ON analysis_service_specs (analysis_service_id, peptide_id) "
-        "WHERE active AND peptide_id IS NOT NULL",
-        "CREATE UNIQUE INDEX IF NOT EXISTS uq_analysis_service_specs_wildcard "
-        "ON analysis_service_specs (analysis_service_id) "
-        "WHERE active AND matrix IS NULL AND peptide_id IS NULL",
+        # The spec uniqueness indexes come from _SPEC_UNIT_INDEX_SWAP below
+        # (endo slice 3), after the peptide_id column is sure to exist.
         # --- Task 7: activity events, parent-hosted (native parent verification) ---
         # Already-migrated DBs need explicit ALTERs; the CREATE TABLE above
         # only covers fresh installs. All three are idempotent — safe to
@@ -2136,18 +2224,17 @@ def _run_migrations():
                         CHECK (NOT (matrix IS NOT NULL AND peptide_id IS NOT NULL));
             END IF;
         END $$""",
-        "CREATE UNIQUE INDEX IF NOT EXISTS uq_analysis_service_specs_peptide "
-        "ON analysis_service_specs (analysis_service_id, peptide_id) "
-        "WHERE active AND peptide_id IS NOT NULL",
         # The old null_matrix slot must not collide peptide rows with the
         # wildcard: retire it and re-key the wildcard on BOTH columns NULL.
         # DROP IF EXISTS is idempotent; an older image booting later
         # recreates the old index (its list still carries the CREATE) —
         # accepted LAST-BOOT-WINS class, documented here.
         "DROP INDEX IF EXISTS uq_analysis_service_specs_null_matrix",
-        "CREATE UNIQUE INDEX IF NOT EXISTS uq_analysis_service_specs_wildcard "
-        "ON analysis_service_specs (analysis_service_id) "
-        "WHERE active AND matrix IS NULL AND peptide_id IS NULL",
+        # Endo slice 3 (spec section 6): one active spec per scope PER UNIT.
+        # Replaces the peptide and wildcard CREATEs that stood here, and the
+        # matrix one next to CREATE TABLE above, so no boot re-creates an old
+        # name (see _SPEC_UNIT_INDEX_SWAP for the LAST-BOOT-WINS note).
+        _SPEC_UNIT_INDEX_SWAP,
         # --- COA display fields (spec 2026-08-16): all nullable, no backfill ---
         "ALTER TABLE analysis_service_specs ADD COLUMN IF NOT EXISTS loq NUMERIC",
         # Report-only specs (2026-08-22): widen the rule-shape CHECK with the
@@ -2545,6 +2632,41 @@ def _run_migrations():
         "ALTER TABLE customer_ai_reviews ADD COLUMN IF NOT EXISTS document_code VARCHAR(32)",
         "ALTER TABLE customer_ai_reviews ADD COLUMN IF NOT EXISTS names_scrubbed INTEGER NOT NULL DEFAULT 0",
         "ALTER TABLE customer_ai_reviews ADD COLUMN IF NOT EXISTS document_error TEXT",
+        # Endo slice 3 (spec 2026-10-12 section 4): a result's own LOQ and LOD.
+        # Nullable, no backfill. Kept above the retest_of_sample_id statement,
+        # which tests/test_hplc_native_schema.py pins as the list's last.
+        "ALTER TABLE lims_analyses ADD COLUMN IF NOT EXISTS loq DOUBLE PRECISION",
+        "ALTER TABLE lims_analyses ADD COLUMN IF NOT EXISTS lod DOUBLE PRECISION",
+        "ALTER TABLE lims_analyses ADD COLUMN IF NOT EXISTS lod_unit TEXT",
+        # Endo slice 5 (spec 2026-10-14 section 3): the prep rules table, the
+        # same shape as models.EndoPrepRule, which is the source of truth. On
+        # a database that has no consumable_types yet (the first boot of the
+        # release that also ships v2) this fails as migration_skipped and
+        # create_all builds the table from the model. Kept above the
+        # retest_of_sample_id statement, which tests pin as the list's last.
+        """CREATE TABLE IF NOT EXISTS endo_prep_rules (
+        id                SERIAL PRIMARY KEY,
+        peptide_id        INTEGER NOT NULL REFERENCES peptides(id),
+        min_mg            DOUBLE PRECISION,
+        max_mg            DOUBLE PRECISION,
+        total_dilution    DOUBLE PRECISION,
+        step1_ratio       DOUBLE PRECISION,
+        cartridge_type_id INTEGER REFERENCES consumable_types(id),
+        status            VARCHAR(10) NOT NULL DEFAULT 'trial',
+        note              TEXT,
+        active            BOOLEAN NOT NULL DEFAULT TRUE,
+        sort_order        INTEGER NOT NULL DEFAULT 0,
+        created_at        TIMESTAMP,
+        updated_at        TIMESTAMP,
+        updated_by_id     INTEGER REFERENCES users(id) ON DELETE SET NULL
+    )""",
+        # Endo slice 5 (spec 2026-10-14 section 6): a 2 mL row's rule lock,
+        # "no rule" switch, special-prep note and history. Nullable or
+        # defaulted, no backfill. Kept above the retest_of_sample_id statement.
+        "ALTER TABLE worksheet_items ADD COLUMN IF NOT EXISTS prep_rule JSON",
+        "ALTER TABLE worksheet_items ADD COLUMN IF NOT EXISTS prep_rules_off BOOLEAN NOT NULL DEFAULT FALSE",
+        "ALTER TABLE worksheet_items ADD COLUMN IF NOT EXISTS prep_note TEXT",
+        "ALTER TABLE worksheet_items ADD COLUMN IF NOT EXISTS prep_history JSON",
         # HPLC-native slice 6 (M8): links a retest's sample row back to the
         # original Mk1 row it was retested from (from signal meta
         # RetestOfSampleId). Nullable, no FK — the original may be a

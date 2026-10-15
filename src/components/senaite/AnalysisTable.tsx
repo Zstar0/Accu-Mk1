@@ -826,6 +826,26 @@ export function CalculatedAggregateTooltip({
   )
 }
 
+/** The result's own LOQ and LOD (endotoxin slice 3) in small text under its
+ *  value, as stored; nothing when the row carries neither. */
+function ResultLimits({ analysis }: { analysis: SenaiteAnalysis }) {
+  const parts = [
+    analysis.loq != null ? `LOQ ${analysis.loq}` : null,
+    analysis.lod != null
+      ? `LOD ${analysis.lod}${analysis.lod_unit ? ` ${analysis.lod_unit}` : ''}`
+      : null,
+  ].filter(Boolean)
+  if (!parts.length) return null
+  return (
+    <div
+      data-testid="result-limits"
+      className="mt-0.5 text-[10px] font-mono text-muted-foreground"
+    >
+      {parts.join(' · ')}
+    </div>
+  )
+}
+
 function EditableResultCell({
   analysis,
   editing,
@@ -1075,6 +1095,7 @@ function EditableResultCell({
         {analysis.unit && analysis.unit.toLowerCase() !== 'text' && (
           <span className="text-xs text-muted-foreground ml-1.5">{analysis.unit}</span>
         )}
+        <ResultLimits analysis={analysis} />
       </td>
     )
   }
@@ -1091,6 +1112,7 @@ function EditableResultCell({
         <span className="text-xs text-muted-foreground ml-1.5">{analysis.unit}</span>
       )}
       {calcMarker}
+      <ResultLimits analysis={analysis} />
     </td>
   )
 }

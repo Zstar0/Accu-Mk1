@@ -87,6 +87,12 @@ class SenaiteAnalysis(BaseModel):
     # SENAITE read path. See SenaiteShapeAnalysisResponse.
     specification: Optional[dict] = None
     conforms: Optional[bool] = None
+    # Endo slice 3: the result's own LOQ / LOD. Mk1-local, same reason as
+    # service_origin above: the registry-details re-type drops undeclared
+    # fields. Always None on the SENAITE read path.
+    loq: Optional[float] = None
+    lod: Optional[float] = None
+    lod_unit: Optional[str] = None
 
 
 class SenaiteAttachment(BaseModel):

@@ -342,12 +342,12 @@ def own_promotions_for_source(db: Session, source_analysis_id: int) -> list:
 # ─── Amendment audit (spec 2026-08-07)───────────────────────────────────────
 # Fields whose changes are captured as before/after into
 # lims_analysis_transitions.details. Values must stay JSON-serializable
-# (str/int/bool/None) — never add a datetime here; per-state timestamps are
-# derivable from the transition rows themselves.
+# (str/int/float/bool/None); never add a datetime here, per-state timestamps
+# are derivable from the transition rows themselves.
 TRACKED_FIELDS = (
     "result_value", "result_unit", "method_id", "instrument_id",
     "reportable", "reportable_reason", "analyst_user_id", "processed_by_user_id",
-    "retested",
+    "retested", "loq", "lod", "lod_unit",
 )
 
 
@@ -364,6 +364,15 @@ def _deltas(before: dict, row) -> dict:
         f: {"before": before[f], "after": after[f]}
         for f in TRACKED_FIELDS if before[f] != after[f]
     }}
+
+
+def clear_result_limits(row) -> None:
+    """Endo slice 3: a result's LOQ and LOD go wherever its value goes. Called
+    by every path that clears result_value (reset, both un-promote paths), so
+    a regenerated COA can never print a stale "< LOQ" off a cleared result."""
+    row.loq = None
+    row.lod = None
+    row.lod_unit = None
 
 
 # ─── Transitions ─────────────────────────────────────────────────────────────
@@ -406,6 +415,10 @@ def apply_transition(
     method_id: Optional[int] = None,
     instrument_id: Optional[int] = None,
     processed_by_user_id: Optional[int] = None,
+    result_unit: Optional[str] = None,
+    loq: Optional[float] = None,
+    lod: Optional[float] = None,
+    lod_unit: Optional[str] = None,
     commit: bool = True,
     preserve_draft: bool = False,
 ) -> LimsAnalysis:
@@ -433,6 +446,13 @@ def apply_transition(
     If any is provided with kind != 'submit', raises BadRequestError up
     front (Task 3, 2026-08-19 bench-stamping slice) — see the guard right
     after the row load.
+    result_unit / loq / lod / lod_unit (endo slice 3): the result's unit and
+    its own limits, filled with the value by the 2 mL worksheet's Promote to
+    Parent (worksheets_endo_promote). Submit-only and applied after the
+    snapshot, like the stamps, so the amendment audit records them. None is
+    a no-op. A submit that changes result_value first clears the old limits
+    (clear_result_limits): they describe the old value, so a hand correction
+    sending none drops them and a fill sending new ones replaces them.
     """
     row = get_analysis(db, analysis_id)
 
@@ -450,6 +470,9 @@ def apply_transition(
         raise BadRequestError(
             "method_id/instrument_id/processed_by_user_id only apply to kind='submit'"
         )
+    if (result_unit is not None or loq is not None or lod is not None
+            or lod_unit is not None) and kind != "submit":
+        raise BadRequestError("result_unit/loq/lod/lod_unit only apply to kind='submit'")
 
     from_state = row.review_state
     before = _snapshot(row)
@@ -465,6 +488,16 @@ def apply_transition(
         row.instrument_id = instrument_id
     if processed_by_user_id is not None:
         row.processed_by_user_id = processed_by_user_id
+    if kind == "submit" and result_value is not None and result_value != row.result_value:
+        clear_result_limits(row)
+    if result_unit is not None:
+        row.result_unit = result_unit
+    if loq is not None:
+        row.loq = loq
+    if lod is not None:
+        row.lod = lod
+    if lod_unit is not None:
+        row.lod_unit = lod_unit
 
     if is_terminal(from_state):
         # State machine will also reject this, but we surface a clearer
@@ -603,6 +636,7 @@ def apply_transition(
         # Clear any draft result + provenance on the way back to unassigned.
         row.result_value = None
         row.result_unit = None
+        clear_result_limits(row)
         row.method_id = None
         row.instrument_id = None
         row.captured_at = None
@@ -836,9 +870,18 @@ def promote_to_parent(
     parent_keyword: Optional[str] = None,
     parent_analysis_service_id: Optional[int] = None,
     parent_title: Optional[str] = None,
+    loq: Optional[float] = None,
+    lod: Optional[float] = None,
+    lod_unit: Optional[str] = None,
+    audit_reason: Optional[str] = None,
     commit: bool = True,
 ) -> Tuple[LimsAnalysis, List["LimsAnalysisPromotion"]]:
     """Phase 4a: create a parent-tier verified row from N vial-tier sources.
+
+    Endo slice 3: loq / lod / lod_unit are the new parent row's result limits;
+    when all three are None the result-bearing source's own are copied.
+    audit_reason, when given, is appended to every transition reason written
+    here (for example "promoted from worksheet WS-24 row P-3001-S02").
 
     sources is a list of {analysis_id: int, contribution_kind: str}. The
     parent_sample_pk is derived from the first source's host (sub-sample →
@@ -1033,6 +1076,7 @@ def promote_to_parent(
             eff_result_unit = target_svc.unit
 
     now = datetime.utcnow()
+    _audit = f"; {audit_reason}" if audit_reason else ""
 
     # ── Retest-source supersession ────────────────────────────────────────────
     # When ALL sources are retest rows (retest_of_id IS NOT NULL), the caller
@@ -1090,7 +1134,7 @@ def promote_to_parent(
                 to_state="retracted",
                 transition_kind="auto",
                 user_id=user_id,
-                reason="superseded by retest promotion",
+                reason="superseded by retest promotion" + _audit,
                 details=_deltas(old_parent_before, old_parent),
             ))
             db.flush()   # emit UPDATE before INSERT so Postgres sees vacated index slot
@@ -1101,6 +1145,16 @@ def promote_to_parent(
 
     _captured_at, _analyst_id, _processed_by_id = _carried_result_provenance(
         db, sources, source_rows, user_id)
+
+    # Result limits (endo slice 3, spec section 4): the caller's when it sends
+    # any of the three, else the result-bearing source's own (the same lead
+    # row _carried_result_provenance reads), so a vial filled with its LOQ
+    # keeps it when promoted from the sample page. Never mixed: one row's LOQ
+    # with another's LOD would describe no result.
+    if loq is None and lod is None and lod_unit is None:
+        lead = next(source_rows[s["analysis_id"]] for s in sources
+                    if s["contribution_kind"] in ("chosen", "aggregated_in"))
+        loq, lod, lod_unit = lead.loq, lead.lod, lead.lod_unit
 
     # Promotion mints the parent-tier row in 'parent_to_verify' — it is the
     # submission, not the sign-off. verified_at stays NULL until a reviewer
@@ -1114,6 +1168,9 @@ def promote_to_parent(
         title=eff_title,
         result_value=result_value,
         result_unit=eff_result_unit,
+        loq=loq,
+        lod=lod,
+        lod_unit=lod_unit,
         review_state="parent_to_verify",
         method_id=method_id,
         instrument_id=instrument_id,
@@ -1133,7 +1190,7 @@ def promote_to_parent(
         to_state="parent_to_verify",
         transition_kind="auto",
         user_id=user_id,
-        reason=f"promoted from sources {source_ids}",
+        reason=f"promoted from sources {source_ids}{_audit}",
         details={"changed": {}},
     ))
 
@@ -1168,7 +1225,7 @@ def promote_to_parent(
             to_state="promoted",
             transition_kind="auto",
             user_id=user_id,
-            reason=f"promoted to parent #{parent_row.id} (kind={kind})",
+            reason=f"promoted to parent #{parent_row.id} (kind={kind}){_audit}",
             details=_deltas(src_before, src),
         ))
 
@@ -2054,7 +2111,7 @@ def list_analysis_change_events_for_parent(
         where = f" ({vial.sample_id})" if vial else ""
 
         rv = changed.get("result_value")
-        only_result = set(changed) <= {"result_value", "result_unit"}
+        only_result = set(changed) <= {"result_value", "result_unit", "loq", "lod", "lod_unit"}
         if rv and rv["before"] is None and rv["after"] is not None and only_result:
             event = "result_entered"
             label = f"Result entered — {a.title}: {rv['after']}{where}"
@@ -2368,6 +2425,7 @@ def cascade_parent_retest_to_sources(
         # The superseded SOURCE vial row keeps the old value for history.
         parent_analysis.result_value = None
         parent_analysis.result_unit = None
+        clear_result_limits(parent_analysis)
         parent_analysis.updated_at = datetime.utcnow()
         db.add(LimsAnalysisTransition(
             analysis_id=parent_analysis.id,
@@ -2757,6 +2815,7 @@ def vial_source_retest(
                 # state, so a retracted parent still renders otherwise.
                 parent.result_value = None
                 parent.result_unit = None
+                clear_result_limits(parent)
                 parent.updated_at = datetime.utcnow()
                 db.add(LimsAnalysisTransition(
                     analysis_id=parent.id,
@@ -3847,7 +3906,7 @@ def _serialize_senaite_shape_rows(
     # blend = ~14 keys); bulk-load analysis_service_specs for service_ids and
     # apply the precedence in Python if this listing ever shows up in a profile.
     from coa.identity_verdict import identity_wire_result
-    from coa.spec_rules import display_spec_fields, normalize_matrix
+    from coa.spec_rules import display_spec_fields, effective_unit, normalize_matrix
     from models import LimsSample, LimsSubSample
     _vial_pks = {r.lims_sub_sample_pk for r in rows if r.lims_sub_sample_pk}
     _parent_pk_by_vial = dict(db.execute(
@@ -3877,6 +3936,7 @@ def _serialize_senaite_shape_rows(
                 db, keyword=r.keyword, result=r.result_value,
                 analysis_service_id=r.analysis_service_id),
             cache=_spec_cache,
+            unit=effective_unit(r.result_unit, svc.unit if svc else None),
         )
         method_name = None
         if r.method_id and r.method_id in methods_by_id:
@@ -3943,6 +4003,9 @@ def _serialize_senaite_shape_rows(
             reportable=r.reportable,
             peptide_id=r.peptide_id,
             slot=r.slot,
+            loq=r.loq,
+            lod=r.lod,
+            lod_unit=r.lod_unit,
             **_spec_fields,
         ))
     return out

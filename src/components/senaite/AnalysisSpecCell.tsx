@@ -81,10 +81,14 @@ export function AnalysisSpecCell({
   analysis,
   faded = false,
 }: {
-  analysis: Pick<SenaiteAnalysis, 'specification' | 'conforms' | 'result' | 'unit'>
+  analysis: Pick<SenaiteAnalysis, 'specification' | 'conforms' | 'result' | 'unit' | 'loq'>
   faded?: boolean
 }) {
-  const spec = analysis.specification
+  const filed = analysis.specification
+  // A result that carries its own LOQ (endotoxin slice 3) shows it in place
+  // of the spec's, as the COA prints it.
+  const spec =
+    filed && analysis.loq != null ? { ...filed, loq: analysis.loq } : filed
   const verdict = specVerdict(analysis)
   if (!spec || !verdict) {
     return (

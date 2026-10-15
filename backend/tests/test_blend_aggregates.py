@@ -238,3 +238,26 @@ def test_published_aggregates_are_never_touched(db):
     assert recalc_parent_blend_aggregates(db, parent_pk=parent.id, user_id=1) == []
     db.refresh(total)
     assert (total.result_value, total.review_state) == ("999", "published")
+
+
+def test_a_recalculated_parent_aggregate_drops_the_old_figures_limits(db):
+    """Endo slice 3: promote rewrites a parent aggregate's value in place, so
+    the LOQ / LOD of the old figure go with it (they describe no new value)."""
+    parent, _, parents = _promoted_blend(db, "PB-7115")
+    total = parents[(KW_BLEND_TOTAL, None)]
+    total.loq, total.lod, total.lod_unit = 0.5, 0.1, "mg"
+    db.commit()
+    svc_id = parents[(KW_QUANTITY, 2)].analysis_service_id
+    new_ids, _ = parent_retest(db, sample_id="PB-7115", keyword=KW_QUANTITY, user_id=1, reason="t",
+                               analysis_service_id=svc_id, slot=2)
+    retest_row = db.get(LimsAnalysis, new_ids[0])
+    apply_transition(db, analysis_id=retest_row.id, kind="submit", result_value="1", user_id=1)
+    db.refresh(retest_row)
+    _promote(db, retest_row)                               # slot 2 quantity is now 1, was 3
+
+    db.refresh(total)
+    assert total.result_value == "2"
+    assert (total.loq, total.lod, total.lod_unit) == (None, None, None)
+    last = db.query(LimsAnalysisTransition).filter_by(analysis_id=total.id) \
+             .order_by(LimsAnalysisTransition.id.desc()).first()
+    assert last.details["changed"]["loq"] == {"before": 0.5, "after": None}

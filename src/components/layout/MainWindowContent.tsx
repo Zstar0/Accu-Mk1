@@ -4,6 +4,7 @@ import { ChromatographViewer } from '@/components/ChromatographViewer'
 import { HPLCAnalysis } from '@/components/hplc/HPLCAnalysis'
 import { InstrumentsPage } from '@/components/hplc/InstrumentsPage'
 import { MethodsPage } from '@/components/hplc/MethodsPage'
+import { ConsumablesPage } from '@/components/hplc/ConsumablesPage'
 import { PeptideConfig } from '@/components/hplc/PeptideConfig'
 import { AnalysisServicesPage } from '@/components/hplc/AnalysisServicesPage'
 import ServiceGroupsPage from '@/components/hplc/ServiceGroupsPage'
@@ -12,6 +13,8 @@ import AnalysisProfilesPage from '@/components/hplc/AnalysisProfilesPage'
 import VialRolesPage from '@/components/hplc/VialRolesPage'
 import WorksheetsInboxPage from '@/components/hplc/WorksheetsInboxPage'
 import WorksheetsListPage from '@/components/hplc/WorksheetsListPage'
+import { EndoWorksheetPage } from '@/components/hplc/endo/EndoWorksheetPage'
+import { EndoPrepRulesPage } from '@/components/hplc/endo/EndoPrepRulesPage'
 import { OrderDashboard } from '@/components/dashboard/OrderDashboard'
 import { AnalyticsDashboard } from '@/components/dashboard/AnalyticsDashboard'
 import { SenaiteDashboard } from '@/components/senaite/SenaiteDashboard'
@@ -69,6 +72,7 @@ export function MainWindowContent({
       case 'lims':
         if (activeSubSection === 'instruments') return <InstrumentsPage />
         if (activeSubSection === 'methods') return <MethodsPage />
+        if (activeSubSection === 'consumables') return <ConsumablesPage />
         if (activeSubSection === 'peptide-config') return <PeptideConfig />
         if (activeSubSection === 'analysis-services')
           return <AnalysisServicesPage />
@@ -81,6 +85,8 @@ export function MainWindowContent({
       case 'hplc-analysis':
         if (activeSubSection === 'inbox') return <WorksheetsInboxPage />
         if (activeSubSection === 'worksheets') return <WorksheetsListPage />
+        if (activeSubSection === 'worksheet') return <EndoWorksheetPage />
+        if (activeSubSection === 'endo-prep-rules') return <EndoPrepRulesPage />
         return <HPLCAnalysis />
       case 'reports':
         if (activeSubSection === 'sync-debug') return <ReportsSyncDebug />

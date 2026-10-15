@@ -12,7 +12,7 @@ from types import SimpleNamespace
 import pytest
 
 from coa.spec_rules import (SpecRuleError, evaluate, normalize_matrix,
-                            resolve_spec, sample_peptide_id)
+                            resolve_spec, sample_peptide_id, sample_peptide_ids)
 from models import AnalysisService, AnalysisServiceSpec  # register tables on Base before conftest's create_all
 
 
@@ -359,3 +359,48 @@ def test_sample_peptide_id_native_blend_returns_none(db_session):
     rows[1].peptide_id, rows[1].slot = p2.id, 2
     db_session.flush()
     assert sample_peptide_id(db_session, parent.id) is None
+
+
+# ── sample_peptide_ids: the batched twin (endo slice 5) ──────────────────────
+
+def test_sample_peptide_ids_answers_like_sample_peptide_id_in_one_query(db_session):
+    """Every case above, batched: the worksheet serializer asks for a whole
+    worksheet's parents at once and must get what one call per parent gives."""
+    from models import LimsAnalysis
+    from sqlalchemy import select
+    from tests.test_endo_v2_worksheets import _count_sql
+    pep_a = _mk_peptide(db_session, "BPC157")
+    pep_b = _mk_peptide(db_session, "TB500")
+    svc_a = _mk_identity_service(db_session, pep_a.id, "BPC157-PURITY")
+    svc_b = _mk_identity_service(db_session, pep_b.id, "TB500-PURITY")
+    other = _mk_service(db_session, keyword="HM-PB")
+    generic = _mk_service(db_session, keyword="HPLC-IDENTITY")
+    single = _mk_family(db_session, "P-BATCH-1", parent_analyses=[svc_a], sub_analyses=[other])
+    on_vial = _mk_family(db_session, "P-BATCH-2", sub_analyses=[svc_b])
+    blend = _mk_family(db_session, "P-BATCH-3", parent_analyses=[svc_a, svc_b])
+    no_anchor = _mk_family(db_session, "P-BATCH-4", parent_analyses=[other])
+    retracted = _mk_family(db_session, "P-BATCH-5", parent_analyses=[svc_a, (svc_b, "retracted")])
+    native = _mk_family(db_session, "P-BATCH-6", parent_analyses=[generic])
+    split = _mk_family(db_session, "P-BATCH-7", parent_analyses=[svc_a], sub_analyses=[svc_b])
+    row = db_session.execute(
+        select(LimsAnalysis).where(LimsAnalysis.lims_sample_pk == native.id)
+    ).scalar_one()
+    row.peptide_id, row.slot = pep_b.id, 1
+    db_session.flush()
+    pks = [p.id for p in (single, on_vial, blend, no_anchor, retracted, native, split)] + [987654]
+
+    with _count_sql(db_session) as seen:
+        got = sample_peptide_ids(db_session, pks + [single.id])   # a repeat is harmless
+
+    assert len(seen) == 1
+    assert got == {pk: sample_peptide_id(db_session, pk) for pk in pks}
+    assert got == {single.id: pep_a.id, on_vial.id: pep_b.id, blend.id: None,
+                   no_anchor.id: None, retracted.id: pep_a.id, native.id: pep_b.id,
+                   split.id: None, 987654: None}
+
+
+def test_sample_peptide_ids_of_nothing_runs_no_query(db_session):
+    from tests.test_endo_v2_worksheets import _count_sql
+    with _count_sql(db_session) as seen:
+        assert sample_peptide_ids(db_session, []) == {}
+    assert seen == []
