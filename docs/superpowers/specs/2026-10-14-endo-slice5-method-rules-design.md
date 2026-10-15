@@ -211,6 +211,7 @@ It holds stored facts only. The row's history view recomputes EU per vial and th
   - The previous image ignores rules and snapshots, so a locked ruled row would recompute at the standard dilution, which is wrong for a prep that followed a rule.
   - Before rolling back, therefore, write each locked rule's values into that row's typed columns (`prep_total_dilution`, `prep_steps[0][1]`, `cartridge_type_id`) wherever the typed value is empty. The old image then computes the same numbers.
   - The plan gives the read-only check and the update statement. That materialising step comes before slice 4's and slice 3's rollback steps.
+  - **Note, 2026-10-14 (final review):** this applies only to a rollback to an image that has v2 without slice 5. v2 and slice 5 ship together, so the real rollback target, v1.48.0, has no v2 worksheet and reads none of these columns. For that rollback, skip the materialisation: it would turn ruled rows into typed overrides on roll-forward. The launch checklist says the same.
 - **The later move to option 1** (rules on the method revision, once settled):
   - Copy the active lines into the Endotoxin method revision as a new revision.
   - Switch matching to read the pinned revision's lines.

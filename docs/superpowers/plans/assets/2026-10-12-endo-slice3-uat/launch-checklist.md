@@ -26,7 +26,7 @@ The module must come first because it begins with `from __future__ import annota
    - this checklist;
    - the slice 3 rollback runbook (slice 3 spec section 9);
    - the slice 4 rollback order (slice 4 spec section 9);
-   - the slice 5 rollback materialisation SQL (slice 5 plan, Appendix A.0 item 11);
+   - the slice 5 rollback note: nothing to undo for a rollback to v1.48.0, and the materialisation SQL (slice 5 plan, Appendix A.0 item 11) is only for an image with v2 but without slice 5;
    - the Handler's final-review rulings: every endo field is final on a promoted row (correct it by retest), and Re-apply moves a row's reading into its history and clears it;
    - the two em dashes kept on purpose in `lims_analyses/promote_flow.py` (moved stored strings, slice 3 A7);
    - the method 26 default gap (v2).
@@ -34,7 +34,9 @@ The module must come first because it begins with `from __future__ import annota
    - three `lims_analyses` columns plus the spec index swap (slice 3);
    - the `endo_prep_rules` table and four `worksheet_items` columns (slice 5).
 
-   Expect exactly one `migration_skipped` warning on the first boot, for `CREATE TABLE endo_prep_rules`. That boot runs before `consumable_types` exists, and `create_all` then builds the table from the model. After boot, confirm the table exists (`\d endo_prep_rules`). Any other `migration_skipped` is a stop.
+   Expect one new `migration_skipped` warning on the first boot, for `CREATE TABLE endo_prep_rules`. That boot runs before `consumable_types` exists, and `create_all` then builds the table from the model. After boot, confirm the table exists (`\d endo_prep_rules`).
+
+   Compare the boot's `migration_skipped` lines with the previous boot's, because production may already log others: the prod-shaped stacks log two `lims_analyses_review_state_check` skips on every boot. Any new skip other than `endo_prep_rules` is a stop.
 
 ## C. Launch steps (after the new image is healthy)
 
@@ -55,13 +57,13 @@ The module must come first because it begins with `from __future__ import annota
 
 ## D. Rollback (in this order)
 
-1. **Slice 5 first: materialise the locked rules.**
-   - The previous image ignores rule locks, so a ruled row would recompute at the standard dilution.
-   - Run the read-only check, then the one-transaction update, from the slice 5 plan (Appendix A.0 item 11). The update writes each locked rule's values into the row's empty typed columns.
-   - Readings that Re-apply moved into a row's history stay out of the row. The old image does not show history.
+1. **Slice 5: nothing to undo when rolling back to v1.48.0 or earlier.**
+   - Those images have no v2 2 mL worksheet, so they read none of the rule columns.
+   - Leave the rule locks in place, so a roll-forward picks them up unchanged.
+   - Do NOT run the materialisation SQL in the slice 5 plan (Appendix A.0 item 11). It would turn ruled rows into typed overrides. It applies only to a rollback to an image that has v2 without slice 5, and no such image has shipped.
 2. **Then slice 4.** Remove `{lod}` from every profile text. The slice 4 spec section 9 has the query and an API-down fallback. Otherwise the old image prints the macro literally.
 3. **Then slice 3.**
    - Deactivate the EU/vial spec row(s).
    - Hold COA generation and regeneration for every sample with an EU/vial endotoxin parent result. The SQL is in slice 3 spec section 9.
    - Redeploy the previous image.
-4. **Roll-forward** reverses this: redeploy, reactivate the EU/vial row(s), release the hold, then put the profile text back. The values materialised in step 1 stay as typed values, so Re-apply never moves those rows.
+4. **Roll-forward** reverses this: redeploy, reactivate the EU/vial row(s), release the hold, then put the profile text back.
