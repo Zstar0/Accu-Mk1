@@ -1,7 +1,6 @@
 import { describe, it, expect } from 'vitest'
-// The shared matcher fixture (Task 1): pytest runs the same cases against
-// backend/endo_prep_rules.py match_rule.
-import fixture from '../../../backend/tests/fixtures/endo_prep_rule_cases.json'
+import { readFileSync } from 'node:fs'
+import { resolve } from 'node:path'
 import {
   bandText,
   matchRule,
@@ -27,8 +26,32 @@ import {
   endoWorksheet,
 } from '@/components/hplc/endo/__tests__/endo-fixtures'
 
-// The JSON's status is a plain string to the compiler.
-const RULE_SETS = fixture.rule_sets as unknown as Record<string, EndoPrepRule[]>
+// The shared matcher fixture (Task 1): pytest runs the same cases against
+// backend/endo_prep_rules.py match_rule. Read at run time, not imported, so
+// the production `tsc` (whose Docker context has no backend/) never resolves
+// a path outside src.
+interface FixtureCase {
+  name: string
+  rules: string
+  query: {
+    peptide_id: number | null
+    weight_mg: number | null
+    is_bac: boolean
+    endo_prep: string | null
+    rules_off: boolean
+  }
+  expect: number | null
+}
+const fixture = JSON.parse(
+  readFileSync(
+    resolve(
+      __dirname,
+      '../../../backend/tests/fixtures/endo_prep_rule_cases.json'
+    ),
+    'utf8'
+  )
+) as { rule_sets: Record<string, EndoPrepRule[]>; cases: FixtureCase[] }
+const RULE_SETS = fixture.rule_sets
 
 function rule(over: Partial<EndoPrepRule> = {}): EndoPrepRule {
   return {
