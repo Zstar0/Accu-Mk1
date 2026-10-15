@@ -9,6 +9,7 @@ import {
 } from '@testing-library/react'
 import { EndoSampleDilutionBox } from '@/components/hplc/endo/EndoSampleDilutionBox'
 import type { WorksheetItemRow } from '@/lib/endo-worksheet'
+import { useUIStore } from '@/store/ui-store'
 import { endoBoxProps, endoItem } from './endo-fixtures'
 
 function setup(items: WorksheetItemRow[], isCompleted = false) {
@@ -256,5 +257,13 @@ describe('EndoSampleDilutionBox', () => {
   it('renders no inputs on a completed worksheet', () => {
     setup([endoItem({ sample_id: 'P-0001-S02' })], true)
     expect(screen.queryByRole('textbox')).not.toBeInTheDocument()
+  })
+
+  it("links the row's sample ID to the vial page", () => {
+    useUIStore.setState({ sampleDetailsTargetId: null })
+    setup([endoItem({ sample_id: 'P-0001-S02' })])
+    fireEvent.click(screen.getByRole('button', { name: 'P-0001-S02' }))
+    expect(useUIStore.getState().activeSubSection).toBe('sample-details')
+    expect(useUIStore.getState().sampleDetailsTargetId).toBe('P-0001-S02')
   })
 })
