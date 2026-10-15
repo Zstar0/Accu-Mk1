@@ -25803,7 +25803,8 @@ class EndoReaderImportOut(BaseModel):
     items: list[dict]  # every item on the worksheet, in the GET /worksheets/{id} shape
     endo_method: Optional[dict] = None
     # Rows the import left unchanged, each {item_id, sample_id, reason}: a
-    # promoted row (endo slice 5, review S1), whose prep is final.
+    # promoted row (endo slice 5, review S1), whose prep is final, or a test
+    # whose reading Re-apply moved into the row's history (final review I2).
     skipped: list[dict] = []
 
 
@@ -25820,11 +25821,14 @@ def import_endo_reader_results(
     writes share one commit, so a refused row writes nothing at all. A test
     already on its row (same reading, same test id) is skipped. Endo slice 5:
     a test that would change a promoted row is skipped too, and listed in
-    `skipped` with PREP_FINAL, while the other rows apply (review S1); a test
-    that moves the cartridge of a row with a result is an override, so the
+    `skipped` with PREP_FINAL, while the other rows apply (review S1). So is
+    a test whose reading Re-apply moved into the row's history, with
+    READING_MOVED (final review I2). A test that moves the cartridge of a row
+    with a result is an override, so the
     replaced run goes to the row's history first (review I5). A POST on an
     id path, so it has no ordering concern against GET /worksheets/{worksheet_id}."""
-    from endo_prep_rules import (append_history, load_rules, lock_items_for_update, lock_rows,
+    from endo_prep_rules import (READING_MOVED, append_history, load_rules,
+                                 lock_items_for_update, lock_rows, moved_test_ids,
                                  promoted_sample_ids, row_effective, row_facts)
     from worksheets_endo import (CARTRIDGE_REFUSED, PREP_FINAL, cartridge_ids_allowed_by,
                                  check_reader_record, check_storable, endo_run_params,
@@ -25899,6 +25903,12 @@ def import_endo_reader_results(
             if item.sample_id in promoted:
                 skipped.append({"item_id": item.id, "sample_id": item.sample_id,
                                 "reason": PREP_FINAL})
+                continue
+            # Final review I2: a run Re-apply moved off the row was read at
+            # the old prep, so it never comes back, replace ticked or not.
+            if test_id in moved_test_ids(item):
+                skipped.append({"item_id": item.id, "sample_id": item.sample_id,
+                                "reason": READING_MOVED})
                 continue
             if held is not None and held != parsed and not t.replace:
                 raise ValueError(f"already holds the reading {item.result_reading}; "

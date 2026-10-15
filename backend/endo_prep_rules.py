@@ -400,12 +400,14 @@ def release_on_clear(item) -> None:
         item.prep_rule = None
 
 
-def append_history(item, *, why: str, user_id: Optional[int], effective: dict) -> None:
+def append_history(item, *, why: str, user_id: Optional[int], effective: dict,
+                   **extra) -> None:
     """Keep the row's current run before a Re-apply or an override replaces
     it (spec 7): stored facts only, from which the row's history view
     recomputes EU per vial and the verdict. `effective` is
-    effective_values() as the row stands. A new list every time: the JSON
-    column misses in-place edits."""
+    effective_values() as the row stands; `extra` adds keys to the entry
+    (Re-apply's moved reading). A new list every time: the JSON column
+    misses in-place edits."""
     entry = {
         "at": _iso_now(), "by": user_id, "why": why, "lock": item.prep_rule,
         "total_dilution": effective["total_dilution"],
@@ -415,8 +417,16 @@ def append_history(item, *, why: str, user_id: Optional[int], effective: dict) -
         "reader_test_id": (item.result_reader or {}).get("test_id"),
         "result_entered_at": (item.result_entered_at.isoformat() + "Z"
                               if item.result_entered_at else None),
+        **extra,
     }
     item.prep_history = [*(item.prep_history or []), entry]
+
+
+def moved_test_ids(item) -> set[str]:
+    """The reader test ids of the readings Re-apply moved off this row into
+    its history (final review I2): the reader import never puts one back."""
+    return {e["reader_test_id"] for e in item.prep_history or []
+            if e.get("reading_moved") and isinstance(e.get("reader_test_id"), str)}
 
 
 def promoted_sample_ids(db: Session, sample_ids) -> set[str]:
@@ -440,6 +450,9 @@ REAPPLY_STOCK = "prep rules are for 2 mL worksheets"
 REAPPLY_RULES_OFF = "the row is set to no rule"
 REAPPLY_NOT_LOCKED = "the row is not locked; it already follows today's rules"
 REAPPLY_UNCHANGED = "nothing to re-apply: the row already matches today's rule"
+# Why the reader import skips a test (final review I2): Re-apply moved that
+# run's reading off the row, because it was read at the old prep.
+READING_MOVED = "this run's reading was moved to history by Re-apply; enter the re-run"
 
 
 def _moves(item, old: Optional[dict], new: Optional[dict]) -> bool:
@@ -547,8 +560,14 @@ def apply_reapply(db: Session, worksheet, item_ids: list[int], current_user) -> 
     sent, re-checked against the preview's conditions. A row that qualifies
     keeps its current run in its history, takes today's line as a new lock
     (locked_by "reapply") and gets an endo_prep_rule_reapplied audit row
-    with the old and new locks. Typed values and the reading stay as they
-    are. A row that no longer qualifies is refused with its reason; one that
+    with the old and new locks. Typed values stay as they are. A row's
+    reading was read at the old prep, so it moves into the history entry in
+    full (marked reading_moved, its reader record and who entered it
+    included; the audit row keeps it too) and is cleared on the row, which
+    keeps its new lock: the re-run's reading is entered the usual way
+    (Handler ruling 2026-10-14, final review I2). A row with no reading
+    writes the entry and the audit row as before. A row that no longer
+    qualifies is refused with its reason; one that
     changed since the preview so that Re-apply would change nothing now is
     REAPPLY_UNCHANGED, and one whose line moved again takes today's
     (preflight F12, deviation B2). The rows are judged under their row locks
@@ -582,12 +601,22 @@ def apply_reapply(db: Session, worksheet, item_ids: list[int], current_user) -> 
         # (preflight F8: the shared helper, on the facts already read).
         _, effective = row_effective(db, worksheet, it, rules=rules, std_total=std_total,
                                      facts=facts.get(it.id, {}))
-        append_history(it, why="reapply", user_id=user_id, effective=effective)
+        moved = ({"result_reader": it.result_reader,
+                  "result_entered_by_user_id": it.result_entered_by_user_id,
+                  "reading_moved": True} if _has_result(it) else {})
+        append_history(it, why="reapply", user_id=user_id, effective=effective, **moved)
+        details = {"user_id": user_id, "worksheet_id": worksheet.id, "sample_id": it.sample_id,
+                   "old": old}
+        if moved:
+            # Every field the item PATCH and the reader import write for a
+            # reading, as the PATCH clears them. The cartridge is a typed
+            # value, and the Ran tick a bench tick: both stay.
+            details.update(old_reading=it.result_reading, old_reader=it.result_reader)
+            it.result_reading = it.result_reader = None
+            it.result_entered_at = it.result_entered_by_user_id = None
         it.prep_rule = _new_lock(new, "reapply", user_id)
         db.add(AuditLog(operation="endo_prep_rule_reapplied", entity_type="worksheet_item",
-                        entity_id=str(it.id),
-                        details={"user_id": user_id, "worksheet_id": worksheet.id,
-                                 "sample_id": it.sample_id, "old": old, "new": it.prep_rule}))
+                        entity_id=str(it.id), details={**details, "new": it.prep_rule}))
         # Listed twice, the second is refused: the row now has today's line.
         rows[item_id] = (it, REAPPLY_UNCHANGED, new)
         results.append({"item_id": item_id, "applied": True, "reason": None})

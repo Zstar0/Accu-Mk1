@@ -898,6 +898,81 @@ def test_reapply_lists_a_new_line_even_when_its_numbers_are_the_same(client, db)
         endo_prep_rules.snapshot(narrow), 300)
 
 
+# --- Final review I2, option B (Handler ruling 2026-10-14) ----------------------
+
+def _read_then_reapplied(client, db):
+    """_world's row P-4001-S01, locked at print to a 1:300 Retatrutide line,
+    then read through the reader import (test T-1, 0.8 on the 0.05). The line
+    moves to 1:400 and the row is re-applied. Returns the row with its lock,
+    reader record and entered-at from before the Re-apply."""
+    w = _world(client, db)
+    item, _ = _row(db, w, "P-4001-S01", reading=None)
+    pep = _peptide(db)
+    _anchor(db, "P-4001", pep)
+    rule = _rule(db, pep, total_dilution=300)
+    db.commit()
+    assert client.post(f"/worksheets/{w.ws.id}/printed").status_code == 200
+    r = _import(client, w.ws, _reader_line(item, "0.8", w.c05, test_id="T-1"))
+    assert (r.status_code, r.json()["applied"]) == (200, 1), r.text
+    db.refresh(item)
+    read = SimpleNamespace(ws=w.ws, c05=w.c05, item=item, lock=item.prep_rule,
+                           reader=item.result_reader, entered=item.result_entered_at)
+    assert (read.lock["locked_by"], read.reader["test_id"]) == ("print", "T-1")
+    rule.total_dilution = 400
+    db.commit()
+    assert _reapply(client, w.ws, item).json()["results"] == [
+        {"item_id": item.id, "applied": True, "reason": None}]
+    db.refresh(item)
+    return read
+
+
+def test_reapply_moves_a_read_rows_reading_into_its_history_and_clears_it(client, db):
+    """The reading was read at the old prep, so Re-apply moves it, in full,
+    into the history entry, marked reading_moved, and clears every reading
+    field on the row. The row keeps its new lock and its cartridge, and has
+    nothing to promote until the re-run is read (the existing refusal). A
+    row with no reading moves as before
+    (test_reapply_moves_only_the_ruled_row_and_never_a_typed_value)."""
+    m = _read_then_reapplied(client, db)
+    it = m.item
+    assert (it.result_reading, it.result_reader, it.result_entered_at,
+            it.result_entered_by_user_id) == (None, None, None, None)
+    assert (it.prep_rule["locked_by"], it.prep_rule["rule"]["total_dilution"],
+            it.cartridge_type_id) == ("reapply", 400, m.c05.id)
+    [entry] = it.prep_history
+    assert entry == {"at": entry["at"], "by": 1, "why": "reapply", "lock": m.lock,
+                     "total_dilution": 300, "step1_ratio": 10, "cartridge_type_id": m.c05.id,
+                     "result_reading": "0.8", "reader_test_id": "T-1",
+                     "result_entered_at": m.entered.isoformat() + "Z",
+                     "result_reader": m.reader, "result_entered_by_user_id": 1,
+                     "reading_moved": True}
+    audit = db.query(AuditLog).filter(AuditLog.operation == "endo_prep_rule_reapplied").one()
+    assert audit.details == {"user_id": 1, "worksheet_id": m.ws.id, "sample_id": it.sample_id,
+                             "old": m.lock, "new": it.prep_rule,
+                             "old_reading": "0.8", "old_reader": m.reader}
+    assert _results(_promote(client, m.ws, _promote_line(it))) == [
+        _refused(it, worksheets_endo_promote.REASON_NO_READING)]
+
+
+def test_a_reader_import_never_restores_a_reading_reapply_moved(client, db):
+    """Re-importing the old reader file would put the run read at 1:300 back
+    at 1:400. Its test is skipped with READING_MOVED, before the re-run is
+    read and after it, replace ticked or not; a new run imports as usual."""
+    m = _read_then_reapplied(client, db)
+    skip = [{"item_id": m.item.id, "sample_id": m.item.sample_id,
+             "reason": endo_prep_rules.READING_MOVED}]
+    r = _import(client, m.ws, _reader_line(m.item, "0.8", m.c05, test_id="T-1"))
+    assert (r.status_code, r.json()["applied"], r.json()["skipped"]) == (200, 0, skip), r.text
+    db.refresh(m.item)
+    assert (m.item.result_reading, m.item.result_reader) == (None, None)
+    r = _import(client, m.ws, _reader_line(m.item, "<0.05", m.c05, test_id="T-2"))
+    assert (r.status_code, r.json()["applied"], r.json()["skipped"]) == (200, 1, []), r.text
+    r = _import(client, m.ws, _reader_line(m.item, "0.8", m.c05, test_id="T-1", replace=True))
+    assert (r.status_code, r.json()["applied"], r.json()["skipped"]) == (200, 0, skip), r.text
+    db.refresh(m.item)
+    assert (m.item.result_reading, m.item.result_reader["test_id"]) == ("<0.05", "T-2")
+
+
 # --- Task 5 review I-1: Re-apply against a concurrent promote or Re-apply ------
 
 def _movable(client, db):
