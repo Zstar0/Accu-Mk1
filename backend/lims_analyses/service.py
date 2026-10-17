@@ -1402,6 +1402,17 @@ _LEGACY_SECTION_RULES: tuple = (
 )
 
 
+def legacy_family(keyword: str | None) -> tuple | None:
+    """(family key, sort) for a SENAITE-era keyword per _LEGACY_SECTION_RULES,
+    else None. 'core' is the legacy HPLC family."""
+    kw = (keyword or "").upper()
+    if kw:
+        for key, _label, sort, prefixes in _LEGACY_SECTION_RULES:
+            if any(kw.startswith(p) or (len(p) > 3 and p in kw) for p in prefixes):
+                return (key, sort)
+    return None
+
+
 def _annotate_profile_sections(db: Session, parent, shaped: list) -> None:
     """Fill profile_section_* on shaped rows, in place (mk1 main table).
 
@@ -1438,13 +1449,7 @@ def _annotate_profile_sections(db: Session, parent, shaped: list) -> None:
         sid = row.analysis_service_id
         if sid is not None and sid in section_by_service:
             return section_by_service[sid]
-        kw = (row.keyword or "").upper()
-        if kw:
-            for key, _label, sort, prefixes in _LEGACY_SECTION_RULES:
-                if any(kw.startswith(p) or (len(p) > 3 and p in kw)
-                       for p in prefixes):
-                    return (key, sort)
-        return (None, None)
+        return legacy_family(row.keyword) or (None, None)
 
     resolved = [_classify(r) for r in shaped]
     needed_keys = {key for key, _ in resolved if key}

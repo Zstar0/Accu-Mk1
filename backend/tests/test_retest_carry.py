@@ -211,3 +211,213 @@ def test_two_original_rows_sharing_one_source_both_carry_once(db):
     again = carry_results(db, original=original, retest=retest, profile_keys=["heavy_metals"], user_id=None)
     db.commit()
     assert again == [] and len(_carried_rows(db, retest)) == 2
+
+
+# Pre-flip samples (P-3182, prod 2026-10-16): the snapshot key is the
+# member-less alias hplcpurity_identity; the verified HPLC rows sit on the OLD
+# per-peptide services, and the native twin hplc-purity-identity holds only
+# the native trio + aggregates.
+
+ENDO_KEY = "endotoxin-usp85-lal"
+NATIVE_KWS = ("HPLC-IDENTITY", "HPLC-PURITY", "HPLC-QUANTITY", "HPLC-BLEND-PURITY", "HPLC-BLEND-TOTAL")
+
+
+@pytest.fixture
+def no_variance_override(monkeypatch):
+    # order_seed reads the lab variance override through its own SessionLocal; keep it off any real DB.
+    monkeypatch.setattr("sub_samples.service._apply_variance_override", lambda _sid, raw: raw)
+
+
+def _p3182(db, *, pur_state="verified", canonical=True):
+    import json
+    alias = AnalysisProfile(key="hplcpurity_identity", name="HPLC Purity + Identity", is_addon=False,
+                            active=True, vials_required=1, fulfillment_role="hplc")
+    twin = AnalysisProfile(key="hplc-purity-identity", name="HPLC Purity + Identity", is_addon=False,
+                           active=False, coa_archetype="legacy_hplc")
+    endo = AnalysisProfile(key=ENDO_KEY, name="Endotoxin USP85 LAL", is_addon=True, active=True,
+                           coa_archetype="limit_table")
+    native = [AnalysisService(title=kw.title(), keyword=kw, origin="mk1") for kw in NATIVE_KWS]
+    old = {kw: AnalysisService(title=title, keyword=kw, origin="senaite") for kw, title in (
+        ("HPLC-PUR", "Peptide Purity (HPLC)"), ("ID_KPV", "KPV - Identity (HPLC)"),
+        ("PEPT-Total", "Peptide Total Quantity"))}
+    lal = AnalysisService(title="Endotoxin USP85 LAL", keyword="ENDOTOXIN-USP85LAL", origin="mk1",
+                          unit="EU/mL")
+    db.add_all([alias, twin, endo, lal, *native, *old.values()])
+    db.flush()
+    twin.analysis_services.extend(native)
+    endo.analysis_services.append(lal)
+    original = LimsSample(sample_id="P-3182", external_lims_system="senaite", status="published",
+                          catalog_snapshot={"profiles": [
+                              {"key": "hplcpurity_identity", "profile_id": alias.id, "service_ids": []},
+                              {"key": ENDO_KEY, "profile_id": endo.id, "service_ids": [lal.id]}]})
+    retest = LimsSample(sample_id="P-5182", external_lims_system="mk1", status="sample_due",
+                        analytes=json.dumps([{"name": "KPV - Identity (HPLC)"}]))
+    db.add_all([original, retest])
+    db.flush()
+    vial = LimsSubSample(parent_sample_pk=original.id, external_lims_uid="v1", sample_id="P-3182-S01",
+                         vial_sequence=1)
+    db.add(vial)
+    db.flush()
+    verified_at = datetime(2026, 10, 3, 14, 5, 0)  # noqa: DTZ001
+    values = {"HPLC-PUR": "99.004", "ID_KPV": "KPV", "PEPT-Total": "35.02"}
+    rows = {}
+    for kw, svc in old.items():
+        state = pur_state if kw == "HPLC-PUR" else "verified"
+        if canonical:
+            row = LimsAnalysis(lims_sample_pk=original.id, analysis_service_id=svc.id, keyword=kw,
+                               title=svc.title, provenance="canonical", review_state=state,
+                               result_value=values[kw],
+                               verified_at=verified_at if state == "verified" else None)
+            src = LimsAnalysis(lims_sub_sample_pk=vial.id, analysis_service_id=svc.id, keyword=kw,
+                               title=svc.title, review_state="promoted", result_value=values[kw])
+            db.add_all([row, src])
+            db.flush()
+            db.add(LimsAnalysisPromotion(parent_analysis_id=row.id, source_analysis_id=src.id,
+                                         contribution_kind="chosen"))
+            rows[kw] = (row, src)
+        db.add(LimsAnalysis(lims_sample_pk=original.id, analysis_service_id=svc.id, keyword=kw,
+                            title=svc.title, provenance="shadow", review_state="senaite_mirror",
+                            mirror_review_state="verified", result_value=values[kw]))
+    db.add(LimsAnalysis(lims_sample_pk=original.id, analysis_service_id=lal.id, keyword=lal.keyword,
+                        title=lal.title, provenance="canonical", review_state="published",
+                        result_value="0.25", result_unit="EU/mL",
+                        verified_at=datetime(2026, 10, 1, 9, 0)))  # noqa: DTZ001
+    db.commit()
+    return original, retest, rows, native
+
+
+def _options(db, sample_id, monkeypatch):
+    from lims_analyses import retest_routes
+    monkeypatch.setattr(retest_routes, "_fetch_retest_context", lambda _sid: None)
+    body = retest_routes.retest_options(sample_id, db=db, _user=None)
+    return {p["key"]: p for p in body["profiles"]}
+
+
+def _legacy_spec(**over):
+    d = {"retest_of_sample_id": "P-3182", "retest": [ENDO_KEY], "carry": ["hplcpurity_identity"],
+         "fee": "free", "reason": "endo re-run", "requested_by_user_id": 9}
+    d.update(over)
+    return d
+
+
+def _live_placeholders(db, sample):
+    return sorted(r.keyword for r in db.execute(select(LimsAnalysis).where(
+        LimsAnalysis.lims_sample_pk == sample.id, LimsAnalysis.provenance == "ordered",
+        LimsAnalysis.review_state.notin_(("rejected", "retracted")))).scalars())
+
+
+def test_legacy_alias_reads_verified_and_carry_eligible(db, monkeypatch):
+    _p3182(db)
+    by_key = _options(db, "P-3182", monkeypatch)
+    hplc = by_key["hplcpurity_identity"]
+    assert hplc["state_label"] == "Verified 10/3" and hplc["state"] == "verified"
+    assert hplc["carry_eligible"] is True and hplc["carry_blocked_reason"] is None
+    # Endotoxin unchanged.
+    endo = by_key[ENDO_KEY]
+    assert endo["state_label"] == "Verified 10/1" and endo["carry_eligible"] is True
+    assert endo["carry_blocked_reason"] is None
+
+
+def test_legacy_alias_carry_copies_the_canonical_rows_and_retires_twin_placeholders(
+        db, no_variance_override):
+    # Order A: the registration fallback seeds the FULL order dict (native HPLC key) first.
+    from lims_analyses.order_seed import seed_parent_from_services
+    from lims_analyses.retest_carry import apply_retest_spec
+    _, retest, rows, _ = _p3182(db)
+    full = {"hplc-purity-identity": True, ENDO_KEY: True}
+    seed_parent_from_services(db, parent=retest, services=full, package=None,
+                              source="registration_signal")
+    db.commit()
+    assert _live_placeholders(db, retest) == ["ENDOTOXIN-USP85LAL", "HPLC-IDENTITY", "HPLC-PURITY",
+                                              "HPLC-QUANTITY"]
+    out = apply_retest_spec(db, parent=retest, raw_spec=_legacy_spec(), services=full, package=None,
+                            source="order_upsert")
+    db.commit()
+    assert out["applied"] is True and out["carried"] == 3
+    carried = db.execute(select(LimsAnalysis).where(
+        LimsAnalysis.lims_sample_pk == retest.id, LimsAnalysis.provenance == "canonical")).scalars().all()
+    assert sorted(r.keyword for r in carried) == ["HPLC-PUR", "ID_KPV", "PEPT-Total"]
+    for r in carried:
+        src_parent, vial_row = rows[r.keyword]
+        assert r.review_state == "verified" and r.result_value == src_parent.result_value
+        assert r.analysis_service_id == src_parent.analysis_service_id and r.title == src_parent.title
+        [link] = db.execute(select(LimsAnalysisPromotion).where(
+            LimsAnalysisPromotion.parent_analysis_id == r.id)).scalars().all()
+        assert link.contribution_kind == CARRIED and link.source_analysis_id == vial_row.id
+    assert not db.execute(select(LimsAnalysis).where(
+        LimsAnalysis.lims_sample_pk == retest.id, LimsAnalysis.provenance == "shadow")).scalars().all()
+    # Native twin placeholders retired; the re-tested endotoxin keeps its own.
+    assert _live_placeholders(db, retest) == ["ENDOTOXIN-USP85LAL"]
+
+
+def test_late_fallback_seed_does_not_remint_twin_placeholders(db, no_variance_override):
+    # Order B: apply first, then the registration fallback with the full dict.
+    from lims_analyses.order_seed import seed_parent_from_services
+    from lims_analyses.retest_carry import apply_retest_spec
+    _, retest, _, _ = _p3182(db)
+    apply_retest_spec(db, parent=retest, raw_spec=_legacy_spec(), services={ENDO_KEY: True},
+                      package=None, source="order_upsert")
+    db.commit()
+    seed_parent_from_services(db, parent=retest, services={
+        "hplc-purity-identity": True, "hplcpurity_identity": True, ENDO_KEY: True},
+        package=None, source="registration_signal")
+    db.commit()
+    assert _live_placeholders(db, retest) == ["ENDOTOXIN-USP85LAL"]
+
+
+def test_hplc_in_demand_keeps_twin_placeholders(db, no_variance_override):
+    from lims_analyses.order_seed import seed_parent_from_services
+    from lims_analyses.retest_carry import _retire_carried_placeholders
+    original, retest, _, _ = _p3182(db)
+    seed_parent_from_services(db, parent=retest, services={"hplc-purity-identity": True},
+                              package=None, source="registration_signal")
+    assert _retire_carried_placeholders(db, parent=retest, original=original,
+                                        carry_keys=["hplcpurity_identity"],
+                                        demand_keys=["hplc-purity-identity"], user_id=None) == 0
+
+
+def test_pending_old_service_row_blocks_the_carry_with_a_reason(db, monkeypatch):
+    from lims_analyses.retest_carry import parse_retest_spec, validate_retest_spec
+    from lims_analyses.service import BadRequestError
+    original, *_ = _p3182(db, pur_state="to_be_verified")
+    hplc = _options(db, "P-3182", monkeypatch)["hplcpurity_identity"]
+    assert hplc["carry_eligible"] is False
+    assert hplc["carry_blocked_reason"] == "a result is still pending"
+    with pytest.raises(BadRequestError, match="cannot carry unverified"):
+        validate_retest_spec(db, original=original, spec=parse_retest_spec(_legacy_spec()))
+
+
+def test_shadow_only_hplc_blocks_by_default(db, monkeypatch):
+    _p3182(db, canonical=False)
+    hplc = _options(db, "P-3182", monkeypatch)["hplcpurity_identity"]
+    assert hplc["carry_eligible"] is False and hplc["state_label"] == "Not verified"
+    assert hplc["carry_blocked_reason"] == "results only in SENAITE (never verified in Mk1)"
+
+
+def test_shadow_only_gate_on_copies_shadow_values_into_canonical_rows(db, monkeypatch):
+    from lims_analyses import retest_carry
+    monkeypatch.setattr(retest_carry, "CARRY_SHADOW_ONLY_HPLC", True)
+    original, retest, _, _ = _p3182(db, canonical=False)
+    assert "hplcpurity_identity" in retest_carry.carry_eligible_profile_keys(db, original)
+    out = carry_results(db, original=original, retest=retest, profile_keys=["hplcpurity_identity"],
+                        user_id=None)
+    db.commit()
+    assert sorted((o["keyword"], o["result_value"]) for o in out) == [
+        ("HPLC-PUR", "99.004"), ("ID_KPV", "KPV"), ("PEPT-Total", "35.02")]
+    assert {(r.provenance, r.review_state) for r in _carried_rows(db, retest)} == {("canonical", "verified")}
+
+
+def test_natively_benched_pre_flip_sample_carries_its_native_rows(db, monkeypatch):
+    from lims_analyses.retest_carry import carry_eligible_profile_keys
+    original, retest, _, native = _p3182(db, canonical=False)
+    for svc, val in zip(native[:3], ("KPV", "99.1", "35.0")):
+        db.add(LimsAnalysis(lims_sample_pk=original.id, analysis_service_id=svc.id, keyword=svc.keyword,
+                            title=svc.title, provenance="canonical", review_state="verified",
+                            result_value=val, slot=1,
+                            verified_at=datetime(2026, 10, 2, 8, 0)))  # noqa: DTZ001
+    db.commit()
+    assert carry_eligible_profile_keys(db, original) == {"hplcpurity_identity", ENDO_KEY}
+    assert _options(db, "P-3182", monkeypatch)["hplcpurity_identity"]["state_label"] == "Verified 10/2"
+    out = carry_results(db, original=original, retest=retest, profile_keys=["hplcpurity_identity"],
+                        user_id=None)
+    assert sorted(o["keyword"] for o in out) == ["HPLC-IDENTITY", "HPLC-PURITY", "HPLC-QUANTITY"]

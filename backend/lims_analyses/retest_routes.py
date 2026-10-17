@@ -24,7 +24,9 @@ from auth import get_current_user
 from database import get_db
 from lims_analyses.retest_carry import (
     HPLC_PROFILE_KEYS,
+    carry_blocked_reason,
     carry_eligible_profile_keys,
+    judged_service_ids,
     parse_retest_spec,
     snapshot_profile_keys,
     validate_retest_spec,
@@ -130,12 +132,13 @@ def retest_options(sample_id: str, db: Session = Depends(get_db), _user=Depends(
     out_profiles = []
     for key in have:
         prof = profiles.get(key)
-        svc_ids = {s.id for s in prof.analysis_services} if prof else set()
+        svc_ids = judged_service_ids(db, sample, prof) if prof else set()
         state = _best_state(db, sample, svc_ids)
         verified_at = _latest_verified_at(db, sample, svc_ids)
         out_profiles.append({
             "key": key, "name": prof.name if prof else key,
             "carry_eligible": key in eligible,
+            "carry_blocked_reason": None if key in eligible else carry_blocked_reason(db, sample, prof),
             "state": state,
             "verified_at": verified_at.isoformat() if verified_at else None,
             "state_label": _state_label(state, verified_at),

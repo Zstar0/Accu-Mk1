@@ -17,8 +17,9 @@ from datetime import datetime
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from catalog.hplc_keys import LEGACY_HPLC_KEY, NATIVE_HPLC_KEY
 from lims_analyses.service import BadRequestError
-from models import AnalysisProfile, LimsAnalysis, LimsSample
+from models import AnalysisProfile, AnalysisService, LimsAnalysis, LimsSample
 
 logger = logging.getLogger(__name__)
 
@@ -26,7 +27,13 @@ CARRIED = "carried"
 # Legacy WP key and the native-born key (catalog.hplc_keys); both are stamped in snapshots.
 HPLC_PROFILE_KEYS = frozenset({"hplcpurity_identity", "hplc-purity-identity"})
 _CARRY_SOURCE_STATES = ("verified", "published")
+_DEAD_STATES = ("retracted", "rejected", "cancelled")
 _FEES = ("paid", "free")
+SHADOW_ONLY_REASON = "results only in SENAITE (never verified in Mk1)"
+# Pre-flip samples whose HPLC was verified only in SENAITE (shadow rows, no
+# canonical row). Off: 2026-09-30 ruled "do not fake a carry" of SENAITE-only
+# results. True copies the shadow values into canonical carried rows.
+CARRY_SHADOW_ONLY_HPLC = False
 
 
 @dataclass(frozen=True)
@@ -167,6 +174,47 @@ def _on_sample(db: Session, sample: LimsSample, service_id: int) -> bool:
     ).limit(1)).first() is not None
 
 
+def _legacy_hplc_rows(db: Session, original: LimsSample, provenance: str) -> list[LimsAnalysis]:
+    """Live parent-tier rows of `provenance` on the original on SENAITE-era
+    (non-mk1) services whose keyword is the legacy HPLC family ('core' in
+    lims_analyses.service.legacy_family: HPLC-PUR, PEPT-Total, ID_*, ...).
+    Shadow rows are live by mirror_review_state, canonical by review_state."""
+    from lims_analyses.service import legacy_family  # local: import cycle
+    rows = db.execute(select(LimsAnalysis, AnalysisService.origin)
+                      .outerjoin(AnalysisService, AnalysisService.id == LimsAnalysis.analysis_service_id)
+                      .where(LimsAnalysis.lims_sample_pk == original.id,
+                             LimsAnalysis.lims_sub_sample_pk.is_(None),
+                             LimsAnalysis.provenance == provenance,
+                             LimsAnalysis.retested.is_(False))).all()
+    state = "mirror_review_state" if provenance == "shadow" else "review_state"
+    return [r for r, origin in rows
+            if (origin or "") != "mk1" and getattr(r, state) not in _DEAD_STATES
+            and (legacy_family(r.keyword) or (None,))[0] == "core"]
+
+
+def _twin_services(db: Session) -> list:
+    """Members of the alias's native twin (inactive on prod; looked up anyway)."""
+    twin = _profiles_by_key(db, [NATIVE_HPLC_KEY]).get(NATIVE_HPLC_KEY)
+    return list(twin.analysis_services) if twin else []
+
+
+def _judged(db: Session, original: LimsSample, prof: AnalysisProfile):
+    """(services, legacy canonical rows) `prof` is judged and carried by on
+    `original`. Its members; the member-less legacy HPLC alias also takes its
+    native twin's members (a pre-flip sample benched natively) and the old
+    HPLC services' live canonical parent rows actually on the sample."""
+    members = list(prof.analysis_services)
+    if prof.key != LEGACY_HPLC_KEY:
+        return members, []
+    members += [s for s in _twin_services(db) if s not in members]
+    return members, _legacy_hplc_rows(db, original, "canonical")
+
+
+def judged_service_ids(db: Session, original: LimsSample, prof: AnalysisProfile) -> set[int]:
+    services, legacy = _judged(db, original, prof)
+    return {s.id for s in services} | {r.analysis_service_id for r in legacy}
+
+
 def _carry_plan(db: Session, original: LimsSample, prof: AnalysisProfile):
     """(rows to copy, withdrawn mk1 members) when `prof` may be carried, else None.
 
@@ -174,10 +222,18 @@ def _carry_plan(db: Session, original: LimsSample, prof: AnalysisProfile):
     or be withdrawn by the lab (coa.native_sections._withdrawn_by_lab), or
     never have been on the sample at all (no row at any tier: the blend
     aggregates on a single-analyte sample). At least one row must carry.
-    A pending member blocks the carry: the retest COA would abort on Rule 4."""
+    A pending member blocks the carry: the retest COA would abort on Rule 4.
+    Old-service HPLC rows (the alias, _judged) must all be verified/published."""
     from coa.native_sections import _withdrawn_by_lab  # local: import cycle
-    members = list(prof.analysis_services)
-    rows = _live_carry_rows(db, original, {svc.id for svc in members})
+    members, legacy = _judged(db, original, prof)
+    if any(r.review_state not in _CARRY_SOURCE_STATES for r in legacy):
+        return None
+    rows = _live_carry_rows(db, original, {svc.id for svc in members}
+                            | {r.analysis_service_id for r in legacy})
+    if not rows and not legacy and CARRY_SHADOW_ONLY_HPLC and prof.key == LEGACY_HPLC_KEY:
+        shadow = _legacy_hplc_rows(db, original, "shadow")
+        if shadow and all(r.mirror_review_state in _CARRY_SOURCE_STATES for r in shadow):
+            return shadow, []
     if not rows:
         return None
     live = {r.analysis_service_id for r in rows}
@@ -200,6 +256,18 @@ def carry_eligible_profile_keys(db: Session, original: LimsSample) -> set[str]:
     on a single-analyte sample), so there is nothing pending to wait for."""
     profiles = _profiles_by_key(db, snapshot_profile_keys(original))
     return {key for key, prof in profiles.items() if _carry_plan(db, original, prof) is not None}
+
+
+def carry_blocked_reason(db: Session, original: LimsSample, prof: AnalysisProfile | None) -> str:
+    """Why a profile _carry_plan refused cannot be carried (the overlay text)."""
+    if prof is None:
+        return "not in the catalog"
+    if _live_carry_rows(db, original, judged_service_ids(db, original, prof)):
+        return "a result is still pending"
+    if prof.key == LEGACY_HPLC_KEY and not _judged(db, original, prof)[1] \
+            and _legacy_hplc_rows(db, original, "shadow"):
+        return SHADOW_ONLY_REASON
+    return "not verified yet"
 
 
 def validate_retest_spec(db: Session, *, original: LimsSample, spec: RetestSpec) -> list[str]:
@@ -414,9 +482,14 @@ def _retire_carried_placeholders(db: Session, *, parent: LimsSample, original: L
                                  carry_keys, demand_keys, user_id: int | None) -> int:
     """Soft-reject every live 'ordered' placeholder on the retest whose
     service belongs to a carried profile and to no demand profile (the
-    Manage Analyses remove primitive). Returns the count."""
+    Manage Analyses remove primitive). A carried legacy HPLC alias also
+    retires its native twin's placeholders, unless HPLC is in demand.
+    Returns the count."""
     from lims_analyses.service import soft_reject_parent_placeholder
-    carried_ids = {s.id for p in _profiles_by_key(db, carry_keys).values() for s in p.analysis_services}
+    carried = _profiles_by_key(db, carry_keys)
+    carried_ids = {s.id for p in carried.values() for s in p.analysis_services}
+    if LEGACY_HPLC_KEY in carried and not HPLC_PROFILE_KEYS & set(demand_keys):
+        carried_ids |= {s.id for s in _twin_services(db)}
     carried_ids -= {s.id for p in _profiles_by_key(db, demand_keys).values() for s in p.analysis_services}
     if not carried_ids:
         return 0
