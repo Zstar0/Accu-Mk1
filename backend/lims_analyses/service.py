@@ -1402,6 +1402,17 @@ _LEGACY_SECTION_RULES: tuple = (
 )
 
 
+def legacy_family(keyword: str | None) -> tuple | None:
+    """(family key, sort) for a SENAITE-era keyword per _LEGACY_SECTION_RULES,
+    else None. 'core' is the legacy HPLC family."""
+    kw = (keyword or "").upper()
+    if kw:
+        for key, _label, sort, prefixes in _LEGACY_SECTION_RULES:
+            if any(kw.startswith(p) or (len(p) > 3 and p in kw) for p in prefixes):
+                return (key, sort)
+    return None
+
+
 def _annotate_profile_sections(db: Session, parent, shaped: list) -> None:
     """Fill profile_section_* on shaped rows, in place (mk1 main table).
 
@@ -1438,13 +1449,7 @@ def _annotate_profile_sections(db: Session, parent, shaped: list) -> None:
         sid = row.analysis_service_id
         if sid is not None and sid in section_by_service:
             return section_by_service[sid]
-        kw = (row.keyword or "").upper()
-        if kw:
-            for key, _label, sort, prefixes in _LEGACY_SECTION_RULES:
-                if any(kw.startswith(p) or (len(p) > 3 and p in kw)
-                       for p in prefixes):
-                    return (key, sort)
-        return (None, None)
+        return legacy_family(row.keyword) or (None, None)
 
     resolved = [_classify(r) for r in shaped]
     needed_keys = {key for key, _ in resolved if key}
@@ -1773,6 +1778,20 @@ def native_parent_line_states(db: Session, parent_sample_id: str) -> Dict[str, s
     return states
 
 
+def canonical_ever_keys(db: Session, parent_pk: int) -> set:
+    """(keyword, slot or 0) of every canonical parent-tier row the parent ever
+    held, in any state: the lines the canonical tier owns. A shadow row for
+    one of them never surfaces (list_parent_analyses_senaite_shape, so the
+    COA row set); the retest carry judges legacy HPLC lines by the same rule."""
+    return {(kw, slot or 0) for kw, slot in db.execute(
+        select(LimsAnalysis.keyword, LimsAnalysis.slot).where(
+            LimsAnalysis.lims_sample_pk == parent_pk,
+            LimsAnalysis.lims_sub_sample_pk.is_(None),
+            LimsAnalysis.provenance == "canonical",
+        ).distinct()
+    ).all()}
+
+
 def list_parent_analyses_senaite_shape(
     db: Session,
     parent_sample_id: str,
@@ -1938,13 +1957,7 @@ def list_parent_analyses_senaite_shape(
     # collapses only its own slot's shadow/placeholder counterpart, never a
     # sibling slot sharing the same keyword (spec 2026-09-10 M6 addendum).
     live_canonical_kw_keys = {kw_slot_key(r) for r in rows if r.provenance == "canonical"}
-    canonical_ever = {(kw, slot or 0) for kw, slot in db.execute(
-        select(LimsAnalysis.keyword, LimsAnalysis.slot).where(
-            LimsAnalysis.lims_sample_pk == parent.id,
-            LimsAnalysis.lims_sub_sample_pk.is_(None),
-            LimsAnalysis.provenance == "canonical",
-        ).distinct()
-    ).all()} | live_canonical_kw_keys
+    canonical_ever = canonical_ever_keys(db, parent.id) | live_canonical_kw_keys
     rows = [
         r for r in rows
         if r.provenance == "canonical"

@@ -7707,7 +7707,7 @@ export async function getSampleRetestInfo(sampleId: string): Promise<SampleRetes
 
 export const HPLC_PROFILE_KEYS = ['hplcpurity_identity', 'hplc-purity-identity'] as const
 
-export interface RetestOptionProfile { key: string; name: string; carry_eligible: boolean; state: string | null; verified_at: string | null; state_label: string }
+export interface RetestOptionProfile { key: string; name: string; carry_eligible: boolean; state: string | null; verified_at: string | null; state_label: string; carry_blocked_reason?: string | null }
 export interface RetestOptionAddon { key: string; name: string; wp_type: string | null; price: number | null; vials: number | null; sellable: boolean }
 export interface RetestContextOrderLine { key: string; label: string; price: number }
 export interface RetestContextOrder {

@@ -114,6 +114,22 @@ function clampInt(v: string, min: number, max: number): number {
 
 const names = (list: { name: string }[]) => list.map(p => p.name).join(', ')
 
+const CARRY_BLOCKED_FALLBACK = 'not verified'
+
+/** "A, B dropped (reason)", one clause per backend carry_blocked_reason. */
+const droppedClauses = (
+  list: { name: string; carry_blocked_reason?: string | null }[]
+) => {
+  const byReason = new Map<string, string[]>()
+  for (const p of list) {
+    const reason = p.carry_blocked_reason ?? CARRY_BLOCKED_FALLBACK
+    byReason.set(reason, [...(byReason.get(reason) ?? []), p.name])
+  }
+  return [...byReason]
+    .map(([reason, ns]) => `${ns.join(', ')} dropped (${reason})`)
+    .join('; ')
+}
+
 function copyLink(url: string) {
   if (!navigator.clipboard) {
     toast.error('Copy failed')
@@ -345,9 +361,7 @@ export function RetestDialog({
           (eligible.length
             ? `; ${names(eligible)} carried from ${sampleId}`
             : '') +
-          (ineligible.length
-            ? `; ${names(ineligible)} dropped (not verified)`
-            : '') +
+          (ineligible.length ? `; ${droppedClauses(ineligible)}` : '') +
           '.'
       )
     }
@@ -607,7 +621,8 @@ export function RetestDialog({
                         </label>
                         {!p.carry_eligible && (
                           <span className="block text-xs text-muted-foreground">
-                            cannot carry: not verified
+                            cannot carry:{' '}
+                            {p.carry_blocked_reason ?? CARRY_BLOCKED_FALLBACK}
                           </span>
                         )}
                       </TableCell>
