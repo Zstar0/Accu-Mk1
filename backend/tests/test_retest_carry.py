@@ -574,6 +574,20 @@ def test_withdrawn_line_without_a_rerun_does_not_block(db, monkeypatch):
     assert _options(db, "P-3182", monkeypatch)["hplcpurity_identity"]["carry_eligible"] is True
 
 
+def test_admin_retract_with_a_still_verified_source_reads_as_withdrawn(db, monkeypatch):
+    # The source vial row is not a re-run of itself: with nothing else pending
+    # on that vial and service, the retracted line is withdrawn, not "being re-run".
+    _, _, rows, _ = _p3182(db)
+    row, src = rows["HPLC-PUR"]
+    row.review_state = "retracted"
+    src.review_state = "verified"
+    src.retested = False
+    db.commit()
+    hplc = _options(db, "P-3182", monkeypatch)["hplcpurity_identity"]
+    assert hplc["carry_eligible"] is True
+    assert hplc["carry_blocked_reason"] is None
+
+
 def test_shadow_gate_on_labels_the_senaite_verification(db, monkeypatch):
     from lims_analyses import retest_carry
     monkeypatch.setattr(retest_carry, "CARRY_SHADOW_ONLY_HPLC", True)

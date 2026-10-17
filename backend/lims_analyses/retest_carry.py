@@ -237,6 +237,9 @@ def _rerun_pending(db: Session, original: LimsSample, have: set) -> str | None:
             src.lims_sub_sample_pk == LimsAnalysis.lims_sub_sample_pk,
             src.analysis_service_id == LimsAnalysis.analysis_service_id,
         )).where(src.id.in_(sources), LimsAnalysis.lims_sub_sample_pk.isnot(None),
+                 # the source itself is not its own re-run (an admin retract of
+                 # the parent leaves a still-'verified' source behind)
+                 LimsAnalysis.id.notin_(sources),
                  LimsAnalysis.retested.is_(False),
                  LimsAnalysis.review_state.in_(_PENDING_VIAL_STATES)).limit(1)).first()
         if pending is not None:
