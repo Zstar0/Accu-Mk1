@@ -26,6 +26,14 @@ describe('retestChipFor', () => {
       )
     ).toBe('added')
   })
+  it('flags the native HPLC placeholders when the spec names the legacy alias', () => {
+    expect(
+      retestChipFor(
+        { provenance: 'ordered', profile_section_key: 'hplc-purity-identity' },
+        { is_retest: true, retest: ['hplcpurity_identity'], add: [] }
+      )
+    ).toBe('retesting')
+  })
   it('never flags canonical rows, other profiles, or non-retest samples', () => {
     expect(
       retestChipFor(

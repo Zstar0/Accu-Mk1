@@ -1,10 +1,19 @@
-import type {
-  ParentPromotionInfo,
-  SampleRetestInfo,
-  SenaiteAnalysis,
+import {
+  HPLC_PROFILE_KEYS,
+  type ParentPromotionInfo,
+  type SampleRetestInfo,
+  type SenaiteAnalysis,
 } from './api'
 
 export type RetestLineChip = 'retesting' | 'added' | null
+
+const HPLC_KEYS: readonly string[] = HPLC_PROFILE_KEYS
+
+/** A spec may name the legacy HPLC alias while the placeholders carry the
+ *  native twin's key: both spellings are one profile. */
+function sameProfile(a: string, b: string): boolean {
+  return a === b || (HPLC_KEYS.includes(a) && HPLC_KEYS.includes(b))
+}
 
 /** Chip for an ORDERED placeholder line on a retest sample: the profile is
  *  being re-run ('retesting') or was bought new on the retest ('added'). */
@@ -21,8 +30,9 @@ export function retestChipFor(
     !row.profile_section_key
   )
     return null
-  if (info.retest?.includes(row.profile_section_key)) return 'retesting'
-  if (info.add?.includes(row.profile_section_key)) return 'added'
+  const key = row.profile_section_key
+  if (info.retest?.some(k => sameProfile(k, key))) return 'retesting'
+  if (info.add?.some(k => sameProfile(k, key))) return 'added'
   return null
 }
 
