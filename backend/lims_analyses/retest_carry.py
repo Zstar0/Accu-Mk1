@@ -73,6 +73,17 @@ class RetestSpec:
         }
 
 
+def _one(key: str) -> str:
+    """The HPLC alias and its native twin are one profile wherever they meet."""
+    return NATIVE_HPLC_KEY if key == LEGACY_HPLC_KEY else key
+
+
+def _meet(a, b) -> list[str]:
+    """Keys of `a` that `b` also holds, the HPLC alias and twin counting as one."""
+    bs = {_one(k) for k in b}
+    return sorted(k for k in a if _one(k) in bs)
+
+
 def _keys(value, field: str) -> tuple[str, ...]:
     if value is None:
         return ()
@@ -103,18 +114,18 @@ def parse_retest_spec(raw: dict) -> RetestSpec:
     fee = str(raw.get("fee") or "").strip().lower()
     reason = str(raw.get("reason") or "").strip()
 
-    overlap = set(retest) & set(carry)
+    overlap = _meet(retest, carry)
     if overlap:
-        raise BadRequestError(f"profiles cannot be both retested and carried: {sorted(overlap)}")
-    overlap = set(retest) & set(drop)
+        raise BadRequestError(f"profiles cannot be both retested and carried: {overlap}")
+    overlap = _meet(retest, drop)
     if overlap:
-        raise BadRequestError(f"profiles cannot be both retested and dropped: {sorted(overlap)}")
-    overlap = set(carry) & set(drop)
+        raise BadRequestError(f"profiles cannot be both retested and dropped: {overlap}")
+    overlap = _meet(carry, drop)
     if overlap:
-        raise BadRequestError(f"profiles cannot be both carried and dropped: {sorted(overlap)}")
-    overlap = set(add_profiles) & (set(retest) | set(carry))
+        raise BadRequestError(f"profiles cannot be both carried and dropped: {overlap}")
+    overlap = _meet(add_profiles, retest + carry)
     if overlap:
-        raise BadRequestError(f"added profiles cannot also be retested or carried: {sorted(overlap)}")
+        raise BadRequestError(f"added profiles cannot also be retested or carried: {overlap}")
     if not retest and not add_profiles and variance_points == 0:
         raise BadRequestError("retest_spec must retest or add at least one service")
     if variance_points not in (0, *range(2, 11)):
@@ -280,9 +291,9 @@ def validate_retest_spec(db: Session, *, original: LimsSample, spec: RetestSpec)
     unknown_drop = [k for k in spec.drop if k not in have]
     if unknown_drop:
         raise BadRequestError(f"not on {original.sample_id}, cannot be dropped: {unknown_drop}")
-    clash = set(spec.add_profiles) & have
+    clash = _meet(spec.add_profiles, have)
     if clash:
-        raise BadRequestError(f"already on the original, cannot be added: {sorted(clash)}")
+        raise BadRequestError(f"already on the original, cannot be added: {clash}")
     known = _profiles_by_key(db, spec.add_profiles)
     unknown = [k for k in spec.add_profiles if k not in known]
     if unknown:
@@ -451,20 +462,36 @@ def _has_warning(db: Session, sample: LimsSample, reason: str, message: str) -> 
     return False
 
 
-def _hplc_key(spec: RetestSpec) -> str:
-    """Whichever HPLC profile key the spec retests (parse guarantees one when variance is set)."""
-    return next(k for k in spec.retest if k in HPLC_PROFILE_KEYS)
+def _seed_keys(db: Session) -> dict[str, str]:
+    """{alias: twin} when the HPLC alias has no members and its native twin
+    does (prod since the native switch): a retest seeds and snapshots the
+    twin in the alias's place. Empty otherwise."""
+    profs = _profiles_by_key(db, [LEGACY_HPLC_KEY, NATIVE_HPLC_KEY])
+    alias, twin = profs.get(LEGACY_HPLC_KEY), profs.get(NATIVE_HPLC_KEY)
+    if (alias is None or not alias.analysis_services) and twin is not None and twin.analysis_services:
+        return {LEGACY_HPLC_KEY: NATIVE_HPLC_KEY}
+    return {}
 
 
-def _demand_services(spec: RetestSpec, services: dict) -> dict:
-    keys = set(spec.demand_keys)
+def _hplc_key(spec: RetestSpec, seed_keys: dict | None = None) -> str:
+    """The HPLC profile key the spec retests, as seeded (parse guarantees one
+    when variance is set). Either primary key satisfies hplc_primary_count."""
+    key = next(k for k in spec.retest if k in HPLC_PROFILE_KEYS)
+    return (seed_keys or {}).get(key, key)
+
+
+def _demand_services(spec: RetestSpec, services: dict, seed_keys: dict | None = None) -> dict:
+    """The services dict the retest seeds and snapshots: its demand profiles,
+    keys swapped per `seed_keys` (_seed_keys). The stored spec keeps the keys
+    as sent."""
+    keys = tuple(dict.fromkeys((seed_keys or {}).get(k, k) for k in spec.demand_keys))
     demand = {k: v for k, v in (services or {}).items() if k in keys}
-    for k in spec.demand_keys:
+    for k in keys:
         demand.setdefault(k, True)      # an added profile may be absent from the WP dict
     if spec.variance_points > 0:
         # The WP/IS wire shape normalize_variance_entitlement reads (prod
         # PB-1000): {"variance": {<hplc key>: points}, "samplevariance": True}.
-        demand["variance"] = {_hplc_key(spec): spec.variance_points}
+        demand["variance"] = {_hplc_key(spec, seed_keys): spec.variance_points}
         demand[VARIANCE_KEY] = True
     return demand
 
@@ -541,7 +568,7 @@ def apply_retest_spec(db: Session, *, parent: LimsSample, raw_spec: dict,
 
     parent.is_retest = True
     parent.retest_of_sample_id = original.sample_id
-    demand = _demand_services(spec, services or {})
+    demand = _demand_services(spec, services or {}, _seed_keys(db))
     seed_parent_from_services(db, parent=parent, services=demand, package=package, source=source)
     snap = dict(parent.catalog_snapshot or {})
     if first_time:

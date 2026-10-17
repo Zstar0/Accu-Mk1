@@ -232,8 +232,10 @@ def _p3182(db, *, pur_state="verified", canonical=True):
     import json
     alias = AnalysisProfile(key="hplcpurity_identity", name="HPLC Purity + Identity", is_addon=False,
                             active=True, vials_required=1, fulfillment_role="hplc")
+    # As catalog/hplc_native_seed.py seeds it (inactive, role hplc).
     twin = AnalysisProfile(key="hplc-purity-identity", name="HPLC Purity + Identity", is_addon=False,
-                           active=False, coa_archetype="legacy_hplc")
+                           active=False, coa_archetype="legacy_hplc", vials_required=1,
+                           fulfillment_role="hplc", fulfillment_dim="role")
     endo = AnalysisProfile(key=ENDO_KEY, name="Endotoxin USP85 LAL", is_addon=True, active=True,
                            coa_archetype="limit_table")
     native = [AnalysisService(title=kw.title(), keyword=kw, origin="mk1") for kw in NATIVE_KWS]
@@ -242,7 +244,8 @@ def _p3182(db, *, pur_state="verified", canonical=True):
         ("PEPT-Total", "Peptide Total Quantity"))}
     lal = AnalysisService(title="Endotoxin USP85 LAL", keyword="ENDOTOXIN-USP85LAL", origin="mk1",
                           unit="EU/mL")
-    db.add_all([alias, twin, endo, lal, *native, *old.values()])
+    from models import VialRole
+    db.add_all([alias, twin, endo, lal, *native, *old.values(), VialRole(code="hplc", label="HPLC", sort_order=0)])
     db.flush()
     twin.analysis_services.extend(native)
     endo.analysis_services.append(lal)
@@ -421,3 +424,88 @@ def test_natively_benched_pre_flip_sample_carries_its_native_rows(db, monkeypatc
     out = carry_results(db, original=original, retest=retest, profile_keys=["hplcpurity_identity"],
                         user_id=None)
     assert sorted(o["keyword"] for o in out) == ["HPLC-IDENTITY", "HPLC-PURITY", "HPLC-QUANTITY"]
+
+
+# Q4 (controller ruling 2026-10-16): re-testing (or adding) the member-less
+# alias seeds and snapshots its member-bearing twin, so the native-born
+# re-test gets native HPLC placeholders per slot.
+
+def _peptides(db, *names):
+    from models import Peptide
+    rows = [Peptide(name=n, abbreviation=n) for n in names]
+    db.add_all(rows)
+    db.flush()
+    return [p.id for p in rows]
+
+
+def _hplc_rows(db, sample):
+    return sorted((r.keyword, r.slot, r.peptide_id) for r in db.execute(select(LimsAnalysis).where(
+        LimsAnalysis.lims_sample_pk == sample.id, LimsAnalysis.provenance == "ordered",
+        LimsAnalysis.review_state.notin_(("rejected", "retracted")),
+        LimsAnalysis.keyword.like("HPLC-%"))).scalars())
+
+
+def test_alias_retest_seeds_the_twin_trio_in_the_original_slot(db, no_variance_override):
+    from lims_analyses.retest_carry import apply_retest_spec
+    _, retest, _, _ = _p3182(db)
+    [kpv] = _peptides(db, "KPV")
+    spec = _legacy_spec(retest=["hplcpurity_identity"], carry=[ENDO_KEY])
+    out = apply_retest_spec(db, parent=retest, raw_spec=spec, services={"hplcpurity_identity": True,
+                            ENDO_KEY: True}, package=None, source="order_upsert")
+    db.commit()
+    assert out["applied"] is True and out["carried"] == 1          # the endotoxin row
+    assert _hplc_rows(db, retest) == [("HPLC-IDENTITY", 1, kpv), ("HPLC-PURITY", 1, kpv),
+                                      ("HPLC-QUANTITY", 1, kpv)]
+    # Snapshot freezes the twin; the stored spec keeps the alias as sent.
+    assert [p["key"] for p in retest.catalog_snapshot["profiles"]] == ["hplc-purity-identity"]
+    assert retest.catalog_snapshot["retest"]["retest"] == ["hplcpurity_identity"]
+    assert out["demand_keys"] == ["hplcpurity_identity"]
+
+
+def test_alias_retest_on_a_blend_seeds_per_slot_and_the_aggregates(db, no_variance_override):
+    import json
+
+    from lims_analyses.retest_carry import apply_retest_spec
+    _, retest, _, _ = _p3182(db)
+    kpv, bpc = _peptides(db, "KPV", "BPC-157")
+    retest.analytes = json.dumps([{"name": "KPV - Identity (HPLC)"}, {"name": "BPC-157 - Identity (HPLC)"}])
+    db.commit()
+    apply_retest_spec(db, parent=retest, raw_spec=_legacy_spec(retest=["hplcpurity_identity"], carry=[ENDO_KEY]),
+                      services={}, package=None, source="order_upsert")
+    db.commit()
+    assert _hplc_rows(db, retest) == [
+        ("HPLC-BLEND-PURITY", None, None), ("HPLC-BLEND-TOTAL", None, None),
+        ("HPLC-IDENTITY", 1, kpv), ("HPLC-IDENTITY", 2, bpc), ("HPLC-PURITY", 1, kpv),
+        ("HPLC-PURITY", 2, bpc), ("HPLC-QUANTITY", 1, kpv), ("HPLC-QUANTITY", 2, bpc)]
+
+
+def test_alias_retest_variance_rides_the_seeded_hplc_key(db):
+    from catalog.hplc_keys import hplc_primary_count
+    from lims_analyses.retest_carry import (
+        _demand_services,
+        _seed_keys,
+        parse_retest_spec,
+    )
+    from sub_samples.service import (
+        derive_variance_demand,
+        normalize_variance_entitlement,
+    )
+    _p3182(db)
+    spec = parse_retest_spec(_legacy_spec(retest=["hplcpurity_identity"], carry=[ENDO_KEY],
+                                          add={"profiles": [], "variance_points": 3}))
+    demand = _demand_services(spec, {"hplcpurity_identity": True}, _seed_keys(db))
+    assert demand == {"hplc-purity-identity": True, "variance": {"hplc-purity-identity": 3},
+                      "samplevariance": True}
+    assert hplc_primary_count(normalize_variance_entitlement(demand)) == 3
+    assert derive_variance_demand(demand)["hplc"] == 2
+
+
+def test_alias_and_twin_spellings_count_as_one_profile(db):
+    from lims_analyses.retest_carry import parse_retest_spec, validate_retest_spec
+    from lims_analyses.service import BadRequestError
+    original, *_ = _p3182(db)
+    with pytest.raises(BadRequestError, match="both retested and carried"):
+        parse_retest_spec(_legacy_spec(retest=["hplc-purity-identity"], carry=["hplcpurity_identity"]))
+    with pytest.raises(BadRequestError, match="already on the original"):
+        validate_retest_spec(db, original=original, spec=parse_retest_spec(_legacy_spec(
+            carry=[], add={"profiles": ["hplc-purity-identity"]})))
