@@ -1,0 +1,3 @@
+2026-10-01T04:00:15.020Z P-0119: SENAITE card rendered for AGN8-YAU3
+2026-10-01T04:00:15.314Z P-0119: Manage popover shows Regen & Republish and Revoke, no Forward
+2026-10-01T04:00:15.613Z P-0119: Revoke dialog opened from the SENAITE card (reason field shown); cancelled

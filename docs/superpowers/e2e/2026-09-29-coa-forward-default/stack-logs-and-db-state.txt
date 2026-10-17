@@ -1,0 +1,48 @@
+since 2026-09-30T04:22:23Z
+=== integration-service
+{"sample_id": "PB-0069", "code": "584L-Q2LS", "event": "generation_upsert_update", "logger": "app.services.generation_service", "level": "INFO", "timestamp": "2026-09-30T04:22:46.916765Z"}
+{"sample_id": "PB-0069", "event": "desktop_publish_coa_request", "logger": "app.api.desktop", "level": "INFO", "timestamp": "2026-09-30T04:22:47.121564Z"}
+{"sample_id": "PB-0069", "old_code": "7RE7-338Y", "new_code": "584L-Q2LS", "event": "generation_superseded", "logger": "app.services.generation_service", "level": "INFO", "timestamp": "2026-09-30T04:22:47.125344Z"}
+{"sample_id": "PB-0069", "generation_number": 20, "verification_code": "584L-Q2LS", "event": "generation_published", "logger": "app.services.generation_service", "level": "INFO", "timestamp": "2026-09-30T04:22:47.127348Z"}
+{"sample_id": "PB-0069", "order_ref": "WP-3166", "endpoint": "http://wordpress:80/wp-json/accumark/v1/coa/notify", "headers": {"X-Accumark-Signature": "sha256=291e7b7f4b4bfe2c530763cbecfa170a11b2884d9c86a4bada82540b4b2aefb8", "X-Accumark-Timestamp": "1790742167", "X-Accumark-Nonce": "2c117e5f-5a20-4947-a0b0-4b66cdaad100", "Content-Type": "application/json"}, "event": "wordpress_notify_start", "log
+{"sample_id": "PB-0069", "verification_code": "584L-Q2LS", "order_ref": "WP-3166", "event": "desktop_publish_primary_coa_wp_notified", "logger": "app.api.desktop", "level": "INFO", "timestamp": "2026-09-30T04:22:47.392172Z"}
+{"sample_id": "PB-0069", "verification_code": "584L-Q2LS", "generation_number": 20, "order_ref": "WP-3166", "event": "desktop_publish_coa_success", "logger": "app.api.desktop", "level": "INFO", "timestamp": "2026-09-30T04:22:47.418095Z"}
+{"generation_id": "e911092c-5958-45b4-85e5-8b2ac4c6d100", "code": "7RE7-338Y", "forward_enabled": false, "event": "desktop_coa_forward_set", "logger": "app.api.desktop", "level": "INFO", "timestamp": "2026-09-30T04:23:01.260407Z"}
+{"generation_id": "e911092c-5958-45b4-85e5-8b2ac4c6d100", "code": "7RE7-338Y", "forward_enabled": true, "event": "desktop_coa_forward_set", "logger": "app.api.desktop", "level": "INFO", "timestamp": "2026-09-30T04:23:10.420554Z"}
+{"sample_id": "PB-0069", "code": "5YFV-4AWH", "event": "generation_upsert_update", "logger": "app.services.generation_service", "level": "INFO", "timestamp": "2026-09-30T04:23:21.726657Z"}
+{"old_code": "6RSP-FQSD", "new_code": "5YFV-4AWH", "sample_id": "PB-0069", "event": "additional_coa_superseded", "logger": "app.api.webhook", "level": "INFO", "timestamp": "2026-09-30T04:23:21.731798Z"}
+{"sample_id": "PB-0069", "order_ref": "WP-3166", "endpoint": "http://wordpress:80/wp-json/accumark/v1/coa/notify", "headers": {"X-Accumark-Signature": "sha256=60fc896f19f4be9c3cf8db581fb89145644ead9f8135e306bf207323eb15c977", "X-Accumark-Timestamp": "1790742201", "X-Accumark-Nonce": "b8664802-bfac-485e-891a-ef3ee4a1f353", "Content-Type": "application/json"}, "event": "wordpress_notify_start", "log
+{"child_id": "07902ae4-4d44-4361-8e6e-e72fef48ecf9", "verification_code": "5YFV-4AWH", "wp_notified": true, "child_status": "published", "coa_index": 1, "event": "additional_coa_publish_result", "logger": "app.api.webhook", "level": "INFO", "timestamp": "2026-09-30T04:23:21.876579Z"}
+=== accu-mk1-backend
+INFO:     172.28.0.12:39164 - "POST /wizard/senaite/samples/PB-0069/regen-primary-coa HTTP/1.1" 200 OK
+INFO:     172.28.0.12:59096 - "PATCH /explorer/coa-generations/e911092c-5958-45b4-85e5-8b2ac4c6d100/forward HTTP/1.1" 200 OK
+INFO:     172.28.0.12:53090 - "PATCH /explorer/coa-generations/e911092c-5958-45b4-85e5-8b2ac4c6d100/forward HTTP/1.1" 200 OK
+INFO:     172.28.0.12:39132 - "POST /wizard/senaite/additional-coas/208f570c-2e3b-484d-bd7f-ef4da30f52e8/regen-coa HTTP/1.1" 200 OK
+=== wordpress
+[COA Notify] Received: {"sample_id":"PB-0069","coa_version":20,"s3_key":"coa\\/584L-Q2LS.pdf","created_at":"2026-09-30T04:22:47Z","order_complete":true,"verification_code":"584L-Q2LS","sha256":"a0ccb4802a585d1018a262a4ddabe666ccbef7b5c00403ca872158d19270d0d1","order_ref":"WP-3166","client_sample_id"
+[COA Notify] Order #3166: Expected 2 samples, received 2 COAs
+[COA Notify] Stored primary COA for order #3166, sample PB-0069, version 20, code: 584L-Q2LS (was: 7RE7-338Y)
+[COA Notify] Triggered COA Reissued email for order #3166, sample PB-0069 (supersedes 7RE7-338Y)
+[COA Notify] Received: {"sample_id":"PB-0069","coa_version":1,"s3_key":"coa\\/5YFV-4AWH.pdf","created_at":"2026-09-30T04:23:21Z","order_complete":false,"verification_code":"5YFV-4AWH","sha256":"b87ac1ed3eacc6a45ff7b9801855197041024ace4e1d43ca0958606b69fe8a88","order_ref":"WP-3166","client_sample_id"
+[COA Notify] Stored additional COA #1 for order #3166, sample PB-0069, version 1, code: 5YFV-4AWH (was: 6RSP-FQSD), profile: profile_1772254448
+=== db: coa_generations PB-0069
+verification_code|generation_number|status|forward_enabled|has_successor|child|created_at|superseded_at
+5YFV-4AWH|21|published|f|f|t|2026-09-30 04:23:21|
+584L-Q2LS|20|published|f|f|f|2026-09-30 04:22:46|
+6RSP-FQSD|19|superseded|t|t|t|2026-09-30 04:20:45|2026-09-30 04:23:22
+A43B-ZBTH|18|superseded|t|t|t|2026-04-24 20:39:28|2026-09-30 04:20:47
+7RE7-338Y|17|superseded|t|t|f|2026-04-24 20:39:27|2026-09-30 04:22:47
+HXXF-JWPT|16|superseded|f|t|t|2026-04-24 20:31:34|2026-04-24 20:39:40
+4B6Z-FYXS|15|superseded|f|t|f|2026-04-24 20:31:33|2026-04-24 20:39:40
+FSXT-369F|14|superseded|f|t|t|2026-04-24 20:09:10|2026-04-24 20:31:39
+(8 rows)
+=== db: wp_accumark_client_peptides PB-0069
+latest_verification_code	peptide_name	is_additional_coa	superseded_at	revoked_at	updated_at
+5YFV-4AWH	BPC-TB — Additional #1	1	NULL	NULL	2026-09-30 04:23:21
+584L-Q2LS	BPC-TB	0	NULL	NULL	2026-09-30 04:22:47
+6RSP-FQSD	BPC-TB — Additional #1	1	2026-09-30 04:23:21	NULL	2026-09-30 04:20:46
+Y343-5P9D	BPC-157, TB500 (17-23 Fragment)	0	NULL	NULL	2026-05-07 17:36:44
+Z4AG-XYZ9	BPC-TB	0	2026-05-06 02:46:00	NULL	2026-05-07 17:36:44
+597J-5ZBP	BPC-TB	0	2026-05-06 02:46:00	NULL	2026-05-07 17:36:44
+X923-Q8NY	BPC-TB	0	2026-05-06 02:46:00	NULL	2026-05-07 17:36:44
+MG4R-68DJ	BPC-TB	0	2026-05-06 02:46:00	NULL	2026-05-07 17:36:44
