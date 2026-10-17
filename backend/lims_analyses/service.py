@@ -1778,6 +1778,20 @@ def native_parent_line_states(db: Session, parent_sample_id: str) -> Dict[str, s
     return states
 
 
+def canonical_ever_keys(db: Session, parent_pk: int) -> set:
+    """(keyword, slot or 0) of every canonical parent-tier row the parent ever
+    held, in any state: the lines the canonical tier owns. A shadow row for
+    one of them never surfaces (list_parent_analyses_senaite_shape, so the
+    COA row set); the retest carry judges legacy HPLC lines by the same rule."""
+    return {(kw, slot or 0) for kw, slot in db.execute(
+        select(LimsAnalysis.keyword, LimsAnalysis.slot).where(
+            LimsAnalysis.lims_sample_pk == parent_pk,
+            LimsAnalysis.lims_sub_sample_pk.is_(None),
+            LimsAnalysis.provenance == "canonical",
+        ).distinct()
+    ).all()}
+
+
 def list_parent_analyses_senaite_shape(
     db: Session,
     parent_sample_id: str,
@@ -1943,13 +1957,7 @@ def list_parent_analyses_senaite_shape(
     # collapses only its own slot's shadow/placeholder counterpart, never a
     # sibling slot sharing the same keyword (spec 2026-09-10 M6 addendum).
     live_canonical_kw_keys = {kw_slot_key(r) for r in rows if r.provenance == "canonical"}
-    canonical_ever = {(kw, slot or 0) for kw, slot in db.execute(
-        select(LimsAnalysis.keyword, LimsAnalysis.slot).where(
-            LimsAnalysis.lims_sample_pk == parent.id,
-            LimsAnalysis.lims_sub_sample_pk.is_(None),
-            LimsAnalysis.provenance == "canonical",
-        ).distinct()
-    ).all()} | live_canonical_kw_keys
+    canonical_ever = canonical_ever_keys(db, parent.id) | live_canonical_kw_keys
     rows = [
         r for r in rows
         if r.provenance == "canonical"

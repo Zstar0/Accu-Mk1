@@ -228,7 +228,7 @@ def no_variance_override(monkeypatch):
     monkeypatch.setattr("sub_samples.service._apply_variance_override", lambda _sid, raw: raw)
 
 
-def _p3182(db, *, pur_state="verified", canonical=True):
+def _p3182(db, *, pur_state="verified", canonical=True, shadow=True):
     import json
     alias = AnalysisProfile(key="hplcpurity_identity", name="HPLC Purity + Identity", is_addon=False,
                             active=True, vials_required=1, fulfillment_role="hplc")
@@ -278,9 +278,11 @@ def _p3182(db, *, pur_state="verified", canonical=True):
             db.add(LimsAnalysisPromotion(parent_analysis_id=row.id, source_analysis_id=src.id,
                                          contribution_kind="chosen"))
             rows[kw] = (row, src)
-        db.add(LimsAnalysis(lims_sample_pk=original.id, analysis_service_id=svc.id, keyword=kw,
-                            title=svc.title, provenance="shadow", review_state="senaite_mirror",
-                            mirror_review_state="verified", result_value=values[kw]))
+        if shadow:
+            db.add(LimsAnalysis(lims_sample_pk=original.id, analysis_service_id=svc.id, keyword=kw,
+                                title=svc.title, provenance="shadow", review_state="senaite_mirror",
+                                mirror_review_state="verified", result_value=values[kw],
+                                verified_at=datetime(2026, 9, 29, 10, 0)))  # noqa: DTZ001
     db.add(LimsAnalysis(lims_sample_pk=original.id, analysis_service_id=lal.id, keyword=lal.keyword,
                         title=lal.title, provenance="canonical", review_state="published",
                         result_value="0.25", result_unit="EU/mL",
@@ -412,7 +414,9 @@ def test_shadow_only_gate_on_copies_shadow_values_into_canonical_rows(db, monkey
 
 def test_natively_benched_pre_flip_sample_carries_its_native_rows(db, monkeypatch):
     from lims_analyses.retest_carry import carry_eligible_profile_keys
-    original, retest, _, native = _p3182(db, canonical=False)
+    # Benched natively: no old-service lines at all (a SENAITE shadow line
+    # would be a second, uncarried HPLC set and blocks; see B1).
+    original, retest, _, native = _p3182(db, canonical=False, shadow=False)
     for svc, val in zip(native[:3], ("KPV", "99.1", "35.0")):
         db.add(LimsAnalysis(lims_sample_pk=original.id, analysis_service_id=svc.id, keyword=svc.keyword,
                             title=svc.title, provenance="canonical", review_state="verified",
@@ -509,3 +513,69 @@ def test_alias_and_twin_spellings_count_as_one_profile(db):
     with pytest.raises(BadRequestError, match="already on the original"):
         validate_retest_spec(db, original=original, spec=parse_retest_spec(_legacy_spec(
             carry=[], add={"profiles": ["hplc-purity-identity"]})))
+
+
+# B1 (review 2026-10-16): the alias carries only a COMPLETE old-service HPLC
+# set, judged by the same lines the original's COA prints (canonical_ever_keys).
+
+def _drop_canonical(db, rows, kw):
+    """The line exists only as its SENAITE shadow: no canonical row ever held it."""
+    row, src = rows[kw]
+    db.query(LimsAnalysisPromotion).filter_by(parent_analysis_id=row.id).delete()
+    db.delete(row)
+    db.delete(src)
+    db.commit()
+
+
+def test_shadow_only_line_in_a_canonical_set_blocks_the_carry(db, monkeypatch):
+    from lims_analyses.retest_carry import carry_eligible_profile_keys
+    original, retest, rows, _ = _p3182(db)
+    _drop_canonical(db, rows, "PEPT-Total")
+    hplc = _options(db, "P-3182", monkeypatch)["hplcpurity_identity"]
+    assert hplc["carry_eligible"] is False
+    assert hplc["carry_blocked_reason"] == "HPLC PEPT-Total is not verified in Mk1"
+    assert "hplcpurity_identity" not in carry_eligible_profile_keys(db, original)
+    assert carry_results(db, original=original, retest=retest, profile_keys=["hplcpurity_identity"],
+                         user_id=None) == []
+
+
+def test_mixed_set_carries_every_line_when_the_shadow_gate_is_on(db, monkeypatch):
+    from lims_analyses import retest_carry
+    monkeypatch.setattr(retest_carry, "CARRY_SHADOW_ONLY_HPLC", True)
+    original, retest, rows, _ = _p3182(db)
+    _drop_canonical(db, rows, "PEPT-Total")
+    out = carry_results(db, original=original, retest=retest, profile_keys=["hplcpurity_identity"],
+                        user_id=None)
+    assert sorted(o["keyword"] for o in out) == ["HPLC-PUR", "ID_KPV", "PEPT-Total"]
+
+
+def test_unpromoted_line_with_a_pending_rerun_blocks_the_carry(db, monkeypatch):
+    original, retest, rows, _ = _p3182(db)
+    row, src = rows["HPLC-PUR"]
+    row.review_state = "retracted"          # un-promoted
+    src.retested = True
+    db.add(LimsAnalysis(lims_sub_sample_pk=src.lims_sub_sample_pk, analysis_service_id=src.analysis_service_id,
+                        keyword=src.keyword, title=src.title, review_state="unassigned", retest_of_id=src.id))
+    db.commit()
+    hplc = _options(db, "P-3182", monkeypatch)["hplcpurity_identity"]
+    assert hplc["carry_eligible"] is False
+    assert hplc["carry_blocked_reason"] == "HPLC HPLC-PUR is being re-run"
+    assert carry_results(db, original=original, retest=retest, profile_keys=["hplcpurity_identity"],
+                         user_id=None) == []
+
+
+def test_withdrawn_line_without_a_rerun_does_not_block(db, monkeypatch):
+    # Retracted with nothing pending (e.g. withdrawn on relabel): the original's
+    # own COA no longer prints it either, so the rest of the set carries.
+    _, _, rows, _ = _p3182(db)
+    rows["HPLC-PUR"][0].review_state = "retracted"
+    db.commit()
+    assert _options(db, "P-3182", monkeypatch)["hplcpurity_identity"]["carry_eligible"] is True
+
+
+def test_shadow_gate_on_labels_the_senaite_verification(db, monkeypatch):
+    from lims_analyses import retest_carry
+    monkeypatch.setattr(retest_carry, "CARRY_SHADOW_ONLY_HPLC", True)
+    _p3182(db, canonical=False)
+    hplc = _options(db, "P-3182", monkeypatch)["hplcpurity_identity"]
+    assert hplc["carry_eligible"] is True and hplc["state_label"] == "Verified (SENAITE) 9/29"

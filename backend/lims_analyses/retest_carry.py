@@ -28,6 +28,8 @@ CARRIED = "carried"
 HPLC_PROFILE_KEYS = frozenset({"hplcpurity_identity", "hplc-purity-identity"})
 _CARRY_SOURCE_STATES = ("verified", "published")
 _DEAD_STATES = ("retracted", "rejected", "cancelled")
+# A vial-tier row in one of these is a result on its way to the parent.
+_PENDING_VIAL_STATES = ("unassigned", "assigned", "to_be_verified", "verified")
 _FEES = ("paid", "free")
 SHADOW_ONLY_REASON = "results only in SENAITE (never verified in Mk1)"
 # Pre-flip samples whose HPLC was verified only in SENAITE (shadow rows, no
@@ -203,22 +205,72 @@ def _legacy_hplc_rows(db: Session, original: LimsSample, provenance: str) -> lis
             and (legacy_family(r.keyword) or (None,))[0] == "core"]
 
 
+def _pending_vial_keys(db: Session, original: LimsSample) -> set:
+    """(keyword, slot or 0) of live vial-tier rows on the original's old HPLC
+    services that have not reached the parent yet (a re-run in progress)."""
+    from lims_analyses.service import legacy_family  # local: import cycle
+    from models import LimsSubSample
+    vial_ids = select(LimsSubSample.id).where(LimsSubSample.parent_sample_pk == original.id)
+    rows = db.execute(select(LimsAnalysis.keyword, LimsAnalysis.slot, AnalysisService.origin)
+                      .outerjoin(AnalysisService, AnalysisService.id == LimsAnalysis.analysis_service_id)
+                      .where(LimsAnalysis.lims_sub_sample_pk.in_(vial_ids),
+                             LimsAnalysis.retested.is_(False),
+                             LimsAnalysis.review_state.in_(_PENDING_VIAL_STATES))).all()
+    return {(kw, slot or 0) for kw, slot, origin in rows
+            if (origin or "") != "mk1" and (legacy_family(kw) or (None,))[0] == "core"}
+
+
+def _legacy_hplc_plan(db: Session, original: LimsSample) -> tuple[list[LimsAnalysis], str | None]:
+    """(old-service HPLC rows to copy, why they cannot be) for the lines the
+    original reports. A line is a (keyword, slot) on a non-mk1 'core' service
+    held as: a live canonical row; a live shadow row no canonical row ever
+    held (canonical_ever_keys: the original's COA prints it from the shadow);
+    or a retracted canonical line whose re-run is pending on a vial. Every
+    line needs a live verified/published canonical row (with
+    CARRY_SHADOW_ONLY_HPLC, a shadow-only line may source from its
+    mirror-verified shadow). A partial set never carries."""
+    from lims_analyses.service import canonical_ever_keys  # local: import cycle
+    canonical = _legacy_hplc_rows(db, original, "canonical")
+    if any(r.review_state not in _CARRY_SOURCE_STATES for r in canonical):
+        return [], "a result is still pending"
+    rows = list(canonical)
+    have = {(r.keyword, r.slot or 0) for r in canonical}
+    ever = canonical_ever_keys(db, original.id)
+    for r in _legacy_hplc_rows(db, original, "shadow"):
+        key = (r.keyword, r.slot or 0)
+        if key in ever:
+            continue                    # the canonical tier owns this line
+        if not (CARRY_SHADOW_ONLY_HPLC and r.mirror_review_state in _CARRY_SOURCE_STATES):
+            return [], (f"HPLC {r.keyword} is not verified in Mk1" if canonical else SHADOW_ONLY_REASON)
+        rows.append(r)
+        have.add(key)
+    rerun = sorted((_pending_vial_keys(db, original) & ever) - have)
+    if rerun:
+        return [], f"HPLC {rerun[0][0]} is being re-run"
+    return rows, None
+
+
 def _twin_services(db: Session) -> list:
     """Members of the alias's native twin (inactive on prod; looked up anyway)."""
     twin = _profiles_by_key(db, [NATIVE_HPLC_KEY]).get(NATIVE_HPLC_KEY)
     return list(twin.analysis_services) if twin else []
 
 
-def _judged(db: Session, original: LimsSample, prof: AnalysisProfile):
-    """(services, legacy canonical rows) `prof` is judged and carried by on
-    `original`. Its members; the member-less legacy HPLC alias also takes its
-    native twin's members (a pre-flip sample benched natively) and the old
-    HPLC services' live canonical parent rows actually on the sample."""
+def _members(db: Session, prof: AnalysisProfile) -> list:
+    """Its members; the member-less legacy HPLC alias also takes its native
+    twin's members (a pre-flip sample benched natively)."""
     members = list(prof.analysis_services)
-    if prof.key != LEGACY_HPLC_KEY:
-        return members, []
-    members += [s for s in _twin_services(db) if s not in members]
-    return members, _legacy_hplc_rows(db, original, "canonical")
+    if prof.key == LEGACY_HPLC_KEY:
+        members += [s for s in _twin_services(db) if s not in members]
+    return members
+
+
+def _judged(db: Session, original: LimsSample, prof: AnalysisProfile):
+    """(services, legacy canonical rows) `prof` is judged by on `original`:
+    _members, plus for the alias the old HPLC services' live canonical parent
+    rows actually on the sample."""
+    legacy = _legacy_hplc_rows(db, original, "canonical") if prof.key == LEGACY_HPLC_KEY else []
+    return _members(db, prof), legacy
 
 
 def judged_service_ids(db: Session, original: LimsSample, prof: AnalysisProfile) -> set[int]:
@@ -234,17 +286,15 @@ def _carry_plan(db: Session, original: LimsSample, prof: AnalysisProfile):
     never have been on the sample at all (no row at any tier: the blend
     aggregates on a single-analyte sample). At least one row must carry.
     A pending member blocks the carry: the retest COA would abort on Rule 4.
-    Old-service HPLC rows (the alias, _judged) must all be verified/published."""
+    The alias's old-service HPLC lines must be complete (_legacy_hplc_plan)."""
     from coa.native_sections import _withdrawn_by_lab  # local: import cycle
-    members, legacy = _judged(db, original, prof)
-    if any(r.review_state not in _CARRY_SOURCE_STATES for r in legacy):
-        return None
-    rows = _live_carry_rows(db, original, {svc.id for svc in members}
-                            | {r.analysis_service_id for r in legacy})
-    if not rows and not legacy and CARRY_SHADOW_ONLY_HPLC and prof.key == LEGACY_HPLC_KEY:
-        shadow = _legacy_hplc_rows(db, original, "shadow")
-        if shadow and all(r.mirror_review_state in _CARRY_SOURCE_STATES for r in shadow):
-            return shadow, []
+    members = _members(db, prof)
+    legacy: list[LimsAnalysis] = []
+    if prof.key == LEGACY_HPLC_KEY:
+        legacy, why = _legacy_hplc_plan(db, original)
+        if why:
+            return None
+    rows = _live_carry_rows(db, original, {svc.id for svc in members}) + legacy
     if not rows:
         return None
     live = {r.analysis_service_id for r in rows}
@@ -273,11 +323,12 @@ def carry_blocked_reason(db: Session, original: LimsSample, prof: AnalysisProfil
     """Why a profile _carry_plan refused cannot be carried (the overlay text)."""
     if prof is None:
         return "not in the catalog"
+    if prof.key == LEGACY_HPLC_KEY:
+        why = _legacy_hplc_plan(db, original)[1]
+        if why:
+            return why
     if _live_carry_rows(db, original, judged_service_ids(db, original, prof)):
         return "a result is still pending"
-    if prof.key == LEGACY_HPLC_KEY and not _judged(db, original, prof)[1] \
-            and _legacy_hplc_rows(db, original, "shadow"):
-        return SHADOW_ONLY_REASON
     return "not verified yet"
 
 
