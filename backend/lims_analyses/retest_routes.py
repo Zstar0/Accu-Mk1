@@ -115,9 +115,12 @@ def _latest_verified_at(db: Session, sample: LimsSample, service_ids: set[int]):
 
 
 def _senaite_verified_label(db: Session, sample: LimsSample) -> str:
-    """Label for an alias carried from SENAITE-only rows (CARRY_SHADOW_ONLY_HPLC)."""
-    times = [r.published_at or r.verified_at for r in _legacy_hplc_rows(db, sample, "shadow")
-             if r.published_at or r.verified_at]
+    """Label for an alias carried from SENAITE-only rows (CARRY_SHADOW_ONLY_HPLC).
+    The mirror rarely stamps verified_at on a shadow: published_at, then
+    captured_at, stand in; no date when none is set."""
+    stamps = (r.verified_at or r.published_at or r.captured_at
+              for r in _legacy_hplc_rows(db, sample, "shadow"))
+    times = [t for t in stamps if t]
     if not times:
         return "Verified (SENAITE)"
     t = max(times)

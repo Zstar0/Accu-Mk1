@@ -282,7 +282,8 @@ def _p3182(db, *, pur_state="verified", canonical=True, shadow=True):
             db.add(LimsAnalysis(lims_sample_pk=original.id, analysis_service_id=svc.id, keyword=kw,
                                 title=svc.title, provenance="shadow", review_state="senaite_mirror",
                                 mirror_review_state="verified", result_value=values[kw],
-                                verified_at=datetime(2026, 9, 29, 10, 0)))  # noqa: DTZ001
+                                # The mirror stamps no verified_at (prod); the capture date stands in.
+                                captured_at=datetime(2026, 9, 29, 10, 0)))  # noqa: DTZ001
     db.add(LimsAnalysis(lims_sample_pk=original.id, analysis_service_id=lal.id, keyword=lal.keyword,
                         title=lal.title, provenance="canonical", review_state="published",
                         result_value="0.25", result_unit="EU/mL",
@@ -579,3 +580,38 @@ def test_shadow_gate_on_labels_the_senaite_verification(db, monkeypatch):
     _p3182(db, canonical=False)
     hplc = _options(db, "P-3182", monkeypatch)["hplcpurity_identity"]
     assert hplc["carry_eligible"] is True and hplc["state_label"] == "Verified (SENAITE) 9/29"
+
+
+# B1 round 2: a blend promote stores the vial PUR_<X>/QTY_<X> as the parent
+# ANALYTE-{n}-PUR/QTY, so a pending re-run is found through the promotion link.
+
+@pytest.mark.parametrize("parent_kw, vial_kw", [("ANALYTE-1-PUR", "PUR_KPV"), ("ANALYTE-1-QTY", "QTY_KPV")])
+def test_unpromoted_blend_line_with_a_pending_rerun_blocks_the_carry(db, monkeypatch, parent_kw, vial_kw):
+    original, retest, rows, _ = _p3182(db)
+    vial_id = rows["HPLC-PUR"][1].lims_sub_sample_pk
+    parent_svc = AnalysisService(title=parent_kw, keyword=parent_kw, origin="senaite")
+    vial_svc = AnalysisService(title=vial_kw, keyword=vial_kw, origin="senaite")
+    db.add_all([parent_svc, vial_svc])
+    db.flush()
+    line = LimsAnalysis(lims_sample_pk=original.id, analysis_service_id=parent_svc.id, keyword=parent_kw,
+                        title=parent_kw, provenance="canonical", review_state="retracted")
+    src = LimsAnalysis(lims_sub_sample_pk=vial_id, analysis_service_id=vial_svc.id, keyword=vial_kw,
+                       title=vial_kw, review_state="promoted", result_value="98", retested=True)
+    db.add_all([line, src])
+    db.flush()
+    db.add(LimsAnalysisPromotion(parent_analysis_id=line.id, source_analysis_id=src.id,
+                                 contribution_kind="chosen"))
+    rerun = LimsAnalysis(lims_sub_sample_pk=vial_id, analysis_service_id=vial_svc.id, keyword=vial_kw,
+                         title=vial_kw, review_state="unassigned", retest_of_id=src.id)
+    db.add(rerun)
+    db.commit()
+    hplc = _options(db, "P-3182", monkeypatch)["hplcpurity_identity"]
+    assert hplc["carry_eligible"] is False
+    assert hplc["carry_blocked_reason"] == f"HPLC {parent_kw} is being re-run"
+    assert carry_results(db, original=original, retest=retest, profile_keys=["hplcpurity_identity"],
+                         user_id=None) == []
+    # Once the re-run is done and promoted, nothing is pending: the line no
+    # longer blocks (here it was never re-promoted, so it reads as withdrawn).
+    rerun.review_state = "promoted"
+    db.commit()
+    assert _options(db, "P-3182", monkeypatch)["hplcpurity_identity"]["carry_eligible"] is True

@@ -14,7 +14,7 @@ import logging
 from dataclasses import dataclass
 from datetime import datetime
 
-from sqlalchemy import select
+from sqlalchemy import and_, select
 from sqlalchemy.orm import Session
 
 from catalog.hplc_keys import LEGACY_HPLC_KEY, NATIVE_HPLC_KEY
@@ -205,19 +205,43 @@ def _legacy_hplc_rows(db: Session, original: LimsSample, provenance: str) -> lis
             and (legacy_family(r.keyword) or (None,))[0] == "core"]
 
 
-def _pending_vial_keys(db: Session, original: LimsSample) -> set:
-    """(keyword, slot or 0) of live vial-tier rows on the original's old HPLC
-    services that have not reached the parent yet (a re-run in progress)."""
-    from lims_analyses.service import legacy_family  # local: import cycle
-    from models import LimsSubSample
-    vial_ids = select(LimsSubSample.id).where(LimsSubSample.parent_sample_pk == original.id)
-    rows = db.execute(select(LimsAnalysis.keyword, LimsAnalysis.slot, AnalysisService.origin)
+def _rerun_pending(db: Session, original: LimsSample, have: set) -> str | None:
+    """Keyword of the first retracted old-service HPLC line (no live row in
+    `have`) whose re-run is still on its way: a live (retested=False), not yet
+    promoted row on the SAME vial and service as a source its promotion link
+    names (the vial current-row idiom). Keyword-agnostic, because a blend
+    promote stores vial PUR_<X>/QTY_<X> as parent ANALYTE-{n}-PUR/QTY. A line
+    whose link is gone (Replace/remove) or with nothing pending is withdrawn."""
+    from sqlalchemy.orm import aliased
+
+    from lims_analyses.service import (  # local: import cycle
+        legacy_family,
+        own_promotion_clause,
+    )
+    from models import LimsAnalysisPromotion
+    dead = db.execute(select(LimsAnalysis, AnalysisService.origin)
                       .outerjoin(AnalysisService, AnalysisService.id == LimsAnalysis.analysis_service_id)
-                      .where(LimsAnalysis.lims_sub_sample_pk.in_(vial_ids),
-                             LimsAnalysis.retested.is_(False),
-                             LimsAnalysis.review_state.in_(_PENDING_VIAL_STATES))).all()
-    return {(kw, slot or 0) for kw, slot, origin in rows
-            if (origin or "") != "mk1" and (legacy_family(kw) or (None,))[0] == "core"}
+                      .where(LimsAnalysis.lims_sample_pk == original.id,
+                             LimsAnalysis.lims_sub_sample_pk.is_(None),
+                             LimsAnalysis.provenance == "canonical",
+                             LimsAnalysis.review_state == "retracted")
+                      .order_by(LimsAnalysis.keyword, LimsAnalysis.id)).all()
+    src = aliased(LimsAnalysis)
+    for row, origin in dead:
+        if ((origin or "") == "mk1" or (legacy_family(row.keyword) or (None,))[0] != "core"
+                or (row.keyword, row.slot or 0) in have):
+            continue
+        sources = select(LimsAnalysisPromotion.source_analysis_id).where(
+            LimsAnalysisPromotion.parent_analysis_id == row.id, own_promotion_clause())
+        pending = db.execute(select(LimsAnalysis.id).join(src, and_(
+            src.lims_sub_sample_pk == LimsAnalysis.lims_sub_sample_pk,
+            src.analysis_service_id == LimsAnalysis.analysis_service_id,
+        )).where(src.id.in_(sources), LimsAnalysis.lims_sub_sample_pk.isnot(None),
+                 LimsAnalysis.retested.is_(False),
+                 LimsAnalysis.review_state.in_(_PENDING_VIAL_STATES)).limit(1)).first()
+        if pending is not None:
+            return row.keyword
+    return None
 
 
 def _legacy_hplc_plan(db: Session, original: LimsSample) -> tuple[list[LimsAnalysis], str | None]:
@@ -225,7 +249,7 @@ def _legacy_hplc_plan(db: Session, original: LimsSample) -> tuple[list[LimsAnaly
     original reports. A line is a (keyword, slot) on a non-mk1 'core' service
     held as: a live canonical row; a live shadow row no canonical row ever
     held (canonical_ever_keys: the original's COA prints it from the shadow);
-    or a retracted canonical line whose re-run is pending on a vial. Every
+    or a retracted canonical line whose re-run is pending (_rerun_pending). Every
     line needs a live verified/published canonical row (with
     CARRY_SHADOW_ONLY_HPLC, a shadow-only line may source from its
     mirror-verified shadow). A partial set never carries."""
@@ -244,9 +268,9 @@ def _legacy_hplc_plan(db: Session, original: LimsSample) -> tuple[list[LimsAnaly
             return [], (f"HPLC {r.keyword} is not verified in Mk1" if canonical else SHADOW_ONLY_REASON)
         rows.append(r)
         have.add(key)
-    rerun = sorted((_pending_vial_keys(db, original) & ever) - have)
+    rerun = _rerun_pending(db, original, have)
     if rerun:
-        return [], f"HPLC {rerun[0][0]} is being re-run"
+        return [], f"HPLC {rerun} is being re-run"
     return rows, None
 
 
