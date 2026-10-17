@@ -235,6 +235,43 @@ describe('RetestDialog overlay v2', () => {
     expect(retestBox(HM)).not.toBeChecked()
   })
 
+  it('shows the backend carry_blocked_reason on the row and in the add-on outcome', async () => {
+    const senaiteOnly = 'results only in SENAITE (never verified in Mk1)'
+    vi.mocked(getRetestOptions).mockResolvedValue({
+      ...OPTIONS,
+      profiles: OPTIONS.profiles.map(p =>
+        p.key === HPLC
+          ? {
+              ...p,
+              carry_eligible: false,
+              state: null,
+              verified_at: null,
+              state_label: 'Not verified',
+              carry_blocked_reason: senaiteOnly,
+            }
+          : p
+      ),
+    })
+    const { user } = renderDialog()
+    await screen.findByTestId(`retest-row-${HPLC}`)
+    expect(carryBox(HPLC)).toBeDisabled()
+    expect(
+      within(row(HPLC)).getByText(`cannot carry: ${senaiteOnly}`)
+    ).toBeInTheDocument()
+    // No reason from an older backend: the old text.
+    expect(
+      within(row(ENDO)).getByText('cannot carry: not verified')
+    ).toBeInTheDocument()
+
+    await user.click(screen.getByRole('tab', { name: 'Add services' }))
+    await user.click(
+      screen.getByRole('checkbox', { name: 'Rapid Sterility (PCR)' })
+    )
+    expect(screen.getByTestId('retest-outcome')).toHaveTextContent(
+      `Once paid: a new sample is created with Rapid Sterility (PCR); Heavy Metals carried from P-9001; HPLC Purity + Identity dropped (${senaiteOnly}); Endotoxin USP85 LAL dropped (not verified).`
+    )
+  })
+
   it('Re-test tab: unticked Carry becomes drop, add.profiles stays empty', async () => {
     vi.mocked(createRetest).mockResolvedValue({ order_number: 'WP-7920' })
     const { user, onClose } = renderDialog()
