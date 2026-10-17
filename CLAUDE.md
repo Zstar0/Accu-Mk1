@@ -1,51 +1,52 @@
-# Claude Code Instructions
+# Accu-Mk1
 
-Read @AGENTS.md for all project instructions.
+The primary LIMS for Accumark Labs: a React SPA (Vite, TypeScript, Zustand, TanStack Query) over a
+FastAPI backend on Postgres. It owns samples, vials, analyses, worksheets, sample-tier status and the
+hand-off into the COA pipeline. Integration Service is the WordPress bridge only; SENAITE is legacy
+and being disconnected (no new SENAITE writes, never flip a sample's `origin`). The Tauri desktop
+build under `src-tauri/` is not in use; the web build from `Dockerfile` is what ships.
 
-## Local Status
+## Commands
+- Frontend dev: `npm run dev`. npm only, never pnpm or yarn.
+- Frontend gate: `npm run check:all`. Without a Rust toolchain run the subset and say so:
+  `npm run typecheck && npm run lint && npm run ast:lint && npm run format:check && npm run test:run`
+- Release gate adds the real image build (`docker build --build-arg ENV_FILE=.env.production -f Dockerfile .`):
+  the image's tsc sees no `backend/`, so src tests read backend fixtures at run time, never import them.
+- Backend tests run inside a devbox stack's backend container, never on the laptop:
+  `docker exec <backend container> python -m pytest tests -q`. Two suites at once deadlock the dev DB.
+- Baselines are not zero (backend about 19 failures, frontend 34). Gate on the failure-set diff
+  against the base commit, never on a count.
+- E2E: `npm run test:e2e` (Playwright, `e2e/`).
 
-@CLAUDE.local.md
+## Non-negotiables
+- Additive only. Extend what exists, never re-architect. A failing test defaults to "the test is
+  stale". Production-behaviour changes need the Handler's sign-off, recorded in the PR.
+- `JWT_SECRET` must be identical across Integration Service, COA Builder and WordPress. Drift makes
+  COA generation fail silently (no verification code). Rotate all three in one window.
+- LIMS-side tables use the `lims_` prefix (`lims_samples`, `lims_sub_samples`). Bare `samples`
+  belongs to HPLC job samples.
+- Never overwrite prod env files (`backend/.env`, `/root/<svc>/.env`, `wp-config.php`). Secrets
+  never land in the repo, PR bodies or logs.
+- No em dashes in prose or commit messages.
 
-<!-- gitnexus:start -->
-# GitNexus — Code Intelligence
+## Traps
+- FastAPI `response_model` silently drops undeclared keys. Add the field to the Pydantic model, then
+  smoke the deployed route on a stack.
+- No Alembic. New columns are `ADD COLUMN IF NOT EXISTS` strings in `backend/database.py`, run at
+  every startup; new tables come from `create_all`. Every entry must be safe to re-run.
+- Parent samples and sub-samples (vials) have different state machines; `verify` is parent-tier.
+  Anything that loops queries per vial gets one bounded query, not N+1 (two pool outages in 2026-09).
+- SLA tiers hang off analysis profiles, not service groups; the surfaces disagree, do not fix one alone.
+- Editing tools can leave CRLF in this LF repo and `git show` hides it: `grep -c $'\r' <file>`.
+- vitest 4: a `vi.fn` reset in `beforeEach` reports a caught rejection as unhandled; wait on call counts.
+- State onion: `useState` for component state, Zustand for global UI, TanStack Query for server data.
+  Select from stores (`useStore(s => s.x)`), never destructure; ast-grep enforces it (`.ast-grep/rules`).
+- Rust commands go through `src/lib/tauri-bindings.ts` (tauri-specta), never a string `invoke`.
 
-This project is indexed by GitNexus as **Accu-Mk1** (7485 symbols, 13258 relationships, 300 execution flows). Use the GitNexus MCP tools to understand code, assess impact, and navigate safely.
+## Read more
+`docs/developer/README.md` (index), `architecture-guide.md`, `state-management.md`,
+`static-analysis.md`, `testing.md`.
 
-> If any GitNexus tool warns the index is stale, run `npx gitnexus analyze` in terminal first.
-
-## Always Do
-
-- **MUST run impact analysis before editing any symbol.** Before modifying a function, class, or method, run `gitnexus_impact({target: "symbolName", direction: "upstream"})` and report the blast radius (direct callers, affected processes, risk level) to the user.
-- **MUST run `gitnexus_detect_changes()` before committing** to verify your changes only affect expected symbols and execution flows.
-- **MUST warn the user** if impact analysis returns HIGH or CRITICAL risk before proceeding with edits.
-- When exploring unfamiliar code, use `gitnexus_query({query: "concept"})` to find execution flows instead of grepping. It returns process-grouped results ranked by relevance.
-- When you need full context on a specific symbol — callers, callees, which execution flows it participates in — use `gitnexus_context({name: "symbolName"})`.
-
-## Never Do
-
-- NEVER edit a function, class, or method without first running `gitnexus_impact` on it.
-- NEVER ignore HIGH or CRITICAL risk warnings from impact analysis.
-- NEVER rename symbols with find-and-replace — use `gitnexus_rename` which understands the call graph.
-- NEVER commit changes without running `gitnexus_detect_changes()` to check affected scope.
-
-## Resources
-
-| Resource | Use for |
-|----------|---------|
-| `gitnexus://repo/Accu-Mk1/context` | Codebase overview, check index freshness |
-| `gitnexus://repo/Accu-Mk1/clusters` | All functional areas |
-| `gitnexus://repo/Accu-Mk1/processes` | All execution flows |
-| `gitnexus://repo/Accu-Mk1/process/{name}` | Step-by-step execution trace |
-
-## CLI
-
-| Task | Read this skill file |
-|------|---------------------|
-| Understand architecture / "How does X work?" | `.claude/skills/gitnexus/gitnexus-exploring/SKILL.md` |
-| Blast radius / "What breaks if I change X?" | `.claude/skills/gitnexus/gitnexus-impact-analysis/SKILL.md` |
-| Trace bugs / "Why is X failing?" | `.claude/skills/gitnexus/gitnexus-debugging/SKILL.md` |
-| Rename / extract / split / refactor | `.claude/skills/gitnexus/gitnexus-refactoring/SKILL.md` |
-| Tools, resources, schema reference | `.claude/skills/gitnexus/gitnexus-guide/SKILL.md` |
-| Index, status, clean, wiki CLI commands | `.claude/skills/gitnexus/gitnexus-cli/SKILL.md` |
-
-<!-- gitnexus:end -->
+## Process
+Follow the `accumark-feature-workflow` skill (`.claude/skills/accumark-feature-workflow/`, on PR #250
+until merged): one PR per change, stack evidence in the PR body, the Handler reviews and merges.
