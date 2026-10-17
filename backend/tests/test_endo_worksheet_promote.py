@@ -838,7 +838,7 @@ def test_a_promote_request_refuses_an_unusable_loq_or_lod(field, value):
     assert [e["loc"] for e in caught.value.errors()] == [(field,)]
 
 
-# --- end to end: the promoted "<" result prints "< LOQ" on the COA -----------
+# --- end to end: the promoted "<" result prints "< <LOQ>" on the COA ---------
 
 @pytest.mark.parametrize("sample_id, sample_type, reading, sensitivity, sent, loq", [
     # <0.05 on the 0.05 at the standard 1:250 and 2 mL: <25 EU per vial.
@@ -881,7 +881,8 @@ def test_a_promoted_below_loq_result_prints_less_than_loq_on_the_coa(
     [section] = build_native_sections(db, parent)["sections"]
     [row] = section["rows"]
     assert (row["result"], row["unit"], row["result_display"], row["conforms"],
-            row["specification"]["loq"]) == (stored.result_value, sent["unit"], "< LOQ", True, loq)
+            row["specification"]["loq"]) == (stored.result_value, sent["unit"], f"< {loq:g}", True, loq)
+    assert row["result_display"] in ("< 25", "< 0.2", "< 2.5")
 
 
 # --- endo_analysis on worksheet items ----------------------------------------

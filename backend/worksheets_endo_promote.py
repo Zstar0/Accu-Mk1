@@ -350,7 +350,7 @@ def _plan(db: Session, worksheet, item, row: EndoPromoteRowIn, ctx) -> dict:
     if lt and limit is not None and row.loq > limit:
         raise _Refused(f"inconclusive: LOQ {_fmt(row.loq)} {unit} is above the {_fmt(limit)} limit")
     # A "<" result is stored as the number equal to its LOQ (spec section 4),
-    # the same float, so the certificate's value <= LOQ always prints "< LOQ".
+    # the same float, so the certificate's value <= LOQ always prints "< <LOQ>".
     loq = row.value if lt else row.loq
     return {
         "analysis": analysis,

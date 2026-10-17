@@ -124,7 +124,7 @@ export function EndoPromoteDialog({
             <DialogDescription className="text-xs">
               {results
                 ? `${done} of ${listed.length} promoted. A reviewer verifies each parent result on its sample page.`
-                : "Fills each vial's endotoxin result with these values and promotes it to its parent sample, where a reviewer verifies it. A < result is sent as its LOQ; the COA prints it as < LOQ."}
+                : "Fills each vial's endotoxin result with these values and promotes it to its parent sample, where a reviewer verifies it. A < result is sent as its LOQ; the COA prints it as < and the LOQ, for example < 25."}
             </DialogDescription>
             <div className="min-h-0 overflow-auto">
               <table className="w-full border-collapse text-[12.5px]">

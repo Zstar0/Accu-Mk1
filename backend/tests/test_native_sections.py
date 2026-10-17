@@ -772,7 +772,7 @@ def test_rule5_abort_message_names_tiers_consulted(db_session, monkeypatch):
 def test_wire_carries_loq_and_display_fields(db_session, monkeypatch):
     """A spec with loq filed + a profile with all four display fields: the
     section carries the display chrome, the row's specification.loq is on
-    the wire, and a result below the LOQ prints "< LOQ" while the VERDICT
+    the wire, and a result below the LOQ prints "< 0.5" while the VERDICT
     (conforms) still judges the raw number."""
     from decimal import Decimal
     from models import AnalysisServiceSpec
@@ -796,12 +796,12 @@ def test_wire_carries_loq_and_display_fields(db_session, monkeypatch):
     assert sec["footnotes"][0]["label"] == "1"
     row = sec["rows"][0]
     assert row["specification"]["loq"] == 0.5
-    assert row["result_display"] == "< LOQ"
+    assert row["result_display"] == "< 0.5"
     assert row["conforms"] is True          # verdict on the RAW number (0.2 <= 100)
 
 
 def test_censoring_boundary(db_session, monkeypatch):
-    """result == loq IS censored (at-or-below the LOQ prints "< LOQ",
+    """result == loq IS censored (at-or-below the LOQ prints "< 0.5",
     ruling 2026-09-14); below is; above is not."""
     from decimal import Decimal
     from models import AnalysisServiceSpec, LimsAnalysis, LimsSample
@@ -827,13 +827,13 @@ def test_censoring_boundary(db_session, monkeypatch):
         return p
 
     doc = build_native_sections(db_session, _parent("P-8001", "0.5"))
-    assert doc["sections"][0]["rows"][0]["result_display"] == "< LOQ"
+    assert doc["sections"][0]["rows"][0]["result_display"] == "< 0.5"
 
     doc = build_native_sections(db_session, _parent("P-8002", "0.51"))
     assert doc["sections"][0]["rows"][0]["result_display"] is None
 
     doc = build_native_sections(db_session, _parent("P-8003", "0.49"))
-    assert doc["sections"][0]["rows"][0]["result_display"] == "< LOQ"
+    assert doc["sections"][0]["rows"][0]["result_display"] == "< 0.5"
 
 
 def test_censored_result_can_still_be_non_conforming(db_session, monkeypatch):
@@ -852,7 +852,7 @@ def test_censored_result_can_still_be_non_conforming(db_session, monkeypatch):
     _order_lookup(monkeypatch)
     doc = build_native_sections(db_session, parent)
     row = doc["sections"][0]["rows"][0]
-    assert row["result_display"] == "< LOQ"
+    assert row["result_display"] == "< 0.5"
     assert row["conforms"] is False          # 0.2 < min_value 1, raw-number verdict
 
 

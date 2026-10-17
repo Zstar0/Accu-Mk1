@@ -369,7 +369,7 @@ def _deltas(before: dict, row) -> dict:
 def clear_result_limits(row) -> None:
     """Endo slice 3: a result's LOQ and LOD go wherever its value goes. Called
     by every path that clears result_value (reset, both un-promote paths), so
-    a regenerated COA can never print a stale "< LOQ" off a cleared result."""
+    a regenerated COA can never print a stale "< <LOQ>" off a cleared result."""
     row.loq = None
     row.lod = None
     row.lod_unit = None
