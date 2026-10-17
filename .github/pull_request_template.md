@@ -16,3 +16,9 @@
 
 ## Not done
 <!-- Anything deliberately left out, and why. -->
+
+## Risk
+<!-- Low / Medium / High per the tiers in the feature-workflow skill. Name the shared surfaces this touches (auth, JWT, checkout, COA judgement, migrations, deploy, SENAITE). -->
+
+## How to revert
+<!-- The previous tag or image, and the deploy skill's rollback command. "Revert the PR" is not an answer for a migration. -->
