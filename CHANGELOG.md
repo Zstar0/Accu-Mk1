@@ -1,5 +1,13 @@
 # Changelog
 
+## v1.49.2 - 2026-10-16
+
+### Re-test: HPLC on samples ordered before the HPLC switch
+- **Verified HPLC can be carried.** On a sample ordered before September 22, the Re-test dialog showed verified HPLC as "Not verified" and would not carry it. It now reads the HPLC results the lab verified in Mk1 and carries them to the new sample.
+- **A carry is complete or refused.** If any HPLC line is only in SENAITE, or is being re-run, the carry is refused and the dialog names the line, so a re-test COA never drops a result.
+- **Re-testing HPLC creates the HPLC lines.** Re-testing HPLC on such a sample now gives the new sample its HPLC lines; before, it got none.
+- **Clearer reasons.** When something cannot be carried, the dialog says why, and the Retesting tag shows on the HPLC lines.
+
 ## v1.49.1 - 2026-10-15
 
 ### Fixes: inbox, reader import, worksheet links
