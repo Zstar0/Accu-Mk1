@@ -134,6 +134,8 @@ class CustomerRow(BaseModel):
     samples: int
     usual_gap_days: Optional[float] = None
     last_order_at: Optional[str] = None
+    first_order_at: Optional[str] = None
+    testing_orders: int
     top_tests: list[str]
     status: str
     monthly: list[MonthSpend]
@@ -176,7 +178,7 @@ class OrdersResponse(Meta):
 
 
 SortField = Literal["key", "name", "email", "company", "rep", "period_spend", "prior_spend", "delta_pct", "lifetime",
-                    "orders", "samples", "usual_gap_days", "last_order_at", "status"]
+                    "orders", "samples", "usual_gap_days", "last_order_at", "first_order_at", "testing_orders", "status"]
 _MONEY_FIELDS = {"period_spend", "prior_spend", "lifetime"}
 
 

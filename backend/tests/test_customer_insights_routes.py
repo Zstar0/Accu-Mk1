@@ -82,6 +82,9 @@ def test_orders_json_and_at_risk_fields_survive(client) -> None:
     assert {"customer_key", "net", "tests", "categories"} <= set(body["rows"][0])
     risk = client.get("/reports/customers/at-risk").json()["rows"][0]
     assert {"spend_12m", "overdue", "monthly", "top_tests"} <= set(risk)
+    assert {"first_order_at", "testing_orders"} <= set(risk)
+    lst = client.get("/reports/customers/list?period=all&sort=first_order_at&dir=asc").json()
+    assert lst["rows"][0]["first_order_at"] is not None
 
 
 def test_dossier_route_guest_key_and_404(client) -> None:

@@ -211,6 +211,8 @@ def customer_rows(ds: Dataset, *, start: datetime | None, end: datetime, tz: str
             "samples": sum(x.samples for x in orders),
             "usual_gap_days": round(rules.usual_gap_days(dates), 1) if len(dates) >= 3 else None,
             "last_order_at": max(dates).isoformat() if dates else None,
+            "first_order_at": min(dates).isoformat() if dates else None,
+            "testing_orders": len(dates),
             "top_tests": [t for t, _ in tests.most_common(3)],
             "status": rules.spend_status(paid_orders=len(orders), at_risk=risk, period=period, prior=prior),
             "monthly": [{"month": m, "spend": money(v)} for m, v in sorted(monthly.items())],
