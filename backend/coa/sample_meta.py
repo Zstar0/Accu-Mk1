@@ -111,11 +111,60 @@ def _newest(db, parent_pk: int, *, chromatogram: bool, source_sub_pks=None):
     return db.execute(q.order_by(A.id.desc()).limit(1)).scalar_one_or_none()
 
 
+def _materialize_vial_chromatogram(db, parent, vial):
+    """Fallback for a vial with no stamped chromatogram row (P-5324,
+    2026-10-19): the raw trace lives on the vial's own HPLC analysis as
+    `chromatogram_data` ({times, signals}) and a pushed CSV is only a
+    serialization of it. Take the newest analysis labelled EXACTLY
+    `vial.sample_id` that carries both arrays, write its CSV as a
+    chromatogram row stamped with the vial (same bytes, filename and kind the
+    push routes write), commit, and return the row. Never a sibling's label
+    and never the parent's newest row: no qualifying analysis means None and
+    the caller fails closed as before. This is the one write in this module
+    and it stays inside the vial branch. A writer failure propagates
+    uncommitted, so no half-written row survives.
+    """
+    from models import HPLCAnalysis
+    from hplc_csv import build_chromatogram_csv
+    from main import write_parent_attachment  # lazy: main imports this module
+    analyses = db.execute(
+        select(HPLCAnalysis)
+        .where(HPLCAnalysis.sample_id_label == vial.sample_id)
+        .order_by(HPLCAnalysis.id.desc())
+    ).scalars().all()
+    analysis = next(
+        (a for a in analyses
+         if a.chromatogram_data and a.chromatogram_data.get("times")
+         and a.chromatogram_data.get("signals")),
+        None)
+    if analysis is None:
+        return None
+    row = write_parent_attachment(
+        db, parent, file_bytes=build_chromatogram_csv(analysis),
+        filename=f"chromatogram_{analysis.sample_id_label}.csv",
+        content_type="text/csv", kind="chromatogram",
+        source_sample_id=vial.sample_id, user_id=None,
+        render_in_report=False, attachment_type="HPLC Graph",
+    )
+    if row.source_sub_sample_pk != vial.id:
+        # The writer dropped the stamp (lineage mismatch): an unstamped row
+        # must not be returned as this vial's trace. Fail closed.
+        db.rollback()
+        return None
+    db.commit()
+    log.info("sample_meta: %s chromatogram row %s materialized from HPLC "
+             "analysis %s for vial %s", parent.sample_id, row.id, analysis.id,
+             vial.sample_id)
+    return row
+
+
 def select_chromatogram_row(db, parent, *, vial=None):
     """The chromatogram row the certificate embeds (P-2627, 2026-09-14).
 
     Per-vial COA (`vial` given): ONLY a row linked to that vial
-    (`source_sub_sample_pk`); none -> NativeSectionsError. Never a sibling's
+    (`source_sub_sample_pk`); none -> the vial's own HPLC-analysis trace is
+    materialized as a stamped row (`_materialize_vial_chromatogram`, P-5324);
+    no such analysis -> NativeSectionsError. Never a sibling's
     trace — vial 1's COA once printed vial 2's chromatogram because the
     parent's newest row was the only rule.
 
@@ -128,6 +177,8 @@ def select_chromatogram_row(db, parent, *, vial=None):
     from models import LimsSubSample
     if vial is not None:
         row = _newest(db, parent.id, chromatogram=True, source_sub_pks=[vial.id])
+        if row is None:
+            row = _materialize_vial_chromatogram(db, parent, vial)
         if row is None:
             raise NativeSectionsError(
                 f"No chromatogram is linked to vial {vial.sample_id} — push it "

@@ -7552,10 +7552,14 @@ async def upload_chromatogram_native(
     csv_bytes = build_chromatogram_csv(analysis)
     filename = f"chromatogram_{analysis.sample_id_label}.csv"
     try:
+        # Lineage (P-5324, 2026-10-19): stamp the vial the trace came from,
+        # the same rule as the SENAITE twin; a bare parent label stays NULL.
+        # The writer checks the vial belongs to this parent.
         write_parent_attachment(
             db, row, file_bytes=csv_bytes, filename=filename,
             content_type="text/csv", kind="chromatogram",
-            source_sample_id=None, user_id=getattr(current_user, "id", None),
+            source_sample_id=label if re.search(r"-S\d{2,}$", label or "") else None,
+            user_id=getattr(current_user, "id", None),
             render_in_report=False, attachment_type="HPLC Graph",
         )
         db.commit()

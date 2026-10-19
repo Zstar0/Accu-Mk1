@@ -5,11 +5,14 @@ backfill stamps `source_sub_sample_pk` from our own push filenames."""
 import logging
 
 import pytest
+from sqlalchemy import select
 
 from coa.native_sections import NativeSectionsError
 from coa.sample_meta import select_chromatogram_row
-from models import LimsParentAttachment, LimsSample, LimsSubSample
+from hplc_csv import build_chromatogram_csv
+from models import HPLCAnalysis, LimsParentAttachment, LimsSample, LimsSubSample, Peptide
 from scripts.backfill_chromatogram_source_vial import backfill
+from sub_samples.photo_storage import get_storage, set_storage_for_tests
 
 
 def _parent(db, sample_id="P-2627"):
@@ -124,3 +127,92 @@ def test_backfill_resolves_from_push_filename(db_session):
     assert already.source_sub_sample_pk == v1.id
     # idempotent: second apply finds nothing new
     assert backfill(db_session, apply=True)["resolved"] == 0
+
+
+# --- vial-trace fallback (P-5324, 2026-10-19) --------------------------------
+# No stamped row for the vial: the vial's own HPLC analysis (exact label) is
+# serialized to a stamped row and returned; anything else still fails closed.
+
+class _FakeStorage:
+    def __init__(self):
+        self.calls: list[tuple[str, bytes, str]] = []
+
+    def save_photo(self, sample_id: str, photo_bytes: bytes, filename: str) -> str:
+        self.calls.append((sample_id, photo_bytes, filename))
+        return f"fake-key/{sample_id}/{filename}"
+
+
+@pytest.fixture
+def fake_storage():
+    prev = get_storage()
+    fake = _FakeStorage()
+    set_storage_for_tests(fake)
+    yield fake
+    set_storage_for_tests(prev)
+
+
+def _analysis(db, label, *, chrom):
+    abbr = f"PEP-{label}"
+    pep = db.execute(select(Peptide).where(Peptide.abbreviation == abbr)).scalar_one_or_none()
+    if pep is None:
+        pep = Peptide(name=f"pep {label}", abbreviation=abbr)
+        db.add(pep); db.flush()
+    row = HPLCAnalysis(
+        sample_id_label=label, peptide_id=pep.id,
+        stock_vial_empty=1.0, stock_vial_with_diluent=2.0,
+        dil_vial_empty=1.0, dil_vial_with_diluent=2.0,
+        dil_vial_with_diluent_and_sample=3.0,
+        chromatogram_data=chrom,
+    )
+    db.add(row); db.flush()
+    return row
+
+
+def test_vial_without_linked_row_materializes_its_own_analysis_trace(
+        db_session, fake_storage, caplog):
+    p = _parent(db_session)
+    v1, v2 = _vial(db_session, p, 1), _vial(db_session, p, 2, kind="variance")
+    _chrom(db_session, p, source=v2)            # sibling's row
+    _chrom(db_session, p)                       # newer, unlinked
+    _analysis(db_session, v1.sample_id, chrom={"times": [0.0], "signals": [1.0]})
+    newest = _analysis(db_session, v1.sample_id,
+                       chrom={"times": [0.0, 0.1], "signals": [1.0, 2.5]})
+    with caplog.at_level(logging.INFO, logger="coa.sample_meta"):
+        row = select_chromatogram_row(db_session, p, vial=v1)
+    assert row.source_sub_sample_pk == v1.id
+    assert row.kind == "chromatogram"
+    assert row.attachment_type == "HPLC Graph"
+    assert row.render_in_report is False
+    assert row.filename == "chromatogram_P-2627-S01.csv"
+    assert fake_storage.calls == [
+        (p.sample_id, build_chromatogram_csv(newest), row.filename)]
+    assert row.storage_key == f"fake-key/{p.sample_id}/{row.filename}"
+    assert any(f"materialized from HPLC analysis {newest.id}" in r.message
+               for r in caplog.records)
+    # The next read finds the stamped row; nothing is written twice.
+    assert select_chromatogram_row(db_session, p, vial=v1).id == row.id
+    assert len(fake_storage.calls) == 1
+
+
+def test_vial_without_linked_row_or_qualifying_analysis_still_fails_closed(
+        db_session, fake_storage):
+    p = _parent(db_session)
+    v1 = _vial(db_session, p, 1)
+    _analysis(db_session, v1.sample_id, chrom=None)                        # no trace
+    _analysis(db_session, v1.sample_id, chrom={"times": [], "signals": []})  # empty
+    _analysis(db_session, p.sample_id, chrom={"times": [0.0], "signals": [1.0]})  # parent label
+    with pytest.raises(NativeSectionsError) as ei:
+        select_chromatogram_row(db_session, p, vial=v1)
+    assert "P-2627-S01" in ei.value.detail
+    assert fake_storage.calls == []
+    assert db_session.execute(select(LimsParentAttachment)).scalars().all() == []
+
+
+def test_vial_fallback_never_uses_a_sibling_vials_analysis(db_session, fake_storage):
+    p = _parent(db_session)
+    v1, v2 = _vial(db_session, p, 1), _vial(db_session, p, 2, kind="variance")
+    _analysis(db_session, v2.sample_id, chrom={"times": [0.0], "signals": [1.0]})
+    with pytest.raises(NativeSectionsError):
+        select_chromatogram_row(db_session, p, vial=v1)
+    assert fake_storage.calls == []
+    assert db_session.execute(select(LimsParentAttachment)).scalars().all() == []
