@@ -86,6 +86,7 @@ def customer_support(customer_key: str, *, refresh: bool, statuses: list[str], p
             data = _load(customer_key, emails, fresh=True)
             at = CACHE.put(key, data)
             CACHE.drop(f"d:{customer_key}:")
+            CACHE.drop(f"touch:{customer_key}")
         else:
             data, at = CACHE.get_or_load(key, rules.LIST_TTL, lambda: _load(customer_key, emails))
     except SupportUnavailable:

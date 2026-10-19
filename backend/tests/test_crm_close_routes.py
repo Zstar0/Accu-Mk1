@@ -148,3 +148,10 @@ def test_failed_refresh_keeps_the_cached_copy_for_later_requests(api):
     assert client.get("/crm/customers/wc:1?refresh=true").json()["stale"] is True
     later = client.get("/crm/customers/wc:1?types=note")
     assert later.status_code == 200 and later.json()["stale"] is False  # cache entry survived
+
+
+def test_refresh_drops_the_touch_summary(api):
+    client, _ = api
+    service.CACHE.put("touch:wc:1", {"state": "none"})
+    assert client.get("/crm/customers/wc:1?refresh=true").status_code == 200
+    assert service.CACHE.peek("touch:wc:1") is None

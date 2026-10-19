@@ -3,6 +3,8 @@ from __future__ import annotations
 
 import csv
 import io
+import logging
+from collections import Counter
 from datetime import date, datetime, timezone
 from decimal import Decimal
 from typing import Literal, Optional
@@ -12,9 +14,11 @@ from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
 from auth import get_current_user
-from customer_insights import metrics, rules, sources
+from customer_insights import metrics, rules, sources, touchpoints
+from customer_insights.touchpoints import TouchpointsResponse
 from database import get_db
 
+logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/reports/customers", tags=["customer-insights"])
 Period = Literal["30d", "90d", "6m", "1y", "all"]
 
@@ -413,6 +417,19 @@ def customers_changes(since: datetime, db: Session = Depends(get_db), _u=Depends
         raise HTTPException(status_code=422, detail="since is in the future")
     ds, _lo, hi, tz, meta = _ctx(db, "all", None, None, False)
     return {**meta, "since": since_utc.isoformat(), "events": metrics.changes(ds, since=since_utc, end=hi, tz=tz)}
+
+
+@router.get("/touchpoints", response_model=TouchpointsResponse)
+def customers_touchpoints(keys: list[str] = Query(...), _u=Depends(get_current_user)):
+    if len(keys) > rules.TOUCH_MAX_KEYS:
+        raise HTTPException(status_code=422, detail=f"at most {rules.TOUCH_MAX_KEYS} keys")
+    crm_visible = _u.role == "admin"
+    support_visible = touchpoints._is_support_reader(_u)
+    rows = touchpoints.collect(keys, crm=crm_visible, support=support_visible)
+    states = Counter(f"{f}_{r[f]['state']}" for r in rows.values() for f in ("crm", "support") if r[f] is not None)
+    logger.info("customer_insights.touchpoints keys=%d crm_visible=%s support_visible=%s states=%s",
+                len(keys), crm_visible, support_visible, dict(states))
+    return {"crm_visible": crm_visible, "support_visible": support_visible, "rows": rows}
 
 
 # Declared LAST: FastAPI matches in order, so every fixed path above wins over the key.
