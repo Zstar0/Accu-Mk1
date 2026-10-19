@@ -15,6 +15,7 @@ import {
   getCustomerAtRisk,
   getCustomerChurnSignals,
   getCustomerCohorts,
+  getCustomerList,
   getCustomerSummary,
   type InsightsPeriod,
 } from '@/lib/api'
@@ -33,6 +34,10 @@ import {
   fmtPrice,
   fmtPoints,
 } from './insights-utils'
+import {
+  InsightsCustomerTable,
+  type InsightsSortField,
+} from './InsightsCustomerTable'
 import { TouchCell } from './TouchCell'
 import { useTouchpoints } from './useTouchpoints'
 import { useUIStore, type InsightsTab } from '@/store/ui-store'
@@ -153,6 +158,49 @@ export function CustomerInsights({
     queryFn: getCustomerChurnSignals,
     staleTime: 60_000,
   })
+  // Paging state is keyed to the period it was set under, so changing the
+  // period falls back to page 1 / lifetime desc without an effect.
+  const [newView, setNewView] = useState<{
+    period: InsightsPeriod
+    page: number
+    sort: InsightsSortField
+    dir: 'asc' | 'desc'
+  }>({ period, page: 1, sort: 'lifetime', dir: 'desc' })
+  const {
+    page: newPage,
+    sort: newSort,
+    dir: newDir,
+  } = newView.period === period
+    ? newView
+    : { page: 1, sort: 'lifetime' as const, dir: 'desc' as const }
+  const setNew = (
+    v: Partial<{ page: number; sort: InsightsSortField; dir: 'asc' | 'desc' }>
+  ) => setNewView({ period, page: newPage, sort: newSort, dir: newDir, ...v })
+  const newCustomers = useQuery({
+    queryKey: [
+      'customers',
+      'list',
+      'new',
+      period,
+      excludeLaunch,
+      newSort,
+      newDir,
+      newPage,
+    ],
+    queryFn: () =>
+      getCustomerList({
+        period,
+        new_only: true,
+        exclude_launch_accounts: excludeLaunch,
+        sort: newSort,
+        dir: newDir,
+        page: newPage,
+        page_size: 25,
+      }),
+    staleTime: 60_000,
+    placeholderData: prev => prev,
+  })
+  const newTouch = useTouchpoints(newCustomers.data?.rows.map(r => r.key) ?? [])
   const s = summary.data
 
   return (
@@ -334,7 +382,10 @@ export function CustomerInsights({
                 <TabsTrigger value="at-risk">
                   At risk{risk.data && ` (${risk.data.rows.length})`}
                 </TabsTrigger>
-                <TabsTrigger value="new">New customers</TabsTrigger>
+                <TabsTrigger value="new">
+                  New customers
+                  {newCustomers.data && ` (${newCustomers.data.total})`}
+                </TabsTrigger>
                 <TabsTrigger value="cohorts">Cohorts</TabsTrigger>
               </TabsList>
               <TabsContent value="at-risk" className="mt-2">
@@ -486,9 +537,41 @@ export function CustomerInsights({
                 )}
               </TabsContent>
               <TabsContent value="new" className="mt-2">
-                <p className="py-4 text-center text-sm text-muted-foreground">
-                  New customers
+                <p className="mb-2 text-[11px] text-muted-foreground">
+                  First testing order in this period, ranked by lifetime spend
                 </p>
+                {newCustomers.error ? (
+                  <SectionError
+                    label="new customers"
+                    onRetry={() => newCustomers.refetch()}
+                  />
+                ) : (
+                  newCustomers.data && (
+                    <InsightsCustomerTable
+                      rows={newCustomers.data.rows}
+                      total={newCustomers.data.total}
+                      page={newPage}
+                      pageSize={25}
+                      onPage={page => setNew({ page })}
+                      sort={newSort}
+                      dir={newDir}
+                      onSort={f =>
+                        setNew(
+                          f === newSort
+                            ? {
+                                dir: newDir === 'asc' ? 'desc' : 'asc',
+                                page: 1,
+                              }
+                            : { sort: f, dir: 'desc', page: 1 }
+                        )
+                      }
+                      tz={s.tz}
+                      touch={newTouch}
+                      onOpenCustomer={onOpenCustomer}
+                      emptyText="No new customers in this period"
+                    />
+                  )
+                )}
               </TabsContent>
               <TabsContent value="cohorts" className="mt-2">
                 <p className="mb-2 text-[11px] text-muted-foreground">

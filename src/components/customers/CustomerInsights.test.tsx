@@ -7,6 +7,7 @@ import type * as Recharts from 'recharts'
 import * as api from '@/lib/api'
 import { useUIStore } from '@/store/ui-store'
 import { CustomerInsights } from './CustomerInsights'
+import { row } from './insights-test-fixtures'
 
 vi.mock('@/lib/api', async () => {
   const actual = await vi.importActual<typeof api>('@/lib/api')
@@ -221,5 +222,37 @@ describe('CustomerInsights', () => {
     expect(onOpen).toHaveBeenCalledWith('wc:1', 'crm')
     await userEvent.click(within(row).getByText('Halcyon Research Supply'))
     expect(onOpen).toHaveBeenLastCalledWith('wc:1')
+  })
+
+  it('New customers tab queries new_only with the period and the launch switch', async () => {
+    vi.mocked(api.getCustomerList).mockResolvedValue({
+      tz: 'America/Los_Angeles',
+      synced_at: null,
+      total: 1,
+      page: 1,
+      page_size: 25,
+      rows: [row({ key: 'wc:2243', name: 'Zackary Smith' })],
+    })
+    setup()
+    await userEvent.click(
+      await screen.findByRole('tab', { name: /New customers/ })
+    )
+    expect(await screen.findByText('Zackary Smith')).toBeInTheDocument()
+    expect(vi.mocked(api.getCustomerList)).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        new_only: true,
+        period: '90d',
+        exclude_launch_accounts: false,
+        sort: 'lifetime',
+        dir: 'desc',
+        page: 1,
+        page_size: 25,
+      })
+    )
+    expect(
+      screen.getByText(
+        'First testing order in this period, ranked by lifetime spend'
+      )
+    ).toBeInTheDocument()
   })
 })
