@@ -1,9 +1,11 @@
-import { render, screen } from '@testing-library/react'
+import { render, screen, within } from '@testing-library/react'
+import userEvent from '@testing-library/user-event'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { cloneElement, type ReactElement } from 'react'
-import { describe, expect, it, vi } from 'vitest'
+import { beforeEach, describe, expect, it, vi } from 'vitest'
 import type * as Recharts from 'recharts'
 import * as api from '@/lib/api'
+import { useUIStore } from '@/store/ui-store'
 import { CustomerInsights } from './CustomerInsights'
 
 vi.mock('@/lib/api', async () => {
@@ -14,6 +16,8 @@ vi.mock('@/lib/api', async () => {
     getCustomerCohorts: vi.fn(),
     getCustomerAtRisk: vi.fn(),
     getCustomerChurnSignals: vi.fn(),
+    getCustomerTouchpoints: vi.fn(),
+    getCustomerList: vi.fn(),
   }
 })
 vi.mock('recharts', async importOriginal => {
@@ -30,7 +34,7 @@ vi.mock('recharts', async importOriginal => {
 
 const k = <T,>(value: T, prior: T | null = null) => ({ value, prior })
 
-function setup(riskFails = false) {
+function setup({ riskFails = false, onOpen = vi.fn() } = {}) {
   vi.mocked(api.getCustomerSummary).mockResolvedValue({
     tz: 'America/Los_Angeles',
     synced_at: '2026-10-05T18:00:00Z',
@@ -111,22 +115,54 @@ function setup(riskFails = false) {
       { signal: 'conformance', group: 'any_fail', orders: 14, returned: 0.36 },
     ],
   })
+  vi.mocked(api.getCustomerTouchpoints).mockResolvedValue({
+    crm_visible: true,
+    support_visible: false,
+    rows: {
+      'wc:1': {
+        crm: {
+          state: 'ok',
+          at: '2026-10-12T15:00:00Z',
+          type: 'email',
+          direction: 'outbound',
+          who: 'Scott',
+          title: 'Checking in',
+          preview: '',
+          lead_name: 'Halcyon',
+          lead_url: null,
+          stale: false,
+          reason: null,
+        },
+        support: null,
+      },
+    },
+  })
   if (riskFails)
     vi.mocked(api.getCustomerAtRisk).mockRejectedValue(new Error('boom'))
   const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } })
   return render(
     <QueryClientProvider client={qc}>
-      <CustomerInsights onOpenCustomer={vi.fn()} />
+      <CustomerInsights onOpenCustomer={onOpen} />
     </QueryClientProvider>
   )
 }
 
 describe('CustomerInsights', () => {
-  it('renders KPIs, cohort cell, at-risk row and freshness line', async () => {
+  beforeEach(() => {
+    useUIStore.setState({
+      insightsView: {
+        tab: 'at-risk',
+        period: '90d',
+        cohort: null,
+        month: null,
+      },
+    })
+  })
+
+  it('renders KPIs, at-risk row and freshness line', async () => {
     setup()
     expect(await screen.findByText('$1.07M')).toBeInTheDocument()
     expect(screen.getByText('24.0%')).toBeInTheDocument()
-    expect(await screen.findByText('12.9%')).toBeInTheDocument()
     expect(
       await screen.findByText('Halcyon Research Supply')
     ).toBeInTheDocument()
@@ -153,11 +189,37 @@ describe('CustomerInsights', () => {
   })
 
   it('shows an error with Retry, and no overdue badge, when at-risk fails', async () => {
-    setup(true)
+    setup({ riskFails: true })
     expect(
       await screen.findByText(/Failed to load at-risk customers/)
     ).toBeInTheDocument()
     expect(screen.getByRole('button', { name: 'Retry' })).toBeInTheDocument()
     expect(screen.queryByText(/overdue$/)).not.toBeInTheDocument()
+  })
+
+  it('has three tabs, shows the CRM touch on the at-risk row and opens the CRM tab from it', async () => {
+    const onOpen = vi.fn()
+    setup({ onOpen })
+    expect(
+      await screen.findByRole('tab', { name: /At risk/ })
+    ).toBeInTheDocument()
+    expect(
+      screen.getByRole('tab', { name: /New customers/ })
+    ).toBeInTheDocument()
+    expect(screen.getByRole('tab', { name: /Cohorts/ })).toBeInTheDocument()
+    const row = (await screen.findByText('Halcyon Research Supply')).closest(
+      'tr'
+    ) as HTMLElement
+    expect(row).toHaveTextContent('Oct 12')
+    expect(
+      screen.getByRole('columnheader', { name: 'Last CRM' })
+    ).toBeInTheDocument()
+    expect(
+      screen.queryByRole('columnheader', { name: 'Last support' })
+    ).toBeNull()
+    await userEvent.click(within(row).getByRole('button'))
+    expect(onOpen).toHaveBeenCalledWith('wc:1', 'crm')
+    await userEvent.click(within(row).getByText('Halcyon Research Supply'))
+    expect(onOpen).toHaveBeenLastCalledWith('wc:1')
   })
 })
