@@ -75,6 +75,7 @@ def test_timeline_hides_automated_by_default_and_declares_every_key(api):
                          "fetched_at", "stale", "refresh_throttled"}
     shown = client.get("/crm/customers/wc:1?include_automated=true&types=email").json()
     assert [i["id"] for i in shown["items"]] == ["acti_2", "acti_1"]
+    assert "email_status" in body["items"][1]  # acti_1 is the email; declared on Item, so it survives response_model
 
 
 def test_unknown_customer_404_and_no_lead_is_empty(api, monkeypatch):

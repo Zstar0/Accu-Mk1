@@ -51,11 +51,14 @@ def normalize(a: dict[str, Any], lead_names: dict[str, str]) -> dict[str, Any] |
     direction = _DIRECTIONS.get((a.get("direction") or "").lower())
     support_url = None
     automated = False
+    email_status = None
     if kind == "email":
         body = _text_body(a)
         sender = (a.get("sender") or "").lower()
         automated = bool(rules.AUTOMATED_SUBJECT.search(a.get("subject") or "")) or any(
-            s in sender for s in rules.AUTOMATED_SENDERS)
+            s in sender for s in rules.AUTOMATED_SENDERS) or any(
+            a.get(f) for f in rules.AUTOMATED_FIELDS)
+        email_status = a.get("status")
         who, title = a.get("sender") or a.get("user_name") or "", a.get("subject") or "(no subject)"
     elif kind == "call":
         body = a.get("note") or ""
@@ -79,7 +82,7 @@ def normalize(a: dict[str, Any], lead_names: dict[str, str]) -> dict[str, Any] |
         "id": a["id"], "type": kind, "at": _at(a), "direction": direction, "who": who, "title": title,
         "preview": "" if support_url else _preview(body), "lead_id": a.get("lead_id"),
         "lead_name": lead_names.get(a.get("lead_id") or "", ""), "automated": automated,
-        "support_thread_url": support_url,
+        "support_thread_url": support_url, "email_status": email_status,
     }
 
 

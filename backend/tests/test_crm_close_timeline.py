@@ -19,8 +19,22 @@ def test_email_normalized_with_inbound_direction_and_preview():
         "id": "acti_e1", "type": "email", "at": "2026-09-02T15:00:00Z", "direction": "inbound",
         "who": "Kyle <kyle@x.example>", "title": "Question about COA",
         "preview": "Hi team, Where is my COA?", "lead_id": "lead_A", "lead_name": "Valor Peptides",
-        "automated": False, "support_thread_url": None,
+        "automated": False, "support_thread_url": None, "email_status": None,
     }
+
+
+def test_sequence_bulk_and_agent_emails_are_automated():
+    for field in ("sequence_id", "sequence_subscription_id", "bulk_email_action_id", "agent_config_id"):
+        assert timeline.normalize(email(**{field: "x_1"}), LEADS)["automated"] is True
+    assert timeline.normalize(email(sequence_id=None), LEADS)["automated"] is False
+
+
+def test_email_status_is_carried_and_none_for_other_types():
+    assert timeline.normalize(email(status="draft"), LEADS)["email_status"] == "draft"
+    assert timeline.normalize(email(status="sent"), LEADS)["email_status"] == "sent"
+    call = {"_type": "Call", "id": "acti_c", "lead_id": "lead_A", "date_created": "2026-09-03T10:00:00Z",
+            "direction": "outbound", "duration": 60, "user_name": "Scott"}
+    assert timeline.normalize(call, LEADS)["email_status"] is None
 
 
 def test_order_notification_is_automated():

@@ -52,6 +52,7 @@ class Item(BaseModel):
     lead_name: str
     automated: bool
     support_thread_url: Optional[str] = None
+    email_status: Optional[str] = None
 
 
 class Counts(BaseModel):
