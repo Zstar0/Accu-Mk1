@@ -81,7 +81,7 @@ export function InsightsCustomerTable({
               <th
                 key={c.field}
                 className={cn(
-                  'py-1 font-medium',
+                  'px-2 py-1 font-medium',
                   c.right ? 'text-right' : 'text-left'
                 )}
               >
@@ -101,10 +101,10 @@ export function InsightsCustomerTable({
               </th>
             ))}
             {touch.crmVisible && (
-              <th className="text-right font-medium">Last CRM</th>
+              <th className="px-2 text-right font-medium">Last CRM</th>
             )}
             {touch.supportVisible && (
-              <th className="text-right font-medium">Last support</th>
+              <th className="px-2 text-right font-medium">Last support</th>
             )}
           </tr>
         </thead>
@@ -121,16 +121,22 @@ export function InsightsCustomerTable({
                   if (e.key === 'Enter') onOpenCustomer(r.key)
                 }}
               >
-                <td className="py-1.5 font-medium">{r.name}</td>
-                <td className="text-muted-foreground">{r.company ?? ''}</td>
-                <td className="text-muted-foreground">
+                <td className="px-2 py-1.5 font-medium">{r.name}</td>
+                <td className="px-2 text-muted-foreground">
+                  {r.company ?? ''}
+                </td>
+                <td className="px-2 text-muted-foreground">
                   {r.rep ?? 'Unassigned'}
                 </td>
-                <td className="text-right">{fmtDate(r.first_order_at, tz)}</td>
-                <td className="text-right">{r.testing_orders}</td>
-                <td className="text-right">{fmtMoney(r.lifetime)}</td>
-                <td className="text-right">{fmtDate(r.last_order_at, tz)}</td>
-                <td>
+                <td className="px-2 text-right">
+                  {fmtDate(r.first_order_at, tz)}
+                </td>
+                <td className="px-2 text-right">{r.testing_orders}</td>
+                <td className="px-2 text-right">{fmtMoney(r.lifetime)}</td>
+                <td className="px-2 text-right">
+                  {fmtDate(r.last_order_at, tz)}
+                </td>
+                <td className="px-2">
                   <span
                     className={cn(
                       'rounded-full px-2 text-xs font-semibold',
@@ -141,7 +147,7 @@ export function InsightsCustomerTable({
                   </span>
                 </td>
                 {touch.crmVisible && (
-                  <td className="text-right">
+                  <td className="px-2 text-right">
                     <TouchCell
                       kind="crm"
                       touch={tp ? (tp.crm ?? null) : undefined}
@@ -151,7 +157,7 @@ export function InsightsCustomerTable({
                   </td>
                 )}
                 {touch.supportVisible && (
-                  <td className="text-right">
+                  <td className="px-2 text-right">
                     <TouchCell
                       kind="support"
                       touch={tp ? (tp.support ?? null) : undefined}

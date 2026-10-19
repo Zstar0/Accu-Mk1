@@ -4,6 +4,7 @@ from __future__ import annotations
 import csv
 import io
 import logging
+import re
 from collections import Counter
 from datetime import date, datetime, timezone
 from decimal import Decimal
@@ -20,6 +21,7 @@ from database import get_db
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/reports/customers", tags=["customer-insights"])
+_TOUCH_KEY = re.compile(r"wc:\d+|email:.+")
 Period = Literal["30d", "90d", "6m", "1y", "all"]
 
 
@@ -423,6 +425,8 @@ def customers_changes(since: datetime, db: Session = Depends(get_db), _u=Depends
 def customers_touchpoints(keys: list[str] = Query(...), _u=Depends(get_current_user)):
     if len(keys) > rules.TOUCH_MAX_KEYS:
         raise HTTPException(status_code=422, detail=f"at most {rules.TOUCH_MAX_KEYS} keys")
+    if not all(_TOUCH_KEY.fullmatch(k) for k in keys):
+        raise HTTPException(status_code=422, detail="keys must be wc:<id> or email:<address>")
     crm_visible = _u.role == "admin"
     support_visible = touchpoints._is_support_reader(_u)
     rows = touchpoints.collect(keys, crm=crm_visible, support=support_visible)

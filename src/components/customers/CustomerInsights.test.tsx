@@ -35,7 +35,49 @@ vi.mock('recharts', async importOriginal => {
 
 const k = <T,>(value: T, prior: T | null = null) => ({ value, prior })
 
-function setup({ riskFails = false, onOpen = vi.fn() } = {}) {
+const EMPTY_LIST: api.CustomerListResponse = {
+  tz: 'America/Los_Angeles',
+  synced_at: null,
+  total: 0,
+  page: 1,
+  page_size: 25,
+  rows: [],
+}
+const listOf = (total: number, rows: api.CustomerListResponse['rows']) => ({
+  ...EMPTY_LIST,
+  total,
+  rows,
+})
+const CRM_OK: api.CrmTouch = {
+  state: 'ok',
+  at: '2026-10-12T15:00:00Z',
+  type: 'email',
+  direction: 'outbound',
+  who: 'Scott',
+  title: 'Checking in',
+  preview: '',
+  lead_name: 'Halcyon',
+  lead_url: null,
+  stale: false,
+  reason: null,
+}
+const CRM_ONLY: api.TouchpointsResponse = {
+  crm_visible: true,
+  support_visible: false,
+  rows: { 'wc:1': { crm: CRM_OK, support: null } },
+}
+
+function setup({
+  riskFails = false,
+  onOpen = vi.fn(),
+  list = EMPTY_LIST,
+  touch = CRM_ONLY,
+}: {
+  riskFails?: boolean
+  onOpen?: (key: string, tab?: 'crm' | 'support') => void
+  list?: api.CustomerListResponse
+  touch?: api.TouchpointsResponse
+} = {}) {
   vi.mocked(api.getCustomerSummary).mockResolvedValue({
     tz: 'America/Los_Angeles',
     synced_at: '2026-10-05T18:00:00Z',
@@ -116,28 +158,8 @@ function setup({ riskFails = false, onOpen = vi.fn() } = {}) {
       { signal: 'conformance', group: 'any_fail', orders: 14, returned: 0.36 },
     ],
   })
-  vi.mocked(api.getCustomerTouchpoints).mockResolvedValue({
-    crm_visible: true,
-    support_visible: false,
-    rows: {
-      'wc:1': {
-        crm: {
-          state: 'ok',
-          at: '2026-10-12T15:00:00Z',
-          type: 'email',
-          direction: 'outbound',
-          who: 'Scott',
-          title: 'Checking in',
-          preview: '',
-          lead_name: 'Halcyon',
-          lead_url: null,
-          stale: false,
-          reason: null,
-        },
-        support: null,
-      },
-    },
-  })
+  vi.mocked(api.getCustomerTouchpoints).mockResolvedValue(touch)
+  vi.mocked(api.getCustomerList).mockResolvedValue(list)
   if (riskFails)
     vi.mocked(api.getCustomerAtRisk).mockRejectedValue(new Error('boom'))
   const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } })
@@ -189,13 +211,68 @@ describe('CustomerInsights', () => {
       expect(screen.getByRole('heading', { name: h })).toBeInTheDocument()
   })
 
-  it('shows an error with Retry, and no overdue badge, when at-risk fails', async () => {
+  it('shows an error with Retry, and a plain At risk tab label, when at-risk fails', async () => {
     setup({ riskFails: true })
     expect(
       await screen.findByText(/Failed to load at-risk customers/)
     ).toBeInTheDocument()
     expect(screen.getByRole('button', { name: 'Retry' })).toBeInTheDocument()
-    expect(screen.queryByText(/overdue$/)).not.toBeInTheDocument()
+    expect(screen.getByRole('tab', { name: 'At risk' })).toBeInTheDocument()
+  })
+
+  it('shows Last support and not Last CRM to a support-only reader', async () => {
+    setup({
+      touch: {
+        crm_visible: false,
+        support_visible: true,
+        rows: {
+          'wc:1': {
+            crm: null,
+            support: {
+              state: 'ok',
+              at: '2026-10-10T15:00:00Z',
+              thread_id: 'th_1',
+              title: 'COA question',
+              status: 'done',
+              waiting_since: null,
+              plain_url: null,
+              open_count: 0,
+              stale: false,
+              reason: null,
+            },
+          },
+        },
+      },
+    })
+    expect(
+      await screen.findByRole('columnheader', { name: 'Last support' })
+    ).toBeInTheDocument()
+    expect(screen.queryByRole('columnheader', { name: 'Last CRM' })).toBeNull()
+  })
+
+  it('fetches touches only for the visible tab', async () => {
+    vi.mocked(api.getCustomerTouchpoints).mockClear()
+    setup({
+      list: listOf(1, [row({ key: 'wc:2243', name: 'Zackary Smith' })]),
+    })
+    // The New customers page has loaded (its count is on the tab) while At risk shows.
+    expect(
+      await screen.findByRole('tab', { name: 'New customers (1)' })
+    ).toBeInTheDocument()
+    await waitFor(() =>
+      expect(vi.mocked(api.getCustomerTouchpoints)).toHaveBeenCalledWith([
+        'wc:1',
+      ])
+    )
+    expect(vi.mocked(api.getCustomerTouchpoints)).not.toHaveBeenCalledWith([
+      'wc:2243',
+    ])
+    await userEvent.click(screen.getByRole('tab', { name: /New customers/ }))
+    await waitFor(() =>
+      expect(vi.mocked(api.getCustomerTouchpoints)).toHaveBeenCalledWith([
+        'wc:2243',
+      ])
+    )
   })
 
   it('has three tabs, shows the CRM touch on the at-risk row and opens the CRM tab from it', async () => {
@@ -225,15 +302,7 @@ describe('CustomerInsights', () => {
   })
 
   it('New customers tab queries new_only with the period and the launch switch', async () => {
-    vi.mocked(api.getCustomerList).mockResolvedValue({
-      tz: 'America/Los_Angeles',
-      synced_at: null,
-      total: 1,
-      page: 1,
-      page_size: 25,
-      rows: [row({ key: 'wc:2243', name: 'Zackary Smith' })],
-    })
-    setup()
+    setup({ list: listOf(1, [row({ key: 'wc:2243', name: 'Zackary Smith' })]) })
     await userEvent.click(
       await screen.findByRole('tab', { name: /New customers/ })
     )
@@ -257,15 +326,9 @@ describe('CustomerInsights', () => {
   })
 
   it('resets New customers paging when the period or launch switch changes', async () => {
-    vi.mocked(api.getCustomerList).mockResolvedValue({
-      tz: 'America/Los_Angeles',
-      synced_at: null,
-      total: 60,
-      page: 1,
-      page_size: 25,
-      rows: [row({ key: 'wc:2243', name: 'Zackary Smith' })],
+    setup({
+      list: listOf(60, [row({ key: 'wc:2243', name: 'Zackary Smith' })]),
     })
-    setup()
     await userEvent.click(
       await screen.findByRole('tab', { name: /New customers/ })
     )
@@ -303,15 +366,7 @@ describe('CustomerInsights', () => {
   })
 
   it('Cohorts tab shows the grid, drills into members with the right query, and keeps the selection in the store', async () => {
-    vi.mocked(api.getCustomerList).mockResolvedValue({
-      tz: 'America/Los_Angeles',
-      synced_at: null,
-      total: 41,
-      page: 1,
-      page_size: 25,
-      rows: [row({ key: 'wc:9', name: 'Member One' })],
-    })
-    setup()
+    setup({ list: listOf(41, [row({ key: 'wc:9', name: 'Member One' })]) })
     await userEvent.click(await screen.findByRole('tab', { name: /Cohorts/ }))
     expect(await screen.findByText('12.9%')).toBeInTheDocument()
     expect(

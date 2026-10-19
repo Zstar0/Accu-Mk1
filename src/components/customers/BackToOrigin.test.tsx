@@ -1,10 +1,21 @@
 import { render, screen } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
-import { describe, expect, it } from 'vitest'
+import { beforeEach, describe, expect, it } from 'vitest'
 import { useUIStore } from '@/store/ui-store'
 import { BackToOrigin } from './BackToOrigin'
 
+const initial = useUIStore.getState()
+
 describe('BackToOrigin', () => {
+  beforeEach(() => {
+    // Each case starts from the store's initial navigation, not the last case's.
+    useUIStore.setState({
+      activeSection: initial.activeSection,
+      activeSubSection: initial.activeSubSection,
+      customerDetailOrigin: initial.customerDetailOrigin,
+    })
+  })
+
   it('labels Back to Insights and navigates back to Insights', async () => {
     useUIStore.setState({
       customerDetailOrigin: 'customer-insights',

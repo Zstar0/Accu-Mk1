@@ -155,7 +155,11 @@ export function CustomerInsights({
     queryFn: getCustomerAtRisk,
     staleTime: 60_000,
   })
-  const touch = useTouchpoints(risk.data?.rows.map(r => r.key) ?? [])
+  // Only the visible tab's keys fan out to Close and Plain; resolved chunks stay
+  // cached for the hook's staleTime, so switching back does not refetch.
+  const touch = useTouchpoints(
+    tab === 'at-risk' ? (risk.data?.rows.map(r => r.key) ?? []) : []
+  )
   const churn = useQuery({
     queryKey: ['customers', 'churn-signals'],
     queryFn: getCustomerChurnSignals,
@@ -195,7 +199,9 @@ export function CustomerInsights({
     staleTime: 60_000,
     placeholderData: prev => prev,
   })
-  const newTouch = useTouchpoints(newCustomers.data?.rows.map(r => r.key) ?? [])
+  const newTouch = useTouchpoints(
+    tab === 'new' ? (newCustomers.data?.rows.map(r => r.key) ?? []) : []
+  )
   // Cohort members: paging resets from the grid's select handler.
   const [memberView, setMemberView] = useState(LIST_DEFAULT)
   const { page: memberPage, sort: memberSort, dir: memberDir } = memberView
@@ -234,7 +240,9 @@ export function CustomerInsights({
         ? prev
         : undefined,
   })
-  const memberTouch = useTouchpoints(members.data?.rows.map(r => r.key) ?? [])
+  const memberTouch = useTouchpoints(
+    tab === 'cohorts' ? (members.data?.rows.map(r => r.key) ?? []) : []
+  )
   const cohortSize = cohorts.data?.rows.find(r => r.cohort === cohort)?.size
   const s = summary.data
 
@@ -455,10 +463,12 @@ export function CustomerInsights({
                         <th className="text-right font-medium">Last order</th>
                         <th className="text-right font-medium">Overdue</th>
                         {touch.crmVisible && (
-                          <th className="text-right font-medium">Last CRM</th>
+                          <th className="px-2 text-right font-medium">
+                            Last CRM
+                          </th>
                         )}
                         {touch.supportVisible && (
-                          <th className="text-right font-medium">
+                          <th className="px-2 text-right font-medium">
                             Last support
                           </th>
                         )}
@@ -483,7 +493,9 @@ export function CustomerInsights({
                           >
                             <Tooltip>
                               <TooltipTrigger asChild>
-                                <td className="py-1.5 font-medium">{r.name}</td>
+                                <td className="py-1.5 font-medium" tabIndex={0}>
+                                  {r.name}
+                                </td>
                               </TooltipTrigger>
                               <TooltipContent className="max-w-xs p-0">
                                 <div className="flex flex-col gap-1.5 p-3 font-mono text-xs">
@@ -549,7 +561,7 @@ export function CustomerInsights({
                               </span>
                             </td>
                             {touch.crmVisible && (
-                              <td className="text-right">
+                              <td className="px-2 text-right">
                                 <TouchCell
                                   kind="crm"
                                   touch={tp ? (tp.crm ?? null) : undefined}
@@ -559,7 +571,7 @@ export function CustomerInsights({
                               </td>
                             )}
                             {touch.supportVisible && (
-                              <td className="text-right">
+                              <td className="px-2 text-right">
                                 <TouchCell
                                   kind="support"
                                   touch={tp ? (tp.support ?? null) : undefined}

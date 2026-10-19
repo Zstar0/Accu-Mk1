@@ -169,24 +169,34 @@ test('tabs render, cells degrade without Close or Plain, cohort drill-down match
   for (const name of [/^At risk/, /^New customers/, /^Cohorts$/])
     await expect(page.getByRole('tab', { name })).toBeVisible()
 
-  // Stacks have no Close, so every Last CRM cell reads n/a and the page still loads.
+  // Stacks have no Close or Plain, so every Last CRM and Last support cell reads
+  // n/a and the page still loads.
   const panel = page.getByRole('tabpanel')
-  const crmCellsAllNa = async () => {
+  const touchCellsAllNa = async () => {
+    // The customer table (not the cohort grid) is the one with a Last order column.
     const table = panel
       .locator('table')
-      .filter({ has: page.getByRole('columnheader', { name: 'Last CRM' }) })
-    const col = (await table.locator('thead th').allTextContents()).findIndex(
-      t => t.trim() === 'Last CRM'
+      .filter({ has: page.getByRole('columnheader', { name: 'Last order' }) })
+      .last()
+    const headers = (await table.locator('thead th').allTextContents()).map(t =>
+      t.trim()
     )
-    const cells = table.locator(`tbody tr td:nth-child(${col + 1})`)
-    await expect(cells.first()).toHaveText('n/a', { timeout: 20_000 })
-    await expect(cells.filter({ hasNotText: 'n/a' })).toHaveCount(0)
+    for (const header of ['Last CRM', 'Last support']) {
+      const col = headers.findIndex(t => t === header)
+      expect(
+        col,
+        `${header} column in [${headers.join(', ')}]`
+      ).toBeGreaterThanOrEqual(0)
+      const cells = table.locator(`tbody tr td:nth-child(${col + 1})`)
+      await expect(cells.first()).toHaveText('n/a', { timeout: 20_000 })
+      await expect(cells.filter({ hasNotText: 'n/a' })).toHaveCount(0)
+    }
   }
   const risk = await api<{ rows: unknown[] }>(
     page,
     '/reports/customers/at-risk'
   )
-  if (risk.rows.length) await crmCellsAllNa()
+  if (risk.rows.length) await touchCellsAllNa()
   await shootFull(page, `${SHOTS}/01-at-risk.png`)
 
   await page.getByRole('tab', { name: /^New customers/ }).click()
@@ -216,6 +226,6 @@ test('tabs render, cells degrade without Close or Plain, cohort drill-down match
   )
   expect(members.total).toBe(first.size)
   // The member table carries the same check, so it runs even with no at-risk rows.
-  await crmCellsAllNa()
+  await touchCellsAllNa()
   await shootFull(page, `${SHOTS}/03-cohorts.png`)
 })

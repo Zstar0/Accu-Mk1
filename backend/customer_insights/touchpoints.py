@@ -1,7 +1,8 @@
 """/reports/customers/touchpoints (spec 2026-10-19, 4.1): last human CRM touch and last support touch.
 
 Reads only through the CRM and Support services; the per-key summary is cached in each
-service's own CACHE under `touch:<key>`, which that service's refresh path drops.
+service's own CACHE under `touch:<key>:`, which that service's refresh path drops (the trailing
+colon keeps a prefix drop of `wc:1` off `wc:10`).
 """
 from __future__ import annotations
 
@@ -130,11 +131,11 @@ def _load_support(key: str) -> dict:
 
 def crm_touch(key: str) -> dict:
     # get_or_load stores only what the loader returns, so a raised Unavailable is never cached.
-    return _crm_cache.get_or_load(f"touch:{key}", rules.TOUCH_TTL, lambda: _load_crm(key))[0]
+    return _crm_cache.get_or_load(f"touch:{key}:", rules.TOUCH_TTL, lambda: _load_crm(key))[0]
 
 
 def support_touch(key: str) -> dict:
-    return _support_cache.get_or_load(f"touch:{key}", rules.TOUCH_TTL, lambda: _load_support(key))[0]
+    return _support_cache.get_or_load(f"touch:{key}:", rules.TOUCH_TTL, lambda: _load_support(key))[0]
 
 
 def _safe(fn: Callable[[str], dict], key: str) -> dict:
@@ -142,9 +143,10 @@ def _safe(fn: Callable[[str], dict], key: str) -> dict:
         return fn(key)
     except Unavailable as e:
         return {"state": "unavailable", "reason": e.reason, "stale": False}
-    except Exception:
-        logger.warning("customer_insights.touchpoints %s failed key_kind=%s", fn.__name__, key.split(":")[0],
-                       exc_info=True)
+    except Exception as e:  # noqa: BLE001 (logged without a traceback on purpose)
+        # No traceback: an upstream exception message could carry customer data.
+        logger.warning("customer_insights.touchpoints %s failed key_kind=%s error=%s", fn.__name__,
+                       key.split(":")[0], type(e).__name__)
         return {"state": "unavailable", "reason": "unavailable", "stale": False}
 
 

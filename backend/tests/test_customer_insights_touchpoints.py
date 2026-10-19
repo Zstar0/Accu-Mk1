@@ -41,7 +41,7 @@ def api(monkeypatch):
 
     def crm(key, **kw):
         calls["crm"].append((key, kw))
-        if key == "wc:boom":
+        if key == "wc:999":
             raise CrmUnavailable("http_503")
         return data.get(key)
 
@@ -57,6 +57,8 @@ def api(monkeypatch):
     main.app.dependency_overrides[get_current_user] = lambda: MagicMock(id=1, role="admin")
     yield TestClient(main.app), calls
     main.app.dependency_overrides.clear()
+    touchpoints._crm_cache.drop("")
+    touchpoints._support_cache.drop("")
 
 
 def test_crm_touch_skips_drafts_and_takes_calls(api):
@@ -97,9 +99,9 @@ def test_gating_omits_fields_and_skips_upstream_calls(api):
 
 def test_one_failing_key_does_not_fail_the_rest_and_unknown_is_none(api):
     client, _ = api
-    body = client.get("/reports/customers/touchpoints?keys=wc:1&keys=wc:boom&keys=email:nobody@x.com").json()["rows"]
+    body = client.get("/reports/customers/touchpoints?keys=wc:1&keys=wc:999&keys=email:nobody@x.com").json()["rows"]
     assert body["wc:1"]["crm"]["state"] == "ok"
-    assert body["wc:boom"]["crm"] == {"state": "unavailable", "reason": "unavailable", "stale": False, "at": None,
+    assert body["wc:999"]["crm"] == {"state": "unavailable", "reason": "unavailable", "stale": False, "at": None,
                                        "type": None, "direction": None, "who": None, "title": None, "preview": None,
                                        "lead_name": None, "lead_url": None}
     assert body["email:nobody@x.com"]["crm"]["state"] == "none"
@@ -108,11 +110,28 @@ def test_one_failing_key_does_not_fail_the_rest_and_unknown_is_none(api):
 
 def test_summary_is_cached_and_unavailable_is_not(api):
     client, calls = api
-    client.get("/reports/customers/touchpoints?keys=wc:1&keys=wc:boom")
-    client.get("/reports/customers/touchpoints?keys=wc:1&keys=wc:boom")
-    assert [k for k, _ in calls["crm"]].count("wc:1") == 1 and [k for k, _ in calls["crm"]].count("wc:boom") == 2
-    assert touchpoints._crm_cache.peek("touch:wc:1") is not None
-    assert touchpoints._crm_cache.peek("touch:wc:boom") is None
+    client.get("/reports/customers/touchpoints?keys=wc:1&keys=wc:999")
+    client.get("/reports/customers/touchpoints?keys=wc:1&keys=wc:999")
+    assert [k for k, _ in calls["crm"]].count("wc:1") == 1 and [k for k, _ in calls["crm"]].count("wc:999") == 2
+    assert touchpoints._crm_cache.peek("touch:wc:1:") is not None
+    assert touchpoints._crm_cache.peek("touch:wc:999:") is None
+
+
+def test_page_two_is_scanned_when_page_one_is_all_drafts(api, monkeypatch):
+    client, _ = api
+    pages = []
+
+    def crm(key, **kw):
+        pages.append(kw["page"])
+        if kw["page"] == 1:
+            drafts = crm_items(*(it(f"d{i}", status="draft") for i in range(rules.TOUCH_SCAN)))
+            return {**drafts, "total": rules.TOUCH_SCAN + 1}
+        return {**crm_items(it("sent_p2", at="2026-09-01T10:00:00Z")), "total": rules.TOUCH_SCAN + 1}
+
+    monkeypatch.setattr(touchpoints, "_crm_fn", crm)
+    row = client.get("/reports/customers/touchpoints?keys=wc:1").json()["rows"]["wc:1"]["crm"]
+    assert row["state"] == "ok" and row["title"] == "t sent_p2" and row["at"] == "2026-09-01T10:00:00Z"
+    assert pages == [1, 2]
 
 
 def test_key_cap_and_route_order(api):
@@ -120,3 +139,10 @@ def test_key_cap_and_route_order(api):
     assert client.get("/reports/customers/touchpoints?" + "&".join(f"keys=wc:{i}" for i in range(51))).status_code == 422
     assert client.get("/reports/customers/touchpoints").status_code == 422
     assert client.get("/reports/customers/touchpoints?keys=wc:1").status_code == 200  # not swallowed by /{customer_key}
+
+
+def test_malformed_keys_are_422(api):
+    client, calls = api
+    assert client.get("/reports/customers/touchpoints?keys=junk").status_code == 422
+    assert client.get("/reports/customers/touchpoints?keys=wc:1&keys=wc:abc").status_code == 422
+    assert calls["crm"] == [] and calls["support"] == []
