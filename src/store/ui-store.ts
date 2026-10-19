@@ -219,7 +219,10 @@ interface UIState {
    *  sets customerDetailKey. */
   navigateToCustomerKey: (
     key: string,
-    opts?: { tab?: CustomerDetailTab; origin?: 'customers' | 'customer-insights' }
+    opts?: {
+      tab?: CustomerDetailTab
+      origin?: 'customers' | 'customer-insights'
+    }
   ) => void
   setInsightsView: (patch: Partial<InsightsView>) => void
   navigateToDocument: (id: number) => void
@@ -362,7 +365,12 @@ export const useUIStore = create<UIState>()(
       orderStatusPrefill: null,
       customerDetailTab: 'orders',
       customerDetailOrigin: 'customers',
-      insightsView: { tab: 'at-risk', period: '90d', cohort: null, month: null },
+      insightsView: {
+        tab: 'at-risk',
+        period: '90d',
+        cohort: null,
+        month: null,
+      },
       customerOrderSearch: {
         order_number: '',
         sample_id: '',

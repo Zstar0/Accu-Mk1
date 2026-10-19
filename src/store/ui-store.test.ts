@@ -136,7 +136,10 @@ describe('UIStore customer actions', () => {
   })
 
   it('navigateToCustomerKey takes a tab and an origin; back returns to the origin', () => {
-    useUIStore.getState().navigateToCustomerKey('wc:2243', { tab: 'crm', origin: 'customer-insights' })
+    useUIStore.getState().navigateToCustomerKey('wc:2243', {
+      tab: 'crm',
+      origin: 'customer-insights',
+    })
     let s = useUIStore.getState()
     expect(s.customerDetailTab).toBe('crm')
     expect(s.customerDetailOrigin).toBe('customer-insights')
@@ -155,9 +158,21 @@ describe('UIStore customer actions', () => {
   })
 
   it('setInsightsView merges a patch', () => {
-    useUIStore.setState({ insightsView: { tab: 'at-risk', period: '90d', cohort: null, month: null } })
+    useUIStore.setState({
+      insightsView: {
+        tab: 'at-risk',
+        period: '90d',
+        cohort: null,
+        month: null,
+      },
+    })
     useUIStore.getState().setInsightsView({ tab: 'cohorts', cohort: '2026-07' })
-    expect(useUIStore.getState().insightsView).toEqual({ tab: 'cohorts', period: '90d', cohort: '2026-07', month: null })
+    expect(useUIStore.getState().insightsView).toEqual({
+      tab: 'cohorts',
+      period: '90d',
+      cohort: '2026-07',
+      month: null,
+    })
     useUIStore.getState().setInsightsView({ month: 'M3' })
     expect(useUIStore.getState().insightsView.cohort).toBe('2026-07')
   })
