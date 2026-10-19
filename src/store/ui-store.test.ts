@@ -135,6 +135,33 @@ describe('UIStore customer actions', () => {
     expect(state.customerDetailTargetId).toBeNull()
   })
 
+  it('navigateToCustomerKey takes a tab and an origin; back returns to the origin', () => {
+    useUIStore.getState().navigateToCustomerKey('wc:2243', { tab: 'crm', origin: 'customer-insights' })
+    let s = useUIStore.getState()
+    expect(s.customerDetailTab).toBe('crm')
+    expect(s.customerDetailOrigin).toBe('customer-insights')
+    useUIStore.getState().navigateToCustomers()
+    s = useUIStore.getState()
+    expect(s.activeSubSection).toBe('customer-insights')
+    expect(s.customerDetailOrigin).toBe('customers')
+    expect(s.customerDetailTargetId).toBeNull()
+  })
+
+  it('navigateToCustomerKey without options keeps the old defaults', () => {
+    useUIStore.getState().navigateToCustomerKey('wc:5')
+    expect(useUIStore.getState().customerDetailTab).toBe('dashboard')
+    useUIStore.getState().navigateToCustomers()
+    expect(useUIStore.getState().activeSubSection).toBe('customers')
+  })
+
+  it('setInsightsView merges a patch', () => {
+    useUIStore.setState({ insightsView: { tab: 'at-risk', period: '90d', cohort: null, month: null } })
+    useUIStore.getState().setInsightsView({ tab: 'cohorts', cohort: '2026-07' })
+    expect(useUIStore.getState().insightsView).toEqual({ tab: 'cohorts', period: '90d', cohort: '2026-07', month: null })
+    useUIStore.getState().setInsightsView({ month: 'M3' })
+    expect(useUIStore.getState().insightsView.cohort).toBe('2026-07')
+  })
+
   it('setSearchAndResetPage atomically updates search term and resets page to 0', () => {
     useUIStore.setState({
       customerListPage: 5,

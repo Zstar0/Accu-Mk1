@@ -1,5 +1,6 @@
 import { create } from 'zustand'
 import { devtools } from 'zustand/middleware'
+import type { InsightsPeriod } from '@/lib/api'
 
 // Navigation sections for main content area
 export type ActiveSection =
@@ -74,6 +75,22 @@ export type ReportsSubSection =
   | 'sync-debug'
 export type AccountSubSection = 'profile' | 'user-management'
 export type PeptideRequestsSubSection = 'list' | 'detail'
+
+export type CustomerDetailTab =
+  | 'orders'
+  | 'dashboard'
+  | 'crm'
+  | 'support'
+  | 'ai-review'
+
+export type InsightsTab = 'at-risk' | 'new' | 'cohorts'
+
+export interface InsightsView {
+  tab: InsightsTab
+  period: InsightsPeriod
+  cohort: string | null
+  month: string | null
+}
 export type BoardsSubSection = 'overview' | 'board'
 // Settings panes double as subsections so #settings/<pane> round-trips through
 // the same hash-navigation as every other section.
@@ -159,7 +176,11 @@ interface UIState {
    *  on arrival. */
   orderStatusPrefill: { orderId: string } | null
   // Customer detail page — Phase 30
-  customerDetailTab: 'orders' | 'dashboard' | 'crm' | 'support' | 'ai-review'
+  customerDetailTab: CustomerDetailTab
+  // Where the open customer detail came from; back-nav returns there.
+  customerDetailOrigin: 'customers' | 'customer-insights'
+  // Customer Insights page view, kept across the detail round trip.
+  insightsView: InsightsView
   // UX revision: four independent search slots, AND-combined server-side.
   // Each slot is the raw committed value (post-debounce) for one input. Empty
   // string = "no filter on that axis" (back-compat with debounce-flush flow).
@@ -196,7 +217,11 @@ interface UIState {
   /** Open a customer by insights key on the Dashboard tab. "wc:<id>" keys
    *  route through the numeric id flow; anything else (guest "email:")
    *  sets customerDetailKey. */
-  navigateToCustomerKey: (key: string) => void
+  navigateToCustomerKey: (
+    key: string,
+    opts?: { tab?: CustomerDetailTab; origin?: 'customers' | 'customer-insights' }
+  ) => void
+  setInsightsView: (patch: Partial<InsightsView>) => void
   navigateToDocument: (id: number) => void
   navigateToDocumentSpace: (slug: string | null) => void
   /** The endo worksheet page; closes the worksheet flyout. */
@@ -336,6 +361,8 @@ export const useUIStore = create<UIState>()(
       hideTestAccounts: true,
       orderStatusPrefill: null,
       customerDetailTab: 'orders',
+      customerDetailOrigin: 'customers',
+      insightsView: { tab: 'at-risk', period: '90d', cohort: null, month: null },
       customerOrderSearch: {
         order_number: '',
         sample_id: '',
@@ -685,13 +712,14 @@ export const useUIStore = create<UIState>()(
             activeSubSection: 'customer-detail',
             customerDetailTargetId: id,
             customerDetailKey: null,
+            customerDetailOrigin: 'customers',
             navigationKey: state.navigationKey + 1,
           }),
           undefined,
           'navigateToCustomer'
         ),
 
-      navigateToCustomerKey: key => {
+      navigateToCustomerKey: (key, opts) => {
         const wcId = key.startsWith('wc:') ? Number(key.slice(3)) : NaN
         const isWc = Number.isInteger(wcId) && wcId > 0
         set(
@@ -700,7 +728,8 @@ export const useUIStore = create<UIState>()(
             activeSubSection: 'customer-detail',
             customerDetailTargetId: isWc ? wcId : null,
             customerDetailKey: isWc ? null : key,
-            customerDetailTab: 'dashboard',
+            customerDetailTab: opts?.tab ?? 'dashboard',
+            customerDetailOrigin: opts?.origin ?? 'customers',
             navigationKey: state.navigationKey + 1,
           }),
           undefined,
@@ -715,7 +744,11 @@ export const useUIStore = create<UIState>()(
         set(
           state => ({
             activeSection: 'accumark-tools',
-            activeSubSection: 'customers',
+            activeSubSection:
+              state.customerDetailOrigin === 'customer-insights'
+                ? 'customer-insights'
+                : 'customers',
+            customerDetailOrigin: 'customers',
             customerDetailTargetId: null,
             customerDetailKey: null,
             // Phase 30 (T-30-03): reset customer-detail page state when going
@@ -735,6 +768,13 @@ export const useUIStore = create<UIState>()(
           }),
           undefined,
           'navigateToCustomers'
+        ),
+
+      setInsightsView: patch =>
+        set(
+          state => ({ insightsView: { ...state.insightsView, ...patch } }),
+          undefined,
+          'setInsightsView'
         ),
 
       setCustomerListPage: page =>
