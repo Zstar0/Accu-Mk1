@@ -92,6 +92,8 @@ function setup(riskFails = false) {
         samples: 142,
         usual_gap_days: 9,
         last_order_at: '2026-08-21T15:00:00Z',
+        first_order_at: '2026-03-02T15:00:00Z',
+        testing_orders: 29,
         top_tests: ['HPLC'],
         status: 'at_risk',
         monthly: [],
