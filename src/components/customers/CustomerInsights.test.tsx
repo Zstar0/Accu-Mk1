@@ -1,4 +1,4 @@
-import { render, screen, within } from '@testing-library/react'
+import { render, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { cloneElement, type ReactElement } from 'react'
@@ -254,5 +254,51 @@ describe('CustomerInsights', () => {
         'First testing order in this period, ranked by lifetime spend'
       )
     ).toBeInTheDocument()
+  })
+
+  it('resets New customers paging when the period or launch switch changes', async () => {
+    vi.mocked(api.getCustomerList).mockResolvedValue({
+      tz: 'America/Los_Angeles',
+      synced_at: null,
+      total: 60,
+      page: 1,
+      page_size: 25,
+      rows: [row({ key: 'wc:2243', name: 'Zackary Smith' })],
+    })
+    setup()
+    await userEvent.click(
+      await screen.findByRole('tab', { name: /New customers/ })
+    )
+    await screen.findByText('Zackary Smith')
+    await userEvent.click(screen.getByRole('button', { name: 'Next' }))
+    await waitFor(() =>
+      expect(vi.mocked(api.getCustomerList)).toHaveBeenLastCalledWith(
+        expect.objectContaining({ page: 2 })
+      )
+    )
+    const reset = expect.objectContaining({
+      page: 1,
+      sort: 'lifetime',
+      dir: 'desc',
+    })
+    await userEvent.click(screen.getByRole('button', { name: '30D' }))
+    await waitFor(() =>
+      expect(vi.mocked(api.getCustomerList)).toHaveBeenLastCalledWith(
+        expect.objectContaining({ period: '30d', page: 1 })
+      )
+    )
+    await userEvent.click(screen.getByRole('button', { name: '90D' }))
+    await waitFor(() =>
+      expect(vi.mocked(api.getCustomerList)).toHaveBeenLastCalledWith(reset)
+    )
+    await userEvent.click(screen.getByRole('button', { name: 'Next' }))
+    await userEvent.click(
+      screen.getByRole('switch', { name: 'Exclude launch accounts' })
+    )
+    await waitFor(() =>
+      expect(vi.mocked(api.getCustomerList)).toHaveBeenLastCalledWith(
+        expect.objectContaining({ exclude_launch_accounts: true, page: 1 })
+      )
+    )
   })
 })

@@ -158,24 +158,16 @@ export function CustomerInsights({
     queryFn: getCustomerChurnSignals,
     staleTime: 60_000,
   })
-  // Paging state is keyed to the period it was set under, so changing the
-  // period falls back to page 1 / lifetime desc without an effect.
-  const [newView, setNewView] = useState<{
-    period: InsightsPeriod
-    page: number
-    sort: InsightsSortField
-    dir: 'asc' | 'desc'
-  }>({ period, page: 1, sort: 'lifetime', dir: 'desc' })
-  const {
-    page: newPage,
-    sort: newSort,
-    dir: newDir,
-  } = newView.period === period
-    ? newView
-    : { page: 1, sort: 'lifetime' as const, dir: 'desc' as const }
-  const setNew = (
-    v: Partial<{ page: number; sort: InsightsSortField; dir: 'asc' | 'desc' }>
-  ) => setNewView({ period, page: newPage, sort: newSort, dir: newDir, ...v })
+  // Reset to page 1 / lifetime desc from the period and launch handlers.
+  const NEW_DEFAULT = {
+    page: 1,
+    sort: 'lifetime' as InsightsSortField,
+    dir: 'desc' as 'asc' | 'desc',
+  }
+  const [newView, setNewView] = useState(NEW_DEFAULT)
+  const { page: newPage, sort: newSort, dir: newDir } = newView
+  const setNew = (v: Partial<typeof NEW_DEFAULT>) =>
+    setNewView(cur => ({ ...cur, ...v }))
   const newCustomers = useQuery({
     queryKey: [
       'customers',
@@ -218,7 +210,10 @@ export function CustomerInsights({
           <label className="flex items-center gap-2 text-xs text-muted-foreground">
             <Switch
               checked={excludeLaunch}
-              onCheckedChange={setExcludeLaunch}
+              onCheckedChange={v => {
+                setExcludeLaunch(v)
+                setNewView(NEW_DEFAULT)
+              }}
               aria-label="Exclude launch accounts"
             />
             Exclude launch accounts
@@ -229,7 +224,10 @@ export function CustomerInsights({
                 key={p.key}
                 type="button"
                 aria-pressed={period === p.key}
-                onClick={() => setInsightsView({ period: p.key })}
+                onClick={() => {
+                  setInsightsView({ period: p.key })
+                  setNewView(NEW_DEFAULT)
+                }}
                 className={cn(
                   'cursor-pointer px-3 py-1 text-xs font-medium',
                   period === p.key
