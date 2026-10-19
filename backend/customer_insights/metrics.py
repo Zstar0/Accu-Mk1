@@ -176,6 +176,32 @@ def cohorts(ds: Dataset, *, end: datetime, tz: str, max_months: int = 12) -> dic
     return {"months": [f"M{k}" for k in range(1, max_months + 1)], "rows": rows}
 
 
+def filter_rows(rows: list[dict[str, Any]], ds: Dataset, *, lo: datetime | None, hi: datetime, tz: str,
+                new_only: bool = False, cohort: str | None = None, returned_in: str | None = None) -> list[dict[str, Any]]:
+    """Keep rows by first testing order (new_only / cohort) and by a later testing-order month (returned_in)."""
+    if not (new_only or cohort or returned_in):
+        return rows
+    active: dict[str, set[str]] = defaultdict(set)
+    if returned_in:  # same testing-order months cohorts() counts, so drill-down totals match the grid
+        for x in ds.orders:
+            if x.is_testing and x.paid_at <= hi:
+                active[x.customer_key].add(rules.lab_month(x.paid_at, tz))
+    out = []
+    for r in rows:
+        raw = r.get("first_order_at")
+        first = datetime.fromisoformat(raw) if raw else None
+        if (new_only or cohort) and first is None:
+            continue
+        if new_only and not ((lo is None or lo <= first) and first <= hi):
+            continue
+        if cohort and rules.lab_month(first, tz) != cohort:
+            continue
+        if returned_in and returned_in not in active[r["key"]]:
+            continue
+        out.append(r)
+    return out
+
+
 def _spend(orders: list[Order], start: datetime | None, end: datetime) -> Decimal:
     return sum((o.net for o in orders if (start is None or o.paid_at >= start) and o.paid_at <= end), ZERO)
 

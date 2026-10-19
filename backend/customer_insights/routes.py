@@ -222,10 +222,15 @@ def customers_at_risk(exclude_launch_accounts: bool = False, db: Session = Depen
 def customers_list(period: Period = "90d", dates: tuple = Depends(_dates),
                    exclude_launch_accounts: bool = False, search: str = "", sort: SortField = "period_spend",
                    dir: Literal["asc", "desc"] = "desc", page: int = Query(1, ge=1),
-                   page_size: int = Query(50, ge=1, le=200), db: Session = Depends(get_db),
-                   _u=Depends(get_current_user)):
+                   page_size: int = Query(50, ge=1, le=200), new_only: bool = False,
+                   cohort: Optional[str] = Query(None, pattern=r"^\d{4}-\d{2}$"),
+                   returned_in: Optional[str] = Query(None, pattern=r"^\d{4}-\d{2}$"),
+                   db: Session = Depends(get_db), _u=Depends(get_current_user)):
+    if returned_in and (not cohort or returned_in == cohort):
+        raise HTTPException(422, "returned_in needs a different cohort month")
     ds, lo, hi, tz, meta = _ctx(db, period, *dates, exclude_launch_accounts)
     rows = metrics.customer_rows(ds, start=lo, end=hi, tz=tz)
+    rows = metrics.filter_rows(rows, ds, lo=lo, hi=hi, tz=tz, new_only=new_only, cohort=cohort, returned_in=returned_in)
     q = search.strip().lower()
     if q:
         rows = [r for r in rows if q in " ".join(str(r.get(f) or "") for f in ("name", "email", "company", "key", "rep")).lower()]
