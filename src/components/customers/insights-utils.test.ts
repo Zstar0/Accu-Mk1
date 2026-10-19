@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import {
+  addMonths,
   cohortTint,
   fmtDelta,
   fmtMoney,
@@ -30,5 +31,9 @@ describe('insights utils', () => {
     expect(cohortTint(null)).toBe('')
     expect(cohortTint(0.13)).toContain('red')
     expect(cohortTint(0.39)).toContain('emerald')
+  })
+  it('adds months across a year boundary', () => {
+    expect(addMonths('2026-07', 3)).toBe('2026-10')
+    expect(addMonths('2026-11', 2)).toBe('2027-01')
   })
 })

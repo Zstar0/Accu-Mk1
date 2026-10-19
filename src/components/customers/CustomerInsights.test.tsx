@@ -301,4 +301,41 @@ describe('CustomerInsights', () => {
       )
     )
   })
+
+  it('Cohorts tab shows the grid, drills into members with the right query, and keeps the selection in the store', async () => {
+    vi.mocked(api.getCustomerList).mockResolvedValue({
+      tz: 'America/Los_Angeles',
+      synced_at: null,
+      total: 41,
+      page: 1,
+      page_size: 25,
+      rows: [row({ key: 'wc:9', name: 'Member One' })],
+    })
+    setup()
+    await userEvent.click(await screen.findByRole('tab', { name: /Cohorts/ }))
+    expect(await screen.findByText('12.9%')).toBeInTheDocument()
+    expect(
+      screen.getByText('Pick a cohort to see its customers')
+    ).toBeInTheDocument()
+    await userEvent.click(screen.getByRole('button', { name: '12.9%' }))
+    expect(await screen.findByText('Member One')).toBeInTheDocument()
+    expect(
+      screen.getByText('2026-08 cohort · came back in M1 (2026-09) · 41 of 163')
+    ).toBeInTheDocument()
+    expect(vi.mocked(api.getCustomerList)).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        cohort: '2026-08',
+        returned_in: '2026-09',
+        exclude_launch_accounts: true,
+        period: 'all',
+        sort: 'lifetime',
+        dir: 'desc',
+      })
+    )
+    expect(useUIStore.getState().insightsView).toMatchObject({
+      tab: 'cohorts',
+      cohort: '2026-08',
+      month: 'M1',
+    })
+  })
 })

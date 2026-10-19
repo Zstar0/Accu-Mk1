@@ -27,13 +27,14 @@ import {
   TooltipTrigger,
 } from '@/components/ui/tooltip'
 import {
-  cohortTint,
+  addMonths,
   fmtDelta,
   fmtMoney,
   fmtPct,
   fmtPrice,
   fmtPoints,
 } from './insights-utils'
+import { CohortGrid } from './CohortGrid'
 import {
   InsightsCustomerTable,
   type InsightsSortField,
@@ -135,6 +136,8 @@ export function CustomerInsights({
 }) {
   const period = useUIStore(state => state.insightsView.period)
   const tab = useUIStore(state => state.insightsView.tab)
+  const cohort = useUIStore(state => state.insightsView.cohort)
+  const month = useUIStore(state => state.insightsView.month)
   const setInsightsView = useUIStore(state => state.setInsightsView)
   const [excludeLaunch, setExcludeLaunch] = useState(false)
   const summary = useQuery({
@@ -159,14 +162,14 @@ export function CustomerInsights({
     staleTime: 60_000,
   })
   // Reset to page 1 / lifetime desc from the period and launch handlers.
-  const NEW_DEFAULT = {
+  const LIST_DEFAULT = {
     page: 1,
     sort: 'lifetime' as InsightsSortField,
     dir: 'desc' as 'asc' | 'desc',
   }
-  const [newView, setNewView] = useState(NEW_DEFAULT)
+  const [newView, setNewView] = useState(LIST_DEFAULT)
   const { page: newPage, sort: newSort, dir: newDir } = newView
-  const setNew = (v: Partial<typeof NEW_DEFAULT>) =>
+  const setNew = (v: Partial<typeof LIST_DEFAULT>) =>
     setNewView(cur => ({ ...cur, ...v }))
   const newCustomers = useQuery({
     queryKey: [
@@ -193,6 +196,46 @@ export function CustomerInsights({
     placeholderData: prev => prev,
   })
   const newTouch = useTouchpoints(newCustomers.data?.rows.map(r => r.key) ?? [])
+  // Cohort members: paging resets from the grid's select handler.
+  const [memberView, setMemberView] = useState(LIST_DEFAULT)
+  const { page: memberPage, sort: memberSort, dir: memberDir } = memberView
+  // 'M3' on the 2026-07 row means came back in 2026-10.
+  const returnedIn =
+    cohort && month ? addMonths(cohort, Number(month.slice(1))) : undefined
+  const setMember = (v: Partial<typeof LIST_DEFAULT>) =>
+    setMemberView(cur => ({ ...cur, ...v }))
+  const members = useQuery({
+    queryKey: [
+      'customers',
+      'list',
+      'cohort',
+      cohort,
+      month,
+      memberSort,
+      memberDir,
+      memberPage,
+    ],
+    queryFn: () =>
+      getCustomerList({
+        cohort: cohort ?? undefined,
+        returned_in: returnedIn,
+        exclude_launch_accounts: true,
+        period: 'all',
+        sort: memberSort,
+        dir: memberDir,
+        page: memberPage,
+        page_size: 25,
+      }),
+    enabled: cohort != null,
+    staleTime: 60_000,
+    // Keep rows while paging or sorting, never across a selection change.
+    placeholderData: (prev, prevQuery) =>
+      prevQuery?.queryKey[3] === cohort && prevQuery.queryKey[4] === month
+        ? prev
+        : undefined,
+  })
+  const memberTouch = useTouchpoints(members.data?.rows.map(r => r.key) ?? [])
+  const cohortSize = cohorts.data?.rows.find(r => r.cohort === cohort)?.size
   const s = summary.data
 
   return (
@@ -212,7 +255,7 @@ export function CustomerInsights({
               checked={excludeLaunch}
               onCheckedChange={v => {
                 setExcludeLaunch(v)
-                setNewView(NEW_DEFAULT)
+                setNewView(LIST_DEFAULT)
               }}
               aria-label="Exclude launch accounts"
             />
@@ -226,7 +269,7 @@ export function CustomerInsights({
                 aria-pressed={period === p.key}
                 onClick={() => {
                   setInsightsView({ period: p.key })
-                  setNewView(NEW_DEFAULT)
+                  setNewView(LIST_DEFAULT)
                 }}
                 className={cn(
                   'cursor-pointer px-3 py-1 text-xs font-medium',
@@ -582,39 +625,66 @@ export function CustomerInsights({
                     onRetry={() => cohorts.refetch()}
                   />
                 ) : (
-                  <table className="w-full text-xs tabular-nums">
-                    <thead>
-                      <tr className="text-muted-foreground">
-                        <th className="py-1 text-left font-medium">Cohort</th>
-                        <th className="font-medium">n</th>
-                        {cohorts.data?.months.slice(0, 6).map(m => (
-                          <th key={m} className="font-medium">
-                            {m}
-                          </th>
-                        ))}
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {cohorts.data?.rows.map(r => (
-                        <tr key={r.cohort}>
-                          <td className="py-0.5">{r.cohort}</td>
-                          <td className="text-center">{r.size}</td>
-                          {r.cells.slice(0, 6).map((c, i) => (
-                            <td
-                              key={i}
-                              className={cn(
-                                'rounded text-center',
-                                cohortTint(c)
-                              )}
-                            >
-                              {c == null ? '' : fmtPct(c, c < 0.2 ? 1 : 0)}
-                            </td>
-                          ))}
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
+                  cohorts.data && (
+                    <CohortGrid
+                      months={cohorts.data.months}
+                      rows={cohorts.data.rows}
+                      selectedCohort={cohort}
+                      selectedMonth={month}
+                      onSelect={(c, m) => {
+                        setInsightsView({ cohort: c, month: m })
+                        setMemberView(LIST_DEFAULT)
+                      }}
+                    />
+                  )
                 )}
+                <div className="mt-3 border-t border-border/30 pt-3">
+                  {cohort == null ? (
+                    <p className="py-4 text-center text-sm text-muted-foreground">
+                      Pick a cohort to see its customers
+                    </p>
+                  ) : (
+                    <>
+                      <h3 className="mb-2 text-sm font-medium">
+                        {returnedIn
+                          ? `${cohort} cohort · came back in ${month} (${returnedIn}) · ${members.data?.total ?? '…'} of ${cohortSize ?? '…'}`
+                          : `${cohort} cohort · ${cohortSize ?? '…'} customers`}
+                      </h3>
+                      {members.error ? (
+                        <SectionError
+                          label="cohort customers"
+                          onRetry={() => members.refetch()}
+                        />
+                      ) : (
+                        members.data && (
+                          <InsightsCustomerTable
+                            rows={members.data.rows}
+                            total={members.data.total}
+                            page={memberPage}
+                            pageSize={25}
+                            onPage={page => setMember({ page })}
+                            sort={memberSort}
+                            dir={memberDir}
+                            onSort={f =>
+                              setMember(
+                                f === memberSort
+                                  ? {
+                                      dir: memberDir === 'asc' ? 'desc' : 'asc',
+                                      page: 1,
+                                    }
+                                  : { sort: f, dir: 'desc', page: 1 }
+                              )
+                            }
+                            tz={s.tz}
+                            touch={memberTouch}
+                            onOpenCustomer={onOpenCustomer}
+                            emptyText="No customers to show"
+                          />
+                        )
+                      )}
+                    </>
+                  )}
+                </div>
               </TabsContent>
             </Tabs>
           </section>
