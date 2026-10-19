@@ -17,7 +17,9 @@ describe('CohortGrid', () => {
     )
     await userEvent.click(screen.getByRole('button', { name: '2026-08' }))
     expect(onSelect).toHaveBeenCalledWith('2026-08', null)
-    await userEvent.click(screen.getByRole('button', { name: '12.9%' }))
+    await userEvent.click(
+      screen.getByRole('button', { name: /2026-08 M1 12\.9%/ })
+    )
     expect(onSelect).toHaveBeenCalledWith('2026-08', 'M1')
     expect(screen.queryByRole('button', { name: '' })).toBeNull() // the null cell is not a button
   })
@@ -33,7 +35,7 @@ describe('CohortGrid', () => {
         onSelect={onSelect}
       />
     )
-    const cell = screen.getByRole('button', { name: '12.9%' })
+    const cell = screen.getByRole('button', { name: /2026-08 M1 12\.9%/ })
     expect(cell).toHaveAttribute('aria-pressed', 'true')
     await userEvent.click(cell)
     expect(onSelect).toHaveBeenCalledWith(null, null)

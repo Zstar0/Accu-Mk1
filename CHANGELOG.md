@@ -6,7 +6,8 @@
 - **Three tabs replace the at-risk card.** At risk is unchanged. New customers lists everyone whose first testing order fell in the selected period, biggest lifetime spend first. Cohorts shows the full 12-month re-order grid; click a cohort to see its customers, or a cell to see who came back that month.
 - **Last CRM and last support contact on every list.** Admins see the last human email or call from Close (sequence and bulk sends do not count); admins and Plain seat holders see the last support thread. Click either to open that tab on the customer.
 - **Back from a customer returns to Insights** when that is where you came from, on the same tab and selection.
-- **CRM tab:** sequence, bulk and AI-agent emails now sit behind "include automated".
+- **Exclude launch accounts moved to the page header**, and now applies to New customers too.
+- **CRM tab:** sequence, bulk and AI-agent emails now sit behind "include automated". The AI review tab's CRM tool, like the CRM tab, no longer sees sequence and bulk sends.
 
 ## v1.49.2 - 2026-10-16
 

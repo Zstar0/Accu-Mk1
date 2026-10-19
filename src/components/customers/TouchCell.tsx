@@ -47,7 +47,6 @@ export function TouchCard({
         {kind === 'crm' ? 'Last CRM touch' : 'Last support touch'}
       </div>
       {touch.state === 'unavailable' && <div>{reason ?? 'Unavailable'}</div>}
-      {touch.state === 'none' && <div>No touch on record</div>}
       {touch.state === 'ok' && kind === 'crm' && (
         <>
           <div>{(touch as CrmTouch).who}</div>

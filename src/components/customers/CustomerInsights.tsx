@@ -50,6 +50,12 @@ const PERIODS: { key: InsightsPeriod; label: string }[] = [
   { key: '1y', label: '1Y' },
   { key: 'all', label: 'All' },
 ]
+// Reset to page 1 / lifetime desc from the period and launch handlers.
+const LIST_DEFAULT = {
+  page: 1,
+  sort: 'lifetime' as InsightsSortField,
+  dir: 'desc' as 'asc' | 'desc',
+}
 const NEW = '#60a5fa'
 const RETURNING = '#34d399'
 const FIRST_ORDER_LABEL: Record<string, string> = {
@@ -165,12 +171,6 @@ export function CustomerInsights({
     queryFn: getCustomerChurnSignals,
     staleTime: 60_000,
   })
-  // Reset to page 1 / lifetime desc from the period and launch handlers.
-  const LIST_DEFAULT = {
-    page: 1,
-    sort: 'lifetime' as InsightsSortField,
-    dir: 'desc' as 'asc' | 'desc',
-  }
   const [newView, setNewView] = useState(LIST_DEFAULT)
   const { page: newPage, sort: newSort, dir: newDir } = newView
   const setNew = (v: Partial<typeof LIST_DEFAULT>) =>

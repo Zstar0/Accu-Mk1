@@ -26,7 +26,6 @@ export function useTouchpoints(keys: string[]): {
       queryFn: () => getCustomerTouchpoints(chunk),
       staleTime: 300_000,
       refetchOnWindowFocus: false,
-      enabled: chunk.length > 0,
     })),
   })
   const rows: Record<string, Touchpoints> = {}

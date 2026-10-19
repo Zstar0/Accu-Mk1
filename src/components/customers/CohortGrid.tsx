@@ -59,6 +59,7 @@ export function CohortGrid({
                 const c = r.cells[i]
                 const pressed =
                   r.cohort === selectedCohort && m === selectedMonth
+                const pct = c == null ? '' : fmtPct(c, c < 0.2 ? 1 : 0)
                 return (
                   <td
                     key={m}
@@ -68,13 +69,14 @@ export function CohortGrid({
                       <button
                         type="button"
                         aria-pressed={pressed}
+                        aria-label={`${r.cohort} ${m} ${pct}`}
                         onClick={() => pick(r.cohort, m)}
                         className={cn(
                           'w-full cursor-pointer rounded hover:underline',
                           pressed && PRESSED
                         )}
                       >
-                        {fmtPct(c, c < 0.2 ? 1 : 0)}
+                        {pct}
                       </button>
                     )}
                   </td>

@@ -372,7 +372,9 @@ describe('CustomerInsights', () => {
     expect(
       screen.getByText('Pick a cohort to see its customers')
     ).toBeInTheDocument()
-    await userEvent.click(screen.getByRole('button', { name: '12.9%' }))
+    await userEvent.click(
+      screen.getByRole('button', { name: /2026-08 M1 12\.9%/ })
+    )
     expect(await screen.findByText('Member One')).toBeInTheDocument()
     expect(
       screen.getByText('2026-08 cohort · came back in M1 (2026-09) · 41 of 163')

@@ -247,9 +247,7 @@ interface UIState {
   setCustomerListPage: (page: number) => void
   setHideTestAccounts: (hide: boolean) => void
   setSearchAndResetPage: (term: string) => void
-  setCustomerDetailTab: (
-    tab: 'orders' | 'dashboard' | 'crm' | 'support' | 'ai-review'
-  ) => void
+  setCustomerDetailTab: (tab: CustomerDetailTab) => void
   // Per-axis setter: writes ONE slot, leaves the others unchanged. This is
   // how the four-input UI commits debounced values independently per axis.
   setCustomerOrderSearchField: (
