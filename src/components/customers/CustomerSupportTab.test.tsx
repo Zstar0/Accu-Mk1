@@ -67,6 +67,7 @@ function setup(data: CustomerSupport | Error = base) {
       <CustomerSupportTab customerKey="wc:1" />
     </QueryClientProvider>
   )
+  return qc
 }
 
 describe('CustomerSupportTab', () => {
@@ -92,6 +93,14 @@ describe('CustomerSupportTab', () => {
       'wc:1',
       expect.objectContaining({ statuses: ['done'] })
     )
+  })
+
+  it('refresh invalidates the touchpoints query', async () => {
+    const qc = setup()
+    const spy = vi.spyOn(qc, 'invalidateQueries')
+    await screen.findByText('COA late')
+    await userEvent.click(screen.getByRole('button', { name: /Refresh/ }))
+    expect(spy).toHaveBeenCalledWith({ queryKey: ['customers', 'touchpoints'] })
   })
 
   it('refresh is one-shot', async () => {

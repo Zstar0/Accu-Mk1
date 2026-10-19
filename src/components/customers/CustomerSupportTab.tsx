@@ -169,6 +169,9 @@ export function CustomerSupportTab({ customerKey }: { customerKey: string }) {
               void qc.invalidateQueries({
                 queryKey: ['support', 'thread', customerKey],
               })
+              void qc.invalidateQueries({
+                queryKey: ['customers', 'touchpoints'],
+              })
             }}
             disabled={q.isFetching}
           >

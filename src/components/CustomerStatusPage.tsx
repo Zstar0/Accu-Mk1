@@ -90,6 +90,7 @@ import { CustomerDashboard } from '@/components/customers/CustomerDashboard'
 import { CustomerCrmTab } from '@/components/customers/CustomerCrmTab'
 import { CustomerSupportTab } from '@/components/customers/CustomerSupportTab'
 import { FlaggedItemOpener } from '@/components/customers/FlaggedItemOpener'
+import { BackToOrigin } from '@/components/customers/BackToOrigin'
 import { useSupportSeat } from '@/components/customers/useSupportSeat'
 import { CustomerAiReviewTab } from '@/components/customers/CustomerAiReviewTab'
 import { useAuthStore } from '@/store/auth-store'
@@ -144,9 +145,7 @@ function CustomerListView() {
   const hideTestAccounts = useUIStore(state => state.hideTestAccounts)
   const setCustomerListPage = useUIStore(state => state.setCustomerListPage)
   const setHideTestAccounts = useUIStore(state => state.setHideTestAccounts)
-  const setSearchAndResetPage = useUIStore(
-    state => state.setSearchAndResetPage
-  )
+  const setSearchAndResetPage = useUIStore(state => state.setSearchAndResetPage)
   const navigateToCustomer = useUIStore(state => state.navigateToCustomer)
   const navigateToCustomerKey = useUIStore(state => state.navigateToCustomerKey)
 
@@ -341,9 +340,7 @@ function CustomerListView() {
           <CardContent className="py-4">
             <div className="flex items-center gap-2 text-destructive">
               <AlertCircle className="h-4 w-4" />
-              <span>
-                Failed to connect to database: {status.error}
-              </span>
+              <span>Failed to connect to database: {status.error}</span>
             </div>
           </CardContent>
         </Card>
@@ -491,7 +488,10 @@ function CustomerListView() {
                   customersLoading &&
                   !hasError &&
                   Array.from({ length: 8 }).map((_, i) => (
-                    <tr key={`skeleton-${i}`} data-testid="customer-row-skeleton">
+                    <tr
+                      key={`skeleton-${i}`}
+                      data-testid="customer-row-skeleton"
+                    >
                       {Array.from({ length: 13 }).map((__, j) => (
                         <td key={j} className="py-3 px-3">
                           <Skeleton className="h-4 w-full" />
@@ -777,9 +777,9 @@ function InsightCells({ insight }: { insight?: InsightRow }) {
  * Selector syntax mandate (AGENTS.md): every useUIStore call uses
  * `state => state.x`. ast-grep enforces.
  *
- * Back navigation (D-11): a single `navigateToCustomers()` call atomically
- * sets activeSubSection='customers' AND clears customerDetailTargetId. The
- * store action is the source of truth — see src/store/ui-store.ts:317-326.
+ * Back navigation (D-11): `BackToOrigin` calls `navigateToCustomers()`, which
+ * returns to Customers or Customer Insights (by `customerDetailOrigin`) AND
+ * clears customerDetailTargetId. The store action is the source of truth.
  */
 function CustomerDetailView() {
   const isAdminUser = useAuthStore(state => state.user)?.role === 'admin'
@@ -789,7 +789,6 @@ function CustomerDetailView() {
   const customerDetailTargetId = useUIStore(
     state => state.customerDetailTargetId
   )
-  const navigateToCustomers = useUIStore(state => state.navigateToCustomers)
   // Phase 30 — Task 6: detail-view tab selection
   const customerDetailTab = useUIStore(state => state.customerDetailTab)
   const setCustomerDetailTab = useUIStore(state => state.setCustomerDetailTab)
@@ -868,9 +867,7 @@ function CustomerDetailView() {
       return getExplorerCustomerById(customerDetailTargetId)
     },
     enabled:
-      isConnected &&
-      customerDetailTargetId !== null &&
-      headerCustomer === null,
+      isConnected && customerDetailTargetId !== null && headerCustomer === null,
     staleTime: 60_000,
   })
 
@@ -941,9 +938,7 @@ function CustomerDetailView() {
       const aOpen = a.completed_at === null
       const bOpen = b.completed_at === null
       if (aOpen !== bOpen) return aOpen ? -1 : 1
-      return (
-        new Date(b.created_at).getTime() - new Date(a.created_at).getTime()
-      )
+      return new Date(b.created_at).getTime() - new Date(a.created_at).getTime()
     })
   }, [orders])
 
@@ -951,8 +946,12 @@ function CustomerDetailView() {
   // Resolved from the 'sample_details' two-tier read-source setting — same
   // mechanism as SampleDetails.tsx; defaults to 'senaite' (no behavior
   // change until the Handler flips it).
-  const { effective: sampleDetailsSource } = useEffectiveReadSource('sample_details')
-  const { sampleLookupMap } = useSenaiteLookupMap(orders ?? [], sampleDetailsSource)
+  const { effective: sampleDetailsSource } =
+    useEffectiveReadSource('sample_details')
+  const { sampleLookupMap } = useSenaiteLookupMap(
+    orders ?? [],
+    sampleDetailsSource
+  )
 
   // wordpressHost is read here and threaded into CustomerOrdersTab (the
   // derived render flags hasError/hasOrders/showLoading/showEmpty now live
@@ -973,13 +972,7 @@ function CustomerDetailView() {
       {/* Back link — D-11. Use a plain <button> (not shadcn Button) per
           UI-SPEC §Back Navigation (matches the text-primary link pattern). */}
       <div>
-        <button
-          type="button"
-          className="text-sm text-primary hover:underline mb-4"
-          onClick={() => navigateToCustomers()}
-        >
-          ← Back to Customers
-        </button>
+        <BackToOrigin />
       </div>
 
       {/* Disconnected banner — inlined verbatim from the list view (D-16). */}
@@ -1004,7 +997,9 @@ function CustomerDetailView() {
             <div className="flex h-7 w-7 items-center justify-center rounded-full bg-primary/10 shrink-0">
               <User className="h-3.5 w-3.5 text-primary" />
             </div>
-            <span className="text-sm font-semibold truncate">{displayName}</span>
+            <span className="text-sm font-semibold truncate">
+              {displayName}
+            </span>
             {secondaryEmail && (
               <span className="text-xs text-muted-foreground whitespace-nowrap">
                 {secondaryEmail}
@@ -1252,11 +1247,7 @@ function CustomerOrdersTab({
       setCustomerOrderSearchField('analyte', analyteInput)
     }, 300)
     return () => clearTimeout(handle)
-  }, [
-    analyteInput,
-    customerOrderSearch.analyte,
-    setCustomerOrderSearchField,
-  ])
+  }, [analyteInput, customerOrderSearch.analyte, setCustomerOrderSearchField])
 
   useEffect(() => {
     if (lotInput === customerOrderSearch.lot) return
@@ -1270,9 +1261,9 @@ function CustomerOrdersTab({
   // empty-state echo, OrderRow.defaultExpanded, and the Clear button mount.
   const searchActive = Boolean(
     customerOrderSearch.order_number ||
-      customerOrderSearch.sample_id ||
-      customerOrderSearch.analyte ||
-      customerOrderSearch.lot
+    customerOrderSearch.sample_id ||
+    customerOrderSearch.analyte ||
+    customerOrderSearch.lot
   )
 
   // highlightSampleId: sample-ID highlight forwarded to OrderRow only when
@@ -1536,7 +1527,9 @@ function CustomerOrdersTab({
                     <th className="py-2 px-3 font-medium whitespace-nowrap">
                       Timing
                     </th>
-                    <th className="py-2 px-3 font-medium whitespace-nowrap">SLA</th>
+                    <th className="py-2 px-3 font-medium whitespace-nowrap">
+                      SLA
+                    </th>
                     <th className="py-2 px-3 font-medium whitespace-nowrap">
                       Sample Details
                     </th>
@@ -1579,7 +1572,6 @@ function GuestCustomerDetailView({ customerKey }: { customerKey: string }) {
   const isAdminUser = useAuthStore(state => state.user)?.role === 'admin'
   const supportSeat = useSupportSeat()
   const canSupport = isAdminUser || supportSeat.data?.has_seat === true
-  const navigateToCustomers = useUIStore(state => state.navigateToCustomers)
   const navigateTo = useUIStore(state => state.navigateTo)
   const { data } = useQuery(dossierQuery(customerKey))
   const email = customerKey.slice('email:'.length)
@@ -1587,13 +1579,7 @@ function GuestCustomerDetailView({ customerKey }: { customerKey: string }) {
   return (
     <div className="flex flex-col gap-4 p-4">
       <div>
-        <button
-          type="button"
-          className="text-sm text-primary hover:underline mb-4"
-          onClick={() => navigateToCustomers()}
-        >
-          ← Back to Customers
-        </button>
+        <BackToOrigin />
       </div>
       <Card className="py-0">
         <CardContent className="flex flex-wrap items-center gap-x-2 gap-y-1 px-4 py-2">
