@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## v1.50.0 - 2026-10-20
 
 ### Customer Insights: at-risk, new customers and cohorts in one place
 - **Three tabs replace the at-risk card.** At risk is unchanged. New customers lists everyone whose first testing order fell in the selected period, biggest lifetime spend first. Cohorts shows the full 12-month re-order grid; click a cohort to see its customers, or a cell to see who came back that month.
