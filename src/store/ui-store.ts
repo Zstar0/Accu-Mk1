@@ -90,6 +90,9 @@ export interface InsightsView {
   period: InsightsPeriod
   cohort: string | null
   month: string | null
+  // The "Exclude launch accounts" switch; kept here so it survives opening a
+  // customer from Insights and coming back.
+  excludeLaunch: boolean
 }
 /** What leaving the customer detail clears, whichever list it returns to:
  *  the detail target, its tab (Phase 30, T-30-03) and the four order-search
@@ -391,6 +394,7 @@ export const useUIStore = create<UIState>()(
         period: '90d',
         cohort: null,
         month: null,
+        excludeLaunch: false,
       },
       customerOrderSearch: {
         order_number: '',

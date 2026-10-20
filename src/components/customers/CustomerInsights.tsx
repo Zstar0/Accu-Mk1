@@ -22,11 +22,6 @@ import {
 import { Switch } from '@/components/ui/switch'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import {
-  Tooltip,
-  TooltipContent,
-  TooltipTrigger,
-} from '@/components/ui/tooltip'
-import {
   addMonths,
   fmtDelta,
   fmtMoney,
@@ -34,12 +29,12 @@ import {
   fmtPrice,
   fmtPoints,
 } from './insights-utils'
+import { AtRiskTable } from './AtRiskTable'
 import { CohortGrid } from './CohortGrid'
 import {
   InsightsCustomerTable,
   type InsightsSortField,
 } from './InsightsCustomerTable'
-import { TouchCell } from './TouchCell'
 import { useTouchpoints } from './useTouchpoints'
 import { useUIStore, type InsightsTab } from '@/store/ui-store'
 
@@ -145,7 +140,7 @@ export function CustomerInsights({
   const cohort = useUIStore(state => state.insightsView.cohort)
   const month = useUIStore(state => state.insightsView.month)
   const setInsightsView = useUIStore(state => state.setInsightsView)
-  const [excludeLaunch, setExcludeLaunch] = useState(false)
+  const excludeLaunch = useUIStore(state => state.insightsView.excludeLaunch)
   const summary = useQuery({
     queryKey: ['customers', 'summary', period, excludeLaunch],
     queryFn: () => getCustomerSummary(period, excludeLaunch),
@@ -262,7 +257,7 @@ export function CustomerInsights({
             <Switch
               checked={excludeLaunch}
               onCheckedChange={v => {
-                setExcludeLaunch(v)
+                setInsightsView({ excludeLaunch: v })
                 setNewView(LIST_DEFAULT)
               }}
               aria-label="Exclude launch accounts"
@@ -452,141 +447,12 @@ export function CustomerInsights({
                     No customers are overdue right now
                   </p>
                 ) : (
-                  <table className="w-full text-sm tabular-nums">
-                    <thead>
-                      <tr className="text-[11px] uppercase tracking-wider text-muted-foreground">
-                        <th className="py-1 text-left font-medium">Customer</th>
-                        <th className="text-left font-medium">Rep</th>
-                        <th className="text-right font-medium">12-mo spend</th>
-                        <th className="text-right font-medium">Orders</th>
-                        <th className="text-right font-medium">Usual gap</th>
-                        <th className="text-right font-medium">Last order</th>
-                        <th className="text-right font-medium">Overdue</th>
-                        {touch.crmVisible && (
-                          <th className="px-2 text-right font-medium">
-                            Last CRM
-                          </th>
-                        )}
-                        {touch.supportVisible && (
-                          <th className="px-2 text-right font-medium">
-                            Last support
-                          </th>
-                        )}
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {risk.data?.rows.map(r => {
-                        // Every row opens: wc: keys get the full detail, guest
-                        // email: keys the Dashboard-only detail. The row card
-                        // hangs off the name cell so it never stacks with the
-                        // touch cells' own cards.
-                        const tp = touch.rows[r.key]
-                        return (
-                          <tr
-                            key={r.key}
-                            className="cursor-pointer border-t border-border/20 hover:bg-muted/30"
-                            tabIndex={0}
-                            onClick={() => onOpenCustomer(r.key)}
-                            onKeyDown={e => {
-                              if (e.key === 'Enter') onOpenCustomer(r.key)
-                            }}
-                          >
-                            <Tooltip>
-                              <TooltipTrigger asChild>
-                                <td className="py-1.5 font-medium" tabIndex={0}>
-                                  {r.name}
-                                </td>
-                              </TooltipTrigger>
-                              <TooltipContent className="max-w-xs p-0">
-                                <div className="flex flex-col gap-1.5 p-3 font-mono text-xs">
-                                  <div className="border-b border-primary-foreground/20 pb-1.5 font-semibold">
-                                    {r.name}
-                                  </div>
-                                  <div>{r.email ?? 'no email'}</div>
-                                  <div>Rep: {r.rep ?? 'unassigned'}</div>
-                                  <div>
-                                    Usual gap{' '}
-                                    {r.usual_gap_days == null
-                                      ? 'n/a'
-                                      : `${r.usual_gap_days} d`}
-                                    {' · '}last order{' '}
-                                    {r.last_order_at
-                                      ? r.last_order_at.slice(0, 10)
-                                      : 'n/a'}
-                                  </div>
-                                  <div className="border-t border-primary-foreground/20 pt-1.5">
-                                    Lifetime {fmtMoney(r.lifetime)} ·{' '}
-                                    {r.samples} samples
-                                  </div>
-                                  <div>
-                                    Top tests: {r.top_tests.join(', ') || 'n/a'}
-                                  </div>
-                                </div>
-                              </TooltipContent>
-                            </Tooltip>
-                            <td className="text-muted-foreground">
-                              {r.rep ?? 'Unassigned'}
-                            </td>
-                            <td className="text-right">
-                              {fmtMoney(r.spend_12m)}
-                            </td>
-                            <td className="text-right">{r.orders}</td>
-                            <td className="text-right">
-                              {r.usual_gap_days == null
-                                ? 'n/a'
-                                : `${r.usual_gap_days} d`}
-                            </td>
-                            <td className="text-right">
-                              {r.last_order_at
-                                ? new Date(r.last_order_at).toLocaleDateString(
-                                    'en-US',
-                                    {
-                                      month: 'short',
-                                      day: 'numeric',
-                                      timeZone: s.tz,
-                                    }
-                                  )
-                                : ''}
-                            </td>
-                            <td className="text-right">
-                              <span
-                                className={cn(
-                                  'rounded-full px-2 text-xs font-semibold',
-                                  r.overdue >= 3
-                                    ? 'bg-red-500/15 text-red-700 dark:text-red-300'
-                                    : 'bg-amber-500/15 text-amber-700 dark:text-amber-300'
-                                )}
-                              >
-                                {r.overdue}× gap
-                              </span>
-                            </td>
-                            {touch.crmVisible && (
-                              <td className="px-2 text-right">
-                                <TouchCell
-                                  kind="crm"
-                                  touch={tp ? (tp.crm ?? null) : undefined}
-                                  tz={s.tz}
-                                  onOpen={() => onOpenCustomer(r.key, 'crm')}
-                                />
-                              </td>
-                            )}
-                            {touch.supportVisible && (
-                              <td className="px-2 text-right">
-                                <TouchCell
-                                  kind="support"
-                                  touch={tp ? (tp.support ?? null) : undefined}
-                                  tz={s.tz}
-                                  onOpen={() =>
-                                    onOpenCustomer(r.key, 'support')
-                                  }
-                                />
-                              </td>
-                            )}
-                          </tr>
-                        )
-                      })}
-                    </tbody>
-                  </table>
+                  <AtRiskTable
+                    rows={risk.data?.rows ?? []}
+                    tz={s.tz}
+                    touch={touch}
+                    onOpenCustomer={onOpenCustomer}
+                  />
                 )}
               </TabsContent>
               <TabsContent value="new" className="mt-2">

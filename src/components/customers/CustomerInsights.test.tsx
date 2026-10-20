@@ -5,6 +5,8 @@ import { cloneElement, type ReactElement } from 'react'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import type * as Recharts from 'recharts'
 import * as api from '@/lib/api'
+import * as supportApi from '@/lib/api-support'
+import { useAuthStore } from '@/store/auth-store'
 import { useUIStore } from '@/store/ui-store'
 import { CustomerInsights } from './CustomerInsights'
 import { row } from './insights-test-fixtures'
@@ -32,8 +34,20 @@ vi.mock('recharts', async importOriginal => {
     }) => cloneElement(children, { width: 800, height: 240 }),
   }
 })
+vi.mock('@/lib/api-support', async () => {
+  const actual = await vi.importActual<typeof supportApi>('@/lib/api-support')
+  return { ...actual, getSupportMe: vi.fn() }
+})
 
 const k = <T,>(value: T, prior: T | null = null) => ({ value, prior })
+const ADMIN = {
+  id: 1,
+  email: 'admin@accumark.example',
+  role: 'admin',
+  is_active: true,
+  created_at: '2026-01-01T00:00:00Z',
+  senaite_configured: false,
+}
 
 const EMPTY_LIST: api.CustomerListResponse = {
   tz: 'America/Los_Angeles',
@@ -72,12 +86,22 @@ function setup({
   onOpen = vi.fn(),
   list = EMPTY_LIST,
   touch = CRM_ONLY,
+  touchPending = false,
 }: {
   riskFails?: boolean
   onOpen?: (key: string, tab?: 'crm' | 'support') => void
   list?: api.CustomerListResponse
   touch?: api.TouchpointsResponse
+  /** Leave the touchpoints request in flight for the whole test. */
+  touchPending?: boolean
 } = {}) {
+  vi.mocked(supportApi.getSupportMe).mockResolvedValue({
+    has_seat: false,
+    plain_user_id: null,
+    name: null,
+    email: null,
+    unavailable: false,
+  })
   vi.mocked(api.getCustomerSummary).mockResolvedValue({
     tz: 'America/Los_Angeles',
     synced_at: '2026-10-05T18:00:00Z',
@@ -159,6 +183,10 @@ function setup({
     ],
   })
   vi.mocked(api.getCustomerTouchpoints).mockResolvedValue(touch)
+  if (touchPending)
+    vi.mocked(api.getCustomerTouchpoints).mockReturnValue(
+      new Promise<api.TouchpointsResponse>(() => undefined)
+    )
   vi.mocked(api.getCustomerList).mockResolvedValue(list)
   if (riskFails)
     vi.mocked(api.getCustomerAtRisk).mockRejectedValue(new Error('boom'))
@@ -178,8 +206,10 @@ describe('CustomerInsights', () => {
         period: '90d',
         cohort: null,
         month: null,
+        excludeLaunch: false,
       },
     })
+    useAuthStore.setState({ user: null })
   })
 
   it('renders KPIs, at-risk row and freshness line', async () => {
@@ -248,6 +278,23 @@ describe('CustomerInsights', () => {
       await screen.findByRole('columnheader', { name: 'Last support' })
     ).toBeInTheDocument()
     expect(screen.queryByRole('columnheader', { name: 'Last CRM' })).toBeNull()
+  })
+
+  it('an admin sees both touch columns with loading cells before the first response', async () => {
+    useAuthStore.setState({ user: ADMIN })
+    setup({ touchPending: true })
+    expect(
+      await screen.findByRole('columnheader', { name: 'Last CRM' })
+    ).toBeInTheDocument()
+    expect(
+      screen.getByRole('columnheader', { name: 'Last support' })
+    ).toBeInTheDocument()
+    const row = (await screen.findByText('Halcyon Research Supply')).closest(
+      'tr'
+    ) as HTMLElement
+    const loading = within(row).getAllByLabelText(/loading/i)
+    expect(loading).toHaveLength(2)
+    expect(loading[0]).toHaveAttribute('aria-busy', 'true')
   })
 
   it('fetches touches only for the visible tab', async () => {
@@ -361,6 +408,31 @@ describe('CustomerInsights', () => {
     await waitFor(() =>
       expect(vi.mocked(api.getCustomerList)).toHaveBeenLastCalledWith(
         expect.objectContaining({ exclude_launch_accounts: true, page: 1 })
+      )
+    )
+    expect(useUIStore.getState().insightsView.excludeLaunch).toBe(true)
+  })
+
+  it('a persisted launch switch renders checked and filters New customers', async () => {
+    useUIStore.setState({
+      insightsView: {
+        tab: 'new',
+        period: '90d',
+        cohort: null,
+        month: null,
+        excludeLaunch: true,
+      },
+    })
+    setup()
+    expect(
+      await screen.findByRole('switch', { name: 'Exclude launch accounts' })
+    ).toBeChecked()
+    await waitFor(() =>
+      expect(vi.mocked(api.getCustomerList)).toHaveBeenCalledWith(
+        expect.objectContaining({
+          new_only: true,
+          exclude_launch_accounts: true,
+        })
       )
     )
   })

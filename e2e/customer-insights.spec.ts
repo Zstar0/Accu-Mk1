@@ -178,6 +178,12 @@ test('tabs render, cells degrade without Close or Plain, cohort drill-down match
       .locator('table')
       .filter({ has: page.getByRole('columnheader', { name: 'Last order' }) })
       .last()
+    // The touch columns appear once the touchpoints response has arrived (or
+    // the client seeded them), so wait for both headers before reading the row.
+    for (const header of ['Last CRM', 'Last support'])
+      await expect(
+        table.getByRole('columnheader', { name: header })
+      ).toBeVisible({ timeout: 20_000 })
     const headers = (await table.locator('thead th').allTextContents()).map(t =>
       t.trim()
     )
