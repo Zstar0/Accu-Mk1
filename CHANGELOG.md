@@ -1,5 +1,10 @@
 # Changelog
 
+## v1.49.6 - 2026-10-20
+
+### Per-vial COAs: PDF preview
+- **Each per-vial COA card has a PDF button.** Open a vial certificate's PDF from Sample Details to check it before Publish, the same way the sample COA cards already do.
+
 ## v1.49.5 - 2026-10-20
 
 ### Change: Generate Per-Vial COAs regenerates every vial
