@@ -925,12 +925,16 @@ export function GeneratedCOAFallbackList({
 /**
  * List of per-vial COA children for the "Per-Vial COAs" card. Each row reports
  * one HPLC vial's own figure ("Vial N"), with its own verification code and
- * release status. Mirrors GeneratedCOAFallbackList's visual language.
+ * release status. Mirrors GeneratedCOAFallbackList's visual language. The PDF
+ * button (2026-10-20) opens that vial generation's signed PDF, the same call
+ * the sample COA cards make, so a draft can be checked before Publish.
  */
-function VialCOAList({
+export function VialCOAList({
   generations,
+  sampleId,
 }: {
   generations: ExplorerCOAGeneration[]
+  sampleId: string
 }) {
   return (
     <div className="space-y-2">
@@ -970,6 +974,12 @@ function VialCOAList({
                 >
                   {release.label}
                 </span>
+                <div className="ml-auto shrink-0">
+                  <GeneratedCOAPdfButton
+                    sampleId={sampleId}
+                    generationNumber={gen.generation_number}
+                  />
+                </div>
               </div>
               <div className="grid grid-cols-2 gap-x-3 gap-y-1">
                 <div className="flex flex-col">
@@ -6298,7 +6308,7 @@ export function SampleDetails() {
                     icon={FileText}
                     title={`Per-Vial COAs (${vialGens.length})`}
                   >
-                    <VialCOAList generations={vialGens} />
+                    <VialCOAList generations={vialGens} sampleId={sampleId} />
                   </SectionHeader>
                 </Card>
               ) : null
