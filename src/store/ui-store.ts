@@ -90,6 +90,9 @@ export interface InsightsView {
   period: InsightsPeriod
   cohort: string | null
   month: string | null
+  // The "Exclude launch accounts" switch; kept here so it survives opening a
+  // customer from Insights and coming back.
+  excludeLaunch: boolean
 }
 export type BoardsSubSection = 'overview' | 'board'
 // Settings panes double as subsections so #settings/<pane> round-trips through
@@ -368,6 +371,7 @@ export const useUIStore = create<UIState>()(
         period: '90d',
         cohort: null,
         month: null,
+        excludeLaunch: false,
       },
       customerOrderSearch: {
         order_number: '',

@@ -145,7 +145,7 @@ export function CustomerInsights({
   const cohort = useUIStore(state => state.insightsView.cohort)
   const month = useUIStore(state => state.insightsView.month)
   const setInsightsView = useUIStore(state => state.setInsightsView)
-  const [excludeLaunch, setExcludeLaunch] = useState(false)
+  const excludeLaunch = useUIStore(state => state.insightsView.excludeLaunch)
   const summary = useQuery({
     queryKey: ['customers', 'summary', period, excludeLaunch],
     queryFn: () => getCustomerSummary(period, excludeLaunch),
@@ -262,7 +262,7 @@ export function CustomerInsights({
             <Switch
               checked={excludeLaunch}
               onCheckedChange={v => {
-                setExcludeLaunch(v)
+                setInsightsView({ excludeLaunch: v })
                 setNewView(LIST_DEFAULT)
               }}
               aria-label="Exclude launch accounts"

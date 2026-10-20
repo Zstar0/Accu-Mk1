@@ -178,6 +178,7 @@ describe('CustomerInsights', () => {
         period: '90d',
         cohort: null,
         month: null,
+        excludeLaunch: false,
       },
     })
   })
@@ -361,6 +362,31 @@ describe('CustomerInsights', () => {
     await waitFor(() =>
       expect(vi.mocked(api.getCustomerList)).toHaveBeenLastCalledWith(
         expect.objectContaining({ exclude_launch_accounts: true, page: 1 })
+      )
+    )
+    expect(useUIStore.getState().insightsView.excludeLaunch).toBe(true)
+  })
+
+  it('a persisted launch switch renders checked and filters New customers', async () => {
+    useUIStore.setState({
+      insightsView: {
+        tab: 'new',
+        period: '90d',
+        cohort: null,
+        month: null,
+        excludeLaunch: true,
+      },
+    })
+    setup()
+    expect(
+      await screen.findByRole('switch', { name: 'Exclude launch accounts' })
+    ).toBeChecked()
+    await waitFor(() =>
+      expect(vi.mocked(api.getCustomerList)).toHaveBeenCalledWith(
+        expect.objectContaining({
+          new_only: true,
+          exclude_launch_accounts: true,
+        })
       )
     )
   })

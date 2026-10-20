@@ -164,6 +164,7 @@ describe('UIStore customer actions', () => {
         period: '90d',
         cohort: null,
         month: null,
+        excludeLaunch: false,
       },
     })
     useUIStore.getState().setInsightsView({ tab: 'cohorts', cohort: '2026-07' })
@@ -172,7 +173,10 @@ describe('UIStore customer actions', () => {
       period: '90d',
       cohort: '2026-07',
       month: null,
+      excludeLaunch: false,
     })
+    useUIStore.getState().setInsightsView({ excludeLaunch: true })
+    expect(useUIStore.getState().insightsView.excludeLaunch).toBe(true)
     useUIStore.getState().setInsightsView({ month: 'M3' })
     expect(useUIStore.getState().insightsView.cohort).toBe('2026-07')
   })
