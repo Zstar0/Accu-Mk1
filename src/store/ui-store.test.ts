@@ -135,7 +135,7 @@ describe('UIStore customer actions', () => {
     expect(state.customerDetailTargetId).toBeNull()
   })
 
-  it('navigateToCustomerKey takes a tab and an origin; back returns to the origin', () => {
+  it('navigateToCustomerKey takes a tab and an origin; the Back action returns to the origin', () => {
     useUIStore.getState().navigateToCustomerKey('wc:2243', {
       tab: 'crm',
       origin: 'customer-insights',
@@ -143,9 +143,21 @@ describe('UIStore customer actions', () => {
     let s = useUIStore.getState()
     expect(s.customerDetailTab).toBe('crm')
     expect(s.customerDetailOrigin).toBe('customer-insights')
-    useUIStore.getState().navigateToCustomers()
+    useUIStore.getState().navigateBackFromCustomer()
     s = useUIStore.getState()
     expect(s.activeSubSection).toBe('customer-insights')
+    expect(s.customerDetailOrigin).toBe('customers')
+    expect(s.customerDetailTargetId).toBeNull()
+    expect(s.customerDetailTab).toBe('orders')
+  })
+
+  it('navigateToCustomers always lands on the list, even from an Insights-opened detail (QuickNav)', () => {
+    useUIStore.getState().navigateToCustomerKey('wc:2243', {
+      origin: 'customer-insights',
+    })
+    useUIStore.getState().navigateToCustomers()
+    const s = useUIStore.getState()
+    expect(s.activeSubSection).toBe('customers')
     expect(s.customerDetailOrigin).toBe('customers')
     expect(s.customerDetailTargetId).toBeNull()
   })

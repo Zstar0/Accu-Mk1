@@ -778,9 +778,10 @@ function InsightCells({ insight }: { insight?: InsightRow }) {
  * Selector syntax mandate (AGENTS.md): every useUIStore call uses
  * `state => state.x`. ast-grep enforces.
  *
- * Back navigation (D-11): `BackToOrigin` calls `navigateToCustomers()`, which
- * returns to Customers or Customer Insights (by `customerDetailOrigin`) AND
- * clears customerDetailTargetId. The store action is the source of truth.
+ * Back navigation (D-11): `BackToOrigin` calls `navigateBackFromCustomer()`,
+ * which returns to Customers or Customer Insights (by `customerDetailOrigin`)
+ * AND clears customerDetailTargetId; `navigateToCustomers()` always goes to
+ * the list (QuickNav, sidebar). The store actions are the source of truth.
  */
 function CustomerDetailView() {
   const isAdminUser = useAuthStore(state => state.user)?.role === 'admin'

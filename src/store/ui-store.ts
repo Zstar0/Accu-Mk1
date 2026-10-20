@@ -91,6 +91,24 @@ export interface InsightsView {
   cohort: string | null
   month: string | null
 }
+/** What leaving the customer detail clears, whichever list it returns to:
+ *  the detail target, its tab (Phase 30, T-30-03) and the four order-search
+ *  slots, so search and tab state never leak between drill-throughs. */
+function leaveCustomerDetail(state: { navigationKey: number }) {
+  return {
+    customerDetailOrigin: 'customers' as const,
+    customerDetailTargetId: null,
+    customerDetailKey: null,
+    customerDetailTab: 'orders' as const,
+    customerOrderSearch: {
+      order_number: '',
+      sample_id: '',
+      analyte: '',
+      lot: '',
+    },
+    navigationKey: state.navigationKey + 1,
+  }
+}
 export type BoardsSubSection = 'overview' | 'board'
 // Settings panes double as subsections so #settings/<pane> round-trips through
 // the same hash-navigation as every other section.
@@ -239,7 +257,12 @@ interface UIState {
   consumePendingBoardNode: () => string | null
   setPendingCustomerItem: (item: PendingCustomerItem | null) => void
   consumePendingCustomerItem: () => PendingCustomerItem | null
+  /** Go to the Customers list. Always the list, whatever the open detail's
+   *  origin: QuickNav and the sidebar use this to GET there. */
   navigateToCustomers: () => void
+  /** The customer detail's Back button: returns to wherever the customer was
+   *  opened from (Customers list or Customer Insights). */
+  navigateBackFromCustomer: () => void
   /** Order Status with ONLY the Order ID text filter set (other text axes
    *  cleared by the page so the result is unambiguous). */
   navigateToOrderStatus: (orderId: string) => void
@@ -743,37 +766,36 @@ export const useUIStore = create<UIState>()(
         )
       },
 
-      // Back-nav from detail view (D-11). Explicitly clears customerDetailTargetId
-      // but PRESERVES customerListPage + customerSearchTerm so the user returns
-      // to the exact list slice they left (D-08).
+      // To the Customers list (D-11): always the list, whatever the detail's
+      // origin, because QuickNav and the sidebar call this to GET there.
+      // Explicitly clears customerDetailTargetId but PRESERVES
+      // customerListPage + customerSearchTerm so the user returns to the
+      // exact list slice they left (D-08).
       navigateToCustomers: () =>
         set(
           state => ({
+            ...leaveCustomerDetail(state),
+            activeSection: 'accumark-tools',
+            activeSubSection: 'customers',
+          }),
+          undefined,
+          'navigateToCustomers'
+        ),
+
+      // The detail page's Back button: back to wherever the customer was
+      // opened from, clearing the same detail state as navigateToCustomers.
+      navigateBackFromCustomer: () =>
+        set(
+          state => ({
+            ...leaveCustomerDetail(state),
             activeSection: 'accumark-tools',
             activeSubSection:
               state.customerDetailOrigin === 'customer-insights'
                 ? 'customer-insights'
                 : 'customers',
-            customerDetailOrigin: 'customers',
-            customerDetailTargetId: null,
-            customerDetailKey: null,
-            // Phase 30 (T-30-03): reset customer-detail page state when going
-            // back to the list so search/tab state never leaks between
-            // customer drill-throughs.
-            customerDetailTab: 'orders',
-            // UX revision: clear all four search slots when navigating back
-            // to the customer list — same intent as the old single-field
-            // reset, just applied per-axis.
-            customerOrderSearch: {
-              order_number: '',
-              sample_id: '',
-              analyte: '',
-              lot: '',
-            },
-            navigationKey: state.navigationKey + 1,
           }),
           undefined,
-          'navigateToCustomers'
+          'navigateBackFromCustomer'
         ),
 
       setInsightsView: patch =>
