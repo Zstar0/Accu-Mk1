@@ -90,6 +90,7 @@ function setup(hasSeat = true) {
       />
     </QueryClientProvider>
   )
+  return qc
 }
 
 const openReply = async () =>
@@ -160,7 +161,8 @@ describe('SupportThreadPanel actions', () => {
   })
 
   it('note sends without confirmation', async () => {
-    setup()
+    const qc = setup()
+    const invalidate = vi.spyOn(qc, 'invalidateQueries')
     await userEvent.click(
       await screen.findByRole('button', { name: 'Add note' })
     )
@@ -181,6 +183,10 @@ describe('SupportThreadPanel actions', () => {
         }
       )
     )
+    // The Insights Last support cells summarise these threads.
+    expect(invalidate).toHaveBeenCalledWith({
+      queryKey: ['customers', 'touchpoints'],
+    })
   })
 
   it('draft survives closing the panel', async () => {
