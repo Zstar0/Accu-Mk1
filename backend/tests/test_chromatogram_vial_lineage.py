@@ -8,11 +8,11 @@ import pytest
 from sqlalchemy import select
 
 from coa.native_sections import NativeSectionsError
-from coa.sample_meta import select_chromatogram_row
+from coa.sample_meta import select_chromatogram_row, select_image_row
 from hplc_csv import build_chromatogram_csv
 from models import HPLCAnalysis, LimsParentAttachment, LimsSample, LimsSubSample, Peptide
 from scripts.backfill_chromatogram_source_vial import backfill
-from sub_samples.photo_storage import get_storage, set_storage_for_tests
+from sub_samples.photo_storage import PhotoNotFoundError, get_storage, set_storage_for_tests
 
 
 def _parent(db, sample_id="P-2627"):
@@ -22,11 +22,11 @@ def _parent(db, sample_id="P-2627"):
     return row
 
 
-def _vial(db, parent, seq, kind="core", role="hplc"):
+def _vial(db, parent, seq, kind="core", role="hplc", photo=None):
     row = LimsSubSample(
         sample_id=f"{parent.sample_id}-S{seq:02d}", parent_sample_pk=parent.id,
         vial_sequence=seq, external_lims_uid=f"uid-{parent.sample_id}-S{seq:02d}",
-        assignment_role=role, assignment_kind=kind,
+        assignment_role=role, assignment_kind=kind, photo_external_uid=photo,
     )
     db.add(row); db.flush()
     return row
@@ -136,10 +136,16 @@ def test_backfill_resolves_from_push_filename(db_session):
 class _FakeStorage:
     def __init__(self):
         self.calls: list[tuple[str, bytes, str]] = []
+        self.photos: dict[str, bytes] = {}
 
     def save_photo(self, sample_id: str, photo_bytes: bytes, filename: str) -> str:
         self.calls.append((sample_id, photo_bytes, filename))
         return f"fake-key/{sample_id}/{filename}"
+
+    def fetch_photo(self, key: str) -> bytes:
+        if key not in self.photos:
+            raise PhotoNotFoundError(key)
+        return self.photos[key]
 
 
 @pytest.fixture
@@ -272,3 +278,121 @@ def test_parent_without_hplc_vials_keeps_newest_even_when_stamped(
     newest = _chrom(db_session, p, source=micro)
     assert select_chromatogram_row(db_session, p).id == newest.id
     assert fake_storage.calls == []
+
+
+# --- sample image lineage (P-5324, 2026-10-20) -------------------------------
+# All four P-5324 vial certificates printed vial 1's photo: the image pick
+# never looked at the vial. A vial COA now reads only a row stamped with its
+# vial, materializing the vial's own check-in photo when none exists; the
+# parent follows the same core-vial guard as the chromatogram.
+
+def _img(db, parent, *, source=None, kind="vial_image", content_type="image/jpeg"):
+    row = LimsParentAttachment(
+        lims_sample_pk=parent.id, kind=kind,
+        source_sub_sample_pk=source.id if source is not None else None,
+        filename="photo.jpg", content_type=content_type, storage="s3",
+        storage_key="k", render_in_report=True, attachment_type="Sample Image",
+    )
+    db.add(row); db.flush()
+    return row
+
+
+def test_vial_without_stamped_image_materializes_its_own_photo(
+        db_session, fake_storage, caplog):
+    p = _parent(db_session)
+    v1 = _vial(db_session, p, 1, photo="mk1://P-2627-S01/aaa.jpg")
+    v2 = _vial(db_session, p, 2, kind="variance", photo="mk1://P-2627-S02/bbb.png")
+    _img(db_session, p, source=v1)                      # vial 1's check-in copy
+    fake_storage.photos["P-2627-S02/bbb.png"] = b"png-bytes"
+    with caplog.at_level(logging.INFO, logger="coa.sample_meta"):
+        row = select_image_row(db_session, p, vial=v2)
+    assert row.source_sub_sample_pk == v2.id
+    assert row.kind == "vial_image"
+    assert row.attachment_type == "Sample Image"
+    assert row.render_in_report is True
+    assert row.content_type == "image/png"
+    assert row.filename == "P-2627-S02-vial-photo.png"
+    assert fake_storage.calls == [(p.sample_id, b"png-bytes", row.filename)]
+    assert any("materialized from vial photo P-2627-S02/bbb.png" in r.message
+               for r in caplog.records)
+    # The next read finds the stamped row; nothing is written twice.
+    assert select_image_row(db_session, p, vial=v2).id == row.id
+    assert len(fake_storage.calls) == 1
+
+
+@pytest.mark.parametrize("photo", [
+    None,                                 # never photographed
+    "senaite/legacy/path.jpg",            # legacy SENAITE path, out of scope
+    "mk1://P-2627-S02/missing.jpg",       # key gone from storage
+    "mk1://P-2627-S02/notes.txt",         # not an image
+])
+def test_vial_without_stamped_image_or_usable_photo_fails_closed(
+        db_session, fake_storage, photo):
+    p = _parent(db_session)
+    v1 = _vial(db_session, p, 1, photo="mk1://P-2627-S01/aaa.jpg")
+    v2 = _vial(db_session, p, 2, kind="variance", photo=photo)
+    _img(db_session, p, source=v1)                      # sibling's photo, never used
+    fake_storage.photos["P-2627-S02/notes.txt"] = b"not an image"
+    with pytest.raises(NativeSectionsError) as ei:
+        select_image_row(db_session, p, vial=v2)
+    assert "P-2627-S02" in ei.value.detail
+    assert fake_storage.calls == []
+    assert len(db_session.execute(select(LimsParentAttachment)).scalars().all()) == 1
+
+
+def test_vial_with_stamped_image_uses_it_without_writing(db_session, fake_storage):
+    p = _parent(db_session)
+    v1 = _vial(db_session, p, 1, photo="mk1://P-2627-S01/aaa.jpg")
+    v2 = _vial(db_session, p, 2, kind="variance", photo="mk1://P-2627-S02/bbb.jpg")
+    fake_storage.photos["P-2627-S02/bbb.jpg"] = b"jpg"
+    _img(db_session, p, source=v1)
+    mine = _img(db_session, p, source=v2)
+    _img(db_session, p)                                 # newer, unstamped
+    assert select_image_row(db_session, p, vial=v2).id == mine.id
+    assert fake_storage.calls == []
+
+
+def test_parent_image_prefers_core_or_unstamped_over_newer_variance_stamped(
+        db_session, fake_storage):
+    p = _parent(db_session)
+    core, var = _vial(db_session, p, 1), _vial(db_session, p, 2, kind="variance")
+    checkin = _img(db_session, p, kind="receive_image")   # unstamped check-in copy
+    _img(db_session, p, source=var)                       # newer, variance-stamped
+    assert select_image_row(db_session, p).id == checkin.id
+    core_row = _img(db_session, p, source=core)           # newer still, core-stamped
+    _img(db_session, p, source=var)
+    assert select_image_row(db_session, p).id == core_row.id
+    assert fake_storage.calls == []
+
+
+def test_parent_image_without_hplc_vials_keeps_newest_even_when_stamped(
+        db_session, fake_storage):
+    p = _parent(db_session)
+    micro = _vial(db_session, p, 1, role="micro")
+    _img(db_session, p)
+    newest = _img(db_session, p, source=micro)
+    assert select_image_row(db_session, p).id == newest.id
+    assert fake_storage.calls == []
+
+
+def test_parent_image_with_only_a_variance_row_materializes_the_core_vials_photo(
+        db_session, fake_storage, caplog):
+    p = _parent(db_session)
+    core = _vial(db_session, p, 1, photo="mk1://P-2627-S01/aaa.jpg")
+    var = _vial(db_session, p, 2, kind="variance", photo="mk1://P-2627-S02/bbb.jpg")
+    _img(db_session, p, source=var)
+    fake_storage.photos["P-2627-S01/aaa.jpg"] = b"core-jpg"
+    fake_storage.photos["P-2627-S02/bbb.jpg"] = b"var-jpg"
+    with caplog.at_level(logging.INFO, logger="coa.sample_meta"):
+        picked = select_image_row(db_session, p)
+    assert picked.source_sub_sample_pk == core.id
+    assert fake_storage.calls == [(p.sample_id, b"core-jpg", "P-2627-S01-vial-photo.jpg")]
+    assert any("core-vial materialized" in r.message for r in caplog.records)
+    # No core photo at all: None (build_sample_meta fails closed), never the
+    # variance row.
+    p2 = _parent(db_session, "P-0002")
+    _vial(db_session, p2, 1)
+    var2 = _vial(db_session, p2, 2, kind="variance")
+    _img(db_session, p2, source=var2)
+    assert select_image_row(db_session, p2) is None
+    assert len(fake_storage.calls) == 1

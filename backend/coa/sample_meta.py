@@ -16,6 +16,7 @@ test_sample_meta_contract.py in BOTH repos. Move together.
 import json
 import logging
 import os
+from pathlib import Path
 
 from sqlalchemy import select
 
@@ -143,23 +144,106 @@ def _materialize_vial_chromatogram(db, parent, vial):
         None)
     if analysis is None:
         return None
+    return _file_vial_row(
+        db, parent, vial, file_bytes=build_chromatogram_csv(analysis),
+        filename=f"chromatogram_{analysis.sample_id_label}.csv",
+        content_type="text/csv", kind="chromatogram", render_in_report=False,
+        attachment_type="HPLC Graph", origin=f"HPLC analysis {analysis.id}")
+
+
+def _materialize_vial_photo(db, parent, vial):
+    """Fallback for a vial with no stamped image row (P-5324, 2026-10-20:
+    all four vial certificates printed vial 1's photo). The vial's own
+    check-in photo lives in Mk1 storage under the `mk1://` key on
+    `lims_sub_samples.photo_external_uid`; fetch those bytes and file them
+    as a `vial_image` row stamped with the vial, the same shape the
+    Select-Vial-Image copy writes. A missing, legacy (non mk1://) or
+    non-image photo means None and the caller fails closed, never a
+    sibling's photo. Writer rules as in `_file_vial_row`.
+    """
+    from sub_samples.photo_storage import (
+        PhotoNotFoundError, _content_type_for_key, get_storage,
+    )
+    uid = vial.photo_external_uid or ""
+    if not uid.startswith("mk1://"):
+        return None
+    key = uid[len("mk1://"):]
+    content_type = _content_type_for_key(key)
+    if not content_type.startswith("image/"):
+        return None
+    try:
+        photo_bytes = get_storage().fetch_photo(key)
+    except PhotoNotFoundError:
+        return None
+    return _file_vial_row(
+        db, parent, vial, file_bytes=photo_bytes,
+        filename=f"{vial.sample_id}-vial-photo{Path(key).suffix.lower()}",
+        content_type=content_type, kind="vial_image", render_in_report=True,
+        attachment_type="Sample Image", origin=f"vial photo {key}")
+
+
+def _file_vial_row(db, parent, vial, *, file_bytes, filename, content_type,
+                   kind, render_in_report, attachment_type, origin):
+    """Write `file_bytes` as a parent-attachment row stamped with `vial`,
+    commit, log one line and return it: the one write in this module. The
+    writer dropping the stamp (lineage mismatch) rolls back and returns
+    None so the caller fails closed; a storage or DB error propagates
+    uncommitted, so no half-written row survives.
+    """
     from main import write_parent_attachment  # lazy: main imports this module
     row = write_parent_attachment(
-        db, parent, file_bytes=build_chromatogram_csv(analysis),
-        filename=f"chromatogram_{analysis.sample_id_label}.csv",
-        content_type="text/csv", kind="chromatogram",
+        db, parent, file_bytes=file_bytes, filename=filename,
+        content_type=content_type, kind=kind,
         source_sample_id=vial.sample_id, user_id=None,
-        render_in_report=False, attachment_type="HPLC Graph",
+        render_in_report=render_in_report, attachment_type=attachment_type,
     )
     if row.source_sub_sample_pk != vial.id:
-        # The writer dropped the stamp (lineage mismatch): an unstamped row
-        # must not be returned as this vial's trace. Fail closed.
         db.rollback()
         return None
     db.commit()
-    log.info("sample_meta: %s chromatogram row %s materialized from HPLC "
-             "analysis %s for vial %s", parent.sample_id, row.id, analysis.id,
-             vial.sample_id)
+    log.info("sample_meta: %s %s row %s materialized from %s for vial %s",
+             parent.sample_id, kind, row.id, origin, vial.sample_id)
+    return row
+
+
+def _select_parent_row(db, parent, *, chromatogram: bool, materialize):
+    """Parent-COA selection shared by chromatogram and image (P-5324 guard):
+    the newest row stamped with a core HPLC vial; else the core vial's own
+    source materialized via `materialize(db, parent, core_vial)` (core
+    vials in vial_sequence order, first that qualifies wins); else the
+    newest row that is unstamped or core-stamped, never another vial's,
+    since vial certificates now stamp rows with variance vials too. A
+    parent with no HPLC vials keeps the plain newest rule. May return None.
+    """
+    from models import LimsSubSample
+    what = "chromatogram" if chromatogram else "image"
+    core_vials = db.execute(
+        select(LimsSubSample).where(
+            LimsSubSample.parent_sample_pk == parent.id,
+            LimsSubSample.assignment_role == "hplc",
+            LimsSubSample.assignment_kind == "core",
+        ).order_by(LimsSubSample.vial_sequence, LimsSubSample.id)
+    ).scalars().all()
+    core_ids = [v.id for v in core_vials]
+    if core_ids:
+        row = _newest(db, parent.id, chromatogram=chromatogram, source_sub_pks=core_ids)
+        if row is not None:
+            log.info("sample_meta: %s %s row %s picked by core-vial rule "
+                     "(vial pk %s)", parent.sample_id, what, row.id,
+                     row.source_sub_sample_pk)
+            return row
+        for core in core_vials:
+            row = materialize(db, parent, core)
+            if row is not None:
+                log.info("sample_meta: %s %s row %s picked by core-vial "
+                         "materialized rule (vial %s)", parent.sample_id,
+                         what, row.id, core.sample_id)
+                return row
+    row = _newest(db, parent.id, chromatogram=chromatogram,
+                  source_sub_pks=core_ids or None, or_unstamped=True)
+    if row is not None:
+        log.info("sample_meta: %s %s row %s picked by newest rule (no "
+                 "core-vial-linked row)", parent.sample_id, what, row.id)
     return row
 
 
@@ -179,7 +263,6 @@ def select_chromatogram_row(db, parent, *, vial=None):
     chromatogram on the parent, exactly as before. May return None — a
     missing parent chromatogram is not fatal here (micro-only samples).
     """
-    from models import LimsSubSample
     if vial is not None:
         row = _newest(db, parent.id, chromatogram=True, source_sub_pks=[vial.id])
         if row is None:
@@ -192,41 +275,37 @@ def select_chromatogram_row(db, parent, *, vial=None):
         log.info("sample_meta: %s chromatogram row %s picked by vial-linked "
                  "rule (vial %s)", parent.sample_id, row.id, vial.sample_id)
         return row
-    core_vials = db.execute(
-        select(LimsSubSample).where(
-            LimsSubSample.parent_sample_pk == parent.id,
-            LimsSubSample.assignment_role == "hplc",
-            LimsSubSample.assignment_kind == "core",
-        ).order_by(LimsSubSample.vial_sequence, LimsSubSample.id)
-    ).scalars().all()
-    core_ids = [v.id for v in core_vials]
-    if core_ids:
-        row = _newest(db, parent.id, chromatogram=True, source_sub_pks=core_ids)
-        if row is not None:
-            log.info("sample_meta: %s chromatogram row %s picked by core-vial "
-                     "rule (vial pk %s)", parent.sample_id, row.id,
-                     row.source_sub_sample_pk)
-            return row
-        # Guard (P-5324 follow-up, 2026-10-19): the vial fallback stamps rows
-        # with VARIANCE vials too, so a parent regen must never inherit one
-        # through the newest rule. Materialize the core vial's own trace
-        # first (normally one core HPLC vial; first that qualifies wins).
-        for core in core_vials:
-            row = _materialize_vial_chromatogram(db, parent, core)
-            if row is not None:
-                log.info("sample_meta: %s chromatogram row %s picked by "
-                         "core-vial materialized rule (vial %s)",
-                         parent.sample_id, row.id, core.sample_id)
-                return row
-    # Newest rule, as before, but when the parent has core HPLC vials only
-    # an unstamped or core-stamped row qualifies, never another vial's.
-    # Parents with no HPLC vials keep the plain newest rule.
-    row = _newest(db, parent.id, chromatogram=True,
-                  source_sub_pks=core_ids or None, or_unstamped=True)
-    if row is not None:
-        log.info("sample_meta: %s chromatogram row %s picked by newest rule "
-                 "(no core-vial-linked row)", parent.sample_id, row.id)
-    return row
+    return _select_parent_row(db, parent, chromatogram=True,
+                              materialize=_materialize_vial_chromatogram)
+
+
+def select_image_row(db, parent, *, vial=None):
+    """The sample-image row the certificate embeds (P-5324, 2026-10-20).
+
+    Per-vial COA (`vial` given): ONLY a row stamped with that vial; none ->
+    the vial's own check-in photo is materialized as a stamped row
+    (`_materialize_vial_photo`); no usable photo -> NativeSectionsError.
+    Never a sibling's photo: all four P-5324 vial certificates printed
+    vial 1's because the parent's newest image was the only rule.
+
+    Parent COA (`vial=None`): `_select_parent_row`, so a parent regen after
+    vial certificates never prints whichever vial photo was materialized
+    last. May return None; build_sample_meta fails closed (Ruling R-13).
+    """
+    if vial is not None:
+        row = _newest(db, parent.id, chromatogram=False, source_sub_pks=[vial.id])
+        if row is None:
+            row = _materialize_vial_photo(db, parent, vial)
+        if row is None:
+            raise NativeSectionsError(
+                f"No vial photo is on file for {vial.sample_id}: retake it "
+                f"from the vial page, or upload the photo with that vial "
+                f"selected as the source.")
+        log.info("sample_meta: %s image row %s picked by vial-linked rule "
+                 "(vial %s)", parent.sample_id, row.id, vial.sample_id)
+        return row
+    return _select_parent_row(db, parent, chromatogram=False,
+                              materialize=_materialize_vial_photo)
 
 
 def _guard_unhonourable_reportable_flags(db, parent) -> None:
@@ -274,8 +353,8 @@ def build_sample_meta(db, parent, *, vial=None) -> dict:
     chromatogram is NOT fatal here -- micro-only samples legitimately have
     none; the generate-flow attachments gate is what enforces the
     per-sample chromatogram requirement. `vial` (a LimsSubSample, per-vial
-    COAs) makes the chromatogram selection vial-strict — see
-    select_chromatogram_row.
+    COAs) makes the chromatogram and image selection vial-strict; see
+    select_chromatogram_row and select_image_row.
 
     MK1_PUBLIC_BASE_URL mints the absolute S2S attachment URLs coab
     downloads. PREFERRED value: an origin coab reaches DIRECTLY --
@@ -299,7 +378,7 @@ def build_sample_meta(db, parent, *, vial=None) -> dict:
         raise NativeSectionsError(
             f"sample_meta: {parent.sample_id} has no sample_type_title — the "
             f"matrix selects the rendering engine; aborting")
-    image_row = _newest(db, parent.id, chromatogram=False)
+    image_row = select_image_row(db, parent, vial=vial)
     if image_row is None:
         raise NativeSectionsError(
             f"sample_meta: {parent.sample_id} has no native sample image — "
