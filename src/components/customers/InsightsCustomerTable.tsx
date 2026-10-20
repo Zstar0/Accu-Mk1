@@ -33,6 +33,7 @@ const fmtDate = (iso: string | null, tz: string) =>
     ? new Date(iso).toLocaleDateString('en-US', {
         month: 'short',
         day: 'numeric',
+        year: 'numeric',
         timeZone: tz,
       })
     : ''
@@ -82,7 +83,7 @@ export function InsightsCustomerTable({
                 key={c.field}
                 className={cn(
                   'px-2 py-1 font-medium',
-                  c.right ? 'text-right' : 'text-left'
+                  c.right ? 'text-end' : 'text-start'
                 )}
               >
                 <button
@@ -101,10 +102,10 @@ export function InsightsCustomerTable({
               </th>
             ))}
             {touch.crmVisible && (
-              <th className="px-2 text-right font-medium">Last CRM</th>
+              <th className="px-2 text-end font-medium">Last CRM</th>
             )}
             {touch.supportVisible && (
-              <th className="px-2 text-right font-medium">Last support</th>
+              <th className="px-2 text-end font-medium">Last support</th>
             )}
           </tr>
         </thead>
@@ -128,12 +129,12 @@ export function InsightsCustomerTable({
                 <td className="px-2 text-muted-foreground">
                   {r.rep ?? 'Unassigned'}
                 </td>
-                <td className="px-2 text-right">
+                <td className="px-2 text-end">
                   {fmtDate(r.first_order_at, tz)}
                 </td>
-                <td className="px-2 text-right">{r.testing_orders}</td>
-                <td className="px-2 text-right">{fmtMoney(r.lifetime)}</td>
-                <td className="px-2 text-right">
+                <td className="px-2 text-end">{r.testing_orders}</td>
+                <td className="px-2 text-end">{fmtMoney(r.lifetime)}</td>
+                <td className="px-2 text-end">
                   {fmtDate(r.last_order_at, tz)}
                 </td>
                 <td className="px-2">
@@ -147,7 +148,7 @@ export function InsightsCustomerTable({
                   </span>
                 </td>
                 {touch.crmVisible && (
-                  <td className="px-2 text-right">
+                  <td className="px-2 text-end">
                     <TouchCell
                       kind="crm"
                       touch={tp ? (tp.crm ?? null) : undefined}
@@ -157,7 +158,7 @@ export function InsightsCustomerTable({
                   </td>
                 )}
                 {touch.supportVisible && (
-                  <td className="px-2 text-right">
+                  <td className="px-2 text-end">
                     <TouchCell
                       kind="support"
                       touch={tp ? (tp.support ?? null) : undefined}

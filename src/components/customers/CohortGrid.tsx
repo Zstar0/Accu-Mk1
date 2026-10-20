@@ -26,7 +26,7 @@ export function CohortGrid({
     <table className="w-full text-xs tabular-nums">
       <thead>
         <tr className="text-muted-foreground">
-          <th className="py-1 text-left font-medium">Cohort</th>
+          <th className="py-1 text-start font-medium">Cohort</th>
           <th className="font-medium">n</th>
           {months.map(m => (
             <th key={m} className="font-medium">

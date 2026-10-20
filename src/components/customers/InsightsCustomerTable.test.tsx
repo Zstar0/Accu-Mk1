@@ -37,7 +37,7 @@ describe('InsightsCustomerTable', () => {
     const tr = screen.getByText('Zackary Smith').closest('tr') as HTMLElement
     expect(tr).toHaveTextContent('UMS Rx LLC')
     expect(tr).toHaveTextContent('$90,051')
-    expect(tr).toHaveTextContent('Jul 22')
+    expect(tr).toHaveTextContent('Jul 22, 2026')
     expect(tr).toHaveTextContent('31')
     expect(screen.getByText('26–26 of 60')).toBeInTheDocument()
     await userEvent.click(
