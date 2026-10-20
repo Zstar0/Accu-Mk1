@@ -1,0 +1,12 @@
+2026-09-30T04:22:47.102Z primary before: 7RE7-338Y published on PB-0069
+2026-09-30T04:22:47.263Z IS public verdict 7RE7-338Y: status=verified forward_enabled=false current=null
+2026-09-30T04:22:49.958Z primary after: 584L-Q2LS published, 7RE7-338Y retired
+2026-09-30T04:22:51.302Z IS public verdict 7RE7-338Y: status=superseded forward_enabled=true current=584L-Q2LS
+2026-09-30T04:22:51.384Z IS public verdict 584L-Q2LS: status=verified forward_enabled=false current=null
+2026-09-30T04:22:55.384Z mailhog: 1 message(s) mention 584L-Q2LS; newest subject: =?UTF-8?Q?=F0=9F=94=84_Your_Certificate_of_Analysis_Has_Been_Reissued_=E2=80=93_BPC-TB,_584L-Q2LS_(Order_#3166)?=
+2026-09-30T04:23:04.165Z IS public verdict 7RE7-338Y: status=superseded forward_enabled=false current=null
+2026-09-30T04:23:12.975Z IS public verdict 7RE7-338Y: status=superseded forward_enabled=true current=584L-Q2LS
+2026-09-30T04:23:22.895Z additional before: 6RSP-FQSD published on PB-0069
+2026-09-30T04:23:23.045Z IS public verdict 6RSP-FQSD: status=verified forward_enabled=false current=null
+2026-09-30T04:23:24.296Z additional after: 5YFV-4AWH published, 6RSP-FQSD retired
+2026-09-30T04:23:25.413Z IS public verdict 6RSP-FQSD: status=superseded forward_enabled=true current=5YFV-4AWH
