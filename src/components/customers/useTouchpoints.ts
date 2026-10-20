@@ -1,5 +1,7 @@
 import { useQueries } from '@tanstack/react-query'
 import { getCustomerTouchpoints, type Touchpoints } from '@/lib/api'
+import { useAuthStore } from '@/store/auth-store'
+import { useSupportSeat } from './useSupportSeat'
 
 const CHUNK = 50
 const DEGRADED = {
@@ -35,11 +37,19 @@ export function useTouchpoints(keys: string[]): {
       else if (q.isError) rows[k] = { crm: DEGRADED, support: DEGRADED }
     }
   })
+  // Until the first chunk settles, seed visibility from what the client already
+  // knows (admin role, Plain seat) so the columns show their loading cells on
+  // first load. Once the server has answered its flags win: it can only take a
+  // column away, never add one the seed did not expect.
+  const isAdmin = useAuthStore(state => state.user?.role === 'admin')
+  const seat = useSupportSeat()
   const first = results.find(q => q.data)?.data
   return {
     rows,
-    crmVisible: first?.crm_visible ?? false,
-    supportVisible: first?.support_visible ?? false,
+    crmVisible: first ? first.crm_visible : isAdmin,
+    supportVisible: first
+      ? first.support_visible
+      : isAdmin || seat.data?.has_seat === true,
     isLoading: results.some(q => q.isLoading),
   }
 }
