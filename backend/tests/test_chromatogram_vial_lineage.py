@@ -216,3 +216,59 @@ def test_vial_fallback_never_uses_a_sibling_vials_analysis(db_session, fake_stor
         select_chromatogram_row(db_session, p, vial=v1)
     assert fake_storage.calls == []
     assert db_session.execute(select(LimsParentAttachment)).scalars().all() == []
+
+
+# --- parent guard (P-5324 follow-up, 2026-10-19) ------------------------------
+# The vial fallback stamps rows with variance vials too, so the parent COA must
+# never inherit one through the newest rule: it materializes the core vial's
+# own trace first, and the newest rule skips rows stamped with another vial.
+
+def test_parent_prefers_unstamped_core_push_over_newer_variance_stamped_row(
+        db_session, fake_storage):
+    p = _parent(db_session)
+    _vial(db_session, p, 1); var = _vial(db_session, p, 2, kind="variance")
+    core_push = _chrom(db_session, p, filename="chromatogram_P-2627.csv")   # source NULL
+    _chrom(db_session, p, source=var)                                      # newer, variance
+    assert select_chromatogram_row(db_session, p).id == core_push.id
+    assert fake_storage.calls == []
+
+
+def test_parent_with_no_core_row_materializes_the_core_vials_own_analysis(
+        db_session, fake_storage, caplog):
+    p = _parent(db_session)
+    core, var = _vial(db_session, p, 1), _vial(db_session, p, 2, kind="variance")
+    _chrom(db_session, p, source=var)                                      # variance only
+    _analysis(db_session, var.sample_id, chrom={"times": [0.0], "signals": [9.0]})
+    a = _analysis(db_session, core.sample_id,
+                  chrom={"times": [0.0, 0.1], "signals": [1.0, 2.0]})
+    with caplog.at_level(logging.INFO, logger="coa.sample_meta"):
+        picked = select_chromatogram_row(db_session, p)
+    assert picked.source_sub_sample_pk == core.id
+    assert picked.filename == "chromatogram_P-2627-S01.csv"
+    assert fake_storage.calls == [(p.sample_id, build_chromatogram_csv(a), picked.filename)]
+    assert any("core-vial materialized" in r.message for r in caplog.records)
+    # The next read finds the core-stamped row; nothing is written twice.
+    assert select_chromatogram_row(db_session, p).id == picked.id
+    assert len(fake_storage.calls) == 1
+
+
+def test_parent_with_only_a_variance_stamped_row_and_no_core_trace_returns_none(
+        db_session, fake_storage):
+    p = _parent(db_session)
+    core, var = _vial(db_session, p, 1), _vial(db_session, p, 2, kind="variance")
+    _chrom(db_session, p, source=var)
+    _analysis(db_session, var.sample_id, chrom={"times": [0.0], "signals": [9.0]})
+    _analysis(db_session, core.sample_id, chrom=None)
+    # Missing parent chromatogram contract: None, not a sibling's trace.
+    assert select_chromatogram_row(db_session, p) is None
+    assert fake_storage.calls == []
+
+
+def test_parent_without_hplc_vials_keeps_newest_even_when_stamped(
+        db_session, fake_storage):
+    p = _parent(db_session)
+    micro = _vial(db_session, p, 1, role="micro")
+    _chrom(db_session, p)
+    newest = _chrom(db_session, p, source=micro)
+    assert select_chromatogram_row(db_session, p).id == newest.id
+    assert fake_storage.calls == []

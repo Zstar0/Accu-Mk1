@@ -75,13 +75,18 @@ def _analyte_slots(db, parent) -> dict:
     return out
 
 
-def _newest(db, parent_pk: int, *, chromatogram: bool, source_sub_pks=None):
+def _newest(db, parent_pk: int, *, chromatogram: bool, source_sub_pks=None,
+            or_unstamped: bool = False):
     """Newest eligible row; `source_sub_pks` (chromatogram only) narrows to
-    rows linked to those vials via `source_sub_sample_pk`."""
+    rows linked to those vials via `source_sub_sample_pk`. With
+    `or_unstamped` a row with no source qualifies as well, but a row stamped
+    with any other vial never does."""
     from models import LimsParentAttachment as A
     q = select(A).where(A.lims_sample_pk == parent_pk, A.storage == "s3")
     if source_sub_pks is not None:
-        q = q.where(A.source_sub_sample_pk.in_(list(source_sub_pks)))
+        linked = A.source_sub_sample_pk.in_(list(source_sub_pks))
+        q = q.where((linked | A.source_sub_sample_pk.is_(None))
+                    if or_unstamped else linked)
     if chromatogram:
         # kind='chromatogram' = the HPLC-prep push / Select-Vial flow. The
         # attachment_type arm (BW-0106, 2026-08-31) admits CSVs attached
@@ -126,7 +131,6 @@ def _materialize_vial_chromatogram(db, parent, vial):
     """
     from models import HPLCAnalysis
     from hplc_csv import build_chromatogram_csv
-    from main import write_parent_attachment  # lazy: main imports this module
     analyses = db.execute(
         select(HPLCAnalysis)
         .where(HPLCAnalysis.sample_id_label == vial.sample_id)
@@ -139,6 +143,7 @@ def _materialize_vial_chromatogram(db, parent, vial):
         None)
     if analysis is None:
         return None
+    from main import write_parent_attachment  # lazy: main imports this module
     row = write_parent_attachment(
         db, parent, file_bytes=build_chromatogram_csv(analysis),
         filename=f"chromatogram_{analysis.sample_id_label}.csv",
@@ -187,13 +192,14 @@ def select_chromatogram_row(db, parent, *, vial=None):
         log.info("sample_meta: %s chromatogram row %s picked by vial-linked "
                  "rule (vial %s)", parent.sample_id, row.id, vial.sample_id)
         return row
-    core_ids = db.execute(
-        select(LimsSubSample.id).where(
+    core_vials = db.execute(
+        select(LimsSubSample).where(
             LimsSubSample.parent_sample_pk == parent.id,
             LimsSubSample.assignment_role == "hplc",
             LimsSubSample.assignment_kind == "core",
-        )
+        ).order_by(LimsSubSample.vial_sequence, LimsSubSample.id)
     ).scalars().all()
+    core_ids = [v.id for v in core_vials]
     if core_ids:
         row = _newest(db, parent.id, chromatogram=True, source_sub_pks=core_ids)
         if row is not None:
@@ -201,7 +207,22 @@ def select_chromatogram_row(db, parent, *, vial=None):
                      "rule (vial pk %s)", parent.sample_id, row.id,
                      row.source_sub_sample_pk)
             return row
-    row = _newest(db, parent.id, chromatogram=True)
+        # Guard (P-5324 follow-up, 2026-10-19): the vial fallback stamps rows
+        # with VARIANCE vials too, so a parent regen must never inherit one
+        # through the newest rule. Materialize the core vial's own trace
+        # first (normally one core HPLC vial; first that qualifies wins).
+        for core in core_vials:
+            row = _materialize_vial_chromatogram(db, parent, core)
+            if row is not None:
+                log.info("sample_meta: %s chromatogram row %s picked by "
+                         "core-vial materialized rule (vial %s)",
+                         parent.sample_id, row.id, core.sample_id)
+                return row
+    # Newest rule, as before, but when the parent has core HPLC vials only
+    # an unstamped or core-stamped row qualifies, never another vial's.
+    # Parents with no HPLC vials keep the plain newest rule.
+    row = _newest(db, parent.id, chromatogram=True,
+                  source_sub_pks=core_ids or None, or_unstamped=True)
     if row is not None:
         log.info("sample_meta: %s chromatogram row %s picked by newest rule "
                  "(no core-vial-linked row)", parent.sample_id, row.id)

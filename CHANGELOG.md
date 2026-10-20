@@ -5,6 +5,7 @@
 ### Fix: per-vial COAs on samples born in Mk1
 - **A pushed chromatogram now records which vial it came from.** On samples born in Mk1, pushing a vial's chromatogram did not note the vial, so the per-vial COAs quietly did not generate. It now records the vial, the same way SENAITE-born samples already did. Chromatograms pushed before this release are repaired by a one-time backfill at deploy.
 - **A vial without a pushed chromatogram uses its own trace.** When a per-vial COA is generated and no chromatogram was pushed for that vial, Mk1 now takes the trace from that vial's own HPLC analysis and files it as the vial's chromatogram, instead of skipping the vial's COA. A vial whose analysis holds no trace is still skipped, and a sibling vial's trace is never used.
+- **The sample COA never borrows a variance vial's trace.** When the core vial has no filed chromatogram, regenerating the sample COA now files the core vial's own trace first, and otherwise falls back only to chromatograms not tied to another vial.
 
 ## v1.49.2 - 2026-10-16
 
