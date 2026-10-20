@@ -28,18 +28,18 @@ export function AtRiskTable({
     <table className="w-full text-sm tabular-nums">
       <thead>
         <tr className="text-[11px] uppercase tracking-wider text-muted-foreground">
-          <th className="py-1 text-left font-medium">Customer</th>
-          <th className="text-left font-medium">Rep</th>
-          <th className="text-right font-medium">12-mo spend</th>
-          <th className="text-right font-medium">Orders</th>
-          <th className="text-right font-medium">Usual gap</th>
-          <th className="text-right font-medium">Last order</th>
-          <th className="text-right font-medium">Overdue</th>
+          <th className="py-1 text-start font-medium">Customer</th>
+          <th className="text-start font-medium">Rep</th>
+          <th className="text-end font-medium">12-mo spend</th>
+          <th className="text-end font-medium">Orders</th>
+          <th className="text-end font-medium">Usual gap</th>
+          <th className="text-end font-medium">Last order</th>
+          <th className="text-end font-medium">Overdue</th>
           {touch.crmVisible && (
-            <th className="px-2 text-right font-medium">Last CRM</th>
+            <th className="px-2 text-end font-medium">Last CRM</th>
           )}
           {touch.supportVisible && (
-            <th className="px-2 text-right font-medium">Last support</th>
+            <th className="px-2 text-end font-medium">Last support</th>
           )}
         </tr>
       </thead>
@@ -85,12 +85,12 @@ export function AtRiskTable({
                 </TooltipContent>
               </Tooltip>
               <td className="text-muted-foreground">{r.rep ?? 'Unassigned'}</td>
-              <td className="text-right">{fmtMoney(r.spend_12m)}</td>
-              <td className="text-right">{r.orders}</td>
-              <td className="text-right">
+              <td className="text-end">{fmtMoney(r.spend_12m)}</td>
+              <td className="text-end">{r.orders}</td>
+              <td className="text-end">
                 {r.usual_gap_days == null ? 'n/a' : `${r.usual_gap_days} d`}
               </td>
-              <td className="text-right">
+              <td className="text-end">
                 {r.last_order_at
                   ? new Date(r.last_order_at).toLocaleDateString('en-US', {
                       month: 'short',
@@ -99,7 +99,7 @@ export function AtRiskTable({
                     })
                   : ''}
               </td>
-              <td className="text-right">
+              <td className="text-end">
                 <span
                   className={cn(
                     'rounded-full px-2 text-xs font-semibold',
@@ -112,7 +112,7 @@ export function AtRiskTable({
                 </span>
               </td>
               {touch.crmVisible && (
-                <td className="px-2 text-right">
+                <td className="px-2 text-end">
                   <TouchCell
                     kind="crm"
                     touch={tp ? (tp.crm ?? null) : undefined}
@@ -122,7 +122,7 @@ export function AtRiskTable({
                 </td>
               )}
               {touch.supportVisible && (
-                <td className="px-2 text-right">
+                <td className="px-2 text-end">
                   <TouchCell
                     kind="support"
                     touch={tp ? (tp.support ?? null) : undefined}
