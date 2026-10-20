@@ -9,6 +9,12 @@
 - **Exclude launch accounts moved to the page header**, and now applies to New customers too.
 - **CRM tab:** sequence, bulk and AI-agent emails now sit behind "include automated". The AI review tab's CRM tool, like the CRM tab, no longer sees sequence and bulk sends.
 
+## v1.49.4 - 2026-10-20
+
+### Fix: per-vial COAs print their own vial photo
+- **Each vial certificate shows its own vial.** On a variance lot, every per-vial COA printed vial 1's photo. A vial certificate now uses only a photo filed for that vial, and when none is filed it takes the vial's own check-in photo and files it. A vial with no photo on file is skipped with a message naming the vial, rather than borrowing a sibling's.
+- **The sample COA never borrows a variance vial's photo.** When the core vial has no filed photo, regenerating the sample COA files the core vial's own check-in photo first, and otherwise falls back only to photos not tied to another vial.
+
 ## v1.49.3 - 2026-10-19
 
 ### Fix: per-vial COAs on samples born in Mk1
