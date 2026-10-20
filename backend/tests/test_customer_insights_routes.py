@@ -82,6 +82,9 @@ def test_orders_json_and_at_risk_fields_survive(client) -> None:
     assert {"customer_key", "net", "tests", "categories"} <= set(body["rows"][0])
     risk = client.get("/reports/customers/at-risk").json()["rows"][0]
     assert {"spend_12m", "overdue", "monthly", "top_tests"} <= set(risk)
+    assert {"first_order_at", "testing_orders"} <= set(risk)
+    lst = client.get("/reports/customers/list?period=all&sort=first_order_at&dir=asc").json()
+    assert lst["rows"][0]["first_order_at"] is not None
 
 
 def test_dossier_route_guest_key_and_404(client) -> None:
@@ -195,3 +198,33 @@ def test_dossier_sla_window_params(client, monkeypatch) -> None:
     d = client.get("/reports/customers/wc:1?sla_from=2026-09-01&sla_to=2026-09-30").json()
     assert d["sla"]["customer"]["delivered"] == 1 and d["sla"]["customer"]["late"] == 0
     assert client.get("/reports/customers/wc:1").json()["sla"]["customer"]["delivered"] == 2
+
+
+def test_list_new_only_follows_the_period_window(client) -> None:
+    assert client.get("/reports/customers/list?period=30d&new_only=true").json()["total"] == 1
+    assert client.get("/reports/customers/list?period=all&new_only=true").json()["total"] == 2
+    assert client.get("/reports/customers/list?from=2026-03-01&to=2026-03-31&new_only=true").json()["rows"][0]["key"] == "wc:1"
+
+
+def test_list_cohort_total_matches_the_grid_and_returned_in_narrows(client) -> None:
+    grid = {r["cohort"]: r for r in client.get("/reports/customers/cohorts").json()["rows"]}
+    for month, row in grid.items():
+        got = client.get(f"/reports/customers/list?cohort={month}&exclude_launch_accounts=true&page_size=1").json()
+        assert got["total"] == row["size"], month
+    assert client.get("/reports/customers/list?cohort=2026-03&returned_in=2026-04").json()["total"] == 1
+    assert client.get("/reports/customers/list?cohort=2026-03&returned_in=2026-05").json()["total"] == 0
+
+
+def test_list_cohort_validation(client) -> None:
+    assert client.get("/reports/customers/list?returned_in=2026-04").status_code == 422
+    assert client.get("/reports/customers/list?cohort=2026-03&returned_in=2026-03").status_code == 422
+    assert client.get("/reports/customers/list?cohort=March").status_code == 422
+
+
+def test_list_filters_skip_customers_without_a_testing_order(client, monkeypatch) -> None:
+    from dataclasses import replace
+    addon_only = replace(DS, orders=DS.orders + (replace(_o("wc:7", 3, "60", oid=9), is_testing=False, samples=0, tests=()),))
+    monkeypatch.setattr(sources, "load_dataset", lambda db, now: addon_only)
+    keys = {r["key"] for r in client.get("/reports/customers/list?period=all&new_only=true").json()["rows"]}
+    assert "wc:7" not in keys
+    assert client.get("/reports/customers/list?cohort=2026-10").json()["total"] == 0

@@ -86,6 +86,7 @@ def customer_support(customer_key: str, *, refresh: bool, statuses: list[str], p
             data = _load(customer_key, emails, fresh=True)
             at = CACHE.put(key, data)
             CACHE.drop(f"d:{customer_key}:")
+            CACHE.drop(f"touch:{customer_key}:")
         else:
             data, at = CACHE.get_or_load(key, rules.LIST_TTL, lambda: _load(customer_key, emails))
     except SupportUnavailable:
@@ -169,6 +170,9 @@ def invalidate(customer_key: str, thread_id: str) -> None:
     # drop() is prefix-based: "l:wc:1" also drops "l:wc:12". Extra invalidation only, never stale data.
     CACHE.drop(f"l:{customer_key}")
     CACHE.drop(f"d:{customer_key}:{thread_id}")
+    # The Insights "Last support" summary (customer_insights.touchpoints) is built from this
+    # customer's threads; a reply, close or snooze changes it, so it goes too.
+    CACHE.drop(f"touch:{customer_key}:")
 
 
 def raw_timeline(client, thread_id: str) -> tuple[dict, list[dict]]:

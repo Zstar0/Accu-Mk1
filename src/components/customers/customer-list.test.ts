@@ -42,6 +42,8 @@ const ins = (
   samples: 1,
   usual_gap_days: null,
   last_order_at: null,
+  first_order_at: null,
+  testing_orders: 0,
   top_tests: [],
   status,
   monthly: [],

@@ -78,11 +78,14 @@ export function SupportThreadPanel({
       // The write may have happened (or half-happened): show Plain's current state, then report.
       void qc.invalidateQueries({ queryKey: key })
       void qc.invalidateQueries({ queryKey: ['support', customerKey] })
+      void qc.invalidateQueries({ queryKey: ['customers', 'touchpoints'] })
       throw e
     }
     if (out.detail) qc.setQueryData(key, out.detail)
     else void qc.invalidateQueries({ queryKey: key })
     void qc.invalidateQueries({ queryKey: ['support', customerKey] })
+    // The Insights "Last support" cells summarise these threads.
+    void qc.invalidateQueries({ queryKey: ['customers', 'touchpoints'] })
   }
   const [order, setOrder] = useState<Order>(readOrder)
   const toggleOrder = () => {

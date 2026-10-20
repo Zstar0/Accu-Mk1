@@ -15,23 +15,33 @@ import {
   getCustomerAtRisk,
   getCustomerChurnSignals,
   getCustomerCohorts,
+  getCustomerList,
   getCustomerSummary,
   type InsightsPeriod,
 } from '@/lib/api'
 import { Switch } from '@/components/ui/switch'
+import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import {
   Tooltip,
   TooltipContent,
   TooltipTrigger,
 } from '@/components/ui/tooltip'
 import {
-  cohortTint,
+  addMonths,
   fmtDelta,
   fmtMoney,
   fmtPct,
   fmtPrice,
   fmtPoints,
 } from './insights-utils'
+import { CohortGrid } from './CohortGrid'
+import {
+  InsightsCustomerTable,
+  type InsightsSortField,
+} from './InsightsCustomerTable'
+import { TouchCell } from './TouchCell'
+import { useTouchpoints } from './useTouchpoints'
+import { useUIStore, type InsightsTab } from '@/store/ui-store'
 
 const PERIODS: { key: InsightsPeriod; label: string }[] = [
   { key: '30d', label: '30D' },
@@ -40,6 +50,12 @@ const PERIODS: { key: InsightsPeriod; label: string }[] = [
   { key: '1y', label: '1Y' },
   { key: 'all', label: 'All' },
 ]
+// Reset to page 1 / lifetime desc from the period and launch handlers.
+const LIST_DEFAULT = {
+  page: 1,
+  sort: 'lifetime' as InsightsSortField,
+  dir: 'desc' as 'asc' | 'desc',
+}
 const NEW = '#60a5fa'
 const RETURNING = '#34d399'
 const FIRST_ORDER_LABEL: Record<string, string> = {
@@ -122,9 +138,13 @@ const relStr = (v: string, p: string | null) =>
 export function CustomerInsights({
   onOpenCustomer,
 }: {
-  onOpenCustomer: (key: string) => void
+  onOpenCustomer: (key: string, tab?: 'crm' | 'support') => void
 }) {
-  const [period, setPeriod] = useState<InsightsPeriod>('90d')
+  const period = useUIStore(state => state.insightsView.period)
+  const tab = useUIStore(state => state.insightsView.tab)
+  const cohort = useUIStore(state => state.insightsView.cohort)
+  const month = useUIStore(state => state.insightsView.month)
+  const setInsightsView = useUIStore(state => state.setInsightsView)
   const [excludeLaunch, setExcludeLaunch] = useState(false)
   const summary = useQuery({
     queryKey: ['customers', 'summary', period, excludeLaunch],
@@ -141,11 +161,89 @@ export function CustomerInsights({
     queryFn: getCustomerAtRisk,
     staleTime: 60_000,
   })
+  // Only the visible tab's keys fan out to Close and Plain; resolved chunks stay
+  // cached for the hook's staleTime, so switching back does not refetch.
+  const touch = useTouchpoints(
+    tab === 'at-risk' ? (risk.data?.rows.map(r => r.key) ?? []) : []
+  )
   const churn = useQuery({
     queryKey: ['customers', 'churn-signals'],
     queryFn: getCustomerChurnSignals,
     staleTime: 60_000,
   })
+  const [newView, setNewView] = useState(LIST_DEFAULT)
+  const { page: newPage, sort: newSort, dir: newDir } = newView
+  const setNew = (v: Partial<typeof LIST_DEFAULT>) =>
+    setNewView(cur => ({ ...cur, ...v }))
+  const newCustomers = useQuery({
+    queryKey: [
+      'customers',
+      'list',
+      'new',
+      period,
+      excludeLaunch,
+      newSort,
+      newDir,
+      newPage,
+    ],
+    queryFn: () =>
+      getCustomerList({
+        period,
+        new_only: true,
+        exclude_launch_accounts: excludeLaunch,
+        sort: newSort,
+        dir: newDir,
+        page: newPage,
+        page_size: 25,
+      }),
+    staleTime: 60_000,
+    placeholderData: prev => prev,
+  })
+  const newTouch = useTouchpoints(
+    tab === 'new' ? (newCustomers.data?.rows.map(r => r.key) ?? []) : []
+  )
+  // Cohort members: paging resets from the grid's select handler.
+  const [memberView, setMemberView] = useState(LIST_DEFAULT)
+  const { page: memberPage, sort: memberSort, dir: memberDir } = memberView
+  // 'M3' on the 2026-07 row means came back in 2026-10.
+  const returnedIn =
+    cohort && month ? addMonths(cohort, Number(month.slice(1))) : undefined
+  const setMember = (v: Partial<typeof LIST_DEFAULT>) =>
+    setMemberView(cur => ({ ...cur, ...v }))
+  const members = useQuery({
+    queryKey: [
+      'customers',
+      'list',
+      'cohort',
+      cohort,
+      month,
+      memberSort,
+      memberDir,
+      memberPage,
+    ],
+    queryFn: () =>
+      getCustomerList({
+        cohort: cohort ?? undefined,
+        returned_in: returnedIn,
+        exclude_launch_accounts: true,
+        period: 'all',
+        sort: memberSort,
+        dir: memberDir,
+        page: memberPage,
+        page_size: 25,
+      }),
+    enabled: cohort != null,
+    staleTime: 60_000,
+    // Keep rows while paging or sorting, never across a selection change.
+    placeholderData: (prev, prevQuery) =>
+      prevQuery?.queryKey[3] === cohort && prevQuery.queryKey[4] === month
+        ? prev
+        : undefined,
+  })
+  const memberTouch = useTouchpoints(
+    tab === 'cohorts' ? (members.data?.rows.map(r => r.key) ?? []) : []
+  )
+  const cohortSize = cohorts.data?.rows.find(r => r.cohort === cohort)?.size
   const s = summary.data
 
   return (
@@ -159,23 +257,39 @@ export function CustomerInsights({
             {s && ` · lab time (${s.tz}) · ${minutesAgo(s.synced_at)}`}
           </p>
         </div>
-        <div className="flex overflow-hidden rounded-md border border-border/50">
-          {PERIODS.map(p => (
-            <button
-              key={p.key}
-              type="button"
-              aria-pressed={period === p.key}
-              onClick={() => setPeriod(p.key)}
-              className={cn(
-                'cursor-pointer px-3 py-1 text-xs font-medium',
-                period === p.key
-                  ? 'bg-primary text-primary-foreground'
-                  : 'text-muted-foreground hover:bg-muted/50 hover:text-foreground'
-              )}
-            >
-              {p.label}
-            </button>
-          ))}
+        <div className="flex items-center gap-4">
+          <label className="flex items-center gap-2 text-xs text-muted-foreground">
+            <Switch
+              checked={excludeLaunch}
+              onCheckedChange={v => {
+                setExcludeLaunch(v)
+                setNewView(LIST_DEFAULT)
+              }}
+              aria-label="Exclude launch accounts"
+            />
+            Exclude launch accounts
+          </label>
+          <div className="flex overflow-hidden rounded-md border border-border/50">
+            {PERIODS.map(p => (
+              <button
+                key={p.key}
+                type="button"
+                aria-pressed={period === p.key}
+                onClick={() => {
+                  setInsightsView({ period: p.key })
+                  setNewView(LIST_DEFAULT)
+                }}
+                className={cn(
+                  'cursor-pointer px-3 py-1 text-xs font-medium',
+                  period === p.key
+                    ? 'bg-primary text-primary-foreground'
+                    : 'text-muted-foreground hover:bg-muted/50 hover:text-foreground'
+                )}
+              >
+                {p.label}
+              </button>
+            ))}
+          </div>
         </div>
       </div>
 
@@ -254,159 +368,122 @@ export function CustomerInsights({
             />
           </div>
 
-          <div className="grid gap-3 xl:grid-cols-[1.45fr_1fr]">
-            <section className={CARD}>
-              <div className="flex items-center justify-between">
-                <h2 className="text-sm font-medium">
-                  Revenue by month: new vs returning customers
-                </h2>
-                <label className="flex items-center gap-2 text-xs text-muted-foreground">
-                  <Switch
-                    checked={excludeLaunch}
-                    onCheckedChange={setExcludeLaunch}
-                    aria-label="Exclude launch accounts"
-                  />
-                  Exclude launch accounts
-                </label>
-              </div>
-              <div className="h-[230px]">
-                <ResponsiveContainer width="100%" height="100%">
-                  <BarChart
-                    data={s.revenue_by_month.map(m => ({
-                      month: m.month,
-                      new: Number(m.new),
-                      returning: Number(m.returning),
-                    }))}
-                  >
-                    <CartesianGrid
-                      strokeDasharray="3 3"
-                      stroke="#374151"
-                      opacity={0.5}
-                      vertical={false}
-                    />
-                    <XAxis
-                      dataKey="month"
-                      tick={{ fontSize: 10, fill: '#9ca3af' }}
-                      tickLine={false}
-                      axisLine={false}
-                    />
-                    <YAxis
-                      tickFormatter={(v: number) => fmtMoney(String(v))}
-                      tick={{ fontSize: 10, fill: '#9ca3af' }}
-                      tickLine={false}
-                      axisLine={false}
-                      width={60}
-                    />
-                    <ChartTooltip
-                      formatter={(v: number | undefined) =>
-                        fmtMoney(String(v ?? 0))
-                      }
-                    />
-                    <Bar
-                      dataKey="returning"
-                      stackId="r"
-                      fill={RETURNING}
-                      name="Returning customers"
-                    />
-                    <Bar
-                      dataKey="new"
-                      stackId="r"
-                      fill={NEW}
-                      name="New customers"
-                    />
-                  </BarChart>
-                </ResponsiveContainer>
-              </div>
-            </section>
-
-            <section className={CARD}>
-              <h2 className="text-sm font-medium">Re-order cohorts</h2>
-              <p className="mb-2 text-[11px] text-muted-foreground">
-                Share of each first-order month&apos;s customers who ordered
-                again N months later (launch accounts excluded)
-              </p>
-              {cohorts.error ? (
-                <SectionError
-                  label="cohorts"
-                  onRetry={() => cohorts.refetch()}
-                />
-              ) : (
-                <table className="w-full text-xs tabular-nums">
-                  <thead>
-                    <tr className="text-muted-foreground">
-                      <th className="py-1 text-left font-medium">Cohort</th>
-                      <th className="font-medium">n</th>
-                      {cohorts.data?.months.slice(0, 6).map(m => (
-                        <th key={m} className="font-medium">
-                          {m}
-                        </th>
-                      ))}
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {cohorts.data?.rows.map(r => (
-                      <tr key={r.cohort}>
-                        <td className="py-0.5">{r.cohort}</td>
-                        <td className="text-center">{r.size}</td>
-                        {r.cells.slice(0, 6).map((c, i) => (
-                          <td
-                            key={i}
-                            className={cn('rounded text-center', cohortTint(c))}
-                          >
-                            {c == null ? '' : fmtPct(c, c < 0.2 ? 1 : 0)}
-                          </td>
-                        ))}
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              )}
-            </section>
-          </div>
-
           <section className={CARD}>
             <h2 className="text-sm font-medium">
-              At-risk customers
-              {risk.data && (
-                <span className="ml-2 rounded-full bg-red-500/15 px-2 text-xs text-red-700 dark:text-red-300">
-                  {risk.data.rows.length} overdue
-                </span>
-              )}
+              Revenue by month: new vs returning customers
             </h2>
-            <p className="mb-2 text-[11px] text-muted-foreground">
-              Overdue against their own usual re-order gap, ranked by 12-month
-              spend
-            </p>
-            {risk.error ? (
-              <SectionError
-                label="at-risk customers"
-                onRetry={() => risk.refetch()}
-              />
-            ) : risk.data && risk.data.rows.length === 0 ? (
-              <p className="py-4 text-center text-sm text-muted-foreground">
-                No customers are overdue right now
-              </p>
-            ) : (
-              <table className="w-full text-sm tabular-nums">
-                <thead>
-                  <tr className="text-[11px] uppercase tracking-wider text-muted-foreground">
-                    <th className="py-1 text-left font-medium">Customer</th>
-                    <th className="text-left font-medium">Rep</th>
-                    <th className="text-right font-medium">12-mo spend</th>
-                    <th className="text-right font-medium">Orders</th>
-                    <th className="text-right font-medium">Usual gap</th>
-                    <th className="text-right font-medium">Last order</th>
-                    <th className="text-right font-medium">Overdue</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {risk.data?.rows.map(r => {
-                    // Every row opens: wc: keys get the full detail, guest
-                    // email: keys the Dashboard-only detail.
-                    return (
-                      <Tooltip key={r.key}>
-                        <TooltipTrigger asChild>
+            <div className="h-[230px]">
+              <ResponsiveContainer width="100%" height="100%">
+                <BarChart
+                  data={s.revenue_by_month.map(m => ({
+                    month: m.month,
+                    new: Number(m.new),
+                    returning: Number(m.returning),
+                  }))}
+                >
+                  <CartesianGrid
+                    strokeDasharray="3 3"
+                    stroke="#374151"
+                    opacity={0.5}
+                    vertical={false}
+                  />
+                  <XAxis
+                    dataKey="month"
+                    tick={{ fontSize: 10, fill: '#9ca3af' }}
+                    tickLine={false}
+                    axisLine={false}
+                  />
+                  <YAxis
+                    tickFormatter={(v: number) => fmtMoney(String(v))}
+                    tick={{ fontSize: 10, fill: '#9ca3af' }}
+                    tickLine={false}
+                    axisLine={false}
+                    width={60}
+                  />
+                  <ChartTooltip
+                    formatter={(v: number | undefined) =>
+                      fmtMoney(String(v ?? 0))
+                    }
+                  />
+                  <Bar
+                    dataKey="returning"
+                    stackId="r"
+                    fill={RETURNING}
+                    name="Returning customers"
+                  />
+                  <Bar
+                    dataKey="new"
+                    stackId="r"
+                    fill={NEW}
+                    name="New customers"
+                  />
+                </BarChart>
+              </ResponsiveContainer>
+            </div>
+          </section>
+
+          <section className={CARD}>
+            <Tabs
+              value={tab}
+              onValueChange={t => setInsightsView({ tab: t as InsightsTab })}
+            >
+              <TabsList>
+                <TabsTrigger value="at-risk">
+                  At risk{risk.data && ` (${risk.data.rows.length})`}
+                </TabsTrigger>
+                <TabsTrigger value="new">
+                  New customers
+                  {newCustomers.data && ` (${newCustomers.data.total})`}
+                </TabsTrigger>
+                <TabsTrigger value="cohorts">Cohorts</TabsTrigger>
+              </TabsList>
+              <TabsContent value="at-risk" className="mt-2">
+                <p className="mb-2 text-[11px] text-muted-foreground">
+                  Overdue against their own usual re-order gap, ranked by
+                  12-month spend
+                </p>
+                {risk.error ? (
+                  <SectionError
+                    label="at-risk customers"
+                    onRetry={() => risk.refetch()}
+                  />
+                ) : risk.data && risk.data.rows.length === 0 ? (
+                  <p className="py-4 text-center text-sm text-muted-foreground">
+                    No customers are overdue right now
+                  </p>
+                ) : (
+                  <table className="w-full text-sm tabular-nums">
+                    <thead>
+                      <tr className="text-[11px] uppercase tracking-wider text-muted-foreground">
+                        <th className="py-1 text-left font-medium">Customer</th>
+                        <th className="text-left font-medium">Rep</th>
+                        <th className="text-right font-medium">12-mo spend</th>
+                        <th className="text-right font-medium">Orders</th>
+                        <th className="text-right font-medium">Usual gap</th>
+                        <th className="text-right font-medium">Last order</th>
+                        <th className="text-right font-medium">Overdue</th>
+                        {touch.crmVisible && (
+                          <th className="px-2 text-right font-medium">
+                            Last CRM
+                          </th>
+                        )}
+                        {touch.supportVisible && (
+                          <th className="px-2 text-right font-medium">
+                            Last support
+                          </th>
+                        )}
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {risk.data?.rows.map(r => {
+                        // Every row opens: wc: keys get the full detail, guest
+                        // email: keys the Dashboard-only detail. The row card
+                        // hangs off the name cell so it never stacks with the
+                        // touch cells' own cards.
+                        const tp = touch.rows[r.key]
+                        return (
                           <tr
+                            key={r.key}
                             className="cursor-pointer border-t border-border/20 hover:bg-muted/30"
                             tabIndex={0}
                             onClick={() => onOpenCustomer(r.key)}
@@ -414,7 +491,39 @@ export function CustomerInsights({
                               if (e.key === 'Enter') onOpenCustomer(r.key)
                             }}
                           >
-                            <td className="py-1.5 font-medium">{r.name}</td>
+                            <Tooltip>
+                              <TooltipTrigger asChild>
+                                <td className="py-1.5 font-medium" tabIndex={0}>
+                                  {r.name}
+                                </td>
+                              </TooltipTrigger>
+                              <TooltipContent className="max-w-xs p-0">
+                                <div className="flex flex-col gap-1.5 p-3 font-mono text-xs">
+                                  <div className="border-b border-primary-foreground/20 pb-1.5 font-semibold">
+                                    {r.name}
+                                  </div>
+                                  <div>{r.email ?? 'no email'}</div>
+                                  <div>Rep: {r.rep ?? 'unassigned'}</div>
+                                  <div>
+                                    Usual gap{' '}
+                                    {r.usual_gap_days == null
+                                      ? 'n/a'
+                                      : `${r.usual_gap_days} d`}
+                                    {' · '}last order{' '}
+                                    {r.last_order_at
+                                      ? r.last_order_at.slice(0, 10)
+                                      : 'n/a'}
+                                  </div>
+                                  <div className="border-t border-primary-foreground/20 pt-1.5">
+                                    Lifetime {fmtMoney(r.lifetime)} ·{' '}
+                                    {r.samples} samples
+                                  </div>
+                                  <div>
+                                    Top tests: {r.top_tests.join(', ') || 'n/a'}
+                                  </div>
+                                </div>
+                              </TooltipContent>
+                            </Tooltip>
                             <td className="text-muted-foreground">
                               {r.rep ?? 'Unassigned'}
                             </td>
@@ -451,40 +560,145 @@ export function CustomerInsights({
                                 {r.overdue}× gap
                               </span>
                             </td>
+                            {touch.crmVisible && (
+                              <td className="px-2 text-right">
+                                <TouchCell
+                                  kind="crm"
+                                  touch={tp ? (tp.crm ?? null) : undefined}
+                                  tz={s.tz}
+                                  onOpen={() => onOpenCustomer(r.key, 'crm')}
+                                />
+                              </td>
+                            )}
+                            {touch.supportVisible && (
+                              <td className="px-2 text-right">
+                                <TouchCell
+                                  kind="support"
+                                  touch={tp ? (tp.support ?? null) : undefined}
+                                  tz={s.tz}
+                                  onOpen={() =>
+                                    onOpenCustomer(r.key, 'support')
+                                  }
+                                />
+                              </td>
+                            )}
                           </tr>
-                        </TooltipTrigger>
-                        <TooltipContent className="max-w-xs p-0">
-                          <div className="flex flex-col gap-1.5 p-3 font-mono text-xs">
-                            <div className="border-b border-primary-foreground/20 pb-1.5 font-semibold">
-                              {r.name}
-                            </div>
-                            <div>{r.email ?? 'no email'}</div>
-                            <div>Rep: {r.rep ?? 'unassigned'}</div>
-                            <div>
-                              Usual gap{' '}
-                              {r.usual_gap_days == null
-                                ? 'n/a'
-                                : `${r.usual_gap_days} d`}
-                              {' · '}last order{' '}
-                              {r.last_order_at
-                                ? r.last_order_at.slice(0, 10)
-                                : 'n/a'}
-                            </div>
-                            <div className="border-t border-primary-foreground/20 pt-1.5">
-                              Lifetime {fmtMoney(r.lifetime)} · {r.samples}{' '}
-                              samples
-                            </div>
-                            <div>
-                              Top tests: {r.top_tests.join(', ') || 'n/a'}
-                            </div>
-                          </div>
-                        </TooltipContent>
-                      </Tooltip>
-                    )
-                  })}
-                </tbody>
-              </table>
-            )}
+                        )
+                      })}
+                    </tbody>
+                  </table>
+                )}
+              </TabsContent>
+              <TabsContent value="new" className="mt-2">
+                <p className="mb-2 text-[11px] text-muted-foreground">
+                  First testing order in this period, ranked by lifetime spend
+                </p>
+                {newCustomers.error ? (
+                  <SectionError
+                    label="new customers"
+                    onRetry={() => newCustomers.refetch()}
+                  />
+                ) : (
+                  newCustomers.data && (
+                    <InsightsCustomerTable
+                      rows={newCustomers.data.rows}
+                      total={newCustomers.data.total}
+                      page={newPage}
+                      pageSize={25}
+                      onPage={page => setNew({ page })}
+                      sort={newSort}
+                      dir={newDir}
+                      onSort={f =>
+                        setNew(
+                          f === newSort
+                            ? {
+                                dir: newDir === 'asc' ? 'desc' : 'asc',
+                                page: 1,
+                              }
+                            : { sort: f, dir: 'desc', page: 1 }
+                        )
+                      }
+                      tz={s.tz}
+                      touch={newTouch}
+                      onOpenCustomer={onOpenCustomer}
+                      emptyText="No new customers in this period"
+                    />
+                  )
+                )}
+              </TabsContent>
+              <TabsContent value="cohorts" className="mt-2">
+                <p className="mb-2 text-[11px] text-muted-foreground">
+                  Share of each first-order month&apos;s customers who ordered
+                  again N months later (launch accounts excluded)
+                </p>
+                {cohorts.error ? (
+                  <SectionError
+                    label="cohorts"
+                    onRetry={() => cohorts.refetch()}
+                  />
+                ) : (
+                  cohorts.data && (
+                    <CohortGrid
+                      months={cohorts.data.months}
+                      rows={cohorts.data.rows}
+                      selectedCohort={cohort}
+                      selectedMonth={month}
+                      onSelect={(c, m) => {
+                        setInsightsView({ cohort: c, month: m })
+                        setMemberView(LIST_DEFAULT)
+                      }}
+                    />
+                  )
+                )}
+                <div className="mt-3 border-t border-border/30 pt-3">
+                  {cohort == null ? (
+                    <p className="py-4 text-center text-sm text-muted-foreground">
+                      Pick a cohort to see its customers
+                    </p>
+                  ) : (
+                    <>
+                      <h3 className="mb-2 text-sm font-medium">
+                        {returnedIn
+                          ? `${cohort} cohort · came back in ${month} (${returnedIn}) · ${members.data?.total ?? '…'} of ${cohortSize ?? '…'}`
+                          : `${cohort} cohort · ${cohortSize ?? '…'} customers`}
+                      </h3>
+                      {members.error ? (
+                        <SectionError
+                          label="cohort customers"
+                          onRetry={() => members.refetch()}
+                        />
+                      ) : (
+                        members.data && (
+                          <InsightsCustomerTable
+                            rows={members.data.rows}
+                            total={members.data.total}
+                            page={memberPage}
+                            pageSize={25}
+                            onPage={page => setMember({ page })}
+                            sort={memberSort}
+                            dir={memberDir}
+                            onSort={f =>
+                              setMember(
+                                f === memberSort
+                                  ? {
+                                      dir: memberDir === 'asc' ? 'desc' : 'asc',
+                                      page: 1,
+                                    }
+                                  : { sort: f, dir: 'desc', page: 1 }
+                              )
+                            }
+                            tz={s.tz}
+                            touch={memberTouch}
+                            onOpenCustomer={onOpenCustomer}
+                            emptyText="No customers to show"
+                          />
+                        )
+                      )}
+                    </>
+                  )}
+                </div>
+              </TabsContent>
+            </Tabs>
           </section>
 
           <div className="grid gap-3 lg:grid-cols-3">

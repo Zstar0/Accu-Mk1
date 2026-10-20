@@ -75,6 +75,7 @@ def test_timeline_hides_automated_by_default_and_declares_every_key(api):
                          "fetched_at", "stale", "refresh_throttled"}
     shown = client.get("/crm/customers/wc:1?include_automated=true&types=email").json()
     assert [i["id"] for i in shown["items"]] == ["acti_2", "acti_1"]
+    assert "email_status" in body["items"][1]  # acti_1 is the email; declared on Item, so it survives response_model
 
 
 def test_unknown_customer_404_and_no_lead_is_empty(api, monkeypatch):
@@ -147,3 +148,12 @@ def test_failed_refresh_keeps_the_cached_copy_for_later_requests(api):
     assert client.get("/crm/customers/wc:1?refresh=true").json()["stale"] is True
     later = client.get("/crm/customers/wc:1?types=note")
     assert later.status_code == 200 and later.json()["stale"] is False  # cache entry survived
+
+
+def test_refresh_drops_the_touch_summary(api):
+    client, _ = api
+    service.CACHE.put("touch:wc:1:", {"state": "none"})
+    service.CACHE.put("touch:wc:10:", {"state": "none"})
+    assert client.get("/crm/customers/wc:1?refresh=true").status_code == 200
+    assert service.CACHE.peek("touch:wc:1:") is None
+    assert service.CACHE.peek("touch:wc:10:") is not None  # wc:1's drop spares wc:10

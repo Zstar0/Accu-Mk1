@@ -9568,6 +9568,8 @@ export interface CustomerRow {
   samples: number
   usual_gap_days: number | null
   last_order_at: string | null
+  first_order_at: string | null
+  testing_orders: number
   top_tests: string[]
   status: string
   monthly: { month: string; spend: string }[]
@@ -9638,7 +9640,62 @@ export const getCustomerList = (p: {
   dir?: 'asc' | 'desc'
   page?: number
   page_size?: number
+  new_only?: boolean
+  cohort?: string
+  returned_in?: string
+  exclude_launch_accounts?: boolean
 }) => getReport<CustomerListResponse>('/reports/customers/list', p)
+
+export type TouchState = 'ok' | 'none' | 'unavailable'
+type TouchReason = 'not_configured' | 'unavailable' | 'unknown_customer'
+/** Mirrors backend CrmTouch; fields the caller may not see arrive as null. */
+export interface CrmTouch {
+  state: TouchState
+  at?: string | null
+  type?: 'email' | 'call' | null
+  direction?: 'inbound' | 'outbound' | null
+  who?: string | null
+  title?: string | null
+  preview?: string | null
+  lead_name?: string | null
+  lead_url?: string | null
+  stale: boolean
+  reason?: TouchReason | null
+}
+/** Mirrors backend SupportTouch; fields the caller may not see arrive as null. */
+export interface SupportTouch {
+  state: TouchState
+  at?: string | null
+  thread_id?: string | null
+  title?: string | null
+  status?: string | null
+  waiting_since?: string | null
+  plain_url?: string | null
+  open_count?: number | null
+  stale: boolean
+  reason?: TouchReason | null
+}
+export interface Touchpoints {
+  crm?: CrmTouch | null
+  support?: SupportTouch | null
+}
+export interface TouchpointsResponse {
+  crm_visible: boolean
+  support_visible: boolean
+  rows: Record<string, Touchpoints>
+}
+export const getCustomerTouchpoints = async (
+  keys: string[]
+): Promise<TouchpointsResponse> => {
+  const path = '/reports/customers/touchpoints'
+  const qs = new URLSearchParams()
+  for (const k of keys) qs.append('keys', k)
+  const response = await fetch(`${API_BASE_URL()}${path}?${qs}`, {
+    headers: getBearerHeaders(),
+  })
+  if (!response.ok) throw new Error(`${path} failed: ${response.status}`)
+  return response.json()
+}
 
 /** One paid order as /reports/customers/orders and the dossier return it. */
 export interface InsightOrderRow {

@@ -72,6 +72,7 @@ function setup(data: CustomerCrm | Error = base) {
       <CustomerCrmTab customerKey="wc:1" />
     </QueryClientProvider>
   )
+  return qc
 }
 
 describe('CustomerCrmTab', () => {
@@ -113,6 +114,14 @@ describe('CustomerCrmTab', () => {
       'wc:1',
       expect.objectContaining({ refresh: true })
     )
+  })
+
+  it('refresh invalidates the touchpoints query', async () => {
+    const qc = setup()
+    const spy = vi.spyOn(qc, 'invalidateQueries')
+    await screen.findByText('Valor')
+    await userEvent.click(screen.getByRole('button', { name: /Refresh/ }))
+    expect(spy).toHaveBeenCalledWith({ queryKey: ['customers', 'touchpoints'] })
   })
 
   it('refresh is one-shot: later filter changes do not refresh again', async () => {

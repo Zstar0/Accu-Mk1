@@ -36,6 +36,12 @@ LAUNCH_ACCOUNT_KEYS: frozenset[str] = frozenset({
     "wc:1552",  # Walt Moscoso, Rapid
 })
 PERIOD_DAYS = {"30d": 30, "90d": 90, "6m": 182, "1y": 365}
+# /touchpoints (spec 2026-10-19, 4.1): summary TTL, items scanned per page, fan-out width, key cap.
+TOUCH_TTL = 900
+TOUCH_SCAN = 10
+TOUCH_WORKERS = 4
+TOUCH_MAX_KEYS = 50
+TOUCH_EMAIL_STATUSES = frozenset({"sent", "inbox"})
 
 
 def customer_key(customer_id: int | None, email: str | None) -> str | None:

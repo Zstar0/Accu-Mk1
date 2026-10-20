@@ -30,6 +30,7 @@ export interface CrmItem {
   lead_name: string
   automated: boolean
   support_thread_url: string | null
+  email_status?: string | null
 }
 
 export interface CustomerCrm {

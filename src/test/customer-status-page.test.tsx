@@ -50,6 +50,7 @@ vi.mock('@/store/ui-store', () => {
     navigateToCustomer: vi.fn(),
     navigateToCustomerKey: vi.fn(),
     navigateToCustomers: vi.fn(),
+    navigateBackFromCustomer: vi.fn(),
     setCustomerListPage: vi.fn(),
     setHideTestAccounts: vi.fn(),
     setSearchAndResetPage: vi.fn(),
@@ -184,6 +185,7 @@ const mockState = (useUIStore as any).__state as {
   navigateToCustomer: ReturnType<typeof vi.fn>
   navigateToCustomerKey: ReturnType<typeof vi.fn>
   navigateToCustomers: ReturnType<typeof vi.fn>
+  navigateBackFromCustomer: ReturnType<typeof vi.fn>
   setCustomerListPage: ReturnType<typeof vi.fn>
   setHideTestAccounts: ReturnType<typeof vi.fn>
   setSearchAndResetPage: ReturnType<typeof vi.fn>
@@ -245,6 +247,7 @@ function resetState() {
   mockState.navigateToCustomer.mockReset()
   mockState.navigateToCustomerKey.mockReset()
   mockState.navigateToCustomers.mockReset()
+  mockState.navigateBackFromCustomer.mockReset()
   mockState.setCustomerListPage.mockReset()
   mockState.setHideTestAccounts.mockReset()
   mockState.setSearchAndResetPage.mockReset()
@@ -340,6 +343,8 @@ describe('CustomerStatusPage — list view', () => {
       samples: 7,
       usual_gap_days: 12,
       last_order_at: null,
+      first_order_at: null,
+      testing_orders: 0,
       top_tests: ['HPLC'],
       status: 'growing',
       monthly: [],
@@ -380,6 +385,8 @@ describe('CustomerStatusPage — list view', () => {
       samples: 1,
       usual_gap_days: null,
       last_order_at: null,
+      first_order_at: null,
+      testing_orders: 0,
       top_tests: [],
       status,
       monthly: [],
@@ -958,12 +965,12 @@ describe('CustomerStatusPage — detail view', () => {
 
   // --- Back navigation (D-11) ---
 
-  it('clicking ← Back to Customers calls navigateToCustomers', async () => {
+  it('clicking ← Back to Customers calls navigateBackFromCustomer', async () => {
     renderDetailWithCache(makeCustomer({ customer_id: 42 }))
 
     const back = await screen.findByText('← Back to Customers')
     fireEvent.click(back)
-    expect(mockState.navigateToCustomers).toHaveBeenCalled()
+    expect(mockState.navigateBackFromCustomer).toHaveBeenCalled()
   })
 
   // --- Empty state ---

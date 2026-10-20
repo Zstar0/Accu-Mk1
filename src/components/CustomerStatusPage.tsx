@@ -90,6 +90,7 @@ import { CustomerDashboard } from '@/components/customers/CustomerDashboard'
 import { CustomerCrmTab } from '@/components/customers/CustomerCrmTab'
 import { CustomerSupportTab } from '@/components/customers/CustomerSupportTab'
 import { FlaggedItemOpener } from '@/components/customers/FlaggedItemOpener'
+import { BackToOrigin } from '@/components/customers/BackToOrigin'
 import { useSupportSeat } from '@/components/customers/useSupportSeat'
 import { CustomerAiReviewTab } from '@/components/customers/CustomerAiReviewTab'
 import { useAuthStore } from '@/store/auth-store'
@@ -777,9 +778,10 @@ function InsightCells({ insight }: { insight?: InsightRow }) {
  * Selector syntax mandate (AGENTS.md): every useUIStore call uses
  * `state => state.x`. ast-grep enforces.
  *
- * Back navigation (D-11): a single `navigateToCustomers()` call atomically
- * sets activeSubSection='customers' AND clears customerDetailTargetId. The
- * store action is the source of truth — see src/store/ui-store.ts:317-326.
+ * Back navigation (D-11): `BackToOrigin` calls `navigateBackFromCustomer()`,
+ * which returns to Customers or Customer Insights (by `customerDetailOrigin`)
+ * AND clears customerDetailTargetId; `navigateToCustomers()` always goes to
+ * the list (QuickNav, sidebar). The store actions are the source of truth.
  */
 function CustomerDetailView() {
   const isAdminUser = useAuthStore(state => state.user)?.role === 'admin'
@@ -789,7 +791,6 @@ function CustomerDetailView() {
   const customerDetailTargetId = useUIStore(
     state => state.customerDetailTargetId
   )
-  const navigateToCustomers = useUIStore(state => state.navigateToCustomers)
   // Phase 30 — Task 6: detail-view tab selection
   const customerDetailTab = useUIStore(state => state.customerDetailTab)
   const setCustomerDetailTab = useUIStore(state => state.setCustomerDetailTab)
@@ -973,13 +974,7 @@ function CustomerDetailView() {
       {/* Back link — D-11. Use a plain <button> (not shadcn Button) per
           UI-SPEC §Back Navigation (matches the text-primary link pattern). */}
       <div>
-        <button
-          type="button"
-          className="text-sm text-primary hover:underline mb-4"
-          onClick={() => navigateToCustomers()}
-        >
-          ← Back to Customers
-        </button>
+        <BackToOrigin />
       </div>
 
       {/* Disconnected banner — inlined verbatim from the list view (D-16). */}
@@ -1579,7 +1574,6 @@ function GuestCustomerDetailView({ customerKey }: { customerKey: string }) {
   const isAdminUser = useAuthStore(state => state.user)?.role === 'admin'
   const supportSeat = useSupportSeat()
   const canSupport = isAdminUser || supportSeat.data?.has_seat === true
-  const navigateToCustomers = useUIStore(state => state.navigateToCustomers)
   const navigateTo = useUIStore(state => state.navigateTo)
   const { data } = useQuery(dossierQuery(customerKey))
   const email = customerKey.slice('email:'.length)
@@ -1587,13 +1581,7 @@ function GuestCustomerDetailView({ customerKey }: { customerKey: string }) {
   return (
     <div className="flex flex-col gap-4 p-4">
       <div>
-        <button
-          type="button"
-          className="text-sm text-primary hover:underline mb-4"
-          onClick={() => navigateToCustomers()}
-        >
-          ← Back to Customers
-        </button>
+        <BackToOrigin />
       </div>
       <Card className="py-0">
         <CardContent className="flex flex-wrap items-center gap-x-2 gap-y-1 px-4 py-2">

@@ -299,3 +299,21 @@ def test_extras_failure_degrades_to_placeholders(api):
     t = r.json()["thread"]
     assert t["tier"] is None and t["fields"] == [] and t["status_detail"]["kind"] == "needs_next_response"
     assert r.json()["entries"]  # the conversation still loads
+
+
+def test_refresh_drops_the_touch_summary(api):
+    client, _ = api
+    service.CACHE.put("touch:wc:1:", {"state": "none"})
+    service.CACHE.put("touch:wc:10:", {"state": "none"})
+    assert client.get("/support/customers/wc:1?refresh=true").status_code == 200
+    assert service.CACHE.peek("touch:wc:1:") is None
+    assert service.CACHE.peek("touch:wc:10:") is not None  # wc:1's drop spares wc:10
+
+
+def test_action_invalidation_drops_the_touch_summary(api):
+    """A reply, close or snooze goes through service.invalidate; the Insights cell must follow."""
+    service.CACHE.put("touch:wc:1:", {"state": "none"})
+    service.CACHE.put("touch:wc:10:", {"state": "none"})
+    service.invalidate("wc:1", "th_a")
+    assert service.CACHE.peek("touch:wc:1:") is None
+    assert service.CACHE.peek("touch:wc:10:") is not None

@@ -350,3 +350,11 @@ def test_sla_section_received_window() -> None:
     assert whole["customer"]["delivered"] == 2
     sept = metrics.sla_section(data, {"10", "11"}, received_from=date(2026, 9, 1), received_to=date(2026, 9, 30))
     assert (sept["customer"]["delivered"], sept["customer"]["late"], sept["lab"]["delivered"]) == (1, 0, 1)
+
+
+def test_customer_rows_first_order_and_testing_count() -> None:
+    data = ds([o("wc:1", 0, "100"), o("wc:1", 5, "40", testing=False), o("wc:1", 20, "100"), o("wc:2", 3, "80", testing=False)])
+    rows = {r["key"]: r for r in metrics.customer_rows(data, start=None, end=T0 + timedelta(days=30), tz=TZ)}
+    assert rows["wc:1"]["first_order_at"] == (T0).isoformat() and rows["wc:1"]["testing_orders"] == 2
+    assert rows["wc:1"]["orders"] == 3
+    assert rows["wc:2"]["first_order_at"] is None and rows["wc:2"]["testing_orders"] == 0

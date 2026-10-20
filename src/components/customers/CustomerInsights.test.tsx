@@ -1,10 +1,13 @@
-import { render, screen } from '@testing-library/react'
+import { render, screen, waitFor, within } from '@testing-library/react'
+import userEvent from '@testing-library/user-event'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { cloneElement, type ReactElement } from 'react'
-import { describe, expect, it, vi } from 'vitest'
+import { beforeEach, describe, expect, it, vi } from 'vitest'
 import type * as Recharts from 'recharts'
 import * as api from '@/lib/api'
+import { useUIStore } from '@/store/ui-store'
 import { CustomerInsights } from './CustomerInsights'
+import { row } from './insights-test-fixtures'
 
 vi.mock('@/lib/api', async () => {
   const actual = await vi.importActual<typeof api>('@/lib/api')
@@ -14,6 +17,8 @@ vi.mock('@/lib/api', async () => {
     getCustomerCohorts: vi.fn(),
     getCustomerAtRisk: vi.fn(),
     getCustomerChurnSignals: vi.fn(),
+    getCustomerTouchpoints: vi.fn(),
+    getCustomerList: vi.fn(),
   }
 })
 vi.mock('recharts', async importOriginal => {
@@ -30,7 +35,49 @@ vi.mock('recharts', async importOriginal => {
 
 const k = <T,>(value: T, prior: T | null = null) => ({ value, prior })
 
-function setup(riskFails = false) {
+const EMPTY_LIST: api.CustomerListResponse = {
+  tz: 'America/Los_Angeles',
+  synced_at: null,
+  total: 0,
+  page: 1,
+  page_size: 25,
+  rows: [],
+}
+const listOf = (total: number, rows: api.CustomerListResponse['rows']) => ({
+  ...EMPTY_LIST,
+  total,
+  rows,
+})
+const CRM_OK: api.CrmTouch = {
+  state: 'ok',
+  at: '2026-10-12T15:00:00Z',
+  type: 'email',
+  direction: 'outbound',
+  who: 'Scott',
+  title: 'Checking in',
+  preview: '',
+  lead_name: 'Halcyon',
+  lead_url: null,
+  stale: false,
+  reason: null,
+}
+const CRM_ONLY: api.TouchpointsResponse = {
+  crm_visible: true,
+  support_visible: false,
+  rows: { 'wc:1': { crm: CRM_OK, support: null } },
+}
+
+function setup({
+  riskFails = false,
+  onOpen = vi.fn(),
+  list = EMPTY_LIST,
+  touch = CRM_ONLY,
+}: {
+  riskFails?: boolean
+  onOpen?: (key: string, tab?: 'crm' | 'support') => void
+  list?: api.CustomerListResponse
+  touch?: api.TouchpointsResponse
+} = {}) {
   vi.mocked(api.getCustomerSummary).mockResolvedValue({
     tz: 'America/Los_Angeles',
     synced_at: '2026-10-05T18:00:00Z',
@@ -92,6 +139,8 @@ function setup(riskFails = false) {
         samples: 142,
         usual_gap_days: 9,
         last_order_at: '2026-08-21T15:00:00Z',
+        first_order_at: '2026-03-02T15:00:00Z',
+        testing_orders: 29,
         top_tests: ['HPLC'],
         status: 'at_risk',
         monthly: [],
@@ -109,22 +158,34 @@ function setup(riskFails = false) {
       { signal: 'conformance', group: 'any_fail', orders: 14, returned: 0.36 },
     ],
   })
+  vi.mocked(api.getCustomerTouchpoints).mockResolvedValue(touch)
+  vi.mocked(api.getCustomerList).mockResolvedValue(list)
   if (riskFails)
     vi.mocked(api.getCustomerAtRisk).mockRejectedValue(new Error('boom'))
   const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } })
   return render(
     <QueryClientProvider client={qc}>
-      <CustomerInsights onOpenCustomer={vi.fn()} />
+      <CustomerInsights onOpenCustomer={onOpen} />
     </QueryClientProvider>
   )
 }
 
 describe('CustomerInsights', () => {
-  it('renders KPIs, cohort cell, at-risk row and freshness line', async () => {
+  beforeEach(() => {
+    useUIStore.setState({
+      insightsView: {
+        tab: 'at-risk',
+        period: '90d',
+        cohort: null,
+        month: null,
+      },
+    })
+  })
+
+  it('renders KPIs, at-risk row and freshness line', async () => {
     setup()
     expect(await screen.findByText('$1.07M')).toBeInTheDocument()
     expect(screen.getByText('24.0%')).toBeInTheDocument()
-    expect(await screen.findByText('12.9%')).toBeInTheDocument()
     expect(
       await screen.findByText('Halcyon Research Supply')
     ).toBeInTheDocument()
@@ -150,12 +211,188 @@ describe('CustomerInsights', () => {
       expect(screen.getByRole('heading', { name: h })).toBeInTheDocument()
   })
 
-  it('shows an error with Retry, and no overdue badge, when at-risk fails', async () => {
-    setup(true)
+  it('shows an error with Retry, and a plain At risk tab label, when at-risk fails', async () => {
+    setup({ riskFails: true })
     expect(
       await screen.findByText(/Failed to load at-risk customers/)
     ).toBeInTheDocument()
     expect(screen.getByRole('button', { name: 'Retry' })).toBeInTheDocument()
-    expect(screen.queryByText(/overdue$/)).not.toBeInTheDocument()
+    expect(screen.getByRole('tab', { name: 'At risk' })).toBeInTheDocument()
+  })
+
+  it('shows Last support and not Last CRM to a support-only reader', async () => {
+    setup({
+      touch: {
+        crm_visible: false,
+        support_visible: true,
+        rows: {
+          'wc:1': {
+            crm: null,
+            support: {
+              state: 'ok',
+              at: '2026-10-10T15:00:00Z',
+              thread_id: 'th_1',
+              title: 'COA question',
+              status: 'done',
+              waiting_since: null,
+              plain_url: null,
+              open_count: 0,
+              stale: false,
+              reason: null,
+            },
+          },
+        },
+      },
+    })
+    expect(
+      await screen.findByRole('columnheader', { name: 'Last support' })
+    ).toBeInTheDocument()
+    expect(screen.queryByRole('columnheader', { name: 'Last CRM' })).toBeNull()
+  })
+
+  it('fetches touches only for the visible tab', async () => {
+    vi.mocked(api.getCustomerTouchpoints).mockClear()
+    setup({
+      list: listOf(1, [row({ key: 'wc:2243', name: 'Zackary Smith' })]),
+    })
+    // The New customers page has loaded (its count is on the tab) while At risk shows.
+    expect(
+      await screen.findByRole('tab', { name: 'New customers (1)' })
+    ).toBeInTheDocument()
+    await waitFor(() =>
+      expect(vi.mocked(api.getCustomerTouchpoints)).toHaveBeenCalledWith([
+        'wc:1',
+      ])
+    )
+    expect(vi.mocked(api.getCustomerTouchpoints)).not.toHaveBeenCalledWith([
+      'wc:2243',
+    ])
+    await userEvent.click(screen.getByRole('tab', { name: /New customers/ }))
+    await waitFor(() =>
+      expect(vi.mocked(api.getCustomerTouchpoints)).toHaveBeenCalledWith([
+        'wc:2243',
+      ])
+    )
+  })
+
+  it('has three tabs, shows the CRM touch on the at-risk row and opens the CRM tab from it', async () => {
+    const onOpen = vi.fn()
+    setup({ onOpen })
+    expect(
+      await screen.findByRole('tab', { name: /At risk/ })
+    ).toBeInTheDocument()
+    expect(
+      screen.getByRole('tab', { name: /New customers/ })
+    ).toBeInTheDocument()
+    expect(screen.getByRole('tab', { name: /Cohorts/ })).toBeInTheDocument()
+    const row = (await screen.findByText('Halcyon Research Supply')).closest(
+      'tr'
+    ) as HTMLElement
+    expect(row).toHaveTextContent('Oct 12')
+    expect(
+      screen.getByRole('columnheader', { name: 'Last CRM' })
+    ).toBeInTheDocument()
+    expect(
+      screen.queryByRole('columnheader', { name: 'Last support' })
+    ).toBeNull()
+    await userEvent.click(within(row).getByRole('button'))
+    expect(onOpen).toHaveBeenCalledWith('wc:1', 'crm')
+    await userEvent.click(within(row).getByText('Halcyon Research Supply'))
+    expect(onOpen).toHaveBeenLastCalledWith('wc:1')
+  })
+
+  it('New customers tab queries new_only with the period and the launch switch', async () => {
+    setup({ list: listOf(1, [row({ key: 'wc:2243', name: 'Zackary Smith' })]) })
+    await userEvent.click(
+      await screen.findByRole('tab', { name: /New customers/ })
+    )
+    expect(await screen.findByText('Zackary Smith')).toBeInTheDocument()
+    expect(vi.mocked(api.getCustomerList)).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        new_only: true,
+        period: '90d',
+        exclude_launch_accounts: false,
+        sort: 'lifetime',
+        dir: 'desc',
+        page: 1,
+        page_size: 25,
+      })
+    )
+    expect(
+      screen.getByText(
+        'First testing order in this period, ranked by lifetime spend'
+      )
+    ).toBeInTheDocument()
+  })
+
+  it('resets New customers paging when the period or launch switch changes', async () => {
+    setup({
+      list: listOf(60, [row({ key: 'wc:2243', name: 'Zackary Smith' })]),
+    })
+    await userEvent.click(
+      await screen.findByRole('tab', { name: /New customers/ })
+    )
+    await screen.findByText('Zackary Smith')
+    await userEvent.click(screen.getByRole('button', { name: 'Next' }))
+    await waitFor(() =>
+      expect(vi.mocked(api.getCustomerList)).toHaveBeenLastCalledWith(
+        expect.objectContaining({ page: 2 })
+      )
+    )
+    const reset = expect.objectContaining({
+      page: 1,
+      sort: 'lifetime',
+      dir: 'desc',
+    })
+    await userEvent.click(screen.getByRole('button', { name: '30D' }))
+    await waitFor(() =>
+      expect(vi.mocked(api.getCustomerList)).toHaveBeenLastCalledWith(
+        expect.objectContaining({ period: '30d', page: 1 })
+      )
+    )
+    await userEvent.click(screen.getByRole('button', { name: '90D' }))
+    await waitFor(() =>
+      expect(vi.mocked(api.getCustomerList)).toHaveBeenLastCalledWith(reset)
+    )
+    await userEvent.click(screen.getByRole('button', { name: 'Next' }))
+    await userEvent.click(
+      screen.getByRole('switch', { name: 'Exclude launch accounts' })
+    )
+    await waitFor(() =>
+      expect(vi.mocked(api.getCustomerList)).toHaveBeenLastCalledWith(
+        expect.objectContaining({ exclude_launch_accounts: true, page: 1 })
+      )
+    )
+  })
+
+  it('Cohorts tab shows the grid, drills into members with the right query, and keeps the selection in the store', async () => {
+    setup({ list: listOf(41, [row({ key: 'wc:9', name: 'Member One' })]) })
+    await userEvent.click(await screen.findByRole('tab', { name: /Cohorts/ }))
+    expect(await screen.findByText('12.9%')).toBeInTheDocument()
+    expect(
+      screen.getByText('Pick a cohort to see its customers')
+    ).toBeInTheDocument()
+    await userEvent.click(
+      screen.getByRole('button', { name: /2026-08 M1 12\.9%/ })
+    )
+    expect(await screen.findByText('Member One')).toBeInTheDocument()
+    expect(
+      screen.getByText('2026-08 cohort · came back in M1 (2026-09) · 41 of 163')
+    ).toBeInTheDocument()
+    expect(vi.mocked(api.getCustomerList)).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        cohort: '2026-08',
+        returned_in: '2026-09',
+        exclude_launch_accounts: true,
+        period: 'all',
+        sort: 'lifetime',
+        dir: 'desc',
+      })
+    )
+    expect(useUIStore.getState().insightsView).toMatchObject({
+      tab: 'cohorts',
+      cohort: '2026-08',
+      month: 'M1',
+    })
   })
 })

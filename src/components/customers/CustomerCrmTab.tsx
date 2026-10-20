@@ -259,6 +259,9 @@ export function CustomerCrmTab({ customerKey }: { customerKey: string }) {
               void qc.invalidateQueries({
                 queryKey: ['crm', 'activity', customerKey],
               })
+              void qc.invalidateQueries({
+                queryKey: ['customers', 'touchpoints'],
+              })
             }}
             disabled={q.isFetching}
           >

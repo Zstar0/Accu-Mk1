@@ -1,0 +1,19 @@
+FAIL  src/App.test.tsx > App > renders main window layout
+FAIL  src/components/flags/__tests__/FlagsFlyout.test.tsx > FlagsFlyout > opens a thread when a card is clicked
+FAIL  src/components/flags/__tests__/FlagsFlyout.test.tsx > FlagsFlyout > renders the cards for the default (assigned) tab
+FAIL  src/components/flags/__tests__/FlagsFlyout.test.tsx > FlagsFlyout > switches the list query when another tab is clicked
+FAIL  src/components/intake/ReceiveWizard/__tests__/PackagingPanel.test.tsx > PackagingPanel > file-path + Save calls createPackagingPhoto with a base64 string
+FAIL  src/components/senaite/__tests__/PackagingAttachmentsGroup.test.tsx [ src/components/senaite/__tests__/PackagingAttachmentsGroup.test.tsx ]
+FAIL  src/test/analysis-profiles-coa-display.test.tsx > AnalysisProfilesPage — COA display fields > clearing basis/method/prep and removing all footnotes sends nulls
+FAIL  src/test/analysis-profiles-coa-display.test.tsx > AnalysisProfilesPage — COA display fields > fills basis note, method, prep, and two footnotes, and PATCH carries all four
+FAIL  src/test/peptide-requests-list.test.tsx > PeptideRequestsList > re-queries with CLOSED_STATUSES when the Closed tab is clicked
+FAIL  src/test/worksheets-inbox-lanes.test.tsx > WorksheetsInboxPage — catalog-driven lane sub-chips (2026-08-24 slice) > sub-chip filters by role_tags — rider work (fentanyl on an hplc host vial) is reachable under its own chip
+× clearing basis/method/prep and removing all footnotes sends nulls
+× file-path + Save calls createPackagingPhoto with a base64 string
+× fills basis note, method, prep, and two footnotes, and PATCH carries all four
+× opens a thread when a card is clicked
+× re-queries with CLOSED_STATUSES when the Closed tab is clicked
+× renders main window layout
+× renders the cards for the default (assigned) tab
+× sub-chip filters by role_tags — rider work (fentanyl on an hplc host vial) is reachable under its own chip
+× switches the list query when another tab is clicked

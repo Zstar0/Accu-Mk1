@@ -59,6 +59,7 @@ def customer_crm(customer_key: str, *, refresh: bool, types: list[str], include_
             # leaves it in place for this and later requests (spec 3.4 / 7).
             data = _load(customer_key, emails, fresh=True)
             at = CACHE.put(key, data)
+            CACHE.drop(f"touch:{customer_key}:")
         else:
             data, at = CACHE.get_or_load(key, rules.TIMELINE_TTL, lambda: _load(customer_key, emails))
     except CrmUnavailable:
