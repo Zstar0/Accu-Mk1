@@ -14840,9 +14840,12 @@ async def generate_vial_coas(
     The parent generation the vial COAs attach to is DERIVED server-side (the
     sample's current primary, non-superseded generation) — never supplied by the
     client, so a stale UI or a forged id can't graft vial COAs onto the wrong
-    lineage. Idempotent: a vial that already has a live child COA is skipped, so
-    re-running fills gaps instead of duplicating. Completeness-aware: success is
-    true only when no vial failed.
+    lineage. Regenerates every vial on every run (Handler, 2026-10-20): each
+    reportable HPLC vial gets a fresh child draft, and the Integration Service
+    retires that vial's previous draft when the new one is minted (IS 1.0.37),
+    so nothing stays live twice; published vial COAs are superseded at the next
+    Publish as before. Completeness-aware: success is true only when no vial
+    failed.
     """
     import logging as _logging
     _logger = _logging.getLogger(__name__)
@@ -14867,7 +14870,7 @@ async def generate_vial_coas(
     # Derive + validate the parent COA generation server-side (do not trust the
     # client). fetch_primary_generation already scopes to this sample_id, a NULL
     # parent_generation_id (primary), and excludes superseded.
-    from integration_db import fetch_primary_generation, fetch_existing_vial_sequences
+    from integration_db import fetch_primary_generation
     try:
         primary = fetch_primary_generation(sample_id)
     except Exception as e:  # noqa: BLE001
@@ -14882,13 +14885,10 @@ async def generate_vial_coas(
     if not vials:
         return _resp(False, "No HPLC vials with reportable results to generate COAs for.")
 
-    # Idempotency: skip vials that already have a live child under this parent
-    # (one child per parent_generation_id + vial_sequence).
-    try:
-        existing = fetch_existing_vial_sequences(parent_generation_id)
-    except Exception as e:  # noqa: BLE001
-        _logger.warning("fetch_existing_vial_sequences failed for %s: %s", sample_id, e)
-        existing = set()
+    # Every vial regenerates: no live-child skip here. The automatic
+    # post-primary run (_maybe_emit_vial_coas) keeps its idempotency through
+    # fetch_existing_vial_sequences; the manual button always re-mints.
+    existing: set = set()
 
     # Customer-remarks snapshot — same source the parent COA uses, so a
     # non-conforming vial COA carries remarks (COABuilder 422s otherwise).
@@ -14905,13 +14905,12 @@ async def generate_vial_coas(
         user_id=getattr(current_user, "id", None),
     )
 
-    g, s, f = len(generated), len(skipped), len(errors)
-    parts = [f"Generated {g} per-vial COA(s)"]
-    if s:
-        parts.append(f"{s} already existed")
+    g, f = len(generated), len(errors)
+    parts = [f"Regenerated {g} per-vial COA(s)"]
     if f:
         parts.append(f"{f} failed")
-    # Success only when nothing failed (a fully-skipped re-run is still success).
+    # Success only when nothing failed. `skipped` stays in the shape for the
+    # frontend toast; the manual path never fills it.
     return {
         "success": f == 0, "message": "; ".join(parts), "expected": len(vials),
         "generated": generated, "skipped": skipped, "errors": errors,

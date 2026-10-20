@@ -1,5 +1,10 @@
 # Changelog
 
+## v1.49.5 - 2026-10-20
+
+### Change: Generate Per-Vial COAs regenerates every vial
+- **Every run makes fresh per-vial COAs.** Generate Per-Vial COAs no longer skips vials that already have a COA. It mints a new draft for every vial each time, and the Integration Service (1.0.37) retires that vial's previous draft, so only one draft per vial stays live. Published vial COAs are unchanged until the next Publish. The message now reads "Regenerated N per-vial COA(s)".
+
 ## v1.49.4 - 2026-10-20
 
 ### Fix: per-vial COAs print their own vial photo
