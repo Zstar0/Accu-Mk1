@@ -154,3 +154,49 @@ def test_publish_refuses_a_draft_older_than_the_live_primary(monkeypatch):
         raise RuntimeError("IS down")
     monkeypatch.setattr("integration_db.fetch_stale_draft_primary", boom)
     main._refuse_stale_draft_primary("P-5324")  # fails open
+
+
+def test_vial_body_carries_aliases_and_the_vials_own_sections(db_session, monkeypatch):
+    """The loop posts one body per vial with that vial's figures, its scoped
+    document (built with its parent_row_ids) and the sample's analyte aliases,
+    the same aliases the primary and regular child send."""
+    import asyncio
+    from unittest.mock import AsyncMock, MagicMock
+    import main
+
+    parent = LimsSample(sample_id="P-7002")
+    db_session.add(parent); db_session.flush()
+    vial = LimsSubSample(parent_sample_pk=parent.id, sample_id="P-7002-S02",
+                         external_lims_uid="mk1://x", vial_sequence=2,
+                         assignment_role="hplc", assignment_kind="variance")
+    db_session.add(vial); db_session.flush()
+
+    docs = []
+    monkeypatch.setattr("coa.wire_document.build_vial_wire_document",
+                        lambda db, p, v, vial_parent_ids=None:
+                        docs.append((v.sample_id, vial_parent_ids)) or {"sections": []})
+    monkeypatch.setattr(main, "_load_sample_aliases", lambda db, sid: {1: "BPC-157 (alias)"})
+    monkeypatch.setattr(main, "_record_parent_event", lambda *a, **k: None)
+    monkeypatch.setattr(main, "COA_BUILDER_URL", "http://coab.test")
+    resp = MagicMock()
+    resp.raise_for_status = MagicMock()
+    resp.json = MagicMock(return_value={"verification_code": "VIAL-0002", "generation_id": "g2"})
+    client = MagicMock()
+    client.post = AsyncMock(return_value=resp)
+    cm = MagicMock()
+    cm.__aenter__ = AsyncMock(return_value=client)
+    cm.__aexit__ = AsyncMock(return_value=False)
+    monkeypatch.setattr("httpx.AsyncClient", lambda *a, **k: cm)
+
+    figs = {"BPC-157": {"PURITY": "98.7%"}}
+    generated, skipped, errors = asyncio.run(main._generate_vial_coas_loop(
+        db_session, parent, [(2, figs, {41, 42})], "prim-1", set(),
+        include_remarks=False, lab_remarks=""))
+    assert errors == [] and skipped == []
+    assert generated[0]["verification_code"] == "VIAL-0002"
+    assert docs == [("P-7002-S02", {41, 42})]
+    body = client.post.call_args.kwargs["json"]
+    assert body["vial_sequence"] == 2 and body["parent_generation_id"] == "prim-1"
+    assert body["vial_figures"] == figs
+    assert body["analyte_display_names"] == {"1": "BPC-157 (alias)"}
+    assert body["native_sections"] == {"sections": []}

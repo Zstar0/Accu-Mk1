@@ -14764,6 +14764,9 @@ async def _generate_vial_coas_loop(db, parent, vials, parent_generation_id, exis
     # the primary they ride on.
     import scheduled_publish as _scheduled_publish
     _vial_date_override = _scheduled_publish.process_override(db, sample_id)
+    # Same per-sample analyte aliases the primary and regular child send, so a
+    # vial certificate names its analytes the way the parent's does.
+    _alias_map = _load_sample_aliases(db, sample_id)
     async with httpx.AsyncClient(verify=HTTPX_SSL_CONTEXT, timeout=120.0) as client:
         for item in vials:
             vial_seq, figs = item[0], item[1]
@@ -14786,6 +14789,8 @@ async def _generate_vial_coas_loop(db, parent, vials, parent_generation_id, exis
             }
             if include_remarks and lab_remarks:
                 vbody["lab_remarks"] = lab_remarks
+            if _alias_map:
+                vbody["analyte_display_names"] = {str(k): v for k, v in _alias_map.items()}
             if _vial_doc is not None:
                 vbody["native_sections"] = _vial_doc
             vbody.update(_vial_date_override)
