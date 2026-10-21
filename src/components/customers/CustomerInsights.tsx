@@ -202,6 +202,7 @@ export function CustomerInsights({
   const segments = useQuery({
     queryKey: ['customers', 'segments'],
     queryFn: getCustomerSegments,
+    enabled: tab === 'segments',
     staleTime: 60_000,
   })
   const [segView, setSegView] = useState(LIST_DEFAULT)
