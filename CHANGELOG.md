@@ -1,5 +1,12 @@
 # Changelog
 
+## v1.50.2 - 2026-10-21
+
+### Fix: a COA uses only its own vial's chromatogram and photo
+- **The sample COA reads only the core HPLC vial.** Its chromatogram and photo come from the core vial: one filed for that vial, or the vial's own HPLC trace or check-in photo. It no longer falls back to an unlabelled upload on the sample or to another vial's file.
+- **Missing means stop, not guess.** When the core vial has neither, generating the COA stops with a message naming the vial and how to fix it, instead of printing another file or no chromatogram.
+- Samples with no HPLC vial (micro-only) are unchanged.
+
 ## v1.50.0 - 2026-10-20
 
 ### Customer Insights: at-risk, new customers and cohorts in one place
