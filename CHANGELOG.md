@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## v1.51.0 - 2026-10-21
 
 ### Customer Insights: segments instead of a cohort tab
 - **The re-order cohort grid is back beside the revenue chart**, where it was before 1.50.0.
