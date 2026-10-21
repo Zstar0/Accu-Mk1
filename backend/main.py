@@ -14188,6 +14188,8 @@ async def _maybe_emit_regular_coa_child(db, sample_id, parent_row, primary_data)
     _logger = _logging.getLogger(__name__)
     if not COA_BUILDER_URL or parent_row is None:
         return
+    if not _emit_regular_child_enabled():
+        return  # Core COA retired 2026-10-20; per-vial certificates replace it
     from coa.variance_series import build_variance_replicates
     if not build_variance_replicates(db, parent_row):
         return  # non-variance: the primary already IS the regular COA
@@ -14698,11 +14700,43 @@ async def generate_sample_coa(
     )
 
 
+def _split_certifiable_vials(vials):
+    """(certifiable, blocked) from list_vials_for_certificates output.
+
+    A vial without its own HPLC figures cannot be rendered yet: COABuilder
+    refuses a certificate with no legacy results table (R-7 and its empty-rows
+    check), and on a native-born lot that table holds only HPLC rows. Such a
+    vial is reported, not sent, until COABuilder supports a certificate made
+    of native sections only (2026-10-20)."""
+    certifiable, blocked = [], []
+    for seq, figs, ids in vials:
+        if figs:
+            certifiable.append((seq, figs, ids))
+        else:
+            blocked.append({
+                "vial_sequence": seq,
+                "reason": "no HPLC results on this vial; a certificate without HPLC is not supported yet",
+            })
+    return certifiable, blocked
+
+
+def _emit_regular_child_enabled() -> bool:
+    """The Core COA child is retired (Handler ruling 2026-10-20): the primary
+    carries everything it had and the per-vial certificates carry each vial's
+    own results. Set COA_EMIT_REGULAR_CHILD=1 to bring it back."""
+    return os.environ.get("COA_EMIT_REGULAR_CHILD", "").strip().lower() in ("1", "true", "yes")
+
+
 async def _generate_vial_coas_loop(db, parent, vials, parent_generation_id, existing,
                                    *, include_remarks, lab_remarks, user_id=None):
-    """One COABuilder /process per reportable HPLC vial not already in
-    `existing`. Returns (generated, skipped, errors). Shared by the
-    generate-vial-coas route and the post-primary auto-run for variance lots.
+    """One COABuilder /process per certifiable vial not already in `existing`.
+    `vials` holds (vial_sequence, vial_figures[, parent_row_ids]) entries.
+    Returns (generated, skipped, errors). Shared by the generate-vial-coas
+    route and the post-primary auto-run for variance lots.
+
+    Per-vial certificates (2026-10-20): each vial's document carries the
+    native sections promoted from that vial (parent_row_ids) next to its own
+    HPLC figures.
 
     Seam 4: vial COAs follow the coa_generation toggle for their BASE row
     sourcing via a legacy-only document (vial certs never render native
@@ -14720,7 +14754,6 @@ async def _generate_vial_coas_loop(db, parent, vials, parent_generation_id, exis
         s.vial_sequence: s for s in db.execute(
             select(LimsSubSample).where(
                 LimsSubSample.parent_sample_pk == parent.id,
-                LimsSubSample.assignment_role == "hplc",
             ).order_by(LimsSubSample.id)
         ).scalars().all()
     }
@@ -14732,12 +14765,15 @@ async def _generate_vial_coas_loop(db, parent, vials, parent_generation_id, exis
     import scheduled_publish as _scheduled_publish
     _vial_date_override = _scheduled_publish.process_override(db, sample_id)
     async with httpx.AsyncClient(verify=HTTPX_SSL_CONTEXT, timeout=120.0) as client:
-        for vial_seq, figs in vials:
+        for item in vials:
+            vial_seq, figs = item[0], item[1]
+            vial_ids = item[2] if len(item) > 2 else set()
             if vial_seq in existing:
                 skipped.append(vial_seq)
                 continue
             try:
-                _vial_doc = build_vial_wire_document(db, parent, subs_by_seq.get(vial_seq))
+                _vial_doc = build_vial_wire_document(
+                    db, parent, subs_by_seq.get(vial_seq), vial_parent_ids=vial_ids)
             except NativeSectionsError as e:
                 errors.append({"vial_sequence": vial_seq, "error": f"COA aborted — {e.detail}"})
                 _logger.warning("vial COA aborted for %s vial %s: %s", sample_id, vial_seq, e.detail)
@@ -14794,7 +14830,7 @@ async def _maybe_emit_vial_coas(db, sample_id, parent_row, primary_data, user_id
             return
         from coa.variance_series import (
             build_variance_replicates,
-            list_hplc_vials_with_figures,
+            list_vials_for_certificates,
         )
         if not build_variance_replicates(db, parent_row):
             return
@@ -14802,7 +14838,10 @@ async def _maybe_emit_vial_coas(db, sample_id, parent_row, primary_data, user_id
         if not primary_gen_id:
             _logger.warning("auto vial COAs skipped for %s: no primary generation_id", sample_id)
             return
-        vials = list_hplc_vials_with_figures(db, parent_row)
+        vials, blocked = _split_certifiable_vials(list_vials_for_certificates(db, parent_row))
+        if blocked:
+            _logger.warning("auto vial COAs for %s: vials without HPLC not supported yet: %s",
+                            sample_id, [b["vial_sequence"] for b in blocked])
         if not vials:
             return
         from integration_db import fetch_existing_vial_sequences
@@ -14880,10 +14919,17 @@ async def generate_vial_coas(
         return _resp(False, "Generate the parent COA first — per-vial COAs attach to it.")
     parent_generation_id = str(primary["id"])
 
-    from coa.variance_series import list_hplc_vials_with_figures
-    vials = list_hplc_vials_with_figures(db, parent)
+    from coa.variance_series import build_variance_replicates, list_vials_for_certificates
+    if not build_variance_replicates(db, parent):
+        return _resp(False, "Per-vial COAs are only generated for variance lots.")
+    vials, blocked = _split_certifiable_vials(list_vials_for_certificates(db, parent))
     if not vials:
-        return _resp(False, "No HPLC vials with reportable results to generate COAs for.")
+        msg = "No vials with HPLC results to generate COAs for."
+        if blocked:
+            msg += f" {len(blocked)} vial(s) without HPLC results are not supported yet."
+        result = _resp(False, msg)
+        result["blocked"] = blocked
+        return result
 
     # Every vial regenerates: no live-child skip here. The automatic
     # post-primary run (_maybe_emit_vial_coas) keeps its idempotency through
@@ -14905,16 +14951,67 @@ async def generate_vial_coas(
         user_id=getattr(current_user, "id", None),
     )
 
+    # A primary that is already published never runs the publish cascade
+    # again, so drafts minted under it would sit unpublished. Publish them
+    # through the IS route that runs the same cascade (IS 1.0.38); a draft
+    # primary carries them on its own Publish.
+    published_children: list = []
+    if generated and primary.get("status") == "published":
+        try:
+            async with httpx.AsyncClient(verify=HTTPX_SSL_CONTEXT, timeout=60.0) as client:
+                resp = await client.post(
+                    f"{INTEGRATION_SERVICE_URL}/explorer/samples/{sample_id}/publish-children",
+                    headers={"X-API-Key": INTEGRATION_SERVICE_API_KEY},
+                )
+                resp.raise_for_status()
+                published_children = (resp.json() or {}).get("published") or []
+        except Exception as e:  # noqa: BLE001 (drafts exist; report, never lose them)
+            _logger.warning("publish-children failed for %s: %s", sample_id, e)
+            errors.append({"vial_sequence": None,
+                           "error": f"Generated, but publishing them failed: {e}"})
+
     g, f = len(generated), len(errors)
     parts = [f"Regenerated {g} per-vial COA(s)"]
+    if published_children:
+        parts.append(f"published {len(published_children)}")
     if f:
         parts.append(f"{f} failed")
+    if blocked:
+        parts.append(f"{len(blocked)} vial(s) without HPLC results not supported yet")
     # Success only when nothing failed. `skipped` stays in the shape for the
-    # frontend toast; the manual path never fills it.
+    # frontend toast; the manual path never fills it. `blocked` and
+    # `published` are additive.
     return {
         "success": f == 0, "message": "; ".join(parts), "expected": len(vials),
         "generated": generated, "skipped": skipped, "errors": errors,
+        "blocked": blocked, "published": published_children,
     }
+
+
+def _refuse_stale_draft_primary(sample_id: str) -> None:
+    """409 when the draft Publish would pick is older than the live primary
+    (P-5324, 2026-10-20: an Oct 14 draft would have replaced the Oct 16
+    certificate). Fails open when the Integration Service can't be read, so
+    an IS hiccup never blocks a normal publish."""
+    import logging as _logging
+    from integration_db import fetch_stale_draft_primary
+    try:
+        stale = fetch_stale_draft_primary(sample_id)
+    except Exception as e:  # noqa: BLE001
+        _logging.getLogger(__name__).warning(
+            "stale-draft check skipped for %s: %s", sample_id, e)
+        return
+    if stale:
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                f"The newest draft COA (Gen #{stale['draft_generation_number']}, "
+                f"{stale['draft_code']}) is older than the published COA "
+                f"(Gen #{stale['live_generation_number']}, {stale['live_code']}). "
+                "Publishing it would replace the newer certificate. Generate a "
+                "new COA first."
+            ),
+        )
 
 
 def _refuse_while_publish_scheduled(db: Session, sample_id: str) -> None:
@@ -14960,6 +15057,7 @@ async def publish_sample_coa(
             ),
         )
     _refuse_while_publish_scheduled(db, sample_id)
+    _refuse_stale_draft_primary(sample_id)
 
     # 2. Resolve SENAITE UID upfront so we fail before touching integration service state.
     # Native-born samples (external_lims_system == "mk1") have no SENAITE AR at
@@ -15564,6 +15662,11 @@ async def regen_primary_coa(
     # cascade's cross-primary supersede retires the old primary's regular child.
     # Best-effort; no-op for non-variance.
     await _maybe_emit_regular_coa_child(db, sample_id, _regen_parent, data)
+    # Per-vial certificates ride the new primary too (2026-10-20): mint them
+    # BEFORE the publish below so its cascade publishes them and supersedes
+    # each vial's previous code. Best-effort; no-op for non-variance.
+    await _maybe_emit_vial_coas(db, sample_id, _regen_parent, data,
+                                user_id=getattr(current_user, "id", None))
 
     # 3. Publish the new primary — reuses publish_sample_coa's flow so
     # integration service marks the new generation as published,
