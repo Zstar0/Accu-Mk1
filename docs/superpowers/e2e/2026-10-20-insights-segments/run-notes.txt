@@ -1,0 +1,12 @@
+Customer Insights segments stack e2e, 2026-10-21 (branch feat/insights-segments).
+Stack: insseg (devbox, golden-20260911-233650). Mk1 = feat/insights-segments at 6db9220e, mounted (clean detached checkout, no working-tree changes).
+IS = integration-service origin/master 55e375c mounted, alembic upgraded to z4a5b6c7d8e9 (wc_orders); the golden IS image predates the order mirror.
+wc_orders: 258 stack orders (149 paid), loaded from an in-WP rest_do_request dump (php -d memory_limit=1024M) through IS upsert_order_if_newer (258 upserted, 0 errors).
+DEV DATA: golden/stack data. Money values mean nothing. Close and Plain are not configured on stacks.
+Command: . <stack env> && node node_modules/@playwright/test/cli.js test e2e/customer-insights.spec.ts --reporter=list
+Result: 4 passed (20.7s).
+01-insights.png: period All; the "Re-order cohorts" grid (cohort 2026-04, n 2) sits beside the revenue chart; tabs At risk, New customers, Segments.
+01-at-risk.png: the at-risk list is empty on this stack (At risk (0), "No customers are overdue right now"), so the at-risk n/a check was skipped.
+02-new-customers.png: New customers tab subtitle; no first orders in the 90D window on this stack.
+03-segments.png: four tiles Key accounts 0, Growth 0, Regular 0, Trial 3. The first non-empty tile, Trial, was clicked; /reports/customers/list?segment=trial total 3 equals the tile count; every Last CRM and Last support cell in the segment table read n/a.
+02-customer-dashboard.png: no at-risk row, so the dashboard opens from the Customers list.
