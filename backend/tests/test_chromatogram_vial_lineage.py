@@ -80,15 +80,18 @@ def test_parent_prefers_core_vial_row_over_newer_variance_row(db_session, caplog
     assert any("core-vial" in r.message for r in caplog.records)
 
 
-def test_parent_falls_back_to_newest_when_nothing_linked(db_session, caplog):
+def test_parent_with_a_core_vial_never_falls_back_to_parent_rows(db_session, fake_storage):
+    """Handler ruling 2026-10-21: the sample COA uses only the core vial's own
+    chromatogram. Unstamped parent-level rows are never borrowed; with no core
+    row and no core trace it fails closed, naming the core vial."""
     p = _parent(db_session)
     _vial(db_session, p, 1); _vial(db_session, p, 2, kind="variance")
     _chrom(db_session, p)
-    newest = _chrom(db_session, p)
-    with caplog.at_level(logging.INFO, logger="coa.sample_meta"):
-        picked = select_chromatogram_row(db_session, p)
-    assert picked.id == newest.id
-    assert any("newest" in r.message for r in caplog.records)
+    _chrom(db_session, p)
+    with pytest.raises(NativeSectionsError) as ei:
+        select_chromatogram_row(db_session, p)
+    assert "core vial P-2627-S01" in ei.value.detail
+    assert fake_storage.calls == []
 
 
 def test_parent_without_hplc_vials_keeps_newest_behaviour(db_session):
@@ -229,14 +232,18 @@ def test_vial_fallback_never_uses_a_sibling_vials_analysis(db_session, fake_stor
 # never inherit one through the newest rule: it materializes the core vial's
 # own trace first, and the newest rule skips rows stamped with another vial.
 
-def test_parent_prefers_unstamped_core_push_over_newer_variance_stamped_row(
+def test_parent_prefers_the_core_vials_own_trace_over_an_unstamped_csv(
         db_session, fake_storage):
+    """An unstamped CSV never wins over the core vial's own source: the core
+    vial's analysis trace is materialized and used instead."""
     p = _parent(db_session)
-    _vial(db_session, p, 1); var = _vial(db_session, p, 2, kind="variance")
-    core_push = _chrom(db_session, p, filename="chromatogram_P-2627.csv")   # source NULL
-    _chrom(db_session, p, source=var)                                      # newer, variance
-    assert select_chromatogram_row(db_session, p).id == core_push.id
-    assert fake_storage.calls == []
+    core = _vial(db_session, p, 1); var = _vial(db_session, p, 2, kind="variance")
+    _chrom(db_session, p, filename="chromatogram_P-2627.csv")   # source NULL
+    _chrom(db_session, p, source=var)                           # newer, variance
+    _analysis(db_session, core.sample_id, chrom={"times": [0.0], "signals": [1.0]})
+    picked = select_chromatogram_row(db_session, p)
+    assert picked.source_sub_sample_pk == core.id
+    assert len(fake_storage.calls) == 1
 
 
 def test_parent_with_no_core_row_materializes_the_core_vials_own_analysis(
@@ -258,15 +265,18 @@ def test_parent_with_no_core_row_materializes_the_core_vials_own_analysis(
     assert len(fake_storage.calls) == 1
 
 
-def test_parent_with_only_a_variance_stamped_row_and_no_core_trace_returns_none(
+def test_parent_with_only_another_vials_row_and_no_core_trace_fails_closed(
         db_session, fake_storage):
     p = _parent(db_session)
     core, var = _vial(db_session, p, 1), _vial(db_session, p, 2, kind="variance")
+    other = _vial(db_session, p, 3, kind=None)                  # neither core nor variance
     _chrom(db_session, p, source=var)
+    _chrom(db_session, p, source=other)
     _analysis(db_session, var.sample_id, chrom={"times": [0.0], "signals": [9.0]})
     _analysis(db_session, core.sample_id, chrom=None)
-    # Missing parent chromatogram contract: None, not a sibling's trace.
-    assert select_chromatogram_row(db_session, p) is None
+    with pytest.raises(NativeSectionsError) as ei:
+        select_chromatogram_row(db_session, p)
+    assert "core vial P-2627-S01" in ei.value.detail
     assert fake_storage.calls == []
 
 
@@ -352,13 +362,14 @@ def test_vial_with_stamped_image_uses_it_without_writing(db_session, fake_storag
     assert fake_storage.calls == []
 
 
-def test_parent_image_prefers_core_or_unstamped_over_newer_variance_stamped(
+def test_parent_image_uses_only_the_core_vials_photo(
         db_session, fake_storage):
     p = _parent(db_session)
     core, var = _vial(db_session, p, 1), _vial(db_session, p, 2, kind="variance")
-    checkin = _img(db_session, p, kind="receive_image")   # unstamped check-in copy
+    _img(db_session, p, kind="receive_image")             # unstamped check-in copy
     _img(db_session, p, source=var)                       # newer, variance-stamped
-    assert select_image_row(db_session, p).id == checkin.id
+    with pytest.raises(NativeSectionsError):              # never borrowed
+        select_image_row(db_session, p)
     core_row = _img(db_session, p, source=core)           # newer still, core-stamped
     _img(db_session, p, source=var)
     assert select_image_row(db_session, p).id == core_row.id
@@ -388,11 +399,13 @@ def test_parent_image_with_only_a_variance_row_materializes_the_core_vials_photo
     assert picked.source_sub_sample_pk == core.id
     assert fake_storage.calls == [(p.sample_id, b"core-jpg", "P-2627-S01-vial-photo.jpg")]
     assert any("core-vial materialized" in r.message for r in caplog.records)
-    # No core photo at all: None (build_sample_meta fails closed), never the
+    # No core photo at all: fail closed naming the core vial, never the
     # variance row.
     p2 = _parent(db_session, "P-0002")
     _vial(db_session, p2, 1)
     var2 = _vial(db_session, p2, 2, kind="variance")
     _img(db_session, p2, source=var2)
-    assert select_image_row(db_session, p2) is None
+    with pytest.raises(NativeSectionsError) as ei:
+        select_image_row(db_session, p2)
+    assert "core vial P-0002-S01" in ei.value.detail
     assert len(fake_storage.calls) == 1
