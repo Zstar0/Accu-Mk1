@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased
+
+### Customer Insights: segments instead of a cohort tab
+- **The re-order cohort grid is back beside the revenue chart**, where it was before 1.50.0.
+- **New Segments tab.** Customers are classed on their last 12 months: Key accounts ($10K or more paid), Growth ($2.5K to $10K), Regular (under $2.5K with 2 or more testing orders) and Trial (0 or 1 testing order). Each tile shows how many customers, their share of revenue and their median orders and samples; click one to list its customers, with the same CRM and support columns as the other lists.
+
 ## v1.50.0 - 2026-10-20
 
 ### Customer Insights: at-risk, new customers and cohorts in one place
