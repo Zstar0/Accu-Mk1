@@ -228,3 +228,16 @@ def test_list_filters_skip_customers_without_a_testing_order(client, monkeypatch
     keys = {r["key"] for r in client.get("/reports/customers/list?period=all&new_only=true").json()["rows"]}
     assert "wc:7" not in keys
     assert client.get("/reports/customers/list?cohort=2026-10").json()["total"] == 0
+
+
+def test_segments_route_and_list_segment_filter(client) -> None:
+    body = client.get("/reports/customers/segments").json()
+    assert body["window_days"] == 365
+    seg = {s["segment"]: s for s in body["segments"]}
+    assert list(seg) == ["key", "growth", "regular", "trial"]
+    assert seg["regular"]["customers"] == 1 and seg["trial"]["customers"] == 1  # wc:1 three $100 orders, guest one $125
+    lst = client.get("/reports/customers/list?period=all&segment=regular").json()
+    assert [r["key"] for r in lst["rows"]] == ["wc:1"] and lst["rows"][0]["segment"] == "regular"
+    assert {"spend_12m", "testing_orders_12m", "samples_12m"} <= set(lst["rows"][0])
+    assert client.get("/reports/customers/list?segment=vip").status_code == 422
+    assert client.get("/reports/customers/list?period=all&sort=spend_12m").status_code == 200

@@ -41,7 +41,7 @@ READS = frozenset({
     (_G, "/reports/purity-trend/{analyte_name}"), (_G, "/reports/ready-to-publish"),
     (_G, "/reports/ready-to-publish/summary"), (_G, "/reports/sync-status"),
     (_G, "/reports/customers/summary"), (_G, "/reports/customers/list"), (_G, "/reports/customers/orders"),
-    (_G, "/reports/customers/cohorts"), (_G, "/reports/customers/at-risk"),
+    (_G, "/reports/customers/cohorts"), (_G, "/reports/customers/at-risk"), (_G, "/reports/customers/segments"),
     (_G, "/reports/customers/churn-signals"), (_G, "/reports/customers/changes"),
     (_G, "/reports/customers/{customer_key}"),
 })

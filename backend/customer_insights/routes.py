@@ -145,11 +145,28 @@ class CustomerRow(BaseModel):
     top_tests: list[str]
     status: str
     monthly: list[MonthSpend]
+    spend_12m: str
+    testing_orders_12m: int
+    samples_12m: int
+    segment: Optional[Literal["key", "growth", "regular", "trial"]] = None
 
 
 class AtRiskRow(CustomerRow):
-    spend_12m: str
     overdue: float
+
+
+class SegmentSummary(BaseModel):
+    segment: Literal["key", "growth", "regular", "trial"]
+    customers: int
+    revenue_12m: str
+    share: float
+    median_testing_orders_12m: Optional[float] = None
+    median_samples_12m: Optional[float] = None
+
+
+class SegmentsResponse(Meta):
+    window_days: int
+    segments: list[SegmentSummary]
 
 
 class AtRiskResponse(Meta):
@@ -184,8 +201,10 @@ class OrdersResponse(Meta):
 
 
 SortField = Literal["key", "name", "email", "company", "rep", "period_spend", "prior_spend", "delta_pct", "lifetime",
-                    "orders", "samples", "usual_gap_days", "last_order_at", "first_order_at", "testing_orders", "status"]
-_MONEY_FIELDS = {"period_spend", "prior_spend", "lifetime"}
+                    "orders", "samples", "usual_gap_days", "last_order_at", "first_order_at", "testing_orders", "status",
+                    "spend_12m", "testing_orders_12m", "samples_12m"]
+_MONEY_FIELDS = {"period_spend", "prior_spend", "lifetime", "spend_12m"}
+Segment = Literal["key", "growth", "regular", "trial"]
 
 
 def _dates(start: Optional[date] = None, end: Optional[date] = None,
@@ -231,12 +250,15 @@ def customers_list(period: Period = "90d", dates: tuple = Depends(_dates),
                    page_size: int = Query(50, ge=1, le=200), new_only: bool = False,
                    cohort: Optional[str] = Query(None, pattern=r"^\d{4}-\d{2}$"),
                    returned_in: Optional[str] = Query(None, pattern=r"^\d{4}-\d{2}$"),
+                   segment: Optional[Segment] = None,
                    db: Session = Depends(get_db), _u=Depends(get_current_user)):
     if returned_in and (not cohort or returned_in == cohort):
         raise HTTPException(422, "returned_in needs a different cohort month")
     ds, lo, hi, tz, meta = _ctx(db, period, *dates, exclude_launch_accounts)
     rows = metrics.customer_rows(ds, start=lo, end=hi, tz=tz)
     rows = metrics.filter_rows(rows, ds, lo=lo, hi=hi, tz=tz, new_only=new_only, cohort=cohort, returned_in=returned_in)
+    if segment:
+        rows = [r for r in rows if r["segment"] == segment]
     q = search.strip().lower()
     if q:
         rows = [r for r in rows if q in " ".join(str(r.get(f) or "") for f in ("name", "email", "company", "key", "rep")).lower()]
@@ -246,6 +268,15 @@ def customers_list(period: Period = "90d", dates: tuple = Depends(_dates),
     total = len(rows)
     return {**meta, "rows": rows[(page - 1) * page_size: page * page_size], "total": total,
             "page": page, "page_size": page_size}
+
+
+@router.get("/segments", response_model=SegmentsResponse)
+def customers_segments(exclude_launch_accounts: bool = False, db: Session = Depends(get_db),
+                       _u=Depends(get_current_user)):
+    """Key / growth / regular / trial on a fixed trailing 12 months (not the page period)."""
+    ds, _lo, hi, tz, meta = _ctx(db, "all", None, None, exclude_launch_accounts)
+    rows = metrics.customer_rows(ds, start=None, end=hi, tz=tz)
+    return {**meta, "window_days": rules.SEGMENT_WINDOW_DAYS, "segments": metrics.segment_summary(rows)}
 
 
 @router.get("/orders", response_model=OrdersResponse)

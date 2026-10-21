@@ -8,7 +8,7 @@ import type { Page } from '@playwright/test'
  */
 
 const BACKEND_URL = process.env.E2E_BACKEND_URL ?? 'http://localhost:8012'
-const SHOTS = 'docs/superpowers/e2e/2026-10-19-customer-insights-tabs'
+const SHOTS = 'docs/superpowers/e2e/2026-10-20-insights-segments'
 test.use({ viewport: { width: 1600, height: 1000 } })
 
 async function api<T>(page: Page, path: string): Promise<T> {
@@ -159,15 +159,19 @@ test('agent feed responds', async ({ authedPage: page }) => {
   expect(Array.isArray(r.events)).toBeTruthy()
 })
 
-test('tabs render, cells degrade without Close or Plain, cohort drill-down matches the grid', async ({
+test('tabs render, cells degrade without Close or Plain, segment lists match their tiles', async ({
   authedPage: page,
 }) => {
   await page.goto('/#accumark-tools/customer-insights')
   await expect(
     page.getByRole('heading', { name: 'Customer Insights', level: 1 })
   ).toBeVisible({ timeout: 20_000 })
-  for (const name of [/^At risk/, /^New customers/, /^Cohorts$/])
+  for (const name of [/^At risk/, /^New customers/, /^Segments$/])
     await expect(page.getByRole('tab', { name })).toBeVisible()
+  // The re-order cohort grid sits beside the revenue chart again, not in a tab.
+  await expect(
+    page.getByRole('heading', { name: 'Re-order cohorts' })
+  ).toBeVisible()
 
   // Stacks have no Close or Plain, so every Last CRM and Last support cell reads
   // n/a and the page still loads.
@@ -213,25 +217,35 @@ test('tabs render, cells degrade without Close or Plain, cohort drill-down match
   ).toBeVisible()
   await shootFull(page, `${SHOTS}/02-new-customers.png`)
 
-  await page.getByRole('tab', { name: /^Cohorts$/ }).click()
-  const c = await api<{ rows: { cohort: string; size: number }[] }>(
-    page,
-    '/reports/customers/cohorts?exclude_launch_accounts=true'
-  )
-  const first = c.rows[0]
-  expect(first, 'stack has at least one cohort').toBeTruthy()
-  await panel.getByRole('button', { name: first.cohort, exact: true }).click()
-  await expect(
-    panel.getByRole('heading', {
-      name: `${first.cohort} cohort · ${first.size} customers`,
-    })
-  ).toBeVisible({ timeout: 20_000 })
+  await page.getByRole('tab', { name: /^Segments$/ }).click()
+  const seg = await api<{
+    segments: { segment: string; customers: number }[]
+  }>(page, '/reports/customers/segments')
+  expect(seg.segments.map(g => g.segment)).toEqual([
+    'key',
+    'growth',
+    'regular',
+    'trial',
+  ])
+  const LABEL: Record<string, string> = {
+    key: 'Key accounts',
+    growth: 'Growth',
+    regular: 'Regular',
+    trial: 'Trial',
+  }
+  // The busiest segment on a sparse stack is usually Trial; any non-empty one will do.
+  const pick = seg.segments.find(g => g.customers > 0)
+  expect(pick, 'stack has at least one segmented customer').toBeTruthy()
+  if (!pick) return
+  await panel
+    .getByRole('button', { name: new RegExp(`^${LABEL[pick.segment]}`) })
+    .click()
   const members = await api<{ total: number }>(
     page,
-    `/reports/customers/list?cohort=${encodeURIComponent(first.cohort)}&exclude_launch_accounts=true&page_size=1`
+    `/reports/customers/list?period=all&segment=${pick.segment}&page_size=1`
   )
-  expect(members.total).toBe(first.size)
-  // The member table carries the same check, so it runs even with no at-risk rows.
+  expect(members.total).toBe(pick.customers)
+  // The segment table carries the same check, so it runs even with no at-risk rows.
   await touchCellsAllNa()
-  await shootFull(page, `${SHOTS}/03-cohorts.png`)
+  await shootFull(page, `${SHOTS}/03-segments.png`)
 })

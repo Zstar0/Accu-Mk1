@@ -21,6 +21,7 @@ vi.mock('@/lib/api', async () => {
     getCustomerChurnSignals: vi.fn(),
     getCustomerTouchpoints: vi.fn(),
     getCustomerList: vi.fn(),
+    getCustomerSegments: vi.fn(),
   }
 })
 vi.mock('recharts', async importOriginal => {
@@ -169,6 +170,9 @@ function setup({
         status: 'at_risk',
         monthly: [],
         spend_12m: '84210.00',
+        testing_orders_12m: 29,
+        samples_12m: 142,
+        segment: 'key',
         overdue: 5.2,
       },
     ],
@@ -188,6 +192,45 @@ function setup({
       new Promise<api.TouchpointsResponse>(() => undefined)
     )
   vi.mocked(api.getCustomerList).mockResolvedValue(list)
+  vi.mocked(api.getCustomerSegments).mockResolvedValue({
+    tz: 'America/Los_Angeles',
+    synced_at: null,
+    window_days: 365,
+    segments: [
+      {
+        segment: 'key',
+        customers: 23,
+        revenue_12m: '1000.00',
+        share: 0.69,
+        median_testing_orders_12m: 10,
+        median_samples_12m: 43,
+      },
+      {
+        segment: 'growth',
+        customers: 52,
+        revenue_12m: '1000.00',
+        share: 0.15,
+        median_testing_orders_12m: 3,
+        median_samples_12m: 14,
+      },
+      {
+        segment: 'regular',
+        customers: 95,
+        revenue_12m: '1000.00',
+        share: 0.06,
+        median_testing_orders_12m: 3,
+        median_samples_12m: 3,
+      },
+      {
+        segment: 'trial',
+        customers: 721,
+        revenue_12m: '1000.00',
+        share: 0.1,
+        median_testing_orders_12m: 1,
+        median_samples_12m: 1,
+      },
+    ],
+  })
   if (riskFails)
     vi.mocked(api.getCustomerAtRisk).mockRejectedValue(new Error('boom'))
   const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } })
@@ -204,8 +247,7 @@ describe('CustomerInsights', () => {
       insightsView: {
         tab: 'at-risk',
         period: '90d',
-        cohort: null,
-        month: null,
+        segment: 'key',
         excludeLaunch: false,
       },
     })
@@ -331,7 +373,7 @@ describe('CustomerInsights', () => {
     expect(
       screen.getByRole('tab', { name: /New customers/ })
     ).toBeInTheDocument()
-    expect(screen.getByRole('tab', { name: /Cohorts/ })).toBeInTheDocument()
+    expect(screen.getByRole('tab', { name: /Segments/ })).toBeInTheDocument()
     const row = (await screen.findByText('Halcyon Research Supply')).closest(
       'tr'
     ) as HTMLElement
@@ -418,8 +460,7 @@ describe('CustomerInsights', () => {
       insightsView: {
         tab: 'new',
         period: '90d',
-        cohort: null,
-        month: null,
+        segment: 'key',
         excludeLaunch: true,
       },
     })
@@ -437,34 +478,38 @@ describe('CustomerInsights', () => {
     )
   })
 
-  it('Cohorts tab shows the grid, drills into members with the right query, and keeps the selection in the store', async () => {
-    setup({ list: listOf(41, [row({ key: 'wc:9', name: 'Member One' })]) })
-    await userEvent.click(await screen.findByRole('tab', { name: /Cohorts/ }))
+  it('shows the re-order cohort grid beside the chart, not in a tab', async () => {
+    setup()
+    expect(
+      await screen.findByRole('heading', { name: 'Re-order cohorts' })
+    ).toBeInTheDocument()
     expect(await screen.findByText('12.9%')).toBeInTheDocument()
-    expect(
-      screen.getByText('Pick a cohort to see its customers')
-    ).toBeInTheDocument()
-    await userEvent.click(
-      screen.getByRole('button', { name: /2026-08 M1 12\.9%/ })
-    )
-    expect(await screen.findByText('Member One')).toBeInTheDocument()
-    expect(
-      screen.getByText('2026-08 cohort · came back in M1 (2026-09) · 41 of 163')
-    ).toBeInTheDocument()
+    expect(screen.queryByRole('tab', { name: /Cohorts/ })).toBeNull()
+  })
+
+  it('Segments tab shows the four tiles and lists the chosen segment, kept in the store', async () => {
+    setup({
+      list: listOf(23, [row({ key: 'wc:2243', name: 'Zackary Smith' })]),
+    })
+    await userEvent.click(await screen.findByRole('tab', { name: /Segments/ }))
+    const key = await screen.findByRole('button', { name: /Key accounts/ })
+    expect(key).toHaveAttribute('aria-pressed', 'true')
+    expect(key).toHaveTextContent('23')
+    expect(key).toHaveTextContent('69% of revenue')
+    expect(key).toHaveTextContent('Median 10 orders, 43 samples')
+    expect(await screen.findByText('Zackary Smith')).toBeInTheDocument()
     expect(vi.mocked(api.getCustomerList)).toHaveBeenLastCalledWith(
-      expect.objectContaining({
-        cohort: '2026-08',
-        returned_in: '2026-09',
-        exclude_launch_accounts: true,
-        period: 'all',
-        sort: 'lifetime',
-        dir: 'desc',
-      })
+      expect.objectContaining({ segment: 'key', period: 'all', page: 1 })
+    )
+    await userEvent.click(screen.getByRole('button', { name: /Growth/ }))
+    await waitFor(() =>
+      expect(vi.mocked(api.getCustomerList)).toHaveBeenLastCalledWith(
+        expect.objectContaining({ segment: 'growth', page: 1 })
+      )
     )
     expect(useUIStore.getState().insightsView).toMatchObject({
-      tab: 'cohorts',
-      cohort: '2026-08',
-      month: 'M1',
+      tab: 'segments',
+      segment: 'growth',
     })
   })
 })
