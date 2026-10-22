@@ -1,9 +1,15 @@
 # Changelog
 
-## v1.50.3 - 2026-10-21
+## v1.51.1 - 2026-10-21
 
 ### COA console: native-born samples no longer show SENAITE steps
 - **Generate and Publish consoles name the real last step.** For a sample born in Mk1 the generate console ends with "Recording in sample registry" instead of "Attaching to SENAITE", and the publish console ends with "Updating sample registry" instead of "SENAITE transition"; the backend already skipped the SENAITE attach and transition for those samples. SENAITE-born samples keep the SENAITE labels in both read modes. Labels only; step ids and timings are unchanged.
+
+## v1.51.0 - 2026-10-21
+
+### Customer Insights: segments instead of a cohort tab
+- **The re-order cohort grid is back beside the revenue chart**, where it was before 1.50.0.
+- **New Segments tab.** Customers are classed on their last 12 months: Key accounts ($10K or more paid), Growth ($2.5K to $10K), Regular (under $2.5K with 2 or more testing orders) and Trial (0 or 1 testing order). Each tile shows how many customers, their share of revenue and their median orders and samples; click one to list its customers, with the same CRM and support columns as the other lists.
 
 ## v1.50.0 - 2026-10-20
 

@@ -73,3 +73,13 @@ def test_registered_test_account_excluded_by_email() -> None:
     assert rules.is_excluded("wc:9", exclude_launch=False, email="Forrest@ValenceAnalytical.com ")
     assert not rules.is_excluded("wc:9", exclude_launch=False, email="buyer@example.com")
     assert not rules.is_excluded("wc:9", exclude_launch=False)
+
+
+def test_segment_boundaries() -> None:
+    assert rules.segment(Decimal("10000"), 1) == "key"
+    assert rules.segment(Decimal("9999.99"), 30) == "growth"
+    assert rules.segment(Decimal("2500"), 1) == "growth"
+    assert rules.segment(Decimal("2499.99"), 2) == "regular"
+    assert rules.segment(Decimal("2499.99"), 1) == "trial"
+    assert rules.segment(Decimal("125"), 0) == "trial"  # add-on-only spend
+    assert rules.segment(Decimal("0"), 0) is None  # nothing paid in the window
