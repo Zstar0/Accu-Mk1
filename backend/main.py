@@ -16342,6 +16342,19 @@ async def create_wizard_session(
     db.add(session)
     db.commit()
     db.refresh(session)
+
+    # Order status → analyzing. HPLC-only native samples never go on a
+    # worksheet, so prep start is their first bench signal. Notify with the
+    # vial's PARENT id (the IS maps parent ids to orders, forward-only).
+    if session.lims_sub_sample_pk and not session.is_standard:
+        parent_sid = db.execute(
+            select(LimsSample.sample_id)
+            .join(LimsSubSample, LimsSubSample.parent_sample_pk == LimsSample.id)
+            .where(LimsSubSample.id == session.lims_sub_sample_pk)
+        ).scalar_one_or_none()
+        if parent_sid:
+            await _notify_worksheet_assigned(parent_sid)
+
     return _build_session_response(session, db)
 
 

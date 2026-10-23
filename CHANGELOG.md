@@ -1,5 +1,10 @@
 # Changelog
 
+## Unreleased
+
+### Fix: customers get the Analyzing email when HPLC prep starts
+- **Starting an HPLC sample prep on a vial now moves the order to Analyzing.** HPLC-only native samples never go on a worksheet, and a worksheet add was the only thing that sent Analyzing, so since 09-22 about two thirds of native orders went from Sample Received straight to Under Review with no "Analysis in progress" email. Creating a vial prep session now tells the Integration Service, the same way adding to a worksheet does. Standards preps do not notify, and an order already past Analyzing is unchanged.
+
 ## v1.51.0 - 2026-10-21
 
 ### Customer Insights: segments instead of a cohort tab
