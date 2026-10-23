@@ -73,9 +73,17 @@ export const dossierQuery = (key: string) => ({
   staleTime: 60_000,
 })
 
-/** 'YYYY-MM' plus n months, e.g. a cohort month plus its M<k> column. */
-export function addMonths(ym: string, n: number): string {
-  const [y = 0, m = 1] = ym.split('-').map(Number)
-  const t = y * 12 + (m - 1) + n
-  return `${Math.floor(t / 12)}-${String((t % 12) + 1).padStart(2, '0')}`
+export const SEGMENT_LABEL: Record<string, string> = {
+  key: 'Key accounts',
+  growth: 'Growth',
+  regular: 'Regular',
+  trial: 'Trial',
+}
+
+/** The rule behind each segment, trailing 12 months (backend rules.segment). */
+export const SEGMENT_RULE: Record<string, string> = {
+  key: '$10K+ paid',
+  growth: '$2.5K to $10K paid',
+  regular: 'Under $2.5K, 2+ testing orders',
+  trial: '0 or 1 testing order',
 }

@@ -1,6 +1,6 @@
 # Changelog
 
-## v1.50.1 - 2026-10-20
+## v1.51.2 - 2026-10-23
 
 ### Per-vial COAs carry each vial's own results
 - **A vial COA now shows every test run on that vial.** Besides its own HPLC figures, each per-vial certificate carries the other results the lab promoted from that vial (for example endotoxin on the vial it was run on). Results from other vials are left off.
@@ -10,6 +10,12 @@
 - **Regen & Republish refreshes the vial COAs too.** They are regenerated and published with the new sample COA.
 - **Generate Per-Vial COAs publishes them when the sample COA is already published**, and is refused for samples that are not variance lots.
 - **Publish refuses a stale draft.** If the draft that would be published is older than the published COA, Publish stops and says so.
+
+## v1.51.0 - 2026-10-21
+
+### Customer Insights: segments instead of a cohort tab
+- **The re-order cohort grid is back beside the revenue chart**, where it was before 1.50.0.
+- **New Segments tab.** Customers are classed on their last 12 months: Key accounts ($10K or more paid), Growth ($2.5K to $10K), Regular (under $2.5K with 2 or more testing orders) and Trial (0 or 1 testing order). Each tile shows how many customers, their share of revenue and their median orders and samples; click one to list its customers, with the same CRM and support columns as the other lists.
 
 ## v1.50.0 - 2026-10-20
 

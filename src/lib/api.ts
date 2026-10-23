@@ -9570,12 +9570,15 @@ export interface CustomerRow {
   last_order_at: string | null
   first_order_at: string | null
   testing_orders: number
+  spend_12m: string
+  testing_orders_12m: number
+  samples_12m: number
+  segment: CustomerSegment | null
   top_tests: string[]
   status: string
   monthly: { month: string; spend: string }[]
 }
 export interface AtRiskRow extends CustomerRow {
-  spend_12m: string
   overdue: number
 }
 export interface CustomerListResponse {
@@ -9643,8 +9646,27 @@ export const getCustomerList = (p: {
   new_only?: boolean
   cohort?: string
   returned_in?: string
+  segment?: CustomerSegment
   exclude_launch_accounts?: boolean
 }) => getReport<CustomerListResponse>('/reports/customers/list', p)
+
+/** Key / growth by 12-month spend, then regular (2+ testing orders) or trial. */
+export type CustomerSegment = 'key' | 'growth' | 'regular' | 'trial'
+export interface SegmentSummary {
+  segment: CustomerSegment
+  customers: number
+  revenue_12m: string
+  share: number
+  median_testing_orders_12m: number | null
+  median_samples_12m: number | null
+}
+export const getCustomerSegments = () =>
+  getReport<{
+    tz: string
+    synced_at: string | null
+    window_days: number
+    segments: SegmentSummary[]
+  }>('/reports/customers/segments')
 
 export type TouchState = 'ok' | 'none' | 'unavailable'
 type TouchReason = 'not_configured' | 'unavailable' | 'unknown_customer'
