@@ -210,10 +210,10 @@ def _select_parent_row(db, parent, *, chromatogram: bool, materialize):
     """Parent-COA selection shared by chromatogram and image (P-5324 guard):
     the newest row stamped with a core HPLC vial; else the core vial's own
     source materialized via `materialize(db, parent, core_vial)` (core
-    vials in vial_sequence order, first that qualifies wins); else the
-    newest row that is unstamped or core-stamped, never another vial's,
-    since vial certificates now stamp rows with variance vials too. A
-    parent with no HPLC vials keeps the plain newest rule. May return None.
+    vials in vial_sequence order, first that qualifies wins); else
+    NativeSectionsError (Handler ruling 2026-10-21: only the vial's own
+    media, never a parent-level or another vial's row). A parent with no
+    core HPLC vial keeps the plain newest rule and may return None.
     """
     from models import LimsSubSample
     what = "chromatogram" if chromatogram else "image"
@@ -226,6 +226,11 @@ def _select_parent_row(db, parent, *, chromatogram: bool, materialize):
     ).scalars().all()
     core_ids = [v.id for v in core_vials]
     if core_ids:
+        # Handler ruling 2026-10-21: a certificate uses ONLY its own vial's
+        # chromatogram and photo. For the sample COA that vial is the core
+        # HPLC vial: a row stamped with it, else its own source materialized,
+        # else fail closed. Never an unstamped parent-level row, never another
+        # vial's, never a guess.
         row = _newest(db, parent.id, chromatogram=chromatogram, source_sub_pks=core_ids)
         if row is not None:
             log.info("sample_meta: %s %s row %s picked by core-vial rule "
@@ -239,11 +244,22 @@ def _select_parent_row(db, parent, *, chromatogram: bool, materialize):
                          "materialized rule (vial %s)", parent.sample_id,
                          what, row.id, core.sample_id)
                 return row
-    row = _newest(db, parent.id, chromatogram=chromatogram,
-                  source_sub_pks=core_ids or None, or_unstamped=True)
+        core = core_vials[0].sample_id
+        if chromatogram:
+            raise NativeSectionsError(
+                f"No chromatogram is linked to core vial {core} of "
+                f"{parent.sample_id}: push it from the vial's HPLC analysis, or "
+                f"upload the CSV with that vial selected as the source.")
+        raise NativeSectionsError(
+            f"No vial photo is on file for core vial {core} of "
+            f"{parent.sample_id}: retake it from the vial page, or upload the "
+            f"photo with that vial selected as the source.")
+    # No core HPLC vial (micro-only samples, vials never assigned): there is
+    # no vial to read from, so the sample-level newest rule stands.
+    row = _newest(db, parent.id, chromatogram=chromatogram)
     if row is not None:
         log.info("sample_meta: %s %s row %s picked by newest rule (no "
-                 "core-vial-linked row)", parent.sample_id, what, row.id)
+                 "core HPLC vial)", parent.sample_id, what, row.id)
     return row
 
 
@@ -257,11 +273,10 @@ def select_chromatogram_row(db, parent, *, vial=None):
     trace — vial 1's COA once printed vial 2's chromatogram because the
     parent's newest row was the only rule.
 
-    Parent COA (`vial=None`): newest row linked to a CORE HPLC vial
-    (assignment_role='hplc', assignment_kind='core'); when nothing is linked
-    (pre-backfill rows, single-vial history) fall back to the newest
-    chromatogram on the parent, exactly as before. May return None — a
-    missing parent chromatogram is not fatal here (micro-only samples).
+    Parent COA (`vial=None`): the core HPLC vial's own chromatogram, by the
+    same rule as a vial COA (`_select_parent_row`); none -> NativeSectionsError.
+    A parent with no core HPLC vial (micro-only samples) keeps the newest
+    row on the parent and may return None.
     """
     if vial is not None:
         row = _newest(db, parent.id, chromatogram=True, source_sub_pks=[vial.id])
@@ -288,9 +303,10 @@ def select_image_row(db, parent, *, vial=None):
     Never a sibling's photo: all four P-5324 vial certificates printed
     vial 1's because the parent's newest image was the only rule.
 
-    Parent COA (`vial=None`): `_select_parent_row`, so a parent regen after
-    vial certificates never prints whichever vial photo was materialized
-    last. May return None; build_sample_meta fails closed (Ruling R-13).
+    Parent COA (`vial=None`): the core HPLC vial's own photo
+    (`_select_parent_row`); none -> NativeSectionsError. With no core HPLC
+    vial the newest image on the parent stands; None still fails closed in
+    build_sample_meta (Ruling R-13).
     """
     if vial is not None:
         row = _newest(db, parent.id, chromatogram=False, source_sub_pks=[vial.id])
