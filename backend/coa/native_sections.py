@@ -276,8 +276,16 @@ def _section_footnotes(raw, values: dict) -> list:
     return out
 
 
-def build_native_sections(db: Session, parent) -> dict:
+def build_native_sections(db: Session, parent, *, vial_parent_ids=None) -> dict:
     """Assemble the native-sections wire document for a parent LimsSample.
+
+    `vial_parent_ids` (per-vial certificates, 2026-10-20): the ids of the
+    certified parent-tier rows promoted from ONE vial. When given, a profile
+    member prints only if its eligible row is one of them; a member that is
+    not this vial's is skipped (it belongs to another vial, it is not
+    pending), a profile left with no members is dropped, nothing is deferred,
+    and ordered_profiles lists only the profiles that printed. The parent
+    document (None) is unchanged.
 
     Returns {"sample_id", "ordered_profiles", "sections"}, plus
     "deferred_sections" (list of profile keys) when one or more profiles were
@@ -336,6 +344,11 @@ def build_native_sections(db: Session, parent) -> dict:
             (svc, _eligible_parent_row(db, parent.id, svc.id))
             for svc in prof.analysis_services
         ]
+        if vial_parent_ids is not None:
+            member_rows = [(svc, row) for svc, row in member_rows
+                           if row is not None and row.id in vial_parent_ids]
+            if not member_rows:
+                continue
         if all(row is None for _, row in member_rows):
             # Partial-COA deferral: zero eligible members means the profile
             # hasn't been started, not that it's half-finished. Omit the
@@ -463,6 +476,12 @@ def build_native_sections(db: Session, parent) -> dict:
             "rows": rows,
         })
 
+    if vial_parent_ids is not None:
+        return {
+            "sample_id": sample_id,
+            "ordered_profiles": [s["profile_key"] for s in sections],
+            "sections": sections,
+        }
     doc = {
         "sample_id": sample_id,
         "ordered_profiles": [p.key for p in profiles],

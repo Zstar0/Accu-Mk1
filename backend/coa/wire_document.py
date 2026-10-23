@@ -33,23 +33,27 @@ def build_coa_wire_document(db, parent) -> dict:
     return doc
 
 
-def build_vial_wire_document(db, parent, vial=None):
-    """Legacy-only document for per-vial COA bodies, or None in senaite mode.
+def build_vial_wire_document(db, parent, vial=None, vial_parent_ids=None):
+    """Per-vial COA document, or None in senaite mode.
 
-    Vial certificates have never rendered native sections and must not start
-    now — only their base row sourcing follows the toggle, so sections stay
-    empty on purpose. `vial` (LimsSubSample) pins the chromatogram to that
-    vial's linked row — fail-closed, never a sibling's trace (P-2627).
+    Per-vial certificates (Handler ruling 2026-10-20): the native sections
+    carry only the results promoted from this vial (`vial_parent_ids`, see
+    coa.variance_series.vial_parent_row_ids); with no ids the sections stay
+    empty, as before. The legacy rows are the parent's: on a native-born lot
+    they are the HPLC rows, which COABuilder replaces with the vial's own
+    figures, and SENAITE-origin rows carry no vial lineage to scope by.
+    `vial` (LimsSubSample) pins the chromatogram and image to that vial's
+    rows, fail-closed, never a sibling's (P-2627, P-5324).
     """
     if coa_generation_source(db) != "mk1":
         return None
-    return {
-        "sample_id": parent.sample_id,
-        "ordered_profiles": [],
-        "sections": [],
-        "legacy_rows": _legacy_block(db, parent),
-        "sample_meta": build_sample_meta(db, parent, vial=vial),
-    }
+    if vial_parent_ids:
+        doc = build_native_sections(db, parent, vial_parent_ids=set(vial_parent_ids))
+    else:
+        doc = {"sample_id": parent.sample_id, "ordered_profiles": [], "sections": []}
+    doc["legacy_rows"] = _legacy_block(db, parent)
+    doc["sample_meta"] = build_sample_meta(db, parent, vial=vial)
+    return doc
 
 
 def warn_if_source_ignored(doc, response_json, sample_id) -> None:

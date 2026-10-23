@@ -337,6 +337,39 @@ def fetch_primary_generation(sample_id: str) -> Optional[dict]:
             return dict(row) if row else None
 
 
+def fetch_stale_draft_primary(sample_id: str) -> Optional[dict]:
+    """The top-level draft Publish would pick (newest by created_at, the same
+    rule as IS /explorer/samples/{id}/publish-coa) when it is OLDER than the
+    sample's published primary, else None. Publishing it would replace a newer
+    certificate with an older one (P-5324 gen 1, 2026-10-20)."""
+    query = """
+        WITH draft AS (
+            SELECT id, generation_number, verification_code, created_at
+            FROM coa_generations
+            WHERE sample_id = %s AND parent_generation_id IS NULL AND status = 'draft'
+            ORDER BY created_at DESC
+            LIMIT 1
+        ), live AS (
+            SELECT generation_number, verification_code, created_at
+            FROM coa_generations
+            WHERE sample_id = %s AND parent_generation_id IS NULL AND status = 'published'
+            ORDER BY created_at DESC
+            LIMIT 1
+        )
+        SELECT draft.generation_number AS draft_generation_number,
+               draft.verification_code AS draft_code,
+               live.generation_number AS live_generation_number,
+               live.verification_code AS live_code
+        FROM draft, live
+        WHERE draft.created_at < live.created_at
+    """
+    with get_integration_db() as conn:
+        with conn.cursor(cursor_factory=RealDictCursor) as cur:
+            cur.execute(query, [sample_id, sample_id])
+            row = cur.fetchone()
+            return dict(row) if row else None
+
+
 def fetch_existing_vial_sequences(parent_generation_id) -> set:
     """vial_sequence values that already have a non-superseded per-vial child
     under the given parent generation.

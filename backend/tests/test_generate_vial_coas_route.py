@@ -27,7 +27,8 @@ from models import LimsSample
 
 TEST_PARENT = "TEST-VCREGEN-P1"
 PRIMARY_ID = "11111111-1111-1111-1111-111111111111"
-VIALS = [(1, {"a": 1}), (2, {"a": 2})]
+VIALS = [(1, {"a": 1}, set()), (2, {"a": 2}, set())]
+NO_HPLC_VIAL = (3, {}, {77})
 
 
 @pytest.fixture
@@ -63,11 +64,14 @@ def _client() -> TestClient:
     return TestClient(main.app)
 
 
-def _post(loop):
+def _post(loop, *, status="draft", vials=None):
     with patch.object(main, "COA_BUILDER_URL", "http://coab.test"), \
-         patch("integration_db.fetch_primary_generation", return_value={"id": PRIMARY_ID}), \
+         patch("integration_db.fetch_primary_generation",
+               return_value={"id": PRIMARY_ID, "status": status}), \
          patch("integration_db.fetch_existing_vial_sequences", return_value={1, 2}) as existing, \
-         patch("coa.variance_series.list_hplc_vials_with_figures", return_value=VIALS), \
+         patch("coa.variance_series.build_variance_replicates", return_value=[1, 2]), \
+         patch("coa.variance_series.list_vials_for_certificates",
+               return_value=VIALS if vials is None else vials), \
          patch.object(main, "_generate_vial_coas_loop", loop):
         r = _client().post(f"/wizard/senaite/samples/{TEST_PARENT}/generate-vial-coas")
     return r, existing
@@ -110,7 +114,7 @@ def test_automatic_post_primary_run_keeps_its_idempotency(db):
     parent_row = SimpleNamespace(customer_remarks_include=False, customer_remarks=None)
     with patch.object(main, "COA_BUILDER_URL", "http://coab.test"), \
          patch("coa.variance_series.build_variance_replicates", return_value=[1, 2]), \
-         patch("coa.variance_series.list_hplc_vials_with_figures", return_value=VIALS), \
+         patch("coa.variance_series.list_vials_for_certificates", return_value=VIALS), \
          patch("integration_db.fetch_existing_vial_sequences", return_value={1}) as existing, \
          patch.object(main, "_generate_vial_coas_loop", loop):
         asyncio.run(main._maybe_emit_vial_coas(
@@ -118,3 +122,56 @@ def test_automatic_post_primary_run_keeps_its_idempotency(db):
     existing.assert_called_once_with(PRIMARY_ID)
     args, _kwargs = loop.call_args
     assert args[4] == {1}
+
+
+def test_vials_without_hplc_are_reported_and_not_sent(parent):
+    """Per-vial certificates (2026-10-20): an endotoxin-only vial cannot be
+    rendered by COABuilder yet, so it is listed under `blocked`, never sent,
+    and does not turn the run into a failure."""
+    loop = AsyncMock(return_value=([{"vial_sequence": 1}, {"vial_sequence": 2}], [], []))
+    r, _existing = _post(loop, vials=VIALS + [NO_HPLC_VIAL])
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["success"] is True
+    assert [b["vial_sequence"] for b in body["blocked"]] == [3]
+    assert body["message"] == (
+        "Regenerated 2 per-vial COA(s); 1 vial(s) without HPLC results not supported yet")
+    args, _kwargs = loop.call_args
+    assert [v[0] for v in args[2]] == [1, 2]
+
+
+def test_published_primary_gets_its_new_vial_drafts_published(parent):
+    """A live (published) primary never runs the cascade again, so the route
+    asks the IS to publish its draft children (IS 1.0.38 publish-children)."""
+    loop = AsyncMock(return_value=([{"vial_sequence": 1}, {"vial_sequence": 2}], [], []))
+    resp = MagicMock()
+    resp.raise_for_status = MagicMock()
+    resp.json = MagicMock(return_value={"published": [
+        {"verification_code": "AAAA-0001", "vial_sequence": 1},
+        {"verification_code": "AAAA-0002", "vial_sequence": 2}]})
+    client = MagicMock()
+    client.post = AsyncMock(return_value=resp)
+    cm = MagicMock()
+    cm.__aenter__ = AsyncMock(return_value=client)
+    cm.__aexit__ = AsyncMock(return_value=False)
+    with patch("httpx.AsyncClient", return_value=cm):
+        r, _existing = _post(loop, status="published")
+    body = r.json()
+    assert body["success"] is True
+    assert body["message"] == "Regenerated 2 per-vial COA(s); published 2"
+    assert len(body["published"]) == 2
+    url = client.post.call_args.args[0]
+    assert url.endswith(f"/explorer/samples/{TEST_PARENT}/publish-children")
+
+
+def test_non_variance_sample_is_refused(parent):
+    loop = AsyncMock()
+    with patch.object(main, "COA_BUILDER_URL", "http://coab.test"), \
+         patch("integration_db.fetch_primary_generation",
+               return_value={"id": PRIMARY_ID, "status": "draft"}), \
+         patch("coa.variance_series.build_variance_replicates", return_value={}), \
+         patch.object(main, "_generate_vial_coas_loop", loop):
+        r = _client().post(f"/wizard/senaite/samples/{TEST_PARENT}/generate-vial-coas")
+    assert r.json()["success"] is False
+    assert "variance" in r.json()["message"]
+    loop.assert_not_called()
