@@ -409,3 +409,58 @@ def test_parent_image_with_only_a_variance_row_materializes_the_core_vials_photo
         select_image_row(db_session, p2)
     assert "core vial P-0002-S01" in ei.value.detail
     assert len(fake_storage.calls) == 1
+
+
+# --- non-variance samples: sample-level media (Handler ruling 2026-10-23) -------
+
+def test_nonvariance_parent_uses_the_csv_uploaded_on_the_sample_page(
+        db_session, fake_storage, caplog):
+    """P-5556 shape: one core HPLC vial plus an endotoxin vial, the raw
+    instrument CSV uploaded on the sample page with no vial picked, and an
+    HPLC analysis with no stored trace. 1.52.1 failed closed here; a
+    non-variance sample now uses the sample-level CSV."""
+    p = _parent(db_session, "P-5556")
+    core = _vial(db_session, p, 1)
+    _vial(db_session, p, 2, role="endo85")
+    _analysis(db_session, core.sample_id, chrom=None)
+    up = _chrom(db_session, p, kind="manual",
+                filename="P-5556-S01_Inj_1_Retatrutide.dx_VWD1A.CSV")
+    caplog.set_level("INFO")
+    assert select_chromatogram_row(db_session, p).id == up.id
+    assert any("non-variance sample-level rule" in r.message for r in caplog.records)
+    assert fake_storage.calls == []
+
+
+def test_nonvariance_parent_still_prefers_the_core_vials_own_row(db_session):
+    p = _parent(db_session)
+    core = _vial(db_session, p, 1)
+    linked = _chrom(db_session, p, source=core)
+    _chrom(db_session, p, kind="manual", filename="newer-unlinked.csv")
+    assert select_chromatogram_row(db_session, p).id == linked.id
+
+
+def test_nonvariance_parent_never_takes_another_vials_stamped_row(db_session):
+    p = _parent(db_session)
+    _vial(db_session, p, 1)
+    endo = _vial(db_session, p, 2, role="endo85")
+    up = _chrom(db_session, p, kind="manual", filename="sample-level.csv")
+    _chrom(db_session, p, source=endo)                    # newer, another vial's
+    assert select_chromatogram_row(db_session, p).id == up.id
+
+
+def test_nonvariance_parent_with_no_media_at_all_still_fails_closed(
+        db_session, fake_storage):
+    p = _parent(db_session)
+    core = _vial(db_session, p, 1)
+    _analysis(db_session, core.sample_id, chrom=None)
+    with pytest.raises(NativeSectionsError) as ei:
+        select_chromatogram_row(db_session, p)
+    assert "core vial P-2627-S01" in ei.value.detail
+
+
+def test_nonvariance_parent_image_falls_back_to_the_sample_level_photo(
+        db_session, fake_storage):
+    p = _parent(db_session)
+    _vial(db_session, p, 1)                               # no photo of its own
+    photo = _img(db_session, p, kind="receive_image")     # unstamped, sample page
+    assert select_image_row(db_session, p).id == photo.id

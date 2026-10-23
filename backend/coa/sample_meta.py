@@ -244,6 +244,28 @@ def _select_parent_row(db, parent, *, chromatogram: bool, materialize):
                          "materialized rule (vial %s)", parent.sample_id,
                          what, row.id, core.sample_id)
                 return row
+        # Non-variance samples (Handler ruling 2026-10-23): one HPLC vial, so a
+        # file uploaded on the sample page can only be that vial's. The lab
+        # attaches chromatogram CSVs there without picking a vial (the sample
+        # page's upload card has no vial picker), and P-5556 stopped on 1.52.1
+        # because of it. Fall back to the newest unstamped (or core-stamped)
+        # row. Variance lots keep the strict rule: there a sample-level file
+        # could belong to any vial. A row stamped with another vial never
+        # qualifies.
+        has_variance = db.execute(
+            select(LimsSubSample.id).where(
+                LimsSubSample.parent_sample_pk == parent.id,
+                LimsSubSample.assignment_role == "hplc",
+                LimsSubSample.assignment_kind == "variance",
+            ).limit(1)
+        ).first() is not None
+        if not has_variance:
+            row = _newest(db, parent.id, chromatogram=chromatogram,
+                          source_sub_pks=core_ids, or_unstamped=True)
+            if row is not None:
+                log.info("sample_meta: %s %s row %s picked by non-variance "
+                         "sample-level rule", parent.sample_id, what, row.id)
+                return row
         core = core_vials[0].sample_id
         if chromatogram:
             raise NativeSectionsError(
