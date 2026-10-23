@@ -14956,29 +14956,17 @@ async def generate_vial_coas(
         user_id=getattr(current_user, "id", None),
     )
 
-    # A primary that is already published never runs the publish cascade
-    # again, so drafts minted under it would sit unpublished. Publish them
-    # through the IS route that runs the same cascade (IS 1.0.38); a draft
-    # primary carries them on its own Publish.
+    # Drafts only (Handler ruling 2026-10-23): this button never publishes,
+    # even when the sample COA is already published. Vial certificates reach
+    # the customer only through an explicit publish action (Publish, or
+    # Regen & Republish, whose new primary carries them in its cascade).
     published_children: list = []
-    if generated and primary.get("status") == "published":
-        try:
-            async with httpx.AsyncClient(verify=HTTPX_SSL_CONTEXT, timeout=60.0) as client:
-                resp = await client.post(
-                    f"{INTEGRATION_SERVICE_URL}/explorer/samples/{sample_id}/publish-children",
-                    headers={"X-API-Key": INTEGRATION_SERVICE_API_KEY},
-                )
-                resp.raise_for_status()
-                published_children = (resp.json() or {}).get("published") or []
-        except Exception as e:  # noqa: BLE001 (drafts exist; report, never lose them)
-            _logger.warning("publish-children failed for %s: %s", sample_id, e)
-            errors.append({"vial_sequence": None,
-                           "error": f"Generated, but publishing them failed: {e}"})
+    primary_is_live = primary.get("status") == "published"
 
     g, f = len(generated), len(errors)
     parts = [f"Regenerated {g} per-vial COA(s)"]
-    if published_children:
-        parts.append(f"published {len(published_children)}")
+    if generated and primary_is_live:
+        parts.append("drafts only, not published")
     if f:
         parts.append(f"{f} failed")
     if blocked:
