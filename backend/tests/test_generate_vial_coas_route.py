@@ -140,17 +140,13 @@ def test_vials_without_hplc_are_reported_and_not_sent(parent):
     assert [v[0] for v in args[2]] == [1, 2]
 
 
-def test_published_primary_gets_its_new_vial_drafts_published(parent):
-    """A live (published) primary never runs the cascade again, so the route
-    asks the IS to publish its draft children (IS 1.0.38 publish-children)."""
+def test_published_primary_gets_drafts_only_never_publishes(parent):
+    """Handler ruling 2026-10-23: Generate Per-Vial COAs never publishes, even
+    when the sample COA is already published. No call to the IS
+    publish-children route; the vial COAs stay drafts."""
     loop = AsyncMock(return_value=([{"vial_sequence": 1}, {"vial_sequence": 2}], [], []))
-    resp = MagicMock()
-    resp.raise_for_status = MagicMock()
-    resp.json = MagicMock(return_value={"published": [
-        {"verification_code": "AAAA-0001", "vial_sequence": 1},
-        {"verification_code": "AAAA-0002", "vial_sequence": 2}]})
     client = MagicMock()
-    client.post = AsyncMock(return_value=resp)
+    client.post = AsyncMock()
     cm = MagicMock()
     cm.__aenter__ = AsyncMock(return_value=client)
     cm.__aexit__ = AsyncMock(return_value=False)
@@ -158,10 +154,9 @@ def test_published_primary_gets_its_new_vial_drafts_published(parent):
         r, _existing = _post(loop, status="published")
     body = r.json()
     assert body["success"] is True
-    assert body["message"] == "Regenerated 2 per-vial COA(s); published 2"
-    assert len(body["published"]) == 2
-    url = client.post.call_args.args[0]
-    assert url.endswith(f"/explorer/samples/{TEST_PARENT}/publish-children")
+    assert body["message"] == "Regenerated 2 per-vial COA(s); drafts only, not published"
+    assert body["published"] == []
+    client.post.assert_not_called()
 
 
 def test_non_variance_sample_is_refused(parent):

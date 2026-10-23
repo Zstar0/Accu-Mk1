@@ -1,5 +1,10 @@
 # Changelog
 
+## v1.52.2 - 2026-10-23
+
+### Generate Per-Vial COAs never publishes
+- **The button only makes drafts now**, even when the sample COA is already published. In 1.52.0 it sent the new vial COAs straight to the customer in that case. Preview them with the PDF button; they go out with the next Publish or Regen & Republish.
+
 ## v1.52.1 - 2026-10-23
 
 ### Fix: a COA uses only its own vial's chromatogram and photo
