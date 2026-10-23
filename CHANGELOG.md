@@ -11,6 +11,11 @@
 - **Generate Per-Vial COAs publishes them when the sample COA is already published**, and is refused for samples that are not variance lots.
 - **Publish refuses a stale draft.** If the draft that would be published is older than the published COA, Publish stops and says so.
 
+### Flags: past flags show on the Flag button and in its history
+- **The "N past" chip beside the Flag button now appears** once a flag on that item has been resolved; before, it never showed on a real page.
+- **Clicking it opens that item's full flag history**, every status, instead of an empty list filtered to open flags.
+- Board side panels and the endotoxin worksheet still show open flags only.
+
 ### COA console: native-born samples no longer show SENAITE steps
 - **Generate and Publish consoles name the real last step.** For a sample born in Mk1 the generate console ends with "Recording in sample registry" instead of "Attaching to SENAITE", and the publish console ends with "Updating sample registry" instead of "SENAITE transition"; the backend already skipped the SENAITE attach and transition for those samples. SENAITE-born samples keep the SENAITE labels in both read modes. Labels only; step ids and timings are unchanged.
 
