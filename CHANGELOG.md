@@ -1,5 +1,11 @@
 # Changelog
 
+## v1.52.3 - 2026-10-23
+
+### Sample COAs on non-variance samples use the chromatogram on the sample page
+- **Generate COA works again when the chromatogram CSV was uploaded on the sample page** without picking a vial. 1.52.1 stopped these with "No chromatogram is linked to core vial" (P-5556). A sample with no variance vials has one HPLC vial, so a sample-level file can only be that vial's; the sample COA now uses it, and the same for the photo.
+- The core vial's own linked chromatogram and photo still win when they exist. Variance lots keep the strict rule: only the core vial's own media.
+
 ## v1.52.2 - 2026-10-23
 
 ### Generate Per-Vial COAs never publishes
