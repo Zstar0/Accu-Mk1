@@ -306,6 +306,11 @@ def list_flags(db: Session, *, user_id: int, tab: str, status: Optional[str] = N
         stmt = stmt.where(FlagFlag.id.in_(sub))
     elif tab == "all_open":
         stmt = stmt.where(FlagFlag.status.in_(open_states))
+    elif tab == "all":
+        # Every status, resolved/closed included: one entity's flag history (the
+        # past flags beside its Flag button). Entity-only so it never lists the table.
+        if not (entity_type and entity_id):
+            raise BadRequestError("tab 'all' needs entity_type and entity_id")
     else:
         raise BadRequestError(f"unknown tab {tab!r}")
     if status:

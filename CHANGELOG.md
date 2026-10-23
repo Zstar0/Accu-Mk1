@@ -1,5 +1,27 @@
 # Changelog
 
+## v1.52.0 - 2026-10-23
+
+### Fix: customers get the Analyzing email when HPLC prep starts
+- **Starting an HPLC sample prep on a vial now moves the order to Analyzing.** HPLC-only native samples never go on a worksheet, and a worksheet add was the only thing that sent Analyzing, so since 09-22 about two thirds of native orders went from Sample Received straight to Under Review with no "Analysis in progress" email. Creating a vial prep session now tells the Integration Service, the same way adding to a worksheet does. Standards preps do not notify, and an order already past Analyzing is unchanged.
+
+### Per-vial COAs carry each vial's own results
+- **A vial COA now shows every test run on that vial.** Besides its own HPLC figures, each per-vial certificate carries the other results the lab promoted from that vial (for example endotoxin on the vial it was run on). Results from other vials are left off.
+- **Only used vials get a certificate.** Every vial is checked; a vial with no results gets none.
+- **Vials without HPLC are listed, not generated yet.** A certificate with no HPLC results needs a COA Builder change that is still being designed, so such a vial is named in the result instead of failing the run.
+- **No more Core COA for variance lots.** The sample COA already carries everything the Core COA had; new generates and regenerates no longer produce one. Existing Core COAs are unchanged.
+- **Regen & Republish refreshes the vial COAs too.** They are regenerated and published with the new sample COA.
+- **Generate Per-Vial COAs publishes them when the sample COA is already published**, and is refused for samples that are not variance lots.
+- **Publish refuses a stale draft.** If the draft that would be published is older than the published COA, Publish stops and says so.
+
+### Flags: past flags show on the Flag button and in its history
+- **The "N past" chip beside the Flag button now appears** once a flag on that item has been resolved; before, it never showed on a real page.
+- **Clicking it opens that item's full flag history**, every status, instead of an empty list filtered to open flags.
+- Board side panels and the endotoxin worksheet still show open flags only.
+
+### COA console: native-born samples no longer show SENAITE steps
+- **Generate and Publish consoles name the real last step.** For a sample born in Mk1 the generate console ends with "Recording in sample registry" instead of "Attaching to SENAITE", and the publish console ends with "Updating sample registry" instead of "SENAITE transition"; the backend already skipped the SENAITE attach and transition for those samples. SENAITE-born samples keep the SENAITE labels in both read modes. Labels only; step ids and timings are unchanged.
+
 ## v1.51.0 - 2026-10-21
 
 ### Customer Insights: segments instead of a cohort tab
