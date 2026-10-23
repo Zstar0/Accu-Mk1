@@ -95,7 +95,12 @@ export function EntityFlagButton({
   size = 'md',
   className,
 }: EntityFlagButtonProps) {
-  const { data } = useEntityFlags(entityType, entityId, { includeDescendants })
+  // includePast: without it the API returns open flags only and `past` below is
+  // always empty (the v1.45.2 chip never rendered on a real page).
+  const { data } = useEntityFlags(entityType, entityId, {
+    includeDescendants,
+    includePast: true,
+  })
   const typesMap = useFlagTypesMap()
   const open = (data ?? []).filter(f => OPEN_STATES.has(f.status))
   // Resolved / closed flags: invisible before, so an item with only past flags looked never-flagged.

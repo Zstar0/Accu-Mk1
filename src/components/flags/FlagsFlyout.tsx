@@ -135,7 +135,11 @@ export function FlagsFlyout() {
   const isUnread = tab === 'unread'
   // Per-tab triage filters, persisted in localStorage (personal tabs default
   // to All-Open). Keyed on the active tab; switching tabs restores its filter.
-  const [filter, setFilter] = useFlagFilter(tab)
+  // The entity view (an item's flag history) keeps its own filter: the tab's
+  // default would be All-Open and hide the resolved flags it exists to show.
+  const [filter, setFilter] = useFlagFilter(
+    entityFilter != null ? 'entity' : tab
+  )
   // Persisted display style (stacked list vs. aligned table).
   const [viewMode, setViewMode] = useFlagViewMode()
   // Flags the user was just pinged about (snapshot captured when this flyout
@@ -164,6 +168,7 @@ export function FlagsFlyout() {
   )
   const entityQuery = useEntityFlags(entityFilter?.type, entityFilter?.id, {
     includeDescendants: entityFilter?.includeDescendants ?? false,
+    includePast: true,
   })
   // Order/samples scope filters the page-wide all_open list client-side. Same
   // query key the indicators already loaded, so TanStack Query dedupes it.
