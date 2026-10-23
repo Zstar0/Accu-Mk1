@@ -78,6 +78,27 @@ def test_list_tabs_and_summary(db):
     assert s["by_type"] == {"blocker": 1}
 
 
+def test_all_tab_returns_entity_history_including_resolved(db):
+    from flags import service
+    from flags.errors import BadRequestError
+    u = _user(7)
+    gone = service.create_flag(db, user=u, entity_type="sub_sample", entity_id="1",
+                               type="question", title="done")
+    service.change_status(db, user=u, flag_id=gone.id, to_status="resolved")
+    live = service.create_flag(db, user=u, entity_type="sub_sample", entity_id="1",
+                               type="blocker", title="live")
+    service.create_flag(db, user=u, entity_type="sub_sample", entity_id="2",
+                        type="blocker", title="other entity")
+    open_only = service.list_flags(db, user_id=7, tab="all_open",
+                                   entity_type="sub_sample", entity_id="1")
+    assert [f.id for f in open_only] == [live.id]
+    history = service.list_flags(db, user_id=7, tab="all",
+                                 entity_type="sub_sample", entity_id="1")
+    assert {f.id for f in history} == {gone.id, live.id}
+    with pytest.raises(BadRequestError):
+        service.list_flags(db, user_id=7, tab="all")
+
+
 def test_summary_by_type_scoped_to_assignee(db):
     from flags import service
     u7, u8 = _user(7), _user(8)

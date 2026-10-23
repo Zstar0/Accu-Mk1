@@ -51,7 +51,16 @@ describe('flagKeys', () => {
 
   it('scopes the entity key under ["flags"] so the SSE glue refreshes it', () => {
     const key = flagKeys.entity('sample', '5', true)
-    expect(key).toEqual(['flags', 'entity', 'sample', '5', true])
+    expect(key).toEqual(['flags', 'entity', 'sample', '5', true, false])
+    // Past-inclusive variant is a distinct cache entry under the same prefix.
+    expect(flagKeys.entity('sample', '5', true, true)).toEqual([
+      'flags',
+      'entity',
+      'sample',
+      '5',
+      true,
+      true,
+    ])
     // Must live under the ['flags'] prefix the glue blanket-invalidates.
     expect(key[0]).toBe('flags')
   })
@@ -69,7 +78,30 @@ describe('useEntityFlags', () => {
       { wrapper: makeWrapper(qc) }
     )
     await waitFor(() =>
-      expect(api.listEntityFlags).toHaveBeenCalledWith('sample', '5', true)
+      expect(api.listEntityFlags).toHaveBeenCalledWith(
+        'sample',
+        '5',
+        true,
+        false
+      )
+    )
+    qc.clear()
+  })
+
+  it('asks for past flags only when includePast is set', async () => {
+    const qc = new QueryClient({
+      defaultOptions: { queries: { retry: false } },
+    })
+    renderHook(() => useEntityFlags('sample', '5', { includePast: true }), {
+      wrapper: makeWrapper(qc),
+    })
+    await waitFor(() =>
+      expect(api.listEntityFlags).toHaveBeenCalledWith(
+        'sample',
+        '5',
+        false,
+        true
+      )
     )
     qc.clear()
   })
