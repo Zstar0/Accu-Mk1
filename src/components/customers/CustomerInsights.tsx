@@ -16,21 +16,23 @@ import {
   getCustomerChurnSignals,
   getCustomerCohorts,
   getCustomerList,
+  getCustomerSegments,
   getCustomerSummary,
   type InsightsPeriod,
 } from '@/lib/api'
 import { Switch } from '@/components/ui/switch'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import {
-  addMonths,
+  cohortTint,
   fmtDelta,
   fmtMoney,
   fmtPct,
   fmtPrice,
   fmtPoints,
+  SEGMENT_LABEL,
+  SEGMENT_RULE,
 } from './insights-utils'
 import { AtRiskTable } from './AtRiskTable'
-import { CohortGrid } from './CohortGrid'
 import {
   InsightsCustomerTable,
   type InsightsSortField,
@@ -137,8 +139,7 @@ export function CustomerInsights({
 }) {
   const period = useUIStore(state => state.insightsView.period)
   const tab = useUIStore(state => state.insightsView.tab)
-  const cohort = useUIStore(state => state.insightsView.cohort)
-  const month = useUIStore(state => state.insightsView.month)
+  const segment = useUIStore(state => state.insightsView.segment)
   const setInsightsView = useUIStore(state => state.setInsightsView)
   const excludeLaunch = useUIStore(state => state.insightsView.excludeLaunch)
   const summary = useQuery({
@@ -197,48 +198,45 @@ export function CustomerInsights({
   const newTouch = useTouchpoints(
     tab === 'new' ? (newCustomers.data?.rows.map(r => r.key) ?? []) : []
   )
-  // Cohort members: paging resets from the grid's select handler.
-  const [memberView, setMemberView] = useState(LIST_DEFAULT)
-  const { page: memberPage, sort: memberSort, dir: memberDir } = memberView
-  // 'M3' on the 2026-07 row means came back in 2026-10.
-  const returnedIn =
-    cohort && month ? addMonths(cohort, Number(month.slice(1))) : undefined
-  const setMember = (v: Partial<typeof LIST_DEFAULT>) =>
-    setMemberView(cur => ({ ...cur, ...v }))
-  const members = useQuery({
+  // Segments: fixed trailing 12 months, launch accounts included (Handler 2026-10-20).
+  const segments = useQuery({
+    queryKey: ['customers', 'segments'],
+    queryFn: getCustomerSegments,
+    enabled: tab === 'segments',
+    staleTime: 60_000,
+  })
+  const [segView, setSegView] = useState(LIST_DEFAULT)
+  const { page: segPage, sort: segSort, dir: segDir } = segView
+  const setSeg = (v: Partial<typeof LIST_DEFAULT>) =>
+    setSegView(cur => ({ ...cur, ...v }))
+  const segMembers = useQuery({
     queryKey: [
       'customers',
       'list',
-      'cohort',
-      cohort,
-      month,
-      memberSort,
-      memberDir,
-      memberPage,
+      'segment',
+      segment,
+      segSort,
+      segDir,
+      segPage,
     ],
     queryFn: () =>
       getCustomerList({
-        cohort: cohort ?? undefined,
-        returned_in: returnedIn,
-        exclude_launch_accounts: true,
+        segment,
         period: 'all',
-        sort: memberSort,
-        dir: memberDir,
-        page: memberPage,
+        sort: segSort,
+        dir: segDir,
+        page: segPage,
         page_size: 25,
       }),
-    enabled: cohort != null,
     staleTime: 60_000,
-    // Keep rows while paging or sorting, never across a selection change.
+    enabled: tab === 'segments',
+    // Keep rows while paging or sorting, never across a segment change.
     placeholderData: (prev, prevQuery) =>
-      prevQuery?.queryKey[3] === cohort && prevQuery.queryKey[4] === month
-        ? prev
-        : undefined,
+      prevQuery?.queryKey[3] === segment ? prev : undefined,
   })
-  const memberTouch = useTouchpoints(
-    tab === 'cohorts' ? (members.data?.rows.map(r => r.key) ?? []) : []
+  const segTouch = useTouchpoints(
+    tab === 'segments' ? (segMembers.data?.rows.map(r => r.key) ?? []) : []
   )
-  const cohortSize = cohorts.data?.rows.find(r => r.cohort === cohort)?.size
   const s = summary.data
 
   return (
@@ -363,59 +361,105 @@ export function CustomerInsights({
             />
           </div>
 
-          <section className={CARD}>
-            <h2 className="text-sm font-medium">
-              Revenue by month: new vs returning customers
-            </h2>
-            <div className="h-[230px]">
-              <ResponsiveContainer width="100%" height="100%">
-                <BarChart
-                  data={s.revenue_by_month.map(m => ({
-                    month: m.month,
-                    new: Number(m.new),
-                    returning: Number(m.returning),
-                  }))}
-                >
-                  <CartesianGrid
-                    strokeDasharray="3 3"
-                    stroke="#374151"
-                    opacity={0.5}
-                    vertical={false}
-                  />
-                  <XAxis
-                    dataKey="month"
-                    tick={{ fontSize: 10, fill: '#9ca3af' }}
-                    tickLine={false}
-                    axisLine={false}
-                  />
-                  <YAxis
-                    tickFormatter={(v: number) => fmtMoney(String(v))}
-                    tick={{ fontSize: 10, fill: '#9ca3af' }}
-                    tickLine={false}
-                    axisLine={false}
-                    width={60}
-                  />
-                  <ChartTooltip
-                    formatter={(v: number | undefined) =>
-                      fmtMoney(String(v ?? 0))
-                    }
-                  />
-                  <Bar
-                    dataKey="returning"
-                    stackId="r"
-                    fill={RETURNING}
-                    name="Returning customers"
-                  />
-                  <Bar
-                    dataKey="new"
-                    stackId="r"
-                    fill={NEW}
-                    name="New customers"
-                  />
-                </BarChart>
-              </ResponsiveContainer>
-            </div>
-          </section>
+          <div className="grid gap-3 xl:grid-cols-[1.45fr_1fr]">
+            <section className={CARD}>
+              <h2 className="text-sm font-medium">
+                Revenue by month: new vs returning customers
+              </h2>
+              <div className="h-[230px]">
+                <ResponsiveContainer width="100%" height="100%">
+                  <BarChart
+                    data={s.revenue_by_month.map(m => ({
+                      month: m.month,
+                      new: Number(m.new),
+                      returning: Number(m.returning),
+                    }))}
+                  >
+                    <CartesianGrid
+                      strokeDasharray="3 3"
+                      stroke="#374151"
+                      opacity={0.5}
+                      vertical={false}
+                    />
+                    <XAxis
+                      dataKey="month"
+                      tick={{ fontSize: 10, fill: '#9ca3af' }}
+                      tickLine={false}
+                      axisLine={false}
+                    />
+                    <YAxis
+                      tickFormatter={(v: number) => fmtMoney(String(v))}
+                      tick={{ fontSize: 10, fill: '#9ca3af' }}
+                      tickLine={false}
+                      axisLine={false}
+                      width={60}
+                    />
+                    <ChartTooltip
+                      formatter={(v: number | undefined) =>
+                        fmtMoney(String(v ?? 0))
+                      }
+                    />
+                    <Bar
+                      dataKey="returning"
+                      stackId="r"
+                      fill={RETURNING}
+                      name="Returning customers"
+                    />
+                    <Bar
+                      dataKey="new"
+                      stackId="r"
+                      fill={NEW}
+                      name="New customers"
+                    />
+                  </BarChart>
+                </ResponsiveContainer>
+              </div>
+            </section>
+
+            <section className={CARD}>
+              <h2 className="text-sm font-medium">Re-order cohorts</h2>
+              <p className="mb-2 text-[11px] text-muted-foreground">
+                Share of each first-order month&apos;s customers who ordered
+                again N months later (launch accounts excluded)
+              </p>
+              {cohorts.error ? (
+                <SectionError
+                  label="cohorts"
+                  onRetry={() => cohorts.refetch()}
+                />
+              ) : (
+                <table className="w-full text-xs tabular-nums">
+                  <thead>
+                    <tr className="text-muted-foreground">
+                      <th className="py-1 text-start font-medium">Cohort</th>
+                      <th className="font-medium">n</th>
+                      {cohorts.data?.months.slice(0, 6).map(m => (
+                        <th key={m} className="font-medium">
+                          {m}
+                        </th>
+                      ))}
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {cohorts.data?.rows.map(r => (
+                      <tr key={r.cohort}>
+                        <td className="py-0.5">{r.cohort}</td>
+                        <td className="text-center">{r.size}</td>
+                        {r.cells.slice(0, 6).map((c, i) => (
+                          <td
+                            key={i}
+                            className={cn('rounded text-center', cohortTint(c))}
+                          >
+                            {c == null ? '' : fmtPct(c, c < 0.2 ? 1 : 0)}
+                          </td>
+                        ))}
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              )}
+            </section>
+          </div>
 
           <section className={CARD}>
             <Tabs
@@ -430,7 +474,7 @@ export function CustomerInsights({
                   New customers
                   {newCustomers.data && ` (${newCustomers.data.total})`}
                 </TabsTrigger>
-                <TabsTrigger value="cohorts">Cohorts</TabsTrigger>
+                <TabsTrigger value="segments">Segments</TabsTrigger>
               </TabsList>
               <TabsContent value="at-risk" className="mt-2">
                 <p className="mb-2 text-[11px] text-muted-foreground">
@@ -492,77 +536,87 @@ export function CustomerInsights({
                   )
                 )}
               </TabsContent>
-              <TabsContent value="cohorts" className="mt-2">
+              <TabsContent value="segments" className="mt-2">
                 <p className="mb-2 text-[11px] text-muted-foreground">
-                  Share of each first-order month&apos;s customers who ordered
-                  again N months later (launch accounts excluded)
+                  Customers by their last 12 months of paid spend and testing
+                  orders (launch accounts included)
                 </p>
-                {cohorts.error ? (
+                {segments.error ? (
                   <SectionError
-                    label="cohorts"
-                    onRetry={() => cohorts.refetch()}
+                    label="segments"
+                    onRetry={() => segments.refetch()}
                   />
                 ) : (
-                  cohorts.data && (
-                    <CohortGrid
-                      months={cohorts.data.months}
-                      rows={cohorts.data.rows}
-                      selectedCohort={cohort}
-                      selectedMonth={month}
-                      onSelect={(c, m) => {
-                        setInsightsView({ cohort: c, month: m })
-                        setMemberView(LIST_DEFAULT)
-                      }}
+                  <div className="mb-3 grid grid-cols-2 gap-2 lg:grid-cols-4">
+                    {segments.data?.segments.map(g => (
+                      <button
+                        key={g.segment}
+                        type="button"
+                        aria-pressed={segment === g.segment}
+                        onClick={() => {
+                          setInsightsView({ segment: g.segment })
+                          setSegView(LIST_DEFAULT)
+                        }}
+                        className={cn(
+                          'cursor-pointer rounded-lg border px-3 py-2 text-start',
+                          segment === g.segment
+                            ? 'border-primary bg-primary/10'
+                            : 'border-border/50 bg-card/50 hover:bg-muted/30'
+                        )}
+                      >
+                        <div className="text-sm font-medium">
+                          {SEGMENT_LABEL[g.segment]}
+                        </div>
+                        <div className="text-[11px] text-muted-foreground">
+                          {SEGMENT_RULE[g.segment]}
+                        </div>
+                        <div className="mt-1 text-2xl font-bold tabular-nums">
+                          {g.customers.toLocaleString('en-US')}
+                        </div>
+                        <div className="text-xs tabular-nums text-muted-foreground">
+                          {fmtPct(g.share, 0)} of revenue,{' '}
+                          {fmtMoney(g.revenue_12m)}
+                        </div>
+                        <div className="text-xs tabular-nums text-muted-foreground">
+                          Median {g.median_testing_orders_12m ?? 'n/a'} orders,{' '}
+                          {g.median_samples_12m ?? 'n/a'} samples
+                        </div>
+                      </button>
+                    ))}
+                  </div>
+                )}
+                {segMembers.error ? (
+                  <SectionError
+                    label="segment customers"
+                    onRetry={() => segMembers.refetch()}
+                  />
+                ) : (
+                  segMembers.data && (
+                    <InsightsCustomerTable
+                      rows={segMembers.data.rows}
+                      total={segMembers.data.total}
+                      page={segPage}
+                      pageSize={25}
+                      onPage={page => setSeg({ page })}
+                      sort={segSort}
+                      dir={segDir}
+                      onSort={f =>
+                        setSeg(
+                          f === segSort
+                            ? {
+                                dir: segDir === 'asc' ? 'desc' : 'asc',
+                                page: 1,
+                              }
+                            : { sort: f, dir: 'desc', page: 1 }
+                        )
+                      }
+                      tz={s.tz}
+                      touch={segTouch}
+                      onOpenCustomer={onOpenCustomer}
+                      emptyText="No customers in this segment"
                     />
                   )
                 )}
-                <div className="mt-3 border-t border-border/30 pt-3">
-                  {cohort == null ? (
-                    <p className="py-4 text-center text-sm text-muted-foreground">
-                      Pick a cohort to see its customers
-                    </p>
-                  ) : (
-                    <>
-                      <h3 className="mb-2 text-sm font-medium">
-                        {returnedIn
-                          ? `${cohort} cohort · came back in ${month} (${returnedIn}) · ${members.data?.total ?? '…'} of ${cohortSize ?? '…'}`
-                          : `${cohort} cohort · ${cohortSize ?? '…'} customers`}
-                      </h3>
-                      {members.error ? (
-                        <SectionError
-                          label="cohort customers"
-                          onRetry={() => members.refetch()}
-                        />
-                      ) : (
-                        members.data && (
-                          <InsightsCustomerTable
-                            rows={members.data.rows}
-                            total={members.data.total}
-                            page={memberPage}
-                            pageSize={25}
-                            onPage={page => setMember({ page })}
-                            sort={memberSort}
-                            dir={memberDir}
-                            onSort={f =>
-                              setMember(
-                                f === memberSort
-                                  ? {
-                                      dir: memberDir === 'asc' ? 'desc' : 'asc',
-                                      page: 1,
-                                    }
-                                  : { sort: f, dir: 'desc', page: 1 }
-                              )
-                            }
-                            tz={s.tz}
-                            touch={memberTouch}
-                            onOpenCustomer={onOpenCustomer}
-                            emptyText="No customers to show"
-                          />
-                        )
-                      )}
-                    </>
-                  )}
-                </div>
               </TabsContent>
             </Tabs>
           </section>

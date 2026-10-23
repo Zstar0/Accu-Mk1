@@ -174,23 +174,23 @@ describe('UIStore customer actions', () => {
       insightsView: {
         tab: 'at-risk',
         period: '90d',
-        cohort: null,
-        month: null,
+        segment: 'key',
         excludeLaunch: false,
       },
     })
-    useUIStore.getState().setInsightsView({ tab: 'cohorts', cohort: '2026-07' })
+    useUIStore
+      .getState()
+      .setInsightsView({ tab: 'segments', segment: 'growth' })
     expect(useUIStore.getState().insightsView).toEqual({
-      tab: 'cohorts',
+      tab: 'segments',
       period: '90d',
-      cohort: '2026-07',
-      month: null,
+      segment: 'growth',
       excludeLaunch: false,
     })
     useUIStore.getState().setInsightsView({ excludeLaunch: true })
     expect(useUIStore.getState().insightsView.excludeLaunch).toBe(true)
-    useUIStore.getState().setInsightsView({ month: 'M3' })
-    expect(useUIStore.getState().insightsView.cohort).toBe('2026-07')
+    useUIStore.getState().setInsightsView({ period: '1y' })
+    expect(useUIStore.getState().insightsView.segment).toBe('growth')
   })
 
   it('setSearchAndResetPage atomically updates search term and resets page to 0', () => {

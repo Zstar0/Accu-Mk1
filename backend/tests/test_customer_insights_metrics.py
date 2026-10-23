@@ -358,3 +358,23 @@ def test_customer_rows_first_order_and_testing_count() -> None:
     assert rows["wc:1"]["first_order_at"] == (T0).isoformat() and rows["wc:1"]["testing_orders"] == 2
     assert rows["wc:1"]["orders"] == 3
     assert rows["wc:2"]["first_order_at"] is None and rows["wc:2"]["testing_orders"] == 0
+
+
+def test_segment_fields_use_the_trailing_12_months_and_summary_sums() -> None:
+    end = T0 + timedelta(days=400)
+    data = ds([
+        o("wc:1", 0, "50000"),                      # outside the 12-month window
+        o("wc:1", 380, "6000"), o("wc:1", 390, "6000"),  # 12 000 inside: key
+        o("wc:2", 300, "3000"),                     # growth
+        o("wc:3", 350, "100"), o("wc:3", 360, "100"),    # regular
+        o("wc:4", 395, "125"),                      # trial
+        o("wc:5", 10, "900"),                       # nothing in the window: no segment
+    ])
+    rows = {r["key"]: r for r in metrics.customer_rows(data, start=None, end=end, tz=TZ)}
+    assert rows["wc:1"]["spend_12m"] == "12000.00" and rows["wc:1"]["testing_orders_12m"] == 2
+    assert [rows[k]["segment"] for k in ("wc:1", "wc:2", "wc:3", "wc:4", "wc:5")] == ["key", "growth", "regular", "trial", None]
+    summary = {s["segment"]: s for s in metrics.segment_summary(list(rows.values()))}
+    assert list(summary) == ["key", "growth", "regular", "trial"]
+    assert summary["key"]["customers"] == 1 and summary["key"]["revenue_12m"] == "12000.00"
+    assert summary["key"]["share"] == round(12000 / 15325, 4)
+    assert summary["regular"]["median_testing_orders_12m"] == 2

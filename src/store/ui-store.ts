@@ -1,6 +1,6 @@
 import { create } from 'zustand'
 import { devtools } from 'zustand/middleware'
-import type { InsightsPeriod } from '@/lib/api'
+import type { CustomerSegment, InsightsPeriod } from '@/lib/api'
 
 // Navigation sections for main content area
 export type ActiveSection =
@@ -83,13 +83,12 @@ export type CustomerDetailTab =
   | 'support'
   | 'ai-review'
 
-export type InsightsTab = 'at-risk' | 'new' | 'cohorts'
+export type InsightsTab = 'at-risk' | 'new' | 'segments'
 
 export interface InsightsView {
   tab: InsightsTab
   period: InsightsPeriod
-  cohort: string | null
-  month: string | null
+  segment: CustomerSegment
   // The "Exclude launch accounts" switch; kept here so it survives opening a
   // customer from Insights and coming back.
   excludeLaunch: boolean
@@ -392,8 +391,7 @@ export const useUIStore = create<UIState>()(
       insightsView: {
         tab: 'at-risk',
         period: '90d',
-        cohort: null,
-        month: null,
+        segment: 'key',
         excludeLaunch: false,
       },
       customerOrderSearch: {

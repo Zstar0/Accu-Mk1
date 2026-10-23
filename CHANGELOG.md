@@ -1,11 +1,17 @@
 # Changelog
 
-## v1.50.2 - 2026-10-21
+## v1.51.3 - 2026-10-23
 
 ### Fix: a COA uses only its own vial's chromatogram and photo
 - **The sample COA reads only the core HPLC vial.** Its chromatogram and photo come from the core vial: one filed for that vial, or the vial's own HPLC trace or check-in photo. It no longer falls back to an unlabelled upload on the sample or to another vial's file.
 - **Missing means stop, not guess.** When the core vial has neither, generating the COA stops with a message naming the vial and how to fix it, instead of printing another file or no chromatogram.
 - Samples with no HPLC vial (micro-only) are unchanged.
+
+## v1.51.0 - 2026-10-21
+
+### Customer Insights: segments instead of a cohort tab
+- **The re-order cohort grid is back beside the revenue chart**, where it was before 1.50.0.
+- **New Segments tab.** Customers are classed on their last 12 months: Key accounts ($10K or more paid), Growth ($2.5K to $10K), Regular (under $2.5K with 2 or more testing orders) and Trial (0 or 1 testing order). Each tile shows how many customers, their share of revenue and their median orders and samples; click one to list its customers, with the same CRM and support columns as the other lists.
 
 ## v1.50.0 - 2026-10-20
 

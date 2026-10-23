@@ -228,6 +228,9 @@ def customer_rows(ds: Dataset, *, start: datetime | None, end: datetime, tz: str
         for x in orders:
             monthly[rules.lab_month(x.paid_at, tz)] += x.net
         tests = Counter(t for x in orders for t in x.tests)
+        y_start = end - timedelta(days=rules.SEGMENT_WINDOW_DAYS)
+        spend_12m = _spend(orders, y_start, end)
+        testing_12m = [x for x in orders if x.is_testing and x.paid_at >= y_start]
         rows.append({
             "key": key, "name": c.name if c else key, "email": c.email if c else None,
             "company": c.company if c else None, "rep": c.rep if c else None,
@@ -242,15 +245,34 @@ def customer_rows(ds: Dataset, *, start: datetime | None, end: datetime, tz: str
             "top_tests": [t for t, _ in tests.most_common(3)],
             "status": rules.spend_status(paid_orders=len(orders), at_risk=risk, period=period, prior=prior),
             "monthly": [{"month": m, "spend": money(v)} for m, v in sorted(monthly.items())],
+            "spend_12m": money(spend_12m),
+            "testing_orders_12m": len(testing_12m),
+            "samples_12m": sum(x.samples for x in testing_12m),
+            "segment": rules.segment(spend_12m, len(testing_12m)),
         })
     return rows
+
+
+def segment_summary(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """One entry per segment, in rules.SEGMENTS order: customers, 12-month revenue and share, median activity."""
+    total = sum((Decimal(r["spend_12m"]) for r in rows if r["segment"]), ZERO)
+    out = []
+    for seg in rules.SEGMENTS:
+        group = [r for r in rows if r["segment"] == seg]
+        revenue = sum((Decimal(r["spend_12m"]) for r in group), ZERO)
+        out.append({
+            "segment": seg, "customers": len(group), "revenue_12m": money(revenue),
+            "share": round(float(revenue / total), 4) if total else 0.0,
+            "median_testing_orders_12m": _med([r["testing_orders_12m"] for r in group]),
+            "median_samples_12m": _med([r["samples_12m"] for r in group]),
+        })
+    return out
 
 
 def at_risk(ds: Dataset, *, end: datetime, tz: str) -> list[dict[str, Any]]:
     rows = [r for r in customer_rows(ds, start=end - timedelta(days=90), end=end, tz=tz) if r["status"] == "at_risk"]
     by = _by_customer(ds, end)
     for r in rows:
-        r["spend_12m"] = money(_spend(by[r["key"]], end - timedelta(days=365), end))
         r["overdue"] = rules.overdue_ratio([x.paid_at for x in by[r["key"]] if x.is_testing], end)
     return sorted(rows, key=lambda r: Decimal(r["spend_12m"]), reverse=True)
 
