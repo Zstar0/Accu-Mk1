@@ -1,5 +1,10 @@
 # Changelog
 
+## v1.51.1 - 2026-10-21
+
+### COA console: native-born samples no longer show SENAITE steps
+- **Generate and Publish consoles name the real last step.** For a sample born in Mk1 the generate console ends with "Recording in sample registry" instead of "Attaching to SENAITE", and the publish console ends with "Updating sample registry" instead of "SENAITE transition"; the backend already skipped the SENAITE attach and transition for those samples. SENAITE-born samples keep the SENAITE labels in both read modes. Labels only; step ids and timings are unchanged.
+
 ## v1.51.0 - 2026-10-21
 
 ### Customer Insights: segments instead of a cohort tab
