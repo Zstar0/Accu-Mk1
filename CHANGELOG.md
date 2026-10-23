@@ -2,6 +2,9 @@
 
 ## v1.52.0 - 2026-10-23
 
+### Fix: customers get the Analyzing email when HPLC prep starts
+- **Starting an HPLC sample prep on a vial now moves the order to Analyzing.** HPLC-only native samples never go on a worksheet, and a worksheet add was the only thing that sent Analyzing, so since 09-22 about two thirds of native orders went from Sample Received straight to Under Review with no "Analysis in progress" email. Creating a vial prep session now tells the Integration Service, the same way adding to a worksheet does. Standards preps do not notify, and an order already past Analyzing is unchanged.
+
 ### Per-vial COAs carry each vial's own results
 - **A vial COA now shows every test run on that vial.** Besides its own HPLC figures, each per-vial certificate carries the other results the lab promoted from that vial (for example endotoxin on the vial it was run on). Results from other vials are left off.
 - **Only used vials get a certificate.** Every vial is checked; a vial with no results gets none.
