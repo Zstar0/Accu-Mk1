@@ -154,6 +154,12 @@ describe('EntityFlagButton', () => {
         includeDescendants
       />
     )
+    // Without includePast the API returns open flags only and this chip never
+    // renders on a real page (the v1.45.2 bug the mocked data hid).
+    expect(useEntityFlags).toHaveBeenCalledWith('sample', 'P-0071', {
+      includeDescendants: true,
+      includePast: true,
+    })
     fireEvent.click(screen.getByRole('button', { name: /1 past flag/i }))
     const s = useUIStore.getState()
     expect(s.flagsFlyoutOpen).toBe(true)
