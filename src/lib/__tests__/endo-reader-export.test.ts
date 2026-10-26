@@ -111,29 +111,29 @@ describe('EndoScan-V sample export', () => {
     ])
 
     // The reader shows the vial; the Sample ID says the peptide.
-    const a = rows[0]!
-    expect(a['Product Family']).toBe('Peptides')
-    expect(a['Dil./Conc.']).toBe('1:1')
-    expect(a.Units).toBe('mL/mL')
-    expect(a['Max. Dosage']).toBe('0')
-    expect(a['Auto Spike']).toBe('Yes')
-    expect(a['Performed With']).toBe('LAL')
-    expect(a['EU Criteria']).toBe('≤')
-    expect(a['Endotoxin Limit']).toBe('0.7') // 350 / (2 mL x 250)
-    expect(a.Comments).toBe('1:250 in 2 mL')
+    const a = rows[0]
+    expect(a?.['Product Family']).toBe('Peptides')
+    expect(a?.['Dil./Conc.']).toBe('1:1')
+    expect(a?.Units).toBe('mL/mL')
+    expect(a?.['Max. Dosage']).toBe('0')
+    expect(a?.['Auto Spike']).toBe('Yes')
+    expect(a?.['Performed With']).toBe('LAL')
+    expect(a?.['EU Criteria']).toBe('≤')
+    expect(a?.['Endotoxin Limit']).toBe('0.7') // 350 / (2 mL x 250)
+    expect(a?.Comments).toBe('1:250 in 2 mL')
 
-    expect(rows[1]!['Endotoxin Limit']).toBe('0.583') // 350 / (2 x 300)
-    expect(rows[1]!.Comments).toBe('1:300 in 2 mL')
+    expect(rows[1]?.['Endotoxin Limit']).toBe('0.583') // 350 / (2 x 300)
+    expect(rows[1]?.Comments).toBe('1:300 in 2 mL')
 
     // A liquid vial's own water.
-    expect(rows[2]!.Comments).toBe('1:250 in 3 mL')
-    expect(rows[2]!['Endotoxin Limit']).toBe('0.467') // 350 / (3 x 250)
+    expect(rows[2]?.Comments).toBe('1:250 in 3 mL')
+    expect(rows[2]?.['Endotoxin Limit']).toBe('0.467') // 350 / (3 x 250)
 
-    const bw = rows[3]!
-    expect(bw['Dil./Conc.']).toBe('1:20')
-    expect(bw['Endotoxin Limit']).toBe('0.25')
-    expect(bw.Comments).toBe('50 + 950 uL LAL water')
-    expect(bw['Product Family']).toBe('Bacteriostatic Water')
+    const bw = rows[3]
+    expect(bw?.['Dil./Conc.']).toBe('1:20')
+    expect(bw?.['Endotoxin Limit']).toBe('0.25')
+    expect(bw?.Comments).toBe('50 + 950 uL LAL water')
+    expect(bw?.['Product Family']).toBe('Bacteriostatic Water')
   })
 
   it('writes the file with a BOM, CRLF and no micro sign', () => {
@@ -196,10 +196,10 @@ describe('EndoScan-V sample export', () => {
     const row = endoscanSampleRows(
       [sample({ sampleId: 'PB-9999-S02', identity: long2, weightMg: 80 })],
       ctx
-    ).rows[0]!
-    expect(row['Product Family']).toBe('Peptides')
-    expect(row['Sample Name']).toBe('PB-9999-S02')
-    expect(row['Sample ID']).toBe('Semaglutide + Tirzepatide + Retatrutide')
+    ).rows[0]
+    expect(row?.['Product Family']).toBe('Peptides')
+    expect(row?.['Sample Name']).toBe('PB-9999-S02')
+    expect(row?.['Sample ID']).toBe('Semaglutide + Tirzepatide + Retatrutide')
 
     expect(
       endoscanSampleRows(
@@ -211,7 +211,7 @@ describe('EndoScan-V sample export', () => {
           }),
         ],
         ctx
-      ).rows[0]!['Sample ID']
+      ).rows[0]?.['Sample ID']
     ).toBe('Retatrutide, Tirzepatide, CJC-1295')
   })
 
@@ -256,8 +256,8 @@ describe('EndoScan-V sample export', () => {
     )
     expect(rows.map(r => r['Sample Name'])).toEqual(['P-5367-S02', 'P-5368-S02'])
     expect(skipped).toHaveLength(1)
-    expect(skipped[0]!.sampleId).toBe('p-5367-s02')
-    expect(skipped[0]!.why).toMatch(/already in the file/)
+    expect(skipped[0]?.sampleId).toBe('p-5367-s02')
+    expect(skipped[0]?.why).toMatch(/already in the file/)
   })
 
   /**
@@ -335,7 +335,7 @@ describe('EndoScan-V sample export', () => {
         }),
       ],
       ctx
-    ).rows[0]!
-    expect(row['Sample ID']).toBe('Retatrutide')
+    ).rows[0]
+    expect(row?.['Sample ID']).toBe('Retatrutide')
   })
 })
