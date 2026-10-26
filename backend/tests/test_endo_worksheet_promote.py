@@ -418,6 +418,20 @@ def test_a_peptide_row_set_to_the_bac_water_form_is_refused(client, db):
         _refused(item, "peptides promote in EU/vial")]
 
 
+def test_a_gt_reading_is_refused_however_the_browser_asks(client, db):
+    """Handler ruling 2026-10-26: a ">" is judged on the worksheet but never
+    promoted. The number is a floor, so storing it as an exact value would have
+    the spec engine judge the floor and a ">200" that may really be 1000 would
+    print CONFORMS. The refusal is explicit, not a side effect of parse_reading
+    rejecting the text, which it no longer does."""
+    w = _world(client, db)
+    item, _ = _row(db, w, reading=">5", cartridge=w.c05)
+    # The browser is not trusted: even asked for with a number and the right
+    # unit, the server refuses it.
+    assert _results(_promote(client, w.ws, _line(item, 2500, loq=25, lod=0.05))) == [
+        _refused(item, worksheets_endo_promote.REASON_GT)]
+
+
 def test_a_bw_sample_set_to_the_powder_form_is_refused(client, db):
     # Only the BW- id says bac water here; the row's form says powder.
     w = _world(client, db)

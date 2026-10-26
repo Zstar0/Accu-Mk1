@@ -19,6 +19,8 @@ export interface ReaderTest {
   sampleType: string
   result: string
   lt: boolean
+  /** The reader showed ">": above its top standard, so a floor not a value. */
+  gt: boolean
   value: number | null
   sampleCv: number | null
   spikeCv: number | null
@@ -201,9 +203,11 @@ export function parseEndoScan(input: string): {
     const qual = cell(spl, ES.resultQual)
     const raw = cell(spl, ES.result)
     const lt = qual === '<'
-    // only "" (a number) and "<" are understood: any other qualifier (">")
-    // stays in the reading verbatim and is never an exact number
-    const understood = qual === '' || lt
+    const gt = qual === '>'
+    // "" (a number), "<" and ">" are understood; anything else stays in the
+    // reading verbatim and is never a number. A ">" keeps its number: the
+    // worksheet judges it as "at least this much" (Handler ruling 2026-10-26).
+    const understood = qual === '' || lt || gt
     const value = understood ? num(raw) : null
     const lot = cell(spl, ES.cartLot)
     const cart = cartridges.find(c => c.lot === lot)
@@ -212,6 +216,7 @@ export function parseEndoScan(input: string): {
       ...idFields(spl),
       result: understood && value === null ? '' : qual + raw,
       lt,
+      gt,
       value,
       sampleCv: num(cell(spl, ES.cv)),
       spikeCv: num(cell(spk, ES.cv)),
