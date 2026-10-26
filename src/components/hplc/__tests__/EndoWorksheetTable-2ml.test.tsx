@@ -225,11 +225,7 @@ describe('Box 1 on a 2 mL row', () => {
       onUpdateItem,
     })
     await pick(formPicker(), 'Liquid (reconstituted)')
-    // The water goes with the old form (2026-10-19).
-    expect(onUpdateItem).toHaveBeenCalledWith(10, {
-      prep_form: 'liquid',
-      prep_water_ml: null,
-    })
+    expect(onUpdateItem).toHaveBeenCalledWith(10, { prep_form: 'liquid' })
     fireEvent.click(cartridgePicker())
     expect(
       (await screen.findAllByRole('option')).map(o => o.textContent)

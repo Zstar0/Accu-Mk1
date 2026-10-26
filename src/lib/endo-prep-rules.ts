@@ -47,7 +47,7 @@ export interface PrepRuleLock {
 export interface PrepHistoryEntry {
   at: string
   by: number | null
-  why: 'reapply' | 'override'
+  why: 'reapply' | 'override' | 'replaced'
   lock: PrepRuleLock | null
   total_dilution: number
   step1_ratio: number

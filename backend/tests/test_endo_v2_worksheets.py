@@ -933,6 +933,12 @@ def test_import_keeps_a_typed_reading_the_reader_replaces_in_the_history(client,
     assert w.a.result_reading == "0.8"
     assert [(h["why"], h["result_reading"]) for h in w.a.prep_history] == [("replaced", "0.9")]
     assert db.query(AuditLog).filter(AuditLog.operation == "endo_prep_override").count() == 0
+    # And it survives the worksheet GET: prep_history is served as stored, so
+    # a new `why` cannot be stripped or refused on the way out.
+    got = client.get(f"/worksheets/{w.ws.id}")
+    assert got.status_code == 200, got.text
+    row = next(i for i in got.json()["items"] if i["id"] == w.a.id)
+    assert [h["why"] for h in row["prep_history"]] == ["replaced"]
 
 
 def test_import_over_an_empty_row_keeps_no_history(client, db):
