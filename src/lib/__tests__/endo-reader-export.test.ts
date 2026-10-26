@@ -169,6 +169,15 @@ describe('EndoScan-V sample export', () => {
     expect(endoscanCsvField('a "quoted" one')).toBe('a  quoted  one')
   })
 
+  it('defuses a field that would read as a formula in a spreadsheet', () => {
+    expect(endoscanCsvField('=cmd()')).toBe("'=cmd()")
+    expect(endoscanCsvField('@SUM(A1)')).toBe("'@SUM(A1)")
+    // Never on a real row: the apostrophe would otherwise reach the reader.
+    expect(endoscanCsvField('Semaglutide')).toBe('Semaglutide')
+    expect(endoscanCsvField('0.583')).toBe('0.583')
+    expect(endoscanCsvField('1:250 in 2 mL')).toBe('1:250 in 2 mL')
+  })
+
   it('cuts the Sample ID to 40 characters at a word, keeping the Sample Name whole', () => {
     const long = 'KPV + GHK-Cu + BPC-157 + TB500 (Thymosin Beta 4)' // 48
     expect(endoscanFamily(long)).toBe('KPV + GHK-Cu + BPC-157 + TB500')

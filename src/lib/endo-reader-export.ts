@@ -108,10 +108,15 @@ export function endoscanFamily(product: string | null | undefined): string {
  * separator, and nothing is quoted.
  */
 export function endoscanCsvField(v: string | null | undefined): string {
-  return noMicro(v)
+  const flat = noMicro(v)
     .replace(/\s*,\s*/g, ' + ')
     .replace(/["\r\n]/g, ' ')
     .trim()
+  // Defused as `csvField` in endo-bench-sheet.ts does, in case the file is
+  // opened in a spreadsheet on the way to the reader. The apostrophe, not a
+  // quote: EndoScan-V ignores quotes. No vial ID, product or number we write
+  // starts with one of these, so this never fires on a real row.
+  return /^[=+\-@\t\r]/.test(flat) ? `'${flat}` : flat
 }
 
 export interface EndoscanSkip {
