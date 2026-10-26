@@ -947,7 +947,11 @@ function TwoMlPrepCells({
           value={form}
           disabled={isCompleted}
           onValueChange={v =>
-            onUpdateItem(item.id, { prep_form: v as EndoForm })
+            // The old form's water never carries over; see EndoPrepLine.
+            onUpdateItem(item.id, {
+              prep_form: v as EndoForm,
+              prep_water_ml: null,
+            })
           }
         >
           <SelectTrigger

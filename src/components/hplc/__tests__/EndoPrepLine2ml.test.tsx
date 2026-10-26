@@ -176,7 +176,11 @@ describe('EndoPrepLine on a mixed worksheet', () => {
     expect(form).toHaveTextContent(/^Liquid \(reconstituted\)$/)
     // A peptide with no form of its own reads as lyophilized.
     await pick(form, 'Auto (Lyophilized)')
-    expect(onUpdate).toHaveBeenCalledWith({ prep_form: null })
+    // The water goes with the old form (2026-10-19).
+    expect(onUpdate).toHaveBeenCalledWith({
+      prep_form: null,
+      prep_water_ml: null,
+    })
   })
 
   it("labels bac water's Auto as bac water even when set by hand to powder", async () => {

@@ -287,7 +287,13 @@ export function EndoPrep2mlFields({
           disabled={disabled}
           value={item.prep_form ?? AUTO}
           onValueChange={v =>
-            onUpdate({ prep_form: v === AUTO ? null : (v as EndoForm) })
+            // The water the old form was prepped with never carries over: a
+            // lyophilized vial takes the standard recon, a liquid one the
+            // customer's own volume (Dennis, 2026-10-19).
+            onUpdate({
+              prep_form: v === AUTO ? null : (v as EndoForm),
+              prep_water_ml: null,
+            })
           }
         >
           <SelectTrigger aria-label="Form" className={LINE_TRIGGER}>
