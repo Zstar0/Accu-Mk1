@@ -376,16 +376,27 @@ describe('calc.test.js:992 reader export: one record per test, spike recovery an
       )
   })
 
-  it('a result qualifier other than "<" is kept verbatim and is never an exact number', () => {
-    // column 26 ">" on the first test: the reading is ">5.00", not 5
+  it('reads a ">" as a floor, and keeps any other qualifier verbatim', () => {
+    // column 26 ">" on the first test: above the cartridge's top standard, so
+    // ">5.00" keeps its 5 as a floor the worksheet judges as "at least"
+    // (Handler ruling 2026-10-26). Before that it was carried as text only.
     const odd = parseEndoScan(EXPORT.replace(',<,0.05,', ',>,5.00,'))
     const [a, b] = three(odd.tests)
-    expect([a.result, a.lt, a.value]).toEqual(['>5.00', false, null])
+    expect([a.result, a.lt, a.gt, a.value]).toEqual(['>5.00', false, true, 5])
     expect(toReaderRecord(a, params, 'EndoScanV-Export-test.csv').result).toBe(
       '>5.00'
     )
+    // A qualifier that is neither stays text with no number.
+    const weird = parseEndoScan(EXPORT.replace(',<,0.05,', ',~,5.00,'))
+    const w = weird.tests[0]
+    expect([w?.result, w?.lt, w?.gt, w?.value]).toEqual([
+      '~5.00',
+      false,
+      false,
+      null,
+    ])
     // the others keep reading as before
-    expect([b.result, b.lt, b.value]).toEqual(['<0.05', true, 0.05])
+    expect([b.result, b.lt, b.gt, b.value]).toEqual(['<0.05', true, false, 0.05])
     // no qualifier at all is an exact number
     const exact = parseEndoScan(EXPORT.replace(',<,0.05,', ',,0.05,'))
     expect([exact.tests[0]?.result, exact.tests[0]?.lt]).toEqual([
@@ -481,6 +492,7 @@ function rt(
     identity: '',
     sampleType: '',
     result: '<0.05',
+    gt: false,
     lt: true,
     value: 0.05,
     sampleCv: null,
