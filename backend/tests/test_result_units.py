@@ -280,3 +280,19 @@ def test_serialized_senaite_row_has_no_unit_options(db):
 
     assert shaped.uid == "a" * 32
     assert (shaped.unit, shaped.default_unit, shaped.unit_options) == ("ppm", None, [])
+
+
+def test_options_survive_the_registry_retype(db):
+    """registry_details re-types rows into SenaiteAnalysis, which drops any
+    field it does not declare: the new fields must come through it."""
+    from sub_samples.registry_details import _analyses_block
+    svc, parent = _nasal_world(db)
+    db.add(LimsAnalysis(lims_sample_pk=parent.id, analysis_service_id=svc.id,
+                        keyword=svc.keyword, title=svc.title, review_state="parent_to_verify",
+                        result_value="3", result_unit="ppm"))
+    db.commit()
+
+    [line] = _analyses_block(db, parent.sample_id)
+
+    assert (line.unit, line.default_unit) == ("ppm", "µg/mL")
+    assert line.unit_options == ["ppm", "µg/g", "µg/mL"]
