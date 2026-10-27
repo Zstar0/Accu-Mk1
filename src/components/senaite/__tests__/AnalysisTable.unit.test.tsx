@@ -98,7 +98,7 @@ const row = (over: Partial<SenaiteAnalysis> = {}): SenaiteAnalysis => ({
 })
 
 function renderTable(
-  analysis: SenaiteAnalysis,
+  analysis: SenaiteAnalysis | SenaiteAnalysis[],
   props: Partial<React.ComponentProps<typeof AnalysisTable>> = {}
 ) {
   const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } })
@@ -106,7 +106,7 @@ function renderTable(
     <QueryClientProvider client={qc}>
       <button>outside</button>
       <AnalysisTable
-        analyses={[analysis]}
+        analyses={Array.isArray(analysis) ? analysis : [analysis]}
         analyteNameMap={new Map()}
         {...props}
       />
@@ -284,6 +284,40 @@ describe('unit dropdown at bench entry', () => {
       await waitFor(() => expect(setAnalysisResult).toHaveBeenCalledTimes(1))
       expect(lastCall()?.slice(0, 2)).toEqual(['mk1:5', '1.5'])
       expect(lastCall()?.[2]).toBeUndefined()
+    })
+  })
+
+  describe('Tab-advance in editing mode', () => {
+    it('stays on a row that needs a unit pick instead of dropping its typed value', async () => {
+      const first = row({
+        uid: 'mk1:1',
+        title: 'Lead (Pb)',
+        result: '1.5',
+        review_state: 'to_be_verified',
+        sort_key: 1,
+      })
+      const needsPick = row({ uid: 'mk1:2', default_unit: null, sort_key: 2 })
+      const last = row({ uid: 'mk1:3', title: 'Arsenic (As)', sort_key: 3 })
+      renderTable([first, needsPick, last])
+
+      await userEvent.click(
+        screen.getByRole('button', { name: 'Edit result for Lead (Pb)' })
+      )
+      await userEvent.type(
+        screen.getByLabelText('Edit result for Lead (Pb)'),
+        '{Tab}'
+      )
+      // the first row saved, then editing moved on to the row that needs a unit
+      await waitFor(() => expect(setAnalysisResult).toHaveBeenCalledTimes(1))
+      expect(calls()[0]?.[0]).toBe('mk1:1')
+      await waitFor(() =>
+        expect(screen.getByRole('button', { name: 'Save' })).toBeInTheDocument()
+      )
+
+      await userEvent.type(screen.getByLabelText(RESULT_LABEL), '2.1{Tab}')
+      expect(calls().some(c => c[0] === 'mk1:2')).toBe(false)
+      expect(screen.getByLabelText(RESULT_LABEL)).toHaveValue(2.1)
+      expect(screen.getAllByRole('button', { name: 'Save' })).toHaveLength(1)
     })
   })
 })

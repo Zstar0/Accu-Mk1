@@ -147,6 +147,15 @@ export function useAnalysisEditing({
         cancelEditing()
       } else if (e.key === 'Tab') {
         e.preventDefault()
+        // A row that needs a unit pick cannot save yet: stay on it (the save
+        // explains why) so advancing does not discard the typed value.
+        if (
+          !unitOverride &&
+          unitPickRequired(analyses.find(a => a.uid === uid))
+        ) {
+          void save(uid)
+          return
+        }
         // Save current, then advance to next editable cell
         const currentIndex = analyses.findIndex(a => a.uid === uid)
         if (currentIndex === -1) {
