@@ -5565,7 +5565,7 @@ export function SampleDetails() {
                   </span>
                 )}
               </div>
-              {/* Form — dosage form (sample-forms spec). Only Peptide-matrix
+              {/* Form: dosage form (sample-forms spec). Only Peptide-matrix
                   samples take one (and only a registry row can be eligible);
                   Bacteriostatic Water and the like get no row at all. */}
               {data.sample_form_eligible && (

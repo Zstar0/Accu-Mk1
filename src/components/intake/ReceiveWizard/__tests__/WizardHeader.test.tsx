@@ -85,7 +85,7 @@ describe('WizardHeader — shape-driven expected-vials total', () => {
   })
 })
 
-describe('WizardHeader — form control slot', () => {
+describe('WizardHeader form control slot', () => {
   beforeEach(() => {
     vi.clearAllMocks()
     mockGetVialDemand.mockResolvedValue(demand())
