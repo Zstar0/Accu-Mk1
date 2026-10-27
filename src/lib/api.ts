@@ -4437,6 +4437,13 @@ export interface SenaiteAnalysis {
   result_type?: string | null
   result_options: SenaiteResultOption[]  // always present from backend; [] if no predefined options
   unit: string | null
+  /** Native (mk1:) rows only: the units the analyst may pick at result entry
+   *  (catalog unit plus every unit on the service's active specs, canonical
+   *  spellings). Absent on SENAITE-sourced rows. */
+  unit_options?: string[]
+  /** Native rows: the unit the sample's form selects, or null when it selects
+   *  none. For an unresulted row `unit` already equals it. */
+  default_unit?: string | null
   method: string | null
   method_uid: string | null
   method_options: { uid: string; title: string }[]
@@ -4892,7 +4899,11 @@ export interface AnalysisResultResponse {
 
 export async function setAnalysisResult(
   uid: string,
-  result: string
+  result: string,
+  /** Native rows only. Omitted (or empty) leaves the stored unit unchanged;
+   *  the server 422s a unit outside the row's `unit_options`. Never sent to
+   *  SENAITE. */
+  resultUnit?: string | null
 ): Promise<AnalysisResultResponse> {
   // Phase 3: route mk1:<id> UIDs to the Mk1 transitions endpoint with
   // kind=submit + result_value inline. The result-set + state-advance
@@ -4907,6 +4918,7 @@ export async function setAnalysisResult(
         body: JSON.stringify({
           kind: 'submit',
           result_value: result,
+          ...(resultUnit ? { result_unit: resultUnit } : {}),
           reason: 'bench-tech result entry',
         }),
       }

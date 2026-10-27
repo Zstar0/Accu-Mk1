@@ -7375,7 +7375,7 @@ export function SampleDetails() {
           parentSampleId !== null ? handlePromotedNativeRetest : undefined
         }
         resultsReadOnly={parentSampleId === null && !showParentResultEditing}
-        onResultSaved={(uid, newResult, newReviewState) => {
+        onResultSaved={(uid, newResult, newReviewState, newUnit) => {
           setData(prev => {
             if (!prev) return prev
             return {
@@ -7386,6 +7386,7 @@ export function SampleDetails() {
                       ...a,
                       result: newResult,
                       review_state: newReviewState ?? a.review_state,
+                      ...(newUnit ? { unit: newUnit } : {}),
                     }
                   : a
               ),

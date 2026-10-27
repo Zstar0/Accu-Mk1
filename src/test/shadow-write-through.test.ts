@@ -48,6 +48,30 @@ describe('shadow rows route their writes to SENAITE', () => {
     expect(url).not.toContain('/api/lims-analyses/')
   })
 
+  it('a unit rides along on a native submit and never reaches SENAITE', async () => {
+    const nativeSpy = stubFetch({ id: 7, review_state: 'to_be_verified' })
+    await setAnalysisResult('mk1:7', '12.0', 'µg/mL')
+    const nativeBody = JSON.parse(String(nativeSpy.mock.calls[0]?.[1]?.body))
+    expect(nativeBody).toMatchObject({
+      kind: 'submit',
+      result_value: '12.0',
+      result_unit: 'µg/mL',
+    })
+    vi.unstubAllGlobals()
+
+    // Omitted / empty means "leave the stored unit": the key must be absent.
+    const bareSpy = stubFetch({ id: 7, review_state: 'to_be_verified' })
+    await setAnalysisResult('mk1:7', '12.0', null)
+    expect(
+      JSON.parse(String(bareSpy.mock.calls[0]?.[1]?.body))
+    ).not.toHaveProperty('result_unit')
+    vi.unstubAllGlobals()
+
+    const senaiteSpy = stubFetch()
+    await setAnalysisResult(SENAITE_UID, '6.85', 'µg/mL')
+    expect(String(senaiteSpy.mock.calls[0]?.[1]?.body)).not.toContain('µg/mL')
+  })
+
   it('a transition on a SENAITE-uid row hits the wizard transition endpoint', async () => {
     const spy = stubFetch()
     await transitionAnalysis(SENAITE_UID, 'retest')
