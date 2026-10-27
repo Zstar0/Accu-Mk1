@@ -65,6 +65,7 @@ from sla_perf import (  # noqa: E402
 from models import AuditLog, Settings, Job, Sample, Result, Instrument, AnalysisService, AnalysisServiceSpec, HplcMethod, Peptide, PeptideAnalyte, CalibrationCurve, HPLCAnalysis, User, SharePointFileCache, WizardSession, WizardMeasurement, peptide_methods, blend_components, ServiceGroup, service_group_members, SamplePriority, Worksheet, WorksheetItem, WorksheetNote, instrument_methods, SampleAnalyteAlias, SlaTier, SlaPriorityTier, BusinessHoursConfig, LabHoliday, LimsSample, LimsSampleRemark, LimsSubSample, LimsBox, FlagType, LimsParentAttachment, MethodAttachment, method_services, LimsOrder
 from models import ConsumableType, method_consumables  # endo worksheet v2
 from models import EndoPrepRule  # endo slice 5
+from models import LimsSampleForm  # spec form tier
 from catalog.change_log import apply_and_log, log_create, log_delete, log_members
 from auth import (
     get_current_user, require_admin, create_access_token,
@@ -4608,6 +4609,8 @@ class ServiceSpecResponse(BaseModel):
     matrix: Optional[str] = None
     peptide_id: Optional[int] = None
     peptide_code: Optional[str] = None
+    sample_form_id: Optional[int] = None
+    sample_form_name: Optional[str] = None
     rule_kind: str
     min_value: Optional[str] = None
     max_value: Optional[str] = None
@@ -4622,6 +4625,7 @@ class ServiceSpecResponse(BaseModel):
 class ServiceSpecCreate(BaseModel):
     matrix: Optional[str] = None
     peptide_id: Optional[int] = None
+    sample_form_id: Optional[int] = None
     rule_kind: Literal["range", "equals", "informational"]
     min_value: Optional[str] = None
     max_value: Optional[str] = None
@@ -4643,13 +4647,17 @@ class ServiceSpecPatch(BaseModel):
 
 
 def _validate_spec_shape(*, rule_kind, min_value, max_value, equals_value,
-                         matrix, peptide_id, db, loq=None):
-    if matrix is not None and peptide_id is not None:
-        raise HTTPException(422, "a spec row is peptide-tier OR matrix-tier, not both")
+                         matrix, peptide_id, db, loq=None, sample_form_id=None):
+    if sum(v is not None for v in (matrix, peptide_id, sample_form_id)) > 1:
+        raise HTTPException(
+            422, "a spec row is peptide-tier, form-tier OR matrix-tier, not more than one")
     if matrix is not None and matrix not in _SPEC_MATRICES:
         raise HTTPException(422, f"matrix must be one of {_SPEC_MATRICES}")
     if peptide_id is not None and db.get(Peptide, peptide_id) is None:
         raise HTTPException(422, f"peptide {peptide_id} does not exist")
+    # An inactive (retired) form is allowed; only a missing one is rejected.
+    if sample_form_id is not None and db.get(LimsSampleForm, sample_form_id) is None:
+        raise HTTPException(422, f"sample form {sample_form_id} does not exist")
     if rule_kind == "range":
         if equals_value is not None or (min_value is None and max_value is None):
             raise HTTPException(422, "range rule needs min and/or max, and no equals_value")
@@ -4716,9 +4724,14 @@ def _spec_response(db, spec) -> ServiceSpecResponse:
     if spec.peptide_id is not None:
         pep = db.get(Peptide, spec.peptide_id)
         code = pep.abbreviation if pep else None
+    form_name = None
+    if spec.sample_form_id is not None:
+        form = db.get(LimsSampleForm, spec.sample_form_id)
+        form_name = form.name if form else None
     return ServiceSpecResponse(
         id=spec.id, analysis_service_id=spec.analysis_service_id,
         matrix=spec.matrix, peptide_id=spec.peptide_id, peptide_code=code,
+        sample_form_id=spec.sample_form_id, sample_form_name=form_name,
         rule_kind=spec.rule_kind,
         min_value=_dec_to_str(spec.min_value),
         max_value=_dec_to_str(spec.max_value),
@@ -4762,6 +4775,7 @@ def list_service_specs(service_id: int, db: Session = Depends(get_db),
         .where(AnalysisServiceSpec.analysis_service_id == service_id,
                AnalysisServiceSpec.active.is_(True))
         .order_by(AnalysisServiceSpec.peptide_id.is_(None),
+                  AnalysisServiceSpec.sample_form_id.is_(None),
                   AnalysisServiceSpec.matrix.is_(None),
                   AnalysisServiceSpec.id)
     ).scalars().all()
@@ -4780,10 +4794,11 @@ def create_service_spec(service_id: int, req: ServiceSpecCreate,
     _validate_spec_shape(rule_kind=req.rule_kind, min_value=req.min_value,
                          max_value=req.max_value, equals_value=req.equals_value,
                          matrix=req.matrix, peptide_id=req.peptide_id, db=db,
-                         loq=req.loq)
+                         loq=req.loq, sample_form_id=req.sample_form_id)
     spec = AnalysisServiceSpec(
         analysis_service_id=service_id, matrix=req.matrix,
-        peptide_id=req.peptide_id, rule_kind=req.rule_kind,
+        peptide_id=req.peptide_id, sample_form_id=req.sample_form_id,
+        rule_kind=req.rule_kind,
         min_value=_parse_decimal(req.min_value, "min_value"),
         max_value=_parse_decimal(req.max_value, "max_value"),
         equals_value=req.equals_value, unit=req.unit,
@@ -4833,7 +4848,8 @@ def patch_service_spec(spec_id: int, req: ServiceSpecPatch,
         "loq": fields.get("loq",
                           str(spec.loq) if spec.loq is not None else None),
     }
-    _validate_spec_shape(matrix=spec.matrix, peptide_id=spec.peptide_id, db=db, **merged)
+    _validate_spec_shape(matrix=spec.matrix, peptide_id=spec.peptide_id,
+                         sample_form_id=spec.sample_form_id, db=db, **merged)
     # Parse every convertible field into a plain local dict BEFORE any
     # setattr — a 422 partway through (e.g. min_value parses, max_value
     # doesn't) must never leave the spec partially mutated on the session.
