@@ -203,6 +203,66 @@ function withOwnCartridge(id: number, sensitivity: number): EndoTwoMl {
   }
 }
 
+const WATER_RULE = {
+  id: 1,
+  peptide_id: 7,
+  min_mg: null,
+  max_mg: null,
+  recon_water_ml: 3,
+  total_dilution: null,
+  step1_ratio: null,
+  cartridge_type_id: null,
+  status: 'trial' as const,
+  note: null,
+  sort_order: 0,
+  active: true,
+}
+
+/** The run with one row whose line prescribes 3 mL (Handler 2026-10-26). */
+const RULED_ROW: EndoRow = {
+  ...ROW,
+  sample: { ...ROW.sample, rule: WATER_RULE },
+}
+const RULED_WATER: EndoTwoMl = { ...TWO_ML, rows: [RULED_ROW] }
+
+/** That run with one field of the row's sample changed. */
+const ruledWith = (over: Partial<EndoRow['sample']>): EndoTwoMl => ({
+  ...TWO_ML,
+  rows: [{ ...RULED_ROW, sample: { ...RULED_ROW.sample, ...over } }],
+})
+
+describe("a rule's reconstitution water", () => {
+  const waterCell = () =>
+    screen.getByLabelText('Water (mL)') as HTMLInputElement
+
+  it("fills the cell with the line's volume, unmarked: nothing was typed", () => {
+    renderTable({ items: [ITEM], prepModel: '2ml', twoMl: RULED_WATER })
+    // The standard is 2; this row's line says 3, and nothing was typed.
+    expect(waterCell().value).toBe('3')
+    expect(waterCell().placeholder).toBe('3')
+  })
+
+  it('is what an override clears back to, never the method standard', () => {
+    renderTable({
+      items: [ITEM],
+      prepModel: '2ml',
+      twoMl: ruledWith({ waterMl: 5 }),
+    })
+    expect(waterCell().value).toBe('5')
+    expect(waterCell().placeholder).toBe('3')
+  })
+
+  it('never reaches a liquid row, whose volume came from the customer', () => {
+    renderTable({
+      items: [ITEM],
+      prepModel: '2ml',
+      twoMl: ruledWith({ form: 'liquid' }),
+    })
+    expect(waterCell().value).toBe('')
+    expect(waterCell().placeholder).toBe('')
+  })
+})
+
 describe('Box 1 on a 2 mL row', () => {
   it('shows the form, the water, the vial concentration and the cartridge with MVD and MVC', () => {
     renderTable({ items: [ITEM], prepModel: '2ml', twoMl: TWO_ML })

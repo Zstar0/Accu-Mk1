@@ -55,6 +55,9 @@ export interface PrepHistoryEntry {
   lock: PrepRuleLock | null
   total_dilution: number
   step1_ratio: number
+  /** The water that run used, mL. Optional: entries written before a rule
+   *  could set one carry none, and such a run was at the standard. */
+  recon_water_ml?: number | null
   cartridge_type_id: number | null
   result_reading: string | null
   reader_test_id: string | null
