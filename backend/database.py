@@ -2638,6 +2638,10 @@ def _run_migrations():
         "ALTER TABLE lims_analyses ADD COLUMN IF NOT EXISTS loq DOUBLE PRECISION",
         "ALTER TABLE lims_analyses ADD COLUMN IF NOT EXISTS lod DOUBLE PRECISION",
         "ALTER TABLE lims_analyses ADD COLUMN IF NOT EXISTS lod_unit TEXT",
+        # Endo ">" on the certificate: the stored number is a floor, not a
+        # measurement. Nullable, no backfill; NULL and false both mean "an
+        # ordinary measured result", which is every row that predates this.
+        "ALTER TABLE lims_analyses ADD COLUMN IF NOT EXISTS result_floor BOOLEAN",
         # Endo slice 5 (spec 2026-10-14 section 3): the prep rules table, the
         # same shape as models.EndoPrepRule, which is the source of truth. On
         # a database that has no consumable_types yet (the first boot of the

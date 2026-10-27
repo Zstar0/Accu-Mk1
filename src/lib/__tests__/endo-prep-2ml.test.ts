@@ -119,13 +119,25 @@ describe('calc.test.js test 10: a ">" reading is judged as "at least this much"'
     )
   })
 
-  it("sends nothing to Accu-Mk1, unlike Dennis's tool", () => {
-    // Deliberate divergence: his mk1Value promotes ">2500". Mk1 would store
-    // the floor as an exact value and the spec engine would judge the floor,
-    // so a ">" that may really be far higher could print CONFORMS. The server
-    // refuses it too (worksheets_endo_promote.REASON_GT).
-    expect(mk1Value(pep2(10, { reading: '>5' }), ctx)).toBeNull()
-    expect(mk1Value(BW({ reading: '>20' }), ctx)).toBeNull()
+  it('sends the floor to Accu-Mk1 with its ">" kept, like Dennis', () => {
+    // Mk1 stores it AS a floor (lims_analyses.result_floor), so the spec
+    // engine judges "at least this much" instead of taking the number for a
+    // measurement; the certificate then prints "> 2500". Whether it may be
+    // promoted at all is the eligibility gate's answer, not this function's.
+    expect(mk1Value(pep2(10, { reading: '>5' }), ctx)).toEqual({
+      value: '>2500',
+      unit: 'EU/vial',
+      verdict: 'fail',
+    })
+    expect(mk1Value(BW({ reading: '>20' }), ctx)).toEqual({
+      value: '>20',
+      unit: 'EU/mL',
+      verdict: 'fail',
+    })
+    // an inconclusive floor still shows its number; only promote refuses it
+    expect(mk1Value(pep2(10, { reading: '>0.5', lambda: 0.005 }), ctx)).toEqual(
+      { value: '>250', unit: 'EU/vial', verdict: 'inconclusive' }
+    )
     // the "<" path is untouched
     expect(mk1Value(pep2(10, { reading: '<0.05' }), ctx)).not.toBeNull()
   })

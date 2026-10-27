@@ -151,6 +151,9 @@ export function EndoPromoteDialog({
                         {row.item.sample_id}
                       </td>
                       <td className={`${PCELL} text-right font-mono`}>
+                        {/* A floor keeps its ">" here: it is what the
+                            certificate will print, so confirm it as such. */}
+                        {payload.result_floor ? '> ' : ''}
                         {payload.value} {payload.unit}
                       </td>
                       <td className={`${PCELL} text-right font-mono`}>

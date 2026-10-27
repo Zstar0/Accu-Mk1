@@ -2290,6 +2290,11 @@ class LimsAnalysis(Base):
     loq: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
     lod: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
     lod_unit: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    # Endo ">" on the certificate: result_value is a FLOOR ("at least this
+    # much"), not a measurement. A "<" needs no flag — it is derived from
+    # value <= loq — but a floor of 2500 is indistinguishable from a measured
+    # 2500, so it has to be stored. NULL/false = an ordinary measured result.
+    result_floor: Mapped[Optional[bool]] = mapped_column(Boolean, nullable=True)
 
     review_state: Mapped[str] = mapped_column(
         Text, nullable=False, default="unassigned", server_default="unassigned",
