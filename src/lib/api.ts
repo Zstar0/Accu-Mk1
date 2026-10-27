@@ -4561,6 +4561,12 @@ export interface SenaiteLookupResult {
   registry_pk?: number | null
   /** The sample's OWN explicit priority key (null = inherit up the chain). */
   explicit_priority_key?: string | null
+  /** Dosage form (sample-forms spec). Only Peptide-matrix samples are
+   *  `sample_form_eligible`; an eligible row may still have a null form id
+   *  (born before its type was known; the next backend boot fills it in). */
+  sample_form_id?: number | null
+  sample_form_name?: string | null
+  sample_form_eligible?: boolean
   /** Task 5: which LIMS owns this sample's canonical record — 'mk1' = native-
    *  born (Analytes card switches to Relabel-only mode); 'senaite' = legacy.
    *  Null when unresolved. */

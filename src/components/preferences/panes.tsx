@@ -17,6 +17,7 @@ import {
   CalendarClock,
   Flag,
   ClipboardCheck,
+  Pill,
   GitBranch,
   FileText,
   Users,
@@ -39,6 +40,7 @@ import { FlagsPane } from './panes/FlagsPane'
 import { GroupsPane } from './panes/GroupsPane'
 import { DocumentsPane } from './panes/DocumentsPane'
 import { CheckInPane } from './panes/CheckInPane'
+import { SampleFormsPane } from './panes/SampleFormsPane'
 import { WorkflowPane } from './panes/WorkflowPane'
 
 export type PreferencePane =
@@ -53,6 +55,7 @@ export type PreferencePane =
   | 'groups'
   | 'documents'
   | 'checkIn'
+  | 'sampleForms'
   | 'workflow'
   | 'integrations'
   | 'agents'
@@ -85,6 +88,7 @@ export const navigationItems: readonly NavigationItem[] = [
   { id: 'groups', labelKey: 'preferences.groups', icon: Users },
   { id: 'documents', labelKey: 'preferences.documents', icon: FileText },
   { id: 'checkIn', labelKey: 'preferences.checkIn', icon: ClipboardCheck },
+  { id: 'sampleForms', labelKey: 'preferences.sampleForms', icon: Pill },
   { id: 'workflow', labelKey: 'preferences.workflow', icon: GitBranch },
   {
     id: 'integrations',
@@ -108,6 +112,7 @@ export const PANE_COMPONENTS: Record<PreferencePane, ComponentType> = {
   groups: GroupsPane,
   documents: DocumentsPane,
   checkIn: CheckInPane,
+  sampleForms: SampleFormsPane,
   workflow: WorkflowPane,
   integrations: IntegrationsPane,
   agents: AgentsPane,

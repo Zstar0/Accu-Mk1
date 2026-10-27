@@ -223,6 +223,7 @@ import type { VialAssignment } from '@/lib/vial-assignment'
 import { vialLabel, vialPosition, vialTotal } from '@/lib/vial-label'
 import { SampleHeaderSla } from '@/components/senaite/SampleHeaderSla'
 import { PrioritySelect } from '@/components/common/PrioritySelect'
+import { SampleFormSelect } from '@/components/common/SampleFormSelect'
 import { useVialRoles } from '@/services/vial-roles'
 import { useDepartments } from '@/services/departments'
 import { ROLE_COLOR_TEXT, roleColorForCode } from '@/lib/role-display'
@@ -5564,6 +5565,25 @@ export function SampleDetails() {
                   </span>
                 )}
               </div>
+              {/* Form — dosage form (sample-forms spec). Only Peptide-matrix
+                  samples take one (and only a registry row can be eligible);
+                  Bacteriostatic Water and the like get no row at all. */}
+              {data.sample_form_eligible && (
+                <div className="flex items-center gap-2 mb-0.5">
+                  <span className="text-[11px] uppercase tracking-wide text-muted-foreground/70">
+                    Form
+                  </span>
+                  <SampleFormSelect
+                    sampleId={data.sample_id}
+                    valueId={data.sample_form_id ?? null}
+                    valueName={data.sample_form_name ?? null}
+                    onChanged={() => refreshSample(data.sample_id)}
+                    compact
+                    className="w-56"
+                    ariaLabel={`Form for ${data.sample_id}`}
+                  />
+                </div>
+              )}
               {/* SLA — stacked one indicator per line so multi-tier samples
                 don't run a long inline string. */}
               <SampleHeaderSla lookup={data} />

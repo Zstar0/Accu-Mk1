@@ -6,6 +6,7 @@ import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { useReceiveWizard, type ParentInfo } from './useReceiveWizard'
 import { useParentSampleDetails } from './useParentSampleDetails'
 import { WizardHeader } from './WizardHeader'
+import { SampleFormSelect } from '@/components/common/SampleFormSelect'
 import { WizardSidebar } from './WizardSidebar'
 import { VialsList } from './VialsList'
 import { VialPanel } from './VialPanel'
@@ -433,6 +434,19 @@ export function ReceiveWizard({
         parentSampleId={parent.sample_id}
         receivedCount={receivedCount}
         priority={parentDetails.details?.priority}
+        formControl={
+          parentDetails.details?.sample_form_eligible ? (
+            <SampleFormSelect
+              sampleId={parent.sample_id}
+              valueId={parentDetails.details.sample_form_id ?? null}
+              valueName={parentDetails.details.sample_form_name ?? null}
+              onChanged={parentDetails.refresh}
+              compact
+              className="w-44"
+              ariaLabel={`Form for ${parent.sample_id}`}
+            />
+          ) : undefined
+        }
       />
       {phaseTabs}
       <div

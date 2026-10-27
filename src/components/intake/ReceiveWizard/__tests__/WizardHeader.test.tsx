@@ -84,3 +84,30 @@ describe('WizardHeader — shape-driven expected-vials total', () => {
     )
   })
 })
+
+describe('WizardHeader — form control slot', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+    mockGetVialDemand.mockResolvedValue(demand())
+  })
+
+  it('renders formControl slot when given', async () => {
+    render(
+      <WizardHeader
+        parentSampleId="P-1"
+        receivedCount={0}
+        formControl={<button type="button">form-control</button>}
+      />,
+    )
+    expect(screen.getByText('Form')).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'form-control' })).toBeInTheDocument()
+    await waitFor(() => expect(mockGetVialDemand).toHaveBeenCalled())
+  })
+
+  it('renders no form block without it', async () => {
+    // Bacteriostatic Water parents are not form-eligible: the wizard passes none.
+    render(<WizardHeader parentSampleId="P-1" receivedCount={0} />)
+    expect(screen.queryByText('Form')).not.toBeInTheDocument()
+    await waitFor(() => expect(mockGetVialDemand).toHaveBeenCalled())
+  })
+})
