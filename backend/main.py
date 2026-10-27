@@ -1858,7 +1858,7 @@ async def get_sample_activity(
                 if d.get("senaite") == "locked":
                     label += " (SENAITE locked — saved in Mk1 only)"
             elif se.event == "sample_form_changed":
-                label = f"Form changed: {d.get('from_name') or '—'} → {d.get('to_name') or '—'}"
+                label = f"Form changed: {d.get('from_name') or 'none'} → {d.get('to_name') or 'none'}"
             elif se.event in ("coa_generated", "coa_published"):
                 coa_actors[(se.event, d.get("verification_code"))] = actor_email
                 continue

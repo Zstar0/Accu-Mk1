@@ -96,6 +96,21 @@ def resolve_spec(db: Session, service_id: int, matrix: Optional[str],
     runs, so another form's row in the result's unit can never switch the
     unit filter on for a sample that is not in that form. sample_form_id=None
     drops every form row: a caller that passes no form sees today's tiers.
+    The form tier is for peptide-family samples only (final review Ruling
+    F-2): callers pass the normalized matrix, and any matrix other than
+    "Peptide" ignores the form, so a sample retitled to Bac Water that kept a
+    stray form still resolves its BW row.
+
+    Form rows fail closed on unit (final review Ruling F-1). When `unit` is
+    given, the sample has a form, and the service has an active row for that
+    form, the winner is accepted only if it is peptide-tier, or a row of this
+    form in the result's unit (or with no unit, for a result in no unit or in
+    the service's catalog unit, the unit-blind fallback below). Anything else,
+    a wildcard or matrix row, or a form row in another unit, resolves None, so
+    a result the form's rows do not cover stops the certificate instead of
+    printing the wildcard's verdict or being censored against an LOQ in the
+    wrong unit. A sample with no row for its form, or no form, resolves as
+    before.
 
     unit (endo slice 3, spec section 6) is the result's unit: callers pass
     effective_unit(result_unit, service unit). When any active row of the
@@ -121,6 +136,8 @@ def resolve_spec(db: Session, service_id: int, matrix: Optional[str],
     matrix/wildcard and never aborts here."""
     from models import AnalysisService, AnalysisServiceSpec
 
+    if matrix != "Peptide":
+        sample_form_id = None
     rows = db.execute(
         select(AnalysisServiceSpec).where(
             AnalysisServiceSpec.analysis_service_id == service_id,
@@ -128,15 +145,27 @@ def resolve_spec(db: Session, service_id: int, matrix: Optional[str],
         ).order_by(AnalysisServiceSpec.id)
     ).scalars().all()
     rows = [s for s in rows if s.sample_form_id is None or s.sample_form_id == sample_form_id]
-    if unit is not None:
-        want = normalize_unit(unit)
-        in_unit = [s for s in rows if normalize_unit(s.unit) == want]
-        if in_unit:
-            return _first_in_scope(in_unit, matrix, peptide_id, sample_form_id)
-        svc = db.get(AnalysisService, service_id)
-        if want and want != normalize_unit(svc.unit if svc is not None else None):
+    if unit is None:
+        return _first_in_scope(rows, matrix, peptide_id, sample_form_id)
+    want = normalize_unit(unit)
+    svc = db.get(AnalysisService, service_id)
+    catalog = normalize_unit(svc.unit if svc is not None else None)
+    in_unit = [s for s in rows if normalize_unit(s.unit) == want]
+    if in_unit:
+        winner = _first_in_scope(in_unit, matrix, peptide_id, sample_form_id)
+    elif want and want != catalog:
+        return None
+    else:
+        winner = _first_in_scope(rows, matrix, peptide_id, sample_form_id)
+    # Final review C1: once the sample's form has a row for this service, only
+    # a form row in the result's unit (or the peptide tier) may judge it.
+    if (winner is not None and sample_form_id is not None and winner.peptide_id is None
+            and any(s.sample_form_id == sample_form_id for s in rows)):
+        unit_ok = normalize_unit(winner.unit) == want or (
+            not normalize_unit(winner.unit) and (not want or want == catalog))
+        if winner.sample_form_id != sample_form_id or not unit_ok:
             return None
-    return _first_in_scope(rows, matrix, peptide_id, sample_form_id)
+    return winner
 
 
 def sample_peptide_id(db: Session, parent_pk: int) -> Optional[int]:

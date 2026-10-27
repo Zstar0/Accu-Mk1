@@ -255,6 +255,93 @@ def test_wildcard_arm_excludes_form_rows(db_session):
     assert resolve_spec(db, svc.id, "Peptide", sample_form_id=nasal.id).id == form_row.id
 
 
+# ── F-1 (final review C1): a result in a unit the form's rows don't cover ────
+# Once a sample's form has a row for the service, the form tier is the only
+# thing allowed to judge it (peptide tier aside). A result in another unit
+# resolves None so the certificate stops, instead of printing the injectable
+# wildcard verdict or censoring against an LOQ in the wrong unit.
+
+def _nasal_hm_service(db, *, wildcard_unit):
+    """HM-PB (catalog unit ppm), a wildcard filed in `wildcard_unit`, and a
+    Nasal Spray report-only row in µg/mL with LOQ 0.1."""
+    svc = _mk_service(db, keyword="HM-PB")
+    svc.unit = "ppm"
+    nasal = _mk_form(db, "Nasal Spray")
+    wild = _mk_spec(db, svc, unit=wildcard_unit, max_value=Decimal("10"))
+    nasal_row = _mk_spec(db, svc, sample_form_id=nasal.id, rule_kind="informational",
+                         max_value=None, unit="µg/mL", loq=Decimal("0.1"))
+    return svc, nasal, wild, nasal_row
+
+
+def test_nasal_result_in_ppm_never_reaches_a_ppm_wildcard(db_session):
+    """Probe (a): wildcard filed in ppm, nasal row in µg/mL."""
+    db = db_session
+    svc, nasal, wild, nasal_row = _nasal_hm_service(db, wildcard_unit="ppm")
+    assert resolve_spec(db, svc.id, "Peptide", unit="ppm", sample_form_id=nasal.id) is None
+    assert resolve_spec(db, svc.id, "Peptide", unit="µg/mL",
+                        sample_form_id=nasal.id).id == nasal_row.id
+
+
+def test_nasal_result_in_ppm_is_not_censored_by_a_ug_ml_row(db_session):
+    """Probe (b): wildcard in µg/g, catalog unit ppm. The catalog-unit
+    fallback used to hand a ppm number the µg/mL form row."""
+    db = db_session
+    svc, nasal, wild, nasal_row = _nasal_hm_service(db, wildcard_unit="µg/g")
+    assert resolve_spec(db, svc.id, "Peptide", unit="ppm", sample_form_id=nasal.id) is None
+
+
+def test_form_row_with_a_blank_unit_keeps_the_catalog_unit_fallback(db_session):
+    db = db_session
+    svc = _mk_service(db)
+    svc.unit = "ppm"
+    nasal = _mk_form(db, "Nasal Spray")
+    row = _mk_spec(db, svc, sample_form_id=nasal.id, unit=None, max_value=Decimal("2"))
+    assert resolve_spec(db, svc.id, "Peptide", unit="ppm", sample_form_id=nasal.id).id == row.id
+    assert resolve_spec(db, svc.id, "Peptide", unit="", sample_form_id=nasal.id).id == row.id
+    assert resolve_spec(db, svc.id, "Peptide", unit="µg/mL", sample_form_id=nasal.id) is None
+
+
+def test_other_forms_and_peptide_tier_are_untouched_by_the_form_fail_closed(db_session):
+    db = db_session
+    svc, nasal, wild, nasal_row = _nasal_hm_service(db, wildcard_unit="ppm")
+    powder = _mk_form(db, "Lyophilized Powder")
+    pep = _mk_peptide(db, "BPC157")
+    pep_row = _mk_spec(db, svc, peptide_id=pep.id, unit="ppm", max_value=Decimal("3"))
+    # A powder sample (no row of its own for this service) still gets the wildcard.
+    assert resolve_spec(db, svc.id, "Peptide", unit="ppm", sample_form_id=powder.id).id == wild.id
+    assert resolve_spec(db, svc.id, "Peptide", unit="ppm").id == wild.id
+    # A nasal sample whose peptide has its own row keeps the peptide tier.
+    assert resolve_spec(db, svc.id, "Peptide", peptide_id=pep.id, unit="ppm",
+                        sample_form_id=nasal.id).id == pep_row.id
+
+
+def test_form_without_rows_for_the_service_resolves_as_before(db_session):
+    """A nasal sample on a service that has no Nasal Spray row is not
+    affected: the post-check only applies when the form has a row here."""
+    db = db_session
+    svc = _mk_service(db)
+    svc.unit = "ppm"
+    nasal = _mk_form(db, "Nasal Spray")
+    wild = _mk_spec(db, svc, unit="ppm")
+    assert resolve_spec(db, svc.id, "Peptide", unit="ppm", sample_form_id=nasal.id).id == wild.id
+
+
+# ── F-2 (final review I1): the form tier is for peptide-family samples only ───
+
+def test_bac_water_sample_with_a_stray_form_resolves_the_bw_matrix_row(db_session):
+    db = db_session
+    svc = _mk_service(db)
+    nasal = _mk_form(db, "Nasal Spray")
+    wild = _mk_spec(db, svc)                                            # wildcard
+    bw = _mk_spec(db, svc, matrix="Bacteriostatic Water", max_value=Decimal("0.05"))
+    _mk_spec(db, svc, sample_form_id=nasal.id, max_value=Decimal("4"))  # form row
+    assert resolve_spec(db, svc.id, "Bacteriostatic Water", unit="ppm",
+                        sample_form_id=nasal.id).id == bw.id
+    assert resolve_spec(db, svc.id, "Bacteriostatic Water",
+                        sample_form_id=nasal.id).id == bw.id
+    assert resolve_spec(db, svc.id, None, sample_form_id=nasal.id).id == wild.id
+
+
 def test_display_spec_fields_cache_is_keyed_by_form(db_session):
     from coa.spec_rules import display_spec_fields
     db = db_session

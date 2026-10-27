@@ -935,6 +935,7 @@ def test_native_sections_uses_parent_form_tier(db_session, monkeypatch):
                                     services=[("HM-PB", "mk1")], specs=False)
     nasal = _form_specs(db_session, svcs)
     parent = _mk_parent_with_rows(db_session, svcs, result="5")
+    parent.sample_type_title = "Peptide"       # the form tier is peptide-family only
     parent.sample_form_id = nasal.id
     db_session.flush()
     _order_lookup(monkeypatch)
@@ -964,9 +965,64 @@ def test_rule5_abort_message_names_the_form_tier(db_session, monkeypatch):
     parent.sample_form_id = nasal.id
     db_session.flush()
     _order_lookup(monkeypatch)
-    with pytest.raises(NativeSectionsError,
-                       match=rf"tiers consulted: peptide=None, form={nasal.id}, matrix=None, wildcard"):
+    # Not a peptide-family sample: the form tier is not consulted, so the abort
+    # message must not name it.
+    with pytest.raises(NativeSectionsError, match=r"tiers consulted: peptide=None, matrix=None, wildcard"):
         build_native_sections(db_session, parent)
+    parent.sample_type_title = "Peptide"
+    db_session.flush()
+    with pytest.raises(NativeSectionsError,
+                       match=rf"tiers consulted: peptide=None, form={nasal.id}, matrix='Peptide', wildcard"):
+        build_native_sections(db_session, parent)
+
+
+def _nasal_ug_ml_only(db, svcs):
+    """A Nasal Spray form whose only row is a report-only one in µg/mL (no
+    wildcard, so an unmatched unit has nothing to fall back on)."""
+    from decimal import Decimal
+    from models import AnalysisServiceSpec, LimsSampleForm
+    nasal = LimsSampleForm(name="Nasal Spray", route="nasal_inhaled")
+    db.add(nasal); db.flush()
+    for svc in svcs:
+        db.add(AnalysisServiceSpec(analysis_service_id=svc.id, sample_form_id=nasal.id,
+                                   rule_kind="informational", unit="µg/mL",
+                                   loq=Decimal("0.1")))
+    db.flush()
+    return nasal
+
+
+def test_nasal_result_in_a_unit_the_form_rows_do_not_cover_aborts(db_session, monkeypatch):
+    """Final review C1 (Ruling F-1): a ppm result on a nasal sample whose
+    Nasal Spray row is µg/mL only stops the certificate (rule 5) instead of
+    printing a verdict or censoring a ppm number against a µg/mL LOQ."""
+    prof, svcs = _mk_native_profile(db_session, key="heavy_metals",
+                                    services=[("HM-PB", "mk1")], specs=False)
+    nasal = _nasal_ug_ml_only(db_session, svcs)
+    parent = _mk_parent_with_rows(db_session, svcs, result="0.05")   # result_unit ppm
+    parent.sample_type_title = "Peptide"
+    parent.sample_form_id = nasal.id
+    db_session.flush()
+    _order_lookup(monkeypatch)
+    with pytest.raises(NativeSectionsError, match="has no active spec"):
+        build_native_sections(db_session, parent)
+
+
+def test_nasal_result_in_the_form_row_unit_still_builds(db_session, monkeypatch):
+    prof, svcs = _mk_native_profile(db_session, key="heavy_metals",
+                                    services=[("HM-PB", "mk1")], specs=False)
+    nasal = _nasal_ug_ml_only(db_session, svcs)
+    parent = _mk_parent_with_rows(db_session, svcs, result="0.05")
+    parent.sample_type_title = "Peptide"
+    parent.sample_form_id = nasal.id
+    from sqlalchemy import update
+    from models import LimsAnalysis
+    db_session.execute(update(LimsAnalysis).where(LimsAnalysis.lims_sample_pk == parent.id)
+                       .values(result_unit="µg/mL"))
+    db_session.flush()
+    _order_lookup(monkeypatch)
+    row = build_native_sections(db_session, parent)["sections"][0]["rows"][0]
+    assert row["conforms"] is None
+    assert row["result_display"] == "< LOQ"
 
 
 # ── report-only rows carry an LOQ; basis note hides on all-report-only (task 7) ─

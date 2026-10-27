@@ -3983,7 +3983,11 @@ def _serialize_senaite_shape_rows(
         _unit = r.result_unit or (svc.unit if svc else None)
         _choices = UnitChoices([], None)
         if svc is not None and _uid.startswith("mk1:"):
-            _choices = unit_choices(db, svc, _form_by_sample.get(_host_pk), _unit_cache)
+            # The form tier is peptide-family only (resolve_spec): a stray form on
+            # a Bac Water sample must not steer its default unit.
+            _row_form_id = (_form_by_sample.get(_host_pk)
+                            if _matrix_by_sample.get(_host_pk) == "Peptide" else None)
+            _choices = unit_choices(db, svc, _row_form_id, _unit_cache)
             if not (r.result_value or "").strip():
                 _unit = _choices.default or _unit
         # The spec column resolves in the unit shown (a seeded result_unit would

@@ -344,6 +344,8 @@ def build_native_sections(db: Session, parent, *, vial_parent_ids=None) -> dict:
     # The parent's dosage form is a spec tier (sample forms); a vial's rows
     # are judged here too, by its parent's form.
     sample_form_id = getattr(parent, "sample_form_id", None)
+    if matrix != "Peptide":
+        sample_form_id = None        # the form tier is peptide-family only (resolve_spec)
     # The form tier is only "consulted" when the sample has a form.
     form_tier = f"form={sample_form_id!r}, " if sample_form_id is not None else ""
 

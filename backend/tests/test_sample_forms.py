@@ -119,6 +119,18 @@ def test_retest_of_original_without_form_keeps_default(db, forms):
     assert retest.sample_form_id == forms["lyo"].id
 
 
+def test_retest_copy_is_a_noop_for_an_ineligible_sample_type(db, forms):
+    """Final review I1 (Ruling F-2): a retest retitled to Bac Water must not
+    inherit its original's form, or the form tier would outrank the BW row."""
+    original = _peptide(db, "P-1", "AR_UID_1")
+    service.set_sample_form(db, sample=original, sample_form_id=forms["nasal"].id, user_id=9)
+    retest = _peptide(db, "PB-2", "AR_UID_2", RetestOfSampleId="P-1",
+                      getSampleTypeTitle="Bacteriostatic Water")
+    assert retest.sample_form_id is None
+    service.copy_form_from_original(db, retest)        # direct call, same answer
+    assert retest.sample_form_id is None
+
+
 # ── service: set_sample_form ───────────────────────────────────────────────
 
 def test_set_sample_form_errors(db, forms):
@@ -316,3 +328,15 @@ def test_activity_log_labels_form_change(client, db, forms):
               if e["event"] == "sample_form_changed")
     assert ev["label"] == "Form changed: Lyophilized Powder \u2192 Nasal Spray"
     assert ev["details"]["to_name"] == "Nasal Spray"
+
+
+def test_activity_log_form_change_from_no_form_reads_none(client, db):
+    _peptide(db)                      # forms table unseeded: the sample has no form
+    nasal = LimsSampleForm(name="Nasal Spray", route="nasal_inhaled")
+    db.add(nasal)
+    db.commit()
+    client.patch("/api/lims-samples/P-2001/form", json={"sample_form_id": nasal.id})
+    events = client.get("/samples/P-2001/activity").json()
+    ev = next(e for e in (events if isinstance(events, list) else events["events"])
+              if e["event"] == "sample_form_changed")
+    assert ev["label"] == "Form changed: none → Nasal Spray"

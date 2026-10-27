@@ -83,6 +83,7 @@ def _spec(db, svc, unit, *, form=None, matrix=None, active=True, max_value="10")
 
 def _sample(db, form=None, sample_id="AA-P1"):
     s = LimsSample(sample_id=sample_id, sample_type="x", status="received",
+                   sample_type_title="Peptide",    # the form tier is peptide-family only
                    sample_form_id=form.id if form else None)
     db.add(s)
     db.flush()
@@ -323,10 +324,37 @@ def test_unresulted_row_spec_column_resolves_in_the_displayed_unit(db):
 
 def test_resulted_row_spec_column_still_resolves_in_its_own_unit(db):
     svc, parent = _limit_world(db)
+    vial, _ = _vial_row(db, svc, parent, result_unit="µg/mL", result_value="0.3")
+
+    (shaped,) = list_analyses_in_senaite_shape(db, host_kind="sub_sample", host_pk=vial.id)
+
+    assert shaped.unit == "µg/mL"
+    assert (shaped.specification["max"], shaped.specification["unit"]) == (0.5, "µg/mL")
+    assert shaped.conforms is True
+
+
+def test_resulted_row_in_a_unit_the_form_does_not_cover_shows_no_spec(db):
+    """Final review C1: a ppm result on a nasal sample (whose row is µg/mL)
+    is not judged by the injectable ppm wildcard; the column shows no spec,
+    as the certificate stops on the same row."""
+    svc, parent = _limit_world(db)
     vial, _ = _vial_row(db, svc, parent, result_unit="ppm", result_value="3")
 
     (shaped,) = list_analyses_in_senaite_shape(db, host_kind="sub_sample", host_pk=vial.id)
 
     assert shaped.unit == "ppm"
-    assert (shaped.specification["max"], shaped.specification["unit"]) == (10.0, "ppm")
-    assert shaped.conforms is True
+    assert shaped.specification is None
+    assert shaped.conforms is None
+
+
+def test_bac_water_sample_with_a_stray_form_gets_no_form_default_unit(db):
+    """Final review I1: the form's unit default is peptide-family only."""
+    svc, parent = _nasal_world(db)
+    parent.sample_type_title = "Bacteriostatic Water"
+    db.commit()
+    vial, _ = _vial_row(db, svc, parent, result_unit="ppm")
+
+    (shaped,) = list_analyses_in_senaite_shape(db, host_kind="sub_sample", host_pk=vial.id)
+
+    assert shaped.unit == "ppm"
+    assert shaped.default_unit == "ppm"          # the catalog unit, not the form's µg/mL

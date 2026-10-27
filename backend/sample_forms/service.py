@@ -43,8 +43,9 @@ def apply_default_form(db: Session, row: LimsSample) -> None:
 
 def copy_form_from_original(db: Session, row: LimsSample) -> None:
     """A retest inherits its original's form; a missing or form-less original
-    leaves whatever apply_default_form gave the retest."""
-    if not row.retest_of_sample_id:
+    leaves whatever apply_default_form gave the retest. A retest that is not a
+    peptide-family sample takes no form at all."""
+    if not row.retest_of_sample_id or not is_form_eligible(row.sample_type_title):
         return
     original_form_id = db.execute(
         select(LimsSample.sample_form_id).where(LimsSample.sample_id == row.retest_of_sample_id)
