@@ -27,8 +27,8 @@ STEP1_RATIO = 10
 # What locked a row's rule (spec section 6).
 LOCK_EVENTS = ("print", "result", "complete", "reapply", "switch")
 
-_SNAPSHOT_KEYS = ("id", "peptide_id", "min_mg", "max_mg", "total_dilution", "step1_ratio",
-                  "cartridge_type_id", "status", "note", "sort_order", "active")
+_SNAPSHOT_KEYS = ("id", "peptide_id", "min_mg", "max_mg", "recon_water_ml", "total_dilution",
+                  "step1_ratio", "cartridge_type_id", "status", "note", "sort_order", "active")
 
 
 def snapshot(rule) -> dict:
@@ -82,7 +82,7 @@ _REQUIRED_FIELDS = ("peptide_id", "status", "active")
 # How match_rule settles an overlap, in the rules page's words (spec section 4).
 OVERLAP_RULE = ("for this peptide; where both match, the narrower band wins (an open band "
                 "is the widest) and a tie goes to the line listed first")
-_NUMBER_FIELDS = ("min_mg", "max_mg", "total_dilution", "step1_ratio")
+_NUMBER_FIELDS = ("min_mg", "max_mg", "recon_water_ml", "total_dilution", "step1_ratio")
 
 
 def _bounds(rule: dict) -> tuple[float, float]:
@@ -149,6 +149,9 @@ def check_rule(db: Session, values: dict, sent, *, rule_id: Optional[int] = None
     total, ratio = values["total_dilution"], values["step1_ratio"]
     if "total_dilution" in sent and total is not None and total <= 0:
         raise ValueError("total_dilution must be greater than zero")
+    water = values["recon_water_ml"]
+    if "recon_water_ml" in sent and water is not None and water <= 0:
+        raise ValueError("recon_water_ml must be greater than zero")
     if "step1_ratio" in sent and ratio is not None and ratio < 1:
         raise ValueError("step1_ratio must be at least 1")
     lo, hi = values["min_mg"], values["max_mg"]
@@ -192,9 +195,10 @@ def check_rule(db: Session, values: dict, sent, *, rule_id: Optional[int] = None
 
 # --- A row's rule and its effective values (spec sections 4 and 5) ----------
 
-# The three values a rule sets on a row; snapshot() and effective_values()
-# use the same names.
-_VALUE_FIELDS = ("total_dilution", "step1_ratio", "cartridge_type_id")
+# The values a rule sets on a row; snapshot() and effective_values() use the
+# same names. recon_water_ml is the row's prep_water_ml on the typed side: one
+# volume, whether it was typed on the row or prescribed by the line.
+_VALUE_FIELDS = ("total_dilution", "step1_ratio", "cartridge_type_id", "recon_water_ml")
 
 
 def _typed_values(item) -> dict:
@@ -210,6 +214,8 @@ def _typed_values(item) -> dict:
         # floor that the :g message cannot format (500); as a float it is inf.
         "step1_ratio": float(ratio) if ratio is not None else None,
         "cartridge_type_id": item.cartridge_type_id,
+        "recon_water_ml": (item.prep_water_ml
+                           if (item.prep_water_ml or 0) > 0 else None),
     }
 
 
@@ -240,19 +246,31 @@ def row_rule(item, *, rules: list[dict], peptide_id: Optional[int], weight_mg: O
                       endo_prep=endo_prep, rules_off=False)
 
 
-def effective_values(item, rule: Optional[dict], *, std_total: float) -> dict:
-    """A row's total dilution, step 1 ratio and cartridge (spec 5), field by
-    field: typed beats rule beats standard. `rule` is row_rule's answer. The
-    standard is the method's std_total_dilution, STEP1_RATIO, and for the
-    cartridge None, meaning the usual chain (bac water's 0.01, the run's,
-    the method default), which callers resolve as before. `ruled` names
-    the values the rule supplied."""
+def effective_values(item, rule: Optional[dict], *, std_total: float,
+                     std_water: float, is_bac: bool = False) -> dict:
+    """A row's total dilution, step 1 ratio, cartridge and reconstitution
+    water (spec 5), field by field: typed beats rule beats standard. `rule`
+    is row_rule's answer. The standard is the method's std_total_dilution and
+    recon_water_ml, STEP1_RATIO, and for the cartridge None, meaning the usual
+    chain (bac water's 0.01, the run's, the method default), which callers
+    resolve as before. `ruled` names the values the rule supplied.
+
+    Water is POWDER ONLY (Handler ruling 2026-10-26), mirroring the browser's
+    waterOf. A liquid vial arrived reconstituted: its volume is a physical fact
+    about what the customer sent, not a prep choice, so neither a rule nor the
+    standard may supply one. The analyst's typed volume is the only water such
+    a row can have, and without it the row has none (the promote refuses it).
+    Bac water is not reconstituted at all: it is its own 20x dilution, so it
+    has no water on any path, and it is never ruled either (match_rule)."""
     typed = _typed_values(item)
     standard = {"total_dilution": std_total, "step1_ratio": STEP1_RATIO,
-                "cartridge_type_id": None}
+                "cartridge_type_id": None, "recon_water_ml": std_water}
     ruled = {f: typed[f] is None and (rule or {}).get(f) is not None for f in _VALUE_FIELDS}
     values = {f: typed[f] if typed[f] is not None else rule[f] if ruled[f] else standard[f]
               for f in _VALUE_FIELDS}
+    if is_bac or item.prep_form == "liquid":
+        ruled["recon_water_ml"] = False
+        values["recon_water_ml"] = None if is_bac else typed["recon_water_ml"]
     return {**values, "ruled": ruled}
 
 
@@ -327,13 +345,15 @@ def row_facts(db: Session, worksheet, items) -> dict[int, dict]:
 
 def row_effective(db: Session, worksheet, item, *, rules: Optional[list] = None,
                   view=None, std_total: Optional[float] = None,
+                  std_water: Optional[float] = None,
                   facts: Optional[dict] = None) -> tuple[Optional[dict], dict]:
     """One row's rule and effective values (preflight F8): row_facts, then
     row_rule and effective_values. `rules` defaults to today's lines
     (load_rules); `view` is the row as a pending change leaves it
     (check_item_endo_fields), read for the rule and the values in place of
-    `item`; `std_total` defaults to the worksheet method's
-    std_total_dilution, resolved only when not given; `facts` is the row's
+    `item`; `std_total` / `std_water` default to the worksheet
+    method's std_total_dilution and recon_water_ml, resolved only when not
+    given; `facts` is the row's
     facts when the caller has them ({} for a row of another bench, which
     has no rule), else read off the stored row."""
     from worksheets_endo import endo_run_params, resolve_endo_method  # lazy: it imports this module
@@ -343,11 +363,13 @@ def row_effective(db: Session, worksheet, item, *, rules: Optional[list] = None,
         facts = row_facts(db, worksheet, [item]).get(item.id)
     rule = (row_rule(row, rules=load_rules(db) if rules is None else rules,
                      endo_prep=worksheet.endo_prep, **facts) if facts else None)
-    if std_total is None:
+    if std_total is None or std_water is None:
         method = resolve_endo_method(db, worksheet)
-        std_total = endo_run_params(
-            method["run_parameters"] if method else None)["std_total_dilution"]
-    return rule, effective_values(row, rule, std_total=std_total)
+        params = endo_run_params(method["run_parameters"] if method else None)
+        std_total = params["std_total_dilution"] if std_total is None else std_total
+        std_water = params["recon_water_ml"] if std_water is None else std_water
+    return rule, effective_values(row, rule, std_total=std_total, std_water=std_water,
+                                  is_bac=bool((facts or {}).get("is_bac")))
 
 
 # --- Locks, release and history (spec sections 6 to 8) ----------------------
@@ -413,6 +435,7 @@ def append_history(item, *, why: str, user_id: Optional[int], effective: dict,
         "total_dilution": effective["total_dilution"],
         "step1_ratio": effective["step1_ratio"],
         "cartridge_type_id": effective["cartridge_type_id"],
+        "recon_water_ml": effective["recon_water_ml"],
         "result_reading": item.result_reading,
         "reader_test_id": (item.result_reader or {}).get("test_id"),
         "result_entered_at": (item.result_entered_at.isoformat() + "Z"

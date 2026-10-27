@@ -44,8 +44,9 @@ def test_a_new_rule_takes_the_table_defaults(db_session):
     db_session.flush()
     assert snapshot(rule) == {
         "id": rule.id, "peptide_id": pep.id, "min_mg": None, "max_mg": None,
-        "total_dilution": None, "step1_ratio": None, "cartridge_type_id": None,
-        "status": "trial", "note": None, "sort_order": 0, "active": True}
+        "recon_water_ml": None, "total_dilution": None, "step1_ratio": None,
+        "cartridge_type_id": None, "status": "trial", "note": None,
+        "sort_order": 0, "active": True}
     assert rule.created_at is not None and rule.updated_by_id is None
     json.dumps(snapshot(rule))   # a lock stores it in a JSON column
 

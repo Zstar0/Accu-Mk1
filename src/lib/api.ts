@@ -6877,6 +6877,7 @@ export interface EndoPrepRuleIn {
   peptide_id: number
   min_mg: number | null
   max_mg: number | null
+  recon_water_ml: number | null
   total_dilution: number | null
   step1_ratio: number | null
   cartridge_type_id: number | null
