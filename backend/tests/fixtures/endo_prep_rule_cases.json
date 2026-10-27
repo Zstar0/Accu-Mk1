@@ -4,19 +4,19 @@
   "cartridges": {"2": "Endosafe 0.01"},
   "rule_sets": {
     "main": [
-      {"id": 1, "peptide_id": 1, "min_mg": null, "max_mg": 30, "total_dilution": null, "step1_ratio": null, "cartridge_type_id": null, "status": "validated", "note": "a: 1:250 fine to 30 mg", "sort_order": 1, "active": true},
-      {"id": 2, "peptide_id": 1, "min_mg": 30, "max_mg": null, "total_dilution": 300, "step1_ratio": null, "cartridge_type_id": null, "status": "trial", "note": "b: 60 mg PPC low at 1:250", "sort_order": 2, "active": true},
-      {"id": 3, "peptide_id": 2, "min_mg": null, "max_mg": null, "total_dilution": 300, "step1_ratio": null, "cartridge_type_id": null, "status": "trial", "note": "c: any weight", "sort_order": 3, "active": true},
-      {"id": 4, "peptide_id": 3, "min_mg": null, "max_mg": null, "total_dilution": null, "step1_ratio": 5, "cartridge_type_id": 2, "status": "trial", "note": "d: step 1 at 1:5 on the 0.01 cartridge", "sort_order": 4, "active": true},
-      {"id": 5, "peptide_id": 4, "min_mg": null, "max_mg": 10, "total_dilution": 400, "step1_ratio": null, "cartridge_type_id": null, "status": "trial", "note": "e: beats f at 10 mg and below", "sort_order": 5, "active": true},
-      {"id": 6, "peptide_id": 4, "min_mg": null, "max_mg": null, "total_dilution": 300, "step1_ratio": null, "cartridge_type_id": null, "status": "trial", "note": "f: any weight", "sort_order": 6, "active": true},
-      {"id": 7, "peptide_id": 6, "min_mg": null, "max_mg": null, "total_dilution": 500, "step1_ratio": null, "cartridge_type_id": null, "status": "trial", "note": "an inactive line", "sort_order": 7, "active": false},
-      {"id": 8, "peptide_id": 7, "min_mg": 30, "max_mg": null, "total_dilution": 350, "step1_ratio": null, "cartridge_type_id": null, "status": "trial", "note": "open band, listed second", "sort_order": 9, "active": true},
-      {"id": 9, "peptide_id": 7, "min_mg": null, "max_mg": null, "total_dilution": 300, "step1_ratio": null, "cartridge_type_id": null, "status": "trial", "note": "open band, listed first", "sort_order": 8, "active": true},
-      {"id": 10, "peptide_id": 8, "min_mg": 50, "max_mg": null, "total_dilution": 400, "step1_ratio": null, "cartridge_type_id": null, "status": "trial", "note": "open band, listed first", "sort_order": 10, "active": true},
-      {"id": 11, "peptide_id": 8, "min_mg": null, "max_mg": 500, "total_dilution": 300, "step1_ratio": null, "cartridge_type_id": null, "status": "trial", "note": "closed band, listed second", "sort_order": 11, "active": true},
-      {"id": 12, "peptide_id": 9, "min_mg": 10, "max_mg": 20, "total_dilution": 300, "step1_ratio": null, "cartridge_type_id": null, "status": "trial", "note": "same width and order, lower id", "sort_order": 12, "active": true},
-      {"id": 13, "peptide_id": 9, "min_mg": 15, "max_mg": 25, "total_dilution": 400, "step1_ratio": null, "cartridge_type_id": null, "status": "trial", "note": "same width and order, higher id", "sort_order": 12, "active": true}
+      {"id": 1, "peptide_id": 1, "min_mg": null, "max_mg": 30, "recon_water_ml": null, "total_dilution": null, "step1_ratio": null, "cartridge_type_id": null, "status": "validated", "note": "a: 1:250 fine to 30 mg", "sort_order": 1, "active": true},
+      {"id": 2, "peptide_id": 1, "min_mg": 30, "max_mg": null, "recon_water_ml": null, "total_dilution": 300, "step1_ratio": null, "cartridge_type_id": null, "status": "trial", "note": "b: 60 mg PPC low at 1:250", "sort_order": 2, "active": true},
+      {"id": 3, "peptide_id": 2, "min_mg": null, "max_mg": null, "recon_water_ml": null, "total_dilution": 300, "step1_ratio": null, "cartridge_type_id": null, "status": "trial", "note": "c: any weight", "sort_order": 3, "active": true},
+      {"id": 4, "peptide_id": 3, "min_mg": null, "max_mg": null, "recon_water_ml": null, "total_dilution": null, "step1_ratio": 5, "cartridge_type_id": 2, "status": "trial", "note": "d: step 1 at 1:5 on the 0.01 cartridge", "sort_order": 4, "active": true},
+      {"id": 5, "peptide_id": 4, "min_mg": null, "max_mg": 10, "recon_water_ml": null, "total_dilution": 400, "step1_ratio": null, "cartridge_type_id": null, "status": "trial", "note": "e: beats f at 10 mg and below", "sort_order": 5, "active": true},
+      {"id": 6, "peptide_id": 4, "min_mg": null, "max_mg": null, "recon_water_ml": null, "total_dilution": 300, "step1_ratio": null, "cartridge_type_id": null, "status": "trial", "note": "f: any weight", "sort_order": 6, "active": true},
+      {"id": 7, "peptide_id": 6, "min_mg": null, "max_mg": null, "recon_water_ml": null, "total_dilution": 500, "step1_ratio": null, "cartridge_type_id": null, "status": "trial", "note": "an inactive line", "sort_order": 7, "active": false},
+      {"id": 8, "peptide_id": 7, "min_mg": 30, "max_mg": null, "recon_water_ml": null, "total_dilution": 350, "step1_ratio": null, "cartridge_type_id": null, "status": "trial", "note": "open band, listed second", "sort_order": 9, "active": true},
+      {"id": 9, "peptide_id": 7, "min_mg": null, "max_mg": null, "recon_water_ml": null, "total_dilution": 300, "step1_ratio": null, "cartridge_type_id": null, "status": "trial", "note": "open band, listed first", "sort_order": 8, "active": true},
+      {"id": 10, "peptide_id": 8, "min_mg": 50, "max_mg": null, "recon_water_ml": null, "total_dilution": 400, "step1_ratio": null, "cartridge_type_id": null, "status": "trial", "note": "open band, listed first", "sort_order": 10, "active": true},
+      {"id": 11, "peptide_id": 8, "min_mg": null, "max_mg": 500, "recon_water_ml": null, "total_dilution": 300, "step1_ratio": null, "cartridge_type_id": null, "status": "trial", "note": "closed band, listed second", "sort_order": 11, "active": true},
+      {"id": 12, "peptide_id": 9, "min_mg": 10, "max_mg": 20, "recon_water_ml": null, "total_dilution": 300, "step1_ratio": null, "cartridge_type_id": null, "status": "trial", "note": "same width and order, lower id", "sort_order": 12, "active": true},
+      {"id": 13, "peptide_id": 9, "min_mg": 15, "max_mg": 25, "recon_water_ml": null, "total_dilution": 400, "step1_ratio": null, "cartridge_type_id": null, "status": "trial", "note": "same width and order, higher id", "sort_order": 12, "active": true}
     ],
     "empty": []
   },

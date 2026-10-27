@@ -179,6 +179,80 @@ def test_a_below_loq_peptide_row_fills_the_vial_and_promotes_it(client, db):
             parent.method_id) == ("25", "EU/vial", 25.0, 0.05, "EU/mL", w.mid)
 
 
+def test_a_rules_water_moves_the_promoted_value_and_its_loq(client, db):
+    """Dennis's ask (Handler 2026-10-26): a line can prescribe more than the
+    standard 2 mL. Water multiplies into both the value and the LOQ, so the
+    server must resolve it through the same chain the browser does, or it
+    refuses its own numbers. The reading is saved through the API, as the
+    bench saves it: that is what locks the row to the line (row_rule)."""
+    from models import EndoPrepRule
+    from tests.test_endo_prep_rule_rows import _anchor
+    from tests.test_spec_rules import _mk_peptide
+
+    w = _world(client, db)
+    w.ws.endo_prep = "2ml"   # a line never applies on a stock worksheet
+    pep = _mk_peptide(db, "RETA", "Retatrutide")
+    db.add(EndoPrepRule(peptide_id=pep.id, recon_water_ml=3))
+    item, _ = _row(db, w, reading=None)
+    _anchor(db, "P-4001", pep)   # the line matches on the parent's catalog peptide
+    db.commit()
+    url = f"/worksheets/{w.ws.id}/items/{item.id}"
+    assert client.patch(url, json={"result_reading": "<0.05",
+                                   "cartridge_type_id": w.c05.id}).status_code == 200
+    db.refresh(item)
+    assert item.prep_rule["rule"]["recon_water_ml"] == 3.0
+
+    # <0.05 x 250 x 3 mL = <37.5 EU/vial, where the standard 2 mL gives <25.
+    [res] = _results(_promote(client, w.ws, _line(item, 37.5, loq=37.5)))
+    assert res["promoted"] is True, res
+    # The anchor analysis sits on the parent too, so pick the endotoxin row.
+    [parent] = [r for r in _parent_rows(db, "P-4001") if r.keyword == w.svc.keyword]
+    assert (parent.result_value, parent.loq) == ("37.5", 37.5)
+    audit = db.query(AuditLog).filter(AuditLog.operation == "endo_worksheet_promoted").one()
+    assert audit.details["water_ml"] == 3.0
+
+    # The standard numbers are now the wrong ones, and are refused.
+    other, _ = _row(db, w, "P-4002-S01", reading=None)
+    _anchor(db, "P-4002", pep)
+    db.commit()
+    assert client.patch(f"/worksheets/{w.ws.id}/items/{other.id}",
+                        json={"result_reading": "<0.05",
+                              "cartridge_type_id": w.c05.id}).status_code == 200
+    assert _results(_promote(client, w.ws, _line(other))) == [
+        _refused(other, worksheets_endo_promote.REASON_BAD_NUMBERS)]
+
+
+def test_a_rules_water_never_reaches_a_liquid_row_on_promote(client, db):
+    """Powder only (Handler 2026-10-26): a liquid vial arrived reconstituted,
+    so a line may not put water in it. Without a typed volume such a row has
+    no value at all, which is how the browser refuses it too."""
+    from models import EndoPrepRule
+    from tests.test_endo_prep_rule_rows import _anchor
+    from tests.test_spec_rules import _mk_peptide
+
+    w = _world(client, db)
+    w.ws.endo_prep = "2ml"
+    pep = _mk_peptide(db, "RETA", "Retatrutide")
+    db.add(EndoPrepRule(peptide_id=pep.id, recon_water_ml=3))
+    item, _ = _row(db, w, reading=None)
+    _anchor(db, "P-4001", pep)
+    db.commit()
+    url = f"/worksheets/{w.ws.id}/items/{item.id}"
+    assert client.patch(url, json={"prep_form": "liquid", "result_reading": "<0.05",
+                                   "cartridge_type_id": w.c05.id}).status_code == 200
+    # The line is still the row's; it just supplies no water.
+    db.refresh(item)
+    assert item.prep_rule["rule"]["recon_water_ml"] == 3.0
+    assert _results(_promote(client, w.ws, _line(item, 37.5, loq=37.5))) == [
+        _refused(item, worksheets_endo_promote.REASON_BAD_NUMBERS)]
+    # With the customer's own volume typed, that is the water used.
+    assert client.patch(url, json={"prep_water_ml": 1}).status_code == 200
+    [res] = _results(_promote(client, w.ws, _line(item, 12.5, loq=12.5)))
+    assert res["promoted"] is True, res
+    audit = db.query(AuditLog).filter(AuditLog.operation == "endo_worksheet_promoted").one()
+    assert audit.details["water_ml"] == 1
+
+
 def test_bac_water_promotes_in_eu_ml_judged_by_its_own_spec(client, db):
     w = _world(client, db)
     item, _ = _row(db, w, "BW-0100-S01", sample_type="Bacteriostatic Water", reading="<0.2",

@@ -60,6 +60,7 @@ interface Draft {
   peptide_id: number | null
   min_mg: string
   max_mg: string
+  recon_water_ml: string
   total_dilution: string
   step1_ratio: string
   cartridge_type_id: number | null
@@ -71,6 +72,8 @@ interface Draft {
 const NUMBER_FIELDS = [
   ['min_mg', 'Above mg'],
   ['max_mg', 'Up to mg'],
+  // Before the dilutions, as the bench works: reconstitute, then dilute.
+  ['recon_water_ml', 'Recon water mL'],
   ['total_dilution', 'Total 1:N'],
   ['step1_ratio', 'Step 1 1:N'],
 ] as const
@@ -89,6 +92,7 @@ function draftOf(r: EndoPrepRuleOut | null): Draft {
     peptide_id: r?.peptide_id ?? null,
     min_mg: text(r?.min_mg),
     max_mg: text(r?.max_mg),
+    recon_water_ml: text(r?.recon_water_ml),
     total_dilution: text(r?.total_dilution),
     step1_ratio: text(r?.step1_ratio),
     cartridge_type_id: r?.cartridge_type_id ?? null,
@@ -116,6 +120,7 @@ function bodyOf(d: Draft): EndoPrepRuleIn | string {
     peptide_id: d.peptide_id,
     min_mg: numOf(d.min_mg) ?? null,
     max_mg: numOf(d.max_mg) ?? null,
+    recon_water_ml: numOf(d.recon_water_ml) ?? null,
     total_dilution: numOf(d.total_dilution) ?? null,
     step1_ratio: numOf(d.step1_ratio) ?? null,
     cartridge_type_id: d.cartridge_type_id,
@@ -539,6 +544,7 @@ export function EndoPrepRulesPage() {
               <TableHead>Peptide</TableHead>
               <TableHead>Above mg</TableHead>
               <TableHead>Up to mg</TableHead>
+              <TableHead>Recon water mL</TableHead>
               <TableHead>Total 1:N</TableHead>
               <TableHead>Step 1 1:N</TableHead>
               <TableHead>Cartridge</TableHead>
@@ -552,7 +558,7 @@ export function EndoPrepRulesPage() {
           <TableBody>
             {isLoading ? (
               <TableRow>
-                <TableCell colSpan={12} className="py-8 text-center">
+                <TableCell colSpan={13} className="py-8 text-center">
                   <Loader2 className="mx-auto h-5 w-5 animate-spin text-muted-foreground" />
                 </TableCell>
               </TableRow>

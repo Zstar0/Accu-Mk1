@@ -127,31 +127,68 @@ def _r(**fields):
     """A row as row_rule and effective_values read it."""
     return SimpleNamespace(**{"prep_total_dilution": None, "prep_steps": None,
                               "cartridge_type_id": None, "prep_rule": None,
-                              "prep_rules_off": False, **fields})
+                              "prep_rules_off": False, "prep_water_ml": None,
+                              "prep_form": None, **fields})
 
 
-_LINE = {"id": 7, "peptide_id": 3, "min_mg": None, "max_mg": None, "total_dilution": 300.0,
-         "step1_ratio": 15.0, "cartridge_type_id": 42, "status": "trial", "note": None,
-         "sort_order": 1, "active": True}
+_LINE = {"id": 7, "peptide_id": 3, "min_mg": None, "max_mg": None, "recon_water_ml": None,
+         "total_dilution": 300.0, "step1_ratio": 15.0, "cartridge_type_id": 42,
+         "status": "trial", "note": None, "sort_order": 1, "active": True}
+
+
+def _ev(item, rule, *, std_total=250, std_water=2, is_bac=False):
+    return endo_prep_rules.effective_values(item, rule, std_total=std_total,
+                                            std_water=std_water, is_bac=is_bac)
+
+
+_NONE_RULED = {"total_dilution": False, "step1_ratio": False, "cartridge_type_id": False,
+               "recon_water_ml": False}
 
 
 def test_effective_values_typed_beats_rule_beats_standard_per_field():
-    ev = endo_prep_rules.effective_values
-    none = {"total_dilution": False, "step1_ratio": False, "cartridge_type_id": False}
-    assert ev(_r(), None, std_total=250) == {
-        "total_dilution": 250, "step1_ratio": 10, "cartridge_type_id": None, "ruled": none}
-    assert ev(_r(), _LINE, std_total=250) == {
+    assert _ev(_r(), None) == {
+        "total_dilution": 250, "step1_ratio": 10, "cartridge_type_id": None,
+        "recon_water_ml": 2, "ruled": _NONE_RULED}
+    assert _ev(_r(), {**_LINE, "recon_water_ml": 3.0}) == {
         "total_dilution": 300.0, "step1_ratio": 15.0, "cartridge_type_id": 42,
-        "ruled": dict.fromkeys(none, True)}
+        "recon_water_ml": 3.0, "ruled": dict.fromkeys(_NONE_RULED, True)}
     # A typed total and cartridge win; step 1 with only its sample uL keeps the rule's ratio.
-    assert ev(_r(prep_total_dilution=500, prep_steps=[[30], None, None], cartridge_type_id=5),
-              _LINE, std_total=250) == {
+    assert _ev(_r(prep_total_dilution=500, prep_steps=[[30], None, None], cartridge_type_id=5),
+               _LINE) == {
         "total_dilution": 500, "step1_ratio": 15.0, "cartridge_type_id": 5,
-        "ruled": {"total_dilution": False, "step1_ratio": True, "cartridge_type_id": False}}
-    assert ev(_r(prep_steps=[[20, 4], None, None]), _LINE, std_total=250)["step1_ratio"] == 4.0
+        "recon_water_ml": 2, "ruled": {**_NONE_RULED, "step1_ratio": True}}
+    assert _ev(_r(prep_steps=[[20, 4], None, None]), _LINE)["step1_ratio"] == 4.0
     # A line's null value leaves that field at the standard; a total of 0 is no total.
-    assert ev(_r(prep_total_dilution=0), {**_LINE, "total_dilution": None},
-              std_total=500)["total_dilution"] == 500
+    assert _ev(_r(prep_total_dilution=0), {**_LINE, "total_dilution": None},
+               std_total=500)["total_dilution"] == 500
+
+
+def test_a_rules_water_reaches_a_powder_row_and_the_analyst_still_overrides_it():
+    line = {**_LINE, "recon_water_ml": 3.0}
+    assert _ev(_r(), line)["recon_water_ml"] == 3.0
+    # Typed beats the line, as it does for every other field.
+    assert _ev(_r(prep_water_ml=5), line) == {
+        "total_dilution": 300.0, "step1_ratio": 15.0, "cartridge_type_id": 42,
+        "recon_water_ml": 5, "ruled": {**dict.fromkeys(_NONE_RULED, True),
+                                       "recon_water_ml": False}}
+    # A blank on the line keeps the method standard, like a blank total.
+    assert _ev(_r(), _LINE)["recon_water_ml"] == 2
+
+
+def test_a_rules_water_never_reaches_a_liquid_or_bac_row():
+    """Handler 2026-10-26: a liquid vial arrived reconstituted, so its volume
+    is what the customer sent, not a prep choice. Bac water is not
+    reconstituted at all. Neither takes a rule's water or the standard."""
+    line = {**_LINE, "recon_water_ml": 3.0}
+    liquid = _ev(_r(prep_form="liquid"), line)
+    assert (liquid["recon_water_ml"], liquid["ruled"]["recon_water_ml"]) == (None, False)
+    # What the analyst typed is the only water a liquid row can have.
+    assert _ev(_r(prep_form="liquid", prep_water_ml=1.5), line)["recon_water_ml"] == 1.5
+    # Bac water has none on any path, typed or not.
+    assert _ev(_r(prep_form="bac", prep_water_ml=1.5), line, is_bac=True)["recon_water_ml"] is None
+    assert _ev(_r(), line, is_bac=True)["recon_water_ml"] is None
+    # The other fields are untouched by the form.
+    assert _ev(_r(prep_form="liquid"), line)["total_dilution"] == 300.0
 
 
 def test_row_rule_reads_the_switch_then_the_lock_then_todays_match(monkeypatch):
@@ -400,7 +437,10 @@ def test_a_bac_row_is_never_ruled_even_one_locked_before_its_form_was_set(client
                                     endo_prep="2ml", **facts) is None
     assert endo_prep_rules.row_effective(db, w.ws, w.item) == (None, {
         "total_dilution": 250, "step1_ratio": 10, "cartridge_type_id": None,
-        "ruled": {"total_dilution": False, "step1_ratio": False, "cartridge_type_id": False}})
+        # Bac water is its own 20x dilution; nothing reconstitutes it.
+        "recon_water_ml": None,
+        "ruled": {"total_dilution": False, "step1_ratio": False,
+                  "cartridge_type_id": False, "recon_water_ml": False}})
     # The server floor reads the standard 1:250, so 1:140 (x 2 = 280) no longer fits.
     r = client.patch(w.url, json={"prep_steps": [[20, 140], None, None]})
     assert (r.status_code, r.json()["detail"]) == (400, _floor(280))
@@ -575,7 +615,7 @@ def test_an_override_on_a_row_with_a_result_keeps_the_replaced_run(client, db):
     lock = w.a.prep_rule
     run = {"by": 1, "why": "override", "lock": lock, "result_reading": "<0.05",
            "reader_test_id": None, "result_entered_at": w.a.result_entered_at.isoformat() + "Z",
-           "step1_ratio": 10, "cartridge_type_id": w.c05.id}
+           "step1_ratio": 10, "cartridge_type_id": w.c05.id, "recon_water_ml": 2}
     assert client.patch(w.url_a, json={"prep_total_dilution": 500}).status_code == 200
     db.refresh(w.a)
     [first] = w.a.prep_history
@@ -765,7 +805,8 @@ def test_a_reader_import_that_moves_a_read_rows_cartridge_is_an_override(client,
     db.refresh(w.a)
     [run] = w.a.prep_history
     assert run == {"at": run["at"], "by": 1, "why": "override", "lock": lock,
-                   "total_dilution": 300, "step1_ratio": 10, "cartridge_type_id": w.c05.id,
+                   "total_dilution": 300, "step1_ratio": 10, "recon_water_ml": 2,
+                   "cartridge_type_id": w.c05.id,
                    "result_reading": "<0.05", "reader_test_id": "T-1",
                    "result_entered_at": entered.isoformat() + "Z"}
     assert (w.a.cartridge_type_id, w.a.result_reader["test_id"]) == (w.c01.id, "T-2")
@@ -825,7 +866,8 @@ def test_reapply_moves_only_the_ruled_row_and_never_a_typed_value(client, db):
         endo_prep_rules.snapshot(w.rule), "reapply", 1)
     [entry] = ruled.prep_history
     assert entry == {"at": entry["at"], "by": 1, "why": "reapply", "lock": old,
-                     "total_dilution": 300, "step1_ratio": 10, "cartridge_type_id": None,
+                     "total_dilution": 300, "step1_ratio": 10, "recon_water_ml": 2,
+                   "cartridge_type_id": None,
                      "result_reading": None, "reader_test_id": None, "result_entered_at": None}
     audit = db.query(AuditLog).filter(AuditLog.operation == "endo_prep_rule_reapplied").one()
     assert (audit.entity_id, audit.details) == (str(ruled.id), {
@@ -972,7 +1014,8 @@ def test_reapply_moves_a_read_rows_reading_into_its_history_and_clears_it(client
             it.cartridge_type_id) == ("reapply", 400, m.c05.id)
     [entry] = it.prep_history
     assert entry == {"at": entry["at"], "by": 1, "why": "reapply", "lock": m.lock,
-                     "total_dilution": 300, "step1_ratio": 10, "cartridge_type_id": m.c05.id,
+                     "total_dilution": 300, "step1_ratio": 10, "recon_water_ml": 2,
+                   "cartridge_type_id": m.c05.id,
                      "result_reading": "0.8", "reader_test_id": "T-1",
                      "reader_tested_at": "2026-10-09T14:02:00",
                      "result_entered_at": m.entered.isoformat() + "Z",

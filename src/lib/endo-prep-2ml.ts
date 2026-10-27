@@ -207,7 +207,12 @@ export function waterOf(s: EndoSample, ctx: EndoCtx): number | null {
   if (form === 'bac') return null
   const own = fin(s.waterMl)
   if (own !== null && own > 0) return own
-  return form === 'liquid' ? null : ctx.params.reconWaterMl
+  // Powder only (Handler 2026-10-26): a liquid vial arrived reconstituted, so
+  // its volume is what the customer sent, not a prep choice. Neither the
+  // rule's water nor the standard may be put in one. Mirrors the server's
+  // effective_values.
+  if (form === 'liquid') return null
+  return ruleWaterOf(s) ?? ctx.params.reconWaterMl
 }
 
 /* ---------------- limits ---------------- */
@@ -240,6 +245,26 @@ export function mvcFor(lambda: number | null, s: EndoSample): number | null {
 function ruleTotalOf(s: EndoSample): number | null {
   const r = fin(s.rule?.total_dilution)
   return r !== null && r > 0 ? r : null
+}
+
+/** The rule's reconstitution water when it sets one (> 0), else null. */
+function ruleWaterOf(s: EndoSample): number | null {
+  const r = fin(s.rule?.recon_water_ml)
+  return r !== null && r > 0 ? r : null
+}
+
+/**
+ * The row's water came from its method rule: not typed, not the standard.
+ * Powder rows only, as waterOf. The bench sheet marks such a cell "R", like
+ * a ruled cartridge, so the tech does not add the standard volume to a vial
+ * the sheet has already scaled by another one.
+ */
+export function waterRuled(s: EndoSample): boolean {
+  const form = formOf(s)
+  if (form === 'bac' || form === 'liquid') return false
+  const own = fin(s.waterMl)
+  if (own !== null && own > 0) return false
+  return ruleWaterOf(s) !== null
 }
 
 /** The rule's step 1 ratio when it sets one (>= 1), else null. */

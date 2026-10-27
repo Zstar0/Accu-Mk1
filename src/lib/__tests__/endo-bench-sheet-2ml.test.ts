@@ -383,6 +383,7 @@ describe('buildEndoBenchSheet2Html', () => {
       peptide_id: 7,
       min_mg: null,
       max_mg: null,
+      recon_water_ml: null,
       total_dilution: 300,
       step1_ratio: null,
       cartridge_type_id: null,
@@ -464,6 +465,24 @@ describe('buildEndoBenchSheet2Html', () => {
       expect(html).toContain(
         '<td class="cart set">0.01<sup class="rmark">R</sup></td>'
       )
+    })
+
+    it('underlines and marks a recon water a rule set, so the bench adds that volume', () => {
+      // The whole point of a ruled water: the tech works from this paper, so
+      // a 3 mL row must not read as the standard 2 mL it is printed beside.
+      const r3 = { ...trial300, total_dilution: null, recon_water_ml: 3 }
+      const html = buildEndoBenchSheet2Html(doc([row(1, { rule: r3 })]), {
+        measure,
+      })
+      expect(html).toContain(
+        '<td class="m r vial own">3<sup class="rmark">R</sup></td>'
+      )
+      expect(html).toContain(
+        '<b>Underlined</b> figures were set for that sample, not the standard. '
+      )
+      // A row at the standard is neither underlined nor marked.
+      const plain = buildEndoBenchSheet2Html(doc([row(1)]), { measure })
+      expect(plain).toContain('<td class="m r vial">2</td>')
     })
 
     it('puts an R on a cartridge a rule set', () => {
@@ -702,6 +721,7 @@ describe('buildEndoSheet2Doc under method rules (slice 5)', () => {
       peptide_id: 7,
       min_mg: null,
       max_mg: null,
+      recon_water_ml: null,
       total_dilution: null,
       step1_ratio: null,
       cartridge_type_id: 4,
