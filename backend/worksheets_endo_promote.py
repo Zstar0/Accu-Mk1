@@ -342,7 +342,7 @@ def _plan(db: Session, worksheet, item, row: EndoPromoteRowIn, ctx) -> dict:
     # The spec the certificate will judge the result by (coa.native_sections).
     matrix = normalize_matrix(parent.sample_type_title)
     spec = resolve_spec(db, svc.id, matrix, peptide_id=sample_peptide_id(db, parent.id),
-                        unit=unit)
+                        unit=unit, sample_form_id=getattr(parent, "sample_form_id", None))
     if spec is None:
         raise _Refused(f"No active {svc.title} spec in {unit} for {matrix or 'any sample type'}")
     limit = (float(spec.max_value)

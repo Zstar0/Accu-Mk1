@@ -333,6 +333,11 @@ def build_native_sections(db: Session, parent, *, vial_parent_ids=None) -> dict:
     # (not per row) — a blend or a non-peptide family returns None (R5), and
     # resolve_spec then coarsens straight to the matrix/wildcard tier.
     peptide_id = sample_peptide_id(db, parent.id)
+    # The parent's dosage form is a spec tier (sample forms); a vial's rows
+    # are judged here too, by its parent's form.
+    sample_form_id = getattr(parent, "sample_form_id", None)
+    # The form tier is only "consulted" when the sample has a form.
+    form_tier = f"form={sample_form_id!r}, " if sample_form_id is not None else ""
 
     sections = []
     deferred_profiles: list[str] = []
@@ -406,7 +411,8 @@ def build_native_sections(db: Session, parent, *, vial_parent_ids=None) -> dict:
                     sample_id, prof.key, svc.keyword,
                 )
             spec = resolve_spec(db, svc.id, matrix, peptide_id=peptide_id,
-                                unit=effective_unit(row.result_unit, svc.unit))
+                                unit=effective_unit(row.result_unit, svc.unit),
+                                sample_form_id=sample_form_id)
             if spec is None:
                 # Rule 5 (relocated from COABuilder): a result must not print
                 # without a verdict. Names the service, every tier consulted
@@ -417,7 +423,7 @@ def build_native_sections(db: Session, parent, *, vial_parent_ids=None) -> dict:
                     f"native sections: profile '{prof.key}' member service "
                     f"'{svc.keyword}' (id={svc.id}) has no active spec "
                     f"(tiers consulted: peptide={peptide_id!r}, "
-                    f"matrix={matrix!r}, wildcard) on {sample_id}: No active "
+                    f"{form_tier}matrix={matrix!r}, wildcard) on {sample_id}: No active "
                     f"{svc.title} spec in {unit or 'no unit'} for "
                     f"{matrix or 'any sample type'}. File one in "
                     f"analysis_service_specs"

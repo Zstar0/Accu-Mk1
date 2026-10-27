@@ -944,3 +944,40 @@ def test_get_worksheet_reads_endo_analyses_in_a_fixed_number_of_queries(client, 
             assert client.get(f"/worksheets/{ws_id}").status_code == 200
         counts.append(len(seen))
     assert counts[0] == counts[1], counts
+
+
+# --- sample forms: the parent's dosage form is a spec tier -------------------
+
+def test_endo_promote_plan_uses_parent_form_tier(client, db):
+    """A Nasal Spray parent is judged by its own 10 EU/vial form spec, not the
+    Peptide matrix's 350: a <25 EU/vial reading is above that limit, so the
+    row is refused as inconclusive."""
+    from models import LimsSampleForm
+    w = _world(client, db)
+    nasal = LimsSampleForm(name="Nasal Spray", route="nasal_inhaled")
+    db.add(nasal)
+    db.flush()
+    db.add(AnalysisServiceSpec(analysis_service_id=w.svc.id, sample_form_id=nasal.id,
+                               rule_kind="range", min_value=Decimal("0"),
+                               max_value=Decimal("10"), unit="EU/vial"))
+    item, _ = _row(db, w)
+    parent = db.execute(select(LimsSample).where(LimsSample.sample_id == "P-4001")).scalar_one()
+    parent.sample_form_id = nasal.id
+    db.commit()
+    assert _results(_promote(client, w.ws, _line(item))) == [
+        _refused(item, "inconclusive: LOQ 25 EU/vial is above the 10 limit")]
+
+
+def test_endo_promote_plan_without_a_form_keeps_the_matrix_limit(client, db):
+    from models import LimsSampleForm
+    w = _world(client, db)
+    nasal = LimsSampleForm(name="Nasal Spray", route="nasal_inhaled")
+    db.add(nasal)
+    db.flush()
+    db.add(AnalysisServiceSpec(analysis_service_id=w.svc.id, sample_form_id=nasal.id,
+                               rule_kind="range", min_value=Decimal("0"),
+                               max_value=Decimal("10"), unit="EU/vial"))
+    item, _ = _row(db, w)  # parent sample_form_id stays None
+    db.commit()
+    [res] = _results(_promote(client, w.ws, _line(item)))
+    assert res["promoted"] is True, res

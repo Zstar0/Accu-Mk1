@@ -910,3 +910,60 @@ def test_unset_fields_wire_shape(db_session, monkeypatch):
     assert sec["footnotes"] == []
     assert sec["rows"][0]["specification"]["loq"] is None
     assert sec["rows"][0]["result_display"] is None
+
+
+# ── sample forms: the parent's dosage form is a spec tier (task 5) ───────────
+
+def _form_specs(db, svcs, *, form_max="1"):
+    """A wildcard (max 100 ppm) + a Nasal Spray form spec (max `form_max` ppm)
+    for each service, and the Nasal Spray form."""
+    from decimal import Decimal
+    from models import AnalysisServiceSpec, LimsSampleForm
+    nasal = LimsSampleForm(name="Nasal Spray", route="nasal_inhaled")
+    db.add(nasal); db.flush()
+    for svc in svcs:
+        db.add(AnalysisServiceSpec(analysis_service_id=svc.id, rule_kind="range",
+                                   max_value=Decimal("100"), unit="ppm"))
+        db.add(AnalysisServiceSpec(analysis_service_id=svc.id, sample_form_id=nasal.id,
+                                   rule_kind="range", max_value=Decimal(form_max), unit="ppm"))
+    db.flush()
+    return nasal
+
+
+def test_native_sections_uses_parent_form_tier(db_session, monkeypatch):
+    prof, svcs = _mk_native_profile(db_session, key="heavy_metals",
+                                    services=[("HM-PB", "mk1")], specs=False)
+    nasal = _form_specs(db_session, svcs)
+    parent = _mk_parent_with_rows(db_session, svcs, result="5")
+    parent.sample_form_id = nasal.id
+    db_session.flush()
+    _order_lookup(monkeypatch)
+    row = build_native_sections(db_session, parent)["sections"][0]["rows"][0]
+    assert row["conforms"] is False
+    assert row["specification"]["max"] == 1.0
+
+
+def test_native_sections_without_a_form_keeps_the_wildcard(db_session, monkeypatch):
+    prof, svcs = _mk_native_profile(db_session, key="heavy_metals",
+                                    services=[("HM-PB", "mk1")], specs=False)
+    _form_specs(db_session, svcs)
+    parent = _mk_parent_with_rows(db_session, svcs, result="5")  # sample_form_id None
+    _order_lookup(monkeypatch)
+    row = build_native_sections(db_session, parent)["sections"][0]["rows"][0]
+    assert row["conforms"] is True
+    assert row["specification"]["max"] == 100.0
+
+
+def test_rule5_abort_message_names_the_form_tier(db_session, monkeypatch):
+    prof, svcs = _mk_native_profile(db_session, key="heavy_metals",
+                                    services=[("HM-PB", "mk1")], specs=False)
+    from models import LimsSampleForm
+    nasal = LimsSampleForm(name="Nasal Spray", route="nasal_inhaled")
+    db_session.add(nasal); db_session.flush()
+    parent = _mk_parent_with_rows(db_session, svcs)
+    parent.sample_form_id = nasal.id
+    db_session.flush()
+    _order_lookup(monkeypatch)
+    with pytest.raises(NativeSectionsError,
+                       match=rf"tiers consulted: peptide=None, form={nasal.id}, matrix=None, wildcard"):
+        build_native_sections(db_session, parent)

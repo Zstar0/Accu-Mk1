@@ -3928,22 +3928,24 @@ def _serialize_senaite_shape_rows(
     ).all()) if _vial_pks else {}
     _sample_pks = ({r.lims_sample_pk for r in rows if r.lims_sample_pk}
                    | set(_parent_pk_by_vial.values()))
-    _matrix_by_sample = {
-        pk: normalize_matrix(title)
-        for pk, title in (db.execute(
-            select(LimsSample.id, LimsSample.sample_type_title)
-            .where(LimsSample.id.in_(_sample_pks))
-        ).all() if _sample_pks else [])
-    }
+    _sample_facts = (db.execute(
+        select(LimsSample.id, LimsSample.sample_type_title, LimsSample.sample_form_id)
+        .where(LimsSample.id.in_(_sample_pks))
+    ).all() if _sample_pks else [])
+    _matrix_by_sample = {pk: normalize_matrix(title) for pk, title, _ in _sample_facts}
+    # The parent's dosage form is a spec tier, keyed like the matrix (a vial
+    # row reaches it through its sub-sample).
+    _form_by_sample = {pk: form_id for pk, _, form_id in _sample_facts}
     _spec_cache: dict = {}
 
     out = []
     for r in rows:
         svc = services_by_id.get(r.analysis_service_id)
+        _host_pk = r.lims_sample_pk or _parent_pk_by_vial.get(r.lims_sub_sample_pk)
         _spec_fields = display_spec_fields(
             db, service_id=r.analysis_service_id,
-            matrix=_matrix_by_sample.get(
-                r.lims_sample_pk or _parent_pk_by_vial.get(r.lims_sub_sample_pk)),
+            matrix=_matrix_by_sample.get(_host_pk),
+            sample_form_id=_form_by_sample.get(_host_pk),
             peptide_id=r.peptide_id,
             wire_result=identity_wire_result(
                 db, keyword=r.keyword, result=r.result_value,
