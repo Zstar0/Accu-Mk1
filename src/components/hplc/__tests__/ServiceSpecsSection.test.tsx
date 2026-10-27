@@ -219,10 +219,9 @@ describe('ServiceSpecsSection', () => {
     expect(screen.getByLabelText('LOQ')).toBeInTheDocument()
     // The helper copy states the censoring: it never claims "prints as-is".
     const helper = screen.getByText(/No verdict\./)
-    expect(helper).toHaveTextContent(
+    expect(helper.textContent).toBe(
       'No verdict. The measured value prints with a neutral status; at or below the LOQ it prints as below the LOQ.'
     )
-    expect(helper).not.toHaveTextContent('as-is')
 
     await user.click(screen.getByRole('button', { name: /add spec/i }))
 
