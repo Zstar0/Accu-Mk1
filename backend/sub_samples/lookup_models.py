@@ -147,6 +147,11 @@ class SenaiteLookupResult(BaseModel):
     registry_pk: Optional[int] = None
     explicit_priority_key: Optional[str] = None
     priority: Optional[dict] = None
+    # Sample form (dosage form, Sample Forms feature). Mutable Mk1 state like
+    # priority. eligible = Peptide-matrix sample; the form is None otherwise.
+    sample_form_id: Optional[int] = None
+    sample_form_name: Optional[str] = None
+    sample_form_eligible: bool = False
 
 
 class RegistrySampleReadResult(SenaiteLookupResult):

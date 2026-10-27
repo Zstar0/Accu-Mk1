@@ -127,6 +127,7 @@ from slack_notify.routes import router as slack_prefs_router
 from slack_notify.interactions import router as slack_interactions_router
 from workflow.routes import router as workflow_router
 from priority.routes import router as priority_router
+from sample_forms.routes import router as sample_forms_router
 from customer_insights.routes import router as customer_insights_router
 from crm_close.routes import router as crm_close_router
 from support_plain.routes import router as support_plain_router
@@ -650,6 +651,7 @@ app.include_router(slack_prefs_router)
 app.include_router(slack_interactions_router)
 app.include_router(workflow_router)
 app.include_router(priority_router)
+app.include_router(sample_forms_router)
 app.include_router(customer_insights_router)
 app.include_router(crm_close_router)
 app.include_router(support_plain_router)
@@ -1854,6 +1856,8 @@ async def get_sample_activity(
                 )
                 if d.get("senaite") == "locked":
                     label += " (SENAITE locked — saved in Mk1 only)"
+            elif se.event == "sample_form_changed":
+                label = f"Form changed: {d.get('from_name') or '—'} → {d.get('to_name') or '—'}"
             elif se.event in ("coa_generated", "coa_published"):
                 coa_actors[(se.event, d.get("verification_code"))] = actor_email
                 continue
@@ -17740,6 +17744,21 @@ def _attach_sample_priority(
     result.priority = _eff_map.as_dict() if _eff_map else None
 
 
+def _attach_sample_form(db: Session, result, row: Optional[LimsSample]) -> None:
+    """Stamp the sample form (Sample Forms feature) onto a lookup payload.
+
+    Mutable Mk1 state like priority: re-stamped on every cache hit so a PATCHed
+    form never shows stale. `result` is the lookup model (or a plain dict);
+    all three fields stay None/False for a SENAITE-only sample."""
+    from sample_forms.service import form_payload
+    payload = form_payload(db, row)
+    if isinstance(result, dict):
+        result.update(payload)
+        return
+    for k, v in payload.items():
+        setattr(result, k, v)
+
+
 _SENAITE_LOOKUP_TTL = 15 * 60  # 15 minutes
 
 
@@ -17811,6 +17830,7 @@ async def lookup_senaite_sample(
                 # Priority is mutable Mk1 state, not a SENAITE artifact — the
                 # cached copy would render a stale chip on the details page.
                 _attach_sample_priority(db, result, None, sample_id=id)
+                _attach_sample_form(db, result, _row)
                 return result
 
     try:
@@ -18426,6 +18446,7 @@ async def lookup_senaite_sample(
         # Sample-priority controls (spec §5) — native-only; a SENAITE sample
         # with no registry row keeps all three fields None.
         _attach_sample_priority(db, result, _logi)
+        _attach_sample_form(db, result, _logi)
         _senaite_lookup_cache[id] = (_time.time(), result)
         return result
 
