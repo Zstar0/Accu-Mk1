@@ -358,14 +358,30 @@ def test_create_informational_loq_keeps_parse_loq_rules(client, svc, bad):
 def test_patch_to_informational_requires_explicit_bound_clearing(client, svc):
     # Flipping kind must NOT silently drop the old bounds: the merged shape
     # still carries them, so the flip alone 422s; nulling them in the same
-    # PATCH succeeds. The LOQ is no longer in the way (sample forms task 7):
-    # an informational row may keep it, so only the bound needs clearing.
+    # PATCH succeeds.
     spec_id = client.post(
         f"/analysis-services/{svc.id}/specs",
         json={"rule_kind": "range", "max_value": "0.5", "loq": "0.1"},
     ).json()["id"]
     assert client.patch(f"/analysis-service-specs/{spec_id}",
                         json={"rule_kind": "informational"}).status_code == 422
+    r = client.patch(
+        f"/analysis-service-specs/{spec_id}",
+        json={"rule_kind": "informational", "max_value": None, "loq": None},
+    )
+    assert r.status_code == 200
+    body = r.json()
+    assert body["rule_kind"] == "informational"
+    assert body["max_value"] is None and body["loq"] is None
+
+
+def test_patch_to_informational_keeps_loq_when_not_sent(client, svc):
+    # Sample forms task 7: an informational row may carry an LOQ, so a kind
+    # flip that clears the bounds but does not send loq keeps the stored one.
+    spec_id = client.post(
+        f"/analysis-services/{svc.id}/specs",
+        json={"rule_kind": "range", "max_value": "0.5", "loq": "0.1"},
+    ).json()["id"]
     r = client.patch(
         f"/analysis-service-specs/{spec_id}",
         json={"rule_kind": "informational", "max_value": None},
