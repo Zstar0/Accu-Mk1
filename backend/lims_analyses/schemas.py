@@ -160,6 +160,10 @@ class PromoteRequest(BaseModel):
     loq: _ResultLimit = Field(default=None, gt=0, allow_inf_nan=False)
     lod: _ResultLimit = Field(default=None, gt=0, allow_inf_nan=False)
     lod_unit: Optional[str] = None
+    # The endo ">" certificate slice: the promoted value is a floor. Like the
+    # limits above, the worksheet promote's alone — the sample-page route
+    # refuses a body that carries it.
+    result_floor: Optional[bool] = None
 
 
 class TransitionInfo(BaseModel):
@@ -192,6 +196,9 @@ class AnalysisResponse(BaseModel):
     loq: Optional[float] = None
     lod: Optional[float] = None
     lod_unit: Optional[str] = None
+    # The endo ">" certificate slice: result_value is a floor, not a
+    # measurement. None/false on every row that carries an ordinary result.
+    result_floor: Optional[bool] = None
     review_state: str
     method_id: Optional[int]
     instrument_id: Optional[int]
@@ -332,6 +339,10 @@ class SenaiteShapeAnalysisResponse(BaseModel):
     loq: Optional[float] = None
     lod: Optional[float] = None
     lod_unit: Optional[str] = None
+    # The endo ">" certificate slice: result_value is a floor ("at least this
+    # much"). The analyses table renders the ">" from it, so the reviewer
+    # signing the row off sees what the certificate will print.
+    result_floor: Optional[bool] = None
 
 
 # ─── Phase 4a: promote_to_parent response shapes ─────────────────────────────

@@ -640,6 +640,12 @@ export function fmtConc(v: number | null | undefined): string {
  * The value for Accu-Mk1 (Dennis 2026-10-09): EU per vial for peptides, the
  * reading itself in EU/mL for bac water, the "<" kept. null until there is a
  * number, and for an invalid test (rerun, never reported).
+ *
+ * A ">" keeps its qualifier too: the number is a floor, and Accu-Mk1 stores
+ * it as one (lims_analyses.result_floor) so the spec engine judges it as "at
+ * least this much" instead of as a measurement. Whether it may be promoted is
+ * a separate question, answered by the eligibility gate (src/lib/endo-promote)
+ * and again by the server: only a floor that already fails can be reported.
  */
 export function mk1Value(
   s: EndoSample,
@@ -647,21 +653,22 @@ export function mk1Value(
 ): { value: string; unit: 'EU/vial' | 'EU/mL'; verdict: EndoVerdict } | null {
   const rs = prep2Result(s, ctx)
   if (rs.verdict === 'invalid') return null
-  // A ">" is a floor, not a result. The worksheet judges it (fail when the
-  // floor already clears the limit, else inconclusive) but nothing goes to
-  // Accu-Mk1: storing the floor as an exact value would have the spec engine
-  // judge the floor, so a ">200" that may be 1000 would print CONFORMS. The
-  // server refuses it too (worksheets_endo_promote.REASON_GT). This is a
-  // deliberate divergence from Dennis's tool, which does promote a ">".
-  if (rs.gt) return null
   const lt = rs.lt === true
   if (formOf(s) === 'bac')
     return rs.value === null
       ? null
-      : { value: fmtEu(lt, rs.value), unit: 'EU/mL', verdict: rs.verdict }
+      : {
+          value: fmtEu(lt, rs.value, rs.gt),
+          unit: 'EU/mL',
+          verdict: rs.verdict,
+        }
   return rs.euPerVial === null
     ? null
-    : { value: fmtEu(lt, rs.euPerVial), unit: 'EU/vial', verdict: rs.verdict }
+    : {
+        value: fmtEu(lt, rs.euPerVial, rs.gt),
+        unit: 'EU/vial',
+        verdict: rs.verdict,
+      }
 }
 
 /* ---------------- order ---------------- */
