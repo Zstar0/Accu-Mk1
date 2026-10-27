@@ -2209,6 +2209,52 @@ def _run_migrations():
               AND review_state NOT IN ('retracted', 'rejected')
               AND provenance = 'canonical'
         """,
+        # --- Sample Forms (spec 2026-10-26): managed dosage forms ---
+        # One contiguous block, in dependency order: the table and its indexes,
+        # the seed, then both FK columns (lims_samples, analysis_service_specs)
+        # and the backfill. The seed fires only into an EMPTY table so UI
+        # renames and retirements survive reboots; the backfill only touches NULLs.
+        """
+        CREATE TABLE IF NOT EXISTS lims_sample_forms (
+            id            SERIAL PRIMARY KEY,
+            name          VARCHAR(100) NOT NULL,
+            route         VARCHAR(20) NOT NULL,
+            is_default    BOOLEAN NOT NULL DEFAULT FALSE,
+            active        BOOLEAN NOT NULL DEFAULT TRUE,
+            sort_order    INTEGER NOT NULL DEFAULT 0,
+            created_at    TIMESTAMP DEFAULT now(),
+            updated_at    TIMESTAMP DEFAULT now(),
+            updated_by_id INTEGER REFERENCES users(id) ON DELETE SET NULL,
+            CONSTRAINT ck_lims_sample_forms_route CHECK (
+                route IN ('injectable','nasal_inhaled','oral')
+            )
+        )
+        """,
+        "CREATE UNIQUE INDEX IF NOT EXISTS uq_lims_sample_forms_name "
+        "ON lims_sample_forms (lower(btrim(name)))",
+        "CREATE UNIQUE INDEX IF NOT EXISTS uq_lims_sample_forms_single_default "
+        "ON lims_sample_forms (is_default) WHERE is_default",
+        """
+        INSERT INTO lims_sample_forms (name, route, is_default, active, sort_order, created_at, updated_at)
+        SELECT v.name, v.route, v.is_default, v.active, v.sort_order, now(), now()
+        FROM (VALUES ('Lyophilized Powder','injectable',true,true,10),
+                     ('Reconstituted Solution','injectable',false,true,20),
+                     ('Pen','injectable',false,true,30),
+                     ('Nasal Spray','nasal_inhaled',false,true,40),
+                     ('Capsule','oral',false,false,50),
+                     ('Tablet','oral',false,false,60)) AS v(name, route, is_default, active, sort_order)
+        WHERE NOT EXISTS (SELECT 1 FROM lims_sample_forms)
+        """,
+        "ALTER TABLE lims_samples ADD COLUMN IF NOT EXISTS sample_form_id "
+        "INTEGER REFERENCES lims_sample_forms(id)",
+        """
+        UPDATE lims_samples SET sample_form_id = (SELECT id FROM lims_sample_forms WHERE is_default LIMIT 1)
+        WHERE sample_form_id IS NULL AND sample_type_title IN ('Peptide', 'Peptide Blend')
+        """,
+        # Model column lands with the resolver task; the ALTER lives here so the
+        # ordering after the table create is fixed in one place.
+        "ALTER TABLE analysis_service_specs ADD COLUMN IF NOT EXISTS sample_form_id "
+        "INTEGER REFERENCES lims_sample_forms(id)",
         # --- spec-ownership slice 2: peptide tier ---
         "ALTER TABLE analysis_service_specs ADD COLUMN IF NOT EXISTS peptide_id "
         "INTEGER REFERENCES peptides(id)",

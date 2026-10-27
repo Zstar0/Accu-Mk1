@@ -1396,6 +1396,11 @@ class LimsSample(Base):
     sla_priority_source: Mapped[Optional[str]] = mapped_column(String(10), nullable=True)
     sla_target_minutes: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
     sla_snapshot_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
+    # Dosage form (Sample Forms). NULL = unclassified; Peptide/Peptide Blend
+    # samples are backfilled to the default form by database._run_migrations.
+    sample_form_id: Mapped[Optional[int]] = mapped_column(
+        ForeignKey("lims_sample_forms.id"), nullable=True
+    )
     external_lims_system: Mapped[Optional[str]] = mapped_column(String(50), default="senaite")
     client_id: Mapped[Optional[str]] = mapped_column(String(100))
     client_uid: Mapped[Optional[str]] = mapped_column(String(100))
@@ -2023,6 +2028,7 @@ PRIORITY_ICONS = ("chevrons-up", "chevron-up", "minus", "chevron-down", "chevron
 PRIORITY_COLORS = ("red", "amber", "emerald", "sky", "violet", "zinc")
 PRIORITY_LEVELS = ("customer", "order", "sample", "vial")
 PRIORITY_SOURCES = ("ui", "order-payload", "migration", "bulk")
+SAMPLE_FORM_ROUTES = ("injectable", "nasal_inhaled", "oral")
 
 
 class Priority(Base):
@@ -2052,6 +2058,42 @@ class Priority(Base):
 
     def __repr__(self) -> str:
         return f"<Priority(key='{self.key}', rank={self.rank}, active={self.is_active})>"
+
+
+class LimsSampleForm(Base):
+    """A managed dosage form for a sample (Lyophilized Powder, Pen, Nasal Spray...).
+
+    `route` groups forms for the spec resolver. Exactly one row is the default
+    (partial unique index); names are unique case-insensitively. Rows are
+    retired via `active`, never deleted. Seeded into an empty table only, so UI
+    renames and retirements survive reboots (see database._run_migrations).
+    """
+
+    __tablename__ = "lims_sample_forms"
+    __table_args__ = (
+        Index("uq_lims_sample_forms_name", text("lower(trim(name))"), unique=True),
+        Index("uq_lims_sample_forms_single_default", "is_default", unique=True,
+              postgresql_where=text("is_default"), sqlite_where=text("is_default")),
+        CheckConstraint("route IN ('injectable','nasal_inhaled','oral')",
+                        name="ck_lims_sample_forms_route"),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
+    name: Mapped[str] = mapped_column(String(100), nullable=False)
+    route: Mapped[str] = mapped_column(String(20), nullable=False)
+    is_default: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+    sort_order: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime, default=datetime.utcnow, onupdate=datetime.utcnow
+    )
+    updated_by_id: Mapped[Optional[int]] = mapped_column(
+        ForeignKey("users.id", ondelete="SET NULL"), nullable=True
+    )
+
+    def __repr__(self) -> str:
+        return f"<LimsSampleForm(id={self.id}, name='{self.name}', route='{self.route}')>"
 
 
 class CustomerPriority(Base):
