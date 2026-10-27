@@ -323,10 +323,12 @@ def _plan(db: Session, worksheet, item, row: EndoPromoteRowIn, ctx) -> dict:
         facts = ctx.facts.get(item.id)
         rule = (row_rule(item, rules=ctx.rules, endo_prep=worksheet.endo_prep, **facts)
                 if facts else None)
-        total = effective_values(item, rule,
-                                 std_total=params["std_total_dilution"])["total_dilution"]
-        water = (item.prep_water_ml if (item.prep_water_ml or 0) > 0
-                 else None if item.prep_form == "liquid" else params["recon_water_ml"])
+        # Water resolves through the same chain as the total now that a rule
+        # line can prescribe it: typed beats rule beats the method's standard,
+        # and a liquid row keeps only what the analyst typed (powder only).
+        effective = effective_values(item, rule, std_total=params["std_total_dilution"],
+                                     std_water=params["recon_water_ml"])
+        total, water = effective["total_dilution"], effective["recon_water_ml"]
     # Final review I-3 (Handler, 2026-10-13): the sent value and LOQ must be
     # what this row's stored reading gives, within Box 3's 3-decimal display.
     # It confirms the browser's arithmetic and recomputes no verdict. Bac

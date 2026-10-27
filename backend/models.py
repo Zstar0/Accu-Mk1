@@ -770,6 +770,10 @@ class EndoPrepRule(Base):
     max_mg: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
     total_dilution: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
     step1_ratio: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    # The reconstitution water this band is prepped in, mL; NULL keeps the
+    # method's standard. Powder rows only: a liquid vial's volume is what the
+    # customer sent, so a rule never supplies it (endo_prep_rules).
+    recon_water_ml: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
     cartridge_type_id: Mapped[Optional[int]] = mapped_column(
         ForeignKey("consumable_types.id"), nullable=True)
     status: Mapped[str] = mapped_column(String(10), nullable=False, default="trial",

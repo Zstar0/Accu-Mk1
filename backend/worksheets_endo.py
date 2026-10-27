@@ -467,14 +467,18 @@ def check_item_endo_fields(db: Session, worksheet, item, values: dict) -> dict:
             cartridge_type_id=out.get("cartridge_type_id", item.cartridge_type_id),
             prep_rule=item.prep_rule,
             prep_rules_off=out.get("prep_rules_off", item.prep_rules_off),
+            # The water this PATCH leaves, and the form that decides whether a
+            # rule may supply one at all (powder only).
+            prep_water_ml=out.get("prep_water_ml", item.prep_water_ml),
+            prep_form=out.get("prep_form", item.prep_form),
             result_reading=None if cleared else item.result_reading,
             result_entered_at=None if cleared else item.result_entered_at)
         # Without a method resolved here the row has a total of its own, which
         # wins below, so this standard (endo_run_params' default) is never read.
+        _params = endo_run_params(method["run_parameters"] if method else None)
         _, effective = row_effective(db, worksheet, item, view=after, facts=facts,
-                                     std_total=endo_run_params(
-                                         method["run_parameters"] if method else None
-                                     )["std_total_dilution"])
+                                     std_total=_params["std_total_dilution"],
+                                     std_water=_params["recon_water_ml"])
         # A total of the row's own is checked as sent, so zero or below is refused.
         total = total_after if total_after is not None else effective["total_dilution"]
         floor = STEP3_RATIO * effective["step1_ratio"]

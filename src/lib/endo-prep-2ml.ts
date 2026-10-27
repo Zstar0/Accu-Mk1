@@ -207,7 +207,12 @@ export function waterOf(s: EndoSample, ctx: EndoCtx): number | null {
   if (form === 'bac') return null
   const own = fin(s.waterMl)
   if (own !== null && own > 0) return own
-  return form === 'liquid' ? null : ctx.params.reconWaterMl
+  // Powder only (Handler 2026-10-26): a liquid vial arrived reconstituted, so
+  // its volume is what the customer sent, not a prep choice. Neither the
+  // rule's water nor the standard may be put in one. Mirrors the server's
+  // effective_values.
+  if (form === 'liquid') return null
+  return ruleWaterOf(s) ?? ctx.params.reconWaterMl
 }
 
 /* ---------------- limits ---------------- */
@@ -239,6 +244,12 @@ export function mvcFor(lambda: number | null, s: EndoSample): number | null {
 /** The rule's total when it sets one (> 0), else null. */
 function ruleTotalOf(s: EndoSample): number | null {
   const r = fin(s.rule?.total_dilution)
+  return r !== null && r > 0 ? r : null
+}
+
+/** The rule's reconstitution water when it sets one (> 0), else null. */
+function ruleWaterOf(s: EndoSample): number | null {
+  const r = fin(s.rule?.recon_water_ml)
   return r !== null && r > 0 ? r : null
 }
 

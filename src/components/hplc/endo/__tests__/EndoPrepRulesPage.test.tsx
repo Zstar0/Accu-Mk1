@@ -38,6 +38,7 @@ function rule(over: Partial<EndoPrepRuleOut> = {}): EndoPrepRuleOut {
     peptide_id: 1,
     min_mg: null,
     max_mg: 30,
+    recon_water_ml: null,
     total_dilution: null,
     step1_ratio: null,
     cartridge_type_id: null,
@@ -57,6 +58,7 @@ const RETA_OVER_30 = rule({
   id: 2,
   min_mg: 30,
   max_mg: null,
+  recon_water_ml: null,
   total_dilution: 300,
   status: 'trial',
   note: '60 mg PPC low at 1:250',
@@ -143,6 +145,7 @@ describe('EndoPrepRulesPage', () => {
       id: 3,
       peptide_id: 2,
       max_mg: null,
+      recon_water_ml: null,
       total_dilution: 300,
       cartridge_type_id: 4,
       status: 'trial',
@@ -166,6 +169,10 @@ describe('EndoPrepRulesPage', () => {
     fireEvent.change(within(row).getByLabelText('Total 1:N'), {
       target: { value: '300' },
     })
+    // Dennis's ask (Handler 2026-10-26): some products need more than 2 mL.
+    fireEvent.change(within(row).getByLabelText('Recon water mL'), {
+      target: { value: '3' },
+    })
     fireEvent.change(within(row).getByLabelText('Cartridge'), {
       target: { value: '4' },
     })
@@ -174,6 +181,7 @@ describe('EndoPrepRulesPage', () => {
       peptide_id: 2,
       min_mg: null,
       max_mg: null,
+      recon_water_ml: 3,
       total_dilution: 300,
       step1_ratio: null,
       cartridge_type_id: 4,

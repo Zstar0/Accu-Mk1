@@ -4179,6 +4179,7 @@ class EndoPrepRuleIn(BaseModel):
     peptide_id: int
     min_mg: Optional[float] = None
     max_mg: Optional[float] = None
+    recon_water_ml: Optional[float] = None
     total_dilution: Optional[float] = None
     step1_ratio: Optional[float] = None
     cartridge_type_id: Optional[int] = None
@@ -4193,6 +4194,7 @@ class EndoPrepRulePatch(BaseModel):
     peptide_id: Optional[int] = None
     min_mg: Optional[float] = None
     max_mg: Optional[float] = None
+    recon_water_ml: Optional[float] = None
     total_dilution: Optional[float] = None
     step1_ratio: Optional[float] = None
     cartridge_type_id: Optional[int] = None
@@ -4208,6 +4210,7 @@ class EndoPrepRuleOut(BaseModel):
     peptide_id: int
     min_mg: Optional[float] = None
     max_mg: Optional[float] = None
+    recon_water_ml: Optional[float] = None
     total_dilution: Optional[float] = None
     step1_ratio: Optional[float] = None
     cartridge_type_id: Optional[int] = None
