@@ -253,6 +253,20 @@ function ruleWaterOf(s: EndoSample): number | null {
   return r !== null && r > 0 ? r : null
 }
 
+/**
+ * The row's water came from its method rule: not typed, not the standard.
+ * Powder rows only, as waterOf. The bench sheet marks such a cell "R", like
+ * a ruled cartridge, so the tech does not add the standard volume to a vial
+ * the sheet has already scaled by another one.
+ */
+export function waterRuled(s: EndoSample): boolean {
+  const form = formOf(s)
+  if (form === 'bac' || form === 'liquid') return false
+  const own = fin(s.waterMl)
+  if (own !== null && own > 0) return false
+  return ruleWaterOf(s) !== null
+}
+
 /** The rule's step 1 ratio when it sets one (>= 1), else null. */
 function ruleRatioOf(s: EndoSample): number | null {
   const r = fin(s.rule?.step1_ratio)

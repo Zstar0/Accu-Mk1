@@ -624,7 +624,7 @@ def apply_reapply(db: Session, worksheet, item_ids: list[int], current_user) -> 
     found, rules, facts = _reapply_rows(db, worksheet)
     rows = {it.id: (it, reason, new) for it, reason, new in found}
     user_id = getattr(current_user, "id", None)
-    std_total = None
+    std_total = std_water = None
     results = []
     for item_id in item_ids:
         if item_id not in rows:
@@ -637,13 +637,15 @@ def apply_reapply(db: Session, worksheet, item_ids: list[int], current_user) -> 
             continue
         if std_total is None:
             method = resolve_endo_method(db, worksheet)
-            std_total = endo_run_params(
-                method["run_parameters"] if method else None)["std_total_dilution"]
+            params = endo_run_params(method["run_parameters"] if method else None)
+            std_total, std_water = params["std_total_dilution"], params["recon_water_ml"]
         old = it.prep_rule
         # Before the new lock: the history keeps the run the old one gave
-        # (preflight F8: the shared helper, on the facts already read).
+        # (preflight F8: the shared helper, on the facts already read). Both
+        # standards are passed, or row_effective resolves the method again on
+        # every row of the loop.
         _, effective = row_effective(db, worksheet, it, rules=rules, std_total=std_total,
-                                     facts=facts.get(it.id, {}))
+                                     std_water=std_water, facts=facts.get(it.id, {}))
         moved = ({"reader_tested_at": (it.result_reader or {}).get("tested_at"),
                   "result_reader": it.result_reader,
                   "result_entered_by_user_id": it.result_entered_by_user_id,
