@@ -1074,3 +1074,22 @@ def test_all_range_section_keeps_basis_note(db_session, monkeypatch):
     sec = build_native_sections(
         db_session, _mk_parent_with_rows(db_session, svcs))["sections"][0]
     assert sec["basis_note"] == "Limits scale with dose"
+
+
+def test_informational_row_uses_the_results_own_loq_when_spec_has_none(db_session, monkeypatch):
+    """effective_loq prefers lims_analyses.loq over the spec's, and now applies
+    to report-only rows too: a result carrying its own LOQ censors against it
+    even though nobody filed one on the spec. Pinned so it is deliberate."""
+    prof, svcs = _mk_native_profile(db_session, key="heavy_metals",
+                                    services=[("HM-PB", "mk1")], specs=False)
+    _info_spec(db_session, svcs[0], loq=None)
+    parent = _mk_parent_with_rows(db_session, svcs, result="2.0")
+    from models import LimsAnalysis
+    row_loq = db_session.query(LimsAnalysis).filter_by(lims_sample_pk=parent.id).one()
+    row_loq.loq = 2.5
+    db_session.flush()
+    _order_lookup(monkeypatch)
+    row = build_native_sections(db_session, parent)["sections"][0]["rows"][0]
+    assert row["conforms"] is None
+    assert row["specification"]["loq"] == 2.5
+    assert row["result_display"] == "< LOQ"
