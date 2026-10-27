@@ -236,9 +236,12 @@ def test_the_boot_list_swaps_the_spec_indexes_once_and_never_recreates_the_old_n
     old_create = re.compile(
         r"CREATE UNIQUE INDEX (IF NOT EXISTS )?uq_analysis_service_specs_(matrix|peptide|wildcard)\s")
     assert not any(old_create.search(s) for s in stmts)
-    for old in ("matrix", "peptide", "wildcard"):
-        assert f"CREATE UNIQUE INDEX IF NOT EXISTS uq_analysis_service_specs_{old}_unit" in swap
+    # Sample forms (task 4): the wildcard index is now the _v2 name, a form
+    # tier index joins it, and the previous wildcard_unit name is dropped too.
+    for new in ("matrix_unit", "peptide_unit", "form_unit", "wildcard_unit_v2"):
+        assert f"CREATE UNIQUE INDEX IF NOT EXISTS uq_analysis_service_specs_{new}\n" in swap
+    for old in ("matrix", "peptide", "wildcard", "wildcard_unit"):
         assert f"DROP INDEX IF EXISTS uq_analysis_service_specs_{old};" in swap
-    assert swap.count("lower(btrim(coalesce(unit, '')))") == 3
+    assert swap.count("lower(btrim(coalesce(unit, '')))") == 4
     # Created before the old names go: a failure inside the block keeps the old ones.
     assert swap.rindex("CREATE UNIQUE INDEX") < swap.index("DROP INDEX")

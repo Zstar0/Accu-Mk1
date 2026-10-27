@@ -31,8 +31,14 @@ SCHEMA = "spec_unit_index_test"
 
 pytestmark = pytest.mark.skipif(not URL, reason="set MK1_TEST_POSTGRES_URL to run the Postgres migration test")
 
+# Sample forms (task 4): the wildcard index is the _v2 name and a form tier
+# index joins the set (flipped from the three endo-slice-3 names).
 NEW = {"uq_analysis_service_specs_matrix_unit", "uq_analysis_service_specs_peptide_unit",
-       "uq_analysis_service_specs_wildcard_unit"}
+       "uq_analysis_service_specs_form_unit", "uq_analysis_service_specs_wildcard_unit_v2"}
+# The endo-slice-3 wildcard name the swap now retires (an older image re-creates it).
+PREV_WILDCARD = ("CREATE UNIQUE INDEX IF NOT EXISTS uq_analysis_service_specs_wildcard_unit "
+                 "ON analysis_service_specs (analysis_service_id, lower(btrim(coalesce(unit, '')))) "
+                 "WHERE active AND matrix IS NULL AND peptide_id IS NULL")
 OLD_NAMES = {"uq_analysis_service_specs_matrix", "uq_analysis_service_specs_peptide",
              "uq_analysis_service_specs_wildcard"}
 # The three indexes a deployed database holds before this release (database.py at 93490a84).
@@ -122,6 +128,15 @@ def test_an_older_image_boot_is_undone_by_the_next_boot(pg):
     assert set(_indexes(pg)) == NEW
 
 
+def test_the_previous_wildcard_name_is_retired_by_the_next_boot(pg):
+    _boot(pg)
+    with pg.begin() as c:      # the endo-slice-3 image re-creates wildcard_unit (LAST-BOOT-WINS)
+        c.execute(text(PREV_WILDCARD))
+    assert "uq_analysis_service_specs_wildcard_unit" in _indexes(pg)
+    _boot(pg)
+    assert set(_indexes(pg)) == NEW
+
+
 def test_one_active_row_per_scope_and_unit(pg):
     _boot(pg)
     sid = _service_id(pg)
@@ -139,4 +154,31 @@ def test_one_active_row_per_scope_and_unit(pg):
             s.commit()
         s.rollback()
         s.add(spec(matrix="Peptide", unit=" eu/VIAL ", active=False))
+        s.commit()             # an inactive duplicate is history, never a conflict
+
+
+def test_a_form_row_stands_beside_the_wildcard_row_and_is_unique_per_form_and_unit(pg):
+    from models import LimsSampleForm
+    _boot(pg)
+    sid = _service_id(pg)
+
+    def spec(form, **over):
+        return AnalysisServiceSpec(analysis_service_id=sid, rule_kind="range",
+                                   min_value=Decimal("0"), max_value=Decimal("5"),
+                                   sample_form_id=form.id, **over)
+
+    with Session(pg) as s:
+        nasal = LimsSampleForm(name="Nasal Spray", route="nasal_inhaled")
+        pen = LimsSampleForm(name="Pen", route="injectable")
+        s.add_all([nasal, pen])
+        s.flush()
+        # Same unit as the fixture's wildcard row (EU/mL): the _v2 wildcard index
+        # excludes form rows, so this must not collide with it.
+        s.add_all([spec(nasal, unit="EU/mL"), spec(pen, unit="EU/mL")])
+        s.commit()
+        s.add(spec(nasal, unit=" eu/ML "))
+        with pytest.raises(IntegrityError):
+            s.commit()
+        s.rollback()
+        s.add(spec(nasal, unit=" eu/ML ", active=False))
         s.commit()             # an inactive duplicate is history, never a conflict

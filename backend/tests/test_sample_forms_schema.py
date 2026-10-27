@@ -78,3 +78,24 @@ def test_migrations_create_forms_before_any_fk_and_seed_only_empty_table():
     assert "WHERE NOT EXISTS (SELECT 1 FROM lims_sample_forms)" in seed
     backfill = sqls[_index_of(sqls, "UPDATE lims_samples SET sample_form_id")]
     assert "sample_form_id IS NULL" in backfill and "'Peptide Blend'" in backfill
+
+
+def test_migrations_widen_spec_tier_check_after_column_and_add_only_block():
+    """Task 4 / Ruling P1: the 3-way tier CHECK lives in a guarded widen that
+    runs after the spec sample_form_id ALTER and the add-only tier block. The
+    inline CREATE TABLE keeps the 2-way text (it runs before that column and
+    before lims_sample_forms exist, so naming sample_form_id there would fail
+    a fresh DB)."""
+    import database
+
+    sqls = _captured()
+    i_alter = _index_of(sqls, "ALTER TABLE analysis_service_specs ADD COLUMN IF NOT EXISTS sample_form_id")
+    i_add_only = _index_of(sqls, "IF NOT EXISTS (\n                SELECT 1 FROM pg_constraint\n                WHERE conname = 'ck_analysis_service_specs_tier'")
+    widen = next(i for i, s in enumerate(sqls)
+                 if "pg_get_constraintdef(oid) NOT LIKE '%sample_form_id%'" in s)
+    assert i_alter < i_add_only < widen
+    assert "<= 1" in sqls[widen] and "sample_form_id IS NOT NULL" in sqls[widen]
+    assert widen < sqls.index(database._SPEC_UNIT_INDEX_SWAP)
+    inline = sqls[_index_of(sqls, "CREATE TABLE IF NOT EXISTS analysis_service_specs")]
+    assert "sample_form_id" not in inline
+    assert i_alter < sqls.index(database._SPEC_UNIT_INDEX_SWAP)

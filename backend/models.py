@@ -251,11 +251,13 @@ class AnalysisServiceSpec(Base):
     """Lab-owned pass/fail rule for a native COA row (spec-ownership slice 1,
     peptide tier added in slice 2, unit added in endo slice 3).
 
-    Three tiers per service, in resolution precedence: a peptide-bound row
+    Four tiers per service, in resolution precedence: a peptide-bound row
     (peptide_id set, matrix NULL; the identity anchor is the peptide FK,
-    never the keyword), a named-matrix row (matrix set, peptide_id NULL),
-    and the wildcard row (both NULL, applies to every matrix/peptide).
-    matrix and peptide_id are mutually exclusive (ck_analysis_service_specs_tier).
+    never the keyword), a sample-form row (sample_form_id set; applies to
+    samples of that dosage form), a named-matrix row (matrix set,
+    peptide_id NULL), and the wildcard row (all three NULL, applies to every
+    matrix/peptide/form). matrix, peptide_id and sample_form_id are
+    mutually exclusive (ck_analysis_service_specs_tier).
     Each tier holds one active row per unit (trimmed, case-insensitive, NULL
     as ""), so an EU/mL row and an EU/vial row stand side by side and
     coa.spec_rules.resolve_spec picks by the result's unit.
@@ -275,13 +277,15 @@ class AnalysisServiceSpec(Base):
             name="ck_analysis_service_specs_rule_shape",
         ),
         CheckConstraint(
-            "NOT (matrix IS NOT NULL AND peptide_id IS NOT NULL)",
+            "(CASE WHEN matrix IS NOT NULL THEN 1 ELSE 0 END + "
+            "CASE WHEN peptide_id IS NOT NULL THEN 1 ELSE 0 END + "
+            "CASE WHEN sample_form_id IS NOT NULL THEN 1 ELSE 0 END) <= 1",
             name="ck_analysis_service_specs_tier",
         ),
         # Postgres treats NULLs as distinct in unique indexes, so each tier
-        # (named matrix / peptide-bound / both-NULL wildcard) needs its own
-        # partial index, and each keys on the normalized unit as well (endo
-        # slice 3): one active row per tier per unit.
+        # (named matrix / peptide-bound / sample-form / all-NULL wildcard)
+        # needs its own partial index, and each keys on the normalized unit as
+        # well (endo slice 3): one active row per tier per unit.
         Index(
             "uq_analysis_service_specs_matrix_unit",
             "analysis_service_id", "matrix", _SPEC_UNIT_KEY,
@@ -297,11 +301,22 @@ class AnalysisServiceSpec(Base):
             sqlite_where=text("active AND peptide_id IS NOT NULL"),
         ),
         Index(
-            "uq_analysis_service_specs_wildcard_unit",
+            "uq_analysis_service_specs_form_unit",
+            "analysis_service_id", "sample_form_id", _SPEC_UNIT_KEY,
+            unique=True,
+            postgresql_where=text("active AND sample_form_id IS NOT NULL"),
+            sqlite_where=text("active AND sample_form_id IS NOT NULL"),
+        ),
+        # _v2: the wildcard slot now also excludes form rows. A new name, so a
+        # deployed database builds it rather than keeping the old predicate.
+        Index(
+            "uq_analysis_service_specs_wildcard_unit_v2",
             "analysis_service_id", _SPEC_UNIT_KEY,
             unique=True,
-            postgresql_where=text("active AND matrix IS NULL AND peptide_id IS NULL"),
-            sqlite_where=text("active AND matrix IS NULL AND peptide_id IS NULL"),
+            postgresql_where=text(
+                "active AND matrix IS NULL AND peptide_id IS NULL AND sample_form_id IS NULL"),
+            sqlite_where=text(
+                "active AND matrix IS NULL AND peptide_id IS NULL AND sample_form_id IS NULL"),
         ),
     )
 
@@ -312,6 +327,11 @@ class AnalysisServiceSpec(Base):
     matrix: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
     peptide_id: Mapped[Optional[int]] = mapped_column(
         ForeignKey("peptides.id"), nullable=True
+    )
+    # Sample-form tier: applies to samples of this dosage form. Mutually
+    # exclusive with matrix and peptide_id (ck_analysis_service_specs_tier).
+    sample_form_id: Mapped[Optional[int]] = mapped_column(
+        ForeignKey("lims_sample_forms.id"), nullable=True
     )
     rule_kind: Mapped[str] = mapped_column(String(16), nullable=False)  # range | equals
     min_value: Mapped[Optional[Decimal]] = mapped_column(Numeric, nullable=True)

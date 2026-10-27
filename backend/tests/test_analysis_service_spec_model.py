@@ -178,3 +178,64 @@ def test_profile_coa_display_columns_default_null(db_session):
     db_session.add(prof); db_session.commit()
     assert (prof.coa_basis_note, prof.coa_method_text,
             prof.coa_prep_text, prof.coa_footnotes) == (None, None, None, None)
+
+
+# ── sample-form tier (spec 2026-10-26 sample-forms, task 4) ─────────────────
+
+@pytest.fixture
+def forms(db_session):
+    from models import LimsSampleForm
+    nasal = LimsSampleForm(name="Nasal Spray", route="nasal_inhaled")
+    pen = LimsSampleForm(name="Pen", route="injectable")
+    db_session.add_all([nasal, pen])
+    db_session.flush()
+    return nasal, pen
+
+
+def test_tier_check_rejects_form_and_matrix_together(db_session, svc, forms):
+    nasal, _ = forms
+    db_session.add(AnalysisServiceSpec(
+        analysis_service_id=svc.id, matrix="Peptide", sample_form_id=nasal.id,
+        rule_kind="range", max_value=Decimal("1")))
+    with pytest.raises(IntegrityError):
+        db_session.flush()
+
+
+def test_tier_check_rejects_form_and_peptide_together(db_session, svc, peptide, forms):
+    nasal, _ = forms
+    db_session.add(AnalysisServiceSpec(
+        analysis_service_id=svc.id, peptide_id=peptide.id, sample_form_id=nasal.id,
+        rule_kind="range", max_value=Decimal("1")))
+    with pytest.raises(IntegrityError):
+        db_session.flush()
+
+
+def test_one_active_form_row_per_service_form_unit(db_session, svc, forms):
+    nasal, pen = forms
+    _mk_spec(db_session, svc, sample_form_id=nasal.id)
+    with pytest.raises(IntegrityError):
+        _mk_spec(db_session, svc, sample_form_id=nasal.id, unit=" PPM ")   # same unit, normalized
+
+
+def test_form_rows_may_differ_by_form_unit_or_active(db_session, svc, forms):
+    nasal, pen = forms
+    _mk_spec(db_session, svc, sample_form_id=nasal.id)
+    _mk_spec(db_session, svc, sample_form_id=pen.id)                  # other form
+    _mk_spec(db_session, svc, sample_form_id=nasal.id, unit="EU/vial")  # other unit
+    _mk_spec(db_session, svc, sample_form_id=nasal.id, active=False)   # history, never a conflict
+
+
+def test_form_row_and_wildcard_row_coexist_in_one_unit(db_session, svc, forms):
+    nasal, _ = forms
+    _mk_spec(db_session, svc)                                          # wildcard, unit ppm
+    _mk_spec(db_session, svc, sample_form_id=nasal.id)                 # form row, unit ppm
+    # ... and a second wildcard is still refused: the form row did not widen that slot.
+    with pytest.raises(IntegrityError):
+        _mk_spec(db_session, svc)
+
+
+def test_snapshot_spec_carries_sample_form_id(db_session, svc, forms):
+    nasal, _ = forms
+    spec = _mk_spec(db_session, svc, sample_form_id=nasal.id)
+    assert snapshot_spec(spec)["sample_form_id"] == nasal.id
+    assert snapshot_spec(_mk_spec(db_session, svc, matrix="Peptide"))["sample_form_id"] is None

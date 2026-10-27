@@ -196,6 +196,80 @@ def test_wildcard_arm_excludes_peptide_rows(db_session):
     assert resolve_spec(db_session, svc.id, None, peptide_id=None) is None
 
 
+# ── sample-form tier (spec 2026-10-26 sample-forms, task 4) ──────────────────
+
+def _mk_form(db, name):
+    from models import LimsSampleForm
+    form = LimsSampleForm(name=name, route="injectable")
+    db.add(form)
+    db.flush()
+    return form
+
+
+def test_form_beats_matrix_and_wildcard_but_not_peptide(db_session):
+    db = db_session
+    svc = _mk_service(db)
+    nasal = _mk_form(db, "Nasal Spray")
+    pep = _mk_peptide(db, "BPC157")
+    wild = _mk_spec(db, svc)                                        # (1) wildcard
+    mat = _mk_spec(db, svc, matrix="Peptide", max_value=Decimal("2"))   # (2) matrix
+    pep_row = _mk_spec(db, svc, peptide_id=pep.id, max_value=Decimal("3"))  # (3) peptide
+    form_row = _mk_spec(db, svc, sample_form_id=nasal.id, max_value=Decimal("4"))  # (4) form
+    assert resolve_spec(db, svc.id, "Peptide", sample_form_id=nasal.id).id == form_row.id
+    assert resolve_spec(db, svc.id, "Peptide", peptide_id=pep.id,
+                        sample_form_id=nasal.id).id == pep_row.id
+    assert resolve_spec(db, svc.id, "Peptide").id == mat.id          # no form -> form rows invisible
+    # A form with no row of its own falls through to matrix, then wildcard.
+    other = _mk_form(db, "Pen")
+    assert resolve_spec(db, svc.id, "Peptide", sample_form_id=other.id).id == mat.id
+    assert resolve_spec(db, svc.id, "Bacteriostatic Water",
+                        sample_form_id=other.id).id == wild.id
+
+
+def test_other_forms_rows_never_change_resolution_unit_trap(db_session):
+    """Another form's row in the result's unit must not make the unit filter
+    drop the wildcard (filed in a different unit) for everyone else: the
+    resolver drops other forms' rows BEFORE the unit filter."""
+    db = db_session
+    svc = _mk_service(db)
+    svc.unit = "ppm"                                  # catalog unit: arms the unit-blind fallback
+    nasal = _mk_form(db, "Nasal Spray")
+    powder = _mk_form(db, "Lyophilized Powder")
+    wild = _mk_spec(db, svc, unit="µg/g", max_value=Decimal("1"))
+    nasal_row = _mk_spec(db, svc, sample_form_id=nasal.id, unit="ppm", max_value=Decimal("2"))
+    assert resolve_spec(db, svc.id, "Peptide", unit="ppm", sample_form_id=powder.id).id == wild.id
+    assert resolve_spec(db, svc.id, "Bacteriostatic Water", unit="ppm").id == wild.id   # Review Focus 5
+    assert resolve_spec(db, svc.id, "Peptide", unit="ppm", sample_form_id=nasal.id).id == nasal_row.id
+
+
+def test_wildcard_arm_excludes_form_rows(db_session):
+    """Clone of the peptide-row regression: a form row must never masquerade
+    as the default for a sample that is not in that form."""
+    db = db_session
+    svc = _mk_service(db)
+    nasal = _mk_form(db, "Nasal Spray")
+    pen = _mk_form(db, "Pen")
+    form_row = _mk_spec(db, svc, sample_form_id=nasal.id, max_value=Decimal("3"))
+    assert resolve_spec(db, svc.id, None) is None
+    assert resolve_spec(db, svc.id, "Peptide", sample_form_id=pen.id) is None
+    assert resolve_spec(db, svc.id, "Peptide", sample_form_id=nasal.id).id == form_row.id
+
+
+def test_display_spec_fields_cache_is_keyed_by_form(db_session):
+    from coa.spec_rules import display_spec_fields
+    db = db_session
+    svc = _mk_service(db)
+    nasal = _mk_form(db, "Nasal Spray")
+    _mk_spec(db, svc)                                                  # max 0.5
+    _mk_spec(db, svc, sample_form_id=nasal.id, max_value=Decimal("2"))
+    cache: dict = {}
+    kw = dict(service_id=svc.id, matrix="Peptide", peptide_id=None,
+              wire_result="1.5", cache=cache, unit="ppm")
+    assert display_spec_fields(db, **kw)["conforms"] is False
+    assert display_spec_fields(db, sample_form_id=nasal.id, **kw)["conforms"] is True
+    assert len(cache) == 2
+
+
 # ── sample_peptide_id: identity anchor (R6) ──────────────────────────────────
 
 def test_sample_peptide_id_unique_anchor(db_session):

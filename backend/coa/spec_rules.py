@@ -54,19 +54,25 @@ def effective_unit(result_unit: Optional[str], service_unit: Optional[str]) -> s
     return normalize_unit(result_unit) or normalize_unit(service_unit)
 
 
-def _first_in_scope(rows, matrix: Optional[str], peptide_id: Optional[int]):
-    """The precedence over already-loaded active rows: (peptide) ->
-    (matrix) -> (wildcard) -> None. Two rows in the winning scope raise
+def _first_in_scope(rows, matrix: Optional[str], peptide_id: Optional[int],
+                    sample_form_id: Optional[int] = None):
+    """The precedence over already-loaded active rows: (peptide) -> (form)
+    -> (matrix) -> (wildcard) -> None. The form scope exists only when the
+    sample has a form. Two rows in the winning scope raise
     MultipleResultsFound, as scalar_one_or_none did."""
     scopes = []
     if peptide_id is not None:
         scopes.append(lambda s: s.peptide_id == peptide_id)
+    if sample_form_id is not None:
+        scopes.append(lambda s: s.sample_form_id == sample_form_id)
     if matrix is not None:
         scopes.append(lambda s: s.matrix == matrix)
-    # CRITICAL: the wildcard scope also requires peptide_id IS NULL. Without
-    # it, a peptide-bound row could masquerade as the default when no true
-    # wildcard row exists for this service.
-    scopes.append(lambda s: s.matrix is None and s.peptide_id is None)
+    # CRITICAL: the wildcard scope also requires peptide_id IS NULL and
+    # sample_form_id IS NULL. Without them, a peptide-bound or form row could
+    # masquerade as the default when no true wildcard row exists for this
+    # service.
+    scopes.append(lambda s: s.matrix is None and s.peptide_id is None
+                  and s.sample_form_id is None)
     for in_scope in scopes:
         hits = [s for s in rows if in_scope(s)]
         if len(hits) > 1:
@@ -79,9 +85,17 @@ def _first_in_scope(rows, matrix: Optional[str], peptide_id: Optional[int]):
 
 
 def resolve_spec(db: Session, service_id: int, matrix: Optional[str],
-                 peptide_id: Optional[int] = None, unit: Optional[str] = None):
-    """Active spec by precedence: (service, peptide) -> (service, matrix) ->
-    (service, wildcard) -> None, over one query for the service's active rows.
+                 peptide_id: Optional[int] = None, unit: Optional[str] = None,
+                 sample_form_id: Optional[int] = None):
+    """Active spec by precedence: (service, peptide) -> (service, form) ->
+    (service, matrix) -> (service, wildcard) -> None, over one query for the
+    service's active rows.
+
+    sample_form_id (sample forms, spec 2026-10-26) is the sample's dosage
+    form. Rows filed under any OTHER form are dropped before the unit filter
+    runs, so another form's row in the result's unit can never switch the
+    unit filter on for a sample that is not in that form. sample_form_id=None
+    drops every form row: a caller that passes no form sees today's tiers.
 
     unit (endo slice 3, spec section 6) is the result's unit: callers pass
     effective_unit(result_unit, service unit). When any active row of the
@@ -113,15 +127,16 @@ def resolve_spec(db: Session, service_id: int, matrix: Optional[str],
             AnalysisServiceSpec.active.is_(True),
         ).order_by(AnalysisServiceSpec.id)
     ).scalars().all()
+    rows = [s for s in rows if s.sample_form_id is None or s.sample_form_id == sample_form_id]
     if unit is not None:
         want = normalize_unit(unit)
         in_unit = [s for s in rows if normalize_unit(s.unit) == want]
         if in_unit:
-            return _first_in_scope(in_unit, matrix, peptide_id)
+            return _first_in_scope(in_unit, matrix, peptide_id, sample_form_id)
         svc = db.get(AnalysisService, service_id)
         if want and want != normalize_unit(svc.unit if svc is not None else None):
             return None
-    return _first_in_scope(rows, matrix, peptide_id)
+    return _first_in_scope(rows, matrix, peptide_id, sample_form_id)
 
 
 def sample_peptide_id(db: Session, parent_pk: int) -> Optional[int]:
@@ -239,7 +254,8 @@ def display_spec_fields(db: Session, *, service_id: Optional[int],
                         matrix: Optional[str], peptide_id: Optional[int],
                         wire_result: Optional[str],
                         cache: Optional[dict] = None,
-                        unit: Optional[str] = None) -> dict:
+                        unit: Optional[str] = None,
+                        sample_form_id: Optional[int] = None) -> dict:
     """`specification` + `conforms` for a row in the analyses TABLE: the same
     resolve_spec / evaluate / wire dict the certificate is built from, so the
     table can never disagree with the COA. Same inputs as
@@ -255,15 +271,18 @@ def display_spec_fields(db: Session, *, service_id: Optional[int],
     service id: {}.
 
     `cache` (optional dict) memoises the resolved spec per
-    (service, matrix, peptide, unit) across the rows of one listing."""
+    (service, matrix, peptide, sample form, unit) across the rows of one
+    listing."""
     if service_id is None:
         return {}
-    key = (service_id, matrix, peptide_id, None if unit is None else normalize_unit(unit))
+    key = (service_id, matrix, peptide_id, sample_form_id,
+           None if unit is None else normalize_unit(unit))
     if cache is not None and key in cache:
         spec = cache[key]
     else:
         try:
-            spec = resolve_spec(db, service_id, matrix, peptide_id=peptide_id, unit=unit)
+            spec = resolve_spec(db, service_id, matrix, peptide_id=peptide_id, unit=unit,
+                                sample_form_id=sample_form_id)
         except Exception:  # noqa: BLE001 -- a catalog fault must not 500 the page
             spec = None
         if cache is not None:
