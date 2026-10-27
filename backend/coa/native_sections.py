@@ -208,6 +208,11 @@ def _method_label(db: Session, method_id: Optional[int]) -> str:
     return (m.name or "") if m is not None else ""
 
 
+# Rule kinds whose printed result is censored against an LOQ. A report-only
+# (informational) row censors too: no verdict, but "< LOQ" when at or below it.
+_LOQ_KINDS = ("range", "informational")
+
+
 def _spec_wire_dict(spec) -> dict:
     """The structured `specification` wire field. Floats (not Decimal) so the
     JSON is stable; display stays None unless the lab filed an override —
@@ -219,11 +224,12 @@ def _spec_wire_dict(spec) -> dict:
         "max": float(spec.max_value) if spec.max_value is not None else None,
         "unit": spec.unit,
         "display": spec.display_override,
-        # Range-only: equals rows never censor, so publishing a stray loq
-        # filed on one (tolerated at write time) would contradict the wire's
-        # own convention and light the consumer's LOQ column regardless.
+        # Range and report-only rows censor; equals rows never do, so
+        # publishing a stray loq filed on one (tolerated at write time) would
+        # contradict the wire's own convention and light the consumer's LOQ
+        # column regardless.
         "loq": (float(spec.loq)
-                if spec.rule_kind == "range" and spec.loq is not None else None),
+                if spec.rule_kind in _LOQ_KINDS and spec.loq is not None else None),
     }
 
 
@@ -238,11 +244,13 @@ def effective_loq(row, spec) -> Optional[float]:
 
 def _result_display(spec, result, loq: Optional[float]) -> Optional[str]:
     """Mk1's applied lab-reporting convention for the PRINTED result; the
-    verdict never reads it. Only convention today: LOQ censoring on range
-    rows, against the effective LOQ (effective_loq). Runs after evaluate(),
-    which guarantees a finite numeric for range rows; the guards here are
-    belt-and-braces, not policy."""
-    if spec.rule_kind != "range" or loq is None:
+    verdict never reads it. Only convention today: LOQ censoring on range and
+    report-only rows, against the effective LOQ (effective_loq). Runs after
+    evaluate(), which guarantees a finite numeric for range rows but NOT for
+    report-only ones (evaluate() returns None without reading the result), so
+    the float/isfinite guards below are policy for those: a text result
+    ("ND", "Not Detected") is never censored."""
+    if spec.rule_kind not in _LOQ_KINDS or loq is None:
         return None
     try:
         value = float(str(result or "").strip())
@@ -438,11 +446,12 @@ def build_native_sections(db: Session, parent, *, vial_parent_ids=None) -> dict:
             # The result's own LOQ wins over the spec's (endo slice 3, spec
             # section 7): it decides "< LOQ" and rides specification.loq, the
             # field coabuilder's LOQ column and the digital COA already read.
-            # Range rows only, as _spec_wire_dict publishes it. A row without
-            # its own LOQ (every heavy metal) keeps the spec's, byte for byte.
+            # Range and report-only rows, as _spec_wire_dict publishes it. A
+            # row without its own LOQ (every heavy metal) keeps the spec's,
+            # byte for byte.
             loq = effective_loq(row, spec)
             specification = _spec_wire_dict(spec)
-            if spec.rule_kind == "range":
+            if spec.rule_kind in _LOQ_KINDS:
                 specification["loq"] = loq
             rows.append({
                 "keyword": svc.keyword,
@@ -465,12 +474,18 @@ def build_native_sections(db: Session, parent, *, vial_parent_ids=None) -> dict:
         # [ ... ] segments, filled from this section's rows (coa.text_macros).
         # Text with no macro comes back exactly as typed.
         values = {"lod": format_lod(limits)}
+        # A basis note describes how the limits scale ("Limits scale with
+        # dose"); a section whose every row is report-only has no limits to
+        # describe, so the note would be noise. The key stays on the wire.
+        all_report_only = all(
+            r["specification"]["rule_kind"] == "informational" for r in rows)
         sections.append({
             "profile_key": prof.key,
             "title": prof.coa_section_title or prof.name,
             "archetype": prof.coa_archetype,
             "sort_order": prof.coa_sort_order,
-            "basis_note": resolve(prof.coa_basis_note, values),
+            "basis_note": (None if all_report_only
+                           else resolve(prof.coa_basis_note, values)),
             "method_text": resolve(prof.coa_method_text, values),
             "prep_text": resolve(prof.coa_prep_text, values),
             # Fail-open to [] on a malformed container is deliberate: the

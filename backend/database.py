@@ -2093,7 +2093,7 @@ def _run_migrations():
                 (rule_kind = 'equals' AND equals_value IS NOT NULL
                  AND min_value IS NULL AND max_value IS NULL) OR
                 (rule_kind = 'informational' AND equals_value IS NULL
-                 AND min_value IS NULL AND max_value IS NULL AND loq IS NULL)
+                 AND min_value IS NULL AND max_value IS NULL)
             ),
             CONSTRAINT ck_analysis_service_specs_tier CHECK (
                 NOT (matrix IS NOT NULL AND peptide_id IS NOT NULL)
@@ -2349,6 +2349,36 @@ def _run_migrations():
                          AND min_value IS NULL AND max_value IS NULL) OR
                         (rule_kind = 'informational' AND equals_value IS NULL
                          AND min_value IS NULL AND max_value IS NULL AND loq IS NULL)
+                    );
+            END IF;
+        END $$""",
+        # Sample forms (2026-10-26): a report-only row may carry an LOQ (it
+        # censors the printed result; the verdict never reads it), so the
+        # informational arm drops `AND loq IS NULL`. Same WIDEN-ONLY guarded
+        # form as the block above: the DROP/re-ADD runs ONLY while the live
+        # definition still pins loq to NULL, so it fires exactly once per
+        # database and an older image booting afterwards (its widen block is
+        # guarded on 'informational', which stays present) cannot re-narrow
+        # it. No existing row can violate the wider shape. Placed AFTER the
+        # block above so a database that is still pre-'informational' passes
+        # through it first and is widened here in the same boot.
+        """DO $$ BEGIN
+            IF EXISTS (
+                SELECT 1 FROM pg_constraint
+                WHERE conname = 'ck_analysis_service_specs_rule_shape'
+                  AND conrelid = 'analysis_service_specs'::regclass
+                  AND pg_get_constraintdef(oid) LIKE '%loq IS NULL%'
+            ) THEN
+                ALTER TABLE analysis_service_specs
+                    DROP CONSTRAINT ck_analysis_service_specs_rule_shape;
+                ALTER TABLE analysis_service_specs
+                    ADD CONSTRAINT ck_analysis_service_specs_rule_shape CHECK (
+                        (rule_kind = 'range' AND equals_value IS NULL
+                         AND (min_value IS NOT NULL OR max_value IS NOT NULL)) OR
+                        (rule_kind = 'equals' AND equals_value IS NOT NULL
+                         AND min_value IS NULL AND max_value IS NULL) OR
+                        (rule_kind = 'informational' AND equals_value IS NULL
+                         AND min_value IS NULL AND max_value IS NULL)
                     );
             END IF;
         END $$""",

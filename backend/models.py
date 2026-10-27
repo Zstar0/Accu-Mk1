@@ -273,7 +273,7 @@ class AnalysisServiceSpec(Base):
             "(rule_kind = 'equals' AND equals_value IS NOT NULL "
             "AND min_value IS NULL AND max_value IS NULL) OR "
             "(rule_kind = 'informational' AND equals_value IS NULL "
-            "AND min_value IS NULL AND max_value IS NULL AND loq IS NULL)",
+            "AND min_value IS NULL AND max_value IS NULL)",
             name="ck_analysis_service_specs_rule_shape",
         ),
         CheckConstraint(

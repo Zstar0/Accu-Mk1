@@ -4662,17 +4662,18 @@ def _validate_spec_shape(*, rule_kind, min_value, max_value, equals_value,
         if equals_value is not None or (min_value is None and max_value is None):
             raise HTTPException(422, "range rule needs min and/or max, and no equals_value")
     elif rule_kind == "informational":
-        # Report-only spec (2026-08-22, R3): bounds/expected/LOQ are REJECTED
+        # Report-only spec (2026-08-22, R3): bounds/expected are REJECTED
         # loudly, never silently nulled — a value the lab typed and lost is
-        # exactly the confusion this arm exists to prevent. LOQ is checked
-        # here (and only here) because range rows legitimately carry one and
-        # equals rows tolerate a stray one at write time (wire never
-        # publishes it for them).
+        # exactly the confusion this arm exists to prevent. LOQ is allowed
+        # (sample forms task 7): it censors the PRINTED result ("< LOQ")
+        # while the verdict stays None; evaluate() never reads it. Its value
+        # rules (finite, non-negative) are _parse_loq's, applied by the
+        # create/patch routes before this runs.
         if (equals_value is not None or min_value is not None
-                or max_value is not None or loq is not None):
+                or max_value is not None):
             raise HTTPException(
                 422, "informational rule reports as measured — it takes no "
-                     "min/max, equals_value, or loq")
+                     "min/max or equals_value")
     else:  # equals
         if equals_value is None or min_value is not None or max_value is not None:
             raise HTTPException(422, "equals rule needs equals_value only")

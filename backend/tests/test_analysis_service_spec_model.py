@@ -105,6 +105,26 @@ def test_equals_with_bounds_rejected(db_session):
                  equals_value="Not Detected")   # max_value 0.5 still set
 
 
+def test_informational_with_loq_inserts(db_session):
+    # Sample forms task 7: a report-only row may carry an LOQ (it censors the
+    # printed result). No older assertion encoded the opposite at model level.
+    svc = _mk_service(db_session)
+    spec = _mk_spec(db_session, svc, rule_kind="informational", max_value=None,
+                    loq=Decimal("3.2"))
+    assert spec.loq == Decimal("3.2")
+
+
+def test_informational_with_bound_or_equals_still_rejected(db_session):
+    svc = _mk_service(db_session)
+    with pytest.raises(IntegrityError):
+        _mk_spec(db_session, svc, rule_kind="informational",
+                 max_value=Decimal("1"), loq=Decimal("3.2"))
+    db_session.rollback()
+    svc = _mk_service(db_session, keyword="HM-YY")
+    with pytest.raises(IntegrityError):
+        _mk_spec(db_session, svc, rule_kind="informational", max_value=None,
+                 equals_value="x")
+
 # ── spec-ownership slice 2: peptide tier ────────────────────────────────────
 
 def test_tier_check_rejects_peptide_and_matrix_together(db_session, svc, peptide):

@@ -325,21 +325,41 @@ def test_create_informational_spec(client, svc):
     {"min_value": "1"},
     {"max_value": "5"},
     {"equals_value": "x"},
-    {"loq": "0.5"},
 ])
 def test_create_informational_rejects_bounds_loudly(client, svc, extra):
-    # R3: bounds/expected/LOQ on an informational row 422 by name — never
+    # R3: bounds/expected on an informational row 422 by name — never
     # silently nulled (a value the lab typed and lost is the confusion this
-    # arm exists to prevent).
+    # arm exists to prevent). LOQ is the one value a report-only row carries
+    # (sample forms task 7), so it is NOT in this list.
     r = client.post(f"/analysis-services/{svc.id}/specs",
                     json={"rule_kind": "informational", **extra})
+    assert r.status_code == 422
+
+
+def test_create_informational_accepts_loq(client, svc):
+    # Sample forms task 7: a report-only row may carry an LOQ (censors the
+    # printed result; the verdict still never reads it).
+    r = client.post(f"/analysis-services/{svc.id}/specs",
+                    json={"rule_kind": "informational", "unit": "ppm", "loq": "0.5"})
+    assert r.status_code == 201
+    body = r.json()
+    assert body["rule_kind"] == "informational"
+    assert body["loq"] == "0.5"
+    assert body["min_value"] is None and body["max_value"] is None
+
+
+@pytest.mark.parametrize("bad", ["-1", "nan", "abc"])
+def test_create_informational_loq_keeps_parse_loq_rules(client, svc, bad):
+    r = client.post(f"/analysis-services/{svc.id}/specs",
+                    json={"rule_kind": "informational", "loq": bad})
     assert r.status_code == 422
 
 
 def test_patch_to_informational_requires_explicit_bound_clearing(client, svc):
     # Flipping kind must NOT silently drop the old bounds: the merged shape
     # still carries them, so the flip alone 422s; nulling them in the same
-    # PATCH succeeds.
+    # PATCH succeeds. The LOQ is no longer in the way (sample forms task 7):
+    # an informational row may keep it, so only the bound needs clearing.
     spec_id = client.post(
         f"/analysis-services/{svc.id}/specs",
         json={"rule_kind": "range", "max_value": "0.5", "loq": "0.1"},
@@ -348,12 +368,12 @@ def test_patch_to_informational_requires_explicit_bound_clearing(client, svc):
                         json={"rule_kind": "informational"}).status_code == 422
     r = client.patch(
         f"/analysis-service-specs/{spec_id}",
-        json={"rule_kind": "informational", "max_value": None, "loq": None},
+        json={"rule_kind": "informational", "max_value": None},
     )
     assert r.status_code == 200
     body = r.json()
     assert body["rule_kind"] == "informational"
-    assert body["max_value"] is None and body["loq"] is None
+    assert body["max_value"] is None and body["loq"] == "0.1"
 
 
 # ── Endo slice 3 (spec 2026-10-12 sections 6 and 8): one active spec per

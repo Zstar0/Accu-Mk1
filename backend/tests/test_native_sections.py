@@ -967,3 +967,110 @@ def test_rule5_abort_message_names_the_form_tier(db_session, monkeypatch):
     with pytest.raises(NativeSectionsError,
                        match=rf"tiers consulted: peptide=None, form={nasal.id}, matrix=None, wildcard"):
         build_native_sections(db_session, parent)
+
+
+# ── report-only rows carry an LOQ; basis note hides on all-report-only (task 7) ─
+
+def _info_spec(db, svc, *, loq="3.2"):
+    from decimal import Decimal
+    from models import AnalysisServiceSpec
+    db.add(AnalysisServiceSpec(analysis_service_id=svc.id, matrix=None,
+                               rule_kind="informational", unit="ppm",
+                               loq=Decimal(loq) if loq is not None else None))
+    db.flush()
+
+
+def test_informational_row_with_loq_censors_and_has_no_verdict(db_session, monkeypatch):
+    prof, svcs = _mk_native_profile(db_session, key="heavy_metals",
+                                    services=[("HM-PB", "mk1")], specs=False)
+    _info_spec(db_session, svcs[0])
+    _order_lookup(monkeypatch)
+    below = build_native_sections(
+        db_session, _mk_parent_with_rows(db_session, svcs, result="2.0"))
+    row = below["sections"][0]["rows"][0]
+    assert row["conforms"] is None
+    assert row["specification"]["rule_kind"] == "informational"
+    assert row["specification"]["loq"] == 3.2
+    assert row["result_display"] == "< LOQ"
+
+
+def test_informational_row_above_loq_prints_as_measured(db_session, monkeypatch):
+    prof, svcs = _mk_native_profile(db_session, key="heavy_metals",
+                                    services=[("HM-PB", "mk1")], specs=False)
+    _info_spec(db_session, svcs[0])
+    _order_lookup(monkeypatch)
+    row = build_native_sections(
+        db_session, _mk_parent_with_rows(db_session, svcs, result="4.0")
+    )["sections"][0]["rows"][0]
+    assert row["conforms"] is None
+    assert row["specification"]["loq"] == 3.2
+    assert row["result_display"] is None
+
+
+def test_informational_row_without_loq_is_unchanged(db_session, monkeypatch):
+    prof, svcs = _mk_native_profile(db_session, key="heavy_metals",
+                                    services=[("HM-PB", "mk1")], specs=False)
+    _info_spec(db_session, svcs[0], loq=None)
+    _order_lookup(monkeypatch)
+    row = build_native_sections(
+        db_session, _mk_parent_with_rows(db_session, svcs, result="2.0")
+    )["sections"][0]["rows"][0]
+    assert row["specification"]["loq"] is None
+    assert row["result_display"] is None
+
+
+def test_equals_row_still_publishes_no_loq(db_session, monkeypatch):
+    from decimal import Decimal
+    from models import AnalysisServiceSpec
+    prof, svcs = _mk_native_profile(db_session, key="heavy_metals",
+                                    services=[("HM-PB", "mk1")], specs=False)
+    db_session.add(AnalysisServiceSpec(analysis_service_id=svcs[0].id, rule_kind="equals",
+                                       equals_value="2.0", unit="ppm", loq=Decimal("3.2")))
+    db_session.flush()
+    _order_lookup(monkeypatch)
+    row = build_native_sections(
+        db_session, _mk_parent_with_rows(db_session, svcs, result="2.0")
+    )["sections"][0]["rows"][0]
+    assert row["specification"]["loq"] is None
+    assert row["result_display"] is None
+
+
+def test_all_report_only_section_omits_basis_note(db_session, monkeypatch):
+    prof, svcs = _mk_native_profile(db_session, key="heavy_metals",
+                                    services=[("HM-PB", "mk1"), ("HM-AS", "mk1")],
+                                    specs=False)
+    prof.coa_basis_note = "Limits scale with dose"
+    for svc in svcs:
+        _info_spec(db_session, svc)
+    _order_lookup(monkeypatch)
+    sec = build_native_sections(
+        db_session, _mk_parent_with_rows(db_session, svcs))["sections"][0]
+    assert "basis_note" in sec          # key stays: section key order is pinned
+    assert sec["basis_note"] is None
+
+
+def test_mixed_section_keeps_basis_note(db_session, monkeypatch):
+    from decimal import Decimal
+    from models import AnalysisServiceSpec
+    prof, svcs = _mk_native_profile(db_session, key="heavy_metals",
+                                    services=[("HM-PB", "mk1"), ("HM-AS", "mk1")],
+                                    specs=False)
+    prof.coa_basis_note = "Limits scale with dose"
+    db_session.add(AnalysisServiceSpec(analysis_service_id=svcs[0].id, rule_kind="range",
+                                       max_value=Decimal("100"), unit="ppm"))
+    _info_spec(db_session, svcs[1])
+    _order_lookup(monkeypatch)
+    sec = build_native_sections(
+        db_session, _mk_parent_with_rows(db_session, svcs))["sections"][0]
+    assert sec["basis_note"] == "Limits scale with dose"
+
+
+def test_all_range_section_keeps_basis_note(db_session, monkeypatch):
+    prof, svcs = _mk_native_profile(db_session, key="heavy_metals",
+                                    services=[("HM-PB", "mk1")])
+    prof.coa_basis_note = "Limits scale with dose"
+    db_session.flush()
+    _order_lookup(monkeypatch)
+    sec = build_native_sections(
+        db_session, _mk_parent_with_rows(db_session, svcs))["sections"][0]
+    assert sec["basis_note"] == "Limits scale with dose"
