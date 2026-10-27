@@ -519,29 +519,43 @@ export function prep2Check(s: EndoSample, ctx: EndoCtx): EndoCheck {
  */
 export function parseReading(
   text: string | null
-): { lt: boolean; value: number } | null {
+): { lt: boolean; gt: boolean; value: number } | null {
   const t = (text ?? '').trim()
   if (t.length > 40) return null // result_reading is varchar(40); the server's parse_reading refuses longer
-  const m = /^(<)?(\d*\.?\d+)$/.exec(t.replace(/\s+/g, ''))
+  // "<" is below the cartridge's lowest standard, ">" above its top one. The
+  // server's parse_reading takes the same grammar; keep the two in lockstep.
+  const m = /^([<>])?(\d*\.?\d+)$/.exec(t.replace(/\s+/g, ''))
   if (!m) return null
   const lt = m[1] === '<'
+  const gt = m[1] === '>'
   const value = Number(m[2])
-  return lt && value <= 0 ? null : { lt, value }
+  return lt && value <= 0 ? null : { lt, gt, value }
 }
 
-function judgeResult(lt: boolean, euPerVial: number): EndoVerdict {
+function judgeResult(lt: boolean, euPerVial: number, gt: boolean): EndoVerdict {
+  // A ">" says the vial holds at least this much: already over the limit is a
+  // fail whatever the true number, under it proves nothing (Handler ruling
+  // 2026-10-26, Dennis d1fdacc). It can never read as a pass.
+  if (gt) return euPerVial >= LIMIT_EU_PER_VIAL ? 'fail' : 'inconclusive'
   if (euPerVial <= LIMIT_EU_PER_VIAL) return 'pass'
   return lt ? 'inconclusive' : 'fail'
 }
 
 /** Bac water: the reading itself against 0.25 EU/mL. */
-export function judgeWater(lt: boolean, euPerMl: number): EndoVerdict {
+export function judgeWater(
+  lt: boolean,
+  euPerMl: number,
+  gt: boolean
+): EndoVerdict {
+  if (gt) return euPerMl >= BW_LIMIT_EU_PER_ML ? 'fail' : 'inconclusive'
   if (euPerMl <= BW_LIMIT_EU_PER_ML) return 'pass'
   return lt ? 'inconclusive' : 'fail'
 }
 
 export interface EndoResult {
   lt: boolean | null
+  /** The reading was ">": the value is a floor, not the result. */
+  gt: boolean
   value: number | null
   euPerMlVial: number | null
   euPerVial: number | null
@@ -558,6 +572,7 @@ function prep2ResultRaw(s: EndoSample, ctx: EndoCtx): EndoResult {
   const bac = formOf(s) === 'bac'
   const none: EndoResult = {
     lt: false,
+    gt: false,
     value: null,
     euPerMlVial: null,
     euPerVial: null,
@@ -573,6 +588,7 @@ function prep2ResultRaw(s: EndoSample, ctx: EndoCtx): EndoResult {
   const out: EndoResult = {
     ...none,
     lt: p.lt,
+    gt: p.gt,
     value: p.value,
     expectedFloor: k.floorShown,
   }
@@ -580,7 +596,7 @@ function prep2ResultRaw(s: EndoSample, ctx: EndoCtx): EndoResult {
     out.floorMismatch = true
   if (bac) {
     // the reading is EU/mL of the bac water (the instrument applies the 20x)
-    out.verdict = judgeWater(p.lt, p.value)
+    out.verdict = judgeWater(p.lt, p.value, p.gt)
     return out
   }
   if (k.dilution === null || k.water === null) return out // nothing to scale by
@@ -592,7 +608,7 @@ function prep2ResultRaw(s: EndoSample, ctx: EndoCtx): EndoResult {
     euPerMlVial,
     euPerVial,
     euPerMg: w ? euPerVial / w : null,
-    verdict: judgeResult(p.lt, euPerVial),
+    verdict: judgeResult(p.lt, euPerVial, p.gt),
   }
 }
 
@@ -608,10 +624,10 @@ export function prep2Result(s: EndoSample, ctx: EndoCtx): EndoResult {
   return out
 }
 
-/** "<2.5" style: the "<" kept, 3 decimals. */
-export function fmtEu(lt: boolean, v: number | null): string {
+/** "<2.5" or ">250" style: the qualifier kept, 3 decimals. */
+export function fmtEu(lt: boolean, v: number | null, gt = false): string {
   if (v === null || !Number.isFinite(v)) return ''
-  return (lt ? '<' : '') + fmt(v)
+  return (lt ? '<' : gt ? '>' : '') + fmt(v)
 }
 
 /** Concentrations on the cartridge: two significant figures below 0.01. */
@@ -631,6 +647,13 @@ export function mk1Value(
 ): { value: string; unit: 'EU/vial' | 'EU/mL'; verdict: EndoVerdict } | null {
   const rs = prep2Result(s, ctx)
   if (rs.verdict === 'invalid') return null
+  // A ">" is a floor, not a result. The worksheet judges it (fail when the
+  // floor already clears the limit, else inconclusive) but nothing goes to
+  // Accu-Mk1: storing the floor as an exact value would have the spec engine
+  // judge the floor, so a ">200" that may be 1000 would print CONFORMS. The
+  // server refuses it too (worksheets_endo_promote.REASON_GT). This is a
+  // deliberate divergence from Dennis's tool, which does promote a ">".
+  if (rs.gt) return null
   const lt = rs.lt === true
   if (formOf(s) === 'bac')
     return rs.value === null

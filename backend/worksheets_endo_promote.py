@@ -64,6 +64,8 @@ REASON_NO_CARTRIDGE = "the row has no cartridge"
 REASON_PEPTIDE_UNIT = "peptides promote in EU/vial"
 REASON_BAC_UNIT = "bac water promotes in EU/mL"
 REASON_BAD_NUMBERS = "the value, LOQ or LOD does not match the worksheet row"
+REASON_GT = ("a '>' reading is a floor, not a result: it is judged on the worksheet, "
+             "but re-run the vial at a higher dilution for a number to report")
 REASON_UNEXPECTED = "not promoted: an unexpected error, see the server log"
 TYPED = "typed, no reader record"
 
@@ -278,7 +280,16 @@ def _plan(db: Session, worksheet, item, row: EndoPromoteRowIn, ctx) -> dict:
         raise _Refused(REASON_PARENT_HOLDS)
     if item.result_reading is None:
         raise _Refused(REASON_NO_READING)
-    lt, reading = parse_reading(item.result_reading)
+    parsed = parse_reading(item.result_reading)
+    # A ">" says the vial holds AT LEAST this much, so the number is a floor,
+    # not the result. Promoting it would store the floor as an exact value and
+    # the spec engine would judge that floor against the limit, so a ">200"
+    # that may really be 1000 would print CONFORMS. There is no upper-bound
+    # equivalent of the LOQ censor that carries a "<" onto the certificate
+    # (R11), so the worksheet judges it and the bench re-runs for a number.
+    if parsed.gt:
+        raise _Refused(REASON_GT)
+    lt, reading = parsed.lt, parsed.value
     record = item.result_reader
     if record:
         valid, why = reader_validity(record, ctx.run_params)
@@ -360,7 +371,7 @@ def _plan(db: Session, worksheet, item, row: EndoPromoteRowIn, ctx) -> dict:
             "user_id": ctx.user_id, "worksheet_id": worksheet.id, "item_id": item.id,
             "sample_id": item.sample_id, "reading": item.result_reading,
             "reader_test_id": (record.get("test_id")
-                               if record and reader_shows(record, (lt, reading)) else TYPED),
+                               if record and reader_shows(record, parsed) else TYPED),
             "cartridge_type_id": cartridge_id, "cartridge_sensitivity": sensitivity,
             "total_dilution": total, "water_ml": water,
             "value": row.value, "unit": unit, "loq": loq, "lod": row.lod, "lod_unit": LOD_UNIT,
