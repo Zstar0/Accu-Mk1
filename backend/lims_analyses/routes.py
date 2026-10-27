@@ -22,6 +22,7 @@ from database import get_db
 # same module object promote_flow calls.
 from lims_analyses import manage_native, senaite_writeback, service  # noqa: F401
 from lims_analyses.promote_flow import PromoteError, run_promote
+from lims_analyses.result_units import allowed_units, canonical_unit
 from lims_analyses.senaite_writeback import (
     SenaiteWritebackError,
     list_parent_line_states,
@@ -52,7 +53,7 @@ from lims_analyses.schemas import (
     TransitionInfo,
     TransitionRequest,
 )
-from models import AnalysisProfile, LimsSample
+from models import AnalysisProfile, AnalysisService, LimsSample
 from lims_analyses.state_machine import (
     InvalidTransitionError,
     TierMismatchError,
@@ -495,6 +496,19 @@ def transition(
     current_user=Depends(get_current_user),
 ):
     try:
+        result_unit = None
+        if req.result_unit is not None:
+            # Validated here, not in apply_transition: the endotoxin worksheet
+            # calls that directly with its own units. Checked before anything
+            # is written, so a bad unit never commits a result.
+            target = service.get_analysis(db, analysis_id)
+            svc = db.get(AnalysisService, target.analysis_service_id)
+            result_unit = canonical_unit(db, svc, req.result_unit) if svc else None
+            if result_unit is None:
+                allowed = allowed_units(db, svc) if svc else []
+                raise HTTPException(
+                    status_code=422,
+                    detail=f"unit {req.result_unit!r} is not one of {allowed}")
         row = service.apply_transition(
             db,
             analysis_id=analysis_id,
@@ -504,6 +518,7 @@ def transition(
             user_id=getattr(current_user, "id", None),
             method_id=req.method_id,
             instrument_id=req.instrument_id,
+            result_unit=result_unit,
         )
         if req.kind == "submit":
             # Native blend aggregates are calculated, never typed: a slot result
@@ -515,6 +530,8 @@ def transition(
         # side-by-side engine: schedules workflow.engine.run_cascades_bg post-response
         _schedule_sbs_cascade(background_tasks, db, row, current_user)
         return AnalysisResponse.model_validate(row)
+    except HTTPException:
+        raise
     except Exception as e:
         raise _handle_service_error(e)
 

@@ -3920,6 +3920,7 @@ def _serialize_senaite_shape_rows(
     # apply the precedence in Python if this listing ever shows up in a profile.
     from coa.identity_verdict import identity_wire_result
     from coa.spec_rules import display_spec_fields, effective_unit, normalize_matrix
+    from lims_analyses.result_units import UnitChoices, unit_choices
     from models import LimsSample, LimsSubSample
     _vial_pks = {r.lims_sub_sample_pk for r in rows if r.lims_sub_sample_pk}
     _parent_pk_by_vial = dict(db.execute(
@@ -3937,6 +3938,7 @@ def _serialize_senaite_shape_rows(
     # row reaches it through its sub-sample).
     _form_by_sample = {pk: form_id for pk, _, form_id in _sample_facts}
     _spec_cache: dict = {}
+    _unit_cache: dict = {}
 
     out = []
     for r in rows:
@@ -3984,6 +3986,18 @@ def _serialize_senaite_shape_rows(
         if r.provenance == "shadow" and (r.senaite_analysis_uid or "").strip():
             _uid = r.senaite_analysis_uid.strip()
 
+        # Result units (sample forms): a native row reports the units its
+        # test's spec rows allow, defaulting to its sample's form. An
+        # unresulted row shows that default over its seeded result_unit
+        # (vial rows are seeded with the catalog unit); a resulted row keeps
+        # the unit it was entered in. SENAITE-owned rows keep today's unit.
+        _unit = r.result_unit or (svc.unit if svc else None)
+        _choices = UnitChoices([], None)
+        if svc is not None and _uid.startswith("mk1:"):
+            _choices = unit_choices(db, svc, _form_by_sample.get(_host_pk), _unit_cache)
+            if not (r.result_value or "").strip():
+                _unit = _choices.default or _unit
+
         out.append(SenaiteShapeAnalysisResponse(
             uid=_uid,
             keyword=r.keyword,
@@ -3991,7 +4005,9 @@ def _serialize_senaite_shape_rows(
             result=r.result_value,
             result_options=svc_options,
             result_type=getattr(svc, "result_type", None),
-            unit=r.result_unit or (svc.unit if svc else None),
+            unit=_unit,
+            unit_options=_choices.allowed,
+            default_unit=_choices.default,
             method=method_name,
             method_uid=str(r.method_id) if r.method_id else None,
             method_options=method_options,

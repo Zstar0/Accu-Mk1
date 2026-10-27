@@ -99,6 +99,9 @@ class TransitionRequest(BaseModel):
     # slice 2: optional stamping at submit; ignored-forbidden on other kinds
     method_id: Optional[int] = None
     instrument_id: Optional[int] = None
+    # Sample forms: the unit the result is entered in. The route checks it
+    # against the test's allowed units and stores the list's spelling.
+    result_unit: Optional[str] = None
 
 
 class SetReportableRequest(BaseModel):
@@ -332,6 +335,11 @@ class SenaiteShapeAnalysisResponse(BaseModel):
     loq: Optional[float] = None
     lod: Optional[float] = None
     lod_unit: Optional[str] = None
+    # Sample forms (task 8): the units a native row may be reported in (the
+    # catalog unit, then the units of the test's spec rows) and the one the
+    # sample's dosage form defaults to. [] / None on SENAITE-owned rows.
+    unit_options: List[str] = []
+    default_unit: Optional[str] = None
 
 
 # ─── Phase 4a: promote_to_parent response shapes ─────────────────────────────

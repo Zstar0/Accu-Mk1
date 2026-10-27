@@ -93,6 +93,11 @@ class SenaiteAnalysis(BaseModel):
     loq: Optional[float] = None
     lod: Optional[float] = None
     lod_unit: Optional[str] = None
+    # Sample forms (task 8): allowed result units and the form's default.
+    # Mk1-local, same reason as service_origin above: the registry-details
+    # re-type drops undeclared fields. [] / None on the SENAITE read path.
+    unit_options: list[str] = []
+    default_unit: Optional[str] = None
 
 
 class SenaiteAttachment(BaseModel):
