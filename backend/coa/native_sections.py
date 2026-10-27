@@ -250,11 +250,14 @@ def _result_display(spec, result, loq: Optional[float]) -> Optional[str]:
         return None
     if not math.isfinite(value):
         return None
-    # At-or-below the LOQ prints "< LOQ" (Handler ruling 2026-09-14: a result
-    # reported AT the LOQ is the reporting floor, not a quantified figure,
-    # Endotoxin USP85 2.50 vs LOQ 2.5). The verdict still uses the raw number.
+    # At-or-below the LOQ prints "< <LOQ>", e.g. "< 25" (Handler ruling
+    # 2026-09-14: a result reported AT the LOQ is the reporting floor, not a
+    # quantified figure, Endotoxin USP85 2.50 vs LOQ 2.5). The number, not the
+    # word "LOQ", since 2026-10-17 (Handler: another lab read "< LOQ" as
+    # oddly laid out). `:g` is COABuilder's LOQ-column format, so the two
+    # cells always agree. The verdict still uses the raw number.
     # A "<25 EU/vial" result is stored as 25 with LOQ 25 (endo slice 3).
-    return "< LOQ" if value <= loq else None
+    return f"< {loq:g}" if value <= loq else None
 
 
 def _section_footnotes(raw, values: dict) -> list:
@@ -430,7 +433,7 @@ def build_native_sections(db: Session, parent, *, vial_parent_ids=None) -> dict:
                     f"'{svc.keyword}' on {sample_id}: {e.detail}"
                 ) from e
             # The result's own LOQ wins over the spec's (endo slice 3, spec
-            # section 7): it decides "< LOQ" and rides specification.loq, the
+            # section 7): it decides "< <LOQ>" and rides specification.loq, the
             # field coabuilder's LOQ column and the digital COA already read.
             # Range rows only, as _spec_wire_dict publishes it. A row without
             # its own LOQ (every heavy metal) keeps the spec's, byte for byte.

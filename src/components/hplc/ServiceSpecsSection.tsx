@@ -436,7 +436,7 @@ export function ServiceSpecsSection({
                 onChange={v => setForm(f => ({ ...f, loq: v }))}
                 placeholder="e.g. 0.5"
                 tooltip={
-                  'Limit of quantitation in the spec\'s unit. Results below it print as "< LOQ" on the COA; the pass/fail verdict still uses the raw number.'
+                  'Limit of quantitation in the spec\'s unit. Results at or below it print as "<" and the LOQ on the COA (for example "< 0.5"); the pass/fail verdict still uses the raw number.'
                 }
               />
             </>
