@@ -82,11 +82,15 @@ export const VERDICT_TONE: Record<Verdict, string> = {
 /** "<2.5" for a derived value, nothing when there is none. */
 const eu = (lt: boolean | null, v: number | null) => fmtEu(lt === true, v)
 
-/** The peptide spec tier: the Peptide matrix row, else the All row. */
+/** The peptide spec tier: the Peptide matrix row, else the All row. A
+ *  form-scope row also has no matrix, so it is excluded: it is never the All
+ *  tier. (`== null`: older fixtures omit the field.) */
 function peptideTier(
   specs: AnalysisServiceSpecRecord[] | undefined
 ): AnalysisServiceSpecRecord | null {
-  const live = (specs ?? []).filter(s => s.active && s.peptide_id == null)
+  const live = (specs ?? []).filter(
+    s => s.active && s.peptide_id == null && s.sample_form_id == null
+  )
   return (
     live.find(s => s.matrix === 'Peptide') ??
     live.find(s => s.matrix == null) ??
