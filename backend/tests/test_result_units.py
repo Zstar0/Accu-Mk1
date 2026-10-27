@@ -72,10 +72,10 @@ def _form(db, name="Nasal Spray", route="nasal_inhaled"):
     return form
 
 
-def _spec(db, svc, unit, *, form=None, matrix=None, active=True):
+def _spec(db, svc, unit, *, form=None, matrix=None, active=True, max_value="10"):
     row = AnalysisServiceSpec(
         analysis_service_id=svc.id, sample_form_id=form.id if form else None,
-        matrix=matrix, rule_kind="range", max_value=Decimal("10"), unit=unit, active=active)
+        matrix=matrix, rule_kind="range", max_value=Decimal(max_value), unit=unit, active=active)
     db.add(row)
     db.flush()
     return row
@@ -296,3 +296,37 @@ def test_options_survive_the_registry_retype(db):
 
     assert (line.unit, line.default_unit) == ("ppm", "µg/mL")
     assert line.unit_options == ["ppm", "µg/g", "µg/mL"]
+
+
+def _limit_world(db):
+    """A wildcard ppm limit (max 10) and a nasal-spray µg/mL limit (max 0.5)."""
+    svc = _service(db, unit="ppm")
+    nasal = _form(db)
+    _spec(db, svc, "ppm", max_value="10")
+    _spec(db, svc, "µg/mL", form=nasal, max_value="0.5")
+    parent = _sample(db, form=nasal)
+    db.commit()
+    return svc, parent
+
+
+def test_unresulted_row_spec_column_resolves_in_the_displayed_unit(db):
+    """The vial is seeded "ppm", but the row shows the form's µg/mL: the spec
+    column must show the µg/mL limit beside it, not the wildcard's 10 ppm."""
+    svc, parent = _limit_world(db)
+    vial, _ = _vial_row(db, svc, parent, result_unit="ppm")
+
+    (shaped,) = list_analyses_in_senaite_shape(db, host_kind="sub_sample", host_pk=vial.id)
+
+    assert shaped.unit == "µg/mL"
+    assert (shaped.specification["max"], shaped.specification["unit"]) == (0.5, "µg/mL")
+
+
+def test_resulted_row_spec_column_still_resolves_in_its_own_unit(db):
+    svc, parent = _limit_world(db)
+    vial, _ = _vial_row(db, svc, parent, result_unit="ppm", result_value="3")
+
+    (shaped,) = list_analyses_in_senaite_shape(db, host_kind="sub_sample", host_pk=vial.id)
+
+    assert shaped.unit == "ppm"
+    assert (shaped.specification["max"], shaped.specification["unit"]) == (10.0, "ppm")
+    assert shaped.conforms is True

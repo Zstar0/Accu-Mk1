@@ -3944,17 +3944,6 @@ def _serialize_senaite_shape_rows(
     for r in rows:
         svc = services_by_id.get(r.analysis_service_id)
         _host_pk = r.lims_sample_pk or _parent_pk_by_vial.get(r.lims_sub_sample_pk)
-        _spec_fields = display_spec_fields(
-            db, service_id=r.analysis_service_id,
-            matrix=_matrix_by_sample.get(_host_pk),
-            sample_form_id=_form_by_sample.get(_host_pk),
-            peptide_id=r.peptide_id,
-            wire_result=identity_wire_result(
-                db, keyword=r.keyword, result=r.result_value,
-                analysis_service_id=r.analysis_service_id),
-            cache=_spec_cache,
-            unit=effective_unit(r.result_unit, svc.unit if svc else None),
-        )
         method_name = None
         if r.method_id and r.method_id in methods_by_id:
             method_name = getattr(methods_by_id[r.method_id], "name", None)
@@ -3997,6 +3986,19 @@ def _serialize_senaite_shape_rows(
             _choices = unit_choices(db, svc, _form_by_sample.get(_host_pk), _unit_cache)
             if not (r.result_value or "").strip():
                 _unit = _choices.default or _unit
+        # The spec column resolves in the unit shown (a seeded result_unit would
+        # file the row under the wildcard limit beside a form unit).
+        _spec_fields = display_spec_fields(
+            db, service_id=r.analysis_service_id,
+            matrix=_matrix_by_sample.get(_host_pk),
+            sample_form_id=_form_by_sample.get(_host_pk),
+            peptide_id=r.peptide_id,
+            wire_result=identity_wire_result(
+                db, keyword=r.keyword, result=r.result_value,
+                analysis_service_id=r.analysis_service_id),
+            cache=_spec_cache,
+            unit=effective_unit(_unit, svc.unit if svc else None),
+        )
 
         out.append(SenaiteShapeAnalysisResponse(
             uid=_uid,
