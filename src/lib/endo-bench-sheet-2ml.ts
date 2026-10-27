@@ -835,11 +835,13 @@ export function buildEndoBenchSheet2Html(
     }
     const liquid = formOf(s) === 'liquid'
     // The EFFECTIVE water, not just a typed one: a rule's volume is off the
-    // standard too, and the tech reads this sheet to know what to add.
+    // standard too, and the tech reads this sheet to know what to add. The
+    // summary tile counts it for the same reason: a run whose only deviation
+    // came from a rule must not total as "Off the standard: 0".
     const waterR = waterRuled(s)
     const waterOwn = !liquid && k.water !== null && k.water !== reconMl
     if (waterR) tally.ruled++
-    if (!plan.standard || s.waterMl !== null) tally.own++
+    if (!plan.standard || s.waterMl !== null || waterOwn) tally.own++
     if (liquid) tally.liquid++
     if (waterOwn || plan.steps.some(st => st.own)) tally.typed++
     return (

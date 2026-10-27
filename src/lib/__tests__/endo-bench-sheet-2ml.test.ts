@@ -483,6 +483,15 @@ describe('buildEndoBenchSheet2Html', () => {
       // A row at the standard is neither underlined nor marked.
       const plain = buildEndoBenchSheet2Html(doc([row(1)]), { measure })
       expect(plain).toContain('<td class="m r vial">2</td>')
+      // The summary has to agree with the row it is summarising. A run whose
+      // only deviation came from a rule still has one: reading "0" here while
+      // row 1 prints an underlined 3 is how a tech ends up adding 2 mL.
+      expect(html).toContain(
+        '<div class="tile"><dt>Off the standard</dt><dd>1</dd></div>'
+      )
+      expect(plain).toContain(
+        '<div class="tile"><dt>Off the standard</dt><dd>0</dd></div>'
+      )
     })
 
     it('puts an R on a cartridge a rule set', () => {
