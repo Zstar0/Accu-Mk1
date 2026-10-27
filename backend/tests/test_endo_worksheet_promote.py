@@ -814,7 +814,7 @@ def test_numbers_rounded_to_box_3s_three_decimals_still_match(client, db, readin
 
 
 def test_an_exact_row_with_an_loq_far_above_its_value_is_refused(client, db):
-    # The D8 case: an LOQ of 1000 would print "< LOQ" and Pass for 50 EU per vial.
+    # The D8 case: an LOQ of 1000 would print "< 1000" and Pass for 50 EU per vial.
     w = _world(client, db)
     item, vial = _row(db, w, reading="0.1")
     db.commit()

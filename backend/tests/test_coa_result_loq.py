@@ -176,7 +176,7 @@ def test_a_floor_prints_its_qualifier_and_does_not_conform(db_session, monkeypat
     assert (row["result"], row["unit"], row["result_display"], row["conforms"]) == (
         "2500", "EU/vial", "> 2500", False)
     # The LOQ still rides the row and still gets its column; the floor is by
-    # definition above it, so the "< LOQ" rule can never censor the ">" away.
+    # definition above it, so the below-LOQ rule can never censor the ">" away.
     assert row["specification"]["loq"] == 25.0
 
 
