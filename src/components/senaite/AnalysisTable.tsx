@@ -875,6 +875,12 @@ function EditableResultCell({
   const displayLabel = conformsValue
     ? resolveIdentityLabel(analysis.result, conformsValue)
     : resolveResultLabel(analysis.result, options)
+  // An endotoxin ">" result is a floor, not a measurement: the stored number
+  // is what it is at least, and the certificate prints "> 2500". The reviewer
+  // signing the row off has to see the same qualifier. Editing still shows
+  // the bare number, and changing it clears the flag server-side.
+  const shownLabel =
+    analysis.result_floor && displayLabel ? `> ${displayLabel}` : displayLabel
   const calcMarker = calculated && (
     <Tooltip>
       <TooltipTrigger asChild>
@@ -1085,7 +1091,7 @@ function EditableResultCell({
           <span
             className={`text-sm ${hasOptions ? '' : 'font-mono'} ${displayLabel ? 'text-foreground' : 'text-muted-foreground italic'}`}
           >
-            {displayLabel || 'Pending'}
+            {shownLabel || 'Pending'}
           </span>
           <Pencil
             size={12}
@@ -1106,7 +1112,7 @@ function EditableResultCell({
       <span
         className={`text-sm ${hasOptions ? '' : 'font-mono'} ${displayLabel ? 'text-foreground' : 'text-muted-foreground italic'}`}
       >
-        {displayLabel || 'Pending'}
+        {shownLabel || 'Pending'}
       </span>
       {analysis.unit && analysis.unit.toLowerCase() !== 'text' && (
         <span className="text-xs text-muted-foreground ml-1.5">{analysis.unit}</span>

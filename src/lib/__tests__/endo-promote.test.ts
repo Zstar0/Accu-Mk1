@@ -115,6 +115,30 @@ describe('promoteCheck: what an eligible row sends', () => {
     })
   })
 
+  it('a ">" that already fails sends the floor with result_floor', () => {
+    // >5 x 250 x 2 = at least 2500 EU/vial, past the 350 limit: a definitive
+    // failure whatever the true value is, so it reports. The LOQ stays the
+    // run's 25, unlike a "<" where the value and the LOQ are one number.
+    const { item, result } = check({ result_reading: '>5' })
+    expect(result).toEqual({
+      eligible: true,
+      payload: {
+        item_id: item.id,
+        value: 2500,
+        unit: 'EU/vial',
+        loq: 25,
+        lod: 0.05,
+        lod_unit: 'EU/mL',
+        result_floor: true,
+      },
+    })
+    // exactly at the limit still fails: "at least 350" is not a pass
+    expect(check({ result_reading: '>0.7' }).result).toMatchObject({
+      eligible: true,
+      payload: { value: 350, result_floor: true },
+    })
+  })
+
   it('sends a "<" value and its LOQ as one number, and the LOD unrounded', () => {
     // a row's own 0.0025 cartridge: Box 3's 3 decimals would make it 0.003
     const { result } = check({
@@ -194,6 +218,14 @@ describe("promoteCheck: refusals, in spec 5.2's order, with the server's reasons
     // <1 x 250 x 2 = <500 EU/vial: its LOQ 500 is above 350 (it is also off the 0.05 floor)
     expect(reasonOf({ result_reading: '<1' })).toBe(
       'inconclusive: LOQ 500 EU/vial is above the 350 limit'
+    )
+  })
+
+  it('an inconclusive ">": the floor does not reach the limit', () => {
+    // >0.5 x 250 x 2 = 250, under 350: the true value could be either side
+    expect(reasonOf({ result_reading: '>0.5' })).toBe(
+      'inconclusive: a floor of 250 EU/vial does not reach the 350 limit; ' +
+        're-run the vial at a higher dilution for a number'
     )
   })
 

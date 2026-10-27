@@ -347,7 +347,7 @@ def own_promotions_for_source(db: Session, source_analysis_id: int) -> list:
 TRACKED_FIELDS = (
     "result_value", "result_unit", "method_id", "instrument_id",
     "reportable", "reportable_reason", "analyst_user_id", "processed_by_user_id",
-    "retested", "loq", "lod", "lod_unit",
+    "retested", "loq", "lod", "lod_unit", "result_floor",
 )
 
 
@@ -369,10 +369,13 @@ def _deltas(before: dict, row) -> dict:
 def clear_result_limits(row) -> None:
     """Endo slice 3: a result's LOQ and LOD go wherever its value goes. Called
     by every path that clears result_value (reset, both un-promote paths), so
-    a regenerated COA can never print a stale "< LOQ" off a cleared result."""
+    a regenerated COA can never print a stale "< LOQ" off a cleared result.
+    result_floor rides with them: a floor describes one number, so leaving it
+    behind would print "> " in front of its replacement."""
     row.loq = None
     row.lod = None
     row.lod_unit = None
+    row.result_floor = None
 
 
 # ─── Transitions ─────────────────────────────────────────────────────────────
@@ -419,6 +422,7 @@ def apply_transition(
     loq: Optional[float] = None,
     lod: Optional[float] = None,
     lod_unit: Optional[str] = None,
+    result_floor: Optional[bool] = None,
     commit: bool = True,
     preserve_draft: bool = False,
 ) -> LimsAnalysis:
@@ -446,13 +450,15 @@ def apply_transition(
     If any is provided with kind != 'submit', raises BadRequestError up
     front (Task 3, 2026-08-19 bench-stamping slice) — see the guard right
     after the row load.
-    result_unit / loq / lod / lod_unit (endo slice 3): the result's unit and
-    its own limits, filled with the value by the 2 mL worksheet's Promote to
-    Parent (worksheets_endo_promote). Submit-only and applied after the
-    snapshot, like the stamps, so the amendment audit records them. None is
-    a no-op. A submit that changes result_value first clears the old limits
-    (clear_result_limits): they describe the old value, so a hand correction
-    sending none drops them and a fill sending new ones replaces them.
+    result_unit / loq / lod / lod_unit (endo slice 3) and result_floor (the
+    endo ">" certificate slice): the result's unit, its own limits and whether
+    the value is a floor rather than a measurement, filled with the value by
+    the 2 mL worksheet's Promote to Parent (worksheets_endo_promote).
+    Submit-only and applied after the snapshot, like the stamps, so the
+    amendment audit records them. None is a no-op. A submit that changes
+    result_value first clears the old limits (clear_result_limits): they
+    describe the old value, so a hand correction sending none drops them and
+    a fill sending new ones replaces them.
     """
     row = get_analysis(db, analysis_id)
 
@@ -471,8 +477,9 @@ def apply_transition(
             "method_id/instrument_id/processed_by_user_id only apply to kind='submit'"
         )
     if (result_unit is not None or loq is not None or lod is not None
-            or lod_unit is not None) and kind != "submit":
-        raise BadRequestError("result_unit/loq/lod/lod_unit only apply to kind='submit'")
+            or lod_unit is not None or result_floor is not None) and kind != "submit":
+        raise BadRequestError(
+            "result_unit/loq/lod/lod_unit/result_floor only apply to kind='submit'")
 
     from_state = row.review_state
     before = _snapshot(row)
@@ -498,6 +505,8 @@ def apply_transition(
         row.lod = lod
     if lod_unit is not None:
         row.lod_unit = lod_unit
+    if result_floor is not None:
+        row.result_floor = result_floor
 
     if is_terminal(from_state):
         # State machine will also reject this, but we surface a clearer
@@ -873,6 +882,7 @@ def promote_to_parent(
     loq: Optional[float] = None,
     lod: Optional[float] = None,
     lod_unit: Optional[str] = None,
+    result_floor: Optional[bool] = None,
     audit_reason: Optional[str] = None,
     commit: bool = True,
 ) -> Tuple[LimsAnalysis, List["LimsAnalysisPromotion"]]:
@@ -880,6 +890,8 @@ def promote_to_parent(
 
     Endo slice 3: loq / lod / lod_unit are the new parent row's result limits;
     when all three are None the result-bearing source's own are copied.
+    result_floor (the endo ">" certificate slice) rides with them: it says the
+    promoted value is a floor, and it is carried or copied the same way.
     audit_reason, when given, is appended to every transition reason written
     here (for example "promoted from worksheet WS-24 row P-3001-S02").
 
@@ -1151,10 +1163,11 @@ def promote_to_parent(
     # row _carried_result_provenance reads), so a vial filled with its LOQ
     # keeps it when promoted from the sample page. Never mixed: one row's LOQ
     # with another's LOD would describe no result.
-    if loq is None and lod is None and lod_unit is None:
+    if loq is None and lod is None and lod_unit is None and result_floor is None:
         lead = next(source_rows[s["analysis_id"]] for s in sources
                     if s["contribution_kind"] in ("chosen", "aggregated_in"))
         loq, lod, lod_unit = lead.loq, lead.lod, lead.lod_unit
+        result_floor = lead.result_floor
 
     # Promotion mints the parent-tier row in 'parent_to_verify' — it is the
     # submission, not the sign-off. verified_at stays NULL until a reviewer
@@ -1171,6 +1184,7 @@ def promote_to_parent(
         loq=loq,
         lod=lod,
         lod_unit=lod_unit,
+        result_floor=result_floor,
         review_state="parent_to_verify",
         method_id=method_id,
         instrument_id=instrument_id,
@@ -2124,7 +2138,8 @@ def list_analysis_change_events_for_parent(
         where = f" ({vial.sample_id})" if vial else ""
 
         rv = changed.get("result_value")
-        only_result = set(changed) <= {"result_value", "result_unit", "loq", "lod", "lod_unit"}
+        only_result = set(changed) <= {"result_value", "result_unit", "loq", "lod",
+                                       "lod_unit", "result_floor"}
         if rv and rv["before"] is None and rv["after"] is not None and only_result:
             event = "result_entered"
             label = f"Result entered — {a.title}: {rv['after']}{where}"
@@ -3950,6 +3965,7 @@ def _serialize_senaite_shape_rows(
                 analysis_service_id=r.analysis_service_id),
             cache=_spec_cache,
             unit=effective_unit(r.result_unit, svc.unit if svc else None),
+            floor=bool(r.result_floor),
         )
         method_name = None
         if r.method_id and r.method_id in methods_by_id:
@@ -4019,6 +4035,7 @@ def _serialize_senaite_shape_rows(
             loq=r.loq,
             lod=r.lod,
             lod_unit=r.lod_unit,
+            result_floor=r.result_floor,
             **_spec_fields,
         ))
     return out

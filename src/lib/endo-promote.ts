@@ -44,7 +44,8 @@ const shown = (v: number): number => Number(fmt(v))
  * the unit the sample's form allows, then usable numbers. A "<" result sends
  * its LOQ as its value (the same number, so the server's value == loq check
  * holds exactly); `lod` is the row's cartridge sensitivity as stored, never
- * rounded.
+ * rounded. A ">" reading sends the floor with `result_floor`, and only when
+ * it already fails: an inconclusive floor is refused here and by the server.
  */
 export function promoteCheck(
   row: EndoRow,
@@ -70,9 +71,15 @@ export function promoteCheck(
   const value = raw === null ? null : shown(raw)
   const loqRaw = bac ? k.loqMl : k.loqVial
   const loq = rs.lt ? value : loqRaw === null ? null : shown(loqRaw)
+  const limit = bac ? BW_LIMIT_EU_PER_ML : LIMIT_EU_PER_VIAL
   if (rs.verdict === 'inconclusive')
     return no(
-      `inconclusive: LOQ ${fmt(loq)} ${unit} is above the ${fmt(bac ? BW_LIMIT_EU_PER_ML : LIMIT_EU_PER_VIAL)} limit`
+      rs.gt
+        ? // A floor reports only when it already fails, so there is nothing to
+          // say about one that stops short of the limit. Mirrors the server
+          // (worksheets_endo_promote.REASON_GT).
+          `inconclusive: a floor of ${fmt(value)} ${unit} does not reach the ${fmt(limit)} limit; re-run the vial at a higher dilution for a number`
+        : `inconclusive: LOQ ${fmt(loq)} ${unit} is above the ${fmt(limit)} limit`
     )
   if (rs.floorMismatch)
     return no(
@@ -102,6 +109,11 @@ export function promoteCheck(
       loq,
       lod,
       lod_unit: 'EU/mL',
+      // The value is a floor, not a measurement: the certificate prints
+      // "> value" and the spec engine judges it as "at least this much". The
+      // server checks this against the stored reading, as it does the value.
+      // Sent only when true, so an ordinary result's body is unchanged.
+      ...(rs.gt ? { result_floor: true } : {}),
     },
   }
 }
