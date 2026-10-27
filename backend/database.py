@@ -2261,7 +2261,7 @@ def _run_migrations():
         "INTEGER REFERENCES lims_sample_forms(id)",
         """
         UPDATE lims_samples SET sample_form_id = (SELECT id FROM lims_sample_forms WHERE is_default LIMIT 1)
-        WHERE sample_form_id IS NULL AND sample_type_title IN ('Peptide', 'Peptide Blend')
+        WHERE sample_form_id IS NULL AND btrim(sample_type_title) IN ('Peptide', 'Peptide Blend')
         """,
         # Model column lands with the resolver task; the ALTER lives here so the
         # ordering after the table create is fixed in one place.
