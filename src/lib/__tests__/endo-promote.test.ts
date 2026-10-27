@@ -225,6 +225,7 @@ describe("promoteCheck: refusals, in spec 5.2's order, with the server's reasons
     // >0.5 x 250 x 2 = 250, under 350: the true value could be either side
     expect(reasonOf({ result_reading: '>0.5' })).toBe(
       'inconclusive: a floor of 250 EU/vial does not reach the 350 limit; ' +
+        "a '>' reading reports only when the floor itself already fails, so " +
         're-run the vial at a higher dilution for a number'
     )
   })

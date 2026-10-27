@@ -445,6 +445,31 @@ def test_a_gt_reading_that_already_fails_promotes_as_a_floor(client, db, reading
     assert audit.details["result_floor"] is True
 
 
+def test_bac_water_promotes_a_floor_in_its_own_unit(client, db):
+    """Bac water has its own unit, its own spec (0 to 0.25 EU/mL) and scale=1:
+    the reading IS the result, the instrument having applied the 20x. ">20"
+    against 0.25 is a definitive failure by a wide margin."""
+    w = _world(client, db)
+    item, _ = _row(db, w, "BW-0200-S01", sample_type="Bacteriostatic Water", reading=">20",
+                   cartridge=w.c01)
+    db.commit()
+    [res] = _results(_promote(client, w.ws,
+                              _line(item, 20, unit="EU/mL", loq=0.2, lod=0.01,
+                                    result_floor=True)))
+    assert res["promoted"] is True, res
+    [parent] = _parent_rows(db, "BW-0200")
+    assert (parent.result_value, parent.result_unit, parent.result_floor,
+            parent.loq) == ("20", "EU/mL", True, 0.2)
+    # And a bac water floor under its own limit is refused, in EU/mL.
+    under, _ = _row(db, w, "BW-0201-S01", sample_type="Bacteriostatic Water", reading=">0.1",
+                    cartridge=w.c01)
+    db.commit()
+    assert _results(_promote(client, w.ws, _line(under, 0.1, unit="EU/mL", loq=0.2, lod=0.01,
+                                                 result_floor=True))) == [
+        _refused(under, "inconclusive: a floor of 0.1 EU/mL does not reach the "
+                        f"0.25 limit; {worksheets_endo_promote.REASON_GT}")]
+
+
 def test_a_gt_reading_under_the_limit_is_refused_as_inconclusive(client, db):
     """A floor that stops short of the limit says nothing: the true value may
     be either side of it. Refused, with the re-run instruction."""
