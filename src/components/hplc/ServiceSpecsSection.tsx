@@ -506,8 +506,9 @@ export function ServiceSpecsSection({
           {form.ruleKind === 'informational' && (
             <Field label="" className="flex-1 min-w-40">
               <p className="text-xs text-muted-foreground pt-1.5">
-                No verdict. The measured value prints as-is with a neutral
-                status. Use Display override below for optional spec-cell text.
+                No verdict. The measured value prints with a neutral status; at
+                or below the LOQ it prints as below the LOQ. Use Display
+                override below for optional spec-cell text.
               </p>
             </Field>
           )}

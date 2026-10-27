@@ -18,6 +18,8 @@ import userEvent from '@testing-library/user-event'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { AnalysisTable } from '@/components/senaite/AnalysisTable'
 import type { SenaiteAnalysis } from '@/lib/api'
+import type * as ApiModule from '@/lib/api'
+import type * as SidebarModule from '@/components/ui/sidebar'
 
 // Radix Select's trigger calls hasPointerCapture on pointerdown; jsdom lacks it.
 window.HTMLElement.prototype.hasPointerCapture = vi.fn()
@@ -34,8 +36,7 @@ Object.defineProperty(window, 'IntersectionObserver', {
 })
 
 vi.mock('@/components/ui/sidebar', async importOriginal => {
-  const actual =
-    await importOriginal<typeof import('@/components/ui/sidebar')>()
+  const actual = await importOriginal<typeof SidebarModule>()
   return {
     ...actual,
     useSidebar: () => ({
@@ -51,7 +52,7 @@ vi.mock('@/components/ui/sidebar', async importOriginal => {
 })
 
 vi.mock('@/lib/api', async importOriginal => {
-  const actual = await importOriginal<typeof import('@/lib/api')>()
+  const actual = await importOriginal<typeof ApiModule>()
   return {
     ...actual,
     setAnalysisResult: vi.fn().mockResolvedValue({
