@@ -32,6 +32,10 @@ const NATIVE_ENDO_KEYWORD = 'ENDOTOXIN-USP85LAL'
 const OPEN_STATES = ['unassigned', 'assigned', 'to_be_verified']
 /** Box 3 shows no checkbox at all for these rows (spec 5.1). */
 export const SENAITE_BORN = 'manual entry: SENAITE-born endotoxin'
+/** worksheets_endo_promote.REASON_GT, byte for byte. */
+const REASON_GT =
+  "a '>' reading reports only when the floor itself already fails, so " +
+  're-run the vial at a higher dilution for a number'
 
 const no = (reason: string): PromoteCheck => ({ eligible: false, reason })
 
@@ -76,9 +80,8 @@ export function promoteCheck(
     return no(
       rs.gt
         ? // A floor reports only when it already fails, so there is nothing to
-          // say about one that stops short of the limit. Mirrors the server
-          // (worksheets_endo_promote.REASON_GT).
-          `inconclusive: a floor of ${fmt(value)} ${unit} does not reach the ${fmt(limit)} limit; re-run the vial at a higher dilution for a number`
+          // say about one that stops short of the limit.
+          `inconclusive: a floor of ${fmt(value)} ${unit} does not reach the ${fmt(limit)} limit; ${REASON_GT}`
         : `inconclusive: LOQ ${fmt(loq)} ${unit} is above the ${fmt(limit)} limit`
     )
   if (rs.floorMismatch)
