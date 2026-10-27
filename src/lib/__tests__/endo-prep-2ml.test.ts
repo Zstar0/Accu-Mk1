@@ -76,6 +76,73 @@ const BW = (o: Partial<EndoSample> = {}) =>
     ...o,
   })
 
+describe('calc.test.js test 10: a ">" reading is judged as "at least this much"', () => {
+  // Handler ruling 2026-10-26, ported from Dennis's d1fdacc. A ">" is above
+  // the cartridge's top standard, so the number is a floor: a fail once that
+  // floor already clears the limit, inconclusive under it. It can never pass.
+  it('parses a ">" and keeps it on the reading', () => {
+    expect(parseReading('>5')).toEqual({ lt: false, gt: true, value: 5 })
+    expect(parseReading('<0.05')).toEqual({ lt: true, gt: false, value: 0.05 })
+    expect(parseReading('0.3')).toEqual({ lt: false, gt: false, value: 0.3 })
+    expect(fmtEu(false, 2500, true)).toBe('>2500')
+    expect(fmtEu(true, 25)).toBe('<25')
+    expect(fmtEu(false, 7)).toBe('7')
+  })
+
+  it('fails a vial whose floor already clears 350 EU/vial', () => {
+    // the 0.05 tops out at 5 x 250 x 2 = 2500 EU/vial, far over the limit
+    const r = prep2Result(pep2(10, { reading: '>5' }), ctx)
+    expect([r.gt, r.euPerVial, r.verdict]).toEqual([true, 2500, 'fail'])
+  })
+
+  it('is inconclusive when the floor is under the limit', () => {
+    // the 0.005 tops out at 0.5 x 250 x 2 = 250, under 350: proves nothing
+    const r = prep2Result(pep2(10, { reading: '>0.5', lambda: 0.005 }), ctx)
+    expect([r.euPerVial, r.verdict]).toEqual([250, 'inconclusive'])
+  })
+
+  it('fails exactly at the limit, since "at least 350" is not a pass', () => {
+    // 0.7 x 250 x 2 = 350 exactly: ">=" so it fails, where a plain 0.7 passes
+    expect(prep2Result(pep2(10, { reading: '>0.7' }), ctx).verdict).toBe('fail')
+    expect(prep2Result(pep2(10, { reading: '0.7' }), ctx).verdict).toBe('pass')
+    // a hair under stays inconclusive
+    expect(prep2Result(pep2(10, { reading: '>0.6' }), ctx).verdict).toBe(
+      'inconclusive'
+    )
+  })
+
+  it('fails bac water the same way, against 0.25 EU/mL', () => {
+    const r = prep2Result(BW({ reading: '>20' }), ctx)
+    expect([r.gt, r.verdict]).toEqual([true, 'fail'])
+    expect(prep2Result(BW({ reading: '>0.1' }), ctx).verdict).toBe(
+      'inconclusive'
+    )
+  })
+
+  it('sends the floor to Accu-Mk1 with its ">" kept, like Dennis', () => {
+    // Mk1 stores it AS a floor (lims_analyses.result_floor), so the spec
+    // engine judges "at least this much" instead of taking the number for a
+    // measurement; the certificate then prints "> 2500". Whether it may be
+    // promoted at all is the eligibility gate's answer, not this function's.
+    expect(mk1Value(pep2(10, { reading: '>5' }), ctx)).toEqual({
+      value: '>2500',
+      unit: 'EU/vial',
+      verdict: 'fail',
+    })
+    expect(mk1Value(BW({ reading: '>20' }), ctx)).toEqual({
+      value: '>20',
+      unit: 'EU/mL',
+      verdict: 'fail',
+    })
+    // an inconclusive floor still shows its number; only promote refuses it
+    expect(mk1Value(pep2(10, { reading: '>0.5', lambda: 0.005 }), ctx)).toEqual(
+      { value: '>250', unit: 'EU/vial', verdict: 'inconclusive' }
+    )
+    // the "<" path is untouched
+    expect(mk1Value(pep2(10, { reading: '<0.05' }), ctx)).not.toBeNull()
+  })
+})
+
 describe('calc.test.js:533 2 mL prep: the factor, what is on the cartridge, MVD, MVC, floors', () => {
   it('matches Dennis', () => {
     // RECON_ML and DILUTION_2ML are the method's run parameters now. prepOf and
@@ -668,8 +735,8 @@ describe('calc.test.js:879 bac water on 2 mL runs: 0.25 EU/mL, a clean run reads
     )
     // typed at factor 1 by mistake: <0.01 is not this prep's floor
     expect(prep2Result(BW({ reading: '<0.01' }), ctx).floorMismatch).toBe(true)
-    expect(judgeWater(false, 0.2)).toBe('pass')
-    expect(judgeWater(true, 0.5)).toBe('inconclusive')
+    expect(judgeWater(false, 0.2, false)).toBe('pass')
+    expect(judgeWater(true, 0.5, false)).toBe('inconclusive')
     // his prepareRun strings: limitPerMl "0.25", limitPerVial ""
     expect(fmt(clean.limitPerMl)).toBe('0.25')
     expect(fmt(clean.limitPerVial)).toBe('')
@@ -836,19 +903,19 @@ describe('calc.test.js:210 MVC is lambda over the row limit per mg', () => {
 
 describe('calc.test.js:352 parseResult -> parseReading, keeping the <', () => {
   it('matches Dennis (no raw; unparseable text is null)', () => {
-    expect(parseReading('<2.5')).toEqual({ lt: true, value: 2.5 })
-    expect(parseReading(' < 2.5 ')).toEqual({ lt: true, value: 2.5 })
-    expect(parseReading('0.8')).toEqual({ lt: false, value: 0.8 })
-    expect(parseReading('.5')).toEqual({ lt: false, value: 0.5 })
+    expect(parseReading('<2.5')).toEqual({ lt: true, gt: false, value: 2.5 })
+    expect(parseReading(' < 2.5 ')).toEqual({ lt: true, gt: false, value: 2.5 })
+    expect(parseReading('0.8')).toEqual({ lt: false, gt: false, value: 0.8 })
+    expect(parseReading('.5')).toEqual({ lt: false, gt: false, value: 0.5 })
     expect(parseReading('')).toBeNull()
     expect(parseReading(null)).toBeNull()
     expect(parseReading('n/a')).toBeNull() // his { lt: false, value: null, raw }
   })
 
   it('RF2: the readings the backend accepts, and nothing else', () => {
-    expect(parseReading('< 0.05')).toEqual({ lt: true, value: 0.05 })
-    expect(parseReading(' 0.8 ')).toEqual({ lt: false, value: 0.8 })
-    expect(parseReading('0')).toEqual({ lt: false, value: 0 })
+    expect(parseReading('< 0.05')).toEqual({ lt: true, gt: false, value: 0.05 })
+    expect(parseReading(' 0.8 ')).toEqual({ lt: false, gt: false, value: 0.8 })
+    expect(parseReading('0')).toEqual({ lt: false, gt: false, value: 0 })
     for (const bad of ['0,8', '-1', '<0', 'abc', ''])
       expect(parseReading(bad)).toBeNull()
   })
@@ -858,9 +925,9 @@ describe('calc.test.js:352 parseResult -> parseReading, keeping the <', () => {
     const at41 = '0.' + '0'.repeat(38) + '1'
     expect(at40).toHaveLength(40)
     expect(at41).toHaveLength(41)
-    expect(parseReading(at40)).toEqual({ lt: false, value: 1e-38 })
+    expect(parseReading(at40)).toEqual({ lt: false, gt: false, value: 1e-38 })
     expect(parseReading(at41)).toBeNull()
-    expect(parseReading(`  ${at40}  `)).toEqual({ lt: false, value: 1e-38 })
+    expect(parseReading(`  ${at40}  `)).toEqual({ lt: false, gt: false, value: 1e-38 })
     expect(parseReading('1'.repeat(400))).toBeNull() // would be Infinity
   })
 })

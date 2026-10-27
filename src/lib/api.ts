@@ -4491,6 +4491,9 @@ export interface SenaiteAnalysis {
   loq?: number | null
   lod?: number | null
   lod_unit?: string | null
+  /** `result` is a floor ("at least this much"), not a measurement: an
+   *  endotoxin ">" reading. The certificate prints "> result". */
+  result_floor?: boolean | null
 }
 
 /** The COA wire `specification` dict (backend coa.native_sections). */
@@ -6821,6 +6824,9 @@ export interface EndoPromoteRowIn {
   loq: number
   lod: number
   lod_unit: string
+  /** The value is a floor (a ">" reading), not a measurement. The server
+   *  checks it against the stored reading, as it does the value. */
+  result_floor?: boolean
 }
 
 /** A row's outcome: promoted, with the parent result's id and state, or
