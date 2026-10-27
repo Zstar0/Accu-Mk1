@@ -2944,6 +2944,8 @@ export interface AnalysisServiceSpecRecord {
   matrix: string | null
   peptide_id: number | null
   peptide_code: string | null
+  sample_form_id: number | null
+  sample_form_name: string | null
   rule_kind: 'range' | 'equals' | 'informational'
   min_value: string | null
   max_value: string | null
@@ -2958,6 +2960,7 @@ export interface AnalysisServiceSpecRecord {
 export interface ServiceSpecPayload {
   matrix?: string | null
   peptide_id?: number | null
+  sample_form_id?: number | null
   rule_kind: 'range' | 'equals' | 'informational'
   min_value?: string | null
   max_value?: string | null

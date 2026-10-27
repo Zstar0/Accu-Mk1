@@ -1,8 +1,13 @@
-import { describe, it, expect, vi } from 'vitest'
+import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { render, screen, waitFor, within, fireEvent } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
-import { ServiceSpecsSection } from '@/components/hplc/ServiceSpecsSection'
+import {
+  ServiceSpecsSection,
+  ruleLabel,
+  tierChip,
+} from '@/components/hplc/ServiceSpecsSection'
 import type { AnalysisServiceSpecRecord } from '@/lib/api'
+import type { SampleForm } from '@/lib/api-sample-forms'
 
 vi.mock('sonner', () => ({ toast: { error: vi.fn(), success: vi.fn() } }))
 
@@ -17,6 +22,8 @@ const { specs } = vi.hoisted(() => {
       matrix: null,
       peptide_id: null,
       peptide_code: null,
+      sample_form_id: null,
+      sample_form_name: null,
       rule_kind: 'range',
       min_value: null,
       max_value: '0.5',
@@ -33,6 +40,8 @@ const { specs } = vi.hoisted(() => {
       matrix: 'Peptide',
       peptide_id: null,
       peptide_code: null,
+      sample_form_id: null,
+      sample_form_name: null,
       rule_kind: 'equals',
       min_value: null,
       max_value: null,
@@ -55,6 +64,34 @@ vi.mock('@/lib/api', async importOriginal => {
     createServiceSpec: vi.fn(),
     patchServiceSpec: vi.fn(),
   }
+})
+
+const form = (
+  id: number,
+  name: string,
+  over: Partial<SampleForm> = {}
+): SampleForm => ({
+  id,
+  name,
+  route: 'injectable',
+  is_default: false,
+  active: true,
+  sort_order: id,
+  sample_count: 0,
+  ...over,
+})
+
+vi.mock('@/lib/api-sample-forms', () => ({
+  listSampleForms: vi.fn(),
+}))
+
+beforeEach(async () => {
+  const { listSampleForms } = await import('@/lib/api-sample-forms')
+  vi.mocked(listSampleForms).mockResolvedValue([
+    form(1, 'Vial', { is_default: true }),
+    form(7, 'Nasal Spray', { route: 'nasal_inhaled' }),
+    form(9, 'Old Form', { active: false }),
+  ])
 })
 
 describe('ServiceSpecsSection', () => {
@@ -165,21 +202,21 @@ describe('ServiceSpecsSection', () => {
 
   it('informational rule sends all-null bounds and enables Add Spec with no fields filled', async () => {
     const { createServiceSpec } = await import('@/lib/api')
+    vi.mocked(createServiceSpec).mockClear()
     const user = userEvent.setup()
     render(<ServiceSpecsSection serviceId={42} peptides={[]} />)
     await screen.findByText('Specs (2)')
 
     // Type bounds first so the payload gate (not empty strings) is what
-    // nulls them after the Rule switch — same discipline as the equals test.
+    // nulls them after the Rule switch, same discipline as the equals test.
     await user.type(screen.getByLabelText('Max'), '100')
-    await user.type(screen.getByLabelText('LOQ'), '0.5')
 
     fireEvent.click(screen.getByRole('combobox', { name: 'Rule' }))
     fireEvent.click(await screen.findByRole('option', { name: 'Report as measured' }))
 
-    // Bounds inputs unmount; the helper note explains the no-verdict shape.
+    // Bounds inputs unmount; LOQ stays (report-only rows may carry one).
     expect(screen.queryByLabelText('Max')).not.toBeInTheDocument()
-    expect(screen.queryByLabelText('LOQ')).not.toBeInTheDocument()
+    expect(screen.getByLabelText('LOQ')).toBeInTheDocument()
 
     await user.click(screen.getByRole('button', { name: /add spec/i }))
 
@@ -195,6 +232,129 @@ describe('ServiceSpecsSection', () => {
         })
       )
     })
+  })
+
+  it('report-only shows LOQ input and posts loq', async () => {
+    const { createServiceSpec } = await import('@/lib/api')
+    vi.mocked(createServiceSpec).mockClear()
+    const user = userEvent.setup()
+    render(<ServiceSpecsSection serviceId={42} peptides={[]} />)
+    await screen.findByText('Specs (2)')
+
+    fireEvent.click(screen.getByRole('combobox', { name: 'Rule' }))
+    fireEvent.click(
+      await screen.findByRole('option', { name: 'Report as measured' })
+    )
+
+    await user.type(screen.getByLabelText('LOQ'), '3.2')
+    await user.click(screen.getByRole('button', { name: /add spec/i }))
+
+    await waitFor(() => {
+      expect(createServiceSpec).toHaveBeenCalledWith(
+        42,
+        expect.objectContaining({
+          rule_kind: 'informational',
+          min_value: null,
+          max_value: null,
+          equals_value: null,
+          loq: '3.2',
+        })
+      )
+    })
+  })
+
+  it('form tier posts sample_form_id and no matrix', async () => {
+    const { createServiceSpec } = await import('@/lib/api')
+    vi.mocked(createServiceSpec).mockClear()
+    const user = userEvent.setup()
+    render(<ServiceSpecsSection serviceId={42} peptides={[]} />)
+    await screen.findByText('Specs (2)')
+
+    fireEvent.click(screen.getByRole('combobox', { name: 'Tier' }))
+    fireEvent.click(await screen.findByRole('option', { name: 'Form' }))
+
+    // Add stays disabled until a form is picked.
+    await user.type(screen.getByLabelText('Max'), '5')
+    const addButton = screen.getByRole('button', { name: /add spec/i })
+    expect(addButton).toBeDisabled()
+
+    fireEvent.click(screen.getByRole('combobox', { name: 'Form' }))
+    // Inactive forms stay pickable, flagged.
+    expect(
+      await screen.findByRole('option', { name: 'Old Form (inactive)' })
+    ).toBeInTheDocument()
+    fireEvent.click(screen.getByRole('option', { name: 'Nasal Spray' }))
+
+    await waitFor(() => expect(addButton).not.toBeDisabled())
+    await user.click(addButton)
+
+    await waitFor(() => {
+      expect(createServiceSpec).toHaveBeenCalledWith(
+        42,
+        expect.objectContaining({
+          sample_form_id: 7,
+          matrix: null,
+          peptide_id: null,
+        })
+      )
+    })
+  })
+
+  it('non-form tiers send sample_form_id: null', async () => {
+    const { createServiceSpec } = await import('@/lib/api')
+    vi.mocked(createServiceSpec).mockClear()
+    const user = userEvent.setup()
+    render(<ServiceSpecsSection serviceId={42} peptides={[]} />)
+    await screen.findByText('Specs (2)')
+
+    await user.type(screen.getByLabelText('Max'), '5')
+    await user.click(screen.getByRole('button', { name: /add spec/i }))
+
+    await waitFor(() => {
+      expect(createServiceSpec).toHaveBeenCalledWith(
+        42,
+        expect.objectContaining({ sample_form_id: null })
+      )
+    })
+  })
+
+  it('tier chip shows the form name', async () => {
+    const { listServiceSpecs } = await import('@/lib/api')
+    const base = specs.find(s => s.id === 1)
+    if (!base) throw new Error('expected the range spec fixture')
+    const formSpec: AnalysisServiceSpecRecord = {
+      ...base,
+      id: 4,
+      sample_form_id: 7,
+      sample_form_name: 'Nasal Spray',
+    }
+    expect(tierChip(formSpec)).toBe('Nasal Spray')
+    expect(tierChip({ ...formSpec, peptide_code: 'BPC-157' })).toBe('BPC-157')
+
+    vi.mocked(listServiceSpecs).mockResolvedValueOnce([formSpec])
+    render(<ServiceSpecsSection serviceId={42} peptides={[]} />)
+    const row = (await screen.findAllByRole('row'))[1]
+    if (!row) throw new Error('expected a data row')
+    expect(within(row).getByText('Nasal Spray')).toBeInTheDocument()
+  })
+
+  it('ruleLabel informational with loq reads "As measured · LOQ 3.2"', () => {
+    const base = specs[0]
+    if (!base) throw new Error('expected a spec fixture')
+    const info = {
+      ...base,
+      rule_kind: 'informational' as const,
+      max_value: null,
+    }
+    expect(ruleLabel({ ...info, loq: '3.2' })).toBe('As measured · LOQ 3.2')
+    expect(ruleLabel({ ...info, loq: '3.2', display_override: 'ND' })).toBe(
+      'As measured · LOQ 3.2 · ND'
+    )
+    // No loq: unchanged (ServiceEndoJudgedPanel passes loq: null).
+    expect(ruleLabel({ ...info, loq: null })).toBe('As measured')
+    expect(ruleLabel({ ...info, loq: null, display_override: 'ND' })).toBe(
+      'As measured · ND'
+    )
   })
 
   it('shows LOQ in the read-only spec row summary when set', async () => {

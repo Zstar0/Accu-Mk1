@@ -31,6 +31,8 @@ const spec = (
   matrix: 'Peptide',
   peptide_id: null,
   peptide_code: null,
+  sample_form_id: null,
+  sample_form_name: null,
   rule_kind: 'range',
   min_value: null,
   max_value: '5',
