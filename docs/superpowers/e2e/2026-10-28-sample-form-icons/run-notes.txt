@@ -73,3 +73,18 @@ and dark (the panel is always dark).
 16b Sample header before the move
 17 Sample header after the move
 18 Registry debug panel title bar with the badge, three-way override and provenance line
+
+Photo column + Flag/Watch move (2026-10-28, stack sforms, Accu-Mk1 read source on):
+The vial photo is pinned to the right of the header and spans every row; Flag/Watch moved from the
+top row to the end of the actions row (after Actions); the SLA lines moved from the left of the
+actions row to the top right, where Flag/Watch used to sit, to make room. The stack has no vial
+photos or received dates, so the run served a portrait test photo for the photo endpoint and set a
+received date on stack P-0148 (so its SLA lines render). The header is capped at 1104px wide on any
+screen. P-0148, unflagged: header 207px -> 148px, actions row on one line with 24px to spare.
+Flagged (one open blocker served for the flags call): the flag pill wraps to a second line, header
+189px. Vial page P-0144-S01: 203px -> 198px (its height comes from the vial priority control).
+Hover zoom on the photo still opens 360px wide from the photo's top-right corner.
+18b Sample header before (photo sets the top row at 127px)
+19 Sample header after, dark, unflagged
+20 Sample header after, light
+21 Flagged sample: the flag pill wraps to a second line

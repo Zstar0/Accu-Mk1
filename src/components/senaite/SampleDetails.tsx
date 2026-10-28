@@ -5183,8 +5183,10 @@ export function SampleDetails() {
           </div>
         )}
 
-        {/* Sample ID + counters + progress */}
-        <div className="flex items-start justify-between gap-x-4 gap-y-2 flex-wrap">
+        {/* Sample ID + counters + progress. The vial photo (below) is pinned
+            to the right edge and spans every row; the right padding only
+            applies while it renders, so photo-less samples keep the width. */}
+        <div className="relative flex items-start justify-between gap-x-4 gap-y-2 flex-wrap has-[>.header-vial-photo]:pr-28">
           <div className="flex items-center gap-4">
             <div className="flex items-center justify-center w-11 h-11 rounded-xl bg-gradient-to-br from-violet-600/20 to-violet-500/5 border border-violet-500/30 dark:border-violet-500/20">
               <FlaskConical
@@ -5466,21 +5468,14 @@ export function SampleDetails() {
             </div>
           )}
 
-          {/* Flag System (Plan 4): stateful flag button, right-aligned (ml-auto)
-              so it sits next to the thumbnail in the justify-between row. Parent
-              pages aggregate their vials' flags; vial pages flag just this vial. */}
-          {flagEntityId && (
-            <div className="flex items-start ml-auto">
-              <EntityFlagButton
-                entityType={flagEntityType}
-                entityId={flagEntityId}
-                includeDescendants={isParent}
-                size="lg"
-              />
-            </div>
-          )}
+          {/* SLA — top right, one indicator per line so multi-tier samples
+              don't run a long inline string. empty:hidden drops the slot when
+              there's no SLA to show. */}
+          <div className="text-xs text-muted-foreground empty:hidden">
+            <SampleHeaderSla lookup={data} />
+          </div>
 
-          {/* Vial photo — far right of the top row, hover to enlarge.
+          {/* Vial photo — pinned right, spanning the whole header, hover to enlarge.
               Vial pages: photo presence comes from the parent summary's vial
               record. Parent pages: the parent IS vial 1, and the photo endpoint
               falls back to the parent AR's last attachment for non-sub-sample
@@ -5505,8 +5500,10 @@ export function SampleDetails() {
                   key={vialPhotoVersion}
                   sampleId={data.sample_id}
                   hasPhoto={hasPhoto}
-                  // self-stretch: span the full height of the header's top row
-                  sizeClass="self-stretch w-24 min-h-16"
+                  // Absolute: fills the header's full height without its own
+                  // aspect ratio ever setting that height. The marker class
+                  // turns on the container's right padding (has-[]).
+                  sizeClass="header-vial-photo absolute inset-y-0 right-0 w-24"
                   hoverZoom
                   hideWhenEmpty
                 />
@@ -5534,21 +5531,12 @@ export function SampleDetails() {
             </div>
           )}
 
-          {/* SLA + actions row — w-full wraps below the top row. The SLA
-              lines (moved out of the left block) sit on the left, indented
-              to align under the header text; the action buttons take the
-              remaining width, which is enough for a single line. Stays in
-              the sticky band so the actions are available while scrolling. */}
-          <div className="w-full flex items-end justify-between gap-3">
-            <div className="text-xs text-muted-foreground pl-[3.75rem] shrink-0">
-              {/* Priority and Form moved to the Sample Info card (2026-10-28,
-                  header clean-up). Vial pages keep their vial-level priority
-                  control above; the sample-level one never had a registry row
-                  to write against there. */}
-              {/* SLA — stacked one indicator per line so multi-tier samples
-                don't run a long inline string. */}
-              <SampleHeaderSla lookup={data} />
-            </div>
+          {/* Actions row — w-full wraps below the top row; Flag/Watch close it
+              on the right. Stays in the sticky band so the actions are
+              available while scrolling. Header clean-up 2026-10-28: the SLA
+              lines moved to the top row, Priority and Form to the Sample
+              Info card (vial pages keep their vial-level priority above). */}
+          <div className="w-full flex justify-end">
             <div className="flex items-center justify-end gap-1 flex-wrap">
               <Button
                 variant="outline"
@@ -5771,9 +5759,18 @@ export function SampleDetails() {
                   )}
                 </>
               )}
+              {/* Flag System (Plan 4): stateful flag button. Parent pages
+                  aggregate their vials' flags; vial pages flag just this vial. */}
+              {flagEntityId && (
+                <EntityFlagButton
+                  entityType={flagEntityType}
+                  entityId={flagEntityId}
+                  includeDescendants={isParent}
+                />
+              )}
             </div>
           </div>
-          {/* end: SLA + actions row */}
+          {/* end: actions row */}
 
           {/* Progress bar + legend — w-full forces wrap to bottom row */}
           {countableTotal > 0 && (
