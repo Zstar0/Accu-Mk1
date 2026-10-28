@@ -62,3 +62,14 @@ from SENAITE.)
 14 Sample page, dark: header without the two controls, Sample Info card with them
 15 Sample Info card, light
 16 Vial page header
+
+Read-source controls move (2026-10-28, stack sforms, 1690px, Accu-Mk1 read source on):
+The "Read from Accu-Mk1" badge, the Follow default / SENAITE / Accu-Mk1 override and the
+"reading basic-info from Accu-Mk1 - N/M fields" line moved from the sample page header into the
+registry debug panel (admin). The panel's old two-way SENAITE / Accu-Mk1 switch is replaced by the
+three-way one, so Follow default is reachable again. Parent pages only; a vial page passes nothing.
+P-0148 header row: 158px before, 144px after (title column 83px -> 70px). Panel checked in light
+and dark (the panel is always dark).
+16b Sample header before the move
+17 Sample header after the move
+18 Registry debug panel title bar with the badge, three-way override and provenance line

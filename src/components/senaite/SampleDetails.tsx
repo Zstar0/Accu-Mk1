@@ -230,8 +230,6 @@ import { ROLE_COLOR_TEXT, roleColorForCode } from '@/lib/role-display'
 import { SamplePrepHplcFlyout } from '@/components/hplc/SamplePrepHplcFlyout'
 import { SampleActivityLog } from '@/components/senaite/SampleActivityLog'
 import { SampleRegistryDebug } from '@/components/senaite/SampleRegistryDebug'
-import { ReadSourceBanner } from '@/components/senaite/ReadSourceBanner'
-import { ReadSourceControls } from '@/components/senaite/ReadSourceControls'
 import {
   generateSteps,
   publishSteps,
@@ -5245,24 +5243,9 @@ export function SampleDetails() {
                     onCancel={handleCancelSchedule}
                   />
                 )}
-                {/* Read-source indicator + tri-state override — parent-only.
-                    The override only affects parent basic-info reads (see
-                    resolveSampleData: sub-sample fetches are hardcoded to
-                    'senaite' regardless of readSource), so on a sub-sample/
-                    vial page there is nothing to indicate or control; showing
-                    either there would misstate data provenance. Visible to
-                    everyone, not just admins (that's the point of widening
-                    the details endpoint). Precedence: override > org default
-                    > 'senaite'; see useEffectiveReadSource. The control itself
-                    is shared with the samples-list page (ReadSourceControls);
-                    this isParent gate stays local to sample-details. */}
-                {isParent && (
-                  <ReadSourceControls
-                    effective={effectiveReadSource}
-                    override={readSourceOverride}
-                    setOverride={setReadSourceOverride}
-                  />
-                )}
+                {/* The read-source badge, override and provenance line live
+                    in the registry debug panel (admin), to keep this header
+                    short. */}
               </div>
               {!isParent && parentSampleId && (
                 <div className="flex items-center gap-2 text-sm text-muted-foreground mt-1 flex-wrap">
@@ -5428,11 +5411,6 @@ export function SampleDetails() {
                       </>
                     )}
                 </p>
-                <ReadSourceBanner
-                  readSource={data.read_source}
-                  registryMissing={data.registry_missing}
-                  fieldSources={data.field_sources}
-                />
               </div>
             </div>
           </div>
@@ -7606,6 +7584,20 @@ export function SampleDetails() {
         open={registryDebugOpen}
         onClose={() => setRegistryDebugOpen(false)}
         sampleId={sampleId ?? ''}
+        readSource={
+          // Parent pages only: sub-sample reads are always SENAITE, so the
+          // override has nothing to act on there (see resolveSampleData).
+          isParent
+            ? {
+                effective: effectiveReadSource,
+                override: readSourceOverride,
+                setOverride: setReadSourceOverride,
+                readSource: data.read_source,
+                registryMissing: data.registry_missing,
+                fieldSources: data.field_sources,
+              }
+            : undefined
+        }
       />
 
       {/* Single-label print portal — off-screen DOM the print CSS reveals */}
