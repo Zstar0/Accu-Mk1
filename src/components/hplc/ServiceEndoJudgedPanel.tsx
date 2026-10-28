@@ -22,6 +22,7 @@ import {
 import { allowedCartridges, runParamsFrom } from '@/lib/endo-worksheet-2ml'
 import { useUIStore } from '@/store/ui-store'
 import { ruleLabel, tierChip } from './ServiceSpecsSection'
+import { SampleFormIconById } from '@/components/common/SampleFormIcon'
 
 const SUB =
   'mb-1.5 text-xs font-semibold uppercase tracking-wider text-muted-foreground'
@@ -238,7 +239,13 @@ function EndoJudged({ serviceId }: { serviceId: number }) {
                   {tiers.map(s => (
                     <tr key={s.id} className="border-t">
                       <td className="py-1.5">
-                        <Badge variant="outline" className="text-xs">
+                        <Badge variant="outline" className="gap-1 text-xs">
+                          {s.sample_form_id != null && (
+                            <SampleFormIconById
+                              id={s.sample_form_id}
+                              className="size-3.5"
+                            />
+                          )}
                           {tierChip(s)}
                         </Badge>
                       </td>

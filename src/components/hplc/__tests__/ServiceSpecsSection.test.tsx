@@ -77,6 +77,7 @@ const form = (
   is_default: false,
   active: true,
   sort_order: id,
+  icon: null,
   sample_count: 0,
   ...over,
 })
@@ -89,7 +90,7 @@ beforeEach(async () => {
   const { listSampleForms } = await import('@/lib/api-sample-forms')
   vi.mocked(listSampleForms).mockResolvedValue([
     form(1, 'Vial', { is_default: true }),
-    form(7, 'Nasal Spray', { route: 'nasal_inhaled' }),
+    form(7, 'Nasal Spray', { route: 'nasal_inhaled', icon: 'nasal_spray' }),
     form(9, 'Old Form', { active: false }),
   ])
 })
@@ -341,6 +342,10 @@ describe('ServiceSpecsSection', () => {
     const row = (await screen.findAllByRole('row'))[1]
     if (!row) throw new Error('expected a data row')
     expect(within(row).getByText('Nasal Spray')).toBeInTheDocument()
+    // the chip carries the form's own icon once the form list is in
+    await waitFor(() =>
+      expect(row.querySelector('svg[data-icon="nasal_spray"]')).not.toBeNull()
+    )
   })
 
   it('ruleLabel informational with loq reads "As measured · LOQ 3.2"', () => {

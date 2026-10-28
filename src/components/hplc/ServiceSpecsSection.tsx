@@ -40,6 +40,7 @@ import {
   type PeptideRecord,
 } from '@/lib/api'
 import { listSampleForms, type SampleForm } from '@/lib/api-sample-forms'
+import { SampleFormIcon } from '@/components/common/SampleFormIcon'
 import { queryClient } from '@/lib/query-client'
 
 /** Mirrors backend/main.py `_SPEC_MATRICES` — extend both in lockstep. */
@@ -350,7 +351,15 @@ export function ServiceSpecsSection({
             {specs.map(spec => (
               <TableRow key={spec.id}>
                 <TableCell className="py-1.5 text-sm">
-                  <Badge variant="outline" className="text-xs">
+                  <Badge variant="outline" className="gap-1 text-xs">
+                    {spec.sample_form_id != null && (
+                      <SampleFormIcon
+                        icon={
+                          forms.find(f => f.id === spec.sample_form_id)?.icon
+                        }
+                        className="size-3.5"
+                      />
+                    )}
                     {tierChip(spec)}
                   </Badge>
                 </TableCell>
@@ -442,6 +451,7 @@ export function ServiceSpecsSection({
                 <SelectContent>
                   {forms.map(sf => (
                     <SelectItem key={sf.id} value={String(sf.id)}>
+                      <SampleFormIcon icon={sf.icon} />
                       {sf.active ? sf.name : `${sf.name} (inactive)`}
                     </SelectItem>
                   ))}
@@ -465,7 +475,9 @@ export function ServiceSpecsSection({
               <SelectContent>
                 <SelectItem value="range">Range</SelectItem>
                 <SelectItem value="equals">Equals</SelectItem>
-                <SelectItem value="informational">Report as measured</SelectItem>
+                <SelectItem value="informational">
+                  Report as measured
+                </SelectItem>
               </SelectContent>
             </Select>
           </Field>

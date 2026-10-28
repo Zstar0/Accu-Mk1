@@ -2104,6 +2104,9 @@ class LimsSampleForm(Base):
     is_default: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
     sort_order: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    # A key into the frontend icon set (sample_forms.routes.FormIcon); NULL
+    # draws the generic icon. No CHECK, so a new icon is a code-only change.
+    icon: Mapped[Optional[str]] = mapped_column(String(30), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
     updated_at: Mapped[datetime] = mapped_column(
         DateTime, default=datetime.utcnow, onupdate=datetime.utcnow

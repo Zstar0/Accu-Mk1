@@ -1,4 +1,5 @@
 import { API_BASE_URL, getBearerHeaders, extractErrorMessage } from '@/lib/api'
+import type { SampleFormIconKey } from '@/lib/sample-form-icons'
 
 export type SampleFormRoute = 'injectable' | 'nasal_inhaled' | 'oral'
 
@@ -17,18 +18,22 @@ export interface SampleForm {
   is_default: boolean
   active: boolean
   sort_order: number
+  /** null (or a key this build does not know) draws the generic icon */
+  icon: string | null
   sample_count: number
 }
 export interface SampleFormCreate {
   name: string
   route: SampleFormRoute
   sort_order?: number
+  icon?: SampleFormIconKey
 }
 export interface SampleFormUpdate {
   name?: string
   route?: SampleFormRoute
   sort_order?: number
   active?: boolean
+  icon?: SampleFormIconKey
   /** The default only ever moves: the server accepts `true`, never `false`. */
   is_default?: true
 }

@@ -11,6 +11,7 @@ const h = vi.hoisted(() => ({
       is_default: true,
       active: true,
       sort_order: 10,
+      icon: 'powder_vial',
       sample_count: 5,
     },
     {
@@ -20,6 +21,7 @@ const h = vi.hoisted(() => ({
       is_default: false,
       active: true,
       sort_order: 20,
+      icon: 'pen',
       sample_count: 1,
     },
     {
@@ -29,6 +31,7 @@ const h = vi.hoisted(() => ({
       is_default: false,
       active: false,
       sort_order: 30,
+      icon: null,
       sample_count: 0,
     },
   ],
@@ -104,6 +107,22 @@ describe('SampleFormSelect', () => {
       expect.objectContaining({ onSuccess: expect.any(Function) })
     )
     expect(onChanged).toHaveBeenCalledTimes(1)
+  })
+
+  it('draws each form icon on the closed picker and on every option', async () => {
+    renderSelect()
+    const icon = (el: Element) =>
+      el.querySelector('svg[data-icon]')?.getAttribute('data-icon')
+    expect(icon(screen.getByRole('combobox'))).toBe('powder_vial')
+    open()
+    expect(icon(await screen.findByRole('option', { name: 'Pen' }))).toBe('pen')
+  })
+
+  it('draws the generic icon for a form with none', () => {
+    renderSelect({ valueId: 3, valueName: 'Old kit' })
+    expect(
+      screen.getByRole('combobox').querySelector('svg[data-icon="other"]')
+    ).not.toBeNull()
   })
 
   it('shows a placeholder when an eligible sample has no form yet', () => {

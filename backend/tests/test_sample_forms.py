@@ -46,7 +46,7 @@ def client(db):
 def forms(db):
     rows = {
         "lyo": LimsSampleForm(name="Lyophilized Powder", route="injectable",
-                              is_default=True, sort_order=10),
+                              is_default=True, sort_order=10, icon="powder_vial"),
         "pen": LimsSampleForm(name="Pen", route="injectable", sort_order=20),
         "nasal": LimsSampleForm(name="Nasal Spray", route="nasal_inhaled", sort_order=30),
         "retired": LimsSampleForm(name="Retired Form", route="oral", active=False, sort_order=40),
@@ -248,7 +248,9 @@ def test_list_forms_counts_samples_and_hides_inactive_by_default(client, db, for
     rows = client.get("/api/sample-forms").json()
     assert [r["name"] for r in rows] == ["Lyophilized Powder", "Pen", "Nasal Spray"]
     assert rows[0] == {"id": forms["lyo"].id, "name": "Lyophilized Powder", "route": "injectable",
-                       "is_default": True, "active": True, "sort_order": 10, "sample_count": 2}
+                       "is_default": True, "active": True, "sort_order": 10,
+                       "icon": "powder_vial", "sample_count": 2}
+    assert rows[1]["icon"] is None                        # no icon set: the UI draws the generic one
     assert rows[1]["sample_count"] == 0
     everything = client.get("/api/sample-forms", params={"include_inactive": "true"}).json()
     assert [r["name"] for r in everything][-1] == "Retired Form"
@@ -264,6 +266,27 @@ def test_create_form_logs_and_returns_201(client, db, forms):
     log = db.execute(select(CatalogChangeLog).where(
         CatalogChangeLog.entity_type == "sample_form")).scalars().all()
     assert [(c.action, c.entity_pk, c.user_id) for c in log] == [("create", body["id"], 9)]
+
+
+def test_form_icon_is_set_on_create_and_patch_and_logged(client, db, forms):
+    r = client.post("/api/sample-forms", json={"name": "Prefilled Syringe", "route": "injectable",
+                                               "icon": "syringe"})
+    assert r.status_code == 201, r.text
+    assert r.json()["icon"] == "syringe"
+    assert client.post("/api/sample-forms", json={"name": "Drops", "route": "oral"}).json()["icon"] is None
+    r = client.patch(f"/api/sample-forms/{forms['nasal'].id}", json={"icon": "nasal_spray"})
+    assert r.status_code == 200 and r.json()["icon"] == "nasal_spray"
+    log = db.execute(select(CatalogChangeLog).where(
+        CatalogChangeLog.entity_type == "sample_form",
+        CatalogChangeLog.entity_pk == forms["nasal"].id)).scalars().all()
+    assert len(log) == 1 and set(log[0].details["changed"]) == {"icon"}
+
+
+def test_form_icon_outside_the_set_is_422(client, db, forms):
+    assert client.post("/api/sample-forms", json={"name": "X", "route": "oral",
+                                                  "icon": "rocket"}).status_code == 422
+    assert client.patch(f"/api/sample-forms/{forms['pen'].id}",
+                        json={"icon": "rocket"}).status_code == 422
 
 
 def test_create_form_rejects_bad_route_and_blank_name(client, db, forms):

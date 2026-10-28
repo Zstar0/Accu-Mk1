@@ -99,3 +99,14 @@ def test_migrations_widen_spec_tier_check_after_column_and_add_only_block():
     inline = sqls[_index_of(sqls, "CREATE TABLE IF NOT EXISTS analysis_service_specs")]
     assert "sample_form_id" not in inline
     assert i_alter < sqls.index(database._SPEC_UNIT_INDEX_SWAP)
+
+
+def test_migrations_add_icon_before_the_seed_and_fill_only_null_icons():
+    sqls = _captured()
+    i_create = _index_of(sqls, "CREATE TABLE IF NOT EXISTS lims_sample_forms")
+    i_icon = _index_of(sqls, "ALTER TABLE lims_sample_forms ADD COLUMN IF NOT EXISTS icon")
+    i_seed = _index_of(sqls, "INSERT INTO lims_sample_forms")
+    i_fill = _index_of(sqls, "UPDATE lims_sample_forms SET icon")
+    assert i_create < i_icon < i_seed < i_fill
+    assert "'Lyophilized Powder','injectable',true,true,10,'powder_vial'" in sqls[i_seed]
+    assert "WHERE icon IS NULL" in sqls[i_fill]

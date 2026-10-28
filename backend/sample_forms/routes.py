@@ -18,8 +18,11 @@ from sample_forms import service
 router = APIRouter(prefix="/api", tags=["sample-forms"])
 
 FormRoute = Literal["injectable", "nasal_inhaled", "oral"]
+# Keys of the frontend icon set (src/lib/sample-form-icons.ts SAMPLE_FORM_ICONS).
+FormIcon = Literal["powder_vial", "liquid_vial", "pen", "nasal_spray", "capsule", "tablet",
+                   "syringe", "other"]
 FormName = Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=100)]
-_LOG_FIELDS = ("name", "route", "is_default", "active", "sort_order")
+_LOG_FIELDS = ("name", "route", "is_default", "active", "sort_order", "icon")
 
 
 class SampleFormResponse(BaseModel):
@@ -29,6 +32,7 @@ class SampleFormResponse(BaseModel):
     is_default: bool
     active: bool
     sort_order: int
+    icon: Optional[str]  # plain str: a key this build does not know still lists
     sample_count: int
 
 
@@ -36,6 +40,7 @@ class SampleFormCreate(BaseModel):
     name: FormName
     route: FormRoute
     sort_order: Optional[int] = None
+    icon: Optional[FormIcon] = None
 
 
 class SampleFormPatch(BaseModel):
@@ -43,6 +48,7 @@ class SampleFormPatch(BaseModel):
     route: Optional[FormRoute] = None
     sort_order: Optional[int] = None
     active: Optional[bool] = None
+    icon: Optional[FormIcon] = None
     is_default: Optional[Literal[True]] = None  # the default moves; it is never unset
 
 
@@ -60,7 +66,8 @@ def _out(db: Session, form: LimsSampleForm) -> SampleFormResponse:
 def _response(form: LimsSampleForm, sample_count: int) -> SampleFormResponse:
     return SampleFormResponse(
         id=form.id, name=form.name, route=form.route, is_default=form.is_default,
-        active=form.active, sort_order=form.sort_order, sample_count=sample_count)
+        active=form.active, sort_order=form.sort_order, icon=form.icon,
+        sample_count=sample_count)
 
 
 def _conflict() -> HTTPException:
@@ -90,7 +97,7 @@ def create_sample_form(body: SampleFormCreate, db: Session = Depends(get_db),
     if sort_order is None:  # append after the current last form
         sort_order = (db.execute(select(func.max(LimsSampleForm.sort_order))).scalar() or 0) + 10
     form = LimsSampleForm(name=body.name, route=body.route, sort_order=sort_order,
-                          is_default=False, active=True, updated_by_id=user_id)
+                          icon=body.icon, is_default=False, active=True, updated_by_id=user_id)
     db.add(form)
     try:
         db.flush()

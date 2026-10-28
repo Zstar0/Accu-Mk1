@@ -7,6 +7,15 @@ window.HTMLElement.prototype.hasPointerCapture = vi.fn()
 window.HTMLElement.prototype.scrollIntoView = vi.fn()
 
 /** Open a Radix Select and pick an option (fireEvent, as in SampleFormSelect.test). */
+async function pickIcon(trigger: HTMLElement, icon: string) {
+  fireEvent.click(trigger)
+  fireEvent.click(
+    await screen.findByRole('option', {
+      name: `preferences.sampleForms.icon.${icon}`,
+    })
+  )
+}
+
 async function pickRoute(trigger: HTMLElement, route: string) {
   fireEvent.click(trigger)
   fireEvent.click(
@@ -26,6 +35,7 @@ const h = vi.hoisted(() => ({
       is_default: true,
       active: true,
       sort_order: 10,
+      icon: 'powder_vial',
       sample_count: 12,
     },
     {
@@ -35,6 +45,7 @@ const h = vi.hoisted(() => ({
       is_default: false,
       active: true,
       sort_order: 20,
+      icon: 'pen',
       sample_count: 3,
     },
     {
@@ -44,6 +55,7 @@ const h = vi.hoisted(() => ({
       is_default: false,
       active: false,
       sort_order: 30,
+      icon: null,
       sample_count: 0,
     },
   ],
@@ -173,7 +185,36 @@ describe('SampleFormsPane', () => {
     })
   })
 
-  it('add form submits name and route', async () => {
+  it('each row shows its icon; a missing one reads as Other and is no change', () => {
+    render(<SampleFormsPane />)
+    const drawn = (name: string) =>
+      within(row(name))
+        .getByLabelText(`${name} icon`)
+        .querySelector('svg[data-icon]')
+        ?.getAttribute('data-icon')
+    expect(drawn('Vial')).toBe('powder_vial')
+    expect(drawn('Pen')).toBe('pen')
+    expect(drawn('Old kit')).toBe('other')
+    expect(
+      within(row('Old kit')).getByRole('button', {
+        name: 'preferences.sampleForms.save',
+      })
+    ).toBeDisabled()
+  })
+
+  it('picking an icon saves only the icon', async () => {
+    const user = userEvent.setup()
+    render(<SampleFormsPane />)
+    await pickIcon(within(row('Pen')).getByLabelText('Pen icon'), 'syringe')
+    await user.click(
+      within(row('Pen')).getByRole('button', {
+        name: 'preferences.sampleForms.save',
+      })
+    )
+    expect(h.update).toHaveBeenCalledWith({ id: 2, data: { icon: 'syringe' } })
+  })
+
+  it('add form submits name, route and icon', async () => {
     const user = userEvent.setup()
     render(<SampleFormsPane />)
     const add = screen.getByRole('button', {
@@ -188,9 +229,13 @@ describe('SampleFormsPane', () => {
       screen.getByLabelText('preferences.sampleForms.newRoute'),
       'oral'
     )
+    await pickIcon(
+      screen.getByLabelText('preferences.sampleForms.newIcon'),
+      'syringe'
+    )
     await user.click(add)
     expect(h.create).toHaveBeenCalledWith(
-      { name: 'Syringe', route: 'oral' },
+      { name: 'Syringe', route: 'oral', icon: 'syringe' },
       expect.anything()
     )
   })

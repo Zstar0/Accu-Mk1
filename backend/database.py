@@ -2246,16 +2246,32 @@ def _run_migrations():
         "ON lims_sample_forms (lower(btrim(name)))",
         "CREATE UNIQUE INDEX IF NOT EXISTS uq_lims_sample_forms_single_default "
         "ON lims_sample_forms (is_default) WHERE is_default",
+        # The form's picker icon (a frontend key; NULL draws the generic one).
+        "ALTER TABLE lims_sample_forms ADD COLUMN IF NOT EXISTS icon VARCHAR(30)",
         """
-        INSERT INTO lims_sample_forms (name, route, is_default, active, sort_order, created_at, updated_at)
-        SELECT v.name, v.route, v.is_default, v.active, v.sort_order, now(), now()
-        FROM (VALUES ('Lyophilized Powder','injectable',true,true,10),
-                     ('Reconstituted Solution','injectable',false,true,20),
-                     ('Pen','injectable',false,true,30),
-                     ('Nasal Spray','nasal_inhaled',false,true,40),
-                     ('Capsule','oral',false,false,50),
-                     ('Tablet','oral',false,false,60)) AS v(name, route, is_default, active, sort_order)
+        INSERT INTO lims_sample_forms (name, route, is_default, active, sort_order, icon, created_at, updated_at)
+        SELECT v.name, v.route, v.is_default, v.active, v.sort_order, v.icon, now(), now()
+        FROM (VALUES ('Lyophilized Powder','injectable',true,true,10,'powder_vial'),
+                     ('Reconstituted Solution','injectable',false,true,20,'liquid_vial'),
+                     ('Pen','injectable',false,true,30,'pen'),
+                     ('Nasal Spray','nasal_inhaled',false,true,40,'nasal_spray'),
+                     ('Capsule','oral',false,false,50,'capsule'),
+                     ('Tablet','oral',false,false,60,'tablet')) AS v(name, route, is_default, active, sort_order, icon)
         WHERE NOT EXISTS (SELECT 1 FROM lims_sample_forms)
+        """,
+        # Databases seeded before the icon column existed: give the built-in
+        # names their icon once. The API never writes NULL, so a picked icon
+        # is never overwritten.
+        """
+        UPDATE lims_sample_forms SET icon = CASE lower(btrim(name))
+            WHEN 'lyophilized powder' THEN 'powder_vial'
+            WHEN 'reconstituted solution' THEN 'liquid_vial'
+            WHEN 'pen' THEN 'pen'
+            WHEN 'nasal spray' THEN 'nasal_spray'
+            WHEN 'capsule' THEN 'capsule'
+            WHEN 'tablet' THEN 'tablet' END
+        WHERE icon IS NULL AND lower(btrim(name)) IN
+            ('lyophilized powder','reconstituted solution','pen','nasal spray','capsule','tablet')
         """,
         "ALTER TABLE lims_samples ADD COLUMN IF NOT EXISTS sample_form_id "
         "INTEGER REFERENCES lims_sample_forms(id)",

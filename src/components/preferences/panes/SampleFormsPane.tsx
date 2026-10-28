@@ -18,6 +18,12 @@ import {
   TooltipTrigger,
 } from '@/components/ui/tooltip'
 import { SettingsSection } from '../shared/SettingsComponents'
+import { SampleFormIcon } from '@/components/common/SampleFormIcon'
+import {
+  iconKey,
+  SAMPLE_FORM_ICONS,
+  type SampleFormIconKey,
+} from '@/lib/sample-form-icons'
 import {
   useCreateSampleForm,
   useSampleForms,
@@ -157,10 +163,50 @@ function RouteSelect({
   )
 }
 
+/** The form's picker icon. The closed trigger is a square showing only the
+ *  drawing (no chevron: it shares the name's track, and a wider trigger cut
+ *  long names off); the list names each icon, since a drawing can be misread. */
+function IconSelect({
+  value,
+  onChange,
+  id,
+  ariaLabel,
+}: {
+  value: SampleFormIconKey
+  onChange: (icon: SampleFormIconKey) => void
+  id?: string
+  ariaLabel?: string
+}) {
+  const { t } = useTranslation()
+  return (
+    <Select value={value} onValueChange={v => onChange(v as SampleFormIconKey)}>
+      <SelectTrigger
+        id={id}
+        size="sm"
+        className="w-8 shrink-0 justify-center px-0 [&>svg]:hidden"
+        aria-label={ariaLabel}
+      >
+        <SelectValue>
+          <SampleFormIcon icon={value} className="text-foreground" />
+        </SelectValue>
+      </SelectTrigger>
+      <SelectContent>
+        {SAMPLE_FORM_ICONS.map(k => (
+          <SelectItem key={k} value={k} className="text-xs">
+            <SampleFormIcon icon={k} />
+            {t(`preferences.sampleForms.icon.${k}`)}
+          </SelectItem>
+        ))}
+      </SelectContent>
+    </Select>
+  )
+}
+
 function FormRow({ form }: { form: SampleForm }) {
   const { t } = useTranslation()
   const [name, setName] = useState(form.name)
   const [route, setRoute] = useState<SampleFormRoute>(form.route)
+  const [icon, setIcon] = useState<SampleFormIconKey>(iconKey(form.icon))
   const [order, setOrder] = useState(String(form.sort_order))
   const update = useUpdateSampleForm()
 
@@ -171,6 +217,7 @@ function FormRow({ form }: { form: SampleForm }) {
   const changes: SampleFormUpdate = {}
   if (name.trim() !== form.name) changes.name = name.trim()
   if (route !== form.route) changes.route = route
+  if (icon !== iconKey(form.icon)) changes.icon = icon
   if (orderValid && orderNum !== form.sort_order) changes.sort_order = orderNum
   const dirty = Object.keys(changes).length > 0
   const canSave = dirty && name.trim() !== '' && orderValid && !update.isPending
@@ -197,13 +244,20 @@ function FormRow({ form }: { form: SampleForm }) {
       aria-label={form.name}
       className={`${ROW_GRID} px-3 py-2 text-sm`}
     >
-      <Input
-        value={name}
-        onChange={e => setName(e.target.value)}
-        maxLength={100}
-        className="h-8 min-w-0 text-xs"
-        aria-label={`${form.name} name`}
-      />
+      <div className="flex min-w-0 items-center gap-1">
+        <IconSelect
+          value={icon}
+          onChange={setIcon}
+          ariaLabel={`${form.name} icon`}
+        />
+        <Input
+          value={name}
+          onChange={e => setName(e.target.value)}
+          maxLength={100}
+          className="h-8 min-w-0 px-2 text-xs"
+          aria-label={`${form.name} name`}
+        />
+      </div>
       <RouteSelect
         value={route}
         onChange={setRoute}
@@ -277,6 +331,7 @@ function NewFormRow() {
   const { t } = useTranslation()
   const [name, setName] = useState('')
   const [route, setRoute] = useState<SampleFormRoute>('injectable')
+  const [icon, setIcon] = useState<SampleFormIconKey>('other')
   const create = useCreateSampleForm()
   const valid = name.trim().length > 0
 
@@ -287,8 +342,13 @@ function NewFormRow() {
         e.preventDefault()
         if (!valid || create.isPending) return
         create.mutate(
-          { name: name.trim(), route },
-          { onSuccess: () => setName('') }
+          { name: name.trim(), route, icon },
+          {
+            onSuccess: () => {
+              setName('')
+              setIcon('other')
+            },
+          }
         )
       }}
     >
@@ -296,14 +356,21 @@ function NewFormRow() {
         <Label htmlFor="sample-form-new-name" className="text-xs">
           {t('preferences.sampleForms.newName')}
         </Label>
-        <Input
-          id="sample-form-new-name"
-          value={name}
-          onChange={e => setName(e.target.value)}
-          placeholder={t('preferences.sampleForms.newNamePlaceholder')}
-          maxLength={100}
-          className="h-8 text-xs"
-        />
+        <div className="flex min-w-0 items-center gap-1">
+          <IconSelect
+            value={icon}
+            onChange={setIcon}
+            ariaLabel={t('preferences.sampleForms.newIcon')}
+          />
+          <Input
+            id="sample-form-new-name"
+            value={name}
+            onChange={e => setName(e.target.value)}
+            placeholder={t('preferences.sampleForms.newNamePlaceholder')}
+            maxLength={100}
+            className="h-8 min-w-0 px-2 text-xs"
+          />
+        </div>
       </div>
       <div className="grid gap-1">
         <Label htmlFor="sample-form-new-route" className="text-xs">

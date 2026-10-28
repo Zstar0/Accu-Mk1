@@ -6,6 +6,7 @@ import {
   SelectValue,
 } from '@/components/ui/select'
 import { useSampleForms, useSetSampleForm } from '@/services/sample-forms'
+import { SampleFormIcon } from '@/components/common/SampleFormIcon'
 import { cn } from '@/lib/utils'
 
 /**
@@ -45,12 +46,20 @@ export function SampleFormSelect({
   const set = useSetSampleForm()
   const current = forms?.find(f => f.id === valueId)
   const options = (forms ?? []).filter(f => f.active || f.id === valueId)
-  const label =
+  const name =
     valueId == null
       ? null
       : current
         ? `${current.name}${current.active ? '' : ' (inactive)'}`
         : valueName
+  // Before the form list arrives the name comes from the lookup and the icon
+  // is the generic one; the list fills it in a moment later.
+  const label = name && (
+    <span className="flex min-w-0 items-center gap-1.5">
+      <SampleFormIcon icon={current?.icon} />
+      <span className="truncate">{name}</span>
+    </span>
+  )
   return (
     <Select
       value={valueId == null ? '' : String(valueId)}
@@ -80,6 +89,7 @@ export function SampleFormSelect({
       <SelectContent>
         {options.map(f => (
           <SelectItem key={f.id} value={String(f.id)} disabled={!f.active}>
+            <SampleFormIcon icon={f.icon} />
             {f.name}
             {!f.active && ' (inactive)'}
           </SelectItem>
