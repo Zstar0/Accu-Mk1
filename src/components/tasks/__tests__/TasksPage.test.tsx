@@ -131,6 +131,12 @@ describe('TasksPage', () => {
     )
   })
 
+  // jsdom has no layout; the live check is a wide table at 1440 px.
+  it('page width never grows with the table', () => {
+    const { container } = render(<TasksPage />)
+    expect(container.firstElementChild).toHaveClass('[contain:inline-size]')
+  })
+
   it('switching tabs saves the tab', async () => {
     render(<TasksPage />)
     await userEvent.click(screen.getByRole('tab', { name: 'Raised by me' }))

@@ -34,8 +34,12 @@ const sameSizing = (a: ColumnSizingState, b: ColumnSizingState) => {
 export function TasksPage() {
   const { ready, settings, update } = useTasksPageSettings()
 
+  // The table has a fixed pixel width. Without inline-size containment that
+  // width becomes this page's min-content width and pushes the shell's <main>
+  // past the viewport, where it is clipped. Contained, the page takes its
+  // width from the shell and the table scrolls inside its own wrapper.
   return (
-    <div className="flex h-full min-h-0 flex-col">
+    <div className="flex h-full min-h-0 flex-col [contain:inline-size]">
       <div className="flex items-center justify-between border-b px-4 py-3">
         <h1 className="flex items-center gap-2 text-lg font-semibold">
           <ListChecks className="h-5 w-5" /> Tasks
