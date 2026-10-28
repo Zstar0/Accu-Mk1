@@ -52,3 +52,13 @@ OrderStatusPage.tsx, already on master).
 11 Vial board grouped by sample
 12 Vial board table
 13 COA Explorer
+
+Sample page header clean-up (same stack): Form and Priority moved from the header into the Sample
+Info card, under Sample Type. P-0148, light and dark: one Form picker and one Priority picker on
+the page, both inside the card. Vial page P-0144-S01: its vial-level Priority control stays in the
+header; the old sample-level row (always "No registry record for this sample yet" on a vial) is gone.
+(P-0148-S01 does not open on this stack: it exists only in Mk1 and the stack reads sample pages
+from SENAITE.)
+14 Sample page, dark: header without the two controls, Sample Info card with them
+15 Sample Info card, light
+16 Vial page header

@@ -2654,6 +2654,29 @@ function SelectVialChromatogramDialog({
   )
 }
 
+/** A Sample Info row whose value is a control (a select), laid out like
+ *  DataRow so labels and right edges line up down the card. */
+function ControlRow({
+  label,
+  children,
+}: {
+  label: string
+  children: React.ReactNode
+}) {
+  return (
+    <div className="flex items-center justify-between py-1 border-b border-border/50 last:border-0">
+      <span className="text-xs text-muted-foreground shrink-0 min-w-28 mr-3">
+        {label}
+      </span>
+      <div className="flex items-center gap-2">
+        {children}
+        {/* Spacer matching the EditableField pencil icon size for column alignment */}
+        <span className="inline-block w-[11px] shrink-0" aria-hidden="true" />
+      </div>
+    </div>
+  )
+}
+
 function DataRow({
   label,
   value,
@@ -5540,50 +5563,10 @@ export function SampleDetails() {
               the sticky band so the actions are available while scrolling. */}
           <div className="w-full flex items-end justify-between gap-3">
             <div className="text-xs text-muted-foreground pl-[3.75rem] shrink-0">
-              {/* Priority — editable in every lifecycle state (2026-09-10);
-                  it used to be reachable only from the received-samples
-                  inbox. Sits above the SLA lines, which need a receipt. */}
-              <div className="flex items-center gap-2 mb-0.5">
-                <span className="text-[11px] uppercase tracking-wide text-muted-foreground/70">
-                  Priority
-                </span>
-                <PriorityGlyph priority={data.priority} size="row" />
-                {data.registry_pk ? (
-                  <PrioritySelect
-                    level="sample"
-                    id={String(data.registry_pk)}
-                    explicitKey={data.explicit_priority_key ?? null}
-                    effective={data.priority}
-                    compact
-                    className="w-56"
-                    ariaLabel={`Priority for ${sampleId}`}
-                    onAssigned={() => refreshSample(sampleId)}
-                  />
-                ) : (
-                  <span className="text-[11px] text-muted-foreground">
-                    No registry record for this sample yet
-                  </span>
-                )}
-              </div>
-              {/* Form: dosage form (sample-forms spec). Only Peptide-matrix
-                  samples take one (and only a registry row can be eligible);
-                  Bacteriostatic Water and the like get no row at all. */}
-              {data.sample_form_eligible && (
-                <div className="flex items-center gap-2 mb-0.5">
-                  <span className="text-[11px] uppercase tracking-wide text-muted-foreground/70">
-                    Form
-                  </span>
-                  <SampleFormSelect
-                    sampleId={data.sample_id}
-                    valueId={data.sample_form_id ?? null}
-                    valueName={data.sample_form_name ?? null}
-                    onChanged={() => refreshSample(data.sample_id)}
-                    compact
-                    className="w-56"
-                    ariaLabel={`Form for ${data.sample_id}`}
-                  />
-                </div>
-              )}
+              {/* Priority and Form moved to the Sample Info card (2026-10-28,
+                  header clean-up). Vial pages keep their vial-level priority
+                  control above; the sample-level one never had a registry row
+                  to write against there. */}
               {/* SLA — stacked one indicator per line so multi-tier samples
                 don't run a long inline string. */}
               <SampleHeaderSla lookup={data} />
@@ -5888,6 +5871,42 @@ export function SampleDetails() {
                     emphasis
                     sourceGlyph={fieldGlyph('sample_type', 'Sample Type')}
                   />
+                  {/* Form: dosage form (sample-forms spec). Only Peptide-matrix
+                      samples take one (and only a registry row can be eligible);
+                      Bacteriostatic Water and the like get no row at all. */}
+                  {data.sample_form_eligible && (
+                    <ControlRow label="Form">
+                      <SampleFormSelect
+                        sampleId={data.sample_id}
+                        valueId={data.sample_form_id ?? null}
+                        valueName={data.sample_form_name ?? null}
+                        onChanged={() => refreshSample(data.sample_id)}
+                        compact
+                        className="w-56"
+                        ariaLabel={`Form for ${data.sample_id}`}
+                      />
+                    </ControlRow>
+                  )}
+                  {/* Priority — editable in every lifecycle state (2026-09-10). */}
+                  <ControlRow label="Priority">
+                    <PriorityGlyph priority={data.priority} size="row" />
+                    {data.registry_pk ? (
+                      <PrioritySelect
+                        level="sample"
+                        id={String(data.registry_pk)}
+                        explicitKey={data.explicit_priority_key ?? null}
+                        effective={data.priority}
+                        compact
+                        className="w-56"
+                        ariaLabel={`Priority for ${sampleId}`}
+                        onAssigned={() => refreshSample(sampleId)}
+                      />
+                    ) : (
+                      <span className="text-[11px] text-muted-foreground">
+                        No registry record for this sample yet
+                      </span>
+                    )}
+                  </ControlRow>
                   <EditableDataRow
                     label="Date Sampled"
                     value={data.date_sampled}
