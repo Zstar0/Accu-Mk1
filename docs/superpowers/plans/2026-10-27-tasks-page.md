@@ -141,9 +141,11 @@ it('controlled sorting: header click reports, rows follow the prop', () => {
 it('controlled sizing: header width comes from the prop', () => {
   // columnSizing={{ name: 240 }} -> the Name <th> has style width 240px
 })
-it('a resize drag fires onColumnSizingCommit exactly once', () => {
-  // mouseDown on the Name resize handle, mouseMove on document x3, mouseUp
+it('a resize drag fires onColumnSizingCommit exactly once, with the final width', () => {
+  // a wrapper component holds columnSizing in useState and passes it back (controlled, as TasksPage will);
+  // mouseDown on the Name resize handle at x=100, mouseMove on document to 120, 140, 160, mouseUp
   expect(commit).toHaveBeenCalledTimes(1)
+  expect(commit.mock.calls[0][0].name).toBe(startWidth + 60)
 })
 it('keyboard rows: Enter activates, and rows are not focusable without the flag', ...)
 it('getRowClassName adds its class to the row', ...)
@@ -279,7 +281,7 @@ it('scope keeps a separate storage key with the same defaults', () => {
   - `TASK_COLUMN_LIMITS: Record<TaskColumnId, { size: number; min: number; max: number }>` with `item {150,90,400}`, `type {110,80,300}`, `title {360,160,900}`, `assignee {150,90,400}`, `status {120,90,300}`, `due {100,80,300}`, `last_activity {140,110,400}`, `created {140,110,400}`; `type TaskColumnId = keyof typeof TASK_COLUMN_LIMITS`.
   - `interface TasksPageSettings { v: 1; tab: TasksTab; sorting: SortingState; columnSizing: ColumnSizingState }`; `DEFAULT_TASKS_SETTINGS` (`tab 'assigned'`, `sorting []`, `columnSizing {}`).
   - `parseTasksSettings(raw: unknown): TasksPageSettings`.
-  - `useTasksPageSettings(): { ready: boolean; settings: TasksPageSettings; update: (patch: Partial<Omit<TasksPageSettings, 'v'>>) => void }`. Query key `['ui-settings', 'tasks.page']`, `retry: false`, `staleTime: Infinity`. `ready` once the query succeeds or fails; failure means defaults. `update` applies locally at once and schedules one `putUiSetting` of the merged value 500 ms after the last call; a pending save flushes on unmount; a failed save calls `toast.error("Couldn't save your table settings")`.
+  - `useTasksPageSettings(): { ready: boolean; settings: TasksPageSettings; update: (patch: Partial<Omit<TasksPageSettings, 'v'>>) => void }`. Query key `['ui-settings', 'tasks.page']`, `retry: false`, `staleTime: Infinity`. **The query cache is the source of truth** (the page remounts on every visit through `navigationKey`, so component state would show a stale layout on return): `settings = parseTasksSettings(query.data)`; `update` merges the patch into the current settings, writes the merged value with `queryClient.setQueryData(['ui-settings', 'tasks.page'], merged)` at once, and schedules one `putUiSetting` of the latest merged value 500 ms after the last call. `ready` once the query succeeds or fails; failure means defaults. A pending save flushes on unmount; a failed save calls `toast.error("Couldn't save your table settings")`.
 
 - [ ] **Step 1: Write the failing tests.**
 
@@ -306,10 +308,15 @@ it('debounces saves into one PUT of the merged value', async () => {
   expect(put).toHaveBeenCalledWith('tasks.page', expect.objectContaining({ v: 1, tab: 'raised', sorting: [{ id: 'due', desc: true }] }))
 })
 it('a failed save shows one toast', async () => { /* put rejects -> toast.error called once with the exact copy */ })
+it('a remount shows the updated value without a second GET', async () => {
+  // shared QueryClient: mount, update({ tab: 'raised' }), unmount, mount again
+  expect(result.current.settings.tab).toBe('raised')
+  expect(get).toHaveBeenCalledTimes(1)
+})
 ```
 
 - [ ] **Step 2: Run to verify failure.** `npx vitest run src/components/tasks/__tests__/tasks-page-settings.test.tsx`.
-- [ ] **Step 3: Implement.** Hold `local` overrides in `useState`; derive `settings` from `local ?? parse(query.data)` (query data is not an impure read). Timer in a `useRef`.
+- [ ] **Step 3: Implement.** No component state for the settings themselves; derive from the query cache (query data is not an impure read, so the React Compiler is safe). Timer and the latest pending value in `useRef`s.
 - [ ] **Step 4: Run again.** Expected: pass.
 - [ ] **Step 5: Commit** `feat(tasks): account-saved Tasks page settings`.
 
@@ -324,7 +331,8 @@ it('a failed save shows one toast', async () => { /* put rejects -> toast.error 
 **Interfaces:**
 - Consumes: Task 3 `DataTable` props; Task 4 cells; Task 5 `openFlagThread(id, { returnTo: 'page' })`; Task 7 `TASK_COLUMN_LIMITS`, `TaskColumnId`.
 - Produces: `TasksTable(props: { flags: FlagResponse[]; unreadIds: Set<number>; searchMeta: Map<number, FlagSearchMeta>; sorting: SortingState; onSortingChange: (s: SortingState) => void; columnSizing: ColumnSizingState; onColumnSizingChange: (s: ColumnSizingState) => void; onColumnSizingCommit: (s: ColumnSizingState) => void })`.
-- `buildTaskColumns(ctx): ColumnDef<FlagResponse>[]`, header labels `Item, Type, Title, Assignee, Status, Due, Last activity, Created`, preceded by an `accent` column (`enableSorting: false`, `enableResizing: false`, size 6). Every data column: `sortDescFirst: false`, `size/minSize/maxSize` from `TASK_COLUMN_LIMITS`. Sort values: item, type, title, assignee are lowercased strings; assignee is `undefined` when unassigned; status is the index in `['open','in_progress','blocked','resolved','closed']`; due is the epoch ms or `undefined`; last activity and created are epoch ms of `updated_at` / `created_at`. Due and assignee use `sortUndefined: 'last'`.
+- `interface TaskColumnContext { users: UserMap; typesMap: Record<string, FlagTypeDef>; kindLabels: Record<string, string>; currentUserId: number | null; unreadIds: Set<number>; searchMeta: Map<number, FlagSearchMeta> }`. `TasksTable` builds it from the same hooks `FlagTable` uses (`useFlagUsers`, `useFlagTypesMap`, `useItemKindLabels`, `useAuthStore(s => s.user?.id ?? null)`) plus its props.
+- `buildTaskColumns(ctx: TaskColumnContext): ColumnDef<FlagResponse>[]`, header labels `Item, Type, Title, Assignee, Status, Due, Last activity, Created`, preceded by an `accent` column (`enableSorting: false`, `enableResizing: false`, size 6). Every data column: `sortDescFirst: false`, `size/minSize/maxSize` from `TASK_COLUMN_LIMITS`. Sort values: item, type, title, assignee are lowercased strings; assignee is `undefined` when unassigned; status is the index in `['open','in_progress','blocked','resolved','closed']`; due is the epoch ms or `undefined`; last activity and created are epoch ms of `updated_at` / `created_at`. Due and assignee use `sortUndefined: 'last'`.
 - Row click and Enter/Space: `openFlagThread(flag.id, { returnTo: 'page' })`. `keyboardRowActivation` on.
 
 - [ ] **Step 1: Write the failing tests.**
