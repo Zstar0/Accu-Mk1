@@ -15,6 +15,7 @@ export type ActiveSection =
   | 'admin-clickup-users'
   | 'settings'
   | 'boards'
+  | 'tasks'
 
 // Sub-sections within each main section
 export type DashboardSubSection = 'orders' | 'analytics'
@@ -306,6 +307,10 @@ interface UIState {
   // null means the flyout shows one flag's thread instead of the triage list.
   flagsFlyoutOpen: boolean
   flagsThreadId: number | null
+  // 'page' = the thread was opened from a page (the Tasks page), so its back
+  // arrow closes the flyout and returns there. Cleared by every list opener
+  // and on close.
+  flagsThreadReturnTo: 'page' | null
   // When set, the flyout shows the open flags on ONE entity (driven by an
   // EntityFlagButton) instead of the triage tabs. Cleared on flyout close.
   flagsEntityFilter: {
@@ -321,7 +326,7 @@ interface UIState {
     sampleIds: string[]
   } | null
   openFlagsFlyout: (threadId?: number) => void
-  openFlagThread: (id: number) => void
+  openFlagThread: (id: number, opts?: { returnTo?: 'page' }) => void
   openFlagsForEntity: (
     type: string,
     id: string,
@@ -407,6 +412,7 @@ export const useUIStore = create<UIState>()(
       worksheetPrepPrefill: null,
       flagsFlyoutOpen: false,
       flagsThreadId: null,
+      flagsThreadReturnTo: null,
       flagsEntityFilter: null,
       flagsSamplesFilter: null,
       activeFlagEntityStack: [],
@@ -907,14 +913,23 @@ export const useUIStore = create<UIState>()(
           state => ({
             flagsFlyoutOpen: true,
             flagsThreadId: threadId ?? state.flagsThreadId,
+            flagsThreadReturnTo: null,
           }),
           undefined,
           'openFlagsFlyout'
         ),
 
-      openFlagThread: id =>
+      // opts.returnTo marks a thread opened from a page; without it, a thread
+      // opened inside an open flyout keeps the current marker.
+      openFlagThread: (id, opts) =>
         set(
-          { flagsFlyoutOpen: true, flagsThreadId: id },
+          state => ({
+            flagsFlyoutOpen: true,
+            flagsThreadId: id,
+            flagsThreadReturnTo:
+              opts?.returnTo ??
+              (state.flagsFlyoutOpen ? state.flagsThreadReturnTo : null),
+          }),
           undefined,
           'openFlagThread'
         ),
@@ -926,6 +941,7 @@ export const useUIStore = create<UIState>()(
           {
             flagsFlyoutOpen: true,
             flagsThreadId: null,
+            flagsThreadReturnTo: null,
             flagsEntityFilter: {
               type,
               id,
@@ -945,6 +961,7 @@ export const useUIStore = create<UIState>()(
           {
             flagsFlyoutOpen: true,
             flagsThreadId: null,
+            flagsThreadReturnTo: null,
             flagsSamplesFilter: { label, sampleIds },
             flagsEntityFilter: null,
           },
@@ -997,14 +1014,18 @@ export const useUIStore = create<UIState>()(
 
       // Back to the triage list — drops the thread but keeps the flyout open
       // (and any entity filter, so "back" returns to the filtered list).
+      // A thread opened from a page closes the flyout instead.
       closeFlagThread: () =>
-        set({ flagsThreadId: null }, undefined, 'closeFlagThread'),
+        get().flagsThreadReturnTo === 'page'
+          ? get().closeFlagsFlyout()
+          : set({ flagsThreadId: null }, undefined, 'closeFlagThread'),
 
       closeFlagsFlyout: () =>
         set(
           {
             flagsFlyoutOpen: false,
             flagsThreadId: null,
+            flagsThreadReturnTo: null,
             flagsEntityFilter: null,
             flagsSamplesFilter: null,
           },

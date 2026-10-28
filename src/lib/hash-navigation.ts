@@ -39,6 +39,7 @@ const VALID_SECTIONS = new Set<string>([
   'admin-clickup-users',
   'settings',
   'boards',
+  'tasks',
 ])
 
 interface ParsedNav {
@@ -158,7 +159,11 @@ export function applyNavToStore(nav: ParsedNav) {
       queryKey: flagKeys.detail(flagId),
       queryFn: () => getFlag(flagId),
     })
-    store.openFlagThread(flagId)
+    // From the Tasks page, back/close on the thread returns to the page.
+    store.openFlagThread(
+      flagId,
+      section === 'tasks' ? { returnTo: 'page' } : undefined
+    )
   }
 }
 

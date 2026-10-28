@@ -11,7 +11,11 @@ vi.mock('@/lib/flags-api', () => ({
 
 describe('hash navigation ?flag= deep link', () => {
   beforeEach(() => {
-    useUIStore.setState({ flagsFlyoutOpen: false, flagsThreadId: null })
+    useUIStore.setState({
+      flagsFlyoutOpen: false,
+      flagsThreadId: null,
+      flagsThreadReturnTo: null,
+    })
     queryClient.clear()
     vi.mocked(getFlag).mockClear()
   })
@@ -31,6 +35,16 @@ describe('hash navigation ?flag= deep link', () => {
     expect(getFlag).toHaveBeenCalledWith(42)
     // Seeded under the same key useFlag(42) reads — no duplicate fetch later.
     expect(queryClient.getQueryState(['flags', 42])).toBeDefined()
+  })
+
+  it('#tasks/overview?flag=42 opens the Tasks page with the thread marked', () => {
+    window.location.hash = '#tasks/overview?flag=42'
+    renderHook(() => useHashNavigation())
+    expect(useUIStore.getState()).toMatchObject({
+      activeSection: 'tasks',
+      flagsThreadId: 42,
+      flagsThreadReturnTo: 'page',
+    })
   })
 
   it('ignores a non-numeric flag param', () => {
