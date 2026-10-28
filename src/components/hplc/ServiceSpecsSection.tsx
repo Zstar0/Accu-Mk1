@@ -54,10 +54,12 @@ type Tier = 'all' | 'matrix' | 'form' | 'peptide'
 export function ruleLabel(spec: AnalysisServiceSpecRecord): string {
   // Report-only rows carry no bounds by construction — the admin list says
   // "As measured" (+ the LOQ if filed); the COA's spec cell renders
-  // display_override or empty (R1).
+  // display_override or empty (R1). The unit rides in brackets: a sample's
+  // result is judged only by a row in its own unit, so the lab must see which
+  // unit a report-only row is filed in.
   if (spec.rule_kind === 'informational')
     return [
-      'As measured',
+      spec.unit ? `As measured (${spec.unit})` : 'As measured',
       spec.loq != null && `LOQ ${spec.loq}`,
       spec.display_override,
     ]

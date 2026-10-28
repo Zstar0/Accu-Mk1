@@ -350,6 +350,7 @@ describe('ServiceSpecsSection', () => {
       ...base,
       rule_kind: 'informational' as const,
       max_value: null,
+      unit: null,
     }
     expect(ruleLabel({ ...info, loq: '3.2' })).toBe('As measured · LOQ 3.2')
     expect(ruleLabel({ ...info, loq: '3.2', display_override: 'ND' })).toBe(
@@ -359,6 +360,28 @@ describe('ServiceSpecsSection', () => {
     expect(ruleLabel({ ...info, loq: null })).toBe('As measured')
     expect(ruleLabel({ ...info, loq: null, display_override: 'ND' })).toBe(
       'As measured · ND'
+    )
+  })
+
+  it('ruleLabel names the unit a report-only row is filed in', () => {
+    const base = specs[0]
+    if (!base) throw new Error('expected a spec fixture')
+    const info = {
+      ...base,
+      rule_kind: 'informational' as const,
+      max_value: null,
+      unit: 'µg/mL',
+    }
+    // A result is judged only by a row in its own unit, so the list says which.
+    expect(ruleLabel({ ...info, loq: '0.5' })).toBe(
+      'As measured (µg/mL) · LOQ 0.5'
+    )
+    expect(ruleLabel({ ...info, loq: null })).toBe('As measured (µg/mL)')
+    expect(ruleLabel({ ...info, loq: null, display_override: 'ND' })).toBe(
+      'As measured (µg/mL) · ND'
+    )
+    expect(ruleLabel({ ...info, unit: '', loq: '0.5' })).toBe(
+      'As measured · LOQ 0.5'
     )
   })
 

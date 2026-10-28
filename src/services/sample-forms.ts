@@ -9,6 +9,7 @@ import {
   type SampleFormCreate,
   type SampleFormUpdate,
 } from '@/lib/api-sample-forms'
+import { invalidateAnalysisListings } from '@/lib/vial-assignment'
 
 export const sampleFormKeys = { all: ['sample-forms'] as const }
 
@@ -61,6 +62,8 @@ export function useSetSampleForm() {
     onSuccess: () => {
       // sample_count on the pane rows moves with every assignment
       qc.invalidateQueries({ queryKey: sampleFormKeys.all })
+      // Cached analyses rows carry the old form's units and specs
+      invalidateAnalysisListings(qc)
       toast.success('Form set')
     },
     onError: (e: Error) => toast.error(e.message),

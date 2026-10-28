@@ -7376,6 +7376,10 @@ export function SampleDetails() {
         }
         resultsReadOnly={parentSampleId === null && !showParentResultEditing}
         onResultSaved={(uid, newResult, newReviewState, newUnit) => {
+          // A save in a different unit moves the row's spec (resolved per
+          // unit), which the local patch below cannot recompute: reload.
+          const prevUnit = data.analyses.find(a => a.uid === uid)?.unit
+          if (newUnit && newUnit !== prevUnit) refreshSample(data.sample_id)
           setData(prev => {
             if (!prev) return prev
             return {

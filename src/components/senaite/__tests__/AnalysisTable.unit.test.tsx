@@ -18,6 +18,11 @@ import userEvent from '@testing-library/user-event'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { AnalysisTable } from '@/components/senaite/AnalysisTable'
 import type { SenaiteAnalysis } from '@/lib/api'
+import { NATIVE_PARENT_ANALYSES_QUERY_KEY } from '@/lib/native-parent-analyses'
+import {
+  PARENT_OVERLAY_QUERY_KEY,
+  QUICKLOOK_VIAL_ANALYSES_QUERY_KEY,
+} from '@/lib/vial-assignment'
 import type * as ApiModule from '@/lib/api'
 import type * as SidebarModule from '@/components/ui/sidebar'
 
@@ -209,6 +214,49 @@ describe('unit dropdown at bench entry', () => {
       '2.1',
     ])
     expect(lastCall()?.[2]).toBeUndefined()
+  })
+
+  describe('cached listings after a save', () => {
+    const LISTINGS = [
+      PARENT_OVERLAY_QUERY_KEY,
+      QUICKLOOK_VIAL_ANALYSES_QUERY_KEY,
+      NATIVE_PARENT_ANALYSES_QUERY_KEY,
+    ]
+    const invalidated = (spy: { mock: { calls: unknown[][] } }) =>
+      spy.mock.calls.map(
+        c =>
+          (c[0] as { queryKey?: readonly unknown[] } | undefined)?.queryKey?.[0]
+      )
+
+    it('a save in a different unit refetches every analyses listing (the spec follows the unit)', async () => {
+      const spy = vi.spyOn(QueryClient.prototype, 'invalidateQueries')
+      try {
+        renderTable(row())
+        await userEvent.type(screen.getByLabelText(RESULT_LABEL), '2.1')
+        await pickUnit('µg/mL')
+        await waitFor(() =>
+          expect(invalidated(spy)).toEqual(expect.arrayContaining(LISTINGS))
+        )
+      } finally {
+        spy.mockRestore()
+      }
+    })
+
+    it('a save in the unit the row already shows leaves the listings alone', async () => {
+      const spy = vi.spyOn(QueryClient.prototype, 'invalidateQueries')
+      const onResultSaved = vi.fn()
+      try {
+        renderTable(row(), { onResultSaved })
+        await userEvent.type(screen.getByLabelText(RESULT_LABEL), '2.1{Enter}')
+        await waitFor(() => expect(onResultSaved).toHaveBeenCalledTimes(1))
+        expect(lastCall()).toEqual(['mk1:5', '2.1', 'ppm'])
+        expect(invalidated(spy)).not.toContain(
+          QUICKLOOK_VIAL_ANALYSES_QUERY_KEY
+        )
+      } finally {
+        spy.mockRestore()
+      }
+    })
   })
 
   describe('several options and no form default', () => {

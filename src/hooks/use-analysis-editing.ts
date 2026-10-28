@@ -1,6 +1,8 @@
 import { useState, useRef, useCallback } from 'react'
+import { useQueryClient } from '@tanstack/react-query'
 import { toast } from 'sonner'
 import { setAnalysisResult, type SenaiteAnalysis } from '@/lib/api'
+import { invalidateAnalysisListings } from '@/lib/vial-assignment'
 
 // --- Types ---
 
@@ -89,6 +91,7 @@ export function useAnalysisEditing({
   const [draft, setDraft] = useState('')
   const [isSaving, setIsSaving] = useState(false)
   const savePendingRef = useRef(false)
+  const queryClient = useQueryClient()
 
   const cancelEditing = useCallback(() => {
     setEditingUid(null)
@@ -120,6 +123,9 @@ export function useAnalysisEditing({
         const response = await setAnalysisResult(uid, valueToSave, unit)
         if (response.success) {
           onResultSaved?.(uid, valueToSave, response.new_review_state, unit)
+          // The spec is resolved per unit: a save in a different unit leaves
+          // every cached listing's spec column describing the old one.
+          if (unit && unit !== row?.unit) invalidateAnalysisListings(queryClient)
           toast.success('Result saved')
           cancelEditing()
         } else {
@@ -133,7 +139,7 @@ export function useAnalysisEditing({
         savePendingRef.current = false
       }
     },
-    [analyses, draft, onResultSaved, cancelEditing]
+    [analyses, draft, onResultSaved, cancelEditing, queryClient]
   )
 
   const handleKeyDown = useCallback(
