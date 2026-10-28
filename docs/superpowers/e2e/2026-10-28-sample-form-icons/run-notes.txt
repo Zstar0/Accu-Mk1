@@ -22,3 +22,10 @@ Tests: backend 98 passed in the stack container (test_sample_forms, test_sample_
 test_service_spec_routes, test_result_units). Frontend: typecheck clean; vitest on every form surface
 121 passed, 1 failed (PackagingPanel, fails on master too); ESLint and Prettier clean on the
 changed files.
+
+Longest seeded name, closed trigger (name span scrollWidth vs clientWidth):
+  with the icon, at w-44: wizard 120 vs 104, spec rules Form 164 vs 126 (both clipped; the wizard
+  fit before the icon, the spec rules picker was already clipped)
+  wizard widened to w-52, spec rules Form to w-56: wizard 120 vs 120, spec rules 164 vs 164
+06 wizard picker showing Reconstituted Solution (P-5001 set back to Lyophilized Powder after)
+07 spec rules Form picker showing Reconstituted Solution (nothing saved)

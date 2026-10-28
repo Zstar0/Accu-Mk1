@@ -436,7 +436,7 @@ export function ServiceSpecsSection({
             </Field>
           )}
           {form.tier === 'form' && (
-            <Field label="Form" className="w-44">
+            <Field label="Form" className="w-56">
               <Select
                 value={
                   form.sampleFormId == null ? '' : String(form.sampleFormId)

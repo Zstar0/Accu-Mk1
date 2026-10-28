@@ -442,7 +442,7 @@ export function ReceiveWizard({
               valueName={parentDetails.details.sample_form_name ?? null}
               onChanged={parentDetails.refresh}
               compact
-              className="w-44"
+              className="w-52"
               ariaLabel={`Form for ${parent.sample_id}`}
             />
           ) : undefined
