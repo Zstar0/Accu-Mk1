@@ -322,7 +322,9 @@ export function EndoPrep2mlFields({
           unit="mL"
           value={waterOf(s, ctx)}
           overridden={item.prep_water_ml != null}
-          computed={form === 'liquid' ? null : ctx.params.reconWaterMl}
+          // The row's own figure (its rule's water, else the standard), never
+          // the standard flat: see EndoWorksheetTable.
+          computed={waterOf({ ...s, waterMl: null }, ctx)}
           disabled={disabled}
           onCommit={v => onUpdate({ prep_water_ml: v })}
         />

@@ -2638,6 +2638,10 @@ def _run_migrations():
         "ALTER TABLE lims_analyses ADD COLUMN IF NOT EXISTS loq DOUBLE PRECISION",
         "ALTER TABLE lims_analyses ADD COLUMN IF NOT EXISTS lod DOUBLE PRECISION",
         "ALTER TABLE lims_analyses ADD COLUMN IF NOT EXISTS lod_unit TEXT",
+        # Endo ">" on the certificate: the stored number is a floor, not a
+        # measurement. Nullable, no backfill; NULL and false both mean "an
+        # ordinary measured result", which is every row that predates this.
+        "ALTER TABLE lims_analyses ADD COLUMN IF NOT EXISTS result_floor BOOLEAN",
         # Endo slice 5 (spec 2026-10-14 section 3): the prep rules table, the
         # same shape as models.EndoPrepRule, which is the source of truth. On
         # a database that has no consumable_types yet (the first boot of the
@@ -2649,6 +2653,7 @@ def _run_migrations():
         peptide_id        INTEGER NOT NULL REFERENCES peptides(id),
         min_mg            DOUBLE PRECISION,
         max_mg            DOUBLE PRECISION,
+        recon_water_ml    DOUBLE PRECISION,
         total_dilution    DOUBLE PRECISION,
         step1_ratio       DOUBLE PRECISION,
         cartridge_type_id INTEGER REFERENCES consumable_types(id),
@@ -2667,6 +2672,12 @@ def _run_migrations():
         "ALTER TABLE worksheet_items ADD COLUMN IF NOT EXISTS prep_rules_off BOOLEAN NOT NULL DEFAULT FALSE",
         "ALTER TABLE worksheet_items ADD COLUMN IF NOT EXISTS prep_note TEXT",
         "ALTER TABLE worksheet_items ADD COLUMN IF NOT EXISTS prep_history JSON",
+        # A rule line's reconstitution water (Handler 2026-10-26, Dennis's
+        # ask): some products need more than the standard 2 mL. The CREATE
+        # above only builds it on a fresh database; slice 5 already shipped
+        # the table, so existing ones need this. Nullable, no backfill, so
+        # every stored line keeps the standard until someone fills it in.
+        "ALTER TABLE endo_prep_rules ADD COLUMN IF NOT EXISTS recon_water_ml DOUBLE PRECISION",
         # HPLC-native slice 6 (M8): links a retest's sample row back to the
         # original Mk1 row it was retested from (from signal meta
         # RetestOfSampleId). Nullable, no FK — the original may be a

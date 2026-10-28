@@ -21,8 +21,8 @@ from models import AuditLog, EndoPrepRule
 from tests.test_endo_v2_worksheets import _cartridge, _count_sql, _method, _service
 from tests.test_spec_rules import _mk_peptide
 
-SNAPSHOT_KEYS = ("id", "peptide_id", "min_mg", "max_mg", "total_dilution", "step1_ratio",
-                 "cartridge_type_id", "status", "note", "sort_order", "active")
+SNAPSHOT_KEYS = ("id", "peptide_id", "min_mg", "max_mg", "recon_water_ml", "total_dilution",
+                 "step1_ratio", "cartridge_type_id", "status", "note", "sort_order", "active")
 
 
 @pytest.fixture
@@ -81,7 +81,8 @@ def test_create_appends_a_line_and_the_list_serves_it(client, db, reta):
     assert first["updated_at"]
     assert {k: v for k, v in first.items() if k != "updated_at"} == {
         "id": first["id"], "peptide_id": reta.id, "min_mg": None, "max_mg": 30.0,
-        "total_dilution": None, "step1_ratio": None, "cartridge_type_id": None,
+        "recon_water_ml": None, "total_dilution": None, "step1_ratio": None,
+        "cartridge_type_id": None,
         "status": "validated", "note": "1:250 fine to 30 mg", "sort_order": 0, "active": True,
         "peptide_name": "Retatrutide", "cartridge_name": None}
 
@@ -343,6 +344,21 @@ def test_reactivating_a_valid_line_saves_with_the_warnings(client, db, reta):
 
 
 # --- audit and reorder -------------------------------------------------------------
+
+
+def test_a_rules_recon_water_is_saved_served_and_must_be_positive(client, db, reta):
+    """Dennis's ask (Handler 2026-10-26): some products need more than the
+    standard 2 mL. Blank keeps the standard, like every other value."""
+    rule = _post(client, peptide_id=reta.id, max_mg=30, recon_water_ml=3).json()["rule"]
+    assert rule["recon_water_ml"] == 3.0
+    assert client.get("/endo-prep-rules").json()[0]["recon_water_ml"] == 3.0
+    # Cleared back to the standard by an explicit null, like total_dilution.
+    patched = client.patch(f"/endo-prep-rules/{rule['id']}", json={"recon_water_ml": None})
+    assert (patched.status_code, patched.json()["rule"]["recon_water_ml"]) == (200, None)
+    for bad in (0, -1):
+        r = _post(client, peptide_id=reta.id, min_mg=100, recon_water_ml=bad)
+        assert (r.status_code, r.json()["detail"]) == (
+            400, "recon_water_ml must be greater than zero")
 
 
 def test_create_and_update_are_audited_with_old_and_new(client, db, reta):

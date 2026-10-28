@@ -990,7 +990,11 @@ function TwoMlPrepCells({
             unit="mL"
             value={water}
             overridden={item.prep_water_ml != null}
-            computed={form === 'liquid' ? null : ctx.params.reconWaterMl}
+            // What the row would use if nothing were typed: its rule's water
+            // when a line sets one, else the method's standard. Not the
+            // standard flat, or an overridden ruled row is told the wrong
+            // figure to clear back to.
+            computed={waterOf({ ...sample, waterMl: null }, ctx)}
             disabled={isCompleted}
             onCommit={v => onUpdateItem(item.id, { prep_water_ml: v })}
           />

@@ -154,6 +154,7 @@ def run_promote(
             loq=req.loq,
             lod=req.lod,
             lod_unit=req.lod_unit,
+            result_floor=req.result_floor,
             audit_reason=audit_reason,
             commit=False,
         )

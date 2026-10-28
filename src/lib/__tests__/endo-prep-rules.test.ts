@@ -16,6 +16,7 @@ import {
   mk1Value,
   prep2Check,
   targetDilutionOf,
+  waterOf,
   type EndoCtx,
   type EndoSample,
 } from '@/lib/endo-prep-2ml'
@@ -59,6 +60,7 @@ function rule(over: Partial<EndoPrepRule> = {}): EndoPrepRule {
     peptide_id: 7,
     min_mg: null,
     max_mg: null,
+    recon_water_ml: null,
     total_dilution: null,
     step1_ratio: null,
     cartridge_type_id: null,
@@ -246,6 +248,34 @@ describe('the rule tier in the prep maths: typed > rule > standard, per field', 
       [40, true],
       [2, false],
     ])
+  })
+
+  it('a ruled water moves the LOQ and the EU per vial, on a powder row', () => {
+    // Dennis's ask (Handler 2026-10-26): some products need more than 2 mL.
+    // 0.05 x 250 x 2 mL = 25 on the standard; x 3 mL = 37.5 under the rule.
+    const r3 = rule({ recon_water_ml: 3 })
+    expect(waterOf(s({ rule: r3 }), ctx)).toBe(3)
+    expect(prep2Check(s({ rule: r3 }), ctx).loqVial).toBe(37.5)
+    expect(mk1Value(s({ rule: r3, reading: '<0.05' }), ctx)?.value).toBe(
+      '<37.5'
+    )
+    // What the analyst typed still wins, as it does for every other value.
+    expect(waterOf(s({ rule: r3, waterMl: 5 }), ctx)).toBe(5)
+  })
+
+  it('a ruled water never reaches a liquid or bac row', () => {
+    // A liquid vial arrived reconstituted: its volume is what the customer
+    // sent, not a prep choice, so neither the rule nor the standard fills it.
+    const r3 = rule({ recon_water_ml: 3 })
+    expect(waterOf(s({ rule: r3, form: 'liquid' }), ctx)).toBeNull()
+    expect(waterOf(s({ rule: r3, form: 'liquid', waterMl: 1.5 }), ctx)).toBe(
+      1.5
+    )
+    expect(waterOf(s({ rule: r3, form: 'bac' }), ctx)).toBeNull()
+    // Without water a liquid row has no value to report at all.
+    expect(
+      mk1Value(s({ rule: r3, form: 'liquid', reading: '<0.05' }), ctx)
+    ).toBeNull()
   })
 
   it('a ruled total moves the LOQ and the EU per vial', () => {

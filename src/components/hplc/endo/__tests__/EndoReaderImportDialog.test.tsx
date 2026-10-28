@@ -179,7 +179,7 @@ describe('EndoReaderImportDialog', () => {
         testId: 'T2',
         sampleId: 'P-0001-S02',
         testedAt: '2026-10-09T14:00:00',
-        result: '>5',
+        result: '~5',
         lt: false,
         value: null,
       }),
@@ -191,7 +191,7 @@ describe('EndoReaderImportDialog', () => {
     ).toBeInTheDocument()
     expect(
       within(dialog).getByText(
-        'Not usable, skipped: P-0001-S02 (>5 is not a usable reading)'
+        'Not usable, skipped: P-0001-S02 (~5 is not a usable reading)'
       )
     ).toBeInTheDocument()
     expect(
@@ -462,19 +462,20 @@ describe('EndoReaderImportDialog', () => {
 
   it('lists a test with no usable reading as skipped and never sends it', async () => {
     setup([endoItem({ sample_id: 'P-0001-S02' })])
-    // the parser keeps a ">" verbatim with no value; the server would refuse
-    // the whole import for it
+    // a qualifier the parser does not know keeps the reading verbatim with no
+    // value; the server would refuse the whole import for it. ">" is NOT one
+    // of these any more: it reads as a floor (Handler ruling 2026-10-26).
     const dialog = await drop([
       readerTest({
         sampleId: 'P-0001-S02',
-        result: '>5',
+        result: '~5',
         lt: false,
         value: null,
       }),
     ])
     expect(
       within(dialog).getByText(
-        'Not usable, skipped: P-0001-S02 (>5 is not a usable reading)'
+        'Not usable, skipped: P-0001-S02 (~5 is not a usable reading)'
       )
     ).toBeInTheDocument()
     expect(

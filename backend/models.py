@@ -770,6 +770,10 @@ class EndoPrepRule(Base):
     max_mg: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
     total_dilution: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
     step1_ratio: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    # The reconstitution water this band is prepped in, mL; NULL keeps the
+    # method's standard. Powder rows only: a liquid vial's volume is what the
+    # customer sent, so a rule never supplies it (endo_prep_rules).
+    recon_water_ml: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
     cartridge_type_id: Mapped[Optional[int]] = mapped_column(
         ForeignKey("consumable_types.id"), nullable=True)
     status: Mapped[str] = mapped_column(String(10), nullable=False, default="trial",
@@ -2290,6 +2294,11 @@ class LimsAnalysis(Base):
     loq: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
     lod: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
     lod_unit: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    # Endo ">" on the certificate: result_value is a FLOOR ("at least this
+    # much"), not a measurement. A "<" needs no flag — it is derived from
+    # value <= loq — but a floor of 2500 is indistinguishable from a measured
+    # 2500, so it has to be stored. NULL/false = an ordinary measured result.
+    result_floor: Mapped[Optional[bool]] = mapped_column(Boolean, nullable=True)
 
     review_state: Mapped[str] = mapped_column(
         Text, nullable=False, default="unassigned", server_default="unassigned",

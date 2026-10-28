@@ -12,6 +12,7 @@ import math
 import re
 from datetime import datetime, timezone
 from types import SimpleNamespace
+from typing import NamedTuple
 from typing import Optional
 
 from sqlalchemy import select
@@ -36,27 +37,36 @@ _READING_MAX = 40
 _DEAD_STATES = ("rejected", "retracted")
 
 
-def parse_reading(text: str) -> tuple[bool, float]:
-    """The instrument's display as typed: "0.8", "0", "<0.05" or "< 0.05".
-    Returns (is_less_than, value). Raises ValueError with a readable reason.
-    Same grammar as Dennis's parseResult (calc.js at 5ef2a62): whitespace is
-    ignored, then an optional "<" and a plain decimal. A "<" needs a value
-    above zero (spec 3.7)."""
+class Reading(NamedTuple):
+    """A parsed instrument display. `lt` is below the cartridge's lowest
+    standard, `gt` above its top one; at most one is ever true."""
+    lt: bool
+    gt: bool
+    value: float
+
+
+def parse_reading(text: str) -> Reading:
+    """The instrument's display as typed: "0.8", "0", "<0.05", "< 0.05" or
+    ">250". Raises ValueError with a readable reason. Same grammar as Dennis's
+    parseResult (calc.js at ab866a2): whitespace is ignored, then an optional
+    "<" or ">" and a plain decimal. A "<" needs a value above zero (spec 3.7);
+    a ">" does not, since ">0" only says "something", which judges
+    inconclusive anyway."""
     s = (text or "").strip()
     if not s:
         raise ValueError("A reading cannot be empty; send null to clear it")
     if len(s) > _READING_MAX:
         raise ValueError(f"A reading is at most {_READING_MAX} characters")
-    m = re.fullmatch(r"(<)?([0-9]*\.?[0-9]+)", re.sub(r"\s+", "", s))
+    m = re.fullmatch(r"([<>])?([0-9]*\.?[0-9]+)", re.sub(r"\s+", "", s))
     if not m:
         # ascii(): '0,8' still reads '0,8', but a lone surrogate is escaped,
         # so the 400 can be encoded (echoed raw, it became a 500).
         raise ValueError(f"{ascii(s)} is not a reading: type a number such as 0.8, "
-                         "or < and a number such as <0.05")
-    lt, value = bool(m.group(1)), float(m.group(2))
-    if lt and value <= 0:
+                         "or < or > and a number such as <0.05")
+    q, value = m.group(1), float(m.group(2))
+    if q == "<" and value <= 0:
         raise ValueError("A '<' reading needs a number above zero, such as <0.05")
-    return lt, value
+    return Reading(q == "<", q == ">", value)
 
 
 def _finite(v) -> bool:
@@ -467,14 +477,18 @@ def check_item_endo_fields(db: Session, worksheet, item, values: dict) -> dict:
             cartridge_type_id=out.get("cartridge_type_id", item.cartridge_type_id),
             prep_rule=item.prep_rule,
             prep_rules_off=out.get("prep_rules_off", item.prep_rules_off),
+            # The water this PATCH leaves, and the form that decides whether a
+            # rule may supply one at all (powder only).
+            prep_water_ml=out.get("prep_water_ml", item.prep_water_ml),
+            prep_form=out.get("prep_form", item.prep_form),
             result_reading=None if cleared else item.result_reading,
             result_entered_at=None if cleared else item.result_entered_at)
         # Without a method resolved here the row has a total of its own, which
         # wins below, so this standard (endo_run_params' default) is never read.
+        _params = endo_run_params(method["run_parameters"] if method else None)
         _, effective = row_effective(db, worksheet, item, view=after, facts=facts,
-                                     std_total=endo_run_params(
-                                         method["run_parameters"] if method else None
-                                     )["std_total_dilution"])
+                                     std_total=_params["std_total_dilution"],
+                                     std_water=_params["recon_water_ml"])
         # A total of the row's own is checked as sent, so zero or below is refused.
         total = total_after if total_after is not None else effective["total_dilution"]
         floor = STEP3_RATIO * effective["step1_ratio"]

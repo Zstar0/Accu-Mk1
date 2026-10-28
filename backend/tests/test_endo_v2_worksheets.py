@@ -53,12 +53,16 @@ def client(db):
 
 
 @pytest.mark.parametrize("text, expected", [
-    ("0.8", (False, 0.8)),
-    ("0", (False, 0.0)),
-    (".5", (False, 0.5)),
-    ("<0.05", (True, 0.05)),
-    ("< 0.05", (True, 0.05)),
-    (" 0.8 ", (False, 0.8)),
+    ("0.8", (False, False, 0.8)),
+    ("0", (False, False, 0.0)),
+    (".5", (False, False, 0.5)),
+    ("<0.05", (True, False, 0.05)),
+    ("< 0.05", (True, False, 0.05)),
+    (" 0.8 ", (False, False, 0.8)),
+    # Handler ruling 2026-10-26: above the cartridge's top standard.
+    (">5", (False, True, 5.0)),
+    ("> 250", (False, True, 250.0)),
+    (">0", (False, True, 0.0)),
 ])
 def test_parse_reading_accepts_the_instrument_display(text, expected):
     assert worksheets_endo.parse_reading(text) == expected

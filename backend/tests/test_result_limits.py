@@ -151,7 +151,7 @@ def test_a_new_retest_row_starts_without_limits(db_session):
 def test_source_retest_unpromote_clears_the_parent_limits(db_session):
     """Review Focus 4: the sample page's vial-side retest un-promotes the parent;
     its LOQ / LOD go with the value, so a regenerated COA cannot print a stale
-    "< LOQ"."""
+    "< <LOQ>"."""
     _svc, _parent, row, parent_row = _promoted_parent_with_limits(db_session)
 
     vial_source_retest(db_session, analysis_id=row.id, user_id=None)

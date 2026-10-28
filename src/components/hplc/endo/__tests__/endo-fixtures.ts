@@ -157,6 +157,7 @@ export function readerTest(over: Partial<ReaderTest> = {}): ReaderTest {
     identity: 'Retatrutide',
     sampleType: 'Peptide',
     result: '<0.05',
+    gt: false,
     lt: true,
     value: 0.05,
     sampleCv: 3.1,
