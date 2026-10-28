@@ -21,7 +21,7 @@ const CHIPS: { key: ActivityChip; label: string }[] = [
  *  the next keyset page; a manual "Load more" button is the accessible fallback
  *  (and the path used where IntersectionObserver is unavailable, e.g. jsdom).
  *  Personalization chips narrow the concatenated pages client-side. */
-export function FlagActivityFeed() {
+export function FlagActivityFeed({ returnTo }: { returnTo?: 'page' } = {}) {
   const {
     data,
     isLoading,
@@ -127,7 +127,9 @@ export function FlagActivityFeed() {
             </p>
           </div>
         ) : (
-          visible.map(item => <FlagActivityRow key={item.id} item={item} />)
+          visible.map(item => (
+            <FlagActivityRow key={item.id} item={item} returnTo={returnTo} />
+          ))
         )}
         <div ref={sentinel} />
         {hasNextPage && (

@@ -38,7 +38,9 @@ vi.mock('@/components/tasks/TasksTable', () => ({
   },
 }))
 vi.mock('@/components/flags/FlagActivityFeed', () => ({
-  FlagActivityFeed: () => <div data-testid="activity-feed" />,
+  FlagActivityFeed: ({ returnTo }: { returnTo?: string }) => (
+    <div data-testid="activity-feed" data-return-to={String(returnTo)} />
+  ),
 }))
 vi.mock('@/components/flags/RaiseFlagButton', () => ({
   RaiseFlagButton: ({ trigger }: { trigger?: ReactNode }) => <>{trigger}</>,
@@ -138,7 +140,11 @@ describe('TasksPage', () => {
   it('Activity renders the feed and no table', () => {
     setTab('activity')
     render(<TasksPage />)
-    expect(screen.getByTestId('activity-feed')).toBeInTheDocument()
+    // Threads opened from the feed return to this page.
+    expect(screen.getByTestId('activity-feed')).toHaveAttribute(
+      'data-return-to',
+      'page'
+    )
     expect(screen.queryByTestId('tasks-table')).toBeNull()
     expect(screen.queryByTestId('filter-bar')).toBeNull()
   })

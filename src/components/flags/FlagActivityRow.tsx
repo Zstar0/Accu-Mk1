@@ -18,8 +18,15 @@ import { FlagAvatar } from '@/components/flags/FlagAvatar'
 import { activityVerb } from '@/components/flags/flag-activity'
 
 /** One line in the Activity feed: actor → verb → flag → entity → time. Clicking
- *  opens that flag's thread. */
-export function FlagActivityRow({ item }: { item: ActivityItem }) {
+ *  opens that flag's thread; `returnTo="page"` makes back and close return to
+ *  the page that hosts the feed. */
+export function FlagActivityRow({
+  item,
+  returnTo,
+}: {
+  item: ActivityItem
+  returnTo?: 'page'
+}) {
   const users = useFlagUsers()
   const typesMap = useFlagTypesMap()
   const kindLabels = useItemKindLabels()
@@ -37,16 +44,22 @@ export function FlagActivityRow({ item }: { item: ActivityItem }) {
     statusLabelOf: slug => STATUS_LABELS[slug as FlagStatus] ?? slug,
   })
   const entity = entityDisplayLabel(item.flag, kindLabels)
+  // No second argument without returnTo: the store treats a present
+  // `returnTo` key, even undefined, as "clear the marker".
+  const open = () =>
+    returnTo
+      ? useUIStore.getState().openFlagThread(item.flag.id, { returnTo })
+      : useUIStore.getState().openFlagThread(item.flag.id)
 
   return (
     <div
       role="button"
       tabIndex={0}
-      onClick={() => useUIStore.getState().openFlagThread(item.flag.id)}
+      onClick={open}
       onKeyDown={e => {
         if (e.key === 'Enter' || e.key === ' ') {
           e.preventDefault()
-          useUIStore.getState().openFlagThread(item.flag.id)
+          open()
         }
       }}
       className="group flex cursor-pointer items-center gap-2 rounded-md px-2 py-1.5 transition-colors hover:bg-muted/60"

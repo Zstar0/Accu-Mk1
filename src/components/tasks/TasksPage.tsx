@@ -168,7 +168,7 @@ function TasksBody({
 
       {isActivity ? (
         <div className="min-h-0 flex-1 overflow-y-auto">
-          <FlagActivityFeed />
+          <FlagActivityFeed returnTo="page" />
         </div>
       ) : (
         <div className="min-h-0 flex-1 overflow-y-auto p-3">
