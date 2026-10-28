@@ -31,10 +31,15 @@ interface DataTableProps<TData, TValue> {
   selectedRowId?: string | number
   getRowId?: (row: TData) => string
   enableColumnResizing?: boolean
-  /** Controlled sorting. Absent: DataTable keeps its own. */
+  /** Controlled sorting: pass `sorting` and `onSortingChange` together.
+   *  Absent: DataTable keeps its own. Pick one mode for the table's lifetime;
+   *  never switch between controlled and uncontrolled. */
   sorting?: SortingState
   onSortingChange?: (next: SortingState) => void
-  /** Controlled column widths. Absent: TanStack keeps its own. */
+  /** Controlled column widths: pass `columnSizing` and
+   *  `onColumnSizingChange` together. Absent: TanStack keeps its own. Pick one
+   *  mode for the table's lifetime; never switch between controlled and
+   *  uncontrolled. */
   columnSizing?: ColumnSizingState
   onColumnSizingChange?: (next: ColumnSizingState) => void
   /** Fires once when a resize drag ends, with the widths after it. */

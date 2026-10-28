@@ -26,6 +26,7 @@
 - Slack fallback: `#tasks/overview?flag=<id>`.
 
 **Working rules for this worktree** (`C:/tmp/Accu-Mk1-tasks-page`, branch `feat/tasks-page`):
+
 - Backend Python: `/c/Users/forre/OneDrive/Documents/GitHub/Accumark-Workspace/Accu-Mk1/backend/.venv/Scripts/python.exe` (bare `python` hangs on this box). Abbreviated below as `$PY`. Run from `backend/`, prefixed `MK1_DB_HOST=127.0.0.1 INTEGRATION_DB_LOCAL_HOST=127.0.0.1`. One pytest process at a time.
 - Frontend: run `npm ci` once before Task 3 (no `node_modules` in this worktree yet).
 - New files written on Windows come out CRLF: `sed -i 's/\r$//' <new files>` before staging.
@@ -45,12 +46,14 @@
 ### Task 1: Backend per-user UI settings store
 
 **Files:**
+
 - Modify: `backend/models.py` (add `UserUiSetting` after `SlackDmPrefs`)
 - Create: `backend/ui_settings/__init__.py` (empty), `backend/ui_settings/routes.py`
 - Modify: `backend/main.py` (import near line 125, `app.include_router` next to `flags_router` near line 648)
 - Test: `backend/tests/test_ui_settings_routes.py`
 
 **Interfaces:**
+
 - Produces: `GET /api/ui-settings/{key}` and `PUT /api/ui-settings/{key}` (body `{"value": {...}}`), both returning `{"key": str, "value": dict | null}`. Consumed by Task 7.
 
 - [ ] **Step 1: Write the failing tests.** Fixture: in-memory sqlite engine with `StaticPool`, `Base.metadata.create_all`, two `User` rows (ids 1 and 2); a bare `FastAPI()` app that includes `ui_settings.routes.router`, with `app.dependency_overrides` for `get_db` and `get_current_user` (a mutable holder so a test can switch to user 2).
@@ -103,6 +106,7 @@ def test_settings_are_per_user(client, as_user):
 ### Task 2: Slack fallback link opens the Tasks page
 
 **Files:**
+
 - Modify: `backend/slack_notify/messages.py` (`link_hash_for`, fallback line)
 - Test: `backend/tests/test_slack_notify_messages.py` (assertions at lines 22, 47-48, 63; check line 83's intent)
 
@@ -117,10 +121,12 @@ def test_settings_are_per_user(client, as_user):
 ### Task 3: `DataTable` optional controlled state
 
 **Files:**
+
 - Modify: `src/components/ui/data-table.tsx`
 - Test: `src/components/ui/__tests__/data-table.test.tsx` (new)
 
 **Interfaces:**
+
 - Produces (all optional; absent means today's behavior):
   - `sorting?: SortingState`, `onSortingChange?: (next: SortingState) => void`
   - `columnSizing?: ColumnSizingState`, `onColumnSizingChange?: (next: ColumnSizingState) => void`
@@ -161,11 +167,13 @@ it('getRowClassName adds its class to the row', ...)
 ### Task 4: Shared flag table cells
 
 **Files:**
+
 - Create: `src/components/flags/flag-table-cells.tsx`
 - Modify: `src/components/flags/FlagTable.tsx` (rows compose the cells; header and `GRID_TEMPLATE` unchanged)
 - Test: existing `src/components/flags/__tests__/FlagTable.test.tsx` (unchanged)
 
 **Interfaces:**
+
 - Produces (markup moved verbatim from `FlagTableRow`):
   - `UnreadAccentCell({ unread }: { unread: boolean })`
   - `EntityCell({ flag, kindLabels }: { flag: FlagResponse; kindLabels: Record<string, string> })` (includes the deep-link button and its `stopPropagation`)
@@ -186,12 +194,14 @@ it('getRowClassName adds its class to the row', ...)
 ### Task 5: Flyout "return to page" marker
 
 **Files:**
+
 - Modify: `src/store/ui-store.ts` (state, `openFlagThread`, `closeFlagThread`, `closeFlagsFlyout`, and the other flyout openers)
 - Modify: `src/components/flags/FlagsFlyout.tsx` (thread `tabLabel`, line 269)
 - Modify: `src/lib/hash-navigation.ts` (`applyNavToStore`, `?flag=` branch)
 - Test: `src/store/ui-store.test.ts`, `src/lib/__tests__/hash-navigation-flag.test.ts`
 
 **Interfaces:**
+
 - Produces: state `flagsThreadReturnTo: 'page' | null` (initial `null`); `openFlagThread(id: number, opts?: { returnTo?: 'page' }) => void`. Consumed by Tasks 8 and 9.
 - Rules: `openFlagThread` sets `returnTo` to `opts.returnTo` when given, else keeps the current value if the flyout is already open, else `null`. `closeFlagThread` with `returnTo === 'page'` does everything `closeFlagsFlyout` does; otherwise it behaves as today. `closeFlagsFlyout`, `openFlagsFlyout`, `openFlagsForEntity` and `openFlagsForSamples` set it to `null`.
 
@@ -201,18 +211,25 @@ it('getRowClassName adds its class to the row', ...)
 it('closeFlagThread with the page marker closes the flyout', () => {
   s().openFlagThread(5, { returnTo: 'page' })
   s().closeFlagThread()
-  expect(s()).toMatchObject({ flagsFlyoutOpen: false, flagsThreadId: null, flagsThreadReturnTo: null })
+  expect(s()).toMatchObject({
+    flagsFlyoutOpen: false,
+    flagsThreadId: null,
+    flagsThreadReturnTo: null,
+  })
 })
 it('marker survives opening another thread while the flyout is open', () => {
-  s().openFlagThread(5, { returnTo: 'page' }); s().openFlagThread(6)
+  s().openFlagThread(5, { returnTo: 'page' })
+  s().openFlagThread(6)
   expect(s().flagsThreadReturnTo).toBe('page')
 })
 it('a plain open from a closed flyout has no marker', () => {
-  s().closeFlagsFlyout(); s().openFlagThread(7)
+  s().closeFlagsFlyout()
+  s().openFlagThread(7)
   expect(s().flagsThreadReturnTo).toBeNull()
 })
 it('opening the flyout list clears the marker', () => {
-  s().openFlagThread(5, { returnTo: 'page' }); s().openFlagsFlyout()
+  s().openFlagThread(5, { returnTo: 'page' })
+  s().openFlagsFlyout()
   expect(s().flagsThreadReturnTo).toBeNull()
 })
 ```
@@ -223,11 +240,16 @@ and in `hash-navigation-flag.test.ts`:
 it('#tasks/overview?flag=42 opens the Tasks page with the thread marked', () => {
   window.location.hash = '#tasks/overview?flag=42'
   // apply as the existing tests do
-  expect(useUIStore.getState()).toMatchObject({ activeSection: 'tasks', flagsThreadId: 42, flagsThreadReturnTo: 'page' })
+  expect(useUIStore.getState()).toMatchObject({
+    activeSection: 'tasks',
+    flagsThreadId: 42,
+    flagsThreadReturnTo: 'page',
+  })
 })
 ```
 
 The existing `closeFlagThread() drops the thread but keeps the flyout open` test must stay green unchanged.
+
 - [ ] **Step 2: Run to verify failure.** `npx vitest run src/store/ui-store.test.ts src/lib/__tests__/hash-navigation-flag.test.ts`.
 - [ ] **Step 3: Implement the store rules.** Add `'tasks'` to `ActiveSection` and to `VALID_SECTIONS` in this task (the hash test needs it). In `applyNavToStore`: `store.openFlagThread(flagId, section === 'tasks' ? { returnTo: 'page' } : undefined)`. In `FlagsFlyout`: `tabLabel={flagsThreadReturnTo === 'page' ? 'Tasks' : activeTabLabel}`.
 - [ ] **Step 4: Run the two files plus `src/components/flags`, then `npm run typecheck`.** Expected: pass; flags folder unchanged; no type errors from the widened `ActiveSection` union (fix any exhaustive `Record<ActiveSection, ...>` maps it breaks).
@@ -238,11 +260,13 @@ The existing `closeFlagThread() drops the thread but keeps the flyout open` test
 ### Task 6: Separate filter scope and the page's list hook
 
 **Files:**
+
 - Modify: `src/components/flags/use-flag-filter.ts`
 - Create: `src/components/tasks/use-task-list.ts`, `src/components/tasks/tasks-tabs.ts`
 - Test: `src/components/flags/__tests__/use-flag-filter.test.ts`, `src/components/tasks/__tests__/use-task-list.test.ts`
 
 **Interfaces:**
+
 - Produces: `useFlagFilter(tab: string, scope: string = 'flags')`; storage key `` `${scope}:filter:${tab}` ``; defaults still from `defaultFlagFilter(tab)` (bare tab).
 - Produces in `tasks-tabs.ts`: `type TasksTab = 'assigned' | 'raised' | 'watching' | 'all_open' | 'unread' | 'activity'`; `TASKS_TABS: { value: TasksTab; label: string }[]` with the flyout's labels and order (Assigned to me, Raised by me, Watching, All open, Unread, Activity); `DEFAULT_TASKS_TAB: TasksTab = 'assigned'`.
 - Produces: `useTaskList(tab: TasksTab, filter: FlagFilterState): TaskList` where `TaskList = { total: number; visibleFlags: FlagResponse[]; searchMeta: Map<number, FlagSearchMeta>; isLoading: boolean; isError: boolean; refetch: () => void; searchPending: boolean; unreadIds: Set<number>; unreadCount: number; buckets: ReturnType<typeof unreadBuckets> }`. Same derivation as the flyout's un-scoped path (`FlagsFlyout.tsx` tab query, Unread list, `filterFlags`, debounced `useFlagSearch` at 3+ chars, `mergeSearchHits`). For `activity` it returns an empty list (the page renders the feed). `// ponytail: duplicates FlagsFlyout's un-scoped derivation; switch the flyout to this hook in a later change.`
@@ -254,12 +278,15 @@ it('scope keeps a separate storage key with the same defaults', () => {
   const { result } = renderHook(() => useFlagFilter('assigned', 'tasks'))
   expect(result.current[0].status).toBe('all_open')
   act(() => result.current[1]({ ...result.current[0], status: 'all' }))
-  expect(localStorage.getItem('tasks:filter:assigned')).toContain('"status":"all"')
+  expect(localStorage.getItem('tasks:filter:assigned')).toContain(
+    '"status":"all"'
+  )
   expect(localStorage.getItem('flags:filter:assigned')).toBeNull()
 })
 ```
 
 `use-task-list.test.ts` (mock `@/hooks/use-flags`): returns the tab query's flags filtered by status; `unread` tab returns the unread list; a 3+ char search merges a comment-only hit; `activity` returns `visibleFlags: []`.
+
 - [ ] **Step 2: Run to verify failure.** `npx vitest run src/components/flags/__tests__/use-flag-filter.test.ts src/components/tasks`.
 - [ ] **Step 3: Implement** the scope argument and the two new files.
 - [ ] **Step 4: Run again plus `src/components/flags`.** Expected: pass; flyout tests unchanged.
@@ -270,10 +297,12 @@ it('scope keeps a separate storage key with the same defaults', () => {
 ### Task 7: Settings client and `useTasksPageSettings`
 
 **Files:**
+
 - Create: `src/lib/ui-settings-api.ts`, `src/components/tasks/tasks-page-settings.ts`
 - Test: `src/components/tasks/__tests__/tasks-page-settings.test.tsx`
 
 **Interfaces:**
+
 - Consumes: Task 1 routes; `TasksTab` and `TASKS_TABS` from Task 6.
 - Defines `TASK_COLUMN_LIMITS` here (Task 8 imports it), so this task has no forward dependency.
 - Produces:
@@ -289,25 +318,53 @@ it('scope keeps a separate storage key with the same defaults', () => {
 it('parseTasksSettings sanitizes bad input', () => {
   expect(parseTasksSettings(null)).toEqual(DEFAULT_TASKS_SETTINGS)
   expect(parseTasksSettings([1])).toEqual(DEFAULT_TASKS_SETTINGS)
-  const p = parseTasksSettings({ v: 1, tab: 'gone', sorting: [{ id: 'nope', desc: true }],
-    columnSizing: { title: 99999, type: 10, item: 0, due: -5, status: Number.NaN, ghost: 200 } })
+  const p = parseTasksSettings({
+    v: 1,
+    tab: 'gone',
+    sorting: [{ id: 'nope', desc: true }],
+    columnSizing: {
+      title: 99999,
+      type: 10,
+      item: 0,
+      due: -5,
+      status: Number.NaN,
+      ghost: 200,
+    },
+  })
   expect(p.tab).toBe('assigned')
   expect(p.sorting).toEqual([])
-  expect(p.columnSizing).toEqual({ title: 900, type: 80 })   // positive values clamped; <= 0, NaN and unknown ids dropped
+  expect(p.columnSizing).toEqual({ title: 900, type: 80 }) // positive values clamped; <= 0, NaN and unknown ids dropped
 })
 it('keeps only the first sort entry', () => {
-  expect(parseTasksSettings({ sorting: [{ id: 'due', desc: false }, { id: 'title', desc: true }] }).sorting)
-    .toEqual([{ id: 'due', desc: false }])
+  expect(
+    parseTasksSettings({
+      sorting: [
+        { id: 'due', desc: false },
+        { id: 'title', desc: true },
+      ],
+    }).sorting
+  ).toEqual([{ id: 'due', desc: false }])
 })
-it('loads a saved value once and applies it', async () => { /* getUiSetting resolves {tab:'watching'} -> ready, settings.tab 'watching' */ })
+it('loads a saved value once and applies it', async () => {
+  /* getUiSetting resolves {tab:'watching'} -> ready, settings.tab 'watching' */
+})
 it('load failure falls back to defaults without saving', async () => {
   // getUiSetting rejects -> ready true, settings equal DEFAULT_TASKS_SETTINGS, putUiSetting not called
 })
 it('debounces saves into one PUT of the merged value', async () => {
   // fake timers: update({ tab: 'raised' }); update({ sorting: [{ id: 'due', desc: true }] }); advance 499 -> 0 calls; advance 1 -> 1 call
-  expect(put).toHaveBeenCalledWith('tasks.page', expect.objectContaining({ v: 1, tab: 'raised', sorting: [{ id: 'due', desc: true }] }))
+  expect(put).toHaveBeenCalledWith(
+    'tasks.page',
+    expect.objectContaining({
+      v: 1,
+      tab: 'raised',
+      sorting: [{ id: 'due', desc: true }],
+    })
+  )
 })
-it('a failed save shows one toast', async () => { /* put rejects -> toast.error called once with the exact copy */ })
+it('a failed save shows one toast', async () => {
+  /* put rejects -> toast.error called once with the exact copy */
+})
 it('a remount shows the updated value without a second GET', async () => {
   // shared QueryClient: mount, update({ tab: 'raised' }), unmount, mount again
   expect(result.current.settings.tab).toBe('raised')
@@ -325,10 +382,12 @@ it('a remount shows the updated value without a second GET', async () => {
 ### Task 8: `TasksTable`
 
 **Files:**
+
 - Create: `src/components/tasks/task-columns.tsx`, `src/components/tasks/TasksTable.tsx`
 - Test: `src/components/tasks/__tests__/TasksTable.test.tsx` (mock `flag-users` exactly as `FlagTable.test.tsx` does)
 
 **Interfaces:**
+
 - Consumes: Task 3 `DataTable` props; Task 4 cells; Task 5 `openFlagThread(id, { returnTo: 'page' })`; Task 7 `TASK_COLUMN_LIMITS`, `TaskColumnId`.
 - Produces: `TasksTable(props: { flags: FlagResponse[]; unreadIds: Set<number>; searchMeta: Map<number, FlagSearchMeta>; sorting: SortingState; onSortingChange: (s: SortingState) => void; columnSizing: ColumnSizingState; onColumnSizingChange: (s: ColumnSizingState) => void; onColumnSizingCommit: (s: ColumnSizingState) => void })`.
 - `interface TaskColumnContext { users: UserMap; typesMap: Record<string, FlagTypeDef>; kindLabels: Record<string, string>; currentUserId: number | null; unreadIds: Set<number>; searchMeta: Map<number, FlagSearchMeta> }`. `TasksTable` builds it from the same hooks `FlagTable` uses (`useFlagUsers`, `useFlagTypesMap`, `useItemKindLabels`, `useAuthStore(s => s.user?.id ?? null)`) plus its props.
@@ -362,11 +421,13 @@ it('the Item deep-link button does not open the thread', ...)
 ### Task 9: `TasksPage` and navigation
 
 **Files:**
+
 - Create: `src/components/tasks/TasksPage.tsx`
 - Modify: `src/components/layout/MainWindowContent.tsx` (`case 'tasks': return <TasksPage />`), `src/components/layout/AppSidebar.tsx` (item `{ id: 'tasks', label: 'Tasks', icon: ListChecks }` directly after the dashboard item, no `adminOnly`)
 - Test: `src/components/tasks/__tests__/TasksPage.test.tsx` (mock `useTasksPageSettings`, `useTaskList`, `FlagActivityFeed`, `RaiseFlagButton`, `FlagsFilterBar`)
 
 **Interfaces:**
+
 - Consumes: Tasks 5 to 8.
 - Layout per spec section 2: header (title `Tasks`, Guide link `/guides/flags-system-guide.html`, `RaiseFlagButton` with a `New task` trigger), tab row from `TASKS_TABS` with the flyout's unread count and dots, `FlagsFilterBar` driven by `useFlagFilter(tab, 'tasks')` (shown on API tabs only, `showAssignee={tab !== 'assigned'}`), then the body. Count line `N of M` as in the flyout.
 - Settings: wait for `ready` (show three `Skeleton` rows). Tab change calls `update({ tab })`; sort change calls `update({ sorting })`; widths live in page state during a drag and `onColumnSizingCommit` calls `update({ columnSizing })`.

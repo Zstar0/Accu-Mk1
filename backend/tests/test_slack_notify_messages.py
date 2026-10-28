@@ -45,6 +45,8 @@ def test_link_hash_for_routes_to_the_entity_page():
     # No usable deep link → Tasks page fallback (thread still opens).
     assert link_hash_for({"kind": "none", "id": "42"}, 7) == (
         "#tasks/overview?flag=7")
+    assert link_hash_for({"kind": "document", "id": "5"}, 7) == (
+        "#tasks/overview?flag=7")
     assert link_hash_for(None, 7) == "#tasks/overview?flag=7"
 
 

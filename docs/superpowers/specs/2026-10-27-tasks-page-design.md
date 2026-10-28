@@ -135,17 +135,17 @@ behavior is unchanged.
 
 Columns, left to right:
 
-| Column | Content | Sort key |
-| --- | --- | --- |
-| (accent) | Unread bar, same as `FlagTable` | not sortable, not resizable, fixed narrow |
-| Item | Entity chip with deep-link button, same as `FlagTable` | display label, case-insensitive |
-| Type | Type pill | type label, case-insensitive |
-| Title | Title plus the search-hit marker | title, case-insensitive |
-| Assignee | Avatar plus name | name, case-insensitive; Unassigned sorts last |
-| Status | Status pill | workflow order: open, in_progress, blocked, resolved, closed |
-| Due | Due label, overdue in red | `due_at`; tasks with no due date sort last in both directions |
-| Last activity | **New column.** `updated_at`, same date-time format as Created | `updated_at` |
-| Created | `created_at` | `created_at` |
+| Column        | Content                                                        | Sort key                                                      |
+| ------------- | -------------------------------------------------------------- | ------------------------------------------------------------- |
+| (accent)      | Unread bar, same as `FlagTable`                                | not sortable, not resizable, fixed narrow                     |
+| Item          | Entity chip with deep-link button, same as `FlagTable`         | display label, case-insensitive                               |
+| Type          | Type pill                                                      | type label, case-insensitive                                  |
+| Title         | Title plus the search-hit marker                               | title, case-insensitive                                       |
+| Assignee      | Avatar plus name                                               | name, case-insensitive; Unassigned sorts last                 |
+| Status        | Status pill                                                    | workflow order: open, in_progress, blocked, resolved, closed  |
+| Due           | Due label, overdue in red                                      | `due_at`; tasks with no due date sort last in both directions |
+| Last activity | **New column.** `updated_at`, same date-time format as Created | `updated_at`                                                  |
+| Created       | `created_at`                                                   | `created_at`                                                  |
 
 - **Last activity** is new because the server already orders lists by `updated_at`; showing it makes the default
   order visible and sortable.
