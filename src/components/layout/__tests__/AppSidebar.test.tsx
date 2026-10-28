@@ -134,6 +134,12 @@ describe('AppSidebar — Customers entry (Phase 29-03)', () => {
     expect(screen.getByRole('button', { name: 'Boards' })).toBeInTheDocument()
   })
 
+  it('Tasks is a top-level item for every user and opens tasks/overview', () => {
+    renderSidebar()
+    fireEvent.click(screen.getByRole('button', { name: 'Tasks' }))
+    expect(uiState.navigateTo).toHaveBeenCalledWith('tasks', 'overview')
+  })
+
   it('orders AccuMark Tools sub-items as Overview → Order Explorer → Order Status → Vial Status → Customers → Customer Insights → COA Explorer → Digital COA → Chromatographs', () => {
     renderSidebar()
     // Scope to the AccuMark Tools group: walk up from a uniquely-named

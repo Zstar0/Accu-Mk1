@@ -14,6 +14,7 @@ import {
   TestTube,
   UserCog,
   Map,
+  ListChecks,
 } from 'lucide-react'
 import { relaunch } from '@tauri-apps/plugin-process'
 import {
@@ -70,6 +71,11 @@ const navItems: NavItem[] = [
       { id: 'orders', label: 'Orders' },
       { id: 'analytics', label: 'Analytics' },
     ],
+  },
+  {
+    id: 'tasks',
+    label: 'Tasks',
+    icon: ListChecks,
   },
   {
     id: 'senaite',

@@ -39,6 +39,7 @@ import { AdminClickupUsers } from '@/pages/AdminClickupUsers'
 import { SettingsPage } from '@/components/preferences/SettingsPage'
 import { BoardsPage } from '@/components/boards/BoardsPage'
 import { BoardPage } from '@/components/boards/BoardPage'
+import { TasksPage } from '@/components/tasks/TasksPage'
 import { useUIStore } from '@/store/ui-store'
 import { useAuthStore } from '@/store/auth-store'
 
@@ -121,6 +122,8 @@ export function MainWindowContent({
         if (activeSubSection === 'board' && boardTargetSlug)
           return <BoardPage key={boardTargetSlug} slug={boardTargetSlug} />
         return <BoardsPage />
+      case 'tasks':
+        return <TasksPage />
       default:
         return null
     }
