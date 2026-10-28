@@ -90,7 +90,13 @@ export function blendNickname(identity: string | null | undefined): string | nul
 
 /** Cut to 40 characters at a word, never ending on an open bracket. */
 export function endoscanFamily(product: string | null | undefined): string {
-  const p = String(product ?? '').trim()
+  // Measured as it will be WRITTEN, not as it arrives. endoscanCsvField turns
+  // each ", " into " + ", one character longer, so a 39 or 40 character comma
+  // blend reached the reader at 41+ and was rejected: the very thing this cap
+  // exists to stop. Flattening first also makes the later endoscanCsvField a
+  // no-op on this field, since no comma is left and the apostrophe guard does
+  // not fire on its own output.
+  const p = endoscanCsvField(product)
   if (p.length <= ENDOSCAN_FAMILY_MAX) return p
   const cut = p.slice(0, ENDOSCAN_FAMILY_MAX)
   const at = Math.max(cut.lastIndexOf(' + '), cut.lastIndexOf(', '), cut.lastIndexOf(' '))
@@ -128,6 +134,18 @@ export interface EndoscanSkip {
  * One row per vial, in worksheet order. A row the reader could not use is
  * left out and named in `skipped` rather than written wrong.
  */
+/**
+ * The limit as the reader must read it: never ABOVE the real cut. `fmt` rounds
+ * to nearest, so 350 / (3 mL x 250) = 0.46667 was written "0.467" and the
+ * instrument, told "<= 0.467", passed a vial Mk1 fails at 350.25 EU/vial.
+ * Rounding down can only make the reader stricter than Mk1, never laxer, which
+ * is the safe direction: a false fail costs a re-run, a false pass ships.
+ * This is a deliberate divergence from Dennis's tool, which rounds to nearest.
+ */
+function endoscanLimit(failAt: number): string {
+  return fmt(Math.floor(failAt * 1000) / 1000)
+}
+
 export function endoscanSampleRows(
   samples: EndoSample[],
   ctx: EndoCtx
@@ -150,7 +168,9 @@ export function endoscanSampleRows(
       })
       continue
     }
-    seen.add(id.toUpperCase())
+    // seen.add is deliberately NOT here: a row that is skipped below must not
+    // take the ID, or a later writable row for the same vial is dropped too
+    // and told, wrongly, that it is "already in the file".
     const k = prep2Check(s, ctx)
     const base: EndoscanRow = {
       'Product Family': '',
@@ -179,6 +199,7 @@ export function endoscanSampleRows(
         Comments:
           fmtUl(sampleUl) + ' + ' + fmtUl(CARTRIDGE_UL - sampleUl) + ' uL LAL water',
       })
+      seen.add(id.toUpperCase())
       continue
     }
     if (k.failAt === null) {
@@ -203,9 +224,10 @@ export function endoscanSampleRows(
       ...base,
       'Product Family': 'Peptides',
       'Sample ID': endoscanFamily(product),
-      'Endotoxin Limit': fmt(k.failAt),
+      'Endotoxin Limit': endoscanLimit(k.failAt),
       Comments: steps,
     })
+    seen.add(id.toUpperCase())
   }
   return { rows, skipped }
 }

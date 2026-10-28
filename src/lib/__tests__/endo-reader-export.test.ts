@@ -131,7 +131,10 @@ describe('EndoScan-V sample export', () => {
 
     // A liquid vial's own water.
     expect(rows[2]?.Comments).toBe('1:250 in 3 mL')
-    expect(rows[2]?.['Endotoxin Limit']).toBe('0.467') // 350 / (3 x 250)
+    // 350 / (3 x 250) = 0.46667. Written DOWN, not to nearest: told "<= 0.467"
+    // the reader would pass a vial Mk1 fails at 350.25 EU/vial. Dennis's tool
+    // rounds to nearest and writes 0.467; this is a deliberate divergence.
+    expect(rows[2]?.['Endotoxin Limit']).toBe('0.466')
 
     const bw = rows[3]
     expect(bw?.['Dil./Conc.']).toBe('1:20')
@@ -216,7 +219,7 @@ describe('EndoScan-V sample export', () => {
         ],
         ctx
       ).rows[0]?.['Sample ID']
-    ).toBe('Retatrutide, Tirzepatide, CJC-1295')
+    ).toBe('Retatrutide + Tirzepatide + CJC-1295')
   })
 
   it('names KLOW and GLOW by their components, ignoring descriptors and order', () => {
@@ -245,7 +248,9 @@ describe('EndoScan-V sample export', () => {
       ],
       ctx
     ).rows
-    expect(rows.map(r => r['Sample ID'])).toEqual(['KLOW', 'GLOW', 'BPC-157, TB500'])
+    // The row carries the Sample ID as it will be WRITTEN, commas already
+    // flattened, so the 40-character cap measures the bytes the reader sees.
+    expect(rows.map(r => r['Sample ID'])).toEqual(['KLOW', 'GLOW', 'BPC-157 + TB500'])
   })
 
   it('writes each vial ID once, naming the row it leaves out', () => {
@@ -341,5 +346,51 @@ describe('EndoScan-V sample export', () => {
       ctx
     ).rows[0]
     expect(row?.['Sample ID']).toBe('Retatrutide')
+  })
+
+  it('never writes a limit above the real cut, whatever the rounding', () => {
+    // The safe direction: a limit rounded UP lets the reader pass a vial Mk1
+    // fails, and the reader's own pass flag is what the tech reads at the bench.
+    for (const water of [3, 7, 9, 11, 13]) {
+      const row = endoscanSampleRows(
+        [sample({ sampleId: `P-9${water}00-S02`, form: 'liquid', waterMl: water, weightMg: 10 })],
+        ctx
+      ).rows[0]
+      const written = Number(row?.['Endotoxin Limit'])
+      const real = 350 / (water * ENDO_RUN_PARAM_DEFAULTS.stdTotalDilution)
+      expect(written).toBeLessThanOrEqual(real)
+      expect(real - written).toBeLessThan(0.001)
+    }
+  })
+
+  it('lets a later writable row take a vial ID the skipped first row did not use', () => {
+    // The first row cannot be set up (a liquid with no volume typed), so it must
+    // not claim the ID: the second row is writable and is the one the reader needs.
+    const { rows, skipped } = endoscanSampleRows(
+      [
+        sample({ sampleId: 'P-6100-S02', form: 'liquid', waterMl: null, weightMg: 10 }),
+        sample({ sampleId: 'p-6100-s02', form: 'liquid', waterMl: 3, weightMg: 10 }),
+      ],
+      ctx
+    )
+    expect(rows.map(r => r['Sample Name'])).toEqual(['p-6100-s02'])
+    expect(skipped).toHaveLength(1)
+    expect(skipped[0]?.why).toMatch(/no volume typed/)
+    expect(skipped[0]?.why).not.toMatch(/already in the file/)
+  })
+
+  it('caps a comma blend at 40 characters as WRITTEN, not as received', () => {
+    // 39 characters in, 41 out once each ", " becomes " + ": the length the
+    // importer rejects. The cap has to measure the bytes that reach the reader.
+    const identity = 'Semaglutide, Cagrilintide, Tirzepatide1'
+    expect(identity.length).toBeLessThanOrEqual(40)
+    const csv = endoscanSampleCsv(
+      [sample({ sampleId: 'P-6200-S02', identity, weightMg: 10 })],
+      ctx
+    ).csv
+    const line = csv.replace(/^\uFEFF/, '').split(String.fromCharCode(13, 10))[1] ?? ''
+    const written = line.split(',')[2] ?? ''
+    expect(written.length).toBeLessThanOrEqual(40)
+    expect(written).not.toMatch(/,/)
   })
 })
