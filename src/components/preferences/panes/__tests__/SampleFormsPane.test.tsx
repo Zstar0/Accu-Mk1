@@ -1,6 +1,20 @@
-import { render, screen, within } from '@testing-library/react'
+import { fireEvent, render, screen, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { describe, it, expect, beforeEach, vi } from 'vitest'
+
+// Radix Select under jsdom: pointer capture and scrollIntoView are missing.
+window.HTMLElement.prototype.hasPointerCapture = vi.fn()
+window.HTMLElement.prototype.scrollIntoView = vi.fn()
+
+/** Open a Radix Select and pick an option (fireEvent, as in SampleFormSelect.test). */
+async function pickRoute(trigger: HTMLElement, route: string) {
+  fireEvent.click(trigger)
+  fireEvent.click(
+    await screen.findByRole('option', {
+      name: `preferences.sampleForms.route.${route}`,
+    })
+  )
+}
 
 const h = vi.hoisted(() => ({
   state: { loading: false, error: false, empty: false },
@@ -145,7 +159,7 @@ describe('SampleFormsPane', () => {
     const name = screen.getByDisplayValue('Pen')
     await user.clear(name)
     await user.type(name, 'Pen v2')
-    await user.selectOptions(
+    await pickRoute(
       within(row('Pen')).getByLabelText('Pen route'),
       'nasal_inhaled'
     )
@@ -170,7 +184,7 @@ describe('SampleFormsPane', () => {
       screen.getByLabelText('preferences.sampleForms.newName'),
       'Syringe'
     )
-    await user.selectOptions(
+    await pickRoute(
       screen.getByLabelText('preferences.sampleForms.newRoute'),
       'oral'
     )
@@ -178,6 +192,33 @@ describe('SampleFormsPane', () => {
     expect(h.create).toHaveBeenCalledWith(
       { name: 'Syringe', route: 'oral' },
       expect.anything()
+    )
+  })
+
+  it('every row, the header and the add row share one column template', () => {
+    const { container } = render(<SampleFormsPane />)
+    const template = (el: Element) =>
+      [...el.classList].find(c => c.startsWith('grid-cols-['))
+    const rows = screen.getAllByRole('group')
+    const header = screen.getByText(
+      'preferences.sampleForms.colForm'
+    ).parentElement
+    const addRow = container.querySelector('form')
+    if (!header || !addRow) throw new Error('expected the header and add row')
+    const templates = [...rows, header, addRow].map(template)
+    expect(templates[0]).toBeDefined()
+    // A per-row `auto` track is what let the columns drift: no track may size
+    // itself from its own row's content.
+    expect(templates[0]).not.toMatch(/auto/)
+    expect(new Set(templates).size).toBe(1)
+    // The default badge sits in the Make default slot, not beside the name.
+    expect(
+      within(row('Vial')).getByText('preferences.sampleForms.default')
+        .parentElement
+    ).toBe(
+      within(row('Vial')).getByRole('button', {
+        name: 'preferences.sampleForms.save',
+      }).parentElement
     )
   })
 
