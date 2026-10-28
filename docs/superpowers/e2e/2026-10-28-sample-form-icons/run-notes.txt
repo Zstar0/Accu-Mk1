@@ -88,3 +88,11 @@ Hover zoom on the photo still opens 360px wide from the photo's top-right corner
 19 Sample header after, dark, unflagged
 20 Sample header after, light
 21 Flagged sample: the flag pill wraps to a second line
+
+Shorter action labels (2026-10-28, same stack): "Manage Sub-Samples" -> "Sub-Samples" and
+"Variance Summary" -> "Variance" (the dialog keeps its Variance Summary title; the lab-tech guide's
+"click" line follows the button). That frees 120px, so a flagged sample's pill now stays on the
+actions row: 965px of buttons in a 992px row, header 156px (148px unflagged). Light mode below is a
+real workflow_stranded flag the stack raised on P-0148 after the test received date was set.
+22 Flagged sample, dark: one actions row
+23 Flagged sample, light

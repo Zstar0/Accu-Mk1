@@ -5599,7 +5599,7 @@ export function SampleDetails() {
                 disabled={isParent ? !hasParentIdentity(data) : !parentSampleId}
               >
                 <Plus size={12} />
-                Manage Sub-Samples
+                Sub-Samples
               </Button>
               <Button
                 variant="outline"
@@ -5624,7 +5624,7 @@ export function SampleDetails() {
                   onClick={() => setVarianceSummaryOpen(true)}
                 >
                   <Sigma size={12} />
-                  Variance Summary
+                  Variance
                 </Button>
               )}
               {/* COA actions (Generate / Publish) are parent-level — the certified
