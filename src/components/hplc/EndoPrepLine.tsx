@@ -286,9 +286,20 @@ export function EndoPrep2mlFields({
         <Select
           disabled={disabled}
           value={item.prep_form ?? AUTO}
-          onValueChange={v =>
-            onUpdate({ prep_form: v === AUTO ? null : (v as EndoForm) })
-          }
+          onValueChange={v => {
+            const next = v === AUTO ? null : (v as EndoForm)
+            // The water cell means a different thing per form: a bench
+            // override for a lyophilized vial, the customer's own volume for
+            // a liquid. A value typed under one is never carried into the
+            // other (Dennis, 2026-10-19). Only the liquid-ness matters, so
+            // naming the form the row already resolved to leaves it alone.
+            const nowLiquid = (next ?? autoForm) === 'liquid'
+            onUpdate(
+              (form === 'liquid') !== nowLiquid && item.prep_water_ml != null
+                ? { prep_form: next, prep_water_ml: null }
+                : { prep_form: next }
+            )
+          }}
         >
           <SelectTrigger aria-label="Form" className={LINE_TRIGGER}>
             <SelectValue />

@@ -946,9 +946,18 @@ function TwoMlPrepCells({
         <Select
           value={form}
           disabled={isCompleted}
-          onValueChange={v =>
-            onUpdateItem(item.id, { prep_form: v as EndoForm })
-          }
+          onValueChange={v => {
+            const next = v as EndoForm
+            // A water volume typed under one form is never carried into the
+            // other; only the liquid-ness matters. See EndoPrepLine.
+            onUpdateItem(
+              item.id,
+              (form === 'liquid') !== (next === 'liquid') &&
+                item.prep_water_ml != null
+                ? { prep_form: next, prep_water_ml: null }
+                : { prep_form: next }
+            )
+          }}
         >
           <SelectTrigger
             aria-label="Form the vial arrived in"

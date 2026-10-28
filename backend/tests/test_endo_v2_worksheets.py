@@ -917,6 +917,42 @@ def test_import_refuses_pathological_values_with_400_and_writes_nothing(client, 
     assert db.query(AuditLog).filter(AuditLog.operation.in_(_IMPORT_OPS)).count() == 0
 
 
+def test_import_keeps_a_typed_reading_the_reader_replaces_in_the_history(client, db):
+    """Dennis 2026-10-19: a hand-typed result the reader overwrites is kept,
+    even when the cartridge does not move, so the run that was there can still
+    be read back. The cartridge-override audit is not raised for it."""
+    w = _reader_world(client, db)
+    typed = client.patch(f"/worksheets/{w.ws.id}/items/{w.a.id}",
+                         json={"result_reading": "0.9",
+                               "cartridge_type_id": w.c05.id})
+    assert typed.status_code == 200, typed.text
+    db.refresh(w.a)
+    assert w.a.prep_history in (None, [])
+
+    # Same cartridge, an explicit replace (the import refuses a silent one):
+    # only the reading changes.
+    assert _import(client, w.ws,
+                   _line(w.a, "0.8", w.c05, replace=True)).status_code == 200
+    db.refresh(w.a)
+    assert w.a.result_reading == "0.8"
+    assert [(h["why"], h["result_reading"]) for h in w.a.prep_history] == [("replaced", "0.9")]
+    assert db.query(AuditLog).filter(AuditLog.operation == "endo_prep_override").count() == 0
+    # And it survives the worksheet GET: prep_history is served as stored, so
+    # a new `why` cannot be stripped or refused on the way out.
+    got = client.get(f"/worksheets/{w.ws.id}")
+    assert got.status_code == 200, got.text
+    row = next(i for i in got.json()["items"] if i["id"] == w.a.id)
+    assert [h["why"] for h in row["prep_history"]] == ["replaced"]
+
+
+def test_import_over_an_empty_row_keeps_no_history(client, db):
+    w = _reader_world(client, db)
+    assert _import(client, w.ws, _line(w.a, "0.8", w.c05)).status_code == 200
+    db.refresh(w.a)
+    assert (w.a.result_reading, w.a.prep_history) == ("0.8", None) or (
+        w.a.result_reading, w.a.prep_history) == ("0.8", [])
+
+
 def test_import_keeps_the_record_as_the_reader_exported_it(client, db):
     # Appendix A.0 item 5: `result` is the reading exactly as the reader showed
     # it, so the page can flag a typed reading that differs. The row's reading

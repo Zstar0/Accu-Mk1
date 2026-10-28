@@ -22,6 +22,7 @@ import {
   buildEndoCsv2,
   buildEndoSheet2Doc,
 } from '@/lib/endo-bench-sheet-2ml'
+import { endoscanSampleCsv } from '@/lib/endo-reader-export'
 import {
   buildEndoSheetDoc,
   isEndoWorksheetItem,
@@ -137,6 +138,33 @@ export function EndoWorksheetActions({
         )
       : buildEndoCsv(buildEndoSheetDoc(worksheet, opts()))
   const fileStem = worksheet.title.replace(/[^A-Za-z0-9._-]+/g, '_')
+  /**
+   * The EndoScan-V Sample Database file, built from the same doc the bench
+   * sheet prints, so the reader is set up with the limits the run was planned
+   * on. 2 mL runs only: the export is built on that model.
+   */
+  const downloadReaderCsv = () => {
+    if (!sheetWorksheet) return
+    const doc = buildEndoSheet2Doc(sheetWorksheet, opts(), catalog, rules ?? [])
+    const { csv, count, skipped } = endoscanSampleCsv(
+      doc.rows.map(r => r.sample),
+      doc.ctx
+    )
+    downloadTextFile(`${fileStem}_endoscan.csv`, csv)
+    // Never silently: a row the reader cannot be set up for is named.
+    if (skipped.length > 0) {
+      toast.warning(
+        `${count} vial${count === 1 ? '' : 's'} written, ${skipped.length} left out`,
+        {
+          description: skipped
+            .map(s => `${s.sampleId || '(no ID)'}: ${s.why}`)
+            .join('; '),
+        }
+      )
+    } else {
+      toast.success(`${count} vial${count === 1 ? '' : 's'} written`)
+    }
+  }
   // A failed refetch keeps the data it had (react-query): only a read with
   // nothing on hand blocks the sheet.
   const runSettingsFailed =
@@ -224,6 +252,21 @@ export function EndoWorksheetActions({
         <Download className="h-3.5 w-3.5" />
         CSV
       </Button>
+      {twoMl && (
+        <Button
+          variant="outline"
+          size="sm"
+          disabled={waiting !== undefined}
+          title={
+            waiting ??
+            'Export the vials as an EndoScan-V Sample Database CSV, to import into the reader before the run'
+          }
+          onClick={downloadReaderCsv}
+        >
+          <Download className="h-3.5 w-3.5" />
+          Reader CSV
+        </Button>
+      )}
 
       <Dialog
         open={previewHtml !== null}

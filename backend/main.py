@@ -26066,20 +26066,27 @@ def import_endo_reader_results(
         pin_endo_method(db, ws, user_id)
     # Naive UTC, as the item PATCH stamps result_entered_at; the serializer appends the Z.
     now = datetime.now(timezone.utc).replace(tzinfo=None)
-    # Review I5: the rows whose cartridge a test moves under a result. Their
-    # lines, standard and facts are read once for all of them, never per row.
+    # Every row this import overwrites keeps the reading it held (Dennis
+    # 2026-10-19): a hand-typed result the reader replaces goes to the history
+    # rather than being lost. `moved` is the narrower set whose cartridge the
+    # test also moves under a result, which additionally records the override
+    # (review I5). Their lines, standard and facts are read once for all of
+    # them, never per row.
+    replaced = {item.id for item, _t, _reading in plan if item.result_reading is not None}
     moved = {item.id for item, t, _reading in plan
              if item.result_reading is not None and t.cartridge_type_id != item.cartridge_type_id}
-    if moved:
+    if replaced:
         rules = load_rules(db)
-        facts = row_facts(db, ws, [item for item, _t, _reading in plan if item.id in moved])
+        facts = row_facts(db, ws, [item for item, _t, _reading in plan if item.id in replaced])
         std_total = endo_run_params(run_params)["std_total_dilution"]
     for item, t, _reading in plan:
-        if item.id in moved:
+        if item.id in replaced:
             # Before any write to the row, as the item PATCH keeps an override.
             _, effective = row_effective(db, ws, item, rules=rules, std_total=std_total,
                                          facts=facts.get(item.id))
-            append_history(item, why="override", user_id=user_id, effective=effective)
+            append_history(item, why="override" if item.id in moved else "replaced",
+                           user_id=user_id, effective=effective)
+        if item.id in moved:
             db.add(AuditLog(
                 operation="endo_prep_override",
                 entity_type="worksheet_item",

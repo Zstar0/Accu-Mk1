@@ -305,7 +305,9 @@ export function PrepHistory({
                           ? e.reading_moved
                             ? 'Re-apply (reading moved)'
                             : 'Re-apply'
-                          : 'override'}
+                          : e.why === 'replaced'
+                            ? 'Reading replaced'
+                            : 'override'}
                       </td>
                       <td className={HCELL}>
                         {lineLabel(
