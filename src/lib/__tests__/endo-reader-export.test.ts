@@ -49,6 +49,10 @@ function rule(total: number): EndoPrepRule {
     peptide_id: 1,
     min_mg: null,
     max_mg: null,
+    // Added by the master merge: #340 made this field required on the type.
+    // null keeps every fixture on the method's standard 2 mL, which is what
+    // Dennis's expected values were computed against.
+    recon_water_ml: null,
     total_dilution: total,
     step1_ratio: null,
     cartridge_type_id: null,
