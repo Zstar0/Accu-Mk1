@@ -4,13 +4,17 @@
  * The TanStack Query cache is the source of truth, not component state: the
  * page remounts on every visit (`navigationKey`), and a remount must show the
  * layout the user just left. `update` writes the cache at once and saves to
- * the server 500 ms after the last change.
+ * the server 500 ms after the last change. The cache key carries the user id:
+ * the query client outlives a logout, and the next user must not see (or
+ * save) the previous user's layout.
  */
 import { useEffect, useRef } from 'react'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import type { ColumnSizingState, SortingState } from '@tanstack/react-table'
 import { toast } from 'sonner'
 import { getUiSetting, putUiSetting } from '@/lib/ui-settings-api'
+import { logger } from '@/lib/logger'
+import { useAuthStore } from '@/store/auth-store'
 import {
   DEFAULT_TASKS_TAB,
   TASKS_TABS,
@@ -44,7 +48,6 @@ export const DEFAULT_TASKS_SETTINGS: TasksPageSettings = {
   columnSizing: {},
 }
 
-const QUERY_KEY = ['ui-settings', 'tasks.page'] as const
 const SAVE_DELAY_MS = 500
 const SAVE_FAILED = "Couldn't save your table settings"
 
@@ -97,7 +100,11 @@ function flushSave(save: PendingSave) {
   const value = save.value
   save.value = null
   if (!value) return
-  putUiSetting('tasks.page', { ...value }).catch(() => toast.error(SAVE_FAILED))
+  putUiSetting('tasks.page', { ...value }).catch((error: unknown) => {
+    logger.error('Failed to save Tasks page settings', { error })
+    // A fixed id: repeated failures replace one toast instead of stacking.
+    toast.error(SAVE_FAILED, { id: 'tasks-settings-save' })
+  })
 }
 
 export function useTasksPageSettings(): {
@@ -106,10 +113,11 @@ export function useTasksPageSettings(): {
   update: (patch: Partial<Omit<TasksPageSettings, 'v'>>) => void
 } {
   const queryClient = useQueryClient()
+  const userId = useAuthStore(s => s.user?.id ?? null)
+  const queryKey = ['ui-settings', userId, 'tasks.page'] as const
   const query = useQuery({
-    queryKey: QUERY_KEY,
+    queryKey,
     queryFn: () => getUiSetting('tasks.page'),
-    retry: false,
     staleTime: Infinity,
   })
   const save = useRef<PendingSave>({ timer: null, value: null })
@@ -123,9 +131,9 @@ export function useTasksPageSettings(): {
   const update = (patch: Partial<Omit<TasksPageSettings, 'v'>>) => {
     // Merge from the cache, not render-time settings: two calls in one tick
     // (a sort and a resize) must both land.
-    const current = parseTasksSettings(queryClient.getQueryData(QUERY_KEY))
+    const current = parseTasksSettings(queryClient.getQueryData(queryKey))
     const merged = parseTasksSettings({ ...current, ...patch })
-    queryClient.setQueryData(QUERY_KEY, merged)
+    queryClient.setQueryData(queryKey, merged)
     const pending = save.current
     pending.value = merged
     if (pending.timer) clearTimeout(pending.timer)

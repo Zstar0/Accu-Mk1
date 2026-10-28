@@ -3,6 +3,8 @@ import { act, renderHook, waitFor } from '@testing-library/react'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { toast } from 'sonner'
+import { logger } from '@/lib/logger'
+import { useAuthStore, type AuthUser } from '@/store/auth-store'
 import {
   DEFAULT_TASKS_SETTINGS,
   parseTasksSettings,
@@ -45,6 +47,8 @@ beforeEach(() => {
 
 afterEach(() => {
   vi.useRealTimers()
+  vi.restoreAllMocks()
+  useAuthStore.setState({ user: null })
 })
 
 describe('parseTasksSettings', () => {
@@ -91,6 +95,21 @@ describe('useTasksPageSettings', () => {
     expect(get).toHaveBeenCalledWith('tasks.page')
   })
 
+  it('a transient load failure retries before using defaults', async () => {
+    get
+      .mockRejectedValueOnce(
+        new Error('GET /api/ui-settings/tasks.page failed: 503')
+      )
+      .mockResolvedValue({ tab: 'watching' })
+    const client = new QueryClient({
+      defaultOptions: { queries: { retry: 1, retryDelay: 0 } },
+    })
+    const { result } = await mountReady(client)
+    expect(get).toHaveBeenCalledTimes(2)
+    expect(result.current.settings.tab).toBe('watching')
+  })
+
+  // newClient() turns retries off, so one rejection is the final failure.
   it('load failure falls back to defaults without saving', async () => {
     get.mockRejectedValue(
       new Error('GET /api/ui-settings/tasks.page failed: 500')
@@ -139,17 +158,25 @@ describe('useTasksPageSettings', () => {
     )
   })
 
-  it('a failed save shows one toast', async () => {
-    put.mockRejectedValue(
-      new Error('PUT /api/ui-settings/tasks.page failed: 500')
-    )
+  it('a failed save logs the error and shows one toast', async () => {
+    const failure = new Error('PUT /api/ui-settings/tasks.page failed: 500')
+    put.mockRejectedValue(failure)
+    const logError = vi
+      .spyOn(logger, 'error')
+      .mockImplementation(() => undefined)
     const { result } = await mountReady()
     vi.useFakeTimers()
     act(() => result.current.update({ tab: 'raised' }))
     await act(() => vi.advanceTimersByTimeAsync(500))
     expect(toast.error).toHaveBeenCalledTimes(1)
+    // A fixed id: repeated failures replace the toast instead of stacking.
     expect(toast.error).toHaveBeenCalledWith(
-      "Couldn't save your table settings"
+      "Couldn't save your table settings",
+      { id: 'tasks-settings-save' }
+    )
+    expect(logError).toHaveBeenCalledWith(
+      expect.any(String),
+      expect.objectContaining({ error: failure })
     )
     // The user's layout stays on screen.
     expect(result.current.settings.tab).toBe('raised')
@@ -166,5 +193,29 @@ describe('useTasksPageSettings', () => {
     expect(result.current.ready).toBe(true)
     expect(result.current.settings.tab).toBe('raised')
     expect(get).toHaveBeenCalledTimes(1)
+  })
+
+  it('a different user in the same window gets their own settings', async () => {
+    const client = newClient()
+    useAuthStore.setState({ user: { id: 1 } as AuthUser })
+    const first = await mountReady(client)
+    act(() => first.result.current.update({ tab: 'raised' }))
+    first.unmount()
+    expect(put).toHaveBeenCalledTimes(1)
+
+    useAuthStore.setState({ user: { id: 2 } as AuthUser })
+    const second = await mountReady(client)
+    expect(get).toHaveBeenCalledTimes(2)
+    expect(second.result.current.settings.tab).toBe('assigned')
+
+    // User 2's first change saves user 2's layout, not user 1's merged in.
+    act(() =>
+      second.result.current.update({ sorting: [{ id: 'due', desc: true }] })
+    )
+    second.unmount()
+    expect(put).toHaveBeenLastCalledWith(
+      'tasks.page',
+      expect.objectContaining({ tab: 'assigned' })
+    )
   })
 })
