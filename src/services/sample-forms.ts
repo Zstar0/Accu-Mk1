@@ -72,11 +72,14 @@ export function useSetSampleForm() {
       sampleId: string
       sampleFormId: number
     }) => setSampleForm(sampleId, sampleFormId),
-    onSuccess: () => {
+    onSuccess: (_data, { sampleId }) => {
       // sample_count on the pane rows moves with every assignment
       qc.invalidateQueries({ queryKey: sampleFormKeys.all })
       // Cached analyses rows carry the old form's units and specs
       invalidateAnalysisListings(qc)
+      // The order status and customer pages draw the form icon from the
+      // per-sample lookup (15 min staleTime); prefix covers both read sources.
+      qc.invalidateQueries({ queryKey: ['senaite', 'lookup', sampleId] })
       toast.success('Form set')
     },
     onError: (e: Error) => toast.error(e.message),

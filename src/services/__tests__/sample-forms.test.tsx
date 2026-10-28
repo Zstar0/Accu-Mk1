@@ -53,6 +53,8 @@ describe('useSetSampleForm', () => {
         [PARENT_OVERLAY_QUERY_KEY],
         [QUICKLOOK_VIAL_ANALYSES_QUERY_KEY],
         [NATIVE_PARENT_ANALYSES_QUERY_KEY],
+        // the status pages' per-sample lookup carries the form icon
+        ['senaite', 'lookup', 'P-0153'],
       ])
     )
   })
