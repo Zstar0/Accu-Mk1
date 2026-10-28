@@ -1,0 +1,24 @@
+Dosage form icons, 2026-10-28, commit 372b91db on feat/sample-forms
+
+Stack: devbox sforms (Mk1 frontend :5552), worktree files synced from the laptop branch, backend
+restarted so _run_migrations ran: lims_sample_forms gained icon, and the six built-in forms were
+filled once (powder_vial, liquid_vial, pen, nasal_spray, capsule, tablet). Headless Chromium via
+Playwright, 1440x900.
+
+Icons read from the DOM (svg data-icon):
+  Settings rows, light and dark: powder_vial, liquid_vial, pen, nasal_spray, capsule, tablet
+  Check-in wizard (SFORMS-TEST-1, P-5000): trigger powder_vial; options powder_vial, liquid_vial,
+    pen, nasal_spray (active forms only)
+  Sample page P-0148: trigger nasal_spray
+  Spec rules, HM-PB: Nasal Spray chip nasal_spray; Form picker lists every form with its icon
+
+01 Settings > Dosage forms, light
+02 Settings, dark, the Pen row's icon picker open (each icon named)
+03 Check-in wizard header, Form picker open
+04 Sample page Form picker
+05 Spec rules: form chip and the Add spec Form picker
+
+Tests: backend 98 passed in the stack container (test_sample_forms, test_sample_forms_schema,
+test_service_spec_routes, test_result_units). Frontend: typecheck clean; vitest on every form surface
+121 passed, 1 failed (PackagingPanel, fails on master too); ESLint and Prettier clean on the
+changed files.
