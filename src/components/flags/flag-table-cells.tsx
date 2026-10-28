@@ -173,8 +173,17 @@ export function StatusCell({ status }: { status: string }) {
   )
 }
 
-/** Due label; overdue (on an open status) renders in the destructive color. */
-export function DueCell({ flag }: { flag: FlagResponse }) {
+/**
+ * Due label; overdue (on an open status) renders in the destructive color.
+ * `empty` is what a task with no due date shows.
+ */
+export function DueCell({
+  flag,
+  empty = '—',
+}: {
+  flag: FlagResponse
+  empty?: string
+}) {
   const due = dueLabel(flag.due_at)
   const isOverdue =
     (due?.overdue ?? false) && OPEN_STATUSES.includes(flag.status as FlagStatus)
@@ -186,7 +195,7 @@ export function DueCell({ flag }: { flag: FlagResponse }) {
       )}
       title={due?.text}
     >
-      {due?.text ?? '—'}
+      {due?.text ?? empty}
     </span>
   )
 }
