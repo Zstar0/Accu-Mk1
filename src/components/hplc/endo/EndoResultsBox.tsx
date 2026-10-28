@@ -1,0 +1,768 @@
+import { useState, type ReactNode } from 'react'
+import { useQuery, useQueryClient } from '@tanstack/react-query'
+import { toast } from 'sonner'
+import { Checkbox } from '@/components/ui/checkbox'
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipTrigger,
+} from '@/components/ui/tooltip'
+import {
+  listServiceSpecs,
+  type AnalysisServiceSpecRecord,
+  type WorksheetListItem,
+} from '@/lib/api'
+import { fmt } from '@/lib/endo-prep'
+import {
+  BW_LIMIT_EU_PER_ML,
+  LIMIT_EU_PER_VIAL,
+  fmtConc,
+  fmtEu,
+  formOf,
+  mk1Value,
+  parseReading,
+  prep2Check,
+  prep2Result,
+  type EndoCheck,
+  type EndoCtx,
+  type EndoResult,
+  type EndoRunParams,
+  type EndoSample,
+} from '@/lib/endo-prep-2ml'
+import {
+  SENAITE_BORN,
+  promoteCheck,
+  type PromoteCheck,
+} from '@/lib/endo-promote'
+import type { EndoRow } from '@/lib/endo-worksheet-2ml'
+import { useAnalysisServices } from '@/services/analysis-services'
+import { resolveServiceForAnalysis } from '@/components/senaite/AnalysisServiceLink'
+import { ruleLabel } from '@/components/hplc/ServiceSpecsSection'
+import {
+  MONO,
+  SampleLink,
+  TD,
+  TD_CALC,
+  TH,
+  TH_CALC,
+  UNIT,
+} from '@/components/hplc/EndoWorksheetTable'
+import { worksheetPageKey } from '@/hooks/use-worksheet-drawer'
+import { EndoReadingInput } from './EndoReadingInput'
+import {
+  EndoReaderImportDialog,
+  type ReaderImportResult,
+} from './EndoReaderImportDialog'
+import { EndoBox, type EndoBoxProps } from './EndoBox'
+import { EndoPromoteDialog, type PromotePick } from './EndoPromoteDialog'
+import { WorkedTip } from './EndoWorkedTip'
+import { useRowRefusals } from './use-row-refusals'
+
+type Verdict = 'pass' | 'fail' | 'inconclusive' | 'invalid'
+
+// Task 17's flyout reuses VERDICT_LABEL and VERDICT_TONE; an object export
+// costs Fast Refresh on this file only.
+// eslint-disable-next-line react-refresh/only-export-components
+export const VERDICT_LABEL: Record<Verdict, string> = {
+  pass: 'Pass',
+  fail: 'Fail',
+  inconclusive: 'Inconclusive',
+  invalid: 'Invalid',
+}
+
+// Dennis's --ok, --crit, --warn, --crit.
+// eslint-disable-next-line react-refresh/only-export-components
+export const VERDICT_TONE: Record<Verdict, string> = {
+  pass: 'text-emerald-600 dark:text-emerald-400',
+  fail: 'text-red-600 dark:text-red-400',
+  inconclusive: 'text-amber-600 dark:text-amber-400',
+  invalid: 'text-red-600 dark:text-red-400',
+}
+
+/** "<2.5" for a derived value, nothing when there is none. */
+const eu = (lt: boolean | null, v: number | null) => fmtEu(lt === true, v)
+
+/** The peptide spec tier: the Peptide matrix row, else the All row. */
+function peptideTier(
+  specs: AnalysisServiceSpecRecord[] | undefined
+): AnalysisServiceSpecRecord | null {
+  const live = (specs ?? []).filter(s => s.active && s.peptide_id == null)
+  return (
+    live.find(s => s.matrix === 'Peptide') ??
+    live.find(s => s.matrix == null) ??
+    null
+  )
+}
+
+/** Every computed cell's worked line, as Dennis's tip* helpers. The reader
+ *  line prints the method's validity limits (`p`), which the verdict uses,
+ *  never the file's rec_min, rec_max or cv_limit. */
+function workedLines(
+  s: EndoSample,
+  k: EndoCheck,
+  rs: EndoResult,
+  bw: boolean,
+  p: EndoRunParams
+) {
+  const lam = fmt(k.lambda)
+  const lt = rs.lt
+  const rd = s.reader
+  const why = (rd?.why ?? []).join('; ') || "failed the reader's checks"
+  let verdict: string | null = null
+  if (rs.verdict === 'invalid') {
+    verdict = `Invalid test: ${why}. The reading proves nothing about the sample (USP <85>); rerun it, usually at a higher dilution`
+  } else if (rs.verdict && bw) {
+    verdict =
+      rs.verdict === 'pass'
+        ? `${eu(lt, rs.value)} EU/mL ≤ ${fmt(BW_LIMIT_EU_PER_ML)} EU/mL → Pass`
+        : rs.verdict === 'fail'
+          ? `${eu(lt, rs.value)} EU/mL > ${fmt(BW_LIMIT_EU_PER_ML)} EU/mL → Fail`
+          : `A < reading whose floor is above ${fmt(BW_LIMIT_EU_PER_ML)} EU/mL proves nothing either way; a finer cartridge would`
+  } else if (rs.verdict) {
+    const v = `${eu(lt, rs.euPerVial)} EU/vial (${eu(lt, rs.euPerMg)} EU/mg)`
+    verdict =
+      rs.verdict === 'pass'
+        ? `${v} ≤ ${LIMIT_EU_PER_VIAL} EU/vial limit → Pass`
+        : rs.verdict === 'fail'
+          ? `${v} > ${LIMIT_EU_PER_VIAL} EU/vial limit → Fail`
+          : `${v}: a < result whose floor is above the ${LIMIT_EU_PER_VIAL} EU/vial limit proves nothing either way; a finer cartridge or more on the cartridge would`
+  }
+  return {
+    cartridge:
+      k.lambda === null
+        ? null
+        : `λ ${lam} EU/mL` +
+          (k.valid === false
+            ? `\nloaded ${fmtConc(k.loaded)} mg/mL is under the MVC ${fmtConc(k.mvc)}${k.needs !== null ? `; the ${fmt(k.needs)} cartridge holds it` : ''}`
+            : '') +
+          (k.failAt !== null ? `\na reading above ${fmt(k.failAt)} fails` : ''),
+    loaded:
+      k.loaded === null
+        ? null
+        : `${fmt(s.weightMg)} mg ÷ ${fmt(k.water)} mL ÷ ${fmt(k.dilution)} = ${fmtConc(k.loaded)} mg/mL on the MCS` +
+          (k.mvc !== null
+            ? `\nneeds ≥ ${fmtConc(k.mvc)} (the MVC for this vial)`
+            : ''),
+    mvd:
+      k.mvd === null || !k.water
+        ? null
+        : `(${LIMIT_EU_PER_VIAL} EU/vial ÷ ${fmt(k.water)} mL = ${fmt(LIMIT_EU_PER_VIAL / k.water)} EU/mL) ÷ λ ${lam} EU/mL = ${fmt(k.mvd)}×\nyou use ${fmt(k.dilution)}×`,
+    mvc:
+      k.mvc === null || !s.weightMg
+        ? null
+        : `λ ${lam} EU/mL ÷ (${LIMIT_EU_PER_VIAL} EU/vial ÷ ${fmt(s.weightMg)} mg = ${fmt(LIMIT_EU_PER_VIAL / s.weightMg)} EU/mg) = ${fmtConc(k.mvc)} mg/mL` +
+          (k.loaded !== null ? `\nloaded ${fmtConc(k.loaded)}` : ''),
+    reader: !rd
+      ? null
+      : [
+          rd.valid
+            ? `Valid: spike recovery ${p.spikeRecoveryMinPct}-${p.spikeRecoveryMaxPct} %, CV at most ${p.cvLimitPct} %`
+            : `INVALID: ${why}`,
+          `Spike recovery ${rd.recovery ?? '-'} % · sample CV ${rd.sample_cv ?? '-'} % · spike CV ${rd.spike_cv ?? '-'} %`,
+          `Test ${rd.test_id} · ${rd.reader ?? '-'} (${rd.slot ?? '-'})`,
+          `Cartridge lot ${rd.cartridge_lot ?? '-'}${rd.cartridge_expiry ? `, exp. ${rd.cartridge_expiry}` : ''} · ${rd.cartridge_range ?? '-'} EU/mL`,
+          `${rd.operator ?? '-'} · ${rd.tested_at ?? '-'} · ${rd.temp_start ?? '-'}/${rd.temp_end ?? '-'} °C`,
+          `From ${rd.file_name}`,
+        ].join('\n'),
+    euPerMg:
+      bw || rs.euPerMg === null
+        ? null
+        : `${eu(lt, rs.euPerVial)} EU/vial ÷ ${fmt(s.weightMg)} mg = ${eu(lt, rs.euPerMg)} EU/mg`,
+    lod:
+      k.lod === null
+        ? null
+        : `LOD: ${fmt(k.lod)} EU/mL, the lowest value the ${lam} cartridge reads; the dilution does not change it`,
+    loq: bw
+      ? k.loqMl === null
+        ? null
+        : `LOQ: ${fmt(k.lod)} EU/mL × ${fmt(k.dilution)} = ${fmt(k.loqMl)} EU per mL of the bac water, the lowest this prep can report`
+      : k.loqVial === null
+        ? null
+        : `LOQ: ${fmt(k.lod)} EU/mL × 1:${fmt(k.dilution)} × ${fmt(k.water)} mL = ${fmt(k.loqVial)} EU per vial, the lowest this prep can report`,
+    euPerVial:
+      bw || rs.euPerVial === null
+        ? null
+        : `${eu(lt, rs.value)} EU/mL on the MCS × 1:${fmt(k.dilution)} = ${eu(lt, rs.euPerMlVial)} EU/mL of the vial solution × ${fmt(k.water)} mL = ${eu(lt, rs.euPerVial)} EU`,
+    limit: bw
+      ? `${fmt(BW_LIMIT_EU_PER_ML)} EU per mL of the bac water (the USP limit for water for injection); above it the verdict is Fail\nThe worksheet's working limit, not yet the COA spec`
+      : `${LIMIT_EU_PER_VIAL} EU per vial, flat: the whole vial as one dose\nThe worksheet's working limit, not yet the COA spec`,
+    verdict,
+    mk1Empty:
+      rs.verdict === 'invalid'
+        ? `Invalid test (${why}): nothing goes to Accu-Mk1 until it is rerun`
+        : bw
+          ? 'Bac water: its reading goes into Accu-Mk1 as EU/mL once it is typed'
+          : formOf(s) === 'liquid' && k.water === null
+            ? "Type the customer's reconstitution water first; EU/vial needs it"
+            : 'Peptides go into Accu-Mk1 as EU/vial once a reading is typed',
+  }
+}
+
+async function copyValue(value: string) {
+  try {
+    await navigator.clipboard.writeText(value)
+    toast.success(`Copied ${value}`)
+  } catch {
+    toast.error('Could not copy; select the number and press Ctrl+C')
+  }
+}
+
+function Calc({
+  tip,
+  className,
+  children,
+}: {
+  tip: string | null
+  className?: string
+  children: ReactNode
+}) {
+  return (
+    <td className={`${TD_CALC} ${className ?? ''}`}>
+      <WorkedTip tip={tip}>{children}</WorkedTip>
+    </td>
+  )
+}
+
+function CellUnit({ children }: { children: ReactNode }) {
+  return (
+    <span className="ml-0.5 font-sans text-[10px] font-normal text-muted-foreground">
+      {children}
+    </span>
+  )
+}
+
+/** The Promote cell (spec 5.1): a checkbox on an eligible row, a disabled
+ *  one with the reason on hover otherwise, the chip once promoted. A
+ *  SENAITE-born row keeps manual entry and gets no checkbox at all. */
+function PromoteCell({
+  check,
+  sampleId,
+  ticked,
+  onTick,
+}: {
+  check: PromoteCheck
+  sampleId: string
+  ticked: boolean
+  onTick: (on: boolean) => void
+}) {
+  if ('promoted' in check)
+    return (
+      <span className="rounded-full border border-emerald-600/40 bg-emerald-500/10 px-1.5 py-px text-[10.5px] font-semibold text-emerald-700 dark:border-emerald-400/40 dark:bg-emerald-400/15 dark:text-emerald-300">
+        Promoted
+      </span>
+    )
+  if (check.eligible)
+    return (
+      <Checkbox
+        checked={ticked}
+        onCheckedChange={v => onTick(v === true)}
+        aria-label={`Promote ${sampleId}`}
+      />
+    )
+  if (check.reason === SENAITE_BORN)
+    return (
+      <WorkedTip tip={check.reason} className="text-muted-foreground">
+        -
+      </WorkedTip>
+    )
+  // A disabled control fires no pointer events: the span carries the hover.
+  return (
+    <WorkedTip tip={check.reason} className="inline-flex">
+      <Checkbox
+        disabled
+        aria-label={`Promote ${sampleId}`}
+        className="pointer-events-none"
+      />
+    </WorkedTip>
+  )
+}
+
+function ResultRow({
+  row,
+  ctx,
+  isCompleted,
+  refusal,
+  onReading,
+  promote,
+}: {
+  row: EndoRow
+  ctx: EndoCtx
+  isCompleted: boolean
+  /** Why the row's last save was refused, until its next save. */
+  refusal: string | undefined
+  onReading: (reading: string | null) => void
+  /** The row's Promote cell; null on a worksheet without one (stock). */
+  promote: {
+    check: PromoteCheck
+    ticked: boolean
+    onTick: (on: boolean) => void
+  } | null
+}) {
+  const s = row.sample
+  const k = prep2Check(s, ctx)
+  const rs = prep2Result(s, ctx)
+  const mk = mk1Value(s, ctx)
+  const bw = formOf(s) === 'bac'
+  const rd = s.reader
+  const tips = workedLines(s, k, rs, bw, ctx.params)
+  const verdict = rs.verdict
+  // A reading typed over an imported one keeps the reader's record; say so
+  // when the two disagree (the record's validity still governs the verdict).
+  const typed = parseReading(s.reading)
+  const exported = rd ? parseReading(rd.result) : null
+  // The reader's three checks (Dennis 514247f), each red only when it fails
+  // its own limit, read from the method as reader_validity does. A missing
+  // number is "-" and not red here; the record's validity still makes the
+  // row Invalid.
+  const p = ctx.params
+  const checks: [number | null | undefined, (v: number) => boolean][] = [
+    [rd?.recovery, v => v < p.spikeRecoveryMinPct || v > p.spikeRecoveryMaxPct],
+    [rd?.sample_cv, v => v > p.cvLimitPct],
+    [rd?.spike_cv, v => v > p.cvLimitPct],
+  ]
+  const readerDiffers =
+    rd !== null &&
+    typed !== null &&
+    (exported === null ||
+      exported.lt !== typed.lt ||
+      exported.value !== typed.value)
+  return (
+    <tr className="group/item hover:bg-teal-500/[0.04] dark:hover:bg-teal-400/[0.06]">
+      <td
+        className={`${TD} pl-3 pr-1.5 text-right font-mono text-[11px] text-muted-foreground`}
+      >
+        {row.n}
+      </td>
+      {promote && (
+        <td className={`${TD} px-1.5 text-center`}>
+          <PromoteCell
+            check={promote.check}
+            sampleId={row.item.sample_id}
+            ticked={promote.ticked}
+            onTick={promote.onTick}
+          />
+        </td>
+      )}
+      <td
+        className={`${TD} ${s.sampleId ? MONO : 'text-xs italic text-muted-foreground'}`}
+      >
+        {s.sampleId ? <SampleLink id={s.sampleId} /> : 'no ID yet'}
+      </td>
+      <td className={`${TD} ${MONO} text-right text-foreground/80`}>
+        {bw ? '' : fmt(s.weightMg)}
+      </td>
+      <td className={`${TD_CALC} !text-left`}>
+        {k.lambda === null ? (
+          <span className="text-muted-foreground">-</span>
+        ) : (
+          <WorkedTip tip={tips.cartridge}>
+            {fmt(k.lambda)}
+            {k.valid === false && (
+              <span
+                className={`block whitespace-normal font-sans text-[11px] font-semibold leading-tight ${k.needs !== null ? 'text-amber-600 dark:text-amber-400' : 'text-red-600 dark:text-red-400'}`}
+              >
+                {k.needs !== null
+                  ? `needs the ${fmt(k.needs)}`
+                  : 'no cartridge holds this'}
+              </span>
+            )}
+          </WorkedTip>
+        )}
+      </td>
+      <Calc tip={tips.loaded}>{fmtConc(k.loaded)}</Calc>
+      <Calc tip={tips.mvd}>{k.mvd === null ? '' : `${fmt(k.mvd)}×`}</Calc>
+      <Calc tip={tips.mvc}>{fmtConc(k.mvc)}</Calc>
+      <td className={`${TD} w-[92px] px-1 text-right`}>
+        {/* Keyed by the saved reading: when it changes under the row (the
+            reader import, another analyst), a stale draft goes with it. */}
+        <EndoReadingInput
+          key={`${row.item.id}:${s.reading ?? ''}`}
+          value={s.reading}
+          placeholder={`<${fmt(k.floorShown ?? 0.05)}`}
+          disabled={isCompleted}
+          label={`Reading for ${row.item.sample_id}`}
+          onCommit={onReading}
+        />
+        {rs.floorMismatch && (
+          <div className="mt-[3px] max-w-[11em] text-[11px] leading-tight text-amber-600 dark:text-amber-400">
+            not this cartridge&apos;s floor (expected &lt;
+            {fmt(rs.expectedFloor)})
+          </div>
+        )}
+        {readerDiffers && rd && (
+          <div className="mt-[3px] max-w-[11em] text-[11px] leading-tight text-amber-600 dark:text-amber-400">
+            the reader exported {rd.result}
+          </div>
+        )}
+        {refusal && (
+          <div
+            role="alert"
+            className="mt-[3px] max-w-[11em] whitespace-normal break-words text-left text-[11px] font-semibold leading-snug text-red-600 dark:text-red-400"
+          >
+            Not saved: {refusal}
+          </div>
+        )}
+      </td>
+      {checks.map(([v, fails], i) => (
+        <Calc
+          key={i}
+          tip={tips.reader}
+          className={
+            v != null && fails(v)
+              ? 'font-semibold !text-red-600 dark:!text-red-400'
+              : ''
+          }
+        >
+          {rd ? (v == null ? '-' : fmt(v)) : ''}
+        </Calc>
+      ))}
+      <Calc tip={tips.euPerMg}>{bw ? '' : eu(rs.lt, rs.euPerMg)}</Calc>
+      <Calc tip={tips.lod}>{fmt(k.lod)}</Calc>
+      <Calc tip={tips.loq}>
+        {bw ? (
+          k.loqMl === null ? (
+            ''
+          ) : (
+            <>
+              {fmt(k.loqMl)}
+              <CellUnit>/mL</CellUnit>
+            </>
+          )
+        ) : (
+          fmt(k.loqVial)
+        )}
+      </Calc>
+      <Calc tip={tips.euPerVial}>{bw ? '' : eu(rs.lt, rs.euPerVial)}</Calc>
+      <Calc tip={tips.limit}>
+        {bw ? (
+          <>
+            {fmt(BW_LIMIT_EU_PER_ML)}
+            <CellUnit>/mL</CellUnit>
+          </>
+        ) : (
+          fmt(rs.limitPerVial ?? LIMIT_EU_PER_VIAL)
+        )}
+      </Calc>
+      <td
+        className={`${TD} whitespace-nowrap font-semibold ${verdict ? VERDICT_TONE[verdict] : ''}`}
+      >
+        {verdict && (
+          <WorkedTip tip={tips.verdict}>{VERDICT_LABEL[verdict]}</WorkedTip>
+        )}
+      </td>
+      {/* Dennis's td.mk1: --mk1-soft #dfe9ff (dark #22304f) fill and a 3px
+          --mk1-edge #3b6fd6 (dark #8fb0ff) left edge, on the theme palette. */}
+      {mk ? (
+        <td
+          className={`${TD} whitespace-nowrap border-l-[3px] border-l-blue-600 bg-blue-500/10 font-mono font-semibold dark:border-l-blue-300 dark:bg-blue-400/15`}
+        >
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <button
+                type="button"
+                aria-label={`Copy ${mk.value} for Accu-Mk1`}
+                className="cursor-copy focus-visible:outline-2 focus-visible:outline-blue-600 dark:focus-visible:outline-blue-300"
+                onClick={() => void copyValue(mk.value)}
+              >
+                {mk.value}
+                <CellUnit>{mk.unit}</CellUnit>
+              </button>
+            </TooltipTrigger>
+            <TooltipContent className="max-w-sm p-0">
+              <div className="p-3 font-mono text-xs">
+                Into Accu-Mk1: {mk.value} {mk.unit}
+                {bw
+                  ? ', bac water reports the reading itself'
+                  : ', peptides report EU per vial'}
+                . Click to copy the number.
+              </div>
+            </TooltipContent>
+          </Tooltip>
+        </td>
+      ) : (
+        <td
+          className={`${TD} border-l-[3px] border-l-blue-600/35 dark:border-l-blue-300/35`}
+        >
+          <WorkedTip tip={tips.mk1Empty} className="block min-h-5">
+            {null}
+          </WorkedTip>
+        </td>
+      )}
+    </tr>
+  )
+}
+
+/**
+ * Box 3, Results (2 mL worksheets only; stock worksheets have no Results
+ * box), as Dennis's 2 mL Results section: the reading typed as the MCS shows
+ * it, the reader's checks, and from them LOD, LOQ, EU/mg, EU per vial, the
+ * verdict against the worksheet's working limits, and the value to enter in
+ * Accu-Mk1 (blue, click to copy). Rows in bench order, numbered as Box 1.
+ * Every computed cell shows its worked line on hover. A save refused (by the
+ * server, or here when no cartridge resolves) shows its reason on the row
+ * until that row's next save. On a 2 mL worksheet, open or completed, the
+ * ticked rows go to their parents through Promote to Parent (slice 3).
+ */
+export function EndoResultsBox({
+  worksheet,
+  rows,
+  ctx,
+  cartridges,
+  isCompleted,
+  onUpdateItem,
+}: EndoBoxProps) {
+  const services = useAnalysisServices().data
+  const endoAnalysis = rows
+    .flatMap(r => r.item.analyses ?? [])
+    .find(a => /ENDO/i.test(a.keyword ?? ''))
+  const service = endoAnalysis
+    ? resolveServiceForAnalysis(
+        {
+          analysis_service_id: endoAnalysis.analysis_service_id ?? null,
+          keyword: endoAnalysis.keyword ?? null,
+        },
+        services
+      )
+    : null
+  const { data: specs } = useQuery({
+    queryKey: ['analysis-services', service?.id, 'specs'],
+    queryFn: () => listServiceSpecs(service?.id ?? 0),
+    enabled: service != null,
+    staleTime: 60_000,
+  })
+  const queryClient = useQueryClient()
+  const { refused, send, refuse, clear } = useRowRefusals(onUpdateItem)
+  const [ticked, setTicked] = useState<ReadonlySet<number>>(new Set())
+
+  if (!rows.length) return null
+  // Stock worksheets have no Promote (Review Focus 5); the server refuses them too.
+  const promoteOn = worksheet.endo_prep === '2ml'
+  const checks = new Map(
+    promoteOn
+      ? rows.map(r => [r.item.id, promoteCheck(r, ctx, worksheet.endo_prep)])
+      : []
+  )
+  // What Promote sends: the ticked rows that are eligible now.
+  const picks: PromotePick[] = rows.flatMap(row => {
+    const c = checks.get(row.item.id)
+    const v = prep2Result(row.sample, ctx).verdict
+    return ticked.has(row.item.id) && c && 'eligible' in c && c.eligible && v
+      ? [
+          {
+            row,
+            payload: c.payload,
+            verdict: { label: VERDICT_LABEL[v], tone: VERDICT_TONE[v] },
+          },
+        ]
+      : []
+  })
+
+  function tick(itemId: number, on: boolean) {
+    setTicked(prev => {
+      const next = new Set(prev)
+      if (on) next.add(itemId)
+      else next.delete(itemId)
+      return next
+    })
+  }
+
+  // After a promote the page refetches, so promoted rows turn to the chip.
+  // A failed request may still have promoted some rows: refetch either way.
+  function promoted(replied: boolean) {
+    if (replied) setTicked(new Set())
+    void queryClient.invalidateQueries({
+      queryKey: worksheetPageKey(worksheet.id),
+    })
+  }
+
+  const tier = peptideTier(specs)
+  // Unit and limit come from the service's spec rows, never hardcoded: the
+  // 09-01 snapshot (<= 5 EU/mL) is unverified against prod.
+  const note = tier
+    ? `Accu-Mk1 values are per vial; Mk1's endotoxin test reports ${tier.unit ?? 'its own unit'} against ${ruleLabel(tier)} until the spec switch.`
+    : specs
+      ? 'Accu-Mk1 values are per vial; the endotoxin test has no peptide spec set yet, so check its unit in Accu-Mk1 before entering a value.'
+      : 'Accu-Mk1 values are per vial.'
+  const p = ctx.params
+
+  // The reading goes with the row's resolved cartridge when the item has
+  // none of its own (spec 9); with no cartridge at all the server would
+  // refuse it, so it is refused here instead.
+  function saveReading(row: EndoRow, reading: string | null) {
+    const { item } = row
+    if (reading === null || item.cartridge_type_id != null) {
+      send(item.id, { result_reading: reading })
+      return
+    }
+    if (!row.cartridge) {
+      refuse(
+        item.id,
+        "set the run cartridge (or this row's) before saving a reading"
+      )
+      return
+    }
+    send(item.id, {
+      result_reading: reading,
+      cartridge_type_id: row.cartridge.id,
+    })
+  }
+
+  // Refresh from the import response: the page cache gets the updated rows
+  // and the (possibly just pinned) method at once, then the worksheets-list
+  // prefix refetches once (the page entry and the flyout list). The rows it
+  // sent drop their stale refusals; the others keep theirs.
+  function applied(res: ReaderImportResult, itemIds: number[]) {
+    clear(itemIds)
+    const byId = new Map(res.items.map(it => [it.id, it]))
+    queryClient.setQueryData<WorksheetListItem>(
+      worksheetPageKey(worksheet.id),
+      ws =>
+        ws
+          ? {
+              ...ws,
+              endo_method: res.endo_method,
+              items: ws.items.map(it => byId.get(it.id) ?? it),
+            }
+          : ws
+    )
+    void queryClient.invalidateQueries({ queryKey: ['worksheets-list'] })
+  }
+
+  return (
+    <EndoBox
+      n={3}
+      title="Results: EU per vial"
+      actions={
+        (!isCompleted || promoteOn) && (
+          <div className="flex items-start gap-3 pt-2.5">
+            {/* A completed worksheet refuses an import (409) but still
+                promotes: the server allows it. */}
+            {!isCompleted && (
+              <div className="min-w-0 flex-1">
+                <EndoReaderImportDialog
+                  worksheet={worksheet}
+                  rows={rows}
+                  cartridges={cartridges}
+                  params={ctx.params}
+                  onApplied={applied}
+                />
+              </div>
+            )}
+            {promoteOn && (
+              <EndoPromoteDialog
+                worksheetId={worksheet.id}
+                picks={picks}
+                onSettled={promoted}
+              />
+            )}
+          </div>
+        )
+      }
+      sub={
+        <>
+          <span className="block font-medium text-foreground/80">{note}</span>
+          Type the reading as the instrument shows it with the MCS factor at 1,
+          with its &lt; if it has one: EU/mL of the step 3 tube. The sheet
+          multiplies by the row&apos;s total (× {fmt(p.stdTotalDilution)}) for
+          EU/mL of the vial solution and by the volume (× {fmt(p.reconWaterMl)}{' '}
+          mL) for EU/vial; Pass is ≤ {LIMIT_EU_PER_VIAL} EU/vial. Bac water is
+          typed as shown with its 20× applied, EU/mL of the bac water, and
+          passes at ≤ {fmt(BW_LIMIT_EU_PER_ML)} EU/mL. These working limits are
+          not yet the COA spec. The blue Accu-Mk1 column is the value to enter
+          there: EU/vial for peptides, EU/mL for bac water; click it to copy.
+          This section is not printed.
+        </>
+      }
+    >
+      <div className="overflow-x-auto">
+        <table className="w-full min-w-[1180px] border-collapse">
+          <thead>
+            <tr>
+              <th className={`${TH} w-[34px]`} />
+              {promoteOn && <th className={`${TH} w-[76px]`}>Promote</th>}
+              <th className={TH}>Sample ID</th>
+              <th className={`${TH} !text-right`}>
+                Declared wt<span className={UNIT}>mg</span>
+              </th>
+              <th className={`${TH} ${TH_CALC} !text-left`}>
+                Cartridge<span className={UNIT}>λ EU/mL</span>
+              </th>
+              <th className={`${TH} ${TH_CALC}`}>
+                Loaded<span className={UNIT}>mg/mL on the MCS</span>
+              </th>
+              <th className={`${TH} ${TH_CALC}`}>
+                MVD<span className={UNIT}>×</span>
+              </th>
+              <th className={`${TH} ${TH_CALC}`}>
+                MVC<span className={UNIT}>mg/mL</span>
+              </th>
+              <th className={`${TH} !text-right`}>
+                Result as read
+                <span className={UNIT}>EU/mL on the MCS, factor 1</span>
+              </th>
+              <th className={`${TH} ${TH_CALC}`}>
+                Spike rec.
+                <span className={UNIT}>
+                  %, valid {p.spikeRecoveryMinPct}-{p.spikeRecoveryMaxPct}
+                </span>
+              </th>
+              <th className={`${TH} ${TH_CALC}`}>
+                Sample CV<span className={UNIT}>%, ≤ {p.cvLimitPct}</span>
+              </th>
+              <th className={`${TH} ${TH_CALC}`}>
+                Spike CV<span className={UNIT}>%, ≤ {p.cvLimitPct}</span>
+              </th>
+              <th className={`${TH} ${TH_CALC}`}>EU/mg</th>
+              <th className={`${TH} ${TH_CALC}`}>
+                LOD<span className={UNIT}>EU/mL, cartridge</span>
+              </th>
+              <th className={`${TH} ${TH_CALC}`}>
+                LOQ<span className={UNIT}>EU/vial</span>
+              </th>
+              <th className={`${TH} ${TH_CALC}`}>
+                EU/vial<span className={UNIT}>EU</span>
+              </th>
+              <th className={`${TH} ${TH_CALC}`}>
+                Limit<span className={UNIT}>EU/vial</span>
+              </th>
+              <th className={TH}>Verdict</th>
+              <th className={TH}>
+                Accu-Mk1
+                <span className="ml-1 rounded-full border border-blue-600 bg-blue-500/10 px-1.5 text-[10.5px] font-bold normal-case tracking-normal text-foreground dark:border-blue-300 dark:bg-blue-400/15">
+                  → Mk1
+                </span>
+                <span className={UNIT}>EU/vial · bac water EU/mL</span>
+              </th>
+            </tr>
+          </thead>
+          <tbody>
+            {rows.map(row => {
+              const check = checks.get(row.item.id)
+              return (
+                <ResultRow
+                  key={row.item.id}
+                  row={row}
+                  ctx={ctx}
+                  isCompleted={isCompleted}
+                  refusal={refused[row.item.id]}
+                  onReading={reading => saveReading(row, reading)}
+                  promote={
+                    check
+                      ? {
+                          check,
+                          ticked: ticked.has(row.item.id),
+                          onTick: on => tick(row.item.id, on),
+                        }
+                      : null
+                  }
+                />
+              )
+            })}
+          </tbody>
+        </table>
+      </div>
+    </EndoBox>
+  )
+}
+
+export default EndoResultsBox

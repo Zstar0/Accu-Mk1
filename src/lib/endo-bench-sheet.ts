@@ -66,19 +66,19 @@ export function escapeHtml(s: unknown): string {
     .replace(/'/g, '&#39;')
 }
 
-const PRIORITY_LABEL: Record<string, string> = {
+export const PRIORITY_LABEL: Record<string, string> = {
   expedited: 'Expedited',
   high: 'High',
   default: 'Default',
 }
 
-function priorityKey(p: string): 'expedited' | 'high' | 'default' {
+export function priorityKey(p: string): 'expedited' | 'high' | 'default' {
   const k = (p ?? '').toLowerCase()
   return k === 'expedited' || k === 'high' ? k : 'default'
 }
 
 /** "Sep 16" style short date from YYYY-MM-DD, without touching time zones. */
-function shortDate(iso: string): string {
+export function shortDate(iso: string): string {
   const [y, m, d] = iso.split('-').map(Number)
   if (!y || !m || !d) return iso
   return new Date(Date.UTC(y, m - 1, d, 12)).toLocaleDateString('en-US', {
@@ -89,7 +89,7 @@ function shortDate(iso: string): string {
 }
 
 /** "Wednesday, September 16, 2026" from YYYY-MM-DD. */
-function longDate(iso: string): string {
+export function longDate(iso: string): string {
   const [y, m, d] = iso.split('-').map(Number)
   if (!y || !m || !d) return iso
   return new Date(Date.UTC(y, m - 1, d, 12)).toLocaleDateString('en-US', {
@@ -103,7 +103,7 @@ function longDate(iso: string): string {
 
 // Kept as one string so the sheet is a single self-contained document.
 // 4mm at the sides is about as close to the edge as a laser printer can image.
-const SHEET_CSS = [
+export const SHEET_CSS = [
   '@page{size:letter landscape;margin:11mm 4mm}',
   '*{box-sizing:border-box;-webkit-print-color-adjust:exact;print-color-adjust:exact}',
   // Figures: Consolas first: ships with every Windows install, slashed zero,
@@ -228,7 +228,7 @@ function fmt1(v: number): string {
 // Preview: the very document Print hands over, shown as paper. Each section
 // is sized to a landscape Letter sheet with the @page margins as padding, so
 // what shows is what comes out.
-const PREVIEW_CSS =
+export const PREVIEW_CSS =
   'body{background:#E7ECEC;padding:16px 0}' +
   '.page{width:1056px;min-height:816px;padding:41.6px 15.1px;background:#fff;' +
   'margin:0 auto 16px;box-shadow:0 1px 8px rgba(0,0,0,.28);' +

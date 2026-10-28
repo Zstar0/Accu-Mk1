@@ -277,6 +277,9 @@ def run_backfill(db: Session, runs: list[dict], *, apply: bool, today: date) -> 
                 ws = Worksheet(
                     title=entry["title"],
                     status=entry["status"],
+                    # Prepped the old way: without this the column default
+                    # would give these runs 2 mL maths (spec 2026-10-10 3.8).
+                    endo_prep="stock",
                     assigned_analyst_id=analyst_id,
                     created_at=made,
                     updated_at=made,

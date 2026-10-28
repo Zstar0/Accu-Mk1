@@ -79,7 +79,13 @@ def compute_blend_values(components: dict[int, dict[str, Optional[float]]],
         if c.get("pur") is None or c.get("qty") is None:
             return None
     total = sum(components[s]["qty"] for s in slots)
-    if total <= 0:
+    if total == 0:
+        # PB-1062 (Handler, 2026-10-10): every quantity is 0 (nothing was
+        # identified), so the weighted purity is 0/0. Both rows take 0, the
+        # figures the lab otherwise had to type to move the sample on; the
+        # COA prints them N/A whenever identity fails (coabuilder 2.35.1).
+        return "0", "0"
+    if total < 0:
         return None
     weighted = sum(components[s]["qty"] * components[s]["pur"] for s in slots)
     return _fmt(total), _fmt(weighted / total)
@@ -131,6 +137,9 @@ def recalc_vial_blend_aggregates(db: Session, *, lims_sub_sample_pk: int,
     new = {KW_BLEND_TOTAL: values[0], KW_BLEND_PURITY: values[1]}
     label = {KW_BLEND_TOTAL: "blend total quantity (sum of slot quantities)",
              KW_BLEND_PURITY: "blend purity (quantity-weighted mean of slot purities)"}
+    if values[0] == "0":
+        label = {kw: f"{text}; every slot quantity is 0, so 0 (nothing to calculate)"
+                 for kw, text in label.items()}
 
     written: list[int] = []
     for kw, found in aggs.items():
@@ -179,7 +188,7 @@ def recalc_parent_blend_aggregates(db: Session, *, parent_pk: int,
     back, when the complete branch rewrites it. Nothing can vouch for it
     meanwhile."""
     from lims_analyses.parent_placeholders import PROVENANCE_ORDERED
-    from lims_analyses.service import _deltas, _snapshot
+    from lims_analyses.service import _deltas, _snapshot, clear_result_limits
 
     rows = db.execute(
         select(LimsAnalysis).where(
@@ -223,6 +232,7 @@ def recalc_parent_blend_aggregates(db: Session, *, parent_pk: int,
         prior = row.review_state
         if new != row.result_value:
             row.captured_at = now          # a recalculated figure is captured now
+            clear_result_limits(row)       # the old figure's LOQ / LOD describe no new value
         row.result_value = new
         if prior == "verified":
             row.review_state = "parent_to_verify"

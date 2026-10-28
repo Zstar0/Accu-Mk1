@@ -4,6 +4,7 @@ Provides REST API for scientific calculations, database access, and audit loggin
 """
 
 import asyncio
+import functools
 import json
 import os
 import re
@@ -33,12 +34,13 @@ APP_VERSION = _read_app_version()
 
 from fastapi import BackgroundTasks, FastAPI, Body, Depends, Form, HTTPException, Header, Query, Request, Response, UploadFile, status
 from fastapi.middleware.cors import CORSMiddleware
-from pydantic import BaseModel, ConfigDict, Field, validator, PrivateAttr
+from pydantic import BaseModel, ConfigDict, Field, field_validator, validator, PrivateAttr
 from sqlalchemy.orm import Session, joinedload
 from sqlalchemy import select, desc, delete, update, func, extract, and_, or_
 from sqlalchemy.exc import IntegrityError
 
 from database import get_db, init_db
+from test_accounts import TEST_EMAILS
 from sla_engine import BusinessSchedule, compute_business_minutes, compute_business_deadline, sla_status_dict
 from throughput import (
     SERIES_START as THROUGHPUT_SERIES_START,
@@ -61,6 +63,8 @@ from sla_perf import (  # noqa: E402
     build_sla_performance,
 )
 from models import AuditLog, Settings, Job, Sample, Result, Instrument, AnalysisService, AnalysisServiceSpec, HplcMethod, Peptide, PeptideAnalyte, CalibrationCurve, HPLCAnalysis, User, SharePointFileCache, WizardSession, WizardMeasurement, peptide_methods, blend_components, ServiceGroup, service_group_members, SamplePriority, Worksheet, WorksheetItem, WorksheetNote, instrument_methods, SampleAnalyteAlias, SlaTier, SlaPriorityTier, BusinessHoursConfig, LabHoliday, LimsSample, LimsSampleRemark, LimsSubSample, LimsBox, FlagType, LimsParentAttachment, MethodAttachment, method_services, LimsOrder
+from models import ConsumableType, method_consumables  # endo worksheet v2
+from models import EndoPrepRule  # endo slice 5
 from catalog.change_log import apply_and_log, log_create, log_delete, log_members
 from auth import (
     get_current_user, require_admin, create_access_token,
@@ -123,9 +127,18 @@ from slack_notify.routes import router as slack_prefs_router
 from slack_notify.interactions import router as slack_interactions_router
 from workflow.routes import router as workflow_router
 from priority.routes import router as priority_router
+from customer_insights.routes import router as customer_insights_router
+from crm_close.routes import router as crm_close_router
+from support_plain.routes import router as support_plain_router
+from integration_keys.routes import router as integration_keys_router
+from agents.routes import router as agents_router
+from customer_review.routes import router as customer_review_router
 from workflow.cancel_routes import router as cancel_router
 from conformance.routes import router as conformance_router
 from documents.routes import router as documents_router
+from documents.comment_routes import router as document_comments_router
+from groups.routes import router as groups_router
+from boards.routes import router as boards_router
 
 import logging
 
@@ -397,6 +410,13 @@ async def lifespan(app: FastAPI):
     verify_identity_indexes(_db_engine)
     from flags import seams as _flag_seams
     _flag_seams.register_mk1_entities()
+    # AI review runs live in daemon threads: any row still "running" at startup is dead.
+    from customer_review.store import sweep_running as _sweep_ai_reviews
+    from database import SessionLocal as _SessionLocal
+    with _SessionLocal() as _db:
+        _swept = _sweep_ai_reviews(_db)
+    if _swept:
+        print(f"[startup] customer AI reviews marked interrupted: {_swept}")
     # Flag attachments reuse the S3 blob store used by vial photos when
     # configured (module purity: the adapter lives here, not in flags/).
     if os.environ.get("MK1_PHOTO_S3_BUCKET"):
@@ -485,6 +505,7 @@ async def lifespan(app: FastAPI):
     # Orphaned-attachment GC — always registered (no Slack env needed); hourly is
     # plenty for a 24h TTL. Lives in flags/ (zero Slack coupling).
     from flags import attachments_gc as _attachments_gc
+    from documents import comment_attachments_gc as _comment_attachments_gc
 
     def _gc_job(now):
         db = _SessionLocal()
@@ -494,6 +515,16 @@ async def lifespan(app: FastAPI):
             db.close()
     _flag_scheduler.register("attachment_gc", interval=_timedelta(hours=1),
                              fn=_gc_job)
+
+    # Its own job so a flags-side failure never skips the comment sweep.
+    def _comment_gc_job(now):
+        db = _SessionLocal()
+        try:
+            _comment_attachments_gc.gc_orphaned_comment_attachments(db, now=now)
+        finally:
+            db.close()
+    _flag_scheduler.register("document_comment_attachment_gc", interval=_timedelta(hours=1),
+                             fn=_comment_gc_job)
     # State-change watches poller (Plan 6) — polls the host `state` seam every
     # ~2 min and fires armed watches once. Job fn takes `now` (the ticker calls
     # fn(now=now)); run_watch_poll owns its own Session via _watch_poll_job.
@@ -619,9 +650,18 @@ app.include_router(slack_prefs_router)
 app.include_router(slack_interactions_router)
 app.include_router(workflow_router)
 app.include_router(priority_router)
+app.include_router(customer_insights_router)
+app.include_router(crm_close_router)
+app.include_router(support_plain_router)
+app.include_router(integration_keys_router)
+app.include_router(agents_router)
+app.include_router(customer_review_router)
 app.include_router(cancel_router)
 app.include_router(conformance_router)
+app.include_router(document_comments_router)  # literal /documents/comments* paths must beat /documents/{doc_id}
 app.include_router(documents_router)
+app.include_router(groups_router)
+app.include_router(boards_router)
 
 # --- Endpoints ---
 
@@ -640,7 +680,7 @@ async def login(
 ):
     """Authenticate user and return JWT access token."""
     user = db.query(User).filter(User.email == form_data.email).first()
-    if not user or not verify_password(form_data.password, user.hashed_password):
+    if not user or user.role == "agent" or not verify_password(form_data.password, user.hashed_password):
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Invalid credentials",
@@ -680,6 +720,9 @@ async def update_me(
     if "last_name" in fields:
         v = (fields["last_name"] or "").strip()
         current_user.last_name = v or None
+    if "title" in fields:
+        v = (fields["title"] or "").strip()
+        current_user.title = v or None
     db.commit()
     db.refresh(current_user)
     return _user_to_read(current_user)
@@ -755,7 +798,7 @@ async def list_users(
     db: Session = Depends(get_db),
 ):
     """List all users (admin only)."""
-    users = db.query(User).order_by(User.created_at.desc()).all()
+    users = db.query(User).filter(User.role != "agent").order_by(User.created_at.desc()).all()
     return [_user_to_read(u) for u in users]
 
 
@@ -767,11 +810,12 @@ async def user_directory(
     """Lightweight id/email/name list for ALL users (active + inactive) so the
     FE can resolve historical analyst emails to names. Auth-only, not admin."""
     rows = db.execute(
-        select(User.id, User.email, User.first_name, User.last_name)
+        select(User.id, User.email, User.first_name, User.last_name, User.title)
         .order_by(User.email)
     ).all()
     return [
-        {"id": r.id, "email": r.email, "first_name": r.first_name, "last_name": r.last_name}
+        {"id": r.id, "email": r.email, "first_name": r.first_name, "last_name": r.last_name,
+         "title": r.title}
         for r in rows
     ]
 
@@ -816,6 +860,8 @@ async def update_user(
     user = db.query(User).filter(User.id == user_id).first()
     if not user:
         raise HTTPException(status_code=404, detail="User not found")
+    if user.role == "agent":
+        raise HTTPException(status_code=400, detail="Agents are managed in Settings > Agents")
 
     if data.role is not None:
         if data.role not in ("standard", "admin"):
@@ -835,6 +881,8 @@ async def update_user(
         user.first_name = data.first_name.strip() or None
     if data.last_name is not None:
         user.last_name = data.last_name.strip() or None
+    if data.title is not None:
+        user.title = data.title.strip() or None
 
     db.commit()
     db.refresh(user)
@@ -853,6 +901,8 @@ async def admin_reset_password(
     user = db.query(User).filter(User.id == user_id).first()
     if not user:
         raise HTTPException(status_code=404, detail="User not found")
+    if user.role == "agent":
+        raise HTTPException(status_code=400, detail="Agents are managed in Settings > Agents")
 
     temp_password = _secrets.token_urlsafe(12)
     user.hashed_password = get_password_hash(temp_password)
@@ -1216,6 +1266,8 @@ def retest_activity_label(event: str, d: dict) -> Optional[str]:
         if d.get("add"):
             tail.append("added: " + ", ".join(d["add"]))
         return head + ("; " + "; ".join(tail) if tail else "")
+    if event in ("addon_order_requested", "addon_services_applied"):
+        return d.get("label") or event
     if event == "retest_spec_warning":
         detail = ", ".join(d.get("missing") or []) or d.get("message") or ""
         return f"Retest spec warning: {d.get('reason', '?')}" + (f" ({detail})" if detail else "")
@@ -2750,6 +2802,7 @@ class InstrumentResponse(BaseModel):
     active: bool
     department_id: Optional[int] = None
     origin: str = "mk1"
+    serial_number: Optional[str] = None
     created_at: datetime
     updated_at: datetime
 
@@ -2764,6 +2817,8 @@ class InstrumentCreate(BaseModel):
     brand: Optional[str] = None
     model: Optional[str] = None
     department_id: Optional[int] = None
+    # instruments.serial_number is VARCHAR(100) and Postgres rejects NUL: refuse both here (422), not as a 500.
+    serial_number: Optional[str] = Field(None, max_length=100, pattern=r"^[^\x00]*$")
 
     class Config:
         extra = "ignore"  # Silently ignore senaite_uid, senaite_id
@@ -2777,6 +2832,7 @@ class InstrumentUpdate(BaseModel):
     model: Optional[str] = None
     department_id: Optional[int] = None
     active: Optional[bool] = None
+    serial_number: Optional[str] = Field(None, max_length=100, pattern=r"^[^\x00]*$")
 
     class Config:
         extra = "ignore"
@@ -3172,7 +3228,16 @@ COA_ARCHETYPES = {"limit_table", LEGACY_HPLC_ARCHETYPE}
 # method content). Corrections go through new-revision instead.
 METHOD_LOCKED_FIELDS = ("name", "code", "technique", "reference", "procedure_summary",
                         "size_peptide", "starting_organic_pct", "temperature_mct_c",
-                        "dissolution")
+                        "dissolution", "run_parameters")
+
+def _method_content_locked(db: Session, method: HplcMethod) -> bool:
+    """The one lock rule for a method's content (METHOD_LOCKED_FIELDS and the
+    allowed consumables): issued (not a draft), or referenced by any analysis."""
+    from models import LimsAnalysis
+    referenced = db.execute(select(func.count()).select_from(LimsAnalysis)
+                            .where(LimsAnalysis.method_id == method.id)).scalar()
+    return method.status != "draft" or bool(referenced)
+
 
 # catalog/change_log.py log_create field list for method create/new-revision —
 # the identity + lifecycle columns worth an audit snapshot at mint time.
@@ -3186,7 +3251,7 @@ METHOD_ATTACHMENT_LOG_FIELDS = ("filename", "content_type", "size_bytes")
 # catalog/change_log.py log_create/apply_and_log field list for instrument CRUD
 # (Task 6) — the identity + lifecycle columns worth an audit snapshot.
 INSTRUMENT_LOG_FIELDS = ("name", "instrument_type", "brand", "model", "department_id",
-                         "active", "origin")
+                         "active", "origin", "serial_number")
 _RESERVED_LEGACY_ROLES = {"hplc", "endo", "ster"}
 
 
@@ -3361,6 +3426,8 @@ class MethodUpdate(BaseModel):
     dissolution: Optional[str] = None
     notes: Optional[str] = None
     active: Optional[bool] = None
+    # Endo worksheet v2: validated by catalog/method_run_params.py; null clears.
+    run_parameters: Optional[dict] = None
 
 
 class PeptideBrief(BaseModel):
@@ -3437,6 +3504,7 @@ class MethodResponse(BaseModel):
     updated_at: datetime
     common_peptides: list[PeptideBrief] = []
     services: list[MethodServiceOut] = []
+    run_parameters: Optional[dict] = None
 
     class Config:
         from_attributes = True
@@ -3838,6 +3906,15 @@ async def sync_instruments(db: Session = Depends(get_db), _current_user=Depends(
 # ─── Instrument Endpoints (Local CRUD) ───
 
 
+def _instrument_holding_serial(db: Session, serial: str, exclude_id: Optional[int] = None) -> Optional[str]:
+    """Name of the instrument that already carries `serial`, else None (the
+    uq_instruments_serial_number partial index is the backstop)."""
+    q = select(Instrument.name).where(Instrument.serial_number == serial)
+    if exclude_id is not None:
+        q = q.where(Instrument.id != exclude_id)
+    return db.execute(q).scalars().first()
+
+
 @app.post("/instruments", response_model=InstrumentResponse, status_code=201)
 async def create_instrument(data: InstrumentCreate, db: Session = Depends(get_db),
                             current_user=Depends(get_current_user)):
@@ -3848,6 +3925,11 @@ async def create_instrument(data: InstrumentCreate, db: Session = Depends(get_db
         from models import Department
         if not db.get(Department, data.department_id):
             raise HTTPException(400, f"Department {data.department_id} not found")
+    data.serial_number = _blank_to_none(data.serial_number)
+    if data.serial_number is not None:
+        holder = _instrument_holding_serial(db, data.serial_number)
+        if holder is not None:
+            raise HTTPException(409, f"serial number '{data.serial_number}' is already on '{holder}'")
     inst = Instrument(**data.model_dump())
     db.add(inst)
     db.flush()
@@ -3882,12 +3964,380 @@ async def update_instrument(instrument_id: int, data: InstrumentUpdate,
         from models import Department
         if not db.get(Department, fields["department_id"]):
             raise HTTPException(400, f"Department {fields['department_id']} not found")
+    if "serial_number" in fields:
+        fields["serial_number"] = _blank_to_none(fields["serial_number"])
+        if fields["serial_number"] is not None:
+            holder = _instrument_holding_serial(db, fields["serial_number"], exclude_id=instrument_id)
+            if holder is not None:
+                raise HTTPException(409, f"serial number '{fields['serial_number']}' is already on '{holder}'")
     from catalog.change_log import apply_and_log
     apply_and_log(db, inst, fields, entity_type="instrument", entity_pk=inst.id,
                   user_id=getattr(current_user, "id", None))
     db.commit()
     db.refresh(inst)
     return InstrumentResponse.model_validate(inst)
+
+
+# ─── Consumables catalog (endo worksheet v2, spec 2026-10-10 sections 3.1, 3.2, 9) ───
+
+
+class ConsumableTypeCreate(BaseModel):
+    kind: str
+    name: str
+    manufacturer: Optional[str] = None
+    part_number: Optional[str] = None
+    instrument_id: Optional[int] = None
+    specs: dict = {}
+
+
+class ConsumableTypeUpdate(BaseModel):
+    """All optional. Retire with active=false; there is no delete."""
+    kind: Optional[str] = None
+    name: Optional[str] = None
+    manufacturer: Optional[str] = None
+    part_number: Optional[str] = None
+    instrument_id: Optional[int] = None
+    specs: Optional[dict] = None
+    active: Optional[bool] = None
+
+
+class ConsumableTypeResponse(BaseModel):
+    id: int
+    kind: str
+    name: str
+    manufacturer: Optional[str] = None
+    part_number: Optional[str] = None
+    instrument_id: Optional[int] = None
+    specs: dict
+    active: bool
+    origin: str
+    in_use: bool = False
+    created_at: datetime
+    updated_at: datetime
+
+    class Config:
+        from_attributes = True
+
+
+class ConsumableSpecFieldOut(BaseModel):
+    key: str
+    label: str
+    unit: Optional[str] = None
+    type: str
+    required: bool
+
+
+class ConsumableKindOut(BaseModel):
+    key: str
+    label: str
+    specs: list[ConsumableSpecFieldOut]
+
+
+def _blank_to_none(value: Optional[str]) -> Optional[str]:
+    """R-P1-2 edge normalization: a blank string never reaches a partial unique index."""
+    if value is None:
+        return None
+    return value.strip() or None
+
+
+def _consumable_out(row: ConsumableType, in_use: bool) -> ConsumableTypeResponse:
+    out = ConsumableTypeResponse.model_validate(row)
+    out.in_use = in_use
+    return out
+
+
+def _consumable_conflict(db: Session, *, kind: str, name: str, manufacturer: Optional[str],
+                         part_number: Optional[str], exclude_id: Optional[int] = None) -> Optional[str]:
+    """The 409 message for a duplicate (kind, name) or a duplicate part number
+    under the same manufacturer (none counts as ''), mirroring the two unique
+    indexes on consumable_types; None when the row is unique."""
+    q = select(ConsumableType.id).where(ConsumableType.kind == kind, ConsumableType.name == name)
+    if exclude_id is not None:
+        q = q.where(ConsumableType.id != exclude_id)
+    if db.execute(q).first() is not None:
+        return f"a {kind} named '{name}' already exists"
+    if part_number is not None:
+        q = select(ConsumableType.name).where(
+            ConsumableType.part_number == part_number,
+            func.coalesce(ConsumableType.manufacturer, "") == (manufacturer or ""))
+        if exclude_id is not None:
+            q = q.where(ConsumableType.id != exclude_id)
+        other = db.execute(q).scalars().first()
+        if other is not None:
+            return f"part number '{part_number}' is already on '{other}'"
+    return None
+
+
+@app.get("/consumables/kinds", response_model=list[ConsumableKindOut])
+async def list_consumable_kinds(_current_user=Depends(get_current_user)):
+    """The kind registry, for the admin form."""
+    from catalog.consumables import kinds_payload
+    return kinds_payload()
+
+
+@app.get("/consumables", response_model=list[ConsumableTypeResponse])
+async def list_consumables(kind: Optional[str] = None, active: Optional[bool] = None,
+                           db: Session = Depends(get_db), _current_user=Depends(get_current_user)):
+    """Every consumable type, retired ones included unless ?active=true.
+    in_use comes from one query, never one per row."""
+    from catalog.consumables import used_type_ids
+    q = select(ConsumableType).order_by(ConsumableType.kind, ConsumableType.name)
+    if kind is not None:
+        q = q.where(ConsumableType.kind == kind)
+    if active is not None:
+        q = q.where(ConsumableType.active == active)
+    used = used_type_ids(db)
+    return [_consumable_out(row, row.id in used) for row in db.execute(q).scalars().all()]
+
+
+@app.post("/consumables", response_model=ConsumableTypeResponse, status_code=201)
+async def create_consumable(data: ConsumableTypeCreate, db: Session = Depends(get_db),
+                            current_user=Depends(get_current_user)):
+    from catalog.consumables import CONSUMABLE_LOG_FIELDS, ConsumableSpecError, validate_specs
+    name = _blank_to_none(data.name)
+    if name is None:
+        raise HTTPException(400, "name is required")
+    try:
+        specs = validate_specs(data.kind, data.specs)
+    except ConsumableSpecError as e:
+        raise HTTPException(400, str(e))
+    manufacturer = _blank_to_none(data.manufacturer)
+    part_number = _blank_to_none(data.part_number)
+    if data.instrument_id is not None and not db.get(Instrument, data.instrument_id):
+        raise HTTPException(400, f"Instrument {data.instrument_id} not found")
+    conflict = _consumable_conflict(db, kind=data.kind, name=name, manufacturer=manufacturer,
+                                    part_number=part_number)
+    if conflict:
+        raise HTTPException(409, conflict)
+    row = ConsumableType(kind=data.kind, name=name, manufacturer=manufacturer,
+                         part_number=part_number, instrument_id=data.instrument_id, specs=specs)
+    db.add(row)
+    db.flush()
+    log_create(db, row, CONSUMABLE_LOG_FIELDS, entity_type="consumable_type", entity_pk=row.id,
+               user_id=getattr(current_user, "id", None))
+    db.commit()
+    db.refresh(row)
+    return _consumable_out(row, False)
+
+
+@app.patch("/consumables/{type_id}", response_model=ConsumableTypeResponse)
+async def update_consumable(type_id: int, data: ConsumableTypeUpdate, db: Session = Depends(get_db),
+                            current_user=Depends(get_current_user)):
+    """Edit or retire a consumable type. Once a worksheet or an item uses it,
+    or a method revision that is not a draft links it (consumable_in_use), a
+    change to kind or specs is 409 naming the fields (resending the stored
+    value is fine); name, manufacturer, part number, instrument and active
+    stay editable."""
+    from catalog.consumables import ConsumableSpecError, consumable_in_use, validate_specs
+    row = db.get(ConsumableType, type_id)
+    if not row:
+        raise HTTPException(404, f"Consumable type {type_id} not found")
+    fields = data.model_dump(exclude_unset=True)
+    for f in ("name", "manufacturer", "part_number"):
+        if f in fields:
+            fields[f] = _blank_to_none(fields[f])
+    for f in ("kind", "name", "specs", "active"):
+        if f in fields and fields[f] is None:
+            raise HTTPException(400, f"{f} cannot be empty")
+    if "kind" in fields or "specs" in fields:
+        try:
+            specs = validate_specs(fields.get("kind", row.kind), fields.get("specs", row.specs))
+        except ConsumableSpecError as e:
+            raise HTTPException(400, str(e))
+        if "specs" in fields:
+            fields["specs"] = specs
+        changed = [f for f in ("kind", "specs") if f in fields and fields[f] != getattr(row, f)]
+        if changed and consumable_in_use(db, type_id):
+            raise HTTPException(
+                409, f"'{row.name}' is in use; locked: {', '.join(changed)}. "
+                     f"Retire it and add a new one to change these")
+    if fields.get("instrument_id") is not None and not db.get(Instrument, fields["instrument_id"]):
+        raise HTTPException(400, f"Instrument {fields['instrument_id']} not found")
+    conflict = _consumable_conflict(
+        db, kind=fields.get("kind", row.kind), name=fields.get("name", row.name),
+        manufacturer=fields.get("manufacturer", row.manufacturer),
+        part_number=fields.get("part_number", row.part_number), exclude_id=type_id)
+    if conflict:
+        raise HTTPException(409, conflict)
+    apply_and_log(db, row, fields, entity_type="consumable_type", entity_pk=row.id,
+                  user_id=getattr(current_user, "id", None))
+    db.commit()
+    db.refresh(row)
+    return _consumable_out(row, consumable_in_use(db, type_id))
+
+
+# ─── Endotoxin prep rules (endo slice 5, spec 2026-10-14 section 3) ───
+#
+# The same permission as the consumables catalog and the method editor above:
+# any signed-in user (get_current_user). Audited in audit_logs with old and
+# new snapshots, the worksheets_endo.py idiom.
+
+
+class EndoPrepRuleIn(BaseModel):
+    """A rule as the rules page creates it. sort_order is never sent: a new
+    line goes to the end of the list, and POST /endo-prep-rules/reorder moves it."""
+    peptide_id: int
+    min_mg: Optional[float] = None
+    max_mg: Optional[float] = None
+    recon_water_ml: Optional[float] = None
+    total_dilution: Optional[float] = None
+    step1_ratio: Optional[float] = None
+    cartridge_type_id: Optional[int] = None
+    status: Literal["trial", "validated"] = "trial"
+    note: Optional[str] = None
+    active: bool = True
+
+
+class EndoPrepRulePatch(BaseModel):
+    """PATCH body: sent = set, an explicit null clears (back to the standard),
+    omitted = untouched. peptide_id, status and active cannot be cleared."""
+    peptide_id: Optional[int] = None
+    min_mg: Optional[float] = None
+    max_mg: Optional[float] = None
+    recon_water_ml: Optional[float] = None
+    total_dilution: Optional[float] = None
+    step1_ratio: Optional[float] = None
+    cartridge_type_id: Optional[int] = None
+    status: Optional[Literal["trial", "validated"]] = None
+    note: Optional[str] = None
+    active: Optional[bool] = None
+
+
+class EndoPrepRuleOut(BaseModel):
+    """endo_prep_rules.snapshot() plus what the page shows. Every key is
+    declared, because response_model drops undeclared ones."""
+    id: int
+    peptide_id: int
+    min_mg: Optional[float] = None
+    max_mg: Optional[float] = None
+    recon_water_ml: Optional[float] = None
+    total_dilution: Optional[float] = None
+    step1_ratio: Optional[float] = None
+    cartridge_type_id: Optional[int] = None
+    status: str
+    note: Optional[str] = None
+    sort_order: int
+    active: bool
+    peptide_name: Optional[str] = None
+    cartridge_name: Optional[str] = None
+    updated_at: Optional[datetime] = None
+
+
+class EndoPrepRuleSaveOut(BaseModel):
+    rule: EndoPrepRuleOut
+    warnings: list[str]
+
+
+class EndoPrepRuleReorderIn(BaseModel):
+    ids: list[int]
+
+
+def _endo_prep_rules_out(db: Session, rule_id: Optional[int] = None) -> list[EndoPrepRuleOut]:
+    """Every rule (or the one rule_id names) with its peptide and cartridge
+    names, inactive ones included, in list order (sort_order, then id). One query."""
+    from endo_prep_rules import snapshot
+    q = (select(EndoPrepRule, Peptide.name, ConsumableType.name)
+         .outerjoin(Peptide, Peptide.id == EndoPrepRule.peptide_id)
+         .outerjoin(ConsumableType, ConsumableType.id == EndoPrepRule.cartridge_type_id)
+         .order_by(EndoPrepRule.sort_order, EndoPrepRule.id))
+    if rule_id is not None:
+        q = q.where(EndoPrepRule.id == rule_id)
+    return [EndoPrepRuleOut(**snapshot(rule), peptide_name=peptide_name,
+                            cartridge_name=cartridge_name, updated_at=rule.updated_at)
+            for rule, peptide_name, cartridge_name in db.execute(q).all()]
+
+
+@app.get("/endo-prep-rules", response_model=list[EndoPrepRuleOut])
+async def list_endo_prep_rules(db: Session = Depends(get_db),
+                               _current_user=Depends(get_current_user)):
+    """Every prep rule, inactive ones included, in list order."""
+    return _endo_prep_rules_out(db)
+
+
+@app.post("/endo-prep-rules", response_model=EndoPrepRuleSaveOut, status_code=201)
+async def create_endo_prep_rule(data: EndoPrepRuleIn, db: Session = Depends(get_db),
+                                current_user=Depends(get_current_user)):
+    """Add a line at the end of the list. A refusal is a 400 with the reason;
+    the warnings come back with the saved line (spec section 3)."""
+    from endo_prep_rules import check_rule, snapshot
+    fields = data.model_dump()
+    fields["note"] = _blank_to_none(fields["note"])
+    try:
+        warnings = check_rule(db, {**fields, "id": None}, fields)
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    user_id = getattr(current_user, "id", None)
+    next_order = db.execute(
+        select(func.coalesce(func.max(EndoPrepRule.sort_order), -1) + 1)).scalar_one()
+    rule = EndoPrepRule(**fields, sort_order=next_order, updated_by_id=user_id)
+    db.add(rule)
+    db.flush()
+    db.add(AuditLog(operation="endo_prep_rule_created", entity_type="endo_prep_rule",
+                    entity_id=str(rule.id),
+                    details={"user_id": user_id, "old": None, "new": snapshot(rule)}))
+    db.commit()
+    return {"rule": _endo_prep_rules_out(db, rule.id)[0], "warnings": warnings}
+
+
+@app.patch("/endo-prep-rules/{rule_id}", response_model=EndoPrepRuleSaveOut)
+async def update_endo_prep_rule(rule_id: int, data: EndoPrepRulePatch,
+                                db: Session = Depends(get_db),
+                                current_user=Depends(get_current_user)):
+    """Edit or (de)activate a line; there is no delete. Only the fields sent
+    change. The checks run on the line as it will be stored (every check when
+    the line is turned back on), and a save that changes nothing writes no
+    audit row."""
+    from endo_prep_rules import check_rule, snapshot
+    rule = db.get(EndoPrepRule, rule_id)
+    if rule is None:
+        raise HTTPException(404, f"prep rule {rule_id} not found")
+    fields = data.model_dump(exclude_unset=True)
+    if "note" in fields:
+        fields["note"] = _blank_to_none(fields["note"])
+    old = snapshot(rule)
+    # Turning a line on again re-checks every field: a cartridge retired or a
+    # standard raised while it was off must not slip back into the matcher.
+    sent = set(old) if fields.get("active") is True and not old["active"] else fields
+    try:
+        warnings = check_rule(db, {**old, **fields}, sent, rule_id=rule_id)
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    for name, value in fields.items():
+        setattr(rule, name, value)
+    new = snapshot(rule)
+    if new != old:
+        user_id = getattr(current_user, "id", None)
+        rule.updated_by_id = user_id
+        db.add(AuditLog(operation="endo_prep_rule_updated", entity_type="endo_prep_rule",
+                        entity_id=str(rule.id),
+                        details={"user_id": user_id, "old": old, "new": new}))
+    db.commit()
+    return {"rule": _endo_prep_rules_out(db, rule_id)[0], "warnings": warnings}
+
+
+@app.post("/endo-prep-rules/reorder", response_model=list[EndoPrepRuleOut])
+async def reorder_endo_prep_rules(data: EndoPrepRuleReorderIn, db: Session = Depends(get_db),
+                                  current_user=Depends(get_current_user)):
+    """Set the list order, the matcher's tie-break (spec section 4). ids lists
+    every rule, inactive ones included, exactly once; position i becomes
+    sort_order i. Sending the current order changes nothing."""
+    rules = db.execute(select(EndoPrepRule)
+                       .order_by(EndoPrepRule.sort_order, EndoPrepRule.id)).scalars().all()
+    old = [r.id for r in rules]
+    if sorted(data.ids) != sorted(old):
+        raise HTTPException(400, "ids must list every rule exactly once")
+    if data.ids != old:
+        user_id = getattr(current_user, "id", None)
+        by_id = {r.id: r for r in rules}
+        for position, rule_id in enumerate(data.ids):
+            if by_id[rule_id].sort_order != position:
+                by_id[rule_id].sort_order = position
+                by_id[rule_id].updated_by_id = user_id
+        db.add(AuditLog(operation="endo_prep_rules_reordered", entity_type="endo_prep_rule",
+                        entity_id=None,
+                        details={"user_id": user_id, "old": old, "new": data.ids}))
+        db.commit()
+    return _endo_prep_rules_out(db)
 
 
 # ─── Analysis Service Endpoints ───
@@ -4401,10 +4851,11 @@ def patch_service_spec(spec_id: int, req: ServiceSpecPatch,
     try:
         db.flush()
     except IntegrityError:
-        # Only reachable via active False -> True: deactivating a row frees
-        # its (service, tier) slot, another row can claim it, and PATCH is
-        # the sole route that can flip a row back to active — colliding
-        # with whatever now occupies that slot.
+        # Two ways in: active False -> True (deactivating a row frees its
+        # (service, tier, unit) slot, another row can claim it, and PATCH is
+        # the sole route that can flip a row back to active), and a unit
+        # change into a slot another active row holds (endo slice 3: the
+        # uniqueness indexes key on the unit as well as the tier).
         db.rollback()
         raise HTTPException(409, "an active spec already exists for this tier — deactivate it first")
     record_spec_change(db, spec, before=before, actor_user_id=current_user.id)
@@ -4813,16 +5264,19 @@ async def update_method(method_id: int, data: MethodUpdate, db: Session = Depend
         raise HTTPException(400, "active is managed by the lifecycle verbs "
                                  "(activate / retire) — not settable directly")
 
-    from models import LimsAnalysis
-    referenced = db.execute(select(func.count()).select_from(LimsAnalysis)
-                            .where(LimsAnalysis.method_id == method_id)).scalar()
-    locked = method.status != "draft" or bool(referenced)
-    if locked:
+    if _method_content_locked(db, method):
         offending = sorted(set(fields) & set(METHOD_LOCKED_FIELDS))
         if offending:
             raise HTTPException(
                 409, f"method '{method.name}' rev {method.revision} is issued — "
                      f"locked fields: {', '.join(offending)}; create a new revision instead")
+
+    if "run_parameters" in fields:
+        from catalog.method_run_params import validate_run_parameters
+        try:
+            fields["run_parameters"] = validate_run_parameters(fields["run_parameters"])
+        except ValueError as e:
+            raise HTTPException(400, str(e))
 
     instrument_ids = fields.pop("instrument_ids", None)
 
@@ -4853,6 +5307,15 @@ async def delete_method(method_id: int, db: Session = Depends(get_db), _current_
         raise HTTPException(
             409, f"Method '{method.name}' is referenced by {ref} analyses and is part "
                  f"of their traceability record — deactivate it instead of deleting")
+
+    # Endo worksheet v2: a pinned revision is the record a worksheet's results
+    # were computed with (spec 2026-10-10 section 4.1); the FK is a plain one.
+    pinned = db.execute(select(func.count()).select_from(Worksheet)
+                        .where(Worksheet.endo_method_id == method_id)).scalar()
+    if pinned:
+        raise HTTPException(
+            409, f"Method '{method.name}' is pinned by {pinned} worksheet(s) and is part "
+                 f"of their results record. Retire it instead of deleting")
 
     db.delete(method)
     db.commit()
@@ -4929,6 +5392,89 @@ async def put_method_services(method_id: int, links: list[MethodServiceLinkIn],
     return _method_service_rows(db, method_id)
 
 
+class MethodConsumableLinkIn(BaseModel):
+    consumable_type_id: int
+    is_default: bool = False
+
+
+class MethodConsumableOut(BaseModel):
+    consumable_type_id: int
+    kind: str
+    name: str
+    specs: dict
+    active: bool
+    is_default: bool
+
+
+def _method_consumable_rows(db: Session, method_id: int) -> list[MethodConsumableOut]:
+    rows = db.execute(
+        select(method_consumables.c.consumable_type_id, method_consumables.c.kind,
+               ConsumableType.name, ConsumableType.specs, ConsumableType.active,
+               method_consumables.c.is_default)
+        .join(ConsumableType, ConsumableType.id == method_consumables.c.consumable_type_id)
+        .where(method_consumables.c.method_id == method_id)
+        .order_by(method_consumables.c.kind, ConsumableType.name)
+    ).all()
+    return [MethodConsumableOut(consumable_type_id=r[0], kind=r[1], name=r[2], specs=r[3],
+                                active=r[4], is_default=r[5]) for r in rows]
+
+
+@app.get("/hplc/methods/{method_id}/consumables", response_model=list[MethodConsumableOut])
+async def get_method_consumables(method_id: int, db: Session = Depends(get_db),
+                                 _current_user=Depends(get_current_user)):
+    if not db.get(HplcMethod, method_id):
+        raise HTTPException(404, f"Method {method_id} not found")
+    return _method_consumable_rows(db, method_id)
+
+
+@app.put("/hplc/methods/{method_id}/consumables", response_model=list[MethodConsumableOut])
+async def put_method_consumables(method_id: int, links: list[MethodConsumableLinkIn],
+                                 db: Session = Depends(get_db),
+                                 current_user=Depends(get_current_user)):
+    """Replace-set (the put_method_services precedent) on DRAFT methods only:
+    a method's allowed consumables change only through a new revision (Handler
+    ruling 2026-10-10). Each type must exist and be active; the link's kind is
+    copied from the type, never sent; at most one default per kind."""
+    method = db.get(HplcMethod, method_id)
+    if not method:
+        raise HTTPException(404, f"Method {method_id} not found")
+    if _method_content_locked(db, method):
+        raise HTTPException(
+            409, f"method '{method.name}' rev {method.revision} is locked (status "
+                 f"{method.status}, or used by analyses); consumables change only on an unused "
+                 f"draft. Create a new revision instead")
+    picked: list[tuple[ConsumableType, bool]] = []
+    defaults: dict[str, int] = {}
+    for ln in links:
+        if any(t.id == ln.consumable_type_id for t, _ in picked):
+            raise HTTPException(400, f"consumable type {ln.consumable_type_id} listed twice")
+        t = db.get(ConsumableType, ln.consumable_type_id)
+        if t is None:
+            raise HTTPException(400, f"consumable type {ln.consumable_type_id} not found")
+        if not t.active:
+            raise HTTPException(400, f"consumable type '{t.name}' is retired")
+        if ln.is_default:
+            if t.kind in defaults:
+                raise HTTPException(400, f"more than one default {t.kind}")
+            defaults[t.kind] = t.id
+        picked.append((t, ln.is_default))
+    before = db.execute(select(method_consumables.c.consumable_type_id, method_consumables.c.is_default)
+                        .where(method_consumables.c.method_id == method_id)).all()
+    db.execute(method_consumables.delete().where(method_consumables.c.method_id == method_id))
+    for t, is_default in picked:
+        db.execute(method_consumables.insert().values(
+            method_id=method_id, consumable_type_id=t.id, kind=t.kind, is_default=is_default))
+    # Two fields, so a change of default alone is still logged.
+    user_id = getattr(current_user, "id", None)
+    log_members(db, entity_type="method", entity_pk=method_id, user_id=user_id, field="consumables",
+                before_ids=sorted(r[0] for r in before), after_ids=sorted(t.id for t, _ in picked))
+    log_members(db, entity_type="method", entity_pk=method_id, user_id=user_id,
+                field="consumable_defaults", before_ids=sorted(r[0] for r in before if r[1]),
+                after_ids=sorted(defaults.values()))
+    db.commit()
+    return _method_consumable_rows(db, method_id)
+
+
 # ─── Methods controlled documents (slice 3): lifecycle verbs ───
 #
 # R4/R10: revision = new row, issued content never changes in place. Corrections
@@ -4944,7 +5490,9 @@ async def new_method_revision(method_id: int, db: Session = Depends(get_db),
     (400 from draft — a draft is already editable in place). Clones all
     content fields + department_id + notes, method_services links (is_default
     reset to False — defaults only move at activation, R11), and instrument
-    links. Never copies senaite_id (R0; also globally unique)."""
+    links. Never copies senaite_id (R0; also globally unique). Endo worksheet
+    v2: also run_parameters, and method_consumables WITH is_default (a
+    consumable default belongs to this method alone, so it cannot clash)."""
     src = db.get(HplcMethod, method_id)
     if not src:
         raise HTTPException(404, f"Method {method_id} not found")
@@ -4960,7 +5508,7 @@ async def new_method_revision(method_id: int, db: Session = Depends(get_db),
         starting_organic_pct=src.starting_organic_pct,
         temperature_mct_c=src.temperature_mct_c, dissolution=src.dissolution,
         notes=src.notes, origin="mk1", status="draft", active=False,
-        revision=max_rev + 1, supersedes_id=src.id,
+        revision=max_rev + 1, supersedes_id=src.id, run_parameters=src.run_parameters,
         # senaite_id deliberately NOT copied (R0; also unique)
     )
     clone.instruments = list(src.instruments)
@@ -4972,10 +5520,25 @@ async def new_method_revision(method_id: int, db: Session = Depends(get_db),
         db.execute(method_services.insert().values(
             method_id=clone.id, analysis_service_id=link.analysis_service_id,
             is_default=False))
+    copied = db.execute(select(method_consumables).where(
+        method_consumables.c.method_id == src.id)).all()
+    for link in copied:
+        db.execute(method_consumables.insert().values(
+            method_id=clone.id, consumable_type_id=link.consumable_type_id,
+            kind=link.kind, is_default=link.is_default))
 
     from catalog.change_log import log_create
-    log_create(db, clone, METHOD_LOG_FIELDS, entity_type="method",
-              entity_pk=clone.id, user_id=getattr(current_user, "id", None))
+    user_id = getattr(current_user, "id", None)
+    # Spec 10: the copied run_parameters and consumable links are logged too,
+    # the links in the fields put_method_consumables uses.
+    log_create(db, clone, (*METHOD_LOG_FIELDS, "run_parameters"), entity_type="method",
+              entity_pk=clone.id, user_id=user_id)
+    log_members(db, entity_type="method", entity_pk=clone.id, user_id=user_id,
+                field="consumables", before_ids=[],
+                after_ids=sorted(link.consumable_type_id for link in copied))
+    log_members(db, entity_type="method", entity_pk=clone.id, user_id=user_id,
+                field="consumable_defaults", before_ids=[],
+                after_ids=sorted(link.consumable_type_id for link in copied if link.is_default))
 
     db.commit()
     db.refresh(clone)
@@ -6992,10 +7555,14 @@ async def upload_chromatogram_native(
     csv_bytes = build_chromatogram_csv(analysis)
     filename = f"chromatogram_{analysis.sample_id_label}.csv"
     try:
+        # Lineage (P-5324, 2026-10-19): stamp the vial the trace came from,
+        # the same rule as the SENAITE twin; a bare parent label stays NULL.
+        # The writer checks the vial belongs to this parent.
         write_parent_attachment(
             db, row, file_bytes=csv_bytes, filename=filename,
             content_type="text/csv", kind="chromatogram",
-            source_sample_id=None, user_id=getattr(current_user, "id", None),
+            source_sample_id=label if re.search(r"-S\d{2,}$", label or "") else None,
+            user_id=getattr(current_user, "id", None),
             render_in_report=False, attachment_type="HPLC Graph",
         )
         db.commit()
@@ -10230,6 +10797,62 @@ async def reports_purity_trend(
         raise HTTPException(status_code=503, detail=f"Reports database error: {e}")
 
 
+class AnalyteTrendTest(BaseModel):
+    name: str
+    value: Optional[float] = None
+    unit: str = ""
+    ok: Optional[bool] = None
+    spec: Optional[str] = None
+
+
+class AnalyteTrendCoa(BaseModel):
+    code: str
+    sample_id: str
+    published_at: Optional[str] = None
+    product: str
+    is_blend: bool
+    matrix: Optional[str] = None
+    lot: Optional[str] = None
+    overall: str
+    purity: Optional[float] = None
+    purity_ok: Optional[bool] = None
+    purity_spec: Optional[str] = None
+    identity_ok: Optional[bool] = None
+    qty: Optional[float] = None
+    qty_declared: Optional[float] = None
+    endo: Optional[bool] = None
+    sterility: Optional[bool] = None
+    hm: Optional[bool] = None
+    tests: list[AnalyteTrendTest] = []
+
+
+class AnalyteTrendsResponse(BaseModel):
+    tz: str
+    coas: list[AnalyteTrendCoa]
+
+
+@app.get("/reports/analyte-trends", response_model=AnalyteTrendsResponse)
+async def reports_analyte_trends(
+    db: Session = Depends(get_db),
+    _current_user=Depends(get_current_user),
+):
+    """Every published primary COA, one record each, for the Analyte Trends report."""
+    import scheduled_publish as _sp
+    from reports_analyte_trends import ANALYTE_TRENDS_SQL, build_coa_records
+
+    try:
+        with get_integration_db() as conn:
+            with conn.cursor() as cur:
+                cur.execute(ANALYTE_TRENDS_SQL)
+                rows = cur.fetchall()
+    except Exception as e:
+        raise HTTPException(status_code=503, detail=f"Reports database error: {e}")
+    # Same test-order rule as the SLA / throughput reports (billing email + test clients).
+    test_ids = _test_order_senaite_ids()
+    coas = [c for c in build_coa_records(rows) if c["sample_id"] not in test_ids]
+    return AnalyteTrendsResponse(tz=_sp.lab_tz(db), coas=coas)
+
+
 class CheckInRecord(BaseModel):
     sample_id: str
     sample_uid: str
@@ -10248,14 +10871,16 @@ TEST_CLIENT_TITLES = frozenset({"valence internal 2"})
 
 
 def _test_client_sample_ids(db: Session) -> set[str]:
-    """Sample IDs whose lims_samples.client_title is an internal/test client."""
-    if not TEST_CLIENT_TITLES:
-        return set()
+    """Sample IDs whose lims_samples.client_title is an internal/test client.
+
+    A test account's e-mail also counts as a test client: samples registered
+    straight into the LIMS for that account carry its e-mail as the client title
+    and no order (prod 10-07: P-0346/P-0347/P-0476/P-0477/P-0203 for Harmony).
+    """
+    titles = sorted(TEST_CLIENT_TITLES | TEST_EMAILS)
     return {
         sid for (sid,) in db.execute(
-            select(LimsSample.sample_id).where(
-                func.lower(LimsSample.client_title).in_(sorted(TEST_CLIENT_TITLES))
-            )
+            select(LimsSample.sample_id).where(func.lower(LimsSample.client_title).in_(titles))
         ).all()
     }
 
@@ -10270,7 +10895,6 @@ def _test_order_senaite_ids() -> set[str]:
     every Mk1 sample registered under a test client (no order needed). Each
     leg degrades to an empty set on failure — nothing flagged as test.
     """
-    TEST_EMAILS = {"forrestp@outlook.com", "forrest@valenceanalytical.com"}
     test_ids: set[str] = set()
 
     try:
@@ -10326,6 +10950,10 @@ def _parse_day_bound(val: Optional[str], *, end: bool) -> Optional[datetime]:
     return datetime.combine(d, _time.max if end else _time.min)
 
 
+_VIAL_SUFFIX = re.compile(r"-S\d+$")
+_PRIORITY_RANK = {"high": 1, "expedited": 2}
+
+
 @app.get("/reports/checkin-times", response_model=list[CheckInRecord])
 async def reports_checkin_times(
     from_date: Optional[str] = Query(None, alias="from"),
@@ -10333,64 +10961,49 @@ async def reports_checkin_times(
     db: Session = Depends(get_db),
     _current_user=Depends(get_current_user),
 ):
-    """Sample check-in events sourced from worksheet_items.date_received.
+    """Sample check-ins: one record per LIMS sample, by lims_samples.date_received.
 
-    Returns raw UTC timestamps (one row per sample); time-of-day bucketing is done
-    client-side in the browser's local timezone. worksheet_items holds one row per
-    (sample, analysis), so a sample with multiple analyses produces several rows
-    sharing one date_received — results are deduped by sample_uid (earliest
-    date_received kept, product labels merged). Rows with a null date_received are
-    excluded. Optional `from`/`to` are inclusive YYYY-MM-DD day bounds.
+    Same population as /reports/throughput (every sample the lab received). Until
+    1.35.2 this read worksheet_items, which only holds VIALS placed on a worksheet:
+    prod Sept 2026 = 758 vial rows vs 1,089 samples received, 642 of which never
+    reached a worksheet. Priority is the most urgent worksheet priority among the
+    sample's vials (``normal`` when none). Raw UTC timestamps; time-of-day
+    bucketing is client-side. Optional `from`/`to` are inclusive YYYY-MM-DD day
+    bounds (naive UTC, like date_received).
     """
-    stmt = select(WorksheetItem).where(WorksheetItem.date_received.is_not(None))
+    stmt = select(
+        LimsSample.id, LimsSample.sample_id, LimsSample.external_lims_uid,
+        LimsSample.date_received, LimsSample.peptide_name,
+    ).where(LimsSample.date_received.is_not(None))
     lo = _parse_day_bound(from_date, end=False)
     hi = _parse_day_bound(to_date, end=True)
     if lo is not None:
-        stmt = stmt.where(WorksheetItem.date_received >= lo)
+        stmt = stmt.where(LimsSample.date_received >= lo)
     if hi is not None:
-        stmt = stmt.where(WorksheetItem.date_received <= hi)
+        stmt = stmt.where(LimsSample.date_received <= hi)
+    samples = db.execute(stmt).all()
 
-    rows = db.execute(stmt.order_by(WorksheetItem.date_received.desc())).scalars().all()
+    priority: dict[str, str] = {}
+    for vial_id, prio in db.execute(
+        select(WorksheetItem.sample_id, WorksheetItem.priority).where(
+            WorksheetItem.priority.in_(tuple(_PRIORITY_RANK))
+        )
+    ).all():
+        parent = _VIAL_SUFFIX.sub("", vial_id or "")
+        if _PRIORITY_RANK[prio] > _PRIORITY_RANK.get(priority.get(parent, ""), 0):
+            priority[parent] = prio
 
     test_ids = _test_order_senaite_ids()
-
-    by_uid: dict[str, dict] = {}
-    for it in rows:
-        names: list[str] = []
-        if it.analyses_json:
-            try:
-                for a in json.loads(it.analyses_json):
-                    pn = (a.get("peptide_name") or "").strip()
-                    if pn and pn not in names:
-                        names.append(pn)
-            except (ValueError, TypeError):
-                pass
-        entry = by_uid.get(it.sample_uid)
-        if entry is None:
-            by_uid[it.sample_uid] = {
-                "sample_id": it.sample_id,
-                "sample_uid": it.sample_uid,
-                "date_received": it.date_received,
-                "priority": it.priority,
-                "names": names,
-            }
-        else:
-            if it.date_received < entry["date_received"]:
-                entry["date_received"] = it.date_received
-            for pn in names:
-                if pn not in entry["names"]:
-                    entry["names"].append(pn)
-
     records = [
         CheckInRecord(
-            sample_id=e["sample_id"],
-            sample_uid=e["sample_uid"],
-            date_received=e["date_received"].isoformat() + "Z",
-            product_label=", ".join(e["names"]) if e["names"] else None,
-            priority=e["priority"],
-            is_test_order=e["sample_id"] in test_ids,
+            sample_id=sid,
+            sample_uid=ext_uid or f"mk1:{pk}",
+            date_received=received.isoformat() + "Z",
+            product_label=(peptide or "").strip() or None,
+            priority=priority.get(sid, "normal"),
+            is_test_order=sid in test_ids,
         )
-        for e in by_uid.values()
+        for pk, sid, ext_uid, received, peptide in samples
     ]
     records.sort(key=lambda r: r.date_received, reverse=True)
     return records
@@ -10439,8 +11052,7 @@ async def reports_turnaround(
         )
         SELECT m.sample_id, os.created_at AS ordered_at,
                m.received_at, m.submitted_at, m.verified_at, m.published_at,
-               (LOWER(os.payload->'billing'->>'email') IN
-                  ('forrestp@outlook.com', 'forrest@valenceanalytical.com')) AS is_test_order
+               (LOWER(os.payload->'billing'->>'email') = ANY(%s)) AS is_test_order
         FROM m
         LEFT JOIN order_submissions os ON os.id = m.order_id
     """
@@ -10457,7 +11069,7 @@ async def reports_turnaround(
     try:
         with get_integration_db() as conn:
             with conn.cursor() as cur:
-                cur.execute(sql)
+                cur.execute(sql, (sorted(TEST_EMAILS),))
                 rows = cur.fetchall()
     except Exception as e:
         raise HTTPException(status_code=503, detail=f"Reports database error: {e}")
@@ -10907,6 +11519,8 @@ class SlaPerfFiltersOut(BaseModel):
     order: Optional[str] = None
     departments: list[str]
     families: list[str]
+    received_from: Optional[str] = None
+    received_to: Optional[str] = None
 
 
 class SlaPerfClientFacet(BaseModel):
@@ -11002,6 +11616,17 @@ def _sla_perf_rows(db: Session) -> tuple[dict, bool]:
         _sla_perf_rows_cache.clear()
         _sla_perf_rows_cache.update({"at": now, "coas": coas, "inputs": inputs, "test_ids": test_ids})
         return _sla_perf_rows_cache, False
+
+
+def sla_sample_records(db: Session, now: datetime) -> list[dict]:
+    """Per-sample SLA records for Customer Insights (delivered + late, keyed by order number)."""
+    import sla_perf
+
+    rows, _stale = _sla_perf_rows(db)
+    if now.tzinfo is not None:  # the engine works in naive UTC, as /reports/sla-performance passes it
+        now = now.astimezone(timezone.utc).replace(tzinfo=None)
+    return sla_perf.sample_records(**rows["inputs"], coas=rows["coas"], now=now,
+                                   excluded_sample_ids=rows["test_ids"])
 
 
 def _load_tiered_profiles(db: Session) -> list[tuple[int, str, int, frozenset]]:
@@ -11119,6 +11744,8 @@ def reports_sla_performance(
     order: Optional[str] = Query(None, description="Substring of client_order_number"),
     department: list[SlaPerfDepartmentKey] = Query(default=[]),
     family: list[SlaPerfFamilyKey] = Query(default=[]),
+    received_from: Optional[date] = Query(None, alias="from", description="Received on/after (lab day)"),
+    received_to: Optional[date] = Query(None, alias="to", description="Received on/before (lab day)"),
     db: Session = Depends(get_db),
     _current_user=Depends(get_current_user),
 ):
@@ -11154,6 +11781,8 @@ def reports_sla_performance(
         order=order,
         departments=list(department),
         families=list(family),
+        received_from=received_from,
+        received_to=received_to,
     )
     report["cache"] = {"stale": stale, "age_seconds": int(max(0.0, _time.monotonic() - rows["at"]))}
     report["generated_at"] = now_utc.isoformat().replace("+00:00", "Z")
@@ -11289,6 +11918,14 @@ def _delivered_sample_pks(db: Session, sample_pks) -> frozenset:
     return frozenset(ledger) | frozenset(events)
 
 
+def _rtp_flag_title(f) -> str:
+    """The flag title the shared ready-to-publish payload may carry. The payload is
+    cached across users, so a flag on a view-scoped anchor (a board node) is masked
+    as "Restricted" rather than filtered; its hold/ready semantics are unchanged."""
+    from flags import seams
+    return "Restricted" if seams.is_view_scoped(f.entity_type) else (f.title or "")
+
+
 def _load_ready_to_publish_inputs(db: Session) -> dict:
     """Fetch everything ``ready_to_publish.build_ready_rows`` needs.
 
@@ -11352,7 +11989,7 @@ def _load_ready_to_publish_inputs(db: Session) -> dict:
                 if f.type in ready_kinds:
                     flagged_sample_ids.add(sid)
                 flags.append(RtpFlagIn(id=f.id, sample_id=sid, type_slug=f.type, status=f.status,
-                                       title=f.title or "", created_at=f.created_at))
+                                       title=_rtp_flag_title(f), created_at=f.created_at))
 
     # A terminal status (published/cancelled) normally ends the sample's
     # eligibility — but an OPEN Ready flag is an explicit human signal that a
@@ -13707,6 +14344,8 @@ async def _maybe_emit_regular_coa_child(db, sample_id, parent_row, primary_data)
     _logger = _logging.getLogger(__name__)
     if not COA_BUILDER_URL or parent_row is None:
         return
+    if not _emit_regular_child_enabled():
+        return  # Core COA retired 2026-10-20; per-vial certificates replace it
     from coa.variance_series import build_variance_replicates
     if not build_variance_replicates(db, parent_row):
         return  # non-variance: the primary already IS the regular COA
@@ -14217,11 +14856,43 @@ async def generate_sample_coa(
     )
 
 
+def _split_certifiable_vials(vials):
+    """(certifiable, blocked) from list_vials_for_certificates output.
+
+    A vial without its own HPLC figures cannot be rendered yet: COABuilder
+    refuses a certificate with no legacy results table (R-7 and its empty-rows
+    check), and on a native-born lot that table holds only HPLC rows. Such a
+    vial is reported, not sent, until COABuilder supports a certificate made
+    of native sections only (2026-10-20)."""
+    certifiable, blocked = [], []
+    for seq, figs, ids in vials:
+        if figs:
+            certifiable.append((seq, figs, ids))
+        else:
+            blocked.append({
+                "vial_sequence": seq,
+                "reason": "no HPLC results on this vial; a certificate without HPLC is not supported yet",
+            })
+    return certifiable, blocked
+
+
+def _emit_regular_child_enabled() -> bool:
+    """The Core COA child is retired (Handler ruling 2026-10-20): the primary
+    carries everything it had and the per-vial certificates carry each vial's
+    own results. Set COA_EMIT_REGULAR_CHILD=1 to bring it back."""
+    return os.environ.get("COA_EMIT_REGULAR_CHILD", "").strip().lower() in ("1", "true", "yes")
+
+
 async def _generate_vial_coas_loop(db, parent, vials, parent_generation_id, existing,
                                    *, include_remarks, lab_remarks, user_id=None):
-    """One COABuilder /process per reportable HPLC vial not already in
-    `existing`. Returns (generated, skipped, errors). Shared by the
-    generate-vial-coas route and the post-primary auto-run for variance lots.
+    """One COABuilder /process per certifiable vial not already in `existing`.
+    `vials` holds (vial_sequence, vial_figures[, parent_row_ids]) entries.
+    Returns (generated, skipped, errors). Shared by the generate-vial-coas
+    route and the post-primary auto-run for variance lots.
+
+    Per-vial certificates (2026-10-20): each vial's document carries the
+    native sections promoted from that vial (parent_row_ids) next to its own
+    HPLC figures.
 
     Seam 4: vial COAs follow the coa_generation toggle for their BASE row
     sourcing via a legacy-only document (vial certs never render native
@@ -14239,7 +14910,6 @@ async def _generate_vial_coas_loop(db, parent, vials, parent_generation_id, exis
         s.vial_sequence: s for s in db.execute(
             select(LimsSubSample).where(
                 LimsSubSample.parent_sample_pk == parent.id,
-                LimsSubSample.assignment_role == "hplc",
             ).order_by(LimsSubSample.id)
         ).scalars().all()
     }
@@ -14250,13 +14920,19 @@ async def _generate_vial_coas_loop(db, parent, vials, parent_generation_id, exis
     # the primary they ride on.
     import scheduled_publish as _scheduled_publish
     _vial_date_override = _scheduled_publish.process_override(db, sample_id)
+    # Same per-sample analyte aliases the primary and regular child send, so a
+    # vial certificate names its analytes the way the parent's does.
+    _alias_map = _load_sample_aliases(db, sample_id)
     async with httpx.AsyncClient(verify=HTTPX_SSL_CONTEXT, timeout=120.0) as client:
-        for vial_seq, figs in vials:
+        for item in vials:
+            vial_seq, figs = item[0], item[1]
+            vial_ids = item[2] if len(item) > 2 else set()
             if vial_seq in existing:
                 skipped.append(vial_seq)
                 continue
             try:
-                _vial_doc = build_vial_wire_document(db, parent, subs_by_seq.get(vial_seq))
+                _vial_doc = build_vial_wire_document(
+                    db, parent, subs_by_seq.get(vial_seq), vial_parent_ids=vial_ids)
             except NativeSectionsError as e:
                 errors.append({"vial_sequence": vial_seq, "error": f"COA aborted — {e.detail}"})
                 _logger.warning("vial COA aborted for %s vial %s: %s", sample_id, vial_seq, e.detail)
@@ -14269,6 +14945,8 @@ async def _generate_vial_coas_loop(db, parent, vials, parent_generation_id, exis
             }
             if include_remarks and lab_remarks:
                 vbody["lab_remarks"] = lab_remarks
+            if _alias_map:
+                vbody["analyte_display_names"] = {str(k): v for k, v in _alias_map.items()}
             if _vial_doc is not None:
                 vbody["native_sections"] = _vial_doc
             vbody.update(_vial_date_override)
@@ -14313,7 +14991,7 @@ async def _maybe_emit_vial_coas(db, sample_id, parent_row, primary_data, user_id
             return
         from coa.variance_series import (
             build_variance_replicates,
-            list_hplc_vials_with_figures,
+            list_vials_for_certificates,
         )
         if not build_variance_replicates(db, parent_row):
             return
@@ -14321,7 +14999,10 @@ async def _maybe_emit_vial_coas(db, sample_id, parent_row, primary_data, user_id
         if not primary_gen_id:
             _logger.warning("auto vial COAs skipped for %s: no primary generation_id", sample_id)
             return
-        vials = list_hplc_vials_with_figures(db, parent_row)
+        vials, blocked = _split_certifiable_vials(list_vials_for_certificates(db, parent_row))
+        if blocked:
+            _logger.warning("auto vial COAs for %s: vials without HPLC not supported yet: %s",
+                            sample_id, [b["vial_sequence"] for b in blocked])
         if not vials:
             return
         from integration_db import fetch_existing_vial_sequences
@@ -14359,9 +15040,12 @@ async def generate_vial_coas(
     The parent generation the vial COAs attach to is DERIVED server-side (the
     sample's current primary, non-superseded generation) — never supplied by the
     client, so a stale UI or a forged id can't graft vial COAs onto the wrong
-    lineage. Idempotent: a vial that already has a live child COA is skipped, so
-    re-running fills gaps instead of duplicating. Completeness-aware: success is
-    true only when no vial failed.
+    lineage. Regenerates every vial on every run (Handler, 2026-10-20): each
+    reportable HPLC vial gets a fresh child draft, and the Integration Service
+    retires that vial's previous draft when the new one is minted (IS 1.0.37),
+    so nothing stays live twice; published vial COAs are superseded at the next
+    Publish as before. Completeness-aware: success is true only when no vial
+    failed.
     """
     import logging as _logging
     _logger = _logging.getLogger(__name__)
@@ -14386,7 +15070,7 @@ async def generate_vial_coas(
     # Derive + validate the parent COA generation server-side (do not trust the
     # client). fetch_primary_generation already scopes to this sample_id, a NULL
     # parent_generation_id (primary), and excludes superseded.
-    from integration_db import fetch_primary_generation, fetch_existing_vial_sequences
+    from integration_db import fetch_primary_generation
     try:
         primary = fetch_primary_generation(sample_id)
     except Exception as e:  # noqa: BLE001
@@ -14396,18 +15080,22 @@ async def generate_vial_coas(
         return _resp(False, "Generate the parent COA first — per-vial COAs attach to it.")
     parent_generation_id = str(primary["id"])
 
-    from coa.variance_series import list_hplc_vials_with_figures
-    vials = list_hplc_vials_with_figures(db, parent)
+    from coa.variance_series import build_variance_replicates, list_vials_for_certificates
+    if not build_variance_replicates(db, parent):
+        return _resp(False, "Per-vial COAs are only generated for variance lots.")
+    vials, blocked = _split_certifiable_vials(list_vials_for_certificates(db, parent))
     if not vials:
-        return _resp(False, "No HPLC vials with reportable results to generate COAs for.")
+        msg = "No vials with HPLC results to generate COAs for."
+        if blocked:
+            msg += f" {len(blocked)} vial(s) without HPLC results are not supported yet."
+        result = _resp(False, msg)
+        result["blocked"] = blocked
+        return result
 
-    # Idempotency: skip vials that already have a live child under this parent
-    # (one child per parent_generation_id + vial_sequence).
-    try:
-        existing = fetch_existing_vial_sequences(parent_generation_id)
-    except Exception as e:  # noqa: BLE001
-        _logger.warning("fetch_existing_vial_sequences failed for %s: %s", sample_id, e)
-        existing = set()
+    # Every vial regenerates: no live-child skip here. The automatic
+    # post-primary run (_maybe_emit_vial_coas) keeps its idempotency through
+    # fetch_existing_vial_sequences; the manual button always re-mints.
+    existing: set = set()
 
     # Customer-remarks snapshot — same source the parent COA uses, so a
     # non-conforming vial COA carries remarks (COABuilder 422s otherwise).
@@ -14424,17 +15112,55 @@ async def generate_vial_coas(
         user_id=getattr(current_user, "id", None),
     )
 
-    g, s, f = len(generated), len(skipped), len(errors)
-    parts = [f"Generated {g} per-vial COA(s)"]
-    if s:
-        parts.append(f"{s} already existed")
+    # Drafts only (Handler ruling 2026-10-23): this button never publishes,
+    # even when the sample COA is already published. Vial certificates reach
+    # the customer only through an explicit publish action (Publish, or
+    # Regen & Republish, whose new primary carries them in its cascade).
+    published_children: list = []
+    primary_is_live = primary.get("status") == "published"
+
+    g, f = len(generated), len(errors)
+    parts = [f"Regenerated {g} per-vial COA(s)"]
+    if generated and primary_is_live:
+        parts.append("drafts only, not published")
     if f:
         parts.append(f"{f} failed")
-    # Success only when nothing failed (a fully-skipped re-run is still success).
+    if blocked:
+        parts.append(f"{len(blocked)} vial(s) without HPLC results not supported yet")
+    # Success only when nothing failed. `skipped` stays in the shape for the
+    # frontend toast; the manual path never fills it. `blocked` and
+    # `published` are additive.
     return {
         "success": f == 0, "message": "; ".join(parts), "expected": len(vials),
         "generated": generated, "skipped": skipped, "errors": errors,
+        "blocked": blocked, "published": published_children,
     }
+
+
+def _refuse_stale_draft_primary(sample_id: str) -> None:
+    """409 when the draft Publish would pick is older than the live primary
+    (P-5324, 2026-10-20: an Oct 14 draft would have replaced the Oct 16
+    certificate). Fails open when the Integration Service can't be read, so
+    an IS hiccup never blocks a normal publish."""
+    import logging as _logging
+    from integration_db import fetch_stale_draft_primary
+    try:
+        stale = fetch_stale_draft_primary(sample_id)
+    except Exception as e:  # noqa: BLE001
+        _logging.getLogger(__name__).warning(
+            "stale-draft check skipped for %s: %s", sample_id, e)
+        return
+    if stale:
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                f"The newest draft COA (Gen #{stale['draft_generation_number']}, "
+                f"{stale['draft_code']}) is older than the published COA "
+                f"(Gen #{stale['live_generation_number']}, {stale['live_code']}). "
+                "Publishing it would replace the newer certificate. Generate a "
+                "new COA first."
+            ),
+        )
 
 
 def _refuse_while_publish_scheduled(db: Session, sample_id: str) -> None:
@@ -14480,6 +15206,7 @@ async def publish_sample_coa(
             ),
         )
     _refuse_while_publish_scheduled(db, sample_id)
+    _refuse_stale_draft_primary(sample_id)
 
     # 2. Resolve SENAITE UID upfront so we fail before touching integration service state.
     # Native-born samples (external_lims_system == "mk1") have no SENAITE AR at
@@ -15084,6 +15811,11 @@ async def regen_primary_coa(
     # cascade's cross-primary supersede retires the old primary's regular child.
     # Best-effort; no-op for non-variance.
     await _maybe_emit_regular_coa_child(db, sample_id, _regen_parent, data)
+    # Per-vial certificates ride the new primary too (2026-10-20): mint them
+    # BEFORE the publish below so its cascade publishes them and supersedes
+    # each vial's previous code. Best-effort; no-op for non-variance.
+    await _maybe_emit_vial_coas(db, sample_id, _regen_parent, data,
+                                user_id=getattr(current_user, "id", None))
 
     # 3. Publish the new primary — reuses publish_sample_coa's flow so
     # integration service marks the new generation as published,
@@ -15862,6 +16594,19 @@ async def create_wizard_session(
     db.add(session)
     db.commit()
     db.refresh(session)
+
+    # Order status → analyzing. HPLC-only native samples never go on a
+    # worksheet, so prep start is their first bench signal. Notify with the
+    # vial's PARENT id (the IS maps parent ids to orders, forward-only).
+    if session.lims_sub_sample_pk and not session.is_standard:
+        parent_sid = db.execute(
+            select(LimsSample.sample_id)
+            .join(LimsSubSample, LimsSubSample.parent_sample_pk == LimsSample.id)
+            .where(LimsSubSample.id == session.lims_sub_sample_pk)
+        ).scalar_one_or_none()
+        if parent_sid:
+            await _notify_worksheet_assigned(parent_sid)
+
     return _build_session_response(session, db)
 
 
@@ -16873,6 +17618,7 @@ def _user_to_read(user) -> UserRead:
         senaite_configured=user.senaite_password_encrypted is not None,
         first_name=user.first_name,
         last_name=user.last_name,
+        title=user.title,
     )
 
 
@@ -21106,6 +21852,34 @@ def _validate_coa_footnotes(value) -> None:
                 400, f"coa_footnotes[{i}] must be {{label, text}} with non-empty strings")
 
 
+def _validate_coa_text_macros(fields: dict) -> None:
+    """Endo slice 4: COA text may carry only the macros coa.text_macros knows,
+    so a typo never reaches a certificate (the COA build itself leaves an
+    unknown macro as typed)."""
+    from coa.text_macros import MACROS, unbalanced_brackets, unknown_macros
+    texts = [fields.get(k) for k in ("coa_basis_note", "coa_method_text", "coa_prep_text")]
+    labels = []
+    notes = fields.get("coa_footnotes")
+    if isinstance(notes, list):
+        texts += [n.get("text") for n in notes if isinstance(n, dict)]
+        labels = [n.get("label") for n in notes if isinstance(n, dict)]
+    texts = [t if isinstance(t, str) else None for t in texts]
+    for text in texts:
+        bad = unknown_macros(text)
+        if bad:
+            supported = ", ".join("{" + m + "}" for m in MACROS)
+            raise HTTPException(
+                400, "unknown COA text macro {" + bad[0] + "}; supported: " + supported)
+    if any(unbalanced_brackets(t) for t in texts):
+        raise HTTPException(400, "unbalanced [ ] around a COA text macro")
+    # Labels print as typed and are never filled, so a macro (or a near miss)
+    # in one would reach the certificate literally.
+    for label in labels:
+        if isinstance(label, str) and (
+                unknown_macros(label) or any("{" + m + "}" in label for m in MACROS)):
+            raise HTTPException(400, "COA text macros are not filled in footnote labels")
+
+
 @app.get("/analysis-profiles", response_model=list[AnalysisProfileResponse])
 async def get_analysis_profiles(db: Session = Depends(get_db), _current_user=Depends(get_current_user)):
     from models import AnalysisProfile
@@ -21140,6 +21914,7 @@ async def create_analysis_profile(
             "retroactive across in-flight samples)",
         )
     _validate_coa_footnotes(data.coa_footnotes)
+    _validate_coa_text_macros(data.model_dump())
     existing = db.execute(
         select(AnalysisProfile).where(AnalysisProfile.key == data.key)
     ).scalar_one_or_none()
@@ -21229,6 +22004,7 @@ async def update_analysis_profile(
         )
     if "coa_footnotes" in fields:
         _validate_coa_footnotes(fields["coa_footnotes"])
+    _validate_coa_text_macros(fields)
     # Task 11: reject an unknown sla_tier_id with a 400. An explicit null
     # (present in `fields` thanks to exclude_unset) is legal — it clears the
     # profile's own tier and falls back to inheriting the group's tier.
@@ -22628,6 +23404,7 @@ def _build_native_vial_inbox_items(
     assignment_map: dict,
     keyword_to_peptide: dict,
     container_mode: bool = True,
+    only_unassigned: bool = False,
 ) -> "list[InboxVialItem]":
     """Inbox rows for the Mk1-native vials of one family.
 
@@ -22665,6 +23442,10 @@ def _build_native_vial_inbox_items(
             db, sub.id, role, keyword_to_peptide,
         )
         analyses = [a for a in analyses if (uid, a.group_id) not in assigned_pairs]
+        if only_unassigned:
+            # waiting_for_addon_results parents: open work only, never a
+            # sibling in to_be_verified / assigned / cancelled or the like.
+            analyses = [a for a in analyses if a.review_state == "unassigned"]
         if not analyses:
             continue
         analyses.sort(key=lambda a: (a.group_name.lower(), a.title.lower()))
@@ -22845,7 +23626,6 @@ async def get_worksheets_inbox(
     # Step 1b: Filter to only samples linked to tracked orders in integration DB.
     # (Order-level priority is NOT copied out of the order payload any more —
     # it reaches each row through the resolver chain; spec §4.)
-    TEST_EMAILS = ["forrestp@outlook.com", "forrest@valenceanalytical.com"]
     try:
         from integration_db import get_integration_db
         from psycopg2.extras import RealDictCursor
@@ -22938,10 +23718,17 @@ async def get_worksheets_inbox(
         except Exception:
             pass  # If mk1 DB is unavailable, show all samples
 
-    # Filter out samples that already have preps (by SENAITE sample ID e.g. "P-0085")
+    # Filter out samples that already have preps (by SENAITE sample ID e.g. "P-0085").
+    # A waiting_for_addon_results parent (mk1 source only) is exempt: a prep
+    # under its own ID is the published primary work, and only its vials are
+    # emitted, each checked against the vial-level preps in
+    # _build_native_vial_inbox_items.
+    from sub_samples.registry_inbox import WAITING_FOR_ADDON_RESULTS
     filtered_items = [
         it for it in senaite_items
-        if not hide_prepped or str(it.get("id", "")) not in prepped_senaite_ids
+        if not hide_prepped
+        or str(it.get("id", "")) not in prepped_senaite_ids
+        or it.get("review_state") == WAITING_FOR_ADDON_RESULTS
     ]
 
     # Step 3: Build keyword → department map (the service's own department
@@ -23200,7 +23987,13 @@ async def get_worksheets_inbox(
                 assignment_map=assignment_map,
                 keyword_to_peptide=keyword_to_peptide,
                 container_mode=bool(vial_meta.get("container_mode")),
+                only_unassigned=it.get("review_state") == WAITING_FOR_ADDON_RESULTS,
             ))
+
+        # A waiting_for_addon_results parent contributes its open native vials
+        # (just above) and never its own row, container or not.
+        if vial_meta.get("is_parent") and it.get("review_state") == WAITING_FOR_ADDON_RESULTS:
+            continue
 
         # Depository suppression: a CONTAINER parent with any vials is a pure
         # depository — suppress its own row. Gated on container_mode (NOT on
@@ -23556,16 +24349,16 @@ async def get_worksheets_users(
     from models import SlackDmPrefs
     users = db.execute(
         select(
-            User.id, User.email, User.first_name, User.last_name,
+            User.id, User.email, User.first_name, User.last_name, User.title,
             SlackDmPrefs.slack_avatar_url,
         )
         .outerjoin(SlackDmPrefs, SlackDmPrefs.user_id == User.id)
-        .where(User.is_active == True)  # noqa: E712
+        .where(User.is_active == True, User.role != "agent")  # noqa: E712
         .order_by(User.email)
     ).all()
     return [
         {"id": row.id, "email": row.email, "first_name": row.first_name,
-         "last_name": row.last_name, "avatar_url": row.slack_avatar_url}
+         "last_name": row.last_name, "title": row.title, "avatar_url": row.slack_avatar_url}
         for row in users
     ]
 
@@ -23799,6 +24592,33 @@ async def create_worksheet(
         "status": ws.status,
         "item_count": len(data.sample_uids),
     }
+
+
+def _worksheet_item_parents(db: Session, sample_ids,
+                            parent_pk_by_sample: "dict[str, Optional[int]]") -> "dict[str, LimsSample]":
+    """Each worksheet item's parent sample, sample_id -> LimsSample. A vial
+    item's is its vial's parent (parent_pk_by_sample, from the caller's own
+    vial query); a parent-sample item (legacy "<order> E" worksheets hold
+    P-XXXX ids) is the sample with its own id. An id with no parent is left
+    out. ONE query, none without ids. The one resolver the serializer,
+    endo_prep_rules.row_facts and the endotoxin promote share (endo slice 5
+    review I2), so the browser's sample_peptide_id and the server's rule
+    checks always read the same parent."""
+    sample_ids = set(sample_ids)
+    if not sample_ids:
+        return {}
+    pks = {parent_pk_by_sample.get(s) for s in sample_ids} - {None}
+    rows = db.execute(select(LimsSample).where(or_(
+        LimsSample.id.in_(pks or [0]), LimsSample.sample_id.in_(sample_ids)))).scalars().all()
+    by_pk = {p.id: p for p in rows}
+    by_sample_id = {p.sample_id: p for p in rows}
+    out = {}
+    for s in sample_ids:
+        pk = parent_pk_by_sample.get(s)
+        parent = by_pk.get(pk) if pk else by_sample_id.get(s)
+        if parent is not None:
+            out[s] = parent
+    return out
 
 
 def _worksheet_item_parent_facts(parent: "Optional[LimsSample]") -> dict:
@@ -24049,22 +24869,10 @@ def _serialize_worksheets(db: Session, worksheets: "list[Worksheet]") -> list:
     # and identity ride on the item. Vial items go through the vial's parent;
     # parent-sample items (legacy "<order> E" worksheets hold P-XXXX ids) match
     # by their own sample id. ONE query for the whole page.
-    parent_pks = {pk for pk in sub_parent_pk_map.values() if pk}
-    parent_by_pk: dict[int, LimsSample] = {}
-    parent_by_sample_id: dict[str, LimsSample] = {}
-    if parent_pks or item_sample_ids:
-        parent_rows = db.execute(
-            select(LimsSample).where(or_(
-                LimsSample.id.in_(parent_pks or [0]),
-                LimsSample.sample_id.in_(item_sample_ids or ["-"]),
-            ))
-        ).scalars().all()
-        parent_by_pk = {p.id: p for p in parent_rows}
-        parent_by_sample_id = {p.sample_id: p for p in parent_rows}
+    parent_by_sample = _worksheet_item_parents(db, item_sample_ids, sub_parent_pk_map)
 
     def _parent_for(sample_id: str) -> Optional[LimsSample]:
-        pk = sub_parent_pk_map.get(sample_id)
-        return parent_by_pk.get(pk) if pk else parent_by_sample_id.get(sample_id)
+        return parent_by_sample.get(sample_id)
 
     # Resolve per-item stamped method/instrument names (bench-stamping
     # slice 2, task 5): the DISTINCT non-null stamped values across a
@@ -24142,6 +24950,40 @@ def _serialize_worksheets(db: Session, worksheets: "list[Worksheet]") -> list:
             return None
         return method_by_pair.get((peptide_id, inst_id))
 
+    # Endo v2 (spec 2026-10-10 section 4.3): each referenced cartridge's
+    # sensitivity, retired types included. ONE query for the whole page.
+    from worksheets_endo import cartridge_sensitivities
+    sensitivity_by_type = cartridge_sensitivities(
+        db,
+        {ws.cartridge_type_id for ws in worksheets if ws.cartridge_type_id}
+        | {it.cartridge_type_id for it in all_items if it.cartridge_type_id},
+    )
+    # Endo slice 3 (spec 2026-10-12 section 5.1): each endotoxin item's live
+    # vial analysis, for Box 3's checkboxes and its Promoted chip. ONE query
+    # for the whole page, endotoxin items only (none: no query at all).
+    from worksheets_endo_promote import endo_analysis_by_sample
+    endo_item_ids = {
+        it.id for it in all_items
+        if _bench_kind_for_item(sub_role_map.get(it.sample_id), it.analyses_json) == "endo"
+    }
+    endo_analysis_map = endo_analysis_by_sample(
+        db, {it.sample_id for it in all_items if it.id in endo_item_ids and it.sample_id})
+    # Endo slice 5 (spec 2026-10-14 sections 4 and 6): the endotoxin items of
+    # 2 mL worksheets carry their rule lock, "no rule" switch, note and
+    # history, and the parent's single catalog peptide (None for a blend).
+    # The endo_analysis lookup above reads vial analyses only; the peptide
+    # anchor reads the whole family, so it is its own query: ONE for the
+    # whole page, none without such items.
+    from coa.spec_rules import sample_peptide_ids
+    rule_ws_ids = {ws.id for ws in worksheets if ws.endo_prep == "2ml"}
+    rule_parent_pk: dict[int, Optional[int]] = {}
+    for it in all_items:
+        if it.id in endo_item_ids and it.worksheet_id in rule_ws_ids:
+            parent = _parent_for(it.sample_id)
+            rule_parent_pk[it.id] = parent.id if parent else None
+    rule_pks = sorted({pk for pk in rule_parent_pk.values() if pk})
+    peptide_by_parent = sample_peptide_ids(db, rule_pks) if rule_pks else {}
+
     result = []
     for ws in worksheets:
         items = items_by_ws.get(ws.id, [])
@@ -24162,6 +25004,12 @@ def _serialize_worksheets(db: Session, worksheets: "list[Worksheet]") -> list:
             "bench_config": ws.bench_config,
             "well_high_water": ws.well_high_water,
             "note_log": notes_by_ws.get(ws.id, []),
+            # Endo v2 run fields (spec 3.6). The sensitivity is the run
+            # cartridge's own; the method's default is on endo_method.
+            "endo_prep": ws.endo_prep,
+            "cartridge_type_id": ws.cartridge_type_id,
+            "cartridge_sensitivity_eu_ml": sensitivity_by_type.get(ws.cartridge_type_id),
+            "endo_method_id": ws.endo_method_id,
             "items": [
                 {
                     "id": it.id,
@@ -24218,6 +25066,25 @@ def _serialize_worksheets(db: Session, worksheets: "list[Worksheet]") -> list:
                     # PCR plate map: the frozen well, or null while the row may still move.
                     "plate_no": it.plate_no,
                     "well_pos": it.well_pos,
+                    # Endo v2 row fields (spec 3.7).
+                    "prep_form": it.prep_form,
+                    "prep_water_ml": it.prep_water_ml,
+                    "prep_total_dilution": it.prep_total_dilution,
+                    "prep_steps": it.prep_steps,
+                    "cartridge_type_id": it.cartridge_type_id,
+                    "cartridge_sensitivity_eu_ml": sensitivity_by_type.get(it.cartridge_type_id),
+                    "result_reading": it.result_reading,
+                    "result_reader": it.result_reader,
+                    "result_entered_at": (it.result_entered_at.isoformat() + "Z") if it.result_entered_at else None,
+                    "result_entered_by_user_id": it.result_entered_by_user_id,
+                    # Endo slice 3 (spec 5.1): endotoxin items only.
+                    **({"endo_analysis": endo_analysis_map.get(it.sample_id)}
+                       if it.id in endo_item_ids else {}),
+                    # Endo slice 5: the 2 mL endotoxin items only.
+                    **({"prep_rule": it.prep_rule, "prep_rules_off": it.prep_rules_off,
+                        "prep_note": it.prep_note, "prep_history": it.prep_history,
+                        "sample_peptide_id": peptide_by_parent.get(rule_parent_pk[it.id])}
+                       if it.id in rule_parent_pk else {}),
                     **_worksheet_item_parent_facts(_parent_for(it.sample_id)),
                 }
                 for it in items
@@ -24276,6 +25143,14 @@ _KEYWORD_BENCH_KIND = (
 )
 
 
+def _bench_kind_for_keyword(keyword: Optional[str]) -> Optional[str]:
+    """The bench one analysis keyword names, or None (_KEYWORD_BENCH_KIND)."""
+    for pattern, kind in _KEYWORD_BENCH_KIND:
+        if pattern.search(keyword or ""):
+            return kind
+    return None
+
+
 def _bench_kind_for_item(role: Optional[str], analyses_json: Optional[str]) -> Optional[str]:
     by_role = _ROLE_BENCH_KIND.get(role or "")
     if by_role:
@@ -24285,10 +25160,9 @@ def _bench_kind_for_item(role: Optional[str], analyses_json: Optional[str]) -> O
     except ValueError:
         analyses = []
     for a in analyses if isinstance(analyses, list) else []:
-        keyword = (a.get("keyword") if isinstance(a, dict) else None) or ""
-        for pattern, kind in _KEYWORD_BENCH_KIND:
-            if pattern.search(keyword):
-                return kind
+        kind = _bench_kind_for_keyword(a.get("keyword") if isinstance(a, dict) else None)
+        if kind:
+            return kind
     return None
 
 
@@ -24371,7 +25245,12 @@ def get_worksheet_by_id(
     ).scalar_one_or_none()
     if not ws or ws.status == "staging":
         raise HTTPException(404, "Worksheet not found")
-    return _serialize_worksheets(db, [ws])[0]
+    out = _serialize_worksheets(db, [ws])[0]
+    # Endo v2 (spec 4.1): the worksheet's endo method, on this single GET only.
+    # The list endpoints never resolve it (a fixed number of queries per call).
+    from worksheets_endo import resolve_endo_method
+    out["endo_method"] = resolve_endo_method(db, ws)
+    return out
 
 
 class WorksheetUpdate(BaseModel):
@@ -24381,21 +25260,65 @@ class WorksheetUpdate(BaseModel):
     # Per-bench run settings, replaced whole (PCR: overage, curve, plate_type,
     # sort_by_order). Omitted = untouched.
     bench_config: Optional[dict] = None
+    # Endo v2 run fields (spec 3.6 and 10). Sent = set (null clears the run
+    # cartridge); omitted = untouched. 409 on a completed worksheet.
+    endo_prep: Optional[str] = None
+    cartridge_type_id: Optional[int] = None
+
+
+def _worksheet_for_update(db: Session, worksheet_id: int) -> Optional["Worksheet"]:
+    """The worksheet row under SELECT ... FOR UPDATE, re-read. Taken first by
+    every request that writes the worksheet row and also analyses or items,
+    so all keep one lock order: the worksheet, then the vial analyses, then
+    the items (endo_prep_rules.lock_items_for_update). SQLite ignores FOR UPDATE."""
+    return db.execute(select(Worksheet).where(Worksheet.id == worksheet_id).with_for_update()
+                      .execution_options(populate_existing=True)).scalar_one_or_none()
+
+
+def _rollback_on_error(endpoint):
+    """For a sync route that takes row locks (endo slice 5 final review C1):
+    any exception rolls the session back before it leaves the route. FastAPI
+    closes the session only after the route, through a worker thread it
+    reaches past an await, so a refused request would hold its FOR UPDATE
+    locks across that gap, and an async route waiting on the same row then
+    blocks the event loop with no timeout. Goes under @app.<verb>; FastAPI
+    passes `db` by keyword."""
+    @functools.wraps(endpoint)
+    def wrapper(*args, **kwargs):
+        try:
+            return endpoint(*args, **kwargs)
+        except Exception:
+            kwargs["db"].rollback()
+            raise
+    return wrapper
 
 
 @app.put("/worksheets/{worksheet_id}")
-async def update_worksheet(
+@_rollback_on_error
+def update_worksheet(
     worksheet_id: int,
     data: WorksheetUpdate,
     db: Session = Depends(get_db),
     _current_user=Depends(get_current_user),
 ):
     """Update worksheet title and/or assigned analyst."""
-    ws = db.execute(
-        select(Worksheet).where(Worksheet.id == worksheet_id)
-    ).scalar_one_or_none()
+    # Worksheet first: the analyst change re-stamps analyses, and a flush
+    # writes them before the worksheet row (the lock order, _worksheet_for_update).
+    ws = _worksheet_for_update(db, worksheet_id)
     if not ws:
         raise HTTPException(404, "Worksheet not found")
+
+    # Endo v2 run fields, checked before anything is written. A completed
+    # worksheet refuses them; the older fields keep today's behaviour.
+    run_fields = [f for f in ("endo_prep", "cartridge_type_id") if f in data.model_fields_set]
+    if run_fields:
+        from worksheets_endo import CARTRIDGE_REFUSED, ENDO_PREP_VALUES, allowed_cartridge_ids
+        if ws.status == "completed":
+            raise HTTPException(409, "Worksheet is completed")
+        if "endo_prep" in run_fields and data.endo_prep not in ENDO_PREP_VALUES:
+            raise HTTPException(400, f"endo_prep must be one of {', '.join(ENDO_PREP_VALUES)}")
+        if data.cartridge_type_id is not None and data.cartridge_type_id not in allowed_cartridge_ids(db, ws):
+            raise HTTPException(400, CARTRIDGE_REFUSED)
 
     if data.title is not None:
         ws.title = data.title
@@ -24426,6 +25349,18 @@ async def update_worksheet(
         ws.notes = data.notes
     if data.bench_config is not None:
         ws.bench_config = data.bench_config
+    for field, operation in (("endo_prep", "endo_prep_set"),
+                             ("cartridge_type_id", "endo_cartridge_set")):
+        new = getattr(data, field)
+        if field in run_fields and getattr(ws, field) != new:
+            db.add(AuditLog(
+                operation=operation,
+                entity_type="worksheet",
+                entity_id=str(ws.id),
+                details={"user_id": getattr(_current_user, "id", None),
+                         "old": getattr(ws, field), "new": new},
+            ))
+            setattr(ws, field, new)
 
     db.commit()
     return {"status": "updated"}
@@ -24732,15 +25667,16 @@ async def create_worksheet_from_drop(
 
 
 @app.delete("/worksheets/{worksheet_id}")
-async def delete_worksheet(
+@_rollback_on_error
+def delete_worksheet(
     worksheet_id: int,
     db: Session = Depends(get_db),
     _current_user=Depends(get_current_user),
 ):
     """Delete a worksheet. Items are removed (analyses return to inbox on next poll)."""
-    ws = db.execute(
-        select(Worksheet).where(Worksheet.id == worksheet_id)
-    ).scalar_one_or_none()
+    # Worksheet first: the stamp clears below write analyses (the lock order,
+    # _worksheet_for_update; final review L110).
+    ws = _worksheet_for_update(db, worksheet_id)
     if not ws:
         raise HTTPException(404, "Worksheet not found")
 
@@ -24778,7 +25714,7 @@ async def delete_worksheet(
 
 
 @app.delete("/worksheets/{worksheet_id}/items/{item_id}")
-async def remove_worksheet_item_by_id(
+def remove_worksheet_item_by_id(
     worksheet_id: int,
     item_id: int,
     db: Session = Depends(get_db),
@@ -24833,17 +25769,27 @@ class ReassignRequest(BaseModel):
 
 
 @app.post("/worksheets/{worksheet_id}/complete")
-async def complete_worksheet(
+@_rollback_on_error
+def complete_worksheet(
     worksheet_id: int,
     db: Session = Depends(get_db),
     current_user=Depends(get_current_user),
 ):
     """Transition a worksheet from open to completed. Records who completed it and when."""
-    ws = db.execute(select(Worksheet).where(Worksheet.id == worksheet_id)).scalar_one_or_none()
+    # Worksheet first: the release below flushes analyses before the
+    # worksheet row (the lock order, _worksheet_for_update).
+    ws = _worksheet_for_update(db, worksheet_id)
     if not ws:
         raise HTTPException(404, "Worksheet not found")
     if ws.status != "open":
         raise HTTPException(400, f"Worksheet is already {ws.status}")
+    # Endo slice 5 (spec 2026-10-14 section 6): completion locks every 2 mL
+    # endotoxin row not locked yet, while the worksheet is still open; after
+    # this nothing on it changes.
+    from endo_prep_rules import lock_rows
+    lock_rows(db, ws, db.execute(select(WorksheetItem).where(
+        WorksheetItem.worksheet_id == ws.id)).scalars().all(),
+        event="complete", user_id=current_user.id)
     ws.status = "completed"
     ws.completed_by = current_user.id
     ws.completed_at = datetime.utcnow()
@@ -24863,7 +25809,7 @@ async def complete_worksheet(
 
 
 @app.post("/worksheets/{worksheet_id}/items/{item_id}/reassign")
-async def reassign_worksheet_item_by_id(
+def reassign_worksheet_item_by_id(
     worksheet_id: int,
     item_id: int,
     data: ReassignRequest,
@@ -24931,13 +25877,9 @@ async def reassign_worksheet_item_by_id(
     return {"status": "reassigned", "target_worksheet_id": data.target_worksheet_id}
 
 
-def _sole_instrument_for_item(db: Session, item: "WorksheetItem") -> "Optional[tuple[int, list]]":
-    """The one instrument this item's open analyses can have run on, with
-    the analyses it applies to, from the catalog: analysis service -> active
-    method covering it -> active instrument linked to that method. None
-    unless exactly one instrument resolves, so a second analyzer is never
-    guessed at (the apply bar stays the way to choose). The method is only
-    the path to the instrument; it is never written (see _apply_bench_ticks)."""
+def _open_vial_analyses(db: Session, item: "WorksheetItem") -> list:
+    """The analyses on this item's vial still open for a bench stamp
+    (STAMPABLE_STATES); [] for a bare parent id, which names no vial."""
     from lims_analyses.service import STAMPABLE_STATES
     from models import LimsAnalysis
 
@@ -24945,13 +25887,26 @@ def _sole_instrument_for_item(db: Session, item: "WorksheetItem") -> "Optional[t
         select(LimsSubSample.id).where(LimsSubSample.sample_id == item.sample_id)
     ).scalar_one_or_none()
     if vial_pk is None:
-        return None
-    open_rows = db.execute(
+        return []
+    return db.execute(
         select(LimsAnalysis).where(
             LimsAnalysis.lims_sub_sample_pk == vial_pk,
             LimsAnalysis.review_state.in_(STAMPABLE_STATES),
         )
     ).scalars().all()
+
+
+def _sole_instrument_for_item(db: Session, item: "WorksheetItem",
+                              prefer: Optional[int] = None) -> "Optional[tuple[int, list]]":
+    """The one instrument this item's open analyses can have run on, with
+    the analyses it applies to, from the catalog: analysis service -> active
+    method covering it -> active instrument linked to that method. None
+    unless exactly one instrument resolves, so a second analyzer is never
+    guessed at (the apply bar stays the way to choose). The method is only
+    the path to the instrument; it is never written (see _apply_bench_ticks).
+    `prefer` (a reader import's serial match, spec 4.5) wins only when it is
+    one of those candidates, and then covers only the rows it is linked to."""
+    open_rows = _open_vial_analyses(db, item)
     service_ids = {r.analysis_service_id for r in open_rows}
     if not service_ids:
         return None
@@ -24968,6 +25923,9 @@ def _sole_instrument_for_item(db: Session, item: "WorksheetItem") -> "Optional[t
         .distinct()
     ).all()
     instruments = {r[1] for r in pairs}
+    if prefer in instruments:
+        covered = {s for s, i in pairs if i == prefer}
+        return prefer, [r for r in open_rows if r.analysis_service_id in covered]
     if len(instruments) != 1:
         return None
     covered = {r[0] for r in pairs}
@@ -24976,7 +25934,8 @@ def _sole_instrument_for_item(db: Session, item: "WorksheetItem") -> "Optional[t
 
 def _apply_bench_ticks(db: Session, worksheet_id: int, item: "WorksheetItem", *,
                        made: Optional[bool], ran: Optional[bool], user_id: Optional[int],
-                       stamp_instrument: bool = True) -> bool:
+                       stamp_instrument: bool = True,
+                       instrument_id: Optional[int] = None) -> bool:
     """Set or clear an item's Made / Ran ticks. The server owns who and when;
     a tick already in the wanted state is left alone (its first stamp stands).
     Every change writes an audit_logs row, prep_status follows the ticks, and a
@@ -24988,6 +25947,8 @@ def _apply_bench_ticks(db: Session, worksheet_id: int, item: "WorksheetItem", *,
     for the samples somebody ticked. Methods are not shown on COAs yet
     (Handler, 2026-09-19); the COA wire never reads instrument_id. A method
     already chosen through the apply bar is kept as it is.
+    A reader import passes the instrument its serial names (instrument_id);
+    it wins only among the catalog's candidates (spec 4.5).
     Returns whether anything changed."""
     changed = False
     newly_set = set()
@@ -25015,7 +25976,9 @@ def _apply_bench_ticks(db: Session, worksheet_id: int, item: "WorksheetItem", *,
     # set or cleared the instrument itself in the same request: their
     # explicit choice stands (stamp_instrument=False).
     if stamp_instrument and "ran" in newly_set and not item.instrument_id:
-        resolved = _sole_instrument_for_item(db, item)
+        # A reader import names its instrument by serial (endo v2, spec 4.5),
+        # used when the catalog links it; otherwise only a single choice stamps.
+        resolved = _sole_instrument_for_item(db, item, prefer=instrument_id)
         if resolved:
             from lims_analyses.service import stamp_method_instrument
 
@@ -25034,6 +25997,7 @@ class WorksheetBenchTicks(BaseModel):
 
 
 @app.post("/worksheets/{worksheet_id}/bench-ticks")
+@_rollback_on_error
 def bulk_bench_ticks(
     worksheet_id: int,
     data: WorksheetBenchTicks,
@@ -25062,6 +26026,7 @@ def bulk_bench_ticks(
 
 
 @app.post("/worksheets/{worksheet_id}/printed")
+@_rollback_on_error
 def record_worksheet_printed(
     worksheet_id: int,
     db: Session = Depends(get_db),
@@ -25076,6 +26041,17 @@ def record_worksheet_printed(
         ws.printed_at = datetime.utcnow()
         ws.printed_by_user_id = _current_user.id
     ws.print_count = (ws.print_count or 0) + 1
+    # Endo v2 (spec 4.1): the first print is the bench start, so it pins the
+    # worksheet's endo method revision (a no-op once pinned or unresolvable).
+    from worksheets_endo import pin_endo_method
+    pin_endo_method(db, ws, _current_user.id)
+    # Endo slice 5 (spec 2026-10-14 section 6): every print locks the rule of
+    # each 2 mL endotoxin row not locked yet, rows added since the last print
+    # included, so a later rule edit never moves what the bench prepped.
+    from endo_prep_rules import lock_rows
+    lock_rows(db, ws, db.execute(select(WorksheetItem).where(
+        WorksheetItem.worksheet_id == ws.id)).scalars().all(),
+        event="print", user_id=_current_user.id)
     db.add(AuditLog(
         operation="worksheet_printed",
         entity_type="worksheet",
@@ -25084,6 +26060,336 @@ def record_worksheet_printed(
     ))
     db.commit()
     return {"status": "recorded", "printed_at": ws.printed_at.isoformat() + "Z", "print_count": ws.print_count}
+
+
+class EndoReaderTest(BaseModel):
+    """One reader test the browser matched to a row (endo v2, spec 8.2)."""
+    item_id: int
+    reading: str
+    record: dict  # the reader record, spec 8.4 (src/lib/endo-reader.ts toReaderRecord)
+    cartridge_type_id: int
+    replace: bool = False
+
+
+class EndoReaderImport(BaseModel):
+    file_name: str
+    tests: list[EndoReaderTest] = Field(max_length=500)
+
+    @field_validator("file_name")
+    @classmethod
+    def _file_name_at_most_200(cls, v: str) -> str:
+        """At most 200 characters (a 422). Not Field(max_length=200): under a
+        length constraint pydantic refuses a lone surrogate with a 422 that
+        echoes it and cannot be encoded (a 500). A name that is not clean
+        text passes here, and the route's check_storable refuses it (a 400)."""
+        from worksheets_endo import check_storable
+        try:
+            check_storable(v, "The file name")
+        except ValueError:
+            return v
+        if len(v) > 200:
+            raise ValueError("the file name is at most 200 characters")
+        return v
+
+
+class EndoReaderImportOut(BaseModel):
+    applied: int
+    items: list[dict]  # every item on the worksheet, in the GET /worksheets/{id} shape
+    endo_method: Optional[dict] = None
+    # Rows the import left unchanged, each {item_id, sample_id, reason}: a
+    # promoted row (endo slice 5, review S1), whose prep is final, or a test
+    # whose reading Re-apply moved into the row's history (final review I2).
+    skipped: list[dict] = []
+
+
+@app.post("/worksheets/{worksheet_id}/reader-import", response_model=EndoReaderImportOut)
+@_rollback_on_error
+def import_endo_reader_results(
+    worksheet_id: int,
+    data: EndoReaderImport,
+    db: Session = Depends(get_db),
+    _current_user=Depends(get_current_user),
+):
+    """Apply an EndoScan-V export that the browser parsed and matched to rows
+    (endo v2, spec 8.2). All or nothing: every row is checked first and the
+    writes share one commit, so a refused row writes nothing at all. A test
+    already on its row (same reading, same test id) is skipped. Endo slice 5:
+    a test that would change a promoted row is skipped too, and listed in
+    `skipped` with PREP_FINAL, while the other rows apply (review S1). So is
+    a test whose reading Re-apply moved into the row's history, with
+    READING_MOVED (final review I2). A test that moves the cartridge of a row
+    with a result is an override, so the
+    replaced run goes to the row's history first (review I5). A POST on an
+    id path, so it has no ordering concern against GET /worksheets/{worksheet_id}."""
+    from endo_prep_rules import (READING_MOVED, append_history, load_rules,
+                                 lock_items_for_update, lock_rows, promoted_sample_ids,
+                                 reading_was_moved, row_effective, row_facts)
+    from worksheets_endo import (CARTRIDGE_REFUSED, PREP_FINAL, cartridge_ids_allowed_by,
+                                 check_reader_record, check_storable, endo_run_params,
+                                 instrument_id_for_serial, parse_reading, pin_endo_method,
+                                 reader_shows, reader_validity, resolve_endo_method)
+
+    # Worksheet first, then each row's analysis and item (the lock order,
+    # _worksheet_for_update): a first reading pins the method on the worksheet.
+    ws = _worksheet_for_update(db, worksheet_id)
+    if not ws or ws.status == "staging":
+        raise HTTPException(404, "Worksheet not found")
+    if ws.status == "completed":
+        raise HTTPException(409, "Worksheet is completed")
+    try:
+        check_storable(data.file_name, "The file name")
+    except ValueError as exc:
+        raise HTTPException(400, f"Nothing was imported. {exc}")
+    rows = db.execute(
+        select(WorksheetItem, LimsSubSample.assignment_role)
+        .outerjoin(LimsSubSample, LimsSubSample.sample_id == WorksheetItem.sample_id)
+        .where(WorksheetItem.worksheet_id == worksheet_id)).all()
+    items = {it.id: it for it, _role in rows}
+    endo_ids = {it.id for it, role in rows if _bench_kind_for_item(role, it.analyses_json) == "endo"}
+    # Resolved once: it sets the allowed cartridges, the validity limits and
+    # the response. The import changes nothing it resolves from, and pinning
+    # stores this same method.
+    method = resolve_endo_method(db, ws)
+    allowed = cartridge_ids_allowed_by(db, method)
+    run_params = method["run_parameters"] if method else None
+
+    # The rows this import would change, under row locks and re-read before
+    # any is judged or written: each live vial analysis, then the item, as
+    # promote, Re-apply and the item PATCH take them. So a promote that
+    # committed while this waited is seen, and skipped below.
+    named = {t.item_id for t in data.tests if t.item_id in endo_ids}
+    if named:
+        lock_items_for_update(db, ws, named)
+    # One query for every row the import names (spec 8: a promoted row's prep is final).
+    promoted = promoted_sample_ids(db, {items[i].sample_id for i in named})
+
+    errors: list[str] = []
+    plan: list[tuple["WorksheetItem", EndoReaderTest, str]] = []
+    skipped: list[dict] = []
+    seen: set[int] = set()
+    for t in data.tests:
+        item = items.get(t.item_id)
+        label = item.sample_id if item else f"item {t.item_id}"
+        test_id = t.record.get("test_id")
+        try:
+            # Before parse_reading, whose reason echoes the text it refuses.
+            check_storable(t.reading, "the reading")
+            check_storable(t.record, "the reader record")
+            check_reader_record(t.record)
+            if item is None:
+                raise ValueError("not on this worksheet")
+            if t.item_id not in endo_ids:
+                raise ValueError("not an endotoxin row")
+            if t.item_id in seen:
+                raise ValueError("listed twice in one import")
+            seen.add(t.item_id)
+            if not isinstance(test_id, str) or not test_id.strip():
+                raise ValueError("the reader record has no test_id")
+            parsed = parse_reading(t.reading)
+            if not reader_shows(t.record, parsed):
+                raise ValueError("the reading does not match the reader record")
+            if t.cartridge_type_id not in allowed:
+                raise ValueError(CARTRIDGE_REFUSED)
+            # Compared as parsed values, so "< 0.05" and "<0.05" are the same reading.
+            held = parse_reading(item.result_reading) if item.result_reading is not None else None
+            if held == parsed and (item.result_reader or {}).get("test_id") == test_id:
+                continue  # this test is already on the row
+            if item.sample_id in promoted:
+                skipped.append({"item_id": item.id, "sample_id": item.sample_id,
+                                "reason": PREP_FINAL})
+                continue
+            # Final review I2: a run Re-apply moved off the row was read at
+            # the old prep, so it never comes back, replace ticked or not.
+            if reading_was_moved(item, t.record):
+                skipped.append({"item_id": item.id, "sample_id": item.sample_id,
+                                "reason": READING_MOVED})
+                continue
+            if held is not None and held != parsed and not t.replace:
+                raise ValueError(f"already holds the reading {item.result_reading}; "
+                                 "tick replace to overwrite it")
+        except ValueError as exc:
+            errors.append(f"Row {label}: {exc}")
+            continue
+        plan.append((item, t, t.reading.strip()))
+    if errors:
+        raise HTTPException(400, "Nothing was imported. " + "; ".join(errors))
+
+    user_id = _current_user.id
+    if plan:
+        pin_endo_method(db, ws, user_id)
+    # Naive UTC, as the item PATCH stamps result_entered_at; the serializer appends the Z.
+    now = datetime.now(timezone.utc).replace(tzinfo=None)
+    # Every row this import overwrites keeps the reading it held (Dennis
+    # 2026-10-19): a hand-typed result the reader replaces goes to the history
+    # rather than being lost. `moved` is the narrower set whose cartridge the
+    # test also moves under a result, which additionally records the override
+    # (review I5). Their lines, standard and facts are read once for all of
+    # them, never per row.
+    replaced = {item.id for item, _t, _reading in plan if item.result_reading is not None}
+    moved = {item.id for item, t, _reading in plan
+             if item.result_reading is not None and t.cartridge_type_id != item.cartridge_type_id}
+    if replaced:
+        rules = load_rules(db)
+        facts = row_facts(db, ws, [item for item, _t, _reading in plan if item.id in replaced])
+        std_total = endo_run_params(run_params)["std_total_dilution"]
+    for item, t, _reading in plan:
+        if item.id in replaced:
+            # Before any write to the row, as the item PATCH keeps an override.
+            _, effective = row_effective(db, ws, item, rules=rules, std_total=std_total,
+                                         facts=facts.get(item.id))
+            append_history(item, why="override" if item.id in moved else "replaced",
+                           user_id=user_id, effective=effective)
+        if item.id in moved:
+            db.add(AuditLog(
+                operation="endo_prep_override",
+                entity_type="worksheet_item",
+                entity_id=str(item.id),
+                details={"user_id": user_id, "worksheet_id": ws.id, "sample_id": item.sample_id,
+                         "old": {"cartridge_type_id": item.cartridge_type_id},
+                         "new": {"cartridge_type_id": t.cartridge_type_id}},
+            ))
+    # Endo slice 5 (spec 6): a reading locks its row's rule, as a typed one
+    # does, judged on the reading the row held before this import (final
+    # review I1): a first one locks today's match, a replaced one from
+    # before slice 5 the standard. After the history, so it keeps the row as stored.
+    lock_rows(db, ws, [item for item, _t, _reading in plan], event="result", user_id=user_id)
+    for item, t, reading in plan:
+        db.add(AuditLog(
+            operation="endo_reader_imported",
+            entity_type="worksheet_item",
+            entity_id=str(item.id),
+            details={"user_id": user_id, "worksheet_id": ws.id, "sample_id": item.sample_id,
+                     "file_name": data.file_name, "test_id": t.record.get("test_id"),
+                     "reader": t.record.get("reader"), "slot": t.record.get("slot"),
+                     "old": item.result_reading, "new": reading,
+                     # The record this one replaces: the file is not stored anywhere.
+                     "old_reader": item.result_reader,
+                     "old_cartridge_type_id": item.cartridge_type_id,
+                     "new_cartridge_type_id": t.cartridge_type_id},
+        ))
+        # The reading and its record are always written together: the item
+        # PATCH relies on that when a cleared reading clears the record.
+        item.result_reading = reading
+        # The server's verdict goes after the spread, so the browser's never wins.
+        valid, why = reader_validity(t.record, run_params)
+        # A new dict every time: a plain JSON column does not see in-place edits.
+        item.result_reader = {**t.record, "valid": valid, "why": why,
+                              "imported_at": now.isoformat() + "Z",
+                              "imported_by_user_id": user_id}
+        item.result_entered_at = now
+        item.result_entered_by_user_id = user_id
+        item.cartridge_type_id = t.cartridge_type_id
+        _apply_bench_ticks(db, ws.id, item, made=None, ran=True, user_id=user_id,
+                           instrument_id=instrument_id_for_serial(db, t.record.get("reader")))
+    db.commit()
+    return {"applied": len(plan), "items": _serialize_worksheets(db, [ws])[0]["items"],
+            "endo_method": method, "skipped": skipped}
+
+
+from worksheets_endo_promote import EndoPromoteRequest, EndoPromoteResponse  # noqa: E402
+
+
+@app.post("/worksheets/{worksheet_id}/promote", response_model=EndoPromoteResponse)
+def promote_endo_worksheet_rows(
+    worksheet_id: int,
+    data: EndoPromoteRequest,
+    background_tasks: BackgroundTasks,
+    db: Session = Depends(get_db),
+    _current_user=Depends(get_current_user),
+):
+    """Promote to Parent from Box 3 of the 2 mL endotoxin worksheet (endo
+    slice 3, spec 5.3). Open and completed worksheets; a staging one 404s. A
+    body that lists an item twice, or more rows than the worksheet has
+    items, is a 400 that writes nothing. Otherwise every row is answered on
+    its own, promoted or not and why (worksheets_endo_promote.promote_rows).
+    A POST on an id path, so it has no ordering concern against
+    GET /worksheets/{worksheet_id}."""
+    from worksheets_endo_promote import promote_rows
+
+    ws = db.execute(select(Worksheet).where(Worksheet.id == worksheet_id)).scalar_one_or_none()
+    if not ws or ws.status == "staging":
+        raise HTTPException(404, "Worksheet not found")
+    ids = [r.item_id for r in data.rows]
+    if len(ids) != len(set(ids)):
+        raise HTTPException(400, "Nothing was promoted. An item is listed more than once")
+    n_items = db.execute(select(func.count(WorksheetItem.id)).where(
+        WorksheetItem.worksheet_id == worksheet_id)).scalar_one()
+    if len(ids) > n_items:
+        raise HTTPException(400, "Nothing was promoted. The request has more rows than "
+                                 "the worksheet has items")
+    return EndoPromoteResponse(results=promote_rows(
+        db, _current_user, ws, data.rows, background_tasks=background_tasks))
+
+
+class PrepRuleReapplyCandidate(BaseModel):
+    """One row Re-apply would move (endo slice 5, spec 7). `old` is the row's
+    lock ({"rule", "locked_at", "locked_by", "user_id"}) and `new_rule` the
+    line that matches it now (None: the standard), each as stored, every key
+    kept."""
+    item_id: int
+    sample_id: str
+    old: dict
+    new_rule: Optional[dict] = None
+
+
+class PrepRuleReapplyPreview(BaseModel):
+    candidates: list[PrepRuleReapplyCandidate]
+
+
+class PrepRuleReapplyRequest(BaseModel):
+    # The promote's bound.
+    item_ids: list[int] = Field(max_length=500)
+
+
+class PrepRuleReapplyResult(BaseModel):
+    item_id: int
+    applied: bool
+    reason: Optional[str] = None
+
+
+class PrepRuleReapplyResponse(BaseModel):
+    results: list[PrepRuleReapplyResult]
+
+
+@app.get("/worksheets/{worksheet_id}/prep-rules/reapply", response_model=PrepRuleReapplyPreview)
+def preview_prep_rules_reapply(
+    worksheet_id: int,
+    db: Session = Depends(get_db),
+    _current_user=Depends(get_current_user),
+):
+    """The 2 mL rows whose locked rule differs from today's match, for the
+    Re-apply dialog (endo slice 5, spec 7). Writes nothing. A staging
+    worksheet 404s; a completed or stock one lists none."""
+    from endo_prep_rules import reapply_candidates
+
+    ws = db.execute(select(Worksheet).where(Worksheet.id == worksheet_id)).scalar_one_or_none()
+    if not ws or ws.status == "staging":
+        raise HTTPException(404, "Worksheet not found")
+    return {"candidates": reapply_candidates(db, ws)}
+
+
+@app.post("/worksheets/{worksheet_id}/prep-rules/reapply", response_model=PrepRuleReapplyResponse)
+@_rollback_on_error
+def apply_prep_rules_reapply(
+    worksheet_id: int,
+    data: PrepRuleReapplyRequest,
+    db: Session = Depends(get_db),
+    _current_user=Depends(get_current_user),
+):
+    """Move the rows the analyst confirmed to today's rule (endo slice 5,
+    spec 7). Every row is answered on its own, applied or not and why; the
+    applied ones share one commit."""
+    from endo_prep_rules import apply_reapply
+
+    # Worksheet first, then the rows' analyses and items (the lock order,
+    # _worksheet_for_update): a completion, which flushes analyses in its own
+    # order, waits here instead of crossing this request on two analyses.
+    ws = _worksheet_for_update(db, worksheet_id)
+    if not ws or ws.status == "staging":
+        raise HTTPException(404, "Worksheet not found")
+    results = apply_reapply(db, ws, data.item_ids, _current_user)
+    db.commit()
+    return {"results": results}
 
 
 class WorksheetWellFreeze(BaseModel):
@@ -25256,10 +26562,26 @@ class WorksheetItemUpdate(BaseModel):
     # false clears; the server owns who/when, never the client.
     made: Optional[bool] = None
     ran: Optional[bool] = None
+    # Endo v2 row fields (spec 2026-10-10 sections 3.7 and 10): explicit null
+    # clears, omitted is a no-op (model_fields_set); 409 on a completed
+    # worksheet for these fields only. Rules in worksheets_endo.py.
+    prep_form: Optional[str] = None
+    # float | int so an int too big for a float (10**400) reaches the check
+    # and gets a 400 with the reason, not pydantic's 422 (spec 10).
+    prep_water_ml: Optional[Union[float, int]] = None
+    prep_total_dilution: Optional[Union[float, int]] = None
+    prep_steps: Optional[list] = None
+    cartridge_type_id: Optional[int] = None
+    result_reading: Optional[str] = None
+    # Endo slice 5 (spec 2026-10-14 sections 6 and 8): the "no rule" switch
+    # and the optional special-prep note, on the same terms as the v2 fields.
+    prep_rules_off: Optional[bool] = None
+    prep_note: Optional[str] = None
 
 
 @app.patch("/worksheets/{worksheet_id}/items/{item_id}")
-async def update_worksheet_item(
+@_rollback_on_error
+def update_worksheet_item(
     worksheet_id: int,
     item_id: int,
     data: WorksheetItemUpdate,
@@ -25275,6 +26597,45 @@ async def update_worksheet_item(
     ).scalar_one_or_none()
     if not item:
         raise HTTPException(404, "Worksheet item not found")
+
+    # Endo v2 row fields, validated before anything below writes. A completed
+    # worksheet refuses them (409); the older fields keep today's behaviour,
+    # except the weight, final on a promoted row.
+    from endo_prep_rules import lock_items_for_update, promoted_sample_ids
+    from worksheets_endo import (ENDO_ITEM_FIELDS, PREP_FINAL, PREP_FINAL_FIELDS,
+                                 apply_item_endo_fields, check_item_endo_fields,
+                                 resolve_endo_method)
+    endo_values = {f: getattr(data, f) for f in ENDO_ITEM_FIELDS if f in data.model_fields_set}
+    # The weight is a stock bench field, saved below, but final on a promoted
+    # row like the endo fields (PREP_FINAL_FIELDS), so it takes the locks and
+    # the guard too; it gets no completed-worksheet 409 and no endo check.
+    weight_sent = "prep_weight_mg" in data.model_fields_set
+    # Endo slice 5: with endo fields, the worksheet row, then the row's live
+    # vial analysis, then the item, under row locks and re-read (the lock
+    # order, _worksheet_for_update): a first reading pins the method on the
+    # worksheet. The status, the checks, the promoted guard and the override
+    # history below then judge the row as committed: an override never writes
+    # over a history entry a Re-apply added meanwhile, and a promote or a
+    # completion that committed meanwhile is seen. Before anything here writes.
+    ws = (_worksheet_for_update(db, worksheet_id) if endo_values or weight_sent else
+          db.execute(select(Worksheet).where(Worksheet.id == worksheet_id)).scalar_one())
+    if endo_values or weight_sent:
+        lock_items_for_update(db, ws, [item.id])
+        if endo_values:
+            if ws.status == "completed":
+                raise HTTPException(409, "Worksheet is completed")
+            try:
+                endo_values = check_item_endo_fields(db, ws, item, endo_values)
+            except ValueError as exc:
+                raise HTTPException(400, str(exc))
+        # Endo slice 5 (spec 8): a promoted row's prep is final, every endo
+        # field (final review I3) and the weight. A value sent as stored is no
+        # change; the other fields outside ENDO_ITEM_FIELDS keep today's
+        # behaviour. One query, and only when a final field would change.
+        final_values = {**endo_values, **({"prep_weight_mg": data.prep_weight_mg} if weight_sent else {})}
+        if (any(f in final_values and final_values[f] != getattr(item, f) for f in PREP_FINAL_FIELDS)
+                and promoted_sample_ids(db, [item.sample_id])):
+            raise HTTPException(409, PREP_FINAL)
 
     resolved_method = None
     if data.instrument_uid is not None:
@@ -25346,8 +26707,21 @@ async def update_worksheet_item(
                        user_id=_current_user.id,
                        stamp_instrument="instrument_id" not in data.model_fields_set)
 
+    if endo_values:
+        apply_item_endo_fields(db, ws, item, endo_values, _current_user.id)
+
     db.commit()
-    return {"status": "updated", "item_id": item_id, "resolved_method": resolved_method}
+    out = {"status": "updated", "item_id": item_id, "resolved_method": resolved_method}
+    if endo_values:
+        # Endo v2 (spec 4.1): the worksheet's endo method, as GET /worksheets/{id}
+        # has it, for an endo PATCH only. The row is already saved, so a failure
+        # here is logged and the key left out, never a 500.
+        try:
+            out["endo_method"] = resolve_endo_method(db, ws)
+        except Exception:
+            logger.exception("endo_method resolution failed after the PATCH of item %s", item_id)
+            db.rollback()
+    return out
 
 
 class WorksheetApplyMethodInstrument(BaseModel):
@@ -25357,7 +26731,7 @@ class WorksheetApplyMethodInstrument(BaseModel):
 
 
 @app.post("/worksheets/{worksheet_id}/apply-method-instrument")
-async def apply_worksheet_method_instrument(
+def apply_worksheet_method_instrument(
     worksheet_id: int,
     data: WorksheetApplyMethodInstrument,
     db: Session = Depends(get_db),
@@ -25417,7 +26791,7 @@ class ReorderRequest(BaseModel):
 
 
 @app.put("/worksheets/{worksheet_id}/reorder")
-async def reorder_worksheet_items(
+def reorder_worksheet_items(
     worksheet_id: int,
     data: ReorderRequest,
     db: Session = Depends(get_db),
@@ -25711,6 +27085,57 @@ def s2s_upsert_lims_sample(
             and row.external_lims_system == "mk1" and row.retest_of_sample_id):
         background_tasks.add_task(_native_auto_checkin_bg, row.sample_id)
     return RegistrySampleSignalResponse(sample_id=row.sample_id, native_id=row.native_id)
+
+
+# Same-sample add-on services (spec 2026-09-29-addon-same-sample). IS calls
+# this after WP applies a paid or waived add-on order to an in-progress sample.
+
+class RegistrySampleServices(BaseModel):
+    services: dict[str, bool]
+    variance_value: Optional[Any] = None
+    event_id: Optional[str] = None
+    order_id: Optional[Any] = None
+    # Newly-true keys (IS diff). When present, only these are added; absent =
+    # fall back to every true key in `services`.
+    added_keys: Optional[list[str]] = None
+
+
+class RegistrySampleServicesResponse(BaseModel):
+    added: list[str]
+    skipped: list[str]
+    ignored: list[str]
+
+
+@app.post("/s2s/lims-samples/{sample_id}/services", response_model=RegistrySampleServicesResponse)
+def s2s_add_lims_sample_services(
+    sample_id: str,
+    req: RegistrySampleServices,
+    db: Session = Depends(get_db),
+    _: None = Depends(require_internal_service_token),
+):
+    """Add every newly-true native profile to the sample. Idempotent: profiles
+    already on the sample are skipped. 409 on a published sample (the retest
+    path should have been used; the WP order stays as the record)."""
+    from lims_analyses.retest_routes import apply_addon_services
+    row = db.execute(select(LimsSample).where(LimsSample.sample_id == sample_id)).scalar_one_or_none()
+    if row is None:
+        raise HTTPException(status_code=404, detail=f"sample {sample_id!r} not known to Mk1")
+    from lims_analyses.retest_routes import TERMINAL_SAMPLE_STATUSES
+    if row.status in TERMINAL_SAMPLE_STATUSES:
+        logger.warning("addon_services.refused_terminal sample_id=%s status=%s order_id=%s",
+                       sample_id, row.status, req.order_id)
+        raise HTTPException(status_code=409, detail=f"sample is {row.status}")
+    try:
+        services = ({k: True for k in req.added_keys} if req.added_keys is not None
+                    else req.services)
+        out = apply_addon_services(db, row, services=services, order_id=req.order_id,
+                                   variance_value=req.variance_value, event_id=req.event_id)
+        db.commit()
+    except Exception:
+        db.rollback()
+        raise
+    logger.info("addon_services.applied sample_id=%s order_id=%s %s", sample_id, req.order_id, out)
+    return out
 
 
 # ── Registry shipping update (logistics capture Slice A, 2026-08-27) ────
@@ -26788,6 +28213,8 @@ def reprovision_catalog_snapshot(
     new_snapshot = compute_catalog_snapshot(
         db, raw.get("services") or {}, raw.get("package"),
     )
+    # Keep keys the builder does not produce (addon_orders, retest rider).
+    new_snapshot = {**(parent.catalog_snapshot or {}), **new_snapshot}
 
     user_id = getattr(current_user, "id", None)
     was_null = parent.catalog_snapshot is None

@@ -81,6 +81,7 @@ describe('VialCOAList history', () => {
   it('lists each vial’s superseded certificates under it with Manage (Forward reachable)', () => {
     render(
       <VialCOAList
+        sampleId="P-1"
         generations={[vial2Live]}
         allGenerations={[vial2Live, vial2Old, vial3Old]}
       />
@@ -95,13 +96,17 @@ describe('VialCOAList history', () => {
 
     // The superseded row's own Manage: the Forward row is on it.
     const manage = screen.getAllByRole('button', { name: 'Manage' })
-    fireEvent.click(manage.at(-1)!)
+    fireEvent.click(manage[manage.length - 1] as HTMLElement)
     expect(screen.getByText('Forward to current')).toBeInTheDocument()
   })
 
   it('shows no history control when nothing was superseded', () => {
     render(
-      <VialCOAList generations={[vial2Live]} allGenerations={[vial2Live]} />
+      <VialCOAList
+        sampleId="P-1"
+        generations={[vial2Live]}
+        allGenerations={[vial2Live]}
+      />
     )
     expect(
       screen.queryByRole('button', { name: /Earlier versions/ })

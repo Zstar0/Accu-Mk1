@@ -125,7 +125,7 @@ class SlackNotifier:
             return 0
 
     async def run(self, bus) -> None:
-        sub = bus.subscribe(None)
+        sub = bus.subscribe(None, system=True)
         logger.info("slack notifier subscribed to flag bus")
         try:
             while True:

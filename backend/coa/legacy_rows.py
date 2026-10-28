@@ -36,7 +36,7 @@ from coa.hplc_shim import (
 )
 from coa.identity_verdict import identity_wire_result
 from coa.native_sections import NativeSectionsError, _spec_wire_dict
-from coa.spec_rules import SpecRuleError, evaluate, normalize_matrix, resolve_spec
+from coa.spec_rules import SpecRuleError, evaluate, normalize_matrix, normalize_unit, resolve_spec
 from lims_analyses.hplc_native import TRIO
 
 # Twin contract: src/coabuilder_core/legacy_rows.py + tests/
@@ -77,8 +77,10 @@ def _native_spec_fields(db, parent, r, wire_result) -> dict:
         # No catalog to consult (same stance as identity_wire_result).
         return {}
     matrix = normalize_matrix(getattr(parent, "sample_type_title", None))
+    # The shaped row's unit is already result_unit or the service unit.
     spec = resolve_spec(db, service_id, matrix,
-                        peptide_id=getattr(r, "peptide_id", None))
+                        peptide_id=getattr(r, "peptide_id", None),
+                        unit=normalize_unit(getattr(r, "unit", None)))
     if spec is None:
         return {}
     conforms = None

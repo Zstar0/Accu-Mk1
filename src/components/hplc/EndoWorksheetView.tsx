@@ -19,7 +19,11 @@ import { useSlaForSubjects } from '@/services/sla-subjects'
 import { EntityFlagButton } from '@/components/flags/EntityFlagButton'
 import { useRegisterActiveFlagEntity } from '@/components/flags/use-active-flag-entity'
 import { EndoWorksheetActions } from './EndoWorksheetActions'
-import { EndoCalculations, EndoWorksheetTable } from './EndoWorksheetTable'
+import {
+  EndoCalculations,
+  EndoWorksheetTable,
+  type EndoTwoMl,
+} from './EndoWorksheetTable'
 
 /**
  * The main column of the flyout for an endotoxin worksheet, laid out as
@@ -41,6 +45,12 @@ export function EndoWorksheetView({
   onReassign,
   onUpdateItem,
   onTickAll,
+  prepModel,
+  twoMl,
+  heading,
+  runHeader,
+  headerAction,
+  children,
 }: {
   worksheet: WorksheetListItem
   users: WorksheetUser[]
@@ -60,6 +70,16 @@ export function EndoWorksheetView({
   onReassign: (itemId: number, targetWorksheetId: number) => void
   onUpdateItem: (itemId: number, data: WorksheetItemPatch) => void
   onTickAll: (data: { made?: boolean; ran?: boolean }) => void
+  /** The worksheet page (spec 2026-10-10 6.1): the prep model and its 2 mL
+   *  data, Box 1's title, the run settings for the meta strip, and Boxes 2
+   *  and 3 as children. The flyout passes none and renders as before. */
+  prepModel?: 'stock' | '2ml'
+  twoMl?: EndoTwoMl
+  heading?: ReactNode
+  runHeader?: ReactNode
+  /** The page's own header button (the 2 mL "Prep rules" link, slice 5). */
+  headerAction?: ReactNode
+  children?: ReactNode
 }) {
   useRegisterActiveFlagEntity(
     'worksheet',
@@ -137,6 +157,7 @@ export function EndoWorksheetView({
             entityId={String(worksheet.id)}
           />
           <EndoWorksheetActions worksheet={worksheet} users={users} />
+          {headerAction}
           {!isCompleted && (
             <>
               <Button
@@ -188,7 +209,7 @@ export function EndoWorksheetView({
             >
               <SelectTrigger
                 aria-label="Analyst"
-                className="h-6 w-full border-0 bg-transparent p-0 text-sm font-medium shadow-none focus:ring-0"
+                className="h-6 w-full border-0 bg-transparent p-0 text-sm font-medium shadow-none focus:ring-0 dark:px-3"
               >
                 <SelectValue placeholder="Assign analyst…" />
               </SelectTrigger>
@@ -210,9 +231,18 @@ export function EndoWorksheetView({
         onReassign={onReassign}
         onUpdateItem={onUpdateItem}
         onTickAll={onTickAll}
+        prepModel={prepModel}
+        twoMl={twoMl}
+        heading={heading}
+        metaExtra={runHeader}
       />
 
-      <EndoCalculations />
+      {/* Boxes 2 and 3; with the column's 16px gap, 24px between boxes as on Dennis's sheet */}
+      {children && <div className="space-y-6 pt-2">{children}</div>}
+
+      <EndoCalculations
+        ctx={prepModel === '2ml' && twoMl ? twoMl.ctx : undefined}
+      />
 
       <section>
         <h3 className="pb-2 text-[9.5px] font-semibold uppercase tracking-[0.13em] text-muted-foreground">

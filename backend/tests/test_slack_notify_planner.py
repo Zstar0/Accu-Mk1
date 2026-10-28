@@ -94,3 +94,43 @@ def test_absent_prefs_row_means_defaults_on(db):
     f = _flag(db, created_by=1, watchers=(4,))
     out = plan_dms(db, _event(f, "commented", actor_id=1))
     assert out == [PlannedDM(user_id=4, category="watching_activity")]
+
+
+# --- visibility re-check at send time (slice 2 final review C2) --------------
+from tests.test_flags_visibility_enforcement import (  # noqa: E402,F401
+    ADMIN, MEMBER, OUTSIDER, w)
+
+
+def _revoke(w, user):
+    from groups.models import UserGroupMember
+    w.s.query(UserGroupMember).filter_by(user_id=user.id).delete()
+    w.s.commit()
+
+
+def test_revoked_watcher_gets_no_dm(w):
+    from flags import service
+    service.add_watcher(w.s, user=ADMIN, flag_id=w.f_secret.id, user_id=MEMBER.id)
+    ev = _event(w.f_secret, "commented", actor_id=ADMIN.id)
+    assert plan_dms(w.s, ev) == [PlannedDM(user_id=MEMBER.id, category="watching_activity")]
+    _revoke(w, MEMBER)
+    assert plan_dms(w.s, ev) == []
+
+
+def test_revoked_creator_gets_no_dm(w):
+    from flags import service
+    f = service.create_flag(w.s, user=MEMBER, entity_type="board_node",
+                            entity_id=str(w.sec.id), type="task", title="member's")
+    ev = _event(f, "status_changed", actor_id=ADMIN.id, to_value="in_progress")
+    assert plan_dms(w.s, ev) == [PlannedDM(user_id=MEMBER.id, category="raised_activity")]
+    _revoke(w, MEMBER)
+    assert plan_dms(w.s, ev) == []
+
+
+def test_unknown_user_on_scoped_flag_is_dropped_but_legacy_keeps_it(w):
+    from flags.models import FlagParticipant
+    for f in (w.f_secret, w.f_sample):
+        w.s.add(FlagParticipant(flag_id=f.id, user_id=999))
+    w.s.commit()
+    assert plan_dms(w.s, _event(w.f_secret, "commented", actor_id=ADMIN.id)) == []
+    assert plan_dms(w.s, _event(w.f_sample, "commented", actor_id=ADMIN.id)) == [
+        PlannedDM(user_id=999, category="watching_activity")]

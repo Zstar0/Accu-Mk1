@@ -125,3 +125,128 @@ def test_cancel_requires_creator_or_admin(db):
     with pytest.raises(PermissionDeniedError):
         watches.cancel_watch(db, user=_user(2), watch_id=w.id)         # not creator
     watches.cancel_watch(db, user=SimpleNamespace(id=99, role="admin"), watch_id=w.id)
+
+
+# --- visibility (slice 2 final review C1) -----------------------------------
+from tests.test_flags_visibility_enforcement import (  # noqa: E402,F401
+    ADMIN, MEMBER, OUTSIDER, w)
+
+
+def _arm(c, *, action_flag, watch_flag=None, body="SECRET BODY"):
+    return c.post("/api/flags/watches", json={
+        "entity_type": "sample", "entity_id": "P-1",
+        "condition": {"field": "state", "equals": "published"},
+        "action": {"kind": "comment", "flag_id": action_flag, "body": body},
+        "watch_flag_id": watch_flag})
+
+
+def test_outsider_arm_on_hidden_flag_matches_missing(w):
+    w.c.as_user(OUTSIDER)
+    sec, gen = w.f_secret.id, w.f_general.id
+    hidden = _arm(w.c, action_flag=gen, watch_flag=sec)
+    missing = _arm(w.c, action_flag=gen, watch_flag=999999)
+    assert hidden.status_code == missing.status_code == 404
+    assert hidden.json()["detail"] == f"flag {sec} not found"
+    assert missing.json()["detail"] == "flag 999999 not found"
+    hidden = _arm(w.c, action_flag=sec)
+    missing = _arm(w.c, action_flag=999999)
+    assert hidden.status_code == missing.status_code == 404
+    assert hidden.json()["detail"] == f"flag {sec} not found"
+    from flags.models import FlagEvent
+    assert not [e for e in w.s.query(FlagEvent).filter_by(flag_id=sec)
+                if e.event_type == "watch_armed"]
+    w.c.as_user(MEMBER)
+    assert _arm(w.c, action_flag=sec, watch_flag=sec).status_code == 201
+
+
+def test_outsider_list_of_hidden_flag_matches_missing(w):
+    w.c.as_user(OUTSIDER)
+    hidden = w.c.get(f"/api/flags/watches?flag_id={w.f_secret.id}")
+    missing = w.c.get("/api/flags/watches?flag_id=999999")
+    assert hidden.status_code == missing.status_code == 404
+    assert hidden.json()["detail"] == f"flag {w.f_secret.id} not found"
+    assert missing.json()["detail"] == "flag 999999 not found"
+
+
+def test_unscoped_list_hides_watches_on_hidden_flags(w):
+    sec = w.f_secret.id
+    w.c.as_user(MEMBER)
+    threaded = _arm(w.c, action_flag=sec, watch_flag=sec).json()["id"]
+    standalone = _arm(w.c, action_flag=sec).json()["id"]      # no thread, secret action
+    public = _arm(w.c, action_flag=w.f_general.id, body="ok").json()["id"]
+    w.c.as_user(OUTSIDER)
+    got = w.c.get("/api/flags/watches").json()
+    assert [x["id"] for x in got] == [public]
+    assert "SECRET BODY" not in str(got)
+    for u in (MEMBER, ADMIN):
+        w.c.as_user(u)
+        assert {x["id"] for x in w.c.get("/api/flags/watches").json()} == {
+            threaded, standalone, public}
+        assert [x["id"] for x in w.c.get(f"/api/flags/watches?flag_id={sec}").json()] == [threaded]
+
+
+def test_revoked_creator_can_still_cancel_without_auditing_the_hidden_flag(w):
+    from flags.models import FlagEvent
+    from groups.models import UserGroupMember
+    sec = w.f_secret.id
+    w.c.as_user(MEMBER)
+    wid = _arm(w.c, action_flag=sec, watch_flag=sec).json()["id"]
+    w.s.query(UserGroupMember).filter_by(user_id=MEMBER.id).delete()
+    w.s.commit()
+    assert w.c.delete(f"/api/flags/watches/{wid}").status_code == 204
+    assert not [e for e in w.s.query(FlagEvent).filter_by(flag_id=sec)
+                if e.event_type == "watch_cancelled"]
+
+
+# --- a watch armed before revocation is cancelled, not retried forever (Task 8 item 3) --
+def test_watch_cancelled_when_actor_loses_visibility_before_fire(w, caplog):
+    """The fire attempt hits the SAME 404 (NotFoundError) a manual comment from
+    the revoked actor would; the watch is cancelled instead of poisoned/retried
+    on every subsequent poll, no watch_cancelled/watch_fired event lands on the
+    flag the actor can no longer see, and the cancellation is logged
+    (fix round 1 item 4)."""
+    import logging
+    from flags import watches
+    from flags.models import FlagEntityWatch, FlagEvent
+    from groups.models import UserGroupMember
+    from models import LimsSample
+    sec = w.f_secret.id
+    w.s.add(LimsSample(sample_id="P-1", status="published"))
+    w.s.commit()
+    w.c.as_user(MEMBER)
+    wid = _arm(w.c, action_flag=sec, watch_flag=sec).json()["id"]
+    w.s.query(UserGroupMember).filter_by(user_id=MEMBER.id).delete()
+    w.s.commit()
+    with caplog.at_level(logging.WARNING, logger="flags.watches"):
+        assert watches.run_watch_poll(w.s) == 0
+    assert w.s.get(FlagEntityWatch, wid).status == "cancelled"
+    events = [e.event_type for e in w.s.query(FlagEvent).filter_by(flag_id=sec)]
+    assert "watch_cancelled" not in events and "watch_fired" not in events
+    msgs = [rec.getMessage() for rec in caplog.records]
+    assert any(m.startswith("flag_watch_cancelled_visibility") and f"watch_id={wid}" in m
+               for m in msgs)
+    assert watches.run_watch_poll(w.s) == 0        # second poll does not touch it
+    assert w.s.get(FlagEntityWatch, wid).status == "cancelled"
+
+
+# --- a deactivated creator's watch is cancelled, not fired (fix round 1 item 3) --
+def test_watch_cancelled_when_creator_is_deactivated_before_fire(w):
+    """_ActorRef carries only an id (reads as active by default, no is_active
+    field) and deactivation does not delete the creator's UserGroupMember rows,
+    so MEMBER's group grant is still intact here: without loading the real row
+    and checking it before the action runs, this watch would still FIRE using
+    the deactivated creator's stale group authority."""
+    from flags import watches
+    from flags.models import FlagEntityWatch
+    from models import LimsSample, User
+    sec = w.f_secret.id
+    w.s.add(LimsSample(sample_id="P-1", status="published"))
+    w.s.commit()
+    w.c.as_user(MEMBER)
+    wid = _arm(w.c, action_flag=sec, watch_flag=sec).json()["id"]
+    w.s.get(User, MEMBER.id).is_active = False
+    w.s.commit()
+    assert watches.run_watch_poll(w.s) == 0
+    assert w.s.get(FlagEntityWatch, wid).status == "cancelled"
+    assert watches.run_watch_poll(w.s) == 0        # second poll does not touch it
+    assert w.s.get(FlagEntityWatch, wid).status == "cancelled"

@@ -86,12 +86,18 @@ def _live_parent_line_states(db: Session, sample: LimsSample) -> dict[str, str]:
         # catalog release, not here.
         out[_key(r)] = ("to_be_verified" if r.review_state == "parent_to_verify"
                         else r.review_state)
-    for r in rows:
+    # Shadow rows get the same furthest-along rule, and a retested shadow
+    # row is never the line's state: its mirror_review_state froze at
+    # whatever SENAITE said before the retest (BW-0118/0121/0122: a stale
+    # 'to_be_verified' copy beside the current 'published' one stranded the
+    # verify edge and, under mk1 authority, the sample's status).
+    shadow_rank = {"published": 3, "verified": 2, "to_be_verified": 1}
+    for r in sorted(rows, key=lambda r: (shadow_rank.get(r.mirror_review_state, 0), r.id)):
         if r.provenance == "canonical":
             continue
         elif r.provenance == "shadow":
             st = r.mirror_review_state
-            if not st or st in _EXCLUDED_LINE_STATES:
+            if r.retested or not st or st in _EXCLUDED_LINE_STATES:
                 continue
             shadow[r.keyword] = st
         elif r.provenance == PROVENANCE_ORDERED:

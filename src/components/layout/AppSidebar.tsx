@@ -13,6 +13,7 @@ import {
   RefreshCw,
   TestTube,
   UserCog,
+  Map,
 } from 'lucide-react'
 import { relaunch } from '@tauri-apps/plugin-process'
 import {
@@ -44,6 +45,7 @@ import { useWizardStore } from '@/store/wizard-store'
 import { ReadyToPublishChips } from './QuickNav'
 import { useAuthStore } from '@/store/auth-store'
 import { logout } from '@/lib/auth-api'
+import { useBoardsNavVisible } from '@/services/boards'
 
 interface SubItem {
   id: ActiveSubSection
@@ -87,6 +89,7 @@ const navItems: NavItem[] = [
     subItems: [
       { id: 'instruments', label: 'Instruments' },
       { id: 'methods', label: 'Methods' },
+      { id: 'consumables', label: 'Consumables' },
       { id: 'peptide-config', label: 'Peptides' },
       { id: 'analysis-services', label: 'Analysis Services' },
       { id: 'service-groups', label: 'Service Groups', adminOnly: true },
@@ -112,6 +115,7 @@ const navItems: NavItem[] = [
       { id: 'sample-preps', label: 'Sample Preps' },
       { id: 'inbox', label: 'Inbox' },
       { id: 'worksheets', label: 'Worksheets' },
+      { id: 'endo-prep-rules', label: 'Endo prep rules' },
     ],
   },
   {
@@ -119,7 +123,7 @@ const navItems: NavItem[] = [
     label: 'Reports',
     icon: Activity,
     subItems: [
-      { id: 'dashboard', label: 'Dashboard' },
+      { id: 'dashboard', label: 'Analyte Trends' },
       { id: 'checkin-times', label: 'Check-In Times' },
       { id: 'ready-to-publish', label: 'Ready to Publish' },
       { id: 'scheduled-publishes', label: 'Scheduled Publishes' },
@@ -131,6 +135,11 @@ const navItems: NavItem[] = [
     ],
   },
   {
+    id: 'boards',
+    label: 'Boards',
+    icon: Map,
+  },
+  {
     id: 'accumark-tools',
     label: 'AccuMark Tools',
     icon: Wrench,
@@ -140,6 +149,7 @@ const navItems: NavItem[] = [
       { id: 'order-status', label: 'Order Status' },
       { id: 'vial-status', label: 'Vial Status' },
       { id: 'customers', label: 'Customers' },
+      { id: 'customer-insights', label: 'Customer Insights' },
       { id: 'coa-explorer', label: 'COA Explorer' },
       { id: 'digital-coa', label: 'Digital COA' },
       { id: 'chromatographs', label: 'Chromatographs' },
@@ -196,6 +206,7 @@ export function AppSidebar() {
   const updateReady = useUIStore(state => state.updateReady)
   const user = useAuthStore(state => state.user)
   const isAdmin = user?.role === 'admin'
+  const boardsVisible = useBoardsNavVisible()
   const [expandedSections, setExpandedSections] = useState(loadExpandedSections)
 
   const toggleSection = (sectionId: string, open: boolean) => {
@@ -223,6 +234,7 @@ export function AppSidebar() {
           <SidebarGroupContent>
             <SidebarMenu>
               {navItems.map(item => {
+                if (item.id === 'boards' && !boardsVisible) return null
                 if (item.adminOnly && !isAdmin) return null
                 const Icon = item.icon
                 const isActive = activeSection === item.id

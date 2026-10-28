@@ -13,6 +13,7 @@ import {
   type SenaiteAnalysis,
 } from '@/lib/api'
 import { useAnalysisServices } from '@/services/analysis-services'
+import { formatLabDateTime, parseUtcIfNaive } from '@/lib/lab-time'
 import { ruleLabel, tierChip } from '@/components/hplc/ServiceSpecsSection'
 import { useUIStore } from '@/store/ui-store'
 
@@ -58,15 +59,11 @@ export function specsForAnalysis(
  *  column any more (slice 22), so the hover is where it is read. */
 function formatCaptured(iso: string | null | undefined): string | null {
   if (!iso) return null
-  const d = new Date(iso)
+  // Display-only: the backend keeps sending native `captured` naive (it feeds
+  // the COA readers, so its wire format must not move); treat it as UTC here.
+  const d = parseUtcIfNaive(iso)
   if (Number.isNaN(d.getTime())) return iso
-  return d.toLocaleString('en-US', {
-    month: 'short',
-    day: 'numeric',
-    year: '2-digit',
-    hour: 'numeric',
-    minute: '2-digit',
-  })
+  return formatLabDateTime(d)
 }
 
 /** Pure hover card: line details + the service's filed specs. */

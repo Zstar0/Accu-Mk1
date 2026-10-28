@@ -115,6 +115,29 @@ def test_disabled_when_secret_unset(client, monkeypatch):
     assert r.status_code == 404
 
 
+def test_flag_assign_me_on_hidden_flag_matches_missing(client):
+    """Task 8 item 5: flag_assign_me must use get_visible_flag, not the ungated
+    get_flag peek. A hidden flag reads as missing, same handling as one that
+    does not exist."""
+    from flags import seams
+    from flags.models import FlagFlag
+    seams.register_entity("secret_thing", label=lambda d, e: "s", deep_link=lambda e: "/s",
+                          can_flag=lambda u, e: True, can_view=lambda d, u, e: False)
+    try:
+        client.session.add(FlagFlag(id=2, entity_type="secret_thing", entity_id="1",
+                                    kind="issue", type="blocker", status="open",
+                                    title="hidden", created_by=5))
+        client.session.commit()
+        hidden = _post(client, _payload("flag_assign_me", flag_id=2))
+        missing = _post(client, _payload("flag_assign_me", flag_id=999999))
+        assert hidden.status_code == missing.status_code == 200
+        assert "didn't go through" in str(client.fake.updates[-2][2])
+        assert "didn't go through" in str(client.fake.updates[-1][2])
+        assert client.session.get(FlagFlag, 2).assignee_id is None
+    finally:
+        seams._REGISTRY.pop("secret_thing", None)
+
+
 def test_unauthorized_actor_declined_flag_untouched(client):
     # Ruling: all 3 buttons ride EVERY DM (incl. watchers); the endpoint enforces
     # permissions. A mapped-but-unauthorized actor (not raiser/assignee/admin)

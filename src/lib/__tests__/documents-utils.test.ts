@@ -91,3 +91,11 @@ describe('formatting helpers', () => {
     expect(documentDownloadName('ART-0012', 3)).toBe('ART-0012-r3.html')
   })
 })
+
+describe('buildDocumentListQuery space filter', () => {
+  it('adds space_id when given and omits it otherwise', () => {
+    expect(buildDocumentListQuery({ spaceId: 7 })).toContain('space_id=7')
+    expect(buildDocumentListQuery({})).not.toContain('space_id')
+    expect(buildDocumentListQuery({ spaceId: null })).not.toContain('space_id')
+  })
+})

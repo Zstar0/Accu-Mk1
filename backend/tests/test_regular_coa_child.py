@@ -21,6 +21,13 @@ import pytest
 import main
 
 
+@pytest.fixture(autouse=True)
+def _regular_child_enabled(monkeypatch):
+    # The Core COA child is off by default since 2026-10-20 (per-vial
+    # certificates replace it); these tests cover it when re-enabled.
+    monkeypatch.setenv("COA_EMIT_REGULAR_CHILD", "1")
+
+
 class _FakeClient:
     def __init__(self, captured):
         self._captured = captured

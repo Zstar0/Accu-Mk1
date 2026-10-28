@@ -29,7 +29,11 @@ import {
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { Textarea } from '@/components/ui/textarea'
 import { Spinner } from '@/components/ui/spinner'
-import { useRetestOptions, useCreateRetest } from '@/hooks/use-retest'
+import {
+  useRetestOptions,
+  useCreateRetest,
+  useCreateAddonOrder,
+} from '@/hooks/use-retest'
 import {
   HPLC_PROFILE_KEYS,
   type RetestOptions,
@@ -78,8 +82,9 @@ const isHplc = (key: string) =>
 
 const RULE_SENTENCE =
   'Rows not re-tested are carried as verified results linked to this sample. Untick Carry to leave a result off the new sample.'
-const ADDON_SENTENCE =
-  'Add-ons are billed at the listed price unless Billing is Waived. Existing results are carried to the new sample.'
+const ADDON_BILLING =
+  'Add-ons are billed at the listed price unless Billing is Waived.'
+const ADDON_SENTENCE = `${ADDON_BILLING} Existing results are carried to the new sample.`
 
 /** Class for a 44 px tap target wrapping a small control. */
 const TARGET = 'inline-flex min-h-11 min-w-11 items-center justify-center'
@@ -108,6 +113,22 @@ function clampInt(v: string, min: number, max: number): number {
 }
 
 const names = (list: { name: string }[]) => list.map(p => p.name).join(', ')
+
+const CARRY_BLOCKED_FALLBACK = 'not verified'
+
+/** "A, B dropped (reason)", one clause per backend carry_blocked_reason. */
+const droppedClauses = (
+  list: { name: string; carry_blocked_reason?: string | null }[]
+) => {
+  const byReason = new Map<string, string[]>()
+  for (const p of list) {
+    const reason = p.carry_blocked_reason ?? CARRY_BLOCKED_FALLBACK
+    byReason.set(reason, [...(byReason.get(reason) ?? []), p.name])
+  }
+  return [...byReason]
+    .map(([reason, ns]) => `${ns.join(', ')} dropped (${reason})`)
+    .join('; ')
+}
 
 function copyLink(url: string) {
   if (!navigator.clipboard) {
@@ -142,6 +163,12 @@ export function RetestDialog({
       onClose()
     },
   })
+  const addonMutation = useCreateAddonOrder(sampleId, {
+    onCreated: r => {
+      onCreated?.(r)
+      onClose()
+    },
+  })
   const [state, setState] = useState<RetestFormState | null>(null)
   const [stateFor, setStateFor] = useState<string | null>(null)
   const [prevOpen, setPrevOpen] = useState(open)
@@ -158,7 +185,7 @@ export function RetestDialog({
     setState(initialState(options))
   }
 
-  const pending = mutation.isPending
+  const pending = mutation.isPending || addonMutation.isPending
 
   function handleOpenChange(v: boolean) {
     if (!v && !pending) onClose()
@@ -218,6 +245,9 @@ export function RetestDialog({
   }
 
   const tab = state.tab
+  // In progress (not yet published): Add services adds to this same sample.
+  // Older backends omit the flag, which means today's new-sample path.
+  const sameSample = tab === 'addons' && options.original_published === false
   const profiles = options.profiles
   const retested = profiles.filter(p => rowOf(p).retest)
   const carried = profiles.filter(p => rowOf(p).carry)
@@ -285,19 +315,88 @@ export function RetestDialog({
 
   const eligible = profiles.filter(p => p.carry_eligible)
   const ineligible = profiles.filter(p => !p.carry_eligible)
-  const sentenceParts =
-    tab === 'retest'
-      ? [
-          retested.length ? `re-test ${names(retested)}` : '',
-          carried.length ? `carry ${names(carried)}` : '',
-          dropped.length ? `drop ${names(dropped)}` : '',
-        ]
-      : [
-          eligible.length ? `carry ${names(eligible)}` : '',
-          ineligible.length ? `drop ${names(ineligible)}` : '',
-          tickedAddons.length ? `add ${names(tickedAddons)}` : '',
-        ]
-  const newSample = sentenceParts.filter(Boolean).join('; ')
+  // "When you press Create": built from the same state as the request body,
+  // so it cannot say something the request does not do.
+  const outcome: string[] = []
+  if (tab === 'retest' ? anyRetest : tickedAddons.length > 0) {
+    const kind = tab === 'retest' ? 'retest order' : 'add-on order'
+    const orig = options.context?.order
+    const who = orig
+      ? `for ${orig.customer_name} against order ${orig.number}`
+      : 'for the customer against the original order'
+    const money = waived
+      ? total
+        ? `$0.00, waived ${formatMoney(total)}`
+        : '$0.00, waived'
+      : total === null
+        ? 'price unavailable'
+        : excludesExtraVials
+          ? `${formatMoney(total)} plus extra vials`
+          : formatMoney(total)
+    outcome.push(`Creates a WooCommerce ${kind} ${who} (${money}).`)
+    const gate = waived ? 'At once' : 'Once paid'
+    if (tab === 'retest') {
+      outcome.push(
+        `${gate}: a new sample is created with ${names(retested)} re-tested` +
+          (varianceOn ? ` (variance, ${state.variancePoints} points)` : '') +
+          (carried.length
+            ? `; ${names(carried)} carried as verified results`
+            : '') +
+          (dropped.length ? `; ${names(dropped)} dropped` : '') +
+          '.'
+      )
+    } else if (sameSample) {
+      const vials =
+        tickedAddons.reduce((n, a) => n + (a.vials ?? 0), 0) + state.extraVials
+      outcome.push(
+        `${gate}: ${names(tickedAddons)} added to ${sampleId}` +
+          (vials > 0
+            ? `; needs ${vials} more vial${vials === 1 ? '' : 's'} from the customer`
+            : '') +
+          '.'
+      )
+    } else {
+      outcome.push(
+        `${gate}: a new sample is created with ${names(tickedAddons)}` +
+          (eligible.length
+            ? `; ${names(eligible)} carried from ${sampleId}`
+            : '') +
+          (ineligible.length ? `; ${droppedClauses(ineligible)}` : '') +
+          '.'
+      )
+    }
+    outcome.push(
+      sameSample
+        ? `No new sample; ${sampleId} keeps its current results.`
+        : `${sampleId} is unchanged and stays linked to the new sample.` +
+            (state.autoCheckin
+              ? ' The new sample is checked in on creation.'
+              : '')
+    )
+    // Email facts from the WordPress side: payment_complete() on a waived
+    // order sends WooCommerce's order confirmation; a charged retest / new-
+    // sample order is emailed an invoice with the pay link; the same-sample
+    // addon-order route leaves a charged order pending with no email.
+    outcome.push(
+      waived
+        ? "Email: the customer gets WooCommerce's order confirmation now (no payment needed)."
+        : sameSample
+          ? 'Email: none now; copy the payment link from the Orders tab. The order confirmation goes out when the customer pays.'
+          : 'Email: the customer is sent an invoice with the payment link now; the order confirmation follows when they pay.'
+    )
+  }
+
+  const submit = () => {
+    if (sameSample)
+      addonMutation.mutate({
+        profiles: tickedAddons.map(a => a.key),
+        variance_points: 0,
+        additional_vials: state.extraVials,
+        fee: state.fee,
+        reason: reasonText,
+      })
+    else mutation.mutate(buildBody())
+  }
 
   const buildBody = (): RetestRequestBody => {
     const base = {
@@ -522,7 +621,8 @@ export function RetestDialog({
                         </label>
                         {!p.carry_eligible && (
                           <span className="block text-xs text-muted-foreground">
-                            cannot carry: not verified
+                            cannot carry:{' '}
+                            {p.carry_blocked_reason ?? CARRY_BLOCKED_FALLBACK}
                           </span>
                         )}
                       </TableCell>
@@ -579,6 +679,11 @@ export function RetestDialog({
           </TabsContent>
 
           <TabsContent value="addons" className="space-y-3">
+            <p data-testid="addon-mode" className="text-sm">
+              {options.original_published === false
+                ? `${sampleId} is in progress: the selected services are added to this sample once the order is paid (or at once if waived).`
+                : `${sampleId} is published: a new sample is created with the existing results carried.`}
+            </p>
             <Table>
               <TableHeader>
                 <TableRow>
@@ -622,7 +727,9 @@ export function RetestDialog({
                 ))}
               </TableBody>
             </Table>
-            <p className="text-xs text-muted-foreground">{ADDON_SENTENCE}</p>
+            <p className="text-xs text-muted-foreground">
+              {sameSample ? ADDON_BILLING : ADDON_SENTENCE}
+            </p>
 
             <Collapsible
               defaultOpen={state.autoCheckin || state.extraVials > 0}
@@ -655,7 +762,8 @@ export function RetestDialog({
                     added to the order at the per-vial price, no test
                   </span>
                 </div>
-                {checkin(false)}
+                {/* The addon-order route has no auto check-in. */}
+                {!sameSample && checkin(false)}
               </CollapsibleContent>
             </Collapsible>
             {billing}
@@ -696,7 +804,11 @@ export function RetestDialog({
                       <TableCell>{formatMoney(o.total)}</TableCell>
                       <TableCell>{o.status}</TableCell>
                       <TableCell>
-                        {o.sample_id ? (
+                        {o.same_sample ? (
+                          <span className="text-muted-foreground">
+                            {o.applied ? 'applied' : 'same sample'}
+                          </span>
+                        ) : o.sample_id ? (
                           <a
                             href={`#senaite/sample-details?id=${encodeURIComponent(o.sample_id)}`}
                             className="underline"
@@ -786,13 +898,20 @@ export function RetestDialog({
                   </>
                 )}
               </div>
+              {outcome.length > 0 && (
+                <div
+                  data-testid="retest-outcome"
+                  className="border-t border-border/40 pt-1.5 mt-1.5 space-y-0.5"
+                >
+                  <div className="font-medium">When you press Create</div>
+                  {outcome.map(line => (
+                    <p key={line} className="text-muted-foreground">
+                      {line}
+                    </p>
+                  ))}
+                </div>
+              )}
             </div>
-
-            {newSample && (
-              <p data-testid="retest-new-sample" className="text-sm">
-                New sample: {newSample}.
-              </p>
-            )}
           </>
         )}
 
@@ -816,14 +935,16 @@ export function RetestDialog({
           {tab !== 'orders' && (
             <Button
               className="min-h-11"
-              onClick={() => mutation.mutate(buildBody())}
+              onClick={submit}
               disabled={blocked !== null || pending}
             >
               {pending
                 ? 'Creating…'
                 : tab === 'retest'
                   ? 'Create retest order'
-                  : 'Create add-on order'}
+                  : sameSample
+                    ? `Add services to ${sampleId}`
+                    : 'Create add-on order (new sample)'}
             </Button>
           )}
         </DialogFooter>

@@ -4,6 +4,8 @@ export interface AppCommand {
   id: string
   /** Translation key for the command label (e.g., 'commands.showLeftSidebar.label') */
   labelKey: string
+  /** Literal label for commands built at runtime (a board's items); used instead of `labelKey` when set. */
+  label?: string
   /** Translation key for the command description (e.g., 'commands.showLeftSidebar.description') */
   descriptionKey?: string
   icon?: LucideIcon

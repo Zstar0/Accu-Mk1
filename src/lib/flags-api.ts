@@ -288,14 +288,16 @@ export const listFlags = (tab: FlagTab, params?: ListFlagsParams) => {
 
 /** `GET /api/flags?entity_type&entity_id[&include_descendants=true]` — the open
  *  flags on one entity (optionally rolling up its descendants, e.g. a sample's
- *  vials). Drives the stateful `EntityFlagButton`. */
+ *  vials). `includePast` asks for every status (tab `all`), so resolved/closed
+ *  flags come back too. Drives the stateful `EntityFlagButton`. */
 export const listEntityFlags = (
   entityType: string,
   entityId: string,
-  includeDescendants = false
+  includeDescendants = false,
+  includePast = false
 ) => {
   const qs = new URLSearchParams({
-    tab: 'all_open',
+    tab: includePast ? 'all' : 'all_open',
     entity_type: entityType,
     entity_id: entityId,
   })

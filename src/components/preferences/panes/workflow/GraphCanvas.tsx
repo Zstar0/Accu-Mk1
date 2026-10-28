@@ -10,6 +10,7 @@ import {
 // Kept local to this module (not the pane's global CSS) so it only ships in
 // the lazy chunk — the whole point of Task 10's React.lazy split.
 import '@xyflow/react/dist/style.css'
+import { useTheme } from '@/hooks/use-theme'
 import { Badge } from '@/components/ui/badge'
 import { cn } from '@/lib/utils'
 import type { WorkflowCategory, WorkflowGraph } from '@/lib/workflow-api'
@@ -71,6 +72,8 @@ function GraphCanvas({
   onSelectState,
   onSelectTransition,
 }: GraphCanvasProps) {
+  // xyflow styles its own Controls and Background per colorMode; 'system' tracks the OS like the app does.
+  const { theme } = useTheme()
   const { nodes, edges } = useMemo(
     () => layoutGraph(graph, showInactive),
     [graph, showInactive]
@@ -88,6 +91,7 @@ function GraphCanvas({
         nodesConnectable={false}
         edgesFocusable
         fitView
+        colorMode={theme}
         proOptions={{ hideAttribution: true }}
       >
         <Background />

@@ -214,6 +214,8 @@ def test_init_db_calls_hplc_native_seed_between_vial_roles_and_specs(monkeypatch
     monkeypatch.setattr(database, "_run_migrations", _rec("migrations"))
     monkeypatch.setattr(database.Base.metadata, "create_all", _rec("create_all"))
     monkeypatch.setattr(database, "_seed_federal_holidays_window", _rec("holidays"))
+    monkeypatch.setattr(database, "_ensure_documents_space_column", _rec("documents_space_column"))
+    monkeypatch.setattr(database, "_run_endo_v2_migrations", _rec("endo_v2"))
     # init_db also opens a fresh SessionLocal() around every seeder call; stub
     # it too so no stubbed seeder (or the try/except plumbing around it) ever
     # touches a real database connection.
@@ -240,6 +242,15 @@ def test_init_db_calls_hplc_native_seed_between_vial_roles_and_specs(monkeypatch
     database.init_db()
 
     assert calls.index("vial_roles") < calls.index("hplc_native") < calls.index("service_specs")
+    # Document spaces: the space_id FK column needs document_spaces, so it runs after
+    # create_all and before the first seeder.
+    assert (calls.index("migrations") < calls.index("create_all")
+            < calls.index("documents_space_column") < calls.index("reconcile_per_substance")
+            < calls.index("vial_roles"))
+    # Endo worksheet v2: its columns and one-time switch run after create_all (the new FK
+    # columns reference consumable_types) and before any seeder reads these tables.
+    assert (calls.index("create_all") < calls.index("documents_space_column")
+            < calls.index("endo_v2") < calls.index("reconcile_per_substance"))
 
 
 def test_seeded_services_match_admin_create_contract(db_session):

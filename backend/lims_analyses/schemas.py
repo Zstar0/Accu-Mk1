@@ -6,10 +6,11 @@ validation is decoupled from internal data shapes.
 
 from __future__ import annotations
 
+import math
 from datetime import datetime
-from typing import List, Literal, Optional
+from typing import Annotated, List, Literal, Optional
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, BeforeValidator, ConfigDict, Field
 
 
 # ─── Task 5b: native parent analyses read shape ───────────────────────────────
@@ -23,6 +24,10 @@ class NativeParentAnalysisRow(BaseModel):
     title: str
     result_value: Optional[str] = None
     result_unit: Optional[str] = None
+    # Endo slice 3: the result's own LOQ / LOD (None when it carries none).
+    loq: Optional[float] = None
+    lod: Optional[float] = None
+    lod_unit: Optional[str] = None
     review_state: str
     updated_at: datetime
 
@@ -118,6 +123,16 @@ class PromoteSourceRef(BaseModel):
     contribution_kind: Literal["chosen", "aggregated_in", "reference"]
 
 
+def _nonfinite_as_text(v):
+    """NaN or inf as its text, so the 422 echoes "nan", not a float that
+    FastAPI 0.115's error body cannot encode (that turned the 422 into a 500)."""
+    return str(v) if isinstance(v, float) and not math.isfinite(v) else v
+
+
+# A result limit (endo slice 3): finite and above zero, or None.
+_ResultLimit = Annotated[Optional[float], BeforeValidator(_nonfinite_as_text)]
+
+
 class PromoteRequest(BaseModel):
     """Phase 4a: promote one or more vial-tier rows to a single parent-tier row.
 
@@ -139,6 +154,16 @@ class PromoteRequest(BaseModel):
     instrument_id: Optional[int] = None
     sources: List[PromoteSourceRef] = Field(..., min_length=1)
     reason: Optional[str] = None
+    # Endo slice 3: the result's own LOQ / LOD for the new parent row. When all
+    # three are omitted the result-bearing source's own are copied instead.
+    # The COA prints a stored LOQ, so NaN, inf, 0 or a negative never lands.
+    loq: _ResultLimit = Field(default=None, gt=0, allow_inf_nan=False)
+    lod: _ResultLimit = Field(default=None, gt=0, allow_inf_nan=False)
+    lod_unit: Optional[str] = None
+    # The endo ">" certificate slice: the promoted value is a floor. Like the
+    # limits above, the worksheet promote's alone — the sample-page route
+    # refuses a body that carries it.
+    result_floor: Optional[bool] = None
 
 
 class TransitionInfo(BaseModel):
@@ -167,6 +192,13 @@ class AnalysisResponse(BaseModel):
     title: str
     result_value: Optional[str]
     result_unit: Optional[str]
+    # Endo slice 3: the result's own LOQ / LOD (None when it carries none).
+    loq: Optional[float] = None
+    lod: Optional[float] = None
+    lod_unit: Optional[str] = None
+    # The endo ">" certificate slice: result_value is a floor, not a
+    # measurement. None/false on every row that carries an ordinary result.
+    result_floor: Optional[bool] = None
     review_state: str
     method_id: Optional[int]
     instrument_id: Optional[int]
@@ -302,6 +334,15 @@ class SenaiteShapeAnalysisResponse(BaseModel):
     # result yet, an informational spec, or a rule that could not run).
     specification: Optional[dict] = None
     conforms: Optional[bool] = None
+    # Endo slice 3 (spec section 7): the result's own LOQ / LOD, straight off
+    # the row. None when the result carries none (every pre-slice row).
+    loq: Optional[float] = None
+    lod: Optional[float] = None
+    lod_unit: Optional[str] = None
+    # The endo ">" certificate slice: result_value is a floor ("at least this
+    # much"). The analyses table renders the ">" from it, so the reviewer
+    # signing the row off sees what the certificate will print.
+    result_floor: Optional[bool] = None
 
 
 # ─── Phase 4a: promote_to_parent response shapes ─────────────────────────────

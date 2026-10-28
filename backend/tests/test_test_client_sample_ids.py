@@ -69,3 +69,10 @@ class _NoClose:
 
     def __exit__(self, *a):
         return False
+
+
+def test_test_account_email_as_client_title_is_a_test_client(db):
+    """Order-less samples registered under a test account's e-mail (prod: Harmony)."""
+    _sample(db, "P-0346", "DrPeptide@HarmonyPeptide.com")
+    _sample(db, "P-0700", "Acme Peptides")
+    assert main_module._test_client_sample_ids(db) == {"P-0346"}

@@ -1,0 +1,2 @@
+FAIL  src/components/flags/__tests__/FlagIndicator.test.tsx > FlagIndicator > unflagged sample → clicking opens the Raise-a-flag compose, not the flyout
+× unflagged sample → clicking opens the Raise-a-flag compose, not the flyout

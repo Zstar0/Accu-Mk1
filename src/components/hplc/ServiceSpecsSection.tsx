@@ -39,6 +39,7 @@ import {
   type ServiceSpecPayload,
   type PeptideRecord,
 } from '@/lib/api'
+import { queryClient } from '@/lib/query-client'
 
 /** Mirrors backend/main.py `_SPEC_MATRICES` — extend both in lockstep. */
 const SPEC_MATRICES = ['Peptide', 'Bacteriostatic Water'] as const
@@ -218,6 +219,13 @@ export function ServiceSpecsSection({
     load()
   }, [load])
 
+  // After a save: other readers of this service's specs share this key (the
+  // endo "How results are judged" panel on the same page).
+  const invalidateSpecs = () =>
+    void queryClient.invalidateQueries({
+      queryKey: ['analysis-services', serviceId, 'specs'],
+    })
+
   const filteredPeptides = useMemo(() => {
     const q = form.peptideQuery.trim().toLowerCase()
     return peptides
@@ -242,6 +250,7 @@ export function ServiceSpecsSection({
       return
     try {
       await patchServiceSpec(spec.id, { active: false })
+      invalidateSpecs()
       await load()
     } catch (err) {
       toast.error(
@@ -256,6 +265,7 @@ export function ServiceSpecsSection({
     setAddError(null)
     try {
       await createServiceSpec(serviceId, buildPayload(form))
+      invalidateSpecs()
       setForm(EMPTY_FORM)
       await load()
     } catch (err) {
@@ -426,7 +436,7 @@ export function ServiceSpecsSection({
                 onChange={v => setForm(f => ({ ...f, loq: v }))}
                 placeholder="e.g. 0.5"
                 tooltip={
-                  'Limit of quantitation in the spec\'s unit. Results below it print as "< LOQ" on the COA; the pass/fail verdict still uses the raw number.'
+                  'Limit of quantitation in the spec\'s unit. Results at or below it print as "<" and the LOQ on the COA (for example "< 0.5"); the pass/fail verdict still uses the raw number.'
                 }
               />
             </>

@@ -63,9 +63,12 @@ def seed_parent_from_services(db, *, parent: LimsSample, services: Optional[dict
     # snapshot failure never undoes the seed above (bench visibility is the
     # load-bearing guarantee); catalog_snapshot stays NULL and the next
     # caller retries.
-    if parent.catalog_snapshot is None:
+    # A dict without "profiles" is not a freeze: the same-sample add-on route
+    # may store `addon_orders` on a sample registered before any stamp.
+    if "profiles" not in (parent.catalog_snapshot or {}):
         try:
-            parent.catalog_snapshot = compute_catalog_snapshot(db, services, package)
+            parent.catalog_snapshot = {**(parent.catalog_snapshot or {}),
+                                       **compute_catalog_snapshot(db, services, package)}
         except Exception as snapshot_err:  # noqa: BLE001
             logger.warning("catalog_snapshot.stamp_failed source=%s sample_id=%s err=%s",
                            source, parent.sample_id, snapshot_err)

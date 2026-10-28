@@ -8,8 +8,7 @@ directly.
 from __future__ import annotations
 
 import logging
-from datetime import date
-from typing import List, Literal, Optional, Union
+from typing import List, Literal, Union
 
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query, status
 from sqlalchemy import select
@@ -18,9 +17,12 @@ from sqlalchemy.orm import Session
 
 from auth import get_current_user, require_admin
 from database import get_db
-from lims_analyses import manage_native, senaite_writeback, service
+# senaite_writeback stays imported here although promote moved out: tests
+# patch lims_analyses.routes.senaite_writeback.writeback_promotion, which is the
+# same module object promote_flow calls.
+from lims_analyses import manage_native, senaite_writeback, service  # noqa: F401
+from lims_analyses.promote_flow import PromoteError, run_promote
 from lims_analyses.senaite_writeback import (
-    SenaiteParentLineLocked,
     SenaiteWritebackError,
     list_parent_line_states,
 )
@@ -38,7 +40,6 @@ from lims_analyses.schemas import (
     ParentRetestResponse,
     PromoteRequest,
     PromoteResponse,
-    PromotionRow,
     RelabelNativeSlotRequest,
     RelabelNativeSlotResponse,
     RemoveNativeAnalysisResponse,
@@ -565,195 +566,18 @@ def promote(
     db: Session = Depends(get_db),
     current_user=Depends(get_current_user),
 ):
-    from models import AnalysisService, LimsAnalysis, LimsAnalysisPromotion, LimsSample, LimsSubSample
-
-    # Resolve the parent SENAITE sample_id + parent-AR target keyword BEFORE
-    # promoting, so per-substance vial keywords (PUR_<X>/QTY_<X>) land on the
-    # parent's generic ANALYTE-{slot} line. Native keywords pass through
-    # unchanged (no SENAITE read).
-    first_src = db.get(LimsAnalysis, req.sources[0].analysis_id)
-    if first_src is None:
-        raise HTTPException(status_code=404, detail="source analysis not found")
-    if first_src.lims_sub_sample_pk is not None:
-        _sub = db.get(LimsSubSample, first_src.lims_sub_sample_pk)
-        _parent = db.get(LimsSample, _sub.parent_sample_pk) if _sub else None
-    else:
-        _parent = db.get(LimsSample, first_src.lims_sample_pk)
-    parent_sample_id = _parent.sample_id if _parent else None
-
-    # Native (origin='mk1') sources have no per-substance SENAITE translation
-    # and no SENAITE keyword contract at all — the caller-supplied req.keyword
-    # is advisory, not identity. Force promote_to_parent's native-identity
-    # override (service-derived keyword/title/unit, service.py step 4c) to
-    # fire by passing None through, instead of trusting a request string that
-    # can drift or arrive empty. Detected off the FIRST SOURCE's service:
-    # native keywords never match the PUR_/QTY_ per-substance regex, so
-    # resolve_parent_analyte_target would be a no-op for them anyway — this
-    # just skips the call and is explicit about why, rather than relying on
-    # that no-op to coincidentally pass req.keyword through unchanged.
-    _first_src_svc = db.get(AnalysisService, first_src.analysis_service_id)
-    _first_src_is_native = _first_src_svc is not None and _first_src_svc.origin == "mk1"
-
-    if _first_src_is_native:
-        parent_keyword, parent_service_id, parent_title = None, None, None
-    else:
-        try:
-            if parent_sample_id:
-                parent_keyword, parent_service_id, parent_title = service.resolve_parent_analyte_target(
-                    db, vial_keyword=req.keyword, parent_sample_id=parent_sample_id)
-            else:
-                parent_keyword, parent_service_id, parent_title = req.keyword, None, None
-        except Exception as e:
-            raise HTTPException(status_code=502, detail=f"parent slot resolution failed: {e}")
-
+    """The body lives in promote_flow.run_promote, shared with the worksheet
+    endpoint. A PromoteError carries the exact status and detail this route
+    raised before the move. Result limits are the worksheet promote's alone
+    (final review I-3): it checks them against the stored reading and calls
+    run_promote directly. The sample page never sends them, so a body that
+    carries one is refused; without them the source's own are copied."""
+    if (req.loq is not None or req.lod is not None or req.lod_unit is not None
+            or req.result_floor is not None):
+        raise HTTPException(status_code=400, detail="result limits are set by the worksheet promote")
     try:
-        parent_row, promotion_rows = service.promote_to_parent(
-            db,
-            keyword=req.keyword,
-            result_value=req.result_value,
-            result_unit=req.result_unit,
-            method_id=req.method_id,
-            instrument_id=req.instrument_id,
-            sources=[s.model_dump() for s in req.sources],
-            user_id=getattr(current_user, "id", None),
-            reason=req.reason,
-            parent_keyword=parent_keyword,
-            parent_analysis_service_id=parent_service_id,
-            parent_title=parent_title,
-            commit=False,
-        )
-    except Exception as e:
-        raise _handle_service_error(e)
-
-    # ── SENAITE write-back (fail-closed) ──────────────────────────────────────
-    # parent_sample_id was derived above (one definition). If it could not be
-    # resolved, fall back to the parent-tier row's sample_id label.
-    if parent_sample_id is None:
-        parent_sample_obj = db.get(LimsSample, parent_row.lims_sample_pk)
-        parent_sample_id = parent_sample_obj.sample_id if parent_sample_obj else str(parent_row.lims_sample_pk)
-
-    # Collect source-vial sample_id labels from sub-sample rows.
-    vial_ids: list[str] = []
-    for prom in promotion_rows:
-        src_analysis = db.get(LimsAnalysis, prom.source_analysis_id)
-        if src_analysis and src_analysis.lims_sub_sample_pk is not None:
-            sub = db.get(LimsSubSample, src_analysis.lims_sub_sample_pk)
-            if sub is not None:
-                vial_ids.append(sub.sample_id)
-
-    email = getattr(current_user, "email", None) or "unknown"
-    remark = (
-        f"Promoted from {', '.join(vial_ids) if vial_ids else '(unknown vials)'} "
-        f"(Accu-Mk1) by {email} on {date.today().isoformat()}"
-    )
-
-    # ── Origin gate (native COA sections, spec 2) ─────────────────────────────
-    # A service with origin='mk1' has no SENAITE representation: there is no
-    # analysis line to write back to, so the Mk1-side commit IS the promotion.
-    # Read origin from the service backing the PARENT row — never the vial row:
-    # resolve_parent_analyte_target translates per-substance keywords, and its
-    # notion of "native" (not PUR_/QTY_) is a different predicate from
-    # origin='mk1'.
-    _parent_svc = db.get(AnalysisService, parent_row.analysis_service_id)
-    _skip_writeback = _parent_svc is not None and _parent_svc.origin == "mk1"
-
-    # ── Accu-Mk1 writes FIRST (Handler ruling 2026-09-10) ────────────────────
-    # Post read-independence Mk1 is the canonical tier: these rows are what
-    # Sample Details and the COA wire read, and SENAITE's analysis line is the
-    # mirror. Committing the mirror first and the source of truth second is
-    # what allowed a lost Mk1 commit to strand a family with a verified SENAITE
-    # line, no Mk1 promotion, and — because the lock map then read that mirror
-    # — no Promote verb in the UI either (P-2553, P-2606; both needed a
-    # by-hand replay of promote_to_parent against prod).
-    #
-    # So the local write is made durable BEFORE SENAITE is touched, and the
-    # write-back becomes a tee that can fail without taking the promotion down
-    # with it. A commit failure here means nothing was written anywhere, which
-    # is a clean failure with no divergence to reconcile.
-    try:
-        db.commit()
-    except Exception:
-        logger.exception(
-            "promote_commit_failed parent=%s keyword=%s — SENAITE was not called, "
-            "nothing to reconcile",
-            parent_sample_id, parent_row.keyword,
-        )
-        raise
-    db.refresh(parent_row)
-    for p in promotion_rows:
-        db.refresh(p)
-
-    # ── Tee to SENAITE (best effort; the promotion above already stands) ─────
-    _sync_event: Optional[tuple] = None
-    if not _skip_writeback:
-        try:
-            senaite_writeback.writeback_promotion(
-                parent_sample_id,
-                parent_row.keyword,        # parent ANALYTE-{slot} (was req.keyword)
-                req.result_value,
-                remark,
-            )
-        except SenaiteParentLineLocked as e:
-            # Locked line (verified/published) — SENAITE can never retract it,
-            # so aborting here would dead-end every retest re-promote on a
-            # senaite-origin family. Handler ruling 2026-08-30: the canonical
-            # row is the certificate authority post read-independence, so
-            # diverge deliberately — record it and promote natively.
-            logger.warning(
-                "senaite_promote_divergence parent=%s keyword=%s senaite_state=%s uid=%s "
-                "— native promote proceeds, SENAITE line left as-is",
-                parent_sample_id, parent_row.keyword, e.state, e.uid,
-            )
-            _sync_event = ("senaite_line_diverged", {
-                "keyword": parent_row.keyword,
-                "senaite_state": e.state,
-                "senaite_uid": e.uid,
-                "reason": "promote over locked SENAITE line — canonical value takes control",
-            })
-        except SenaiteWritebackError as e:
-            # Unreachable / refused / line missing. The promotion is already
-            # committed, so this is the MIRROR falling behind, not lost work.
-            # Recorded on the parent so it is visible in the activity feed
-            # rather than living only in a log line that rotates.
-            logger.error(
-                "senaite_promote_writeback_failed parent=%s keyword=%s — the Mk1 "
-                "promotion stands, SENAITE's line is now behind: %s",
-                parent_sample_id, parent_row.keyword, e,
-            )
-            _sync_event = ("senaite_promote_writeback_failed", {
-                "keyword": parent_row.keyword,
-                "error": str(e)[:500],
-                "reason": "SENAITE unreachable or refused — Mk1 promotion committed, mirror lagging",
-            })
-    else:
-        logger.info(
-            "native_promote_writeback_skipped parent_analysis_id=%s service_id=%s keyword=%s",
-            parent_row.id, parent_row.analysis_service_id, parent_row.keyword,
-        )
-
-    if _sync_event is not None:
-        # Its own transaction: the promotion is committed and must not be put
-        # at risk by the bookkeeping that records how the tee went.
-        try:
-            from models import LimsSubSampleEvent
-            db.add(LimsSubSampleEvent(
-                lims_sample_pk=parent_row.lims_sample_pk,
-                event=_sync_event[0],
-                details=_sync_event[1],
-                user_id=getattr(current_user, "id", None),
-            ))
-            db.commit()
-        except Exception:
-            db.rollback()
-            logger.exception(
-                "promote_sync_event_write_failed parent=%s keyword=%s event=%s",
-                parent_sample_id, parent_row.keyword, _sync_event[0],
-            )
-
-    # side-by-side engine: schedules workflow.engine.run_cascades_bg post-response
-    _schedule_sbs_cascade(background_tasks, db, parent_row, current_user)
-
-    return PromoteResponse(
-        parent=AnalysisResponse.model_validate(parent_row),
-        promotions=[PromotionRow.model_validate(p) for p in promotion_rows],
-    )
+        # run_promote schedules workflow.engine.run_cascades_bg on
+        # background_tasks post-response, as this route always did.
+        return run_promote(db, current_user, req, background_tasks=background_tasks)
+    except PromoteError as e:
+        raise HTTPException(status_code=e.status, detail=e.body)

@@ -111,6 +111,88 @@ describe('UIStore customer actions', () => {
     expect(state.navigationKey).toBe(before + 1)
   })
 
+  it('navigateToCustomerKey: email keys set customerDetailKey, wc keys use the id flow, back-nav clears both', () => {
+    useUIStore.getState().navigateToCustomerKey('email:g@x.com')
+    let state = useUIStore.getState()
+    expect(state.activeSubSection).toBe('customer-detail')
+    expect(state.customerDetailKey).toBe('email:g@x.com')
+    expect(state.customerDetailTargetId).toBeNull()
+    expect(state.customerDetailTab).toBe('dashboard')
+
+    useUIStore.getState().navigateToCustomerKey('wc:1188')
+    state = useUIStore.getState()
+    expect(state.customerDetailTargetId).toBe(1188)
+    expect(state.customerDetailKey).toBeNull()
+
+    useUIStore.getState().navigateToCustomerKey('email:g@x.com')
+    useUIStore.getState().navigateToCustomer(7)
+    expect(useUIStore.getState().customerDetailKey).toBeNull()
+
+    useUIStore.getState().navigateToCustomerKey('email:g@x.com')
+    useUIStore.getState().navigateToCustomers()
+    state = useUIStore.getState()
+    expect(state.customerDetailKey).toBeNull()
+    expect(state.customerDetailTargetId).toBeNull()
+  })
+
+  it('navigateToCustomerKey takes a tab and an origin; the Back action returns to the origin', () => {
+    useUIStore.getState().navigateToCustomerKey('wc:2243', {
+      tab: 'crm',
+      origin: 'customer-insights',
+    })
+    let s = useUIStore.getState()
+    expect(s.customerDetailTab).toBe('crm')
+    expect(s.customerDetailOrigin).toBe('customer-insights')
+    useUIStore.getState().navigateBackFromCustomer()
+    s = useUIStore.getState()
+    expect(s.activeSubSection).toBe('customer-insights')
+    expect(s.customerDetailOrigin).toBe('customers')
+    expect(s.customerDetailTargetId).toBeNull()
+    expect(s.customerDetailTab).toBe('orders')
+  })
+
+  it('navigateToCustomers always lands on the list, even from an Insights-opened detail (QuickNav)', () => {
+    useUIStore.getState().navigateToCustomerKey('wc:2243', {
+      origin: 'customer-insights',
+    })
+    useUIStore.getState().navigateToCustomers()
+    const s = useUIStore.getState()
+    expect(s.activeSubSection).toBe('customers')
+    expect(s.customerDetailOrigin).toBe('customers')
+    expect(s.customerDetailTargetId).toBeNull()
+  })
+
+  it('navigateToCustomerKey without options keeps the old defaults', () => {
+    useUIStore.getState().navigateToCustomerKey('wc:5')
+    expect(useUIStore.getState().customerDetailTab).toBe('dashboard')
+    useUIStore.getState().navigateToCustomers()
+    expect(useUIStore.getState().activeSubSection).toBe('customers')
+  })
+
+  it('setInsightsView merges a patch', () => {
+    useUIStore.setState({
+      insightsView: {
+        tab: 'at-risk',
+        period: '90d',
+        segment: 'key',
+        excludeLaunch: false,
+      },
+    })
+    useUIStore
+      .getState()
+      .setInsightsView({ tab: 'segments', segment: 'growth' })
+    expect(useUIStore.getState().insightsView).toEqual({
+      tab: 'segments',
+      period: '90d',
+      segment: 'growth',
+      excludeLaunch: false,
+    })
+    useUIStore.getState().setInsightsView({ excludeLaunch: true })
+    expect(useUIStore.getState().insightsView.excludeLaunch).toBe(true)
+    useUIStore.getState().setInsightsView({ period: '1y' })
+    expect(useUIStore.getState().insightsView.segment).toBe('growth')
+  })
+
   it('setSearchAndResetPage atomically updates search term and resets page to 0', () => {
     useUIStore.setState({
       customerListPage: 5,

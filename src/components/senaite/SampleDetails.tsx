@@ -220,7 +220,6 @@ import {
   useCoaGenerationSource,
   coaSourceBadgeLabel,
   useSampleStatusAuthority,
-  type ReadSource,
 } from '@/lib/read-source'
 import { FieldSourceGlyph } from '@/components/senaite/FieldSourceGlyph'
 import {
@@ -240,6 +239,11 @@ import { SampleActivityLog } from '@/components/senaite/SampleActivityLog'
 import { SampleRegistryDebug } from '@/components/senaite/SampleRegistryDebug'
 import { ReadSourceBanner } from '@/components/senaite/ReadSourceBanner'
 import { ReadSourceControls } from '@/components/senaite/ReadSourceControls'
+import {
+  generateSteps,
+  publishSteps,
+  type StepDef,
+} from '@/components/senaite/coa-console-steps'
 import { SamplePriorityRow } from '@/components/senaite/SamplePriorityRow'
 import { PriorityGlyph } from '@/components/common/PriorityGlyph'
 import {
@@ -324,13 +328,6 @@ interface COAConsoleState {
   errorDetail?: string
 }
 
-interface StepDef {
-  id: string
-  label: string
-  /** ms from operation start when this step begins "running" */
-  delay: number
-}
-
 /**
  * Map a backend error message to the step ID that most likely caused it.
  * Returns the step index, or -1 if no match (fall through to running-step logic).
@@ -389,37 +386,6 @@ function inferErrorStepIdx(
 
   return -1
 }
-
-// Step labels mirror what the backend actually does per COA source: with
-// coa_generation=mk1 the wire document is assembled from the native
-// registry (zero SENAITE reads — read-independence), while the PDF attach
-// (and publish's transition) still WRITE to SENAITE in both modes. Step ids
-// are load-bearing (errorStepFor maps failure text onto them) — only the
-// label varies. Sub-sample (-SXX) COAs stay SENAITE-sourced regardless of
-// the toggle, so callers pass 'senaite' for non-parents (same rule as
-// coaSourceBadgeLabel).
-export function generateSteps(source: ReadSource): StepDef[] {
-  return [
-    {
-      id: 'senaite',
-      label:
-        source === 'mk1' ? 'Reading sample registry' : 'Connecting to SENAITE',
-      delay: 0,
-    },
-    { id: 'coabuilder', label: 'Running COABuilder', delay: 700 },
-    { id: 'verification', label: 'Reserving verification code', delay: 3800 },
-    { id: 's3', label: 'Uploading PDF to S3', delay: 4800 },
-    { id: 'attach', label: 'Attaching to SENAITE', delay: 6200 },
-  ]
-}
-
-const PUBLISH_STEPS: StepDef[] = [
-  { id: 'draft', label: 'Locating draft generation', delay: 0 },
-  { id: 'primary', label: 'Publishing primary COA', delay: 500 },
-  { id: 'additional', label: 'Publishing additional COAs', delay: 1600 },
-  { id: 'wordpress', label: 'Notifying WordPress', delay: 2700 },
-  { id: 'senaite_tx', label: 'SENAITE transition', delay: 3700 },
-]
 
 function COAConsole({
   state,
@@ -1519,18 +1485,22 @@ export function GeneratedCOAFallbackList({
 /**
  * List of per-vial COA children for the "Per-Vial COAs" card. Each row reports
  * one HPLC vial's own figure ("Vial N"), with its own verification code and
- * release status. Mirrors GeneratedCOAFallbackList's visual language.
+ * release status. Mirrors GeneratedCOAFallbackList's visual language. The PDF
+ * button (2026-10-20) opens that vial generation's signed PDF, the same call
+ * the sample COA cards make, so a draft can be checked before Publish.
  */
 export function VialCOAList({
   generations,
   allGenerations,
   onStateChanged,
+  sampleId,
 }: {
   generations: ExplorerCOAGeneration[]
   /** Every generation of the sample: each vial lists its superseded history from it. */
   allGenerations?: ExplorerCOAGeneration[]
   /** After a verdict change (forward toggle, revoke): refetch the lists. */
   onStateChanged?: () => void
+  sampleId: string
 }) {
   return (
     <div className="space-y-2">
@@ -1572,6 +1542,10 @@ export function VialCOAList({
                   {release.label}
                 </span>
                 <span className="ml-auto flex items-center gap-2 shrink-0">
+                  <GeneratedCOAPdfButton
+                    sampleId={sampleId}
+                    generationNumber={gen.generation_number}
+                  />
                   <CoaManagePopover gen={gen} onStateChanged={onStateChanged} />
                 </span>
               </div>
@@ -4589,6 +4563,10 @@ export function SampleDetails() {
   // in -SNN). Sub-samples don't have sub-sub-samples, so we hide the section
   // entirely on sub-sample detail pages.
   const isParent = !!sampleId && !/-S\d{2,}$/.test(sampleId)
+  // Native-born samples have no SENAITE AR: the console labels say so.
+  const consoleStepOptions = {
+    nativeBorn: data?.external_lims_system === 'mk1',
+  }
   const [wizardParent, setWizardParent] = useState<ParentInfo | null>(null)
   const { data: subData, refetch: refetchSubs } = useQuery({
     queryKey: ['sub-samples', sampleId],
@@ -5569,7 +5547,7 @@ export function SampleDetails() {
     setIsGeneratingCOA(true)
     const settle = startCOAConsole(
       `generate-coa ${sampleId}`,
-      generateSteps(isParent ? coaGenSource : 'senaite')
+      generateSteps(isParent ? coaGenSource : 'senaite', consoleStepOptions)
     )
     try {
       const result = await generateSenaiteCOA(sampleId)
@@ -5622,7 +5600,7 @@ export function SampleDetails() {
     setIsGeneratingVialCOAs(true)
     const settle = startCOAConsole(
       `generate-vial-coas ${sampleId}`,
-      generateSteps(isParent ? coaGenSource : 'senaite')
+      generateSteps(isParent ? coaGenSource : 'senaite', consoleStepOptions)
     )
     try {
       const result = await generateVialCOAs(sampleId)
@@ -5668,7 +5646,7 @@ export function SampleDetails() {
       setIsPublishingCOA(true)
       const settleCancel = startCOAConsole(
         `cancel-schedule ${sampleId}`,
-        generateSteps(isParent ? coaGenSource : 'senaite')
+        generateSteps(isParent ? coaGenSource : 'senaite', consoleStepOptions)
       )
       try {
         const cancelled = await cancelScheduledPublish(sampleId)
@@ -5690,7 +5668,10 @@ export function SampleDetails() {
       }
     }
     setIsPublishingCOA(true)
-    const settle = startCOAConsole(`publish-coa ${sampleId}`, PUBLISH_STEPS)
+    const settle = startCOAConsole(
+      `publish-coa ${sampleId}`,
+      publishSteps(consoleStepOptions)
+    )
     try {
       const result = await publishSenaiteCOA(sampleId)
       if (result.success) {
@@ -5724,7 +5705,7 @@ export function SampleDetails() {
     setIsSchedulingCOA(true)
     const settle = startCOAConsole(
       `schedule-publish ${sampleId}`,
-      generateSteps(isParent ? coaGenSource : 'senaite')
+      generateSteps(isParent ? coaGenSource : 'senaite', consoleStepOptions)
     )
     try {
       const result = await schedulePublish(sampleId, iso)
@@ -5776,7 +5757,7 @@ export function SampleDetails() {
     const settle = pending
       ? startCOAConsole(
           `cancel-schedule ${sampleId}`,
-          generateSteps(isParent ? coaGenSource : 'senaite')
+          generateSteps(isParent ? coaGenSource : 'senaite', consoleStepOptions)
         )
       : null
     try {
@@ -7006,6 +6987,7 @@ export function SampleDetails() {
                       generations={vialGens}
                       allGenerations={coaGenerations}
                       onStateChanged={refreshGeneratedCoas}
+                      sampleId={sampleId}
                     />
                   </SectionHeader>
                 </Card>

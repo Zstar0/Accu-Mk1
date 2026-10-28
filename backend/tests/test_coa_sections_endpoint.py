@@ -169,6 +169,8 @@ def _variance_parent(sample_id):
 def test_regular_child_aborts_before_post_on_native_sections_failure(db_session, monkeypatch, caplog):
     """Fail-closed: if build_native_sections raises, the regular-child's own
     COABuilder POST must never fire — no section-less certificate emitted."""
+    # Core COA child is off by default since 2026-10-20; this covers it re-enabled.
+    monkeypatch.setenv("COA_EMIT_REGULAR_CHILD", "1")
     monkeypatch.setattr(
         "coa.variance_series.build_variance_replicates",
         lambda db, parent: {"PEP": [{"vial_sequence": 2}]},  # variance sample
@@ -189,6 +191,8 @@ def test_regular_child_aborts_before_post_on_native_sections_failure(db_session,
 def test_regular_child_attaches_native_sections_before_post(db_session, monkeypatch):
     """Success path: native_sections is attached to the child body BEFORE the
     COABuilder POST fires, and carries the exact built document."""
+    # Core COA child is off by default since 2026-10-20; this covers it re-enabled.
+    monkeypatch.setenv("COA_EMIT_REGULAR_CHILD", "1")
     monkeypatch.setattr(
         "coa.variance_series.build_variance_replicates",
         lambda db, parent: {"PEP": [{"vial_sequence": 2}]},  # variance sample

@@ -4,6 +4,7 @@ import { ChromatographViewer } from '@/components/ChromatographViewer'
 import { HPLCAnalysis } from '@/components/hplc/HPLCAnalysis'
 import { InstrumentsPage } from '@/components/hplc/InstrumentsPage'
 import { MethodsPage } from '@/components/hplc/MethodsPage'
+import { ConsumablesPage } from '@/components/hplc/ConsumablesPage'
 import { PeptideConfig } from '@/components/hplc/PeptideConfig'
 import { AnalysisServicesPage } from '@/components/hplc/AnalysisServicesPage'
 import ServiceGroupsPage from '@/components/hplc/ServiceGroupsPage'
@@ -12,6 +13,8 @@ import AnalysisProfilesPage from '@/components/hplc/AnalysisProfilesPage'
 import VialRolesPage from '@/components/hplc/VialRolesPage'
 import WorksheetsInboxPage from '@/components/hplc/WorksheetsInboxPage'
 import WorksheetsListPage from '@/components/hplc/WorksheetsListPage'
+import { EndoWorksheetPage } from '@/components/hplc/endo/EndoWorksheetPage'
+import { EndoPrepRulesPage } from '@/components/hplc/endo/EndoPrepRulesPage'
 import { OrderDashboard } from '@/components/dashboard/OrderDashboard'
 import { AnalyticsDashboard } from '@/components/dashboard/AnalyticsDashboard'
 import { SenaiteDashboard } from '@/components/senaite/SenaiteDashboard'
@@ -21,7 +24,7 @@ import { ReceiveSample } from '@/components/intake/ReceiveSample'
 import { ActiveBoxesPage } from '@/components/intake/ActiveBoxesPage'
 import { UserManagement } from '@/components/auth/UserManagement'
 import { ProfilePage } from '@/components/auth/ProfilePage'
-import { ReportsDashboard } from '@/components/reports/ReportsDashboard'
+import { AnalyteTrends } from '@/components/reports/AnalyteTrends'
 import { DocumentsPage } from '@/components/documents/DocumentsPage'
 import { ReportsSyncDebug } from '@/components/reports/ReportsSyncDebug'
 import { CheckInTimesReport } from '@/components/reports/CheckInTimesReport'
@@ -34,6 +37,8 @@ import { PeptideRequestsList } from '@/pages/PeptideRequestsList'
 import { PeptideRequestDetail } from '@/pages/PeptideRequestDetail'
 import { AdminClickupUsers } from '@/pages/AdminClickupUsers'
 import { SettingsPage } from '@/components/preferences/SettingsPage'
+import { BoardsPage } from '@/components/boards/BoardsPage'
+import { BoardPage } from '@/components/boards/BoardPage'
 import { useUIStore } from '@/store/ui-store'
 import { useAuthStore } from '@/store/auth-store'
 
@@ -49,6 +54,7 @@ export function MainWindowContent({
   const activeSection = useUIStore(state => state.activeSection)
   const activeSubSection = useUIStore(state => state.activeSubSection)
   const navigationKey = useUIStore(state => state.navigationKey)
+  const boardTargetSlug = useUIStore(state => state.boardTargetSlug)
   const isAdmin = useAuthStore(state => state.user?.role === 'admin')
 
   // Render section content based on active section
@@ -66,6 +72,7 @@ export function MainWindowContent({
       case 'lims':
         if (activeSubSection === 'instruments') return <InstrumentsPage />
         if (activeSubSection === 'methods') return <MethodsPage />
+        if (activeSubSection === 'consumables') return <ConsumablesPage />
         if (activeSubSection === 'peptide-config') return <PeptideConfig />
         if (activeSubSection === 'analysis-services')
           return <AnalysisServicesPage />
@@ -78,6 +85,8 @@ export function MainWindowContent({
       case 'hplc-analysis':
         if (activeSubSection === 'inbox') return <WorksheetsInboxPage />
         if (activeSubSection === 'worksheets') return <WorksheetsListPage />
+        if (activeSubSection === 'worksheet') return <EndoWorksheetPage />
+        if (activeSubSection === 'endo-prep-rules') return <EndoPrepRulesPage />
         return <HPLCAnalysis />
       case 'reports':
         if (activeSubSection === 'sync-debug') return <ReportsSyncDebug />
@@ -91,7 +100,7 @@ export function MainWindowContent({
         if (activeSubSection === 'sla-performance')
           return <SlaPerformanceReport />
         if (activeSubSection === 'bottlenecks') return <TurnaroundReport />
-        return <ReportsDashboard />
+        return <AnalyteTrends />
       case 'accumark-tools':
         if (activeSubSection === 'chromatographs')
           return <ChromatographViewer />
@@ -108,6 +117,10 @@ export function MainWindowContent({
         return <AdminClickupUsers />
       case 'settings':
         return <SettingsPage />
+      case 'boards':
+        if (activeSubSection === 'board' && boardTargetSlug)
+          return <BoardPage key={boardTargetSlug} slug={boardTargetSlug} />
+        return <BoardsPage />
       default:
         return null
     }

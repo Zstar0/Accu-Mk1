@@ -38,8 +38,9 @@ from typing import Optional
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from coa.spec_rules import (SpecRuleError, evaluate, normalize_matrix,
+from coa.spec_rules import (SpecRuleError, effective_unit, evaluate, normalize_matrix,
                             resolve_spec, sample_peptide_id)
+from coa.text_macros import format_lod, resolve
 from sub_samples.service import fetch_sample_services
 
 log = logging.getLogger(__name__)
@@ -226,12 +227,28 @@ def _spec_wire_dict(spec) -> dict:
     }
 
 
-def _result_display(spec, result) -> Optional[str]:
-    """Mk1's applied lab-reporting convention for the PRINTED result — the
-    verdict never reads it. Only convention today: LOQ censoring on range
-    rows. Runs after evaluate(), which guarantees a finite numeric for
-    range rows; the guards here are belt-and-braces, not policy."""
-    if spec.rule_kind != "range" or spec.loq is None:
+def effective_loq(row, spec) -> Optional[float]:
+    """The LOQ a result is reported against (endo slice 3, spec section 7):
+    the result's own (lims_analyses.loq, filled by the worksheet promote)
+    when it carries one, else the spec row's. Heavy metals carry none, so
+    theirs stays the spec's."""
+    loq = row.loq if row.loq is not None else spec.loq
+    return float(loq) if loq is not None else None
+
+
+def _result_display(spec, result, loq: Optional[float], *,
+                    floor: bool = False) -> Optional[str]:
+    """Mk1's applied lab-reporting convention for the PRINTED result; the
+    verdict never reads it. Two conventions, both range rows only: LOQ
+    censoring against the effective LOQ (effective_loq), and a floor reading
+    (endo ">"). Runs after evaluate(), which guarantees a finite numeric for
+    range rows; the guards here are belt-and-braces, not policy.
+
+    Every surface downstream mirrors result_display verbatim (coabuilder's
+    validator, its fixed digital key list, the PDF cell, the AccuVerify page
+    and badge, the customer portal), so this string is the whole printed
+    convention — no new wire key, no coabuilder or WordPress change."""
+    if spec.rule_kind != "range" or (loq is None and not floor):
         return None
     try:
         value = float(str(result or "").strip())
@@ -239,14 +256,54 @@ def _result_display(spec, result) -> Optional[str]:
         return None
     if not math.isfinite(value):
         return None
-    # At-or-below the LOQ prints "< LOQ" (Handler ruling 2026-09-14: a result
-    # reported AT the LOQ is the reporting floor, not a quantified figure —
-    # Endotoxin USP85 2.50 vs LOQ 2.5). The verdict still uses the raw number.
-    return "< LOQ" if value <= float(spec.loq) else None
+    # A floor prints the number it is at least. The qualifier is the whole
+    # point of the row, so it is never censored away by the LOQ rule below:
+    # a floor is by definition above its own LOQ. evaluate(floor=True) has
+    # already refused anything that is not a definitive failure, so the only
+    # floor that reaches here is one the certificate marks non-conforming.
+    # It returns before the LOQ rule, so a floor with no LOQ never reaches
+    # the f-string below.
+    if floor:
+        return f"> {value:g}"
+    # At-or-below the LOQ prints "< <LOQ>", e.g. "< 25" (Handler ruling
+    # 2026-09-14: a result reported AT the LOQ is the reporting floor, not a
+    # quantified figure, Endotoxin USP85 2.50 vs LOQ 2.5). The number, not the
+    # word "LOQ", since 2026-10-17 (Handler: another lab read "< LOQ" as
+    # oddly laid out). `:g` is COABuilder's LOQ-column format, so the two
+    # cells always agree. The verdict still uses the raw number.
+    # A "<25 EU/vial" result is stored as 25 with LOQ 25 (endo slice 3).
+    return f"< {loq:g}" if value <= loq else None
 
 
-def build_native_sections(db: Session, parent) -> dict:
+def _section_footnotes(raw, values: dict) -> list:
+    """The profile's footnotes with macros resolved (endo slice 4). A note
+    whose text resolves to nothing is dropped, so its label never prints
+    alone. Anything that is not a {label, text} dict passes through as
+    before (the builder's fail-open rule for rows written by SQL)."""
+    if not isinstance(raw, list):
+        return []
+    out = []
+    for note in raw:
+        if isinstance(note, dict) and isinstance(note.get("text"), str):
+            text = resolve(note["text"], values)
+            if not text:
+                continue
+            if text != note["text"]:
+                note = {**note, "text": text}
+        out.append(note)
+    return out
+
+
+def build_native_sections(db: Session, parent, *, vial_parent_ids=None) -> dict:
     """Assemble the native-sections wire document for a parent LimsSample.
+
+    `vial_parent_ids` (per-vial certificates, 2026-10-20): the ids of the
+    certified parent-tier rows promoted from ONE vial. When given, a profile
+    member prints only if its eligible row is one of them; a member that is
+    not this vial's is skipped (it belongs to another vial, it is not
+    pending), a profile left with no members is dropped, nothing is deferred,
+    and ordered_profiles lists only the profiles that printed. The parent
+    document (None) is unchanged.
 
     Returns {"sample_id", "ordered_profiles", "sections"}, plus
     "deferred_sections" (list of profile keys) when one or more profiles were
@@ -305,6 +362,11 @@ def build_native_sections(db: Session, parent) -> dict:
             (svc, _eligible_parent_row(db, parent.id, svc.id))
             for svc in prof.analysis_services
         ]
+        if vial_parent_ids is not None:
+            member_rows = [(svc, row) for svc, row in member_rows
+                           if row is not None and row.id in vial_parent_ids]
+            if not member_rows:
+                continue
         if all(row is None for _, row in member_rows):
             # Partial-COA deferral: zero eligible members means the profile
             # hasn't been started, not that it's half-finished. Omit the
@@ -319,6 +381,9 @@ def build_native_sections(db: Session, parent) -> dict:
             continue
 
         rows = []
+        # (lod, lod_unit) of every printed row, for the profile text's {lod}
+        # (endo slice 4).
+        limits: list[tuple] = []
         for svc, row in member_rows:
             if row is None:
                 if _withdrawn_by_lab(db, parent.id, svc.id):
@@ -358,60 +423,85 @@ def build_native_sections(db: Session, parent) -> dict:
                     "native_section_blank_unit sample=%s profile=%s keyword=%s",
                     sample_id, prof.key, svc.keyword,
                 )
-            spec = resolve_spec(db, svc.id, matrix, peptide_id=peptide_id)
+            spec = resolve_spec(db, svc.id, matrix, peptide_id=peptide_id,
+                                unit=effective_unit(row.result_unit, svc.unit))
             if spec is None:
                 # Rule 5 (relocated from COABuilder): a result must not print
-                # without a verdict. Names the service AND every tier
-                # consulted (peptide/matrix/wildcard) so the lab knows
-                # exactly which analysis_service_specs row to file.
+                # without a verdict. Names the service, every tier consulted
+                # (peptide/matrix/wildcard) and the unit (endo slice 3: a
+                # result is judged only by a spec in its own unit), so the lab
+                # knows exactly which analysis_service_specs row to file.
                 raise NativeSectionsError(
                     f"native sections: profile '{prof.key}' member service "
                     f"'{svc.keyword}' (id={svc.id}) has no active spec "
                     f"(tiers consulted: peptide={peptide_id!r}, "
-                    f"matrix={matrix!r}, wildcard) on {sample_id} — file one "
-                    f"in analysis_service_specs"
+                    f"matrix={matrix!r}, wildcard) on {sample_id}: No active "
+                    f"{svc.title} spec in {unit or 'no unit'} for "
+                    f"{matrix or 'any sample type'}. File one in "
+                    f"analysis_service_specs"
                 )
+            floor = bool(row.result_floor)
             try:
-                conforms = evaluate(spec, row.result_value)
+                conforms = evaluate(spec, row.result_value, floor=floor)
             except SpecRuleError as e:
                 raise NativeSectionsError(
                     f"native sections: profile '{prof.key}' row "
                     f"'{svc.keyword}' on {sample_id}: {e.detail}"
                 ) from e
+            # The result's own LOQ wins over the spec's (endo slice 3, spec
+            # section 7): it decides "< <LOQ>" and rides specification.loq, the
+            # field coabuilder's LOQ column and the digital COA already read.
+            # Range rows only, as _spec_wire_dict publishes it. A row without
+            # its own LOQ (every heavy metal) keeps the spec's, byte for byte.
+            loq = effective_loq(row, spec)
+            specification = _spec_wire_dict(spec)
+            if spec.rule_kind == "range":
+                specification["loq"] = loq
             rows.append({
                 "keyword": svc.keyword,
                 "name": svc.title,
                 "result": row.result_value,
                 "unit": unit,
                 "method": _method_label(db, row.method_id),
-                "specification": _spec_wire_dict(spec),
+                "specification": specification,
                 "conforms": conforms,
-                "result_display": _result_display(spec, row.result_value),
+                "result_display": _result_display(spec, row.result_value, loq,
+                                                  floor=floor),
             })
+            limits.append((row.lod, row.lod_unit))
         if not rows:
             # Rule 3 (section half): unreachable while members are required
             # non-empty in _ordered_native_profiles, kept as defence.
             raise NativeSectionsError(
                 f"native sections: profile '{prof.key}' produced zero rows on {sample_id}"
             )
+        # Endo slice 4: the profile's COA text may carry {lod} and optional
+        # [ ... ] segments, filled from this section's rows (coa.text_macros).
+        # Text with no macro comes back exactly as typed.
+        values = {"lod": format_lod(limits)}
         sections.append({
             "profile_key": prof.key,
             "title": prof.coa_section_title or prof.name,
             "archetype": prof.coa_archetype,
             "sort_order": prof.coa_sort_order,
-            "basis_note": prof.coa_basis_note,
-            "method_text": prof.coa_method_text,
-            "prep_text": prof.coa_prep_text,
+            "basis_note": resolve(prof.coa_basis_note, values),
+            "method_text": resolve(prof.coa_method_text, values),
+            "prep_text": resolve(prof.coa_prep_text, values),
             # Fail-open to [] on a malformed container is deliberate: the
             # certificate must not 500 on a bad footnote row (module's
             # NativeSectionsError-only failure surface). The validated
             # routes enforce list shape on every authored write — a non-list
             # here means seed/migration/direct SQL, not user input.
-            "footnotes": (list(prof.coa_footnotes)
-                          if isinstance(prof.coa_footnotes, list) else []),
+            "footnotes": _section_footnotes(prof.coa_footnotes, values),
             "rows": rows,
         })
 
+    if vial_parent_ids is not None:
+        return {
+            "sample_id": sample_id,
+            "ordered_profiles": [s["profile_key"] for s in sections],
+            "sections": sections,
+        }
     doc = {
         "sample_id": sample_id,
         "ordered_profiles": [p.key for p in profiles],

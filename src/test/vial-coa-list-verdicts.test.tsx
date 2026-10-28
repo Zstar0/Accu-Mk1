@@ -60,6 +60,7 @@ describe('VialCOAList verdict controls', () => {
   it('offers Revoke on published vials and Forward plus Revoke on superseded ones', () => {
     render(
       <VialCOAList
+        sampleId="P-1"
         generations={[
           gen({ id: 'v1', vial_sequence: 1, verification_code: 'V1-0002' }),
           gen({
@@ -89,6 +90,7 @@ describe('VialCOAList verdict controls', () => {
   it('offers nothing on a draft or a revoked vial', () => {
     render(
       <VialCOAList
+        sampleId="P-1"
         generations={[
           gen({ id: 'd', status: 'draft', published_at: null }),
           gen({ id: 'r', status: 'revoked', revocation_reason: 'x' }),

@@ -12,7 +12,7 @@ from types import SimpleNamespace
 import pytest
 
 from coa.spec_rules import (SpecRuleError, evaluate, normalize_matrix,
-                            resolve_spec, sample_peptide_id)
+                            resolve_spec, sample_peptide_id, sample_peptide_ids)
 from models import AnalysisService, AnalysisServiceSpec  # register tables on Base before conftest's create_all
 
 
@@ -302,6 +302,47 @@ def test_blank_equals_value_aborts():
                                  min_value=None, max_value=None), "anything")
 
 
+# ── floor results (endo ">", 2026-10-26) ─────────────────────────────────────
+# A floor is a LOWER bound: "at least this much". NOT added to PARITY_CASES —
+# the old engine has no floor concept, so there is no column to assert.
+
+def _range(max_value="350", min_value="0"):
+    return SimpleNamespace(rule_kind="range", equals_value=None,
+                           min_value=Decimal(min_value) if min_value else None,
+                           max_value=Decimal(max_value) if max_value else None)
+
+
+@pytest.mark.parametrize("result", ["2500", "350", "350.0"])
+def test_a_floor_at_or_above_the_limit_does_not_conform(result):
+    # 350 against a 0 to 350 spec is the boundary: bounds are inclusive, so an
+    # ordinary verdict would read Conforms on a sample holding AT LEAST 350.
+    assert evaluate(_range(), result) is (result != "2500")
+    assert evaluate(_range(), result, floor=True) is False
+
+
+@pytest.mark.parametrize("result, max_value", [("250", "350"), ("2500", None)])
+def test_a_floor_that_cannot_be_judged_aborts(result, max_value):
+    # Below the limit the true value is unknown; with no upper limit there is
+    # nothing for a floor to reach. Fail closed either way.
+    assert evaluate(_range(max_value), result) is True
+    with pytest.raises(SpecRuleError, match="floor"):
+        evaluate(_range(max_value), result, floor=True)
+
+
+@pytest.mark.parametrize("spec", [
+    SimpleNamespace(rule_kind="equals", equals_value="Not Detected",
+                    min_value=None, max_value=None),
+    SimpleNamespace(rule_kind="informational", equals_value=None,
+                    min_value=None, max_value=None),
+])
+def test_a_floor_on_a_non_range_spec_aborts(spec):
+    # Only a numeric range can say whether a floor already fails. An
+    # informational row returns None for an ordinary result but must not
+    # silently swallow a floor it was never asked to judge.
+    with pytest.raises(SpecRuleError, match="floor"):
+        evaluate(spec, "2500", floor=True)
+
+
 # ── report-only specs ("as measured", 2026-08-22) ────────────────────────────
 # NOT added to PARITY_CASES: informational rows never reach the old engine —
 # a wire dict spec bypasses COABuilder's _verdict entirely, so there is no
@@ -359,3 +400,48 @@ def test_sample_peptide_id_native_blend_returns_none(db_session):
     rows[1].peptide_id, rows[1].slot = p2.id, 2
     db_session.flush()
     assert sample_peptide_id(db_session, parent.id) is None
+
+
+# ── sample_peptide_ids: the batched twin (endo slice 5) ──────────────────────
+
+def test_sample_peptide_ids_answers_like_sample_peptide_id_in_one_query(db_session):
+    """Every case above, batched: the worksheet serializer asks for a whole
+    worksheet's parents at once and must get what one call per parent gives."""
+    from models import LimsAnalysis
+    from sqlalchemy import select
+    from tests.test_endo_v2_worksheets import _count_sql
+    pep_a = _mk_peptide(db_session, "BPC157")
+    pep_b = _mk_peptide(db_session, "TB500")
+    svc_a = _mk_identity_service(db_session, pep_a.id, "BPC157-PURITY")
+    svc_b = _mk_identity_service(db_session, pep_b.id, "TB500-PURITY")
+    other = _mk_service(db_session, keyword="HM-PB")
+    generic = _mk_service(db_session, keyword="HPLC-IDENTITY")
+    single = _mk_family(db_session, "P-BATCH-1", parent_analyses=[svc_a], sub_analyses=[other])
+    on_vial = _mk_family(db_session, "P-BATCH-2", sub_analyses=[svc_b])
+    blend = _mk_family(db_session, "P-BATCH-3", parent_analyses=[svc_a, svc_b])
+    no_anchor = _mk_family(db_session, "P-BATCH-4", parent_analyses=[other])
+    retracted = _mk_family(db_session, "P-BATCH-5", parent_analyses=[svc_a, (svc_b, "retracted")])
+    native = _mk_family(db_session, "P-BATCH-6", parent_analyses=[generic])
+    split = _mk_family(db_session, "P-BATCH-7", parent_analyses=[svc_a], sub_analyses=[svc_b])
+    row = db_session.execute(
+        select(LimsAnalysis).where(LimsAnalysis.lims_sample_pk == native.id)
+    ).scalar_one()
+    row.peptide_id, row.slot = pep_b.id, 1
+    db_session.flush()
+    pks = [p.id for p in (single, on_vial, blend, no_anchor, retracted, native, split)] + [987654]
+
+    with _count_sql(db_session) as seen:
+        got = sample_peptide_ids(db_session, pks + [single.id])   # a repeat is harmless
+
+    assert len(seen) == 1
+    assert got == {pk: sample_peptide_id(db_session, pk) for pk in pks}
+    assert got == {single.id: pep_a.id, on_vial.id: pep_b.id, blend.id: None,
+                   no_anchor.id: None, retracted.id: pep_a.id, native.id: pep_b.id,
+                   split.id: None, 987654: None}
+
+
+def test_sample_peptide_ids_of_nothing_runs_no_query(db_session):
+    from tests.test_endo_v2_worksheets import _count_sql
+    with _count_sql(db_session) as seen:
+        assert sample_peptide_ids(db_session, []) == {}
+    assert seen == []

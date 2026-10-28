@@ -53,3 +53,33 @@ def _parent_with_rows(db, states):
 def test_furthest_state_wins_regardless_of_insert_order(db, states, expected):
     parent = _parent_with_rows(db, states)
     assert _live_parent_line_states(db, parent) == {"ARSENIC-PPM": expected}
+
+
+def _parent_with_shadow_rows(db, rows):
+    """One keyword, one shadow (SENAITE-mirror) parent row per
+    (mirror_state, retested), inserted IN ORDER."""
+    parent = LimsSample(sample_id="BW-DEDUPE", external_lims_uid="uid")
+    svc = AnalysisService(title="Fill", keyword="FILL-NET-CONTENT", origin="senaite")
+    db.add_all([parent, svc])
+    db.flush()
+    for st, retested in rows:
+        db.add(LimsAnalysis(lims_sample_pk=parent.id, analysis_service_id=svc.id,
+                            keyword="FILL-NET-CONTENT", title="Fill",
+                            provenance="shadow", review_state="senaite_mirror",
+                            mirror_review_state=st, retested=retested))
+        db.flush()
+    db.commit()
+    return parent
+
+
+@pytest.mark.parametrize("rows, expected", [
+    # BW-0118 shape: two stale retested copies, current row published.
+    ([("to_be_verified", True), ("to_be_verified", True), ("published", False)], "published"),
+    # Same, with the current row fetched FIRST (stale copy newest id).
+    ([("published", False), ("to_be_verified", True)], "published"),
+    # Two live shadow rows: furthest along wins, not last fetched.
+    ([("published", False), ("to_be_verified", False)], "published"),
+])
+def test_retested_shadow_rows_never_set_line_state(db, rows, expected):
+    parent = _parent_with_shadow_rows(db, rows)
+    assert _live_parent_line_states(db, parent) == {"FILL-NET-CONTENT": expected}
