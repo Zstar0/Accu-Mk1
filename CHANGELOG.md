@@ -1,5 +1,17 @@
 # Changelog
 
+## v1.54.0 - 2026-10-27
+
+### Endotoxin: set the reader up from Mk1
+- **A "Reader CSV" button on 2 mL worksheets writes the EndoScan-V Sample Database file**, so a run planned in Mk1 no longer has to be keyed into the instrument by hand or exported from a second tool. Every prep number comes from Mk1's own prep check and dilution plan, and the rows come from the same document the bench sheet prints, so the file and the worksheet cannot disagree.
+- **A row the reader could not be set up for is named rather than written wrong.** A duplicate vial ID, a liquid vial with no volume typed, or a dilution that cannot be made as typed is listed in a message instead of going into the file.
+- **The exported limit is never above the real cut.** It is rounded down to the digits written, so the instrument can only ever be stricter than Mk1, never laxer: a false fail costs a re-run, a false pass would ship. This is a deliberate difference from the tool it replaces, which rounds to nearest.
+- Blends go out under the lab's nickname (KLOW, GLOW), and a long name is cut to the 40 characters the importer accepts, measured as the file will carry it rather than as it arrives.
+
+### Endotoxin: two fixes from the bench
+- **The water cell no longer carries over when a row's Form changes.** Typing a liquid vial's own volume and then switching the row to lyophilized left that volume in place, so the prep was figured on the customer's water instead of the standard reconstitution, and the same the other way round.
+- **A typed reading the reader replaces is kept in the row's history.** The import already refuses to overwrite a reading silently, so a replace is always deliberate, but the typed value was then lost unless the cartridge happened to move with it. Only the cartridge-moved rows still raise the override audit entry.
+
 ## v1.53.0 - 2026-10-27
 
 ### Endotoxin: a ">" reading is reported instead of re-run
