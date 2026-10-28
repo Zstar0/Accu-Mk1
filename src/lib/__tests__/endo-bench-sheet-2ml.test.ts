@@ -492,6 +492,17 @@ describe('buildEndoBenchSheet2Html', () => {
       expect(plain).toContain(
         '<div class="tile"><dt>Off the standard</dt><dd>0</dd></div>'
       )
+      // The other direction: a liquid arrived reconstituted, so its volume is
+      // the customer's and the row does not underline it. The tile must not
+      // claim a deviation no row shows.
+      const wet = buildEndoBenchSheet2Html(
+        doc([row(1, { form: 'liquid', waterMl: 5 })]),
+        { measure }
+      )
+      expect(wet).toContain('<td class="m r vial">5<sup class="lmark">L</sup>')
+      expect(wet).toContain(
+        '<div class="tile"><dt>Off the standard</dt><dd>0</dd></div>'
+      )
     })
 
     it('puts an R on a cartridge a rule set', () => {
