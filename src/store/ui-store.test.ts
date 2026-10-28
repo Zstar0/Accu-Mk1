@@ -287,8 +287,14 @@ describe('UIStore flags flyout + thread', () => {
     expect(s().flagsThreadReturnTo).toBe('page')
   })
   it('a plain open from a closed flyout has no marker', () => {
-    s().closeFlagsFlyout()
+    // A stale marker on a closed flyout must not carry into a new open.
+    useUIStore.setState({ flagsFlyoutOpen: false, flagsThreadReturnTo: 'page' })
     s().openFlagThread(7)
+    expect(s().flagsThreadReturnTo).toBeNull()
+  })
+  it('an explicit returnTo: null clears the marker on an open flyout', () => {
+    s().openFlagThread(5, { returnTo: 'page' })
+    s().openFlagThread(6, { returnTo: null })
     expect(s().flagsThreadReturnTo).toBeNull()
   })
   it('opening the flyout list clears the marker', () => {

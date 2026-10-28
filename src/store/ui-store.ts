@@ -326,7 +326,7 @@ interface UIState {
     sampleIds: string[]
   } | null
   openFlagsFlyout: (threadId?: number) => void
-  openFlagThread: (id: number, opts?: { returnTo?: 'page' }) => void
+  openFlagThread: (id: number, opts?: { returnTo?: 'page' | null }) => void
   openFlagsForEntity: (
     type: string,
     id: string,
@@ -919,16 +919,19 @@ export const useUIStore = create<UIState>()(
           'openFlagsFlyout'
         ),
 
-      // opts.returnTo marks a thread opened from a page; without it, a thread
-      // opened inside an open flyout keeps the current marker.
+      // opts.returnTo (even null) sets the marker for this open; without it, a
+      // thread opened inside an open flyout keeps the current marker.
       openFlagThread: (id, opts) =>
         set(
           state => ({
             flagsFlyoutOpen: true,
             flagsThreadId: id,
             flagsThreadReturnTo:
-              opts?.returnTo ??
-              (state.flagsFlyoutOpen ? state.flagsThreadReturnTo : null),
+              opts && 'returnTo' in opts
+                ? (opts.returnTo ?? null)
+                : state.flagsFlyoutOpen
+                  ? state.flagsThreadReturnTo
+                  : null,
           }),
           undefined,
           'openFlagThread'

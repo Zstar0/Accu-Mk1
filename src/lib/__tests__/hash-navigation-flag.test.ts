@@ -42,9 +42,29 @@ describe('hash navigation ?flag= deep link', () => {
     renderHook(() => useHashNavigation())
     expect(useUIStore.getState()).toMatchObject({
       activeSection: 'tasks',
+      flagsFlyoutOpen: true,
       flagsThreadId: 42,
       flagsThreadReturnTo: 'page',
     })
+  })
+
+  it('a non-Tasks ?flag= open drops the page marker (per open, not per page)', () => {
+    // e.g. browser Back from the Tasks page to an earlier Slack-link entry.
+    useUIStore.getState().openFlagThread(5, { returnTo: 'page' })
+    window.location.hash = '#dashboard/orders?flag=9'
+    renderHook(() => useHashNavigation())
+    expect(useUIStore.getState()).toMatchObject({
+      flagsFlyoutOpen: true,
+      flagsThreadId: 9,
+      flagsThreadReturnTo: null,
+    })
+  })
+
+  it('navigating to a non-Tasks section clears the page marker', () => {
+    useUIStore.getState().openFlagThread(5, { returnTo: 'page' })
+    window.location.hash = '#dashboard/orders'
+    renderHook(() => useHashNavigation())
+    expect(useUIStore.getState().flagsThreadReturnTo).toBeNull()
   })
 
   it('ignores a non-numeric flag param', () => {
