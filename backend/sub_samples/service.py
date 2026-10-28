@@ -21,7 +21,7 @@ from sqlalchemy.orm import Session
 from models import (LimsAnalysis, LimsSample, LimsSampleRemark, LimsSubSample,
                     LimsSubSampleEvent, SamplePriority, User, Worksheet,
                     WorksheetItem)
-from sample_forms.service import apply_default_form, copy_form_from_original
+from sample_forms.service import apply_default_form, copy_form_from_original, is_form_eligible
 from sub_samples import native
 from sub_samples import senaite
 from sub_samples.native_id import mint_native_id
@@ -3022,6 +3022,8 @@ def board_vials(
                     client_sample_id=par.client_sample_id,
                     priority=priority_by_uid.get(par.external_lims_uid or "", "normal"),
                     is_test_order=par.sample_id in test_ids,
+                    sample_form_id=(par.sample_form_id
+                                    if is_form_eligible(par.sample_type_title) else None),
                 ),
                 analyses=[
                     BoardAnalysisOut(

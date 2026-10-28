@@ -72,6 +72,15 @@ export const listSampleForms = (includeInactive = true) =>
     'Load sample forms failed'
   )
 
+/** Form id per sample id (a vial id answers with its parent's form), for list
+ *  pages that hold only ids. Ids without a form are left out. Max 200. */
+export const getSampleFormsOfSamples = (sampleIds: string[]) =>
+  req<Record<string, number>>(
+    `/api/sample-forms/of-samples?ids=${encodeURIComponent(sampleIds.join(','))}`,
+    {},
+    'Load sample forms failed'
+  )
+
 export const createSampleForm = (body: SampleFormCreate) =>
   req<SampleForm>(
     '/api/sample-forms',

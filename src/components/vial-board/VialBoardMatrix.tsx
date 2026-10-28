@@ -1,5 +1,6 @@
 import { cn } from '@/lib/utils'
 import { useUIStore } from '@/store/ui-store'
+import { SampleFormMark } from '@/components/common/SampleFormIcon'
 import {
   buildMatrixRows,
   type MatrixCell,
@@ -144,8 +145,9 @@ export function VialBoardMatrix({
               className="border-b border-border/30 last:border-b-0 hover:bg-muted/20 cursor-pointer"
             >
               <td className="px-3 py-2">
-                <div className="font-mono text-[13px] font-semibold text-primary">
+                <div className="flex items-center gap-1.5 font-mono text-[13px] font-semibold text-primary">
                   {row.parentSampleId}
+                  <SampleFormMark formId={row.sampleFormId} />
                 </div>
                 {row.label && (
                   <div className="text-xs text-muted-foreground truncate max-w-[180px]">

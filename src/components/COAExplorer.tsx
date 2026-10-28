@@ -43,6 +43,8 @@ import {
 } from '@/components/ui/card'
 import { DataTable } from '@/components/ui/data-table'
 import { SampleIdBadge } from '@/components/samples/SampleIdBadge'
+import { SampleFormMark } from '@/components/common/SampleFormIcon'
+import { useSampleFormIdsFor } from '@/services/sample-forms'
 
 // --- Helpers ---
 
@@ -280,6 +282,12 @@ export function COAExplorer() {
     enabled: status?.connected === true,
   })
 
+  // Form icons: the generations come from the Integration Service with only a
+  // sample id, so the page asks Mk1 for the forms of the ids on screen.
+  const { data: formIds } = useSampleFormIdsFor(
+    (generations ?? []).map(g => g.sample_id)
+  )
+
   // Handle search with debounce
   const handleSearchChange = (value: string) => {
     setSearchTerm(value)
@@ -321,7 +329,12 @@ export function COAExplorer() {
       header: 'Sample ID',
       size: 110,
       enableSorting: true,
-      cell: ({ row }) => <SampleIdBadge id={row.original.sample_id} />,
+      cell: ({ row }) => (
+        <div className="flex items-center gap-1.5">
+          <SampleIdBadge id={row.original.sample_id} />
+          <SampleFormMark formId={formIds?.[row.original.sample_id]} />
+        </div>
+      ),
     },
     {
       accessorKey: 'generation_number',

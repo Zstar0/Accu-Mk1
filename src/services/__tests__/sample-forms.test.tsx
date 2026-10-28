@@ -8,7 +8,12 @@ import {
   PARENT_OVERLAY_QUERY_KEY,
   QUICKLOOK_VIAL_ANALYSES_QUERY_KEY,
 } from '@/lib/vial-assignment'
-import { sampleFormKeys, useSetSampleForm } from '@/services/sample-forms'
+import { getSampleFormsOfSamples } from '@/lib/api-sample-forms'
+import {
+  sampleFormKeys,
+  useSampleFormIdsFor,
+  useSetSampleForm,
+} from '@/services/sample-forms'
 
 vi.mock('@/lib/api-sample-forms', async () => {
   const actual = (await vi.importActual('@/lib/api-sample-forms')) as Record<
@@ -17,6 +22,7 @@ vi.mock('@/lib/api-sample-forms', async () => {
   >
   return {
     ...actual,
+    getSampleFormsOfSamples: vi.fn(async () => ({ 'P-0002': 4 })),
     setSampleForm: vi.fn(async () => ({
       sample_form_id: 4,
       sample_form_name: 'Nasal Spray',
@@ -49,5 +55,34 @@ describe('useSetSampleForm', () => {
         [NATIVE_PARENT_ANALYSES_QUERY_KEY],
       ])
     )
+  })
+})
+
+describe('useSampleFormIdsFor', () => {
+  const wrapper = ({ children }: { children: ReactNode }) =>
+    createElement(
+      QueryClientProvider,
+      {
+        client: new QueryClient({
+          defaultOptions: { queries: { retry: false } },
+        }),
+      },
+      children
+    )
+
+  it('asks once for the unique ids on screen, sorted', async () => {
+    const { result } = renderHook(
+      () => useSampleFormIdsFor(['P-0002', 'P-0001', 'P-0002']),
+      { wrapper }
+    )
+    await waitFor(() => expect(result.current.data).toEqual({ 'P-0002': 4 }))
+    expect(getSampleFormsOfSamples).toHaveBeenCalledWith(['P-0001', 'P-0002'])
+  })
+
+  it('sends nothing for an empty page', () => {
+    vi.mocked(getSampleFormsOfSamples).mockClear()
+    const { result } = renderHook(() => useSampleFormIdsFor([]), { wrapper })
+    expect(result.current.fetchStatus).toBe('idle')
+    expect(getSampleFormsOfSamples).not.toHaveBeenCalled()
   })
 })

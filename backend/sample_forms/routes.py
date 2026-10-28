@@ -12,7 +12,7 @@ from sqlalchemy.orm import Session
 from auth import get_current_user
 from catalog.change_log import apply_and_log, log_create
 from database import get_db
-from models import LimsSample, LimsSampleForm
+from models import LimsSample, LimsSampleForm, LimsSubSample
 from sample_forms import service
 
 router = APIRouter(prefix="/api", tags=["sample-forms"])
@@ -87,6 +87,33 @@ def list_sample_forms(include_inactive: bool = False, db: Session = Depends(get_
         .group_by(LimsSample.sample_form_id)
     ).all())
     return [_response(f, counts.get(f.id, 0)) for f in db.execute(q).scalars()]
+
+
+_OF_SAMPLES_MAX = 200
+
+
+@router.get("/sample-forms/of-samples", response_model=dict[str, int])
+def sample_forms_of_samples(ids: str = "", db: Session = Depends(get_db),
+                            _=Depends(get_current_user)):
+    """Form id per sample id, for list pages that hold only ids (the COA
+    Explorer). `ids` is comma-separated; a vial id answers with its parent's
+    form. Ids with no form, a type that takes none, or no registry row are
+    left out."""
+    wanted = list(dict.fromkeys(i.strip() for i in ids.split(",") if i.strip()))
+    if len(wanted) > _OF_SAMPLES_MAX:
+        raise HTTPException(422, f"At most {_OF_SAMPLES_MAX} sample ids per request")
+    if not wanted:
+        return {}
+    facts = db.execute(
+        select(LimsSample.sample_id, LimsSample.sample_form_id, LimsSample.sample_type_title)
+        .where(LimsSample.sample_id.in_(wanted))
+    ).all() + db.execute(
+        select(LimsSubSample.sample_id, LimsSample.sample_form_id, LimsSample.sample_type_title)
+        .join(LimsSample, LimsSample.id == LimsSubSample.parent_sample_pk)
+        .where(LimsSubSample.sample_id.in_(wanted))
+    ).all()
+    return {sid: fid for sid, fid, title in facts
+            if fid is not None and service.is_form_eligible(title)}
 
 
 @router.post("/sample-forms", response_model=SampleFormResponse, status_code=201)

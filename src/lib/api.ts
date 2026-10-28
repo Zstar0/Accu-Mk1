@@ -5826,6 +5826,8 @@ export interface BoardParent {
   client_sample_id: string | null
   priority: InboxPriority
   is_test_order: boolean
+  /** Dosage form, for the form icon; null when the type takes none. */
+  sample_form_id?: number | null
 }
 
 export interface BoardVial {

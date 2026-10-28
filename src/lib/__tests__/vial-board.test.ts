@@ -335,6 +335,18 @@ describe('buildMatrixRows', () => {
     expect(row?.earliestReceived).toBe('2026-08-26T09:00:00Z')
   })
 
+  it('carries the parent form id for the row icon, null without one', () => {
+    const vials = [
+      vial({ parent: { sample_id: 'P-0001', sample_form_id: 4 } }),
+      vial({ parent: { sample_id: 'PB-0002' }, sample_id: 'PB-0002-S01' }),
+    ]
+    const rows = buildMatrixRows(vials, vials, ['hplc'])
+    expect(rows.map(r => [r.parentSampleId, r.sampleFormId])).toEqual([
+      ['P-0001', 4],
+      ['PB-0002', null],
+    ])
+  })
+
   it('parents sort by sample_id and distinct-dedupes techs/worksheets', () => {
     const vials = [
       vial({ parent: { sample_id: 'PB-0002' }, sample_id: 'PB-0002-S01' }),

@@ -73,7 +73,11 @@ export interface BoardVialLike {
   sample_id: string
   assignment_role: string
   received_at: string
-  parent: { sample_id: string; label?: string | null }
+  parent: {
+    sample_id: string
+    label?: string | null
+    sample_form_id?: number | null
+  }
   analyses: BoardAnalysisLike[]
   worksheet?: { title: string } | null
 }
@@ -268,6 +272,8 @@ export interface MatrixCell {
 export interface MatrixRow {
   parentSampleId: string
   label: string | null
+  /** The parent's dosage form, for the row's form icon. */
+  sampleFormId: number | null
   /** Keyed by role code — columns come from the selected lane's catalog roles. */
   cells: Record<string, MatrixCell>
   overall: 'complete' | 'in_progress' | 'issue'
@@ -371,6 +377,7 @@ export function buildMatrixRows<V extends BoardVialLike>(
     return {
       parentSampleId,
       label: group[0]?.parent.label ?? null,
+      sampleFormId: group[0]?.parent.sample_form_id ?? null,
       cells,
       overall: matrixOverall(Object.values(cells)),
       techs,

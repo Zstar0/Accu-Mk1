@@ -1,5 +1,11 @@
 import type { ReactNode } from 'react'
+import { useTranslation } from 'react-i18next'
 import { useSampleForms } from '@/services/sample-forms'
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipTrigger,
+} from '@/components/ui/tooltip'
 import { iconKey, type SampleFormIconKey } from '@/lib/sample-form-icons'
 import { cn } from '@/lib/utils'
 
@@ -151,4 +157,78 @@ export function SampleFormIconById({
   const { data: forms } = useSampleForms()
   const form = forms?.find(f => f.id === id)
   return form ? <SampleFormIcon icon={form.icon} className={className} /> : null
+}
+
+/** The hover card behind a form mark. Pure, so it renders without a query. */
+export function SampleFormCard({
+  name,
+  routeLabel,
+  active,
+}: {
+  name: string
+  routeLabel: string
+  active: boolean
+}) {
+  return (
+    <div className="flex flex-col gap-1.5 p-3 font-mono text-xs">
+      <div className="border-b border-primary-foreground/20 pb-1.5 font-semibold">
+        {name}
+      </div>
+      <div>
+        <span className="opacity-60">Route:</span> {routeLabel}
+        {!active && <span className="opacity-60"> (inactive)</span>}
+      </div>
+    </div>
+  )
+}
+
+/** A sample's form at a glance on list pages (order status, customer status,
+ *  vial board, COA Explorer): the icon, with the form's name on hover. Draws
+ *  nothing for a sample without a form or before the form list arrives. */
+export function SampleFormMark({
+  formId,
+  className,
+}: {
+  formId: number | null | undefined
+  className?: string
+}) {
+  return formId == null ? null : (
+    <SampleFormMarkFor formId={formId} className={className} />
+  )
+}
+
+function SampleFormMarkFor({
+  formId,
+  className,
+}: {
+  formId: number
+  className?: string
+}) {
+  const { t } = useTranslation()
+  const { data: forms } = useSampleForms()
+  const form = forms?.find(f => f.id === formId)
+  if (!form) return null
+  return (
+    <Tooltip>
+      <TooltipTrigger asChild>
+        <span
+          role="img"
+          aria-label={`Form: ${form.name}`}
+          className="inline-flex shrink-0 text-muted-foreground"
+        >
+          <SampleFormIcon
+            icon={form.icon}
+            className={cn('size-3.5', className)}
+          />
+        </span>
+      </TooltipTrigger>
+      <TooltipContent className="max-w-xs p-0">
+        <SampleFormCard
+          name={form.name}
+          routeLabel={t(`preferences.sampleForms.route.${form.route}`)}
+          active={form.active}
+        />
+      </TooltipContent>
+    </Tooltip>
+  )
 }

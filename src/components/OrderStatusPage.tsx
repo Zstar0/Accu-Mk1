@@ -40,6 +40,7 @@ import {
 } from '@/lib/api-profiles'
 import { useUIStore } from '@/store/ui-store'
 import { PriorityGlyph } from '@/components/common/PriorityGlyph'
+import { SampleFormMark } from '@/components/common/SampleFormIcon'
 import { PrioritySelect } from '@/components/common/PrioritySelect'
 
 import { Badge } from '@/components/ui/badge'
@@ -356,6 +357,10 @@ function KanbanSampleCard({
           >
             {item.sampleId}
           </button>
+          <SampleFormMark
+            formId={item.lookup?.sample_form_id}
+            className="size-3"
+          />
           <FlagIndicator scope={{ kind: 'sample', sampleId: item.sampleId }} />
           {item.email && (
             <span className="text-[10px] text-muted-foreground/60 leading-none truncate">

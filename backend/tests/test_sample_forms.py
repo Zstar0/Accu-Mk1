@@ -11,7 +11,8 @@ from sqlalchemy.pool import StaticPool
 import auth
 import main
 from database import Base, get_db
-from models import CatalogChangeLog, LimsSample, LimsSampleForm, LimsSubSampleEvent
+from models import (CatalogChangeLog, LimsSample, LimsSampleForm, LimsSubSample,
+                    LimsSubSampleEvent)
 from sample_forms import service
 from sub_samples.lookup_models import SenaiteLookupResult
 from sub_samples.service import upsert_sample_from_signal
@@ -254,6 +255,28 @@ def test_list_forms_counts_samples_and_hides_inactive_by_default(client, db, for
     assert rows[1]["sample_count"] == 0
     everything = client.get("/api/sample-forms", params={"include_inactive": "true"}).json()
     assert [r["name"] for r in everything][-1] == "Retired Form"
+
+
+def test_forms_of_samples_answers_parents_and_vials_and_skips_formless(client, db, forms):
+    pep = _peptide(db)                                                       # default form
+    nasal = _peptide(db, "P-2002", "AR_UID_2")
+    nasal.sample_form_id = forms["nasal"].id
+    bw = _peptide(db, "PB-0001", "AR_UID_3", getSampleTypeTitle="Bacteriostatic Water")
+    bw.sample_form_id = forms["pen"].id          # a leftover form on a type that takes none
+    db.add(LimsSubSample(parent_sample_pk=nasal.id, external_lims_uid="AR_UID_2-S01",
+                         sample_id="P-2002-S01", vial_sequence=1))
+    db.commit()
+    r = client.get("/api/sample-forms/of-samples",
+                   params={"ids": f"{pep.sample_id}, P-2002,P-2002-S01,PB-0001,P-9999,P-2002"})
+    assert r.status_code == 200, r.text
+    assert r.json() == {pep.sample_id: forms["lyo"].id, "P-2002": forms["nasal"].id,
+                        "P-2002-S01": forms["nasal"].id}
+    assert client.get("/api/sample-forms/of-samples").json() == {}
+
+
+def test_forms_of_samples_caps_the_id_list(client, db, forms):
+    ids = ",".join(f"P-{n:04d}" for n in range(201))
+    assert client.get("/api/sample-forms/of-samples", params={"ids": ids}).status_code == 422
 
 
 def test_create_form_logs_and_returns_201(client, db, forms):

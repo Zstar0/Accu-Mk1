@@ -3,6 +3,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { toast } from 'sonner'
 import {
   createSampleForm,
+  getSampleFormsOfSamples,
   listSampleForms,
   setSampleForm,
   updateSampleForm,
@@ -20,6 +21,18 @@ export function useSampleForms() {
   return useQuery({
     queryKey: sampleFormKeys.all,
     queryFn: () => listSampleForms(true),
+    staleTime: 60_000,
+  })
+}
+
+/** Form id per sample id for a page that holds only ids (COA Explorer).
+ *  Under sampleFormKeys.all, so a form change refreshes it too. */
+export function useSampleFormIdsFor(sampleIds: string[]) {
+  const ids = [...new Set(sampleIds)].sort()
+  return useQuery({
+    queryKey: [...sampleFormKeys.all, 'of-samples', ids],
+    queryFn: () => getSampleFormsOfSamples(ids),
+    enabled: ids.length > 0,
     staleTime: 60_000,
   })
 }
