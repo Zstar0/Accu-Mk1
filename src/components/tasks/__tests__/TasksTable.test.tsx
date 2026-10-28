@@ -1,5 +1,6 @@
+import { useState } from 'react'
 import { describe, it, expect, vi, beforeEach } from 'vitest'
-import type { SortingState } from '@tanstack/react-table'
+import type { ColumnSizingState, SortingState } from '@tanstack/react-table'
 import { render, screen, fireEvent } from '@/test/test-utils'
 import type { FlagResponse, EntityContext } from '@/lib/flags-api'
 import { useUIStore } from '@/store/ui-store'
@@ -157,6 +158,34 @@ describe('TasksTable', () => {
     renderTable(flags, [{ id: 'item', desc: false }])
     // Both general labels sort ahead of the vial; equal keys keep input order.
     expect(titles()).toEqual(['General', 'Legacy', 'Vial'])
+  })
+
+  it('columns start at their default widths and a drag stops at the minimum', () => {
+    // Holds the widths in state and feeds them back, as the page does.
+    function Sized() {
+      const [sizing, setSizing] = useState<ColumnSizingState>({})
+      return (
+        <TasksTable
+          flags={[flag()]}
+          unreadIds={new Set()}
+          searchMeta={new Map()}
+          sorting={[]}
+          onSortingChange={vi.fn()}
+          columnSizing={sizing}
+          onColumnSizingChange={setSizing}
+          onColumnSizingCommit={vi.fn()}
+        />
+      )
+    }
+    render(<Sized />)
+    const th = screen.getByRole('columnheader', { name: 'Title' })
+    expect(th).toHaveStyle({ width: '360px' })
+    const handle = th.querySelector('.cursor-col-resize')
+    if (!handle) throw new Error('no resize handle')
+    fireEvent.mouseDown(handle, { clientX: 500 })
+    fireEvent.mouseMove(document, { clientX: 0 })
+    fireEvent.mouseUp(document, { clientX: 0 })
+    expect(th).toHaveStyle({ width: '160px' })
   })
 
   it('a row click opens the thread with the page marker', () => {
