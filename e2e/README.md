@@ -87,6 +87,19 @@ dialog opening from it (then cancelled; nothing is minted or revoked). Walks
 samples) until one has an attached report whose code the IS knows. Screenshots
 land in `docs/superpowers/e2e/2026-09-30-coa-senaite-card/`.
 
+`coa-revoke-withdraw.spec.ts` revokes a published primary from the Manage
+popover on a stack with the IS, WordPress, Mailhog and object storage mounted,
+then checks the IS response (PDF withdrawn, WordPress notified, no warning),
+the public verdict (revoked, no PDF URL), the PDF's former public URL (no
+longer 200), the WordPress verify page (Certificate Revoked), the COA Revoked
+email in Mailhog, and that "Revocation follow-ups > Retry" on the revoked row
+is idempotent (resumed, nothing left to withdraw, no second email). Needs
+`E2E_REVOKE_SAMPLE_ID` (ONE published primary with a PDF object and a linked
+order; its primary is revoked for good, regenerate afterwards), `E2E_IS_URL`,
+`E2E_WP_URL`, `E2E_MAILHOG_URL`, and optionally `E2E_MINIO_URL` to map the
+IS's container-internal object-store origin to one the browser host can reach.
+Evidence lands in `docs/superpowers/e2e/2026-10-28-coa-revoke-withdraw/`.
+
 `retest.spec.ts` drives the Mk1-native retest overlay (sample details > Actions
 > Retest) on a stack with IS and WordPress mounted:
 
