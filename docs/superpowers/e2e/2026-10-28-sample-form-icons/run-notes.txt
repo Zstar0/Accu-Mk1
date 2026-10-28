@@ -29,3 +29,26 @@ Longest seeded name, closed trigger (name span scrollWidth vs clientWidth):
   wizard widened to w-52, spec rules Form to w-56: wizard 120 vs 120, spec rules 164 vs 164
 06 wizard picker showing Reconstituted Solution (P-5001 set back to Lyophilized Powder after)
 07 spec rules Form picker showing Reconstituted Solution (nothing saved)
+
+Status pages, commit df9f0db8 (same stack, 1920x1000, dark). Each mark hovered; the card shows the
+form name and route. Marks read from the DOM ([role=img][aria-label^="Form:"]):
+  Order Status table (All Orders, test orders shown, sample P-0139): P-0139 Pen
+  Order Status kanban: P-0139 Pen (no screenshot: the card prints the order's email)
+  Customer status page (customer 1539): P-0139 Pen, P-0123 Nasal Spray, P-0121 Reconstituted Solution
+  Vial board cards: 7 marks (P-0145 Lyophilized Powder, P-0153/P-0144/P-0151 Nasal Spray vials)
+  Vial board grouped by sample: 11 marks (group headers plus cards)
+  Vial board table: P-0144 Nasal Spray, P-0145 Lyophilized Powder, P-0151 and P-0153 Nasal Spray
+  COA Explorer: P-0139 Pen
+Stack-only test data: the golden samples carry no type, so P-0139, P-0123, P-0121, P-0144 and
+P-0145 were given type Peptide and a form by SQL in accumark_mk1, and one draft coa_generations row
+(P-0139, SFRM-ICON) was inserted in accumark_integration so the COA Explorer lists a sample with a
+form. Backend in the stack container: 49 passed (test_sample_forms, test_sub_samples_board,
+test_sample_forms_schema). Frontend: 198 passed across the 16 test files for the touched pages;
+typecheck clean; ESLint clean on new code (8 errors remain on untouched lines of api.ts and
+OrderStatusPage.tsx, already on master).
+08 Order Status table, hover card
+09 Customer status page
+10 Vial board cards
+11 Vial board grouped by sample
+12 Vial board table
+13 COA Explorer
