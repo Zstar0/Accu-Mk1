@@ -2768,6 +2768,21 @@ class SlackDmPrefs(Base):
                                                  onupdate=datetime.utcnow, nullable=False)
 
 
+class UserUiSetting(Base):
+    """Per-user UI state for pages (sort, column widths, last tab); never flag data.
+
+    One row per (user, key); keys are allowlisted in ui_settings/routes.py.
+    """
+    __tablename__ = "user_ui_settings"
+    __table_args__ = (UniqueConstraint("user_id", "key", name="uq_user_ui_settings_user_key"),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    user_id: Mapped[int] = mapped_column(Integer, ForeignKey("users.id"), nullable=False, index=True)
+    key: Mapped[str] = mapped_column(String(64), nullable=False)
+    value: Mapped[dict] = mapped_column(JSON, nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+
+
 class CustomerAiReview(Base):
     """One AI customer review run (spec 2026-10-08-customer-ai-review-design.md, 3.5).
 

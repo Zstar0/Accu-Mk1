@@ -123,6 +123,7 @@ from boxes.service import box_label_code
 from packaging_photos.routes import router as packaging_photos_router
 from capture_tokens.routes import router as capture_tokens_router
 from flags.routes import router as flags_router
+from ui_settings.routes import router as ui_settings_router
 from slack_notify.routes import router as slack_prefs_router
 from slack_notify.interactions import router as slack_interactions_router
 from workflow.routes import router as workflow_router
@@ -646,6 +647,7 @@ app.include_router(boxes_router)
 app.include_router(packaging_photos_router)
 app.include_router(capture_tokens_router)
 app.include_router(flags_router)
+app.include_router(ui_settings_router)
 app.include_router(slack_prefs_router)
 app.include_router(slack_interactions_router)
 app.include_router(workflow_router)
