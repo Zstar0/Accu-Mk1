@@ -8,8 +8,10 @@ import {
   type SortingState,
   getSortedRowModel,
   type ColumnResizeMode,
+  type ColumnSizingState,
+  type TableOptions,
 } from '@tanstack/react-table'
-import { useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { ArrowUp, ArrowDown, ArrowUpDown } from 'lucide-react'
 
 import {
@@ -29,6 +31,17 @@ interface DataTableProps<TData, TValue> {
   selectedRowId?: string | number
   getRowId?: (row: TData) => string
   enableColumnResizing?: boolean
+  /** Controlled sorting. Absent: DataTable keeps its own. */
+  sorting?: SortingState
+  onSortingChange?: (next: SortingState) => void
+  /** Controlled column widths. Absent: TanStack keeps its own. */
+  columnSizing?: ColumnSizingState
+  onColumnSizingChange?: (next: ColumnSizingState) => void
+  /** Fires once when a resize drag ends, with the widths after it. */
+  onColumnSizingCommit?: (sizing: ColumnSizingState) => void
+  getRowClassName?: (row: TData) => string | undefined
+  /** Rows take focus; Enter or Space calls onRowClick. */
+  keyboardRowActivation?: boolean
 }
 
 export function DataTable<TData, TValue>({
@@ -38,10 +51,38 @@ export function DataTable<TData, TValue>({
   selectedRowId,
   getRowId,
   enableColumnResizing = true,
+  sorting: sortingProp,
+  onSortingChange,
+  columnSizing,
+  onColumnSizingChange,
+  onColumnSizingCommit,
+  getRowClassName,
+  keyboardRowActivation = false,
 }: DataTableProps<TData, TValue>) {
   'use no memo'
-  const [sorting, setSorting] = useState<SortingState>([])
+  const [innerSorting, setInnerSorting] = useState<SortingState>([])
   const [columnResizeMode] = useState<ColumnResizeMode>('onChange')
+  const sorting = sortingProp ?? innerSorting
+
+  // Only add the sizing keys when controlled: an explicit `undefined` would
+  // override TanStack's own state and updater and break resizing.
+  // TanStack's resize handler fills the new width inside its sizing-info
+  // updater and reads it in the sizing updater. React may defer the first, so
+  // run it now; otherwise the controlled width lags or comes back empty.
+  const sizingOptions: Partial<TableOptions<TData>> =
+    columnSizing === undefined
+      ? {}
+      : {
+          onColumnSizingInfoChange: u => {
+            const next =
+              typeof u === 'function' ? u(table.getState().columnSizingInfo) : u
+            table.setState(old => ({ ...old, columnSizingInfo: next }))
+          },
+          onColumnSizingChange: u =>
+            onColumnSizingChange?.(
+              typeof u === 'function' ? u(columnSizing) : u
+            ),
+        }
 
   // eslint-disable-next-line react-hooks/incompatible-library -- TanStack Table known issue with React Compiler
   const table = useReactTable({
@@ -54,12 +95,28 @@ export function DataTable<TData, TValue>({
     },
     getCoreRowModel: getCoreRowModel(),
     getSortedRowModel: getSortedRowModel(),
-    onSortingChange: setSorting,
+    onSortingChange:
+      sortingProp === undefined
+        ? setInnerSorting
+        : u => onSortingChange?.(typeof u === 'function' ? u(sortingProp) : u),
     state: {
       sorting,
+      ...(columnSizing !== undefined && { columnSizing }),
     },
     columnResizeMode,
     enableColumnResizing,
+    ...sizingOptions,
+  })
+
+  // A drag ends when isResizingColumn goes from a column id to false. Checked
+  // after render so a controlled columnSizing already holds the final width.
+  const wasResizing = useRef<string | false>(false)
+  useEffect(() => {
+    const { columnSizingInfo, columnSizing: sizing } = table.getState()
+    if (wasResizing.current && !columnSizingInfo.isResizingColumn) {
+      onColumnSizingCommit?.(sizing)
+    }
+    wasResizing.current = columnSizingInfo.isResizingColumn
   })
 
   return (
@@ -141,9 +198,22 @@ export function DataTable<TData, TValue>({
                   data-state={isSelected ? 'selected' : undefined}
                   className={cn(
                     onRowClick && 'cursor-pointer hover:bg-muted/50',
-                    isSelected && 'bg-muted'
+                    isSelected && 'bg-muted',
+                    getRowClassName?.(row.original)
                   )}
                   onClick={() => onRowClick?.(row.original)}
+                  tabIndex={keyboardRowActivation ? 0 : undefined}
+                  onKeyDown={
+                    keyboardRowActivation
+                      ? e => {
+                          // Keys aimed at a control inside the row stay there.
+                          if (e.target !== e.currentTarget) return
+                          if (e.key !== 'Enter' && e.key !== ' ') return
+                          e.preventDefault()
+                          onRowClick?.(row.original)
+                        }
+                      : undefined
+                  }
                 >
                   {row.getVisibleCells().map(cell => (
                     <TableCell
