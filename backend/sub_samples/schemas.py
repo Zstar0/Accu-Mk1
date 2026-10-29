@@ -327,6 +327,9 @@ class BoardParentOut(BaseModel):
     client_sample_id: Optional[str] = None
     priority: str = "normal"
     is_test_order: bool = False
+    # Dosage form (sample forms), for the board's form icon. None for a
+    # sample that takes no form (Bac Water), even if it still holds one.
+    sample_form_id: Optional[int] = None
 
 
 class BoardVialOut(BaseModel):

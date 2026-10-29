@@ -208,6 +208,12 @@ def _method_label(db: Session, method_id: Optional[int]) -> str:
     return (m.name or "") if m is not None else ""
 
 
+# Rule kinds whose printed result is censored against an LOQ. A report-only
+# (informational) row censors too: no verdict, but "< <LOQ>" (e.g. "< 0.5")
+# when at or below it.
+_LOQ_KINDS = ("range", "informational")
+
+
 def _spec_wire_dict(spec) -> dict:
     """The structured `specification` wire field. Floats (not Decimal) so the
     JSON is stable; display stays None unless the lab filed an override —
@@ -219,11 +225,12 @@ def _spec_wire_dict(spec) -> dict:
         "max": float(spec.max_value) if spec.max_value is not None else None,
         "unit": spec.unit,
         "display": spec.display_override,
-        # Range-only: equals rows never censor, so publishing a stray loq
-        # filed on one (tolerated at write time) would contradict the wire's
-        # own convention and light the consumer's LOQ column regardless.
+        # Range and report-only rows censor; equals rows never do, so
+        # publishing a stray loq filed on one (tolerated at write time) would
+        # contradict the wire's own convention and light the consumer's LOQ
+        # column regardless.
         "loq": (float(spec.loq)
-                if spec.rule_kind == "range" and spec.loq is not None else None),
+                if spec.rule_kind in _LOQ_KINDS and spec.loq is not None else None),
     }
 
 
@@ -239,16 +246,19 @@ def effective_loq(row, spec) -> Optional[float]:
 def _result_display(spec, result, loq: Optional[float], *,
                     floor: bool = False) -> Optional[str]:
     """Mk1's applied lab-reporting convention for the PRINTED result; the
-    verdict never reads it. Two conventions, both range rows only: LOQ
-    censoring against the effective LOQ (effective_loq), and a floor reading
-    (endo ">"). Runs after evaluate(), which guarantees a finite numeric for
-    range rows; the guards here are belt-and-braces, not policy.
+    verdict never reads it. Two conventions: LOQ censoring on range and
+    report-only rows, against the effective LOQ (effective_loq), and a floor
+    reading (endo ">"), range rows only: evaluate() refuses a floor on any
+    other kind before this runs. evaluate() guarantees a finite numeric for
+    range rows but NOT for report-only ones (it returns None without reading
+    the result), so the float/isfinite guards below are policy for those: a
+    text result ("ND", "Not Detected") is never censored.
 
     Every surface downstream mirrors result_display verbatim (coabuilder's
     validator, its fixed digital key list, the PDF cell, the AccuVerify page
     and badge, the customer portal), so this string is the whole printed
     convention — no new wire key, no coabuilder or WordPress change."""
-    if spec.rule_kind != "range" or (loq is None and not floor):
+    if spec.rule_kind not in _LOQ_KINDS or (loq is None and not floor):
         return None
     try:
         value = float(str(result or "").strip())
@@ -351,6 +361,13 @@ def build_native_sections(db: Session, parent, *, vial_parent_ids=None) -> dict:
     # (not per row) — a blend or a non-peptide family returns None (R5), and
     # resolve_spec then coarsens straight to the matrix/wildcard tier.
     peptide_id = sample_peptide_id(db, parent.id)
+    # The parent's dosage form is a spec tier (sample forms); a vial's rows
+    # are judged here too, by its parent's form.
+    sample_form_id = getattr(parent, "sample_form_id", None)
+    if matrix != "Peptide":
+        sample_form_id = None        # the form tier is peptide-family only (resolve_spec)
+    # The form tier is only "consulted" when the sample has a form.
+    form_tier = f"form={sample_form_id!r}, " if sample_form_id is not None else ""
 
     sections = []
     deferred_profiles: list[str] = []
@@ -384,6 +401,9 @@ def build_native_sections(db: Session, parent, *, vial_parent_ids=None) -> dict:
         # (lod, lod_unit) of every printed row, for the profile text's {lod}
         # (endo slice 4).
         limits: list[tuple] = []
+        # Whether every printed row is a report-only row filed for the
+        # sample's form (the basis-note rule below).
+        all_form_report_only = True
         for svc, row in member_rows:
             if row is None:
                 if _withdrawn_by_lab(db, parent.id, svc.id):
@@ -424,7 +444,8 @@ def build_native_sections(db: Session, parent, *, vial_parent_ids=None) -> dict:
                     sample_id, prof.key, svc.keyword,
                 )
             spec = resolve_spec(db, svc.id, matrix, peptide_id=peptide_id,
-                                unit=effective_unit(row.result_unit, svc.unit))
+                                unit=effective_unit(row.result_unit, svc.unit),
+                                sample_form_id=sample_form_id)
             if spec is None:
                 # Rule 5 (relocated from COABuilder): a result must not print
                 # without a verdict. Names the service, every tier consulted
@@ -435,7 +456,7 @@ def build_native_sections(db: Session, parent, *, vial_parent_ids=None) -> dict:
                     f"native sections: profile '{prof.key}' member service "
                     f"'{svc.keyword}' (id={svc.id}) has no active spec "
                     f"(tiers consulted: peptide={peptide_id!r}, "
-                    f"matrix={matrix!r}, wildcard) on {sample_id}: No active "
+                    f"{form_tier}matrix={matrix!r}, wildcard) on {sample_id}: No active "
                     f"{svc.title} spec in {unit or 'no unit'} for "
                     f"{matrix or 'any sample type'}. File one in "
                     f"analysis_service_specs"
@@ -451,11 +472,12 @@ def build_native_sections(db: Session, parent, *, vial_parent_ids=None) -> dict:
             # The result's own LOQ wins over the spec's (endo slice 3, spec
             # section 7): it decides "< <LOQ>" and rides specification.loq, the
             # field coabuilder's LOQ column and the digital COA already read.
-            # Range rows only, as _spec_wire_dict publishes it. A row without
-            # its own LOQ (every heavy metal) keeps the spec's, byte for byte.
+            # Range and report-only rows, as _spec_wire_dict publishes it. A
+            # row without its own LOQ (every heavy metal) keeps the spec's,
+            # byte for byte.
             loq = effective_loq(row, spec)
             specification = _spec_wire_dict(spec)
-            if spec.rule_kind == "range":
+            if spec.rule_kind in _LOQ_KINDS:
                 specification["loq"] = loq
             rows.append({
                 "keyword": svc.keyword,
@@ -469,6 +491,9 @@ def build_native_sections(db: Session, parent, *, vial_parent_ids=None) -> dict:
                                                   floor=floor),
             })
             limits.append((row.lod, row.lod_unit))
+            all_form_report_only = (all_form_report_only
+                                    and spec.rule_kind == "informational"
+                                    and spec.sample_form_id is not None)
         if not rows:
             # Rule 3 (section half): unreachable while members are required
             # non-empty in _ordered_native_profiles, kept as defence.
@@ -479,12 +504,20 @@ def build_native_sections(db: Session, parent, *, vial_parent_ids=None) -> dict:
         # [ ... ] segments, filled from this section's rows (coa.text_macros).
         # Text with no macro comes back exactly as typed.
         values = {"lod": format_lod(limits)}
+        # A heavy-metal basis note describes how the limits scale ("Limits
+        # scale with dose"); a section whose every row is a report-only row
+        # filed for the sample's form (nasal spray) has no limits to describe,
+        # so the note would be noise. Form rows only (Handler, 2026-10-28,
+        # after the prod pre-check): a section that is report-only for every
+        # sample, like the vial vacuum test, uses its note to describe the
+        # method and keeps it. The key stays on the wire.
         sections.append({
             "profile_key": prof.key,
             "title": prof.coa_section_title or prof.name,
             "archetype": prof.coa_archetype,
             "sort_order": prof.coa_sort_order,
-            "basis_note": resolve(prof.coa_basis_note, values),
+            "basis_note": (None if all_form_report_only
+                           else resolve(prof.coa_basis_note, values)),
             "method_text": resolve(prof.coa_method_text, values),
             "prep_text": resolve(prof.coa_prep_text, values),
             # Fail-open to [] on a malformed container is deliberate: the

@@ -126,6 +126,7 @@ export type SettingsSubSection =
   | 'groups'
   | 'documents'
   | 'checkIn'
+  | 'sampleForms'
   | 'workflow'
   | 'integrations'
   | 'agents'

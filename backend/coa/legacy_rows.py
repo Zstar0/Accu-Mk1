@@ -80,7 +80,8 @@ def _native_spec_fields(db, parent, r, wire_result) -> dict:
     # The shaped row's unit is already result_unit or the service unit.
     spec = resolve_spec(db, service_id, matrix,
                         peptide_id=getattr(r, "peptide_id", None),
-                        unit=normalize_unit(getattr(r, "unit", None)))
+                        unit=normalize_unit(getattr(r, "unit", None)),
+                        sample_form_id=getattr(parent, "sample_form_id", None))
     if spec is None:
         return {}
     conforms = None

@@ -43,7 +43,20 @@ import { useDepartments, type Department } from '@/services/departments'
 import { PromotedFromBadge } from '@/components/senaite/PromotedFromBadge'
 import { AnalysisSpecCell } from '@/components/senaite/AnalysisSpecCell'
 import { formatNumericResult } from '@/components/senaite/senaite-utils'
-import { useAnalysisEditing, type UseAnalysisEditingReturn } from '@/hooks/use-analysis-editing'
+import {
+  presetUnit,
+  unitChoices,
+  unitPickRequired,
+  useAnalysisEditing,
+  type UseAnalysisEditingReturn,
+} from '@/hooks/use-analysis-editing'
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from '@/components/ui/select'
 import { useAnalysisTransition, type UseAnalysisTransitionReturn } from '@/hooks/use-analysis-transition'
 import { useBulkAnalysisTransition } from '@/hooks/use-bulk-analysis-transition'
 import { useSidebar } from '@/components/ui/sidebar'
@@ -897,6 +910,46 @@ function EditableResultCell({
     </Tooltip>
   )
 
+  // Unit dropdown (native rows with more than one unit on offer). The picked
+  // unit lives here until the save; a new edit session starts from the preset.
+  const unitTriggerRef = useRef<HTMLButtonElement>(null)
+  const unitMenuOpenRef = useRef(false)
+  const [pickedUnit, setPickedUnit] = useState<string | null>(null)
+  const [wasEditing, setWasEditing] = useState(isEditing)
+  if (wasEditing !== isEditing) {
+    setWasEditing(isEditing)
+    setPickedUnit(null)
+  }
+  const unitList = unitChoices(analysis)
+  const hasUnitSelect = unitList.length > 1
+  const shownUnit = pickedUnit ?? presetUnit(analysis)
+  const unitArg = pickedUnit ?? undefined
+  // Value and unit form one control: focus moving between them is not a blur,
+  // and neither is the menu opening (it takes focus into its listbox).
+  const focusStaysInUnitPair = (e: React.FocusEvent) => {
+    if (!hasUnitSelect) return false
+    const to = e.relatedTarget
+    return (
+      unitMenuOpenRef.current ||
+      (to instanceof Element &&
+        (to === unitTriggerRef.current ||
+          to === inputRef.current ||
+          to.closest('[data-slot="select-content"]') != null))
+    )
+  }
+  // The one commit path for a typed value plus its unit: the unit's pick,
+  // its menu closing without a change, and blur out of the pair all land here,
+  // so a typed value is never left unsaved.
+  const commitValue = (unit?: string) => {
+    if (!analysis.uid) return
+    const u = unit ?? unitArg
+    if (autoEdit) {
+      if (autoValue.trim()) void editing.save(analysis.uid, autoValue.trim(), u)
+    } else if (editing.draft.trim()) {
+      void editing.save(analysis.uid, undefined, u)
+    }
+  }
+
   // Auto-focus when entering edit mode
   useEffect(() => {
     if (isEditing) {
@@ -913,21 +966,69 @@ function EditableResultCell({
   // If draft is empty: save (to clear) when there was a prior value, otherwise just cancel.
   const handleBlur = (e: React.FocusEvent) => {
     if ((e.relatedTarget as HTMLElement)?.dataset.cancel) return
+    if (focusStaysInUnitPair(e)) return
     if (!analysis.uid || editing.isSaving) return
     if (editing.draft.trim() || analysis.result) {
-      void editing.save(analysis.uid)
+      void editing.save(analysis.uid, undefined, unitArg)
     } else {
       editing.cancelEditing()
     }
   }
+  // autoEdit: the input and the unit trigger blur through the same gate.
+  const handleAutoBlur = (e: React.FocusEvent) => {
+    if (focusStaysInUnitPair(e)) return
+    commitValue()
+  }
+
+  const staticUnit =
+    analysis.unit && analysis.unit.toLowerCase() !== 'text' ? (
+      <span className="text-xs text-muted-foreground shrink-0">
+        {analysis.unit}
+      </span>
+    ) : null
+  const unitControl = hasUnitSelect ? (
+    <Select
+      value={shownUnit ?? ''}
+      onValueChange={u => {
+        setPickedUnit(u)
+        commitValue(u)
+      }}
+      onOpenChange={open => {
+        unitMenuOpenRef.current = open
+        if (!open) commitValue()
+      }}
+      disabled={editing.isSaving}
+    >
+      <SelectTrigger
+        ref={unitTriggerRef}
+        size="sm"
+        className="h-7 w-auto min-w-16 gap-1 px-2 text-xs shrink-0 data-[size=sm]:h-7"
+        aria-label={`Unit for ${analysis.title}`}
+        aria-invalid={
+          unitPickRequired(analysis) &&
+          !pickedUnit &&
+          !!(autoEdit ? autoValue.trim() : editing.draft.trim())
+        }
+        onBlur={autoEdit ? handleAutoBlur : handleBlur}
+      >
+        <SelectValue placeholder="Unit">{shownUnit}</SelectValue>
+      </SelectTrigger>
+      <SelectContent>
+        {unitList.map(u => (
+          <SelectItem key={u} value={u} className="text-xs">
+            {u}
+          </SelectItem>
+        ))}
+      </SelectContent>
+    </Select>
+  ) : (
+    staticUnit
+  )
 
   // autoEdit mode: inline input always visible when no result yet
   if (autoEdit) {
-    const handleAutoSave = () => {
-      if (analysis.uid && autoValue.trim()) void editing.save(analysis.uid, autoValue.trim())
-    }
     const handleAutoKeyDown = (e: React.KeyboardEvent) => {
-      if (e.key === 'Enter') { e.preventDefault(); handleAutoSave() }
+      if (e.key === 'Enter') { e.preventDefault(); commitValue() }
       if (e.key === 'Escape') { e.preventDefault(); setAutoValue('') }
     }
     const autoInputClass = "h-7 text-sm px-2 py-0 rounded-md border border-input bg-background text-foreground focus:outline-none focus:ring-2 focus:ring-ring shrink-0"
@@ -967,16 +1068,14 @@ function EditableResultCell({
               value={autoValue}
               onChange={e => setAutoValue(e.target.value)}
               onKeyDown={handleAutoKeyDown}
-              onBlur={handleAutoSave}
+              onBlur={handleAutoBlur}
               disabled={editing.isSaving}
               className="h-7 text-sm font-mono px-2 py-1 w-28 shrink-0"
               placeholder="—"
               aria-label={`Edit result for ${analysis.title}`}
             />
           )}
-          {analysis.unit && analysis.unit.toLowerCase() !== 'text' && (
-            <span className="text-xs text-muted-foreground shrink-0">{analysis.unit}</span>
-          )}
+          {unitControl}
           {autoValue && (
             <button
               onClick={() => setAutoValue('')}
@@ -1004,7 +1103,7 @@ function EditableResultCell({
               onChange={e => editing.setDraft(e.target.value)}
               onKeyDown={e => {
                 if (e.key === 'Escape') { e.preventDefault(); editing.cancelEditing() }
-                if (e.key === 'Enter') { e.preventDefault(); if (analysis.uid) void editing.save(analysis.uid) }
+                if (e.key === 'Enter') { e.preventDefault(); if (analysis.uid) void editing.save(analysis.uid, undefined, unitArg) }
               }}
               onBlur={handleBlur}
               disabled={editing.isSaving}
@@ -1022,7 +1121,7 @@ function EditableResultCell({
               onChange={e => editing.setDraft(e.target.value)}
               onKeyDown={e => {
                 if (e.key === 'Escape') { e.preventDefault(); editing.cancelEditing() }
-                if (e.key === 'Enter') { e.preventDefault(); if (analysis.uid) void editing.save(analysis.uid) }
+                if (e.key === 'Enter') { e.preventDefault(); if (analysis.uid) void editing.save(analysis.uid, undefined, unitArg) }
               }}
               onBlur={handleBlur}
               disabled={editing.isSaving}
@@ -1041,18 +1140,16 @@ function EditableResultCell({
               step={isNumeric ? 'any' : undefined}
               value={editing.draft}
               onChange={e => editing.setDraft(e.target.value)}
-              onKeyDown={e => { if (analysis.uid) editing.handleKeyDown(e, analysis.uid) }}
+              onKeyDown={e => { if (analysis.uid) editing.handleKeyDown(e, analysis.uid, unitArg) }}
               onBlur={handleBlur}
               disabled={editing.isSaving}
               className="h-7 text-sm font-mono px-2 py-1 w-28 shrink-0"
               aria-label={`Edit result for ${analysis.title}`}
             />
           )}
-          {analysis.unit && analysis.unit.toLowerCase() !== 'text' && (
-            <span className="text-xs text-muted-foreground shrink-0">{analysis.unit}</span>
-          )}
+          {unitControl}
           <button
-            onClick={() => { if (analysis.uid) void editing.save(analysis.uid) }}
+            onClick={() => { if (analysis.uid) void editing.save(analysis.uid, undefined, unitArg) }}
             disabled={editing.isSaving}
             className="inline-flex items-center justify-center w-6 h-6 rounded-md text-emerald-600 hover:bg-emerald-50 dark:hover:bg-emerald-500/10 transition-colors cursor-pointer disabled:opacity-50 shrink-0"
             aria-label="Save"
@@ -2075,7 +2172,12 @@ function getCellValue(a: SenaiteAnalysis, col: SortColumn, nameMap: Map<number, 
 interface AnalysisTableProps {
   analyses: SenaiteAnalysis[]
   analyteNameMap: Map<number, string>
-  onResultSaved?: (uid: string, newResult: string, newReviewState: string | null) => void
+  onResultSaved?: (
+    uid: string,
+    newResult: string,
+    newReviewState: string | null,
+    newUnit?: string | null
+  ) => void
   onTransitionComplete?: () => void
   onMethodInstrumentSaved?: (uid: string, field: 'method' | 'instrument', newUid: string | null, newTitle: string | null) => void
   /**

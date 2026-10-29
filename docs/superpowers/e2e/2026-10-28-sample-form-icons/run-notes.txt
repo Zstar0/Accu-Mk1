@@ -1,0 +1,98 @@
+Dosage form icons, 2026-10-28, commit 372b91db on feat/sample-forms
+
+Stack: devbox sforms (Mk1 frontend :5552), worktree files synced from the laptop branch, backend
+restarted so _run_migrations ran: lims_sample_forms gained icon, and the six built-in forms were
+filled once (powder_vial, liquid_vial, pen, nasal_spray, capsule, tablet). Headless Chromium via
+Playwright, 1440x900.
+
+Icons read from the DOM (svg data-icon):
+  Settings rows, light and dark: powder_vial, liquid_vial, pen, nasal_spray, capsule, tablet
+  Check-in wizard (SFORMS-TEST-1, P-5000): trigger powder_vial; options powder_vial, liquid_vial,
+    pen, nasal_spray (active forms only)
+  Sample page P-0148: trigger nasal_spray
+  Spec rules, HM-PB: Nasal Spray chip nasal_spray; Form picker lists every form with its icon
+
+01 Settings > Dosage forms, light
+02 Settings, dark, the Pen row's icon picker open (each icon named)
+03 Check-in wizard header, Form picker open
+04 Sample page Form picker
+05 Spec rules: form chip and the Add spec Form picker
+
+Tests: backend 98 passed in the stack container (test_sample_forms, test_sample_forms_schema,
+test_service_spec_routes, test_result_units). Frontend: typecheck clean; vitest on every form surface
+121 passed, 1 failed (PackagingPanel, fails on master too); ESLint and Prettier clean on the
+changed files.
+
+Longest seeded name, closed trigger (name span scrollWidth vs clientWidth):
+  with the icon, at w-44: wizard 120 vs 104, spec rules Form 164 vs 126 (both clipped; the wizard
+  fit before the icon, the spec rules picker was already clipped)
+  wizard widened to w-52, spec rules Form to w-56: wizard 120 vs 120, spec rules 164 vs 164
+06 wizard picker showing Reconstituted Solution (P-5001 set back to Lyophilized Powder after)
+07 spec rules Form picker showing Reconstituted Solution (nothing saved)
+
+Status pages, commit df9f0db8 (same stack, 1920x1000, dark). Each mark hovered; the card shows the
+form name and route. Marks read from the DOM ([role=img][aria-label^="Form:"]):
+  Order Status table (All Orders, test orders shown, sample P-0139): P-0139 Pen
+  Order Status kanban: P-0139 Pen (no screenshot: the card prints the order's email)
+  Customer status page (customer 1539): P-0139 Pen, P-0123 Nasal Spray, P-0121 Reconstituted Solution
+  Vial board cards: 7 marks (P-0145 Lyophilized Powder, P-0153/P-0144/P-0151 Nasal Spray vials)
+  Vial board grouped by sample: 11 marks (group headers plus cards)
+  Vial board table: P-0144 Nasal Spray, P-0145 Lyophilized Powder, P-0151 and P-0153 Nasal Spray
+  COA Explorer: P-0139 Pen
+Stack-only test data: the golden samples carry no type, so P-0139, P-0123, P-0121, P-0144 and
+P-0145 were given type Peptide and a form by SQL in accumark_mk1, and one draft coa_generations row
+(P-0139, SFRM-ICON) was inserted in accumark_integration so the COA Explorer lists a sample with a
+form. Backend in the stack container: 49 passed (test_sample_forms, test_sub_samples_board,
+test_sample_forms_schema). Frontend: 198 passed across the 16 test files for the touched pages;
+typecheck clean; ESLint clean on new code (8 errors remain on untouched lines of api.ts and
+OrderStatusPage.tsx, already on master).
+08 Order Status table, hover card
+09 Customer status page
+10 Vial board cards
+11 Vial board grouped by sample
+12 Vial board table
+13 COA Explorer
+
+Sample page header clean-up (same stack): Form and Priority moved from the header into the Sample
+Info card, under Sample Type. P-0148, light and dark: one Form picker and one Priority picker on
+the page, both inside the card. Vial page P-0144-S01: its vial-level Priority control stays in the
+header; the old sample-level row (always "No registry record for this sample yet" on a vial) is gone.
+(P-0148-S01 does not open on this stack: it exists only in Mk1 and the stack reads sample pages
+from SENAITE.)
+14 Sample page, dark: header without the two controls, Sample Info card with them
+15 Sample Info card, light
+16 Vial page header
+
+Read-source controls move (2026-10-28, stack sforms, 1690px, Accu-Mk1 read source on):
+The "Read from Accu-Mk1" badge, the Follow default / SENAITE / Accu-Mk1 override and the
+"reading basic-info from Accu-Mk1 - N/M fields" line moved from the sample page header into the
+registry debug panel (admin). The panel's old two-way SENAITE / Accu-Mk1 switch is replaced by the
+three-way one, so Follow default is reachable again. Parent pages only; a vial page passes nothing.
+P-0148 header row: 158px before, 144px after (title column 83px -> 70px). Panel checked in light
+and dark (the panel is always dark).
+16b Sample header before the move
+17 Sample header after the move
+18 Registry debug panel title bar with the badge, three-way override and provenance line
+
+Photo column + Flag/Watch move (2026-10-28, stack sforms, Accu-Mk1 read source on):
+The vial photo is pinned to the right of the header and spans every row; Flag/Watch moved from the
+top row to the end of the actions row (after Actions); the SLA lines moved from the left of the
+actions row to the top right, where Flag/Watch used to sit, to make room. The stack has no vial
+photos or received dates, so the run served a portrait test photo for the photo endpoint and set a
+received date on stack P-0148 (so its SLA lines render). The header is capped at 1104px wide on any
+screen. P-0148, unflagged: header 207px -> 148px, actions row on one line with 24px to spare.
+Flagged (one open blocker served for the flags call): the flag pill wraps to a second line, header
+189px. Vial page P-0144-S01: 203px -> 198px (its height comes from the vial priority control).
+Hover zoom on the photo still opens 360px wide from the photo's top-right corner.
+18b Sample header before (photo sets the top row at 127px)
+19 Sample header after, dark, unflagged
+20 Sample header after, light
+21 Flagged sample: the flag pill wraps to a second line
+
+Shorter action labels (2026-10-28, same stack): "Manage Sub-Samples" -> "Sub-Samples" and
+"Variance Summary" -> "Variance" (the dialog keeps its Variance Summary title; the lab-tech guide's
+"click" line follows the button). That frees 120px, so a flagged sample's pill now stays on the
+actions row: 965px of buttons in a 992px row, header 156px (148px unflagged). Light mode below is a
+real workflow_stranded flag the stack raised on P-0148 after the test received date was set.
+22 Flagged sample, dark: one actions row
+23 Flagged sample, light

@@ -1,5 +1,25 @@
 # Changelog
 
+## v1.55.0 - 2026-10-28
+
+Needs COA Builder 2.35.6 (deployed first, 2026-10-28).
+
+### Sample forms: record what a sample physically is
+- **Check-in records each sample's dosage form**: Lyophilized Powder, Reconstituted Solution, Pen, Nasal Spray, and more. The Receive Wizard header has a Form picker preset to the default, and the Sample Info card on the sample page shows the form and can change it. Peptide-type samples only; Bac Water gets no form. Existing peptide samples start as Lyophilized Powder.
+- **Settings → Sample Forms manages the list**: add a form, rename it, reorder it, pick the default and an icon, or retire it (forms are never deleted).
+- **Each sample's form icon shows next to its id** on Order Status, the customer status page, the vial board and the COA Explorer, with the form name on hover. The certificate does not print the form.
+
+### Specs and the bench: a form can carry its own rules
+- **The spec editor has a Form tier.** Precedence is Peptide, then Form, then product type, then All, per unit, so a nasal spray can have its own heavy-metal rules, unit and LOQ.
+- **A report-only rule can carry an LOQ.** At or below it the COA prints `< 0.5` (the LOQ), the LOQ column shows, and there is no pass/fail verdict.
+- **The bench presets the result unit from the form's rule**, with a dropdown to change it. A unit no rule or catalog entry allows is refused.
+- **A result in a unit the form's rules don't cover stops the certificate** with "has no active spec", instead of falling back to the injectable pass/fail. Re-enter it in the form's unit, or file the form rule in that unit too.
+- **A section's basis note is left off only when every row is a form's report-only rule** (nasal heavy metals). Sections that are report-only for every sample, like the vial vacuum test, keep their note.
+
+### Sample page header
+- Form and Priority moved into the Sample Info card; the read-source badge and override moved into the admin registry panel.
+- The vial photo sits on the right across the whole header, Flag and Watch follow Actions, and two buttons are shorter: "Sub-Samples" and "Variance".
+
 ## v1.54.0 - 2026-10-27
 
 ### Endotoxin: set the reader up from Mk1

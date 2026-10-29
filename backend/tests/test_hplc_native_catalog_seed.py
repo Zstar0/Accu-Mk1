@@ -2,6 +2,8 @@
 origin=mk1 services, ONE profile `hplc-purity-identity` with the five as
 ordered members, and the parity spec rows. Idempotent; admin edits survive.
 """
+from decimal import Decimal
+
 import pytest
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
@@ -342,3 +344,31 @@ def test_keyword_collision_skips_service_and_aborts_profile(db_session, caplog):
     assert report2["services"] == 1 and report2["profile"] == 1 and report2["members"] == 5
     prof = db_session.query(AnalysisProfile).filter_by(key=HPLC_NATIVE_PROFILE_KEY).one()
     assert [s.keyword for s in prof.analysis_services] == list(KEYWORDS)
+
+
+def test_seed_ignores_a_form_tier_spec_row_when_probing_the_wildcard_slot(db_session):
+    """A sample-form row (matrix and peptide_id NULL, sample_form_id set) must
+    not read as the wildcard slot: the seed still mints the wildcard row."""
+    from catalog.hplc_native_seed import seed_hplc_native_catalog
+    from models import AnalysisService, AnalysisServiceSpec, LimsSampleForm
+    seed_hplc_native_catalog(db_session)
+    svc = db_session.query(AnalysisService).filter_by(keyword="HPLC-PURITY").one()
+    wild = (db_session.query(AnalysisServiceSpec)
+            .filter_by(analysis_service_id=svc.id, matrix=None, peptide_id=None).one())
+    db_session.delete(wild)
+    nasal = LimsSampleForm(name="Nasal Spray", route="nasal_inhaled")
+    db_session.add(nasal)
+    db_session.flush()
+    db_session.add(AnalysisServiceSpec(
+        analysis_service_id=svc.id, sample_form_id=nasal.id, rule_kind="range",
+        min_value=Decimal("90"), unit="%"))
+    db_session.flush()
+
+    seed_hplc_native_catalog(db_session)
+
+    assert (db_session.query(AnalysisServiceSpec)
+            .filter(AnalysisServiceSpec.analysis_service_id == svc.id,
+                    AnalysisServiceSpec.matrix.is_(None),
+                    AnalysisServiceSpec.peptide_id.is_(None),
+                    AnalysisServiceSpec.sample_form_id.is_(None))
+            .count()) == 1

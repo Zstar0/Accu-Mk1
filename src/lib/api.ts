@@ -2944,6 +2944,8 @@ export interface AnalysisServiceSpecRecord {
   matrix: string | null
   peptide_id: number | null
   peptide_code: string | null
+  sample_form_id: number | null
+  sample_form_name: string | null
   rule_kind: 'range' | 'equals' | 'informational'
   min_value: string | null
   max_value: string | null
@@ -2958,6 +2960,7 @@ export interface AnalysisServiceSpecRecord {
 export interface ServiceSpecPayload {
   matrix?: string | null
   peptide_id?: number | null
+  sample_form_id?: number | null
   rule_kind: 'range' | 'equals' | 'informational'
   min_value?: string | null
   max_value?: string | null
@@ -4434,6 +4437,13 @@ export interface SenaiteAnalysis {
   result_type?: string | null
   result_options: SenaiteResultOption[]  // always present from backend; [] if no predefined options
   unit: string | null
+  /** Native (mk1:) rows only: the units the analyst may pick at result entry
+   *  (catalog unit plus every unit on the service's active specs, canonical
+   *  spellings). Absent on SENAITE-sourced rows. */
+  unit_options?: string[]
+  /** Native rows: the unit the sample's form selects, or null when it selects
+   *  none. For an unresulted row `unit` already equals it. */
+  default_unit?: string | null
   method: string | null
   method_uid: string | null
   method_options: { uid: string; title: string }[]
@@ -4564,6 +4574,12 @@ export interface SenaiteLookupResult {
   registry_pk?: number | null
   /** The sample's OWN explicit priority key (null = inherit up the chain). */
   explicit_priority_key?: string | null
+  /** Dosage form (sample-forms spec). Only Peptide-matrix samples are
+   *  `sample_form_eligible`; an eligible row may still have a null form id
+   *  (born before its type was known; the next backend boot fills it in). */
+  sample_form_id?: number | null
+  sample_form_name?: string | null
+  sample_form_eligible?: boolean
   /** Task 5: which LIMS owns this sample's canonical record — 'mk1' = native-
    *  born (Analytes card switches to Relabel-only mode); 'senaite' = legacy.
    *  Null when unresolved. */
@@ -4886,7 +4902,11 @@ export interface AnalysisResultResponse {
 
 export async function setAnalysisResult(
   uid: string,
-  result: string
+  result: string,
+  /** Native rows only. Omitted (or empty) leaves the stored unit unchanged;
+   *  the server 422s a unit outside the row's `unit_options`. Never sent to
+   *  SENAITE. */
+  resultUnit?: string | null
 ): Promise<AnalysisResultResponse> {
   // Phase 3: route mk1:<id> UIDs to the Mk1 transitions endpoint with
   // kind=submit + result_value inline. The result-set + state-advance
@@ -4901,6 +4921,7 @@ export async function setAnalysisResult(
         body: JSON.stringify({
           kind: 'submit',
           result_value: result,
+          ...(resultUnit ? { result_unit: resultUnit } : {}),
           reason: 'bench-tech result entry',
         }),
       }
@@ -5808,6 +5829,8 @@ export interface BoardParent {
   client_sample_id: string | null
   priority: InboxPriority
   is_test_order: boolean
+  /** Dosage form, for the form icon; null when the type takes none. */
+  sample_form_id?: number | null
 }
 
 export interface BoardVial {

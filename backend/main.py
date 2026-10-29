@@ -65,6 +65,7 @@ from sla_perf import (  # noqa: E402
 from models import AuditLog, Settings, Job, Sample, Result, Instrument, AnalysisService, AnalysisServiceSpec, HplcMethod, Peptide, PeptideAnalyte, CalibrationCurve, HPLCAnalysis, User, SharePointFileCache, WizardSession, WizardMeasurement, peptide_methods, blend_components, ServiceGroup, service_group_members, SamplePriority, Worksheet, WorksheetItem, WorksheetNote, instrument_methods, SampleAnalyteAlias, SlaTier, SlaPriorityTier, BusinessHoursConfig, LabHoliday, LimsSample, LimsSampleRemark, LimsSubSample, LimsBox, FlagType, LimsParentAttachment, MethodAttachment, method_services, LimsOrder
 from models import ConsumableType, method_consumables  # endo worksheet v2
 from models import EndoPrepRule  # endo slice 5
+from models import LimsSampleForm  # spec form tier
 from catalog.change_log import apply_and_log, log_create, log_delete, log_members
 from auth import (
     get_current_user, require_admin, create_access_token,
@@ -127,6 +128,7 @@ from slack_notify.routes import router as slack_prefs_router
 from slack_notify.interactions import router as slack_interactions_router
 from workflow.routes import router as workflow_router
 from priority.routes import router as priority_router
+from sample_forms.routes import router as sample_forms_router
 from customer_insights.routes import router as customer_insights_router
 from crm_close.routes import router as crm_close_router
 from support_plain.routes import router as support_plain_router
@@ -650,6 +652,7 @@ app.include_router(slack_prefs_router)
 app.include_router(slack_interactions_router)
 app.include_router(workflow_router)
 app.include_router(priority_router)
+app.include_router(sample_forms_router)
 app.include_router(customer_insights_router)
 app.include_router(crm_close_router)
 app.include_router(support_plain_router)
@@ -1854,6 +1857,8 @@ async def get_sample_activity(
                 )
                 if d.get("senaite") == "locked":
                     label += " (SENAITE locked — saved in Mk1 only)"
+            elif se.event == "sample_form_changed":
+                label = f"Form changed: {d.get('from_name') or 'none'} → {d.get('to_name') or 'none'}"
             elif se.event in ("coa_generated", "coa_published"):
                 coa_actors[(se.event, d.get("verification_code"))] = actor_email
                 continue
@@ -4607,6 +4612,8 @@ class ServiceSpecResponse(BaseModel):
     matrix: Optional[str] = None
     peptide_id: Optional[int] = None
     peptide_code: Optional[str] = None
+    sample_form_id: Optional[int] = None
+    sample_form_name: Optional[str] = None
     rule_kind: str
     min_value: Optional[str] = None
     max_value: Optional[str] = None
@@ -4621,6 +4628,7 @@ class ServiceSpecResponse(BaseModel):
 class ServiceSpecCreate(BaseModel):
     matrix: Optional[str] = None
     peptide_id: Optional[int] = None
+    sample_form_id: Optional[int] = None
     rule_kind: Literal["range", "equals", "informational"]
     min_value: Optional[str] = None
     max_value: Optional[str] = None
@@ -4642,28 +4650,33 @@ class ServiceSpecPatch(BaseModel):
 
 
 def _validate_spec_shape(*, rule_kind, min_value, max_value, equals_value,
-                         matrix, peptide_id, db, loq=None):
-    if matrix is not None and peptide_id is not None:
-        raise HTTPException(422, "a spec row is peptide-tier OR matrix-tier, not both")
+                         matrix, peptide_id, db, loq=None, sample_form_id=None):
+    if sum(v is not None for v in (matrix, peptide_id, sample_form_id)) > 1:
+        raise HTTPException(
+            422, "a spec row is peptide-tier, form-tier OR matrix-tier, not more than one")
     if matrix is not None and matrix not in _SPEC_MATRICES:
         raise HTTPException(422, f"matrix must be one of {_SPEC_MATRICES}")
     if peptide_id is not None and db.get(Peptide, peptide_id) is None:
         raise HTTPException(422, f"peptide {peptide_id} does not exist")
+    # An inactive (retired) form is allowed; only a missing one is rejected.
+    if sample_form_id is not None and db.get(LimsSampleForm, sample_form_id) is None:
+        raise HTTPException(422, f"sample form {sample_form_id} does not exist")
     if rule_kind == "range":
         if equals_value is not None or (min_value is None and max_value is None):
             raise HTTPException(422, "range rule needs min and/or max, and no equals_value")
     elif rule_kind == "informational":
-        # Report-only spec (2026-08-22, R3): bounds/expected/LOQ are REJECTED
+        # Report-only spec (2026-08-22, R3): bounds/expected are REJECTED
         # loudly, never silently nulled — a value the lab typed and lost is
-        # exactly the confusion this arm exists to prevent. LOQ is checked
-        # here (and only here) because range rows legitimately carry one and
-        # equals rows tolerate a stray one at write time (wire never
-        # publishes it for them).
+        # exactly the confusion this arm exists to prevent. LOQ is allowed
+        # (sample forms task 7): it censors the PRINTED result ("< <LOQ>",
+        # e.g. "< 0.5") while the verdict stays None; evaluate() never reads
+        # it. Its value rules (finite, non-negative) are _parse_loq's, applied
+        # by the create/patch routes before this runs.
         if (equals_value is not None or min_value is not None
-                or max_value is not None or loq is not None):
+                or max_value is not None):
             raise HTTPException(
                 422, "informational rule reports as measured — it takes no "
-                     "min/max, equals_value, or loq")
+                     "min/max or equals_value")
     else:  # equals
         if equals_value is None or min_value is not None or max_value is not None:
             raise HTTPException(422, "equals rule needs equals_value only")
@@ -4715,9 +4728,14 @@ def _spec_response(db, spec) -> ServiceSpecResponse:
     if spec.peptide_id is not None:
         pep = db.get(Peptide, spec.peptide_id)
         code = pep.abbreviation if pep else None
+    form_name = None
+    if spec.sample_form_id is not None:
+        form = db.get(LimsSampleForm, spec.sample_form_id)
+        form_name = form.name if form else None
     return ServiceSpecResponse(
         id=spec.id, analysis_service_id=spec.analysis_service_id,
         matrix=spec.matrix, peptide_id=spec.peptide_id, peptide_code=code,
+        sample_form_id=spec.sample_form_id, sample_form_name=form_name,
         rule_kind=spec.rule_kind,
         min_value=_dec_to_str(spec.min_value),
         max_value=_dec_to_str(spec.max_value),
@@ -4761,6 +4779,7 @@ def list_service_specs(service_id: int, db: Session = Depends(get_db),
         .where(AnalysisServiceSpec.analysis_service_id == service_id,
                AnalysisServiceSpec.active.is_(True))
         .order_by(AnalysisServiceSpec.peptide_id.is_(None),
+                  AnalysisServiceSpec.sample_form_id.is_(None),
                   AnalysisServiceSpec.matrix.is_(None),
                   AnalysisServiceSpec.id)
     ).scalars().all()
@@ -4779,10 +4798,11 @@ def create_service_spec(service_id: int, req: ServiceSpecCreate,
     _validate_spec_shape(rule_kind=req.rule_kind, min_value=req.min_value,
                          max_value=req.max_value, equals_value=req.equals_value,
                          matrix=req.matrix, peptide_id=req.peptide_id, db=db,
-                         loq=req.loq)
+                         loq=req.loq, sample_form_id=req.sample_form_id)
     spec = AnalysisServiceSpec(
         analysis_service_id=service_id, matrix=req.matrix,
-        peptide_id=req.peptide_id, rule_kind=req.rule_kind,
+        peptide_id=req.peptide_id, sample_form_id=req.sample_form_id,
+        rule_kind=req.rule_kind,
         min_value=_parse_decimal(req.min_value, "min_value"),
         max_value=_parse_decimal(req.max_value, "max_value"),
         equals_value=req.equals_value, unit=req.unit,
@@ -4832,7 +4852,8 @@ def patch_service_spec(spec_id: int, req: ServiceSpecPatch,
         "loq": fields.get("loq",
                           str(spec.loq) if spec.loq is not None else None),
     }
-    _validate_spec_shape(matrix=spec.matrix, peptide_id=spec.peptide_id, db=db, **merged)
+    _validate_spec_shape(matrix=spec.matrix, peptide_id=spec.peptide_id,
+                         sample_form_id=spec.sample_form_id, db=db, **merged)
     # Parse every convertible field into a plain local dict BEFORE any
     # setattr — a 422 partway through (e.g. min_value parses, max_value
     # doesn't) must never leave the spec partially mutated on the session.
@@ -17743,6 +17764,21 @@ def _attach_sample_priority(
     result.priority = _eff_map.as_dict() if _eff_map else None
 
 
+def _attach_sample_form(db: Session, result, row: Optional[LimsSample]) -> None:
+    """Stamp the sample form (Sample Forms feature) onto a lookup payload.
+
+    Mutable Mk1 state like priority: re-stamped on every cache hit so a PATCHed
+    form never shows stale. `result` is the lookup model (or a plain dict);
+    all three fields stay None/False for a SENAITE-only sample."""
+    from sample_forms.service import form_payload
+    payload = form_payload(db, row)
+    if isinstance(result, dict):
+        result.update(payload)
+        return
+    for k, v in payload.items():
+        setattr(result, k, v)
+
+
 _SENAITE_LOOKUP_TTL = 15 * 60  # 15 minutes
 
 
@@ -17814,6 +17850,7 @@ async def lookup_senaite_sample(
                 # Priority is mutable Mk1 state, not a SENAITE artifact — the
                 # cached copy would render a stale chip on the details page.
                 _attach_sample_priority(db, result, None, sample_id=id)
+                _attach_sample_form(db, result, _row)
                 return result
 
     try:
@@ -18429,6 +18466,7 @@ async def lookup_senaite_sample(
         # Sample-priority controls (spec §5) — native-only; a SENAITE sample
         # with no registry row keeps all three fields None.
         _attach_sample_priority(db, result, _logi)
+        _attach_sample_form(db, result, _logi)
         _senaite_lookup_cache[id] = (_time.time(), result)
         return result
 

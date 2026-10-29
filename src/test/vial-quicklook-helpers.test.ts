@@ -68,4 +68,21 @@ describe('patchAnalysisInList', () => {
     const out = patchAnalysisInList(list, 'mk1:1', '1.0', null)
     expect(out[0]).toMatchObject({ result: '1.0', review_state: 'unassigned' })
   })
+
+  it('patches the unit only when the save stored one', () => {
+    const list = [mkAnalysis({ uid: 'mk1:1', unit: 'ppm' })]
+    expect(
+      patchAnalysisInList(list, 'mk1:1', '1.0', null, 'µg/mL')[0]
+    ).toMatchObject({
+      unit: 'µg/mL',
+    })
+    expect(patchAnalysisInList(list, 'mk1:1', '1.0', null)[0]).toMatchObject({
+      unit: 'ppm',
+    })
+    expect(
+      patchAnalysisInList(list, 'mk1:1', '1.0', null, null)[0]
+    ).toMatchObject({
+      unit: 'ppm',
+    })
+  })
 })

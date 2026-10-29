@@ -112,7 +112,7 @@ Each row supports a handful of actions. Most are hover-revealed.
 
 ### 8. Lock the variance set (parent samples with multiple vials)
 
-Variance lives at the parent sample. After results come in (or even before, see Edge cases), open the parent sample's detail page and click **Variance Summary**.
+Variance lives at the parent sample. After results come in (or even before, see Edge cases), open the parent sample's detail page and click **Variance**.
 
 <!-- screenshot: Variance Summary dialog header showing parent sample ID -->
 

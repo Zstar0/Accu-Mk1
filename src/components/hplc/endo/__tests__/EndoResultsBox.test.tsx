@@ -13,7 +13,9 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import type * as ApiModule from '@/lib/api'
 import {
   importReaderResults,
+  listServiceSpecs,
   promoteWorksheetRows,
+  type AnalysisServiceSpecRecord,
   type WorksheetListItem,
 } from '@/lib/api'
 import { EndoResultsBox } from '@/components/hplc/endo/EndoResultsBox'
@@ -181,6 +183,47 @@ describe('EndoResultsBox', () => {
   })
 
   it('says under the title what Mk1 reports today, read from the peptide spec tier', async () => {
+    setup([endoItem({ sample_id: 'P-0001-S02' })])
+    expect(
+      await screen.findByText(
+        "Accu-Mk1 values are per vial; Mk1's endotoxin test reports EU/mL against ≤ 5 EU/mL until the spec switch."
+      )
+    ).toBeInTheDocument()
+  })
+
+  it('never reads a form-scope spec as the All tier, even when it is listed first', async () => {
+    const row = (
+      over: Partial<AnalysisServiceSpecRecord>
+    ): AnalysisServiceSpecRecord => ({
+      id: 1,
+      analysis_service_id: 61,
+      matrix: null,
+      peptide_id: null,
+      peptide_code: null,
+      sample_form_id: null,
+      sample_form_name: null,
+      rule_kind: 'range',
+      min_value: null,
+      max_value: '5',
+      equals_value: null,
+      unit: 'EU/mL',
+      display_override: null,
+      loq: null,
+      active: true,
+      updated_at: null,
+      ...over,
+    })
+    // The API lists form rows ahead of the wildcard; there is no matrix='Peptide' row.
+    vi.mocked(listServiceSpecs).mockResolvedValueOnce([
+      row({
+        id: 2,
+        sample_form_id: 7,
+        sample_form_name: 'Nasal Spray',
+        max_value: '1',
+        unit: 'EU/spray',
+      }),
+      row({ id: 3 }),
+    ])
     setup([endoItem({ sample_id: 'P-0001-S02' })])
     expect(
       await screen.findByText(

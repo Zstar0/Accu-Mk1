@@ -245,6 +245,24 @@ def test_promote_rows_carry_empty_changed(db, vial_row):
     assert parent_first.details == {"changed": {}}
 
 
+def test_vial_result_unit_survives_promote_to_parent(db, vial_row):
+    """Sample forms spec section 8: a result entered in the form's unit (here
+    µg/mL, not the catalog unit) keeps that unit on the parent row. The bench
+    sends the vial row's own unit with the promote request."""
+    apply_transition(db, analysis_id=vial_row.id, kind="submit",
+                     result_value="0.05", result_unit="µg/mL", user_id=1)
+    db.refresh(vial_row)
+    assert vial_row.result_unit == "µg/mL"
+    parent_row, _ = promote_to_parent(
+        db, keyword="STERILITY_USP71", result_value="0.05",
+        result_unit=vial_row.result_unit, method_id=None, instrument_id=None,
+        sources=[{"analysis_id": vial_row.id, "contribution_kind": "chosen"}],
+        user_id=1,
+    )
+    db.refresh(parent_row)
+    assert parent_row.result_unit == "µg/mL"
+
+
 def test_unpromote_captures_cleared_parent_value(db, vial_row):
     from lims_analyses.service import vial_source_retest
     apply_transition(db, analysis_id=vial_row.id, kind="submit",

@@ -3935,6 +3935,7 @@ def _serialize_senaite_shape_rows(
     # apply the precedence in Python if this listing ever shows up in a profile.
     from coa.identity_verdict import identity_wire_result
     from coa.spec_rules import display_spec_fields, effective_unit, normalize_matrix
+    from lims_analyses.result_units import UnitChoices, unit_choices
     from models import LimsSample, LimsSubSample
     _vial_pks = {r.lims_sub_sample_pk for r in rows if r.lims_sub_sample_pk}
     _parent_pk_by_vial = dict(db.execute(
@@ -3943,30 +3944,21 @@ def _serialize_senaite_shape_rows(
     ).all()) if _vial_pks else {}
     _sample_pks = ({r.lims_sample_pk for r in rows if r.lims_sample_pk}
                    | set(_parent_pk_by_vial.values()))
-    _matrix_by_sample = {
-        pk: normalize_matrix(title)
-        for pk, title in (db.execute(
-            select(LimsSample.id, LimsSample.sample_type_title)
-            .where(LimsSample.id.in_(_sample_pks))
-        ).all() if _sample_pks else [])
-    }
+    _sample_facts = (db.execute(
+        select(LimsSample.id, LimsSample.sample_type_title, LimsSample.sample_form_id)
+        .where(LimsSample.id.in_(_sample_pks))
+    ).all() if _sample_pks else [])
+    _matrix_by_sample = {pk: normalize_matrix(title) for pk, title, _ in _sample_facts}
+    # The parent's dosage form is a spec tier, keyed like the matrix (a vial
+    # row reaches it through its sub-sample).
+    _form_by_sample = {pk: form_id for pk, _, form_id in _sample_facts}
     _spec_cache: dict = {}
+    _unit_cache: dict = {}
 
     out = []
     for r in rows:
         svc = services_by_id.get(r.analysis_service_id)
-        _spec_fields = display_spec_fields(
-            db, service_id=r.analysis_service_id,
-            matrix=_matrix_by_sample.get(
-                r.lims_sample_pk or _parent_pk_by_vial.get(r.lims_sub_sample_pk)),
-            peptide_id=r.peptide_id,
-            wire_result=identity_wire_result(
-                db, keyword=r.keyword, result=r.result_value,
-                analysis_service_id=r.analysis_service_id),
-            cache=_spec_cache,
-            unit=effective_unit(r.result_unit, svc.unit if svc else None),
-            floor=bool(r.result_floor),
-        )
+        _host_pk = r.lims_sample_pk or _parent_pk_by_vial.get(r.lims_sub_sample_pk)
         method_name = None
         if r.method_id and r.method_id in methods_by_id:
             method_name = getattr(methods_by_id[r.method_id], "name", None)
@@ -3998,6 +3990,36 @@ def _serialize_senaite_shape_rows(
         if r.provenance == "shadow" and (r.senaite_analysis_uid or "").strip():
             _uid = r.senaite_analysis_uid.strip()
 
+        # Result units (sample forms): a native row reports the units its
+        # test's spec rows allow, defaulting to its sample's form. An
+        # unresulted row shows that default over its seeded result_unit
+        # (vial rows are seeded with the catalog unit); a resulted row keeps
+        # the unit it was entered in. SENAITE-owned rows keep today's unit.
+        _unit = r.result_unit or (svc.unit if svc else None)
+        _choices = UnitChoices([], None)
+        if svc is not None and _uid.startswith("mk1:"):
+            # The form tier is peptide-family only (resolve_spec): a stray form on
+            # a Bac Water sample must not steer its default unit.
+            _row_form_id = (_form_by_sample.get(_host_pk)
+                            if _matrix_by_sample.get(_host_pk) == "Peptide" else None)
+            _choices = unit_choices(db, svc, _row_form_id, _unit_cache)
+            if not (r.result_value or "").strip():
+                _unit = _choices.default or _unit
+        # The spec column resolves in the unit shown (a seeded result_unit would
+        # file the row under the wildcard limit beside a form unit).
+        _spec_fields = display_spec_fields(
+            db, service_id=r.analysis_service_id,
+            matrix=_matrix_by_sample.get(_host_pk),
+            sample_form_id=_form_by_sample.get(_host_pk),
+            peptide_id=r.peptide_id,
+            wire_result=identity_wire_result(
+                db, keyword=r.keyword, result=r.result_value,
+                analysis_service_id=r.analysis_service_id),
+            cache=_spec_cache,
+            unit=effective_unit(_unit, svc.unit if svc else None),
+            floor=bool(r.result_floor),
+        )
+
         out.append(SenaiteShapeAnalysisResponse(
             uid=_uid,
             keyword=r.keyword,
@@ -4005,7 +4027,9 @@ def _serialize_senaite_shape_rows(
             result=r.result_value,
             result_options=svc_options,
             result_type=getattr(svc, "result_type", None),
-            unit=r.result_unit or (svc.unit if svc else None),
+            unit=_unit,
+            unit_options=_choices.allowed,
+            default_unit=_choices.default,
             method=method_name,
             method_uid=str(r.method_id) if r.method_id else None,
             method_options=method_options,

@@ -554,14 +554,24 @@ export function SenaiteResultsView({ prep, results: hplcResults, onBack, onCompl
   // ── AnalysisTable callbacks ──────────────────────────────────────────────────
 
   const handleResultSaved = useCallback(
-    (uid: string, newResult: string, newReviewState: string | null) => {
+    (
+      uid: string,
+      newResult: string,
+      newReviewState: string | null,
+      newUnit?: string | null
+    ) => {
       setSenaiteData(prev => {
         if (!prev) return prev
         return {
           ...prev,
           analyses: prev.analyses.map(a =>
             a.uid === uid
-              ? { ...a, result: newResult, review_state: newReviewState ?? a.review_state }
+              ? {
+                  ...a,
+                  result: newResult,
+                  review_state: newReviewState ?? a.review_state,
+                  ...(newUnit ? { unit: newUnit } : {}),
+                }
               : a,
           ),
         }

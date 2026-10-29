@@ -145,3 +145,44 @@ def test_unjudgeable_result_aborts_instead_of_guessing(db, monkeypatch):
 
     with pytest.raises(NativeSectionsError, match="not numeric"):
         build_legacy_rows(db, _parent())
+
+
+# --- sample forms: the parent's dosage form is a spec tier -------------------
+
+def _nasal_purity_world(db, monkeypatch, *, form_id_on_parent):
+    """Wildcard purity min 98 % (seeded) + a Nasal Spray form spec max 1 %.
+    Returns the parent; a result of 99 passes the wildcard and fails the form,
+    so only the form tier flips the verdict."""
+    from models import LimsSampleForm
+    svcs = native_catalog(db)
+    pep = _peptide(db, "BPC-157", "BPC157")
+    pur = svcs["HPLC-PURITY"]
+    nasal = LimsSampleForm(name="Nasal Spray", route="nasal_inhaled")
+    db.add(nasal)
+    db.flush()
+    db.add(AnalysisServiceSpec(analysis_service_id=pur.id, sample_form_id=nasal.id,
+                               rule_kind="range", max_value=Decimal("1"), unit="%"))
+    db.flush()
+    _stub(monkeypatch, [_row(pur, uid="mk1:2", result="99", peptide_id=pep.id)],
+          [SlotWire(1, "BPC-157", pep.id, None)])
+    parent = _parent()
+    parent.sample_form_id = nasal.id if form_id_on_parent else None
+    return parent
+
+
+def test_legacy_native_row_uses_parent_form_tier(db, monkeypatch):
+    parent = _nasal_purity_world(db, monkeypatch, form_id_on_parent=True)
+
+    (pur,) = build_legacy_rows(db, parent)
+
+    assert (pur["specification"]["max"], pur["specification"]["min"]) == (1.0, None)
+    assert pur["conforms"] is False
+
+
+def test_legacy_native_row_without_a_form_keeps_the_wildcard(db, monkeypatch):
+    parent = _nasal_purity_world(db, monkeypatch, form_id_on_parent=False)
+
+    (pur,) = build_legacy_rows(db, parent)
+
+    assert (pur["specification"]["min"], pur["specification"]["max"]) == (98.0, None)
+    assert pur["conforms"] is True

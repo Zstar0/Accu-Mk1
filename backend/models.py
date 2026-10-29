@@ -251,11 +251,13 @@ class AnalysisServiceSpec(Base):
     """Lab-owned pass/fail rule for a native COA row (spec-ownership slice 1,
     peptide tier added in slice 2, unit added in endo slice 3).
 
-    Three tiers per service, in resolution precedence: a peptide-bound row
+    Four tiers per service, in resolution precedence: a peptide-bound row
     (peptide_id set, matrix NULL; the identity anchor is the peptide FK,
-    never the keyword), a named-matrix row (matrix set, peptide_id NULL),
-    and the wildcard row (both NULL, applies to every matrix/peptide).
-    matrix and peptide_id are mutually exclusive (ck_analysis_service_specs_tier).
+    never the keyword), a sample-form row (sample_form_id set; applies to
+    samples of that dosage form), a named-matrix row (matrix set,
+    peptide_id NULL), and the wildcard row (all three NULL, applies to every
+    matrix/peptide/form). matrix, peptide_id and sample_form_id are
+    mutually exclusive (ck_analysis_service_specs_tier).
     Each tier holds one active row per unit (trimmed, case-insensitive, NULL
     as ""), so an EU/mL row and an EU/vial row stand side by side and
     coa.spec_rules.resolve_spec picks by the result's unit.
@@ -271,17 +273,19 @@ class AnalysisServiceSpec(Base):
             "(rule_kind = 'equals' AND equals_value IS NOT NULL "
             "AND min_value IS NULL AND max_value IS NULL) OR "
             "(rule_kind = 'informational' AND equals_value IS NULL "
-            "AND min_value IS NULL AND max_value IS NULL AND loq IS NULL)",
+            "AND min_value IS NULL AND max_value IS NULL)",
             name="ck_analysis_service_specs_rule_shape",
         ),
         CheckConstraint(
-            "NOT (matrix IS NOT NULL AND peptide_id IS NOT NULL)",
+            "(CASE WHEN matrix IS NOT NULL THEN 1 ELSE 0 END + "
+            "CASE WHEN peptide_id IS NOT NULL THEN 1 ELSE 0 END + "
+            "CASE WHEN sample_form_id IS NOT NULL THEN 1 ELSE 0 END) <= 1",
             name="ck_analysis_service_specs_tier",
         ),
         # Postgres treats NULLs as distinct in unique indexes, so each tier
-        # (named matrix / peptide-bound / both-NULL wildcard) needs its own
-        # partial index, and each keys on the normalized unit as well (endo
-        # slice 3): one active row per tier per unit.
+        # (named matrix / peptide-bound / sample-form / all-NULL wildcard)
+        # needs its own partial index, and each keys on the normalized unit as
+        # well (endo slice 3): one active row per tier per unit.
         Index(
             "uq_analysis_service_specs_matrix_unit",
             "analysis_service_id", "matrix", _SPEC_UNIT_KEY,
@@ -297,11 +301,22 @@ class AnalysisServiceSpec(Base):
             sqlite_where=text("active AND peptide_id IS NOT NULL"),
         ),
         Index(
-            "uq_analysis_service_specs_wildcard_unit",
+            "uq_analysis_service_specs_form_unit",
+            "analysis_service_id", "sample_form_id", _SPEC_UNIT_KEY,
+            unique=True,
+            postgresql_where=text("active AND sample_form_id IS NOT NULL"),
+            sqlite_where=text("active AND sample_form_id IS NOT NULL"),
+        ),
+        # _v2: the wildcard slot now also excludes form rows. A new name, so a
+        # deployed database builds it rather than keeping the old predicate.
+        Index(
+            "uq_analysis_service_specs_wildcard_unit_v2",
             "analysis_service_id", _SPEC_UNIT_KEY,
             unique=True,
-            postgresql_where=text("active AND matrix IS NULL AND peptide_id IS NULL"),
-            sqlite_where=text("active AND matrix IS NULL AND peptide_id IS NULL"),
+            postgresql_where=text(
+                "active AND matrix IS NULL AND peptide_id IS NULL AND sample_form_id IS NULL"),
+            sqlite_where=text(
+                "active AND matrix IS NULL AND peptide_id IS NULL AND sample_form_id IS NULL"),
         ),
     )
 
@@ -312,6 +327,11 @@ class AnalysisServiceSpec(Base):
     matrix: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
     peptide_id: Mapped[Optional[int]] = mapped_column(
         ForeignKey("peptides.id"), nullable=True
+    )
+    # Sample-form tier: applies to samples of this dosage form. Mutually
+    # exclusive with matrix and peptide_id (ck_analysis_service_specs_tier).
+    sample_form_id: Mapped[Optional[int]] = mapped_column(
+        ForeignKey("lims_sample_forms.id"), nullable=True
     )
     rule_kind: Mapped[str] = mapped_column(String(16), nullable=False)  # range | equals
     min_value: Mapped[Optional[Decimal]] = mapped_column(Numeric, nullable=True)
@@ -1400,6 +1420,11 @@ class LimsSample(Base):
     sla_priority_source: Mapped[Optional[str]] = mapped_column(String(10), nullable=True)
     sla_target_minutes: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
     sla_snapshot_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
+    # Dosage form (Sample Forms). NULL = unclassified; Peptide/Peptide Blend
+    # samples are backfilled to the default form by database._run_migrations.
+    sample_form_id: Mapped[Optional[int]] = mapped_column(
+        ForeignKey("lims_sample_forms.id"), nullable=True
+    )
     external_lims_system: Mapped[Optional[str]] = mapped_column(String(50), default="senaite")
     client_id: Mapped[Optional[str]] = mapped_column(String(100))
     client_uid: Mapped[Optional[str]] = mapped_column(String(100))
@@ -2027,6 +2052,7 @@ PRIORITY_ICONS = ("chevrons-up", "chevron-up", "minus", "chevron-down", "chevron
 PRIORITY_COLORS = ("red", "amber", "emerald", "sky", "violet", "zinc")
 PRIORITY_LEVELS = ("customer", "order", "sample", "vial")
 PRIORITY_SOURCES = ("ui", "order-payload", "migration", "bulk")
+SAMPLE_FORM_ROUTES = ("injectable", "nasal_inhaled", "oral")
 
 
 class Priority(Base):
@@ -2056,6 +2082,45 @@ class Priority(Base):
 
     def __repr__(self) -> str:
         return f"<Priority(key='{self.key}', rank={self.rank}, active={self.is_active})>"
+
+
+class LimsSampleForm(Base):
+    """A managed dosage form for a sample (Lyophilized Powder, Pen, Nasal Spray...).
+
+    `route` groups forms for the spec resolver. Exactly one row is the default
+    (partial unique index); names are unique case-insensitively. Rows are
+    retired via `active`, never deleted. Seeded into an empty table only, so UI
+    renames and retirements survive reboots (see database._run_migrations).
+    """
+
+    __tablename__ = "lims_sample_forms"
+    __table_args__ = (
+        Index("uq_lims_sample_forms_name", text("lower(trim(name))"), unique=True),
+        Index("uq_lims_sample_forms_single_default", "is_default", unique=True,
+              postgresql_where=text("is_default"), sqlite_where=text("is_default")),
+        CheckConstraint("route IN ('injectable','nasal_inhaled','oral')",
+                        name="ck_lims_sample_forms_route"),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
+    name: Mapped[str] = mapped_column(String(100), nullable=False)
+    route: Mapped[str] = mapped_column(String(20), nullable=False)
+    is_default: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+    sort_order: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    # A key into the frontend icon set (sample_forms.routes.FormIcon); NULL
+    # draws the generic icon. No CHECK, so a new icon is a code-only change.
+    icon: Mapped[Optional[str]] = mapped_column(String(30), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime, default=datetime.utcnow, onupdate=datetime.utcnow
+    )
+    updated_by_id: Mapped[Optional[int]] = mapped_column(
+        ForeignKey("users.id", ondelete="SET NULL"), nullable=True
+    )
+
+    def __repr__(self) -> str:
+        return f"<LimsSampleForm(id={self.id}, name='{self.name}', route='{self.route}')>"
 
 
 class CustomerPriority(Base):

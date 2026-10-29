@@ -177,6 +177,14 @@ _ENDO_V2_DDL = (
 # deactivates the EU/vial rows before the older image is redeployed.
 # models.AnalysisServiceSpec declares the same names with trim(), which
 # Postgres stores as btrim.
+# Sample forms (spec 2026-10-26, task 4): the wildcard slot now also requires
+# sample_form_id IS NULL and moves to the _v2 name (the old predicate would
+# collide a form row with the wildcard row in the same unit), a form tier
+# index is added, and the old wildcard_unit name is dropped after the creates.
+# This entry runs after the spec sample_form_id ALTER in _run_migrations.
+# LAST-BOOT-WINS: an older image re-creates wildcard_unit; with a form row and
+# a wildcard row in one unit that CREATE fails and the older boot logs
+# migration_skipped. Deactivate form rows before redeploying an older image.
 _SPEC_UNIT_INDEX_SWAP = """DO $$ BEGIN
     CREATE UNIQUE INDEX IF NOT EXISTS uq_analysis_service_specs_matrix_unit
         ON analysis_service_specs (analysis_service_id, matrix, lower(btrim(coalesce(unit, ''))))
@@ -184,12 +192,16 @@ _SPEC_UNIT_INDEX_SWAP = """DO $$ BEGIN
     CREATE UNIQUE INDEX IF NOT EXISTS uq_analysis_service_specs_peptide_unit
         ON analysis_service_specs (analysis_service_id, peptide_id, lower(btrim(coalesce(unit, ''))))
         WHERE active AND peptide_id IS NOT NULL;
-    CREATE UNIQUE INDEX IF NOT EXISTS uq_analysis_service_specs_wildcard_unit
+    CREATE UNIQUE INDEX IF NOT EXISTS uq_analysis_service_specs_form_unit
+        ON analysis_service_specs (analysis_service_id, sample_form_id, lower(btrim(coalesce(unit, ''))))
+        WHERE active AND sample_form_id IS NOT NULL;
+    CREATE UNIQUE INDEX IF NOT EXISTS uq_analysis_service_specs_wildcard_unit_v2
         ON analysis_service_specs (analysis_service_id, lower(btrim(coalesce(unit, ''))))
-        WHERE active AND matrix IS NULL AND peptide_id IS NULL;
+        WHERE active AND matrix IS NULL AND peptide_id IS NULL AND sample_form_id IS NULL;
     DROP INDEX IF EXISTS uq_analysis_service_specs_matrix;
     DROP INDEX IF EXISTS uq_analysis_service_specs_peptide;
     DROP INDEX IF EXISTS uq_analysis_service_specs_wildcard;
+    DROP INDEX IF EXISTS uq_analysis_service_specs_wildcard_unit;
 END $$"""
 
 
@@ -2081,7 +2093,7 @@ def _run_migrations():
                 (rule_kind = 'equals' AND equals_value IS NOT NULL
                  AND min_value IS NULL AND max_value IS NULL) OR
                 (rule_kind = 'informational' AND equals_value IS NULL
-                 AND min_value IS NULL AND max_value IS NULL AND loq IS NULL)
+                 AND min_value IS NULL AND max_value IS NULL)
             ),
             CONSTRAINT ck_analysis_service_specs_tier CHECK (
                 NOT (matrix IS NOT NULL AND peptide_id IS NOT NULL)
@@ -2209,6 +2221,68 @@ def _run_migrations():
               AND review_state NOT IN ('retracted', 'rejected')
               AND provenance = 'canonical'
         """,
+        # --- Sample Forms (spec 2026-10-26): managed dosage forms ---
+        # One contiguous block, in dependency order: the table and its indexes,
+        # the seed, then both FK columns (lims_samples, analysis_service_specs)
+        # and the backfill. The seed fires only into an EMPTY table so UI
+        # renames and retirements survive reboots; the backfill only touches NULLs.
+        """
+        CREATE TABLE IF NOT EXISTS lims_sample_forms (
+            id            SERIAL PRIMARY KEY,
+            name          VARCHAR(100) NOT NULL,
+            route         VARCHAR(20) NOT NULL,
+            is_default    BOOLEAN NOT NULL DEFAULT FALSE,
+            active        BOOLEAN NOT NULL DEFAULT TRUE,
+            sort_order    INTEGER NOT NULL DEFAULT 0,
+            created_at    TIMESTAMP DEFAULT now(),
+            updated_at    TIMESTAMP DEFAULT now(),
+            updated_by_id INTEGER REFERENCES users(id) ON DELETE SET NULL,
+            CONSTRAINT ck_lims_sample_forms_route CHECK (
+                route IN ('injectable','nasal_inhaled','oral')
+            )
+        )
+        """,
+        "CREATE UNIQUE INDEX IF NOT EXISTS uq_lims_sample_forms_name "
+        "ON lims_sample_forms (lower(btrim(name)))",
+        "CREATE UNIQUE INDEX IF NOT EXISTS uq_lims_sample_forms_single_default "
+        "ON lims_sample_forms (is_default) WHERE is_default",
+        # The form's picker icon (a frontend key; NULL draws the generic one).
+        "ALTER TABLE lims_sample_forms ADD COLUMN IF NOT EXISTS icon VARCHAR(30)",
+        """
+        INSERT INTO lims_sample_forms (name, route, is_default, active, sort_order, icon, created_at, updated_at)
+        SELECT v.name, v.route, v.is_default, v.active, v.sort_order, v.icon, now(), now()
+        FROM (VALUES ('Lyophilized Powder','injectable',true,true,10,'powder_vial'),
+                     ('Reconstituted Solution','injectable',false,true,20,'liquid_vial'),
+                     ('Pen','injectable',false,true,30,'pen'),
+                     ('Nasal Spray','nasal_inhaled',false,true,40,'nasal_spray'),
+                     ('Capsule','oral',false,false,50,'capsule'),
+                     ('Tablet','oral',false,false,60,'tablet')) AS v(name, route, is_default, active, sort_order, icon)
+        WHERE NOT EXISTS (SELECT 1 FROM lims_sample_forms)
+        """,
+        # Databases seeded before the icon column existed: give the built-in
+        # names their icon once. The API never writes NULL, so a picked icon
+        # is never overwritten.
+        """
+        UPDATE lims_sample_forms SET icon = CASE lower(btrim(name))
+            WHEN 'lyophilized powder' THEN 'powder_vial'
+            WHEN 'reconstituted solution' THEN 'liquid_vial'
+            WHEN 'pen' THEN 'pen'
+            WHEN 'nasal spray' THEN 'nasal_spray'
+            WHEN 'capsule' THEN 'capsule'
+            WHEN 'tablet' THEN 'tablet' END
+        WHERE icon IS NULL AND lower(btrim(name)) IN
+            ('lyophilized powder','reconstituted solution','pen','nasal spray','capsule','tablet')
+        """,
+        "ALTER TABLE lims_samples ADD COLUMN IF NOT EXISTS sample_form_id "
+        "INTEGER REFERENCES lims_sample_forms(id)",
+        """
+        UPDATE lims_samples SET sample_form_id = (SELECT id FROM lims_sample_forms WHERE is_default LIMIT 1)
+        WHERE sample_form_id IS NULL AND btrim(sample_type_title) IN ('Peptide', 'Peptide Blend')
+        """,
+        # Model column lands with the resolver task; the ALTER lives here so the
+        # ordering after the table create is fixed in one place.
+        "ALTER TABLE analysis_service_specs ADD COLUMN IF NOT EXISTS sample_form_id "
+        "INTEGER REFERENCES lims_sample_forms(id)",
         # --- spec-ownership slice 2: peptide tier ---
         "ALTER TABLE analysis_service_specs ADD COLUMN IF NOT EXISTS peptide_id "
         "INTEGER REFERENCES peptides(id)",
@@ -2222,6 +2296,33 @@ def _run_migrations():
                 ALTER TABLE analysis_service_specs
                     ADD CONSTRAINT ck_analysis_service_specs_tier
                         CHECK (NOT (matrix IS NOT NULL AND peptide_id IS NOT NULL));
+            END IF;
+        END $$""",
+        # Sample-form tier (spec 2026-10-26, task 4): widen the tier CHECK to
+        # the 3-way mutual exclusion. WIDEN-ONLY guarded form (the rule_shape
+        # widen below is the precedent): DROP/re-ADD runs only while the live
+        # definition lacks sample_form_id, so it fires once per database and an
+        # older image booting later cannot re-narrow it (its add-only block
+        # above skips on the existing name). No existing row can violate the
+        # wider CHECK (sample_form_id is NULL on all of them). Runs after the
+        # spec sample_form_id ALTER above and after the add-only block; the
+        # inline CREATE TABLE keeps the 2-way text on purpose, since it runs
+        # before that column exists.
+        """DO $$ BEGIN
+            IF EXISTS (
+                SELECT 1 FROM pg_constraint
+                WHERE conname = 'ck_analysis_service_specs_tier'
+                  AND conrelid = 'analysis_service_specs'::regclass
+                  AND pg_get_constraintdef(oid) NOT LIKE '%sample_form_id%'
+            ) THEN
+                ALTER TABLE analysis_service_specs
+                    DROP CONSTRAINT ck_analysis_service_specs_tier;
+                ALTER TABLE analysis_service_specs
+                    ADD CONSTRAINT ck_analysis_service_specs_tier CHECK (
+                        (CASE WHEN matrix IS NOT NULL THEN 1 ELSE 0 END +
+                         CASE WHEN peptide_id IS NOT NULL THEN 1 ELSE 0 END +
+                         CASE WHEN sample_form_id IS NOT NULL THEN 1 ELSE 0 END) <= 1
+                    );
             END IF;
         END $$""",
         # The old null_matrix slot must not collide peptide rows with the
@@ -2264,6 +2365,36 @@ def _run_migrations():
                          AND min_value IS NULL AND max_value IS NULL) OR
                         (rule_kind = 'informational' AND equals_value IS NULL
                          AND min_value IS NULL AND max_value IS NULL AND loq IS NULL)
+                    );
+            END IF;
+        END $$""",
+        # Sample forms (2026-10-26): a report-only row may carry an LOQ (it
+        # censors the printed result; the verdict never reads it), so the
+        # informational arm drops `AND loq IS NULL`. Same WIDEN-ONLY guarded
+        # form as the block above: the DROP/re-ADD runs ONLY while the live
+        # definition still pins loq to NULL, so it fires exactly once per
+        # database and an older image booting afterwards (its widen block is
+        # guarded on 'informational', which stays present) cannot re-narrow
+        # it. No existing row can violate the wider shape. Placed AFTER the
+        # block above so a database that is still pre-'informational' passes
+        # through it first and is widened here in the same boot.
+        """DO $$ BEGIN
+            IF EXISTS (
+                SELECT 1 FROM pg_constraint
+                WHERE conname = 'ck_analysis_service_specs_rule_shape'
+                  AND conrelid = 'analysis_service_specs'::regclass
+                  AND pg_get_constraintdef(oid) LIKE '%loq IS NULL%'
+            ) THEN
+                ALTER TABLE analysis_service_specs
+                    DROP CONSTRAINT ck_analysis_service_specs_rule_shape;
+                ALTER TABLE analysis_service_specs
+                    ADD CONSTRAINT ck_analysis_service_specs_rule_shape CHECK (
+                        (rule_kind = 'range' AND equals_value IS NULL
+                         AND (min_value IS NOT NULL OR max_value IS NOT NULL)) OR
+                        (rule_kind = 'equals' AND equals_value IS NOT NULL
+                         AND min_value IS NULL AND max_value IS NULL) OR
+                        (rule_kind = 'informational' AND equals_value IS NULL
+                         AND min_value IS NULL AND max_value IS NULL)
                     );
             END IF;
         END $$""",

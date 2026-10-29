@@ -54,19 +54,25 @@ def effective_unit(result_unit: Optional[str], service_unit: Optional[str]) -> s
     return normalize_unit(result_unit) or normalize_unit(service_unit)
 
 
-def _first_in_scope(rows, matrix: Optional[str], peptide_id: Optional[int]):
-    """The precedence over already-loaded active rows: (peptide) ->
-    (matrix) -> (wildcard) -> None. Two rows in the winning scope raise
+def _first_in_scope(rows, matrix: Optional[str], peptide_id: Optional[int],
+                    sample_form_id: Optional[int] = None):
+    """The precedence over already-loaded active rows: (peptide) -> (form)
+    -> (matrix) -> (wildcard) -> None. The form scope exists only when the
+    sample has a form. Two rows in the winning scope raise
     MultipleResultsFound, as scalar_one_or_none did."""
     scopes = []
     if peptide_id is not None:
         scopes.append(lambda s: s.peptide_id == peptide_id)
+    if sample_form_id is not None:
+        scopes.append(lambda s: s.sample_form_id == sample_form_id)
     if matrix is not None:
         scopes.append(lambda s: s.matrix == matrix)
-    # CRITICAL: the wildcard scope also requires peptide_id IS NULL. Without
-    # it, a peptide-bound row could masquerade as the default when no true
-    # wildcard row exists for this service.
-    scopes.append(lambda s: s.matrix is None and s.peptide_id is None)
+    # CRITICAL: the wildcard scope also requires peptide_id IS NULL and
+    # sample_form_id IS NULL. Without them, a peptide-bound or form row could
+    # masquerade as the default when no true wildcard row exists for this
+    # service.
+    scopes.append(lambda s: s.matrix is None and s.peptide_id is None
+                  and s.sample_form_id is None)
     for in_scope in scopes:
         hits = [s for s in rows if in_scope(s)]
         if len(hits) > 1:
@@ -79,9 +85,32 @@ def _first_in_scope(rows, matrix: Optional[str], peptide_id: Optional[int]):
 
 
 def resolve_spec(db: Session, service_id: int, matrix: Optional[str],
-                 peptide_id: Optional[int] = None, unit: Optional[str] = None):
-    """Active spec by precedence: (service, peptide) -> (service, matrix) ->
-    (service, wildcard) -> None, over one query for the service's active rows.
+                 peptide_id: Optional[int] = None, unit: Optional[str] = None,
+                 sample_form_id: Optional[int] = None):
+    """Active spec by precedence: (service, peptide) -> (service, form) ->
+    (service, matrix) -> (service, wildcard) -> None, over one query for the
+    service's active rows.
+
+    sample_form_id (sample forms, spec 2026-10-26) is the sample's dosage
+    form. Rows filed under any OTHER form are dropped before the unit filter
+    runs, so another form's row in the result's unit can never switch the
+    unit filter on for a sample that is not in that form. sample_form_id=None
+    drops every form row: a caller that passes no form sees today's tiers.
+    The form tier is for peptide-family samples only (final review Ruling
+    F-2): callers pass the normalized matrix, and any matrix other than
+    "Peptide" ignores the form, so a sample retitled to Bac Water that kept a
+    stray form still resolves its BW row.
+
+    Form rows fail closed on unit (final review Ruling F-1). When `unit` is
+    given, the sample has a form, and the service has an active row for that
+    form, the winner is accepted only if it is peptide-tier, or a row of this
+    form in the result's unit (or with no unit, for a result in no unit or in
+    the service's catalog unit, the unit-blind fallback below). Anything else,
+    a wildcard or matrix row, or a form row in another unit, resolves None, so
+    a result the form's rows do not cover stops the certificate instead of
+    printing the wildcard's verdict or being censored against an LOQ in the
+    wrong unit. A sample with no row for its form, or no form, resolves as
+    before.
 
     unit (endo slice 3, spec section 6) is the result's unit: callers pass
     effective_unit(result_unit, service unit). When any active row of the
@@ -107,21 +136,36 @@ def resolve_spec(db: Session, service_id: int, matrix: Optional[str],
     matrix/wildcard and never aborts here."""
     from models import AnalysisService, AnalysisServiceSpec
 
+    if matrix != "Peptide":
+        sample_form_id = None
     rows = db.execute(
         select(AnalysisServiceSpec).where(
             AnalysisServiceSpec.analysis_service_id == service_id,
             AnalysisServiceSpec.active.is_(True),
         ).order_by(AnalysisServiceSpec.id)
     ).scalars().all()
-    if unit is not None:
-        want = normalize_unit(unit)
-        in_unit = [s for s in rows if normalize_unit(s.unit) == want]
-        if in_unit:
-            return _first_in_scope(in_unit, matrix, peptide_id)
-        svc = db.get(AnalysisService, service_id)
-        if want and want != normalize_unit(svc.unit if svc is not None else None):
+    rows = [s for s in rows if s.sample_form_id is None or s.sample_form_id == sample_form_id]
+    if unit is None:
+        return _first_in_scope(rows, matrix, peptide_id, sample_form_id)
+    want = normalize_unit(unit)
+    svc = db.get(AnalysisService, service_id)
+    catalog = normalize_unit(svc.unit if svc is not None else None)
+    in_unit = [s for s in rows if normalize_unit(s.unit) == want]
+    if in_unit:
+        winner = _first_in_scope(in_unit, matrix, peptide_id, sample_form_id)
+    elif want and want != catalog:
+        return None
+    else:
+        winner = _first_in_scope(rows, matrix, peptide_id, sample_form_id)
+    # Final review C1: once the sample's form has a row for this service, only
+    # a form row in the result's unit (or the peptide tier) may judge it.
+    if (winner is not None and sample_form_id is not None and winner.peptide_id is None
+            and any(s.sample_form_id == sample_form_id for s in rows)):
+        unit_ok = normalize_unit(winner.unit) == want or (
+            not normalize_unit(winner.unit) and (not want or want == catalog))
+        if winner.sample_form_id != sample_form_id or not unit_ok:
             return None
-    return _first_in_scope(rows, matrix, peptide_id)
+    return winner
 
 
 def sample_peptide_id(db: Session, parent_pk: int) -> Optional[int]:
@@ -217,9 +261,9 @@ def evaluate(spec, result: str, *, floor: bool = False) -> Optional[bool]:
     if floor and spec.rule_kind != "range":
         # Checked BEFORE the informational early-out: "report as measured" has
         # no verdict to give, but it also prints the raw number with no
-        # qualifier (_result_display is range-only), so a floor would read as
-        # a measurement on the certificate. Only a numeric range can say
-        # whether a floor already fails.
+        # qualifier (_result_display's floor is range-only), so a floor would
+        # read as a measurement on the certificate. Only a numeric range can
+        # say whether a floor already fails.
         raise SpecRuleError(
             f"result {result!r} is a floor but the spec is {spec.rule_kind!r}, "
             f"not a numeric range — cannot verdict"
@@ -272,6 +316,7 @@ def display_spec_fields(db: Session, *, service_id: Optional[int],
                         wire_result: Optional[str],
                         cache: Optional[dict] = None,
                         unit: Optional[str] = None,
+                        sample_form_id: Optional[int] = None,
                         floor: bool = False) -> dict:
     """`specification` + `conforms` for a row in the analyses TABLE: the same
     resolve_spec / evaluate / wire dict the certificate is built from, so the
@@ -288,15 +333,18 @@ def display_spec_fields(db: Session, *, service_id: Optional[int],
     service id: {}.
 
     `cache` (optional dict) memoises the resolved spec per
-    (service, matrix, peptide, unit) across the rows of one listing."""
+    (service, matrix, peptide, sample form, unit) across the rows of one
+    listing."""
     if service_id is None:
         return {}
-    key = (service_id, matrix, peptide_id, None if unit is None else normalize_unit(unit))
+    key = (service_id, matrix, peptide_id, sample_form_id,
+           None if unit is None else normalize_unit(unit))
     if cache is not None and key in cache:
         spec = cache[key]
     else:
         try:
-            spec = resolve_spec(db, service_id, matrix, peptide_id=peptide_id, unit=unit)
+            spec = resolve_spec(db, service_id, matrix, peptide_id=peptide_id, unit=unit,
+                                sample_form_id=sample_form_id)
         except Exception:  # noqa: BLE001 -- a catalog fault must not 500 the page
             spec = None
         if cache is not None:

@@ -93,6 +93,11 @@ class SenaiteAnalysis(BaseModel):
     loq: Optional[float] = None
     lod: Optional[float] = None
     lod_unit: Optional[str] = None
+    # Sample forms (task 8): allowed result units and the form's default.
+    # Mk1-local, same reason as service_origin above: the registry-details
+    # re-type drops undeclared fields. [] / None on the SENAITE read path.
+    unit_options: list[str] = []
+    default_unit: Optional[str] = None
 
 
 class SenaiteAttachment(BaseModel):
@@ -147,6 +152,11 @@ class SenaiteLookupResult(BaseModel):
     registry_pk: Optional[int] = None
     explicit_priority_key: Optional[str] = None
     priority: Optional[dict] = None
+    # Sample form (dosage form, Sample Forms feature). Mutable Mk1 state like
+    # priority. eligible = Peptide-matrix sample; the form is None otherwise.
+    sample_form_id: Optional[int] = None
+    sample_form_name: Optional[str] = None
+    sample_form_eligible: bool = False
 
 
 class RegistrySampleReadResult(SenaiteLookupResult):
