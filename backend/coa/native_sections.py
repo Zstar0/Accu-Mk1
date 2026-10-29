@@ -401,6 +401,9 @@ def build_native_sections(db: Session, parent, *, vial_parent_ids=None) -> dict:
         # (lod, lod_unit) of every printed row, for the profile text's {lod}
         # (endo slice 4).
         limits: list[tuple] = []
+        # Whether every printed row is a report-only row filed for the
+        # sample's form (the basis-note rule below).
+        all_form_report_only = True
         for svc, row in member_rows:
             if row is None:
                 if _withdrawn_by_lab(db, parent.id, svc.id):
@@ -488,6 +491,9 @@ def build_native_sections(db: Session, parent, *, vial_parent_ids=None) -> dict:
                                                   floor=floor),
             })
             limits.append((row.lod, row.lod_unit))
+            all_form_report_only = (all_form_report_only
+                                    and spec.rule_kind == "informational"
+                                    and spec.sample_form_id is not None)
         if not rows:
             # Rule 3 (section half): unreachable while members are required
             # non-empty in _ordered_native_profiles, kept as defence.
@@ -498,17 +504,19 @@ def build_native_sections(db: Session, parent, *, vial_parent_ids=None) -> dict:
         # [ ... ] segments, filled from this section's rows (coa.text_macros).
         # Text with no macro comes back exactly as typed.
         values = {"lod": format_lod(limits)}
-        # A basis note describes how the limits scale ("Limits scale with
-        # dose"); a section whose every row is report-only has no limits to
-        # describe, so the note would be noise. The key stays on the wire.
-        all_report_only = all(
-            r["specification"]["rule_kind"] == "informational" for r in rows)
+        # A heavy-metal basis note describes how the limits scale ("Limits
+        # scale with dose"); a section whose every row is a report-only row
+        # filed for the sample's form (nasal spray) has no limits to describe,
+        # so the note would be noise. Form rows only (Handler, 2026-10-28,
+        # after the prod pre-check): a section that is report-only for every
+        # sample, like the vial vacuum test, uses its note to describe the
+        # method and keeps it. The key stays on the wire.
         sections.append({
             "profile_key": prof.key,
             "title": prof.coa_section_title or prof.name,
             "archetype": prof.coa_archetype,
             "sort_order": prof.coa_sort_order,
-            "basis_note": (None if all_report_only
+            "basis_note": (None if all_form_report_only
                            else resolve(prof.coa_basis_note, values)),
             "method_text": resolve(prof.coa_method_text, values),
             "prep_text": resolve(prof.coa_prep_text, values),

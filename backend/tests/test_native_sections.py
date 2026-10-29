@@ -1091,18 +1091,65 @@ def test_equals_row_still_publishes_no_loq(db_session, monkeypatch):
     assert row["result_display"] is None
 
 
-def test_all_report_only_section_omits_basis_note(db_session, monkeypatch):
+def _nasal_parent(db, svcs, *, form_row_svcs):
+    """A Peptide sample with the Nasal Spray form, and a report-only ppm row
+    filed for that form on each of form_row_svcs."""
+    from decimal import Decimal
+    from models import AnalysisServiceSpec, LimsSampleForm
+    nasal = LimsSampleForm(name="Nasal Spray", route="nasal_inhaled")
+    db.add(nasal); db.flush()
+    for svc in form_row_svcs:
+        db.add(AnalysisServiceSpec(analysis_service_id=svc.id, sample_form_id=nasal.id,
+                                   rule_kind="informational", unit="ppm",
+                                   loq=Decimal("3.2")))
+    parent = _mk_parent_with_rows(db, svcs)
+    parent.sample_type_title = "Peptide"
+    parent.sample_form_id = nasal.id
+    db.flush()
+    return parent
+
+
+def test_all_form_report_only_section_omits_basis_note(db_session, monkeypatch):
     prof, svcs = _mk_native_profile(db_session, key="heavy_metals",
                                     services=[("HM-PB", "mk1"), ("HM-AS", "mk1")],
                                     specs=False)
     prof.coa_basis_note = "Limits scale with dose"
-    for svc in svcs:
-        _info_spec(db_session, svc)
+    parent = _nasal_parent(db_session, svcs, form_row_svcs=svcs)
     _order_lookup(monkeypatch)
-    sec = build_native_sections(
-        db_session, _mk_parent_with_rows(db_session, svcs))["sections"][0]
+    sec = build_native_sections(db_session, parent)["sections"][0]
     assert "basis_note" in sec          # key stays: section key order is pinned
     assert sec["basis_note"] is None
+
+
+def test_report_only_section_without_form_rows_keeps_basis_note(db_session, monkeypatch):
+    """Prod pre-check 2026-10-28: the vial vacuum test is report-only for every
+    sample (one all-samples report-only row) and its basis note describes the
+    method, so it must keep printing. Only form rows hide the note."""
+    prof, svcs = _mk_native_profile(db_session, key="vial-vacuum-test",
+                                    services=[("PRESSURE-VC", "mk1")], specs=False)
+    prof.coa_basis_note = "Basis: Quantitative headspace pressure, needle puncture"
+    _info_spec(db_session, svcs[0], loq=None)
+    _order_lookup(monkeypatch, key="vial-vacuum-test")
+    sec = build_native_sections(
+        db_session, _mk_parent_with_rows(db_session, svcs))["sections"][0]
+    assert sec["basis_note"] == "Basis: Quantitative headspace pressure, needle puncture"
+
+
+def test_report_only_section_mixing_form_and_all_samples_rows_keeps_basis_note(
+        db_session, monkeypatch):
+    """Every printed row has to come from a form rule: one all-samples
+    report-only row keeps the note."""
+    prof, svcs = _mk_native_profile(db_session, key="heavy_metals",
+                                    services=[("HM-PB", "mk1"), ("HM-AS", "mk1")],
+                                    specs=False)
+    prof.coa_basis_note = "Limits scale with dose"
+    _info_spec(db_session, svcs[1])
+    parent = _nasal_parent(db_session, svcs, form_row_svcs=svcs[:1])
+    _order_lookup(monkeypatch)
+    sec = build_native_sections(db_session, parent)["sections"][0]
+    assert [r["specification"]["rule_kind"] for r in sec["rows"]] == [
+        "informational", "informational"]
+    assert sec["basis_note"] == "Limits scale with dose"
 
 
 def test_mixed_section_keeps_basis_note(db_session, monkeypatch):
