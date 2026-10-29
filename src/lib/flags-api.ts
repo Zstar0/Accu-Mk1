@@ -517,7 +517,17 @@ export async function addFlagAttachment(
       body: form,
     }
   )
-  if (!res.ok) throw new Error(`attachment upload failed: ${res.status}`)
+  if (!res.ok) {
+    // A proxy 413 has an HTML body, so name it here; backend errors carry detail.
+    const payload = await res.json().catch(() => null)
+    throw new Error(
+      typeof payload?.detail === 'string'
+        ? payload.detail
+        : res.status === 413
+          ? 'image is too large for the server (413)'
+          : `attachment upload failed: ${res.status}`
+    )
+  }
   return res.json() as Promise<FlagAttachment>
 }
 

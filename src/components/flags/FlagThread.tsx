@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import { useQueryClient } from '@tanstack/react-query'
+import { toast } from 'sonner'
 import {
   ArrowLeft,
   ArrowUpRight,
@@ -175,8 +176,11 @@ export function FlagThread({
     try {
       const att = await addFlagAttachment(flagId, file)
       insertAtCaret(`{attachment:${att.id}}`)
-    } catch {
-      /* surfaced by the failing send if the token dangles; no toast in v1 */
+    } catch (e) {
+      // No token was inserted, so without this a failed paste/drop is silent.
+      toast.error(
+        `Image didn't attach: ${e instanceof Error ? e.message : String(e)}`
+      )
     }
   }
 
