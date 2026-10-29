@@ -219,6 +219,10 @@ function pastRunSample(
     ...s,
     rule: null,
     totalDilution: e.total_dilution,
+    // The water that run used, so a past EU per vial is recomputed with it
+    // and not with today's. Entries from before a rule could set one carry
+    // none; those runs were at the standard, which waterOf then supplies.
+    waterMl: e.recon_water_ml ?? null,
     steps: [
       { sampleUl: s.steps?.[0]?.sampleUl ?? null, ratio: e.step1_ratio },
       s.steps?.[1] ?? null,
@@ -301,7 +305,9 @@ export function PrepHistory({
                           ? e.reading_moved
                             ? 'Re-apply (reading moved)'
                             : 'Re-apply'
-                          : 'override'}
+                          : e.why === 'replaced'
+                            ? 'Reading replaced'
+                            : 'override'}
                       </td>
                       <td className={HCELL}>
                         {lineLabel(

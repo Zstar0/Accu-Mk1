@@ -589,7 +589,8 @@ def promote(
     (final review I-3): it checks them against the stored reading and calls
     run_promote directly. The sample page never sends them, so a body that
     carries one is refused; without them the source's own are copied."""
-    if req.loq is not None or req.lod is not None or req.lod_unit is not None:
+    if (req.loq is not None or req.lod is not None or req.lod_unit is not None
+            or req.result_floor is not None):
         raise HTTPException(status_code=400, detail="result limits are set by the worksheet promote")
     try:
         # run_promote schedules workflow.engine.run_cascades_bg on

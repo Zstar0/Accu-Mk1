@@ -383,6 +383,7 @@ describe('buildEndoBenchSheet2Html', () => {
       peptide_id: 7,
       min_mg: null,
       max_mg: null,
+      recon_water_ml: null,
       total_dilution: 300,
       step1_ratio: null,
       cartridge_type_id: null,
@@ -463,6 +464,44 @@ describe('buildEndoBenchSheet2Html', () => {
       )
       expect(html).toContain(
         '<td class="cart set">0.01<sup class="rmark">R</sup></td>'
+      )
+    })
+
+    it('underlines and marks a recon water a rule set, so the bench adds that volume', () => {
+      // The whole point of a ruled water: the tech works from this paper, so
+      // a 3 mL row must not read as the standard 2 mL it is printed beside.
+      const r3 = { ...trial300, total_dilution: null, recon_water_ml: 3 }
+      const html = buildEndoBenchSheet2Html(doc([row(1, { rule: r3 })]), {
+        measure,
+      })
+      expect(html).toContain(
+        '<td class="m r vial own">3<sup class="rmark">R</sup></td>'
+      )
+      expect(html).toContain(
+        '<b>Underlined</b> figures were set for that sample, not the standard. '
+      )
+      // A row at the standard is neither underlined nor marked.
+      const plain = buildEndoBenchSheet2Html(doc([row(1)]), { measure })
+      expect(plain).toContain('<td class="m r vial">2</td>')
+      // The summary has to agree with the row it is summarising. A run whose
+      // only deviation came from a rule still has one: reading "0" here while
+      // row 1 prints an underlined 3 is how a tech ends up adding 2 mL.
+      expect(html).toContain(
+        '<div class="tile"><dt>Off the standard</dt><dd>1</dd></div>'
+      )
+      expect(plain).toContain(
+        '<div class="tile"><dt>Off the standard</dt><dd>0</dd></div>'
+      )
+      // The other direction: a liquid arrived reconstituted, so its volume is
+      // the customer's and the row does not underline it. The tile must not
+      // claim a deviation no row shows.
+      const wet = buildEndoBenchSheet2Html(
+        doc([row(1, { form: 'liquid', waterMl: 5 })]),
+        { measure }
+      )
+      expect(wet).toContain('<td class="m r vial">5<sup class="lmark">L</sup>')
+      expect(wet).toContain(
+        '<div class="tile"><dt>Off the standard</dt><dd>0</dd></div>'
       )
     })
 
@@ -702,6 +741,7 @@ describe('buildEndoSheet2Doc under method rules (slice 5)', () => {
       peptide_id: 7,
       min_mg: null,
       max_mg: null,
+      recon_water_ml: null,
       total_dilution: null,
       step1_ratio: null,
       cartridge_type_id: 4,

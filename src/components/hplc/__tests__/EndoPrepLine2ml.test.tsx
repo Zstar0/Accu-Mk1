@@ -1,6 +1,12 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import type { ReactNode } from 'react'
-import { fireEvent, render, screen, waitFor } from '@testing-library/react'
+import {
+  cleanup,
+  fireEvent,
+  render,
+  screen,
+  waitFor,
+} from '@testing-library/react'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { EndoPrepLine } from '@/components/hplc/EndoPrepLine'
 import {
@@ -179,6 +185,35 @@ describe('EndoPrepLine on a mixed worksheet', () => {
     expect(onUpdate).toHaveBeenCalledWith({ prep_form: null })
   })
 
+  it('drops a typed water when the row stops being liquid, and keeps it otherwise', async () => {
+    // The water cell means a different thing per form: the customer's own
+    // volume for a liquid, a bench override for a lyophilized vial (Dennis,
+    // 2026-10-19). Leaving liquid clears it.
+    const liquid = endoItem({
+      sample_id: 'P-0001-S02',
+      prep_form: 'liquid',
+      prep_water_ml: 3,
+    })
+    const a = setup(endoWorksheet([liquid]), liquid)
+    await pick(screen.getByRole('combobox', { name: 'Form' }), 'Lyophilized')
+    expect(a.onUpdate).toHaveBeenCalledWith({
+      prep_form: 'powder',
+      prep_water_ml: null,
+    })
+
+    cleanup()
+    // Staying on the same liquid-ness keeps it: an override typed on a
+    // lyophilized row survives naming the form it already resolved to.
+    const powder = endoItem({
+      sample_id: 'P-0002-S02',
+      prep_form: null,
+      prep_water_ml: 3,
+    })
+    const b = setup(endoWorksheet([powder]), powder)
+    await pick(screen.getByRole('combobox', { name: 'Form' }), 'Lyophilized')
+    expect(b.onUpdate).toHaveBeenCalledWith({ prep_form: 'powder' })
+  })
+
   it("labels bac water's Auto as bac water even when set by hand to powder", async () => {
     const item = endoItem({ sample_id: 'BW-0114-S02', prep_form: 'powder' })
     setup(endoWorksheet([item]), item)
@@ -219,6 +254,7 @@ describe('EndoPrepLine on a mixed worksheet', () => {
         peptide_id: 7,
         min_mg: null,
         max_mg: null,
+        recon_water_ml: null,
         total_dilution: 300,
         step1_ratio: null,
         cartridge_type_id: 4,

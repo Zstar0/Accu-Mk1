@@ -119,6 +119,31 @@ describe('the result cell', () => {
     ).toBeInTheDocument()
   })
 
+  it('shows the ">" on a floor result, on both the editable and the read-only cell', () => {
+    // The stored number is a floor: the certificate prints "> 2500", so the
+    // reviewer signing the row off has to see the same qualifier.
+    renderTable(
+      row({
+        result: '2500',
+        loq: 25,
+        lod: 0.05,
+        lod_unit: 'EU/mL',
+        result_floor: true,
+      })
+    )
+    expect(screen.getByText('> 2500')).toBeInTheDocument()
+    renderTable(
+      row({
+        uid: 'mk1:4103',
+        review_state: 'to_be_verified',
+        result: '2500',
+        result_floor: true,
+      })
+    )
+    // Editable: the button shows the qualifier, and there are now two cells.
+    expect(screen.getAllByText('> 2500')).toHaveLength(2)
+  })
+
   it('renders a row without them exactly as before', () => {
     renderTable(row({}))
     expect(screen.queryByTestId('result-limits')).not.toBeInTheDocument()

@@ -393,6 +393,7 @@ describe('EndoWorksheetPage', () => {
             peptide_id: 7,
             min_mg: null,
             max_mg: null,
+            recon_water_ml: null,
             total_dilution: 300,
             step1_ratio: null,
             cartridge_type_id: null,

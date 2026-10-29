@@ -240,17 +240,34 @@ def sample_peptide_ids(db: Session, parent_pks: list[int]) -> dict[int, Optional
     return {pk: next(iter(ids)) if len(ids) == 1 else None for pk, ids in anchors.items()}
 
 
-def evaluate(spec, result: str) -> Optional[bool]:
+def evaluate(spec, result: str, *, floor: bool = False) -> Optional[bool]:
     """Verdict of a result string against a spec (any object with rule_kind,
     equals_value, min_value, max_value). Pure. Raises SpecRuleError whenever
     the rule cannot actually be applied — a verdict is only ever emitted from
     a rule that ran; anything else fails closed. Bounds are INCLUSIVE.
+
+    floor=True (endo ">"): the result is a LOWER BOUND, "at least this much",
+    not a measurement. Judging a floor the ordinary way is anti-conservative
+    — bounds are inclusive, so a floor of 350 against a 0-350 spec would read
+    as Conforms when the true value is 350 or more. The only verdict a floor
+    can support is a definitive failure, once it already reaches an upper
+    limit; everything else cannot be verdicted and raises.
 
     rule_kind='informational' returns None — "report as measured", no
     verdict by design (report-only spec, 2026-08-22). This is NOT the
     fail-closed None-shaped anything: the row still required a real,
     deliberately-filed spec row to get here (rule 5 untouched), and no
     numeric parsing applies — the measured value prints verbatim."""
+    if floor and spec.rule_kind != "range":
+        # Checked BEFORE the informational early-out: "report as measured" has
+        # no verdict to give, but it also prints the raw number with no
+        # qualifier (_result_display's floor is range-only), so a floor would
+        # read as a measurement on the certificate. Only a numeric range can
+        # say whether a floor already fails.
+        raise SpecRuleError(
+            f"result {result!r} is a floor but the spec is {spec.rule_kind!r}, "
+            f"not a numeric range — cannot verdict"
+        )
     if spec.rule_kind == "informational":
         return None
     text = str(result or "").strip()
@@ -272,6 +289,21 @@ def evaluate(spec, result: str) -> Optional[bool]:
     if not math.isfinite(value):
         # The old engine false-passed NaN and -inf here. Deliberate divergence.
         raise SpecRuleError(f"result {result!r} is non-finite — cannot verdict")
+    if floor:
+        # Only one answer is available from a lower bound: it fails when the
+        # floor itself already reaches the upper limit. Below the limit, or
+        # with no upper limit at all, the true value is unknown and no verdict
+        # may be emitted. Deliberately NOT extended to min_value (a floor
+        # clearing a lower bound would be a definitive pass): endotoxin is the
+        # only producer of floors and its specs are max-bounded, so the
+        # speculative half stays unwritten rather than untested.
+        if spec.max_value is None or value < float(spec.max_value):
+            raise SpecRuleError(
+                f"result {result!r} is a floor below the "
+                f"{'absent' if spec.max_value is None else f'{float(spec.max_value):g}'} "
+                f"upper limit — cannot verdict; re-run for a number to report"
+            )
+        return False
     if spec.min_value is not None and value < float(spec.min_value):
         return False
     if spec.max_value is not None and value > float(spec.max_value):
@@ -284,7 +316,8 @@ def display_spec_fields(db: Session, *, service_id: Optional[int],
                         wire_result: Optional[str],
                         cache: Optional[dict] = None,
                         unit: Optional[str] = None,
-                        sample_form_id: Optional[int] = None) -> dict:
+                        sample_form_id: Optional[int] = None,
+                        floor: bool = False) -> dict:
     """`specification` + `conforms` for a row in the analyses TABLE: the same
     resolve_spec / evaluate / wire dict the certificate is built from, so the
     table can never disagree with the COA. Same inputs as
@@ -323,7 +356,7 @@ def display_spec_fields(db: Session, *, service_id: Optional[int],
     conforms = None
     if str(wire_result or "").strip():
         try:
-            conforms = evaluate(spec, wire_result)
+            conforms = evaluate(spec, wire_result, floor=floor)
         except SpecRuleError:
             conforms = None
     return {"specification": _spec_wire_dict(spec), "conforms": conforms}

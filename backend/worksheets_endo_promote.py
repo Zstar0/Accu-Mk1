@@ -64,6 +64,8 @@ REASON_NO_CARTRIDGE = "the row has no cartridge"
 REASON_PEPTIDE_UNIT = "peptides promote in EU/vial"
 REASON_BAC_UNIT = "bac water promotes in EU/mL"
 REASON_BAD_NUMBERS = "the value, LOQ or LOD does not match the worksheet row"
+REASON_GT = ("a '>' reading reports only when the floor itself already fails, so "
+             "re-run the vial at a higher dilution for a number")
 REASON_UNEXPECTED = "not promoted: an unexpected error, see the server log"
 TYPED = "typed, no reader record"
 
@@ -76,6 +78,10 @@ class EndoPromoteRowIn(BaseModel):
     loq: float
     lod: float
     lod_unit: str
+    # The endo ">" certificate slice: the browser asserts that this value is a
+    # floor, and the server checks the assertion against the stored reading
+    # (the same trust model as value and LOQ, final review I-3).
+    result_floor: bool = False
 
 
 class EndoPromoteRequest(BaseModel):
@@ -278,7 +284,14 @@ def _plan(db: Session, worksheet, item, row: EndoPromoteRowIn, ctx) -> dict:
         raise _Refused(REASON_PARENT_HOLDS)
     if item.result_reading is None:
         raise _Refused(REASON_NO_READING)
-    lt, reading = parse_reading(item.result_reading)
+    parsed = parse_reading(item.result_reading)
+    # A ">" says the vial holds AT LEAST this much, so the number is a floor,
+    # not the result. It promotes ONLY when the floor already reaches the
+    # limit, which is a definitive failure whatever the true value is; the
+    # row carries result_floor so the spec engine judges it as a floor
+    # (coa.spec_rules.evaluate) and the certificate prints "> 2500". A floor
+    # under the limit is refused below, once the spec says what the limit is.
+    lt, gt, reading = parsed.lt, parsed.gt, parsed.value
     record = item.result_reader
     if record:
         valid, why = reader_validity(record, ctx.run_params)
@@ -310,6 +323,7 @@ def _plan(db: Session, worksheet, item, row: EndoPromoteRowIn, ctx) -> dict:
             or row.value < 0 or row.loq <= 0 or row.lod <= 0
             or normalize_unit(row.lod_unit) != normalize_unit(LOD_UNIT)
             or not _same(row.lod, sensitivity)
+            or bool(row.result_floor) != gt
             or (lt and not _same(row.value, row.loq))):
         raise _Refused(REASON_BAD_NUMBERS)
     # The browser's totalOf and waterOf (src/lib/endo-prep-2ml.ts). The total
@@ -323,10 +337,12 @@ def _plan(db: Session, worksheet, item, row: EndoPromoteRowIn, ctx) -> dict:
         facts = ctx.facts.get(item.id)
         rule = (row_rule(item, rules=ctx.rules, endo_prep=worksheet.endo_prep, **facts)
                 if facts else None)
-        total = effective_values(item, rule,
-                                 std_total=params["std_total_dilution"])["total_dilution"]
-        water = (item.prep_water_ml if (item.prep_water_ml or 0) > 0
-                 else None if item.prep_form == "liquid" else params["recon_water_ml"])
+        # Water resolves through the same chain as the total now that a rule
+        # line can prescribe it: typed beats rule beats the method's standard,
+        # and a liquid row keeps only what the analyst typed (powder only).
+        effective = effective_values(item, rule, std_total=params["std_total_dilution"],
+                                     std_water=params["recon_water_ml"])
+        total, water = effective["total_dilution"], effective["recon_water_ml"]
     # Final review I-3 (Handler, 2026-10-13): the sent value and LOQ must be
     # what this row's stored reading gives, within Box 3's 3-decimal display.
     # It confirms the browser's arithmetic and recomputes no verdict. Bac
@@ -349,21 +365,33 @@ def _plan(db: Session, worksheet, item, row: EndoPromoteRowIn, ctx) -> dict:
              if spec.rule_kind == "range" and spec.max_value is not None else None)
     if lt and limit is not None and row.loq > limit:
         raise _Refused(f"inconclusive: LOQ {_fmt(row.loq)} {unit} is above the {_fmt(limit)} limit")
+    # The only verdict a floor supports: it fails once the floor itself
+    # reaches the limit (inclusive, so exactly the limit fails). Under the
+    # limit, or with no limit to clear, the true value is unknown and nothing
+    # may be reported. Mirrors coa.spec_rules.evaluate(floor=True), which
+    # would abort the certificate on such a row.
+    if gt and (limit is None or row.value < limit):
+        why = ("the spec has no upper limit for a floor to reach" if limit is None
+               else f"a floor of {_fmt(row.value)} {unit} does not reach the "
+                    f"{_fmt(limit)} limit")
+        raise _Refused(f"inconclusive: {why}; {REASON_GT}")
     # A "<" result is stored as the number equal to its LOQ (spec section 4),
-    # the same float, so the certificate's value <= LOQ always prints "< LOQ".
+    # the same float, so the certificate's value <= LOQ always prints "< <LOQ>".
     loq = row.value if lt else row.loq
     return {
         "analysis": analysis,
         "unit": unit,
         "loq": loq,
+        "result_floor": gt,
         "details": {
             "user_id": ctx.user_id, "worksheet_id": worksheet.id, "item_id": item.id,
             "sample_id": item.sample_id, "reading": item.result_reading,
             "reader_test_id": (record.get("test_id")
-                               if record and reader_shows(record, (lt, reading)) else TYPED),
+                               if record and reader_shows(record, parsed) else TYPED),
             "cartridge_type_id": cartridge_id, "cartridge_sensitivity": sensitivity,
             "total_dilution": total, "water_ml": water,
             "value": row.value, "unit": unit, "loq": loq, "lod": row.lod, "lod_unit": LOD_UNIT,
+            "result_floor": gt,
         },
     }
 
@@ -389,6 +417,7 @@ def _promote_one(db: Session, current_user, worksheet, item, row: EndoPromoteRow
     apply_transition(
         db, analysis_id=analysis.id, kind="submit", result_value=value,
         result_unit=plan["unit"], loq=plan["loq"], lod=row.lod, lod_unit=LOD_UNIT,
+        result_floor=plan["result_floor"] or None,
         method_id=method_id, user_id=plan["details"]["user_id"], reason=reason, commit=False,
     )
     resp = promote_flow.run_promote(db, current_user, PromoteRequest(
@@ -398,6 +427,10 @@ def _promote_one(db: Session, current_user, worksheet, item, row: EndoPromoteRow
         instrument_id=analysis.instrument_id,
         sources=[PromoteSourceRef(analysis_id=analysis.id, contribution_kind="chosen")],
         reason=reason, loq=plan["loq"], lod=row.lod, lod_unit=LOD_UNIT,
+        # Sent explicitly, never left to promote_to_parent's copy-from-source
+        # branch: that fires only when every limit is None, and this promote
+        # always sends the LOQ, so a floor would be dropped on the parent.
+        result_floor=plan["result_floor"] or None,
     ), background_tasks=background_tasks, audit_reason=reason)
     parent_id = resp.parent.id
     try:

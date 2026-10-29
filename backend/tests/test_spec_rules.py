@@ -463,6 +463,47 @@ def test_blank_equals_value_aborts():
                                  min_value=None, max_value=None), "anything")
 
 
+# ── floor results (endo ">", 2026-10-26) ─────────────────────────────────────
+# A floor is a LOWER bound: "at least this much". NOT added to PARITY_CASES —
+# the old engine has no floor concept, so there is no column to assert.
+
+def _range(max_value="350", min_value="0"):
+    return SimpleNamespace(rule_kind="range", equals_value=None,
+                           min_value=Decimal(min_value) if min_value else None,
+                           max_value=Decimal(max_value) if max_value else None)
+
+
+@pytest.mark.parametrize("result", ["2500", "350", "350.0"])
+def test_a_floor_at_or_above_the_limit_does_not_conform(result):
+    # 350 against a 0 to 350 spec is the boundary: bounds are inclusive, so an
+    # ordinary verdict would read Conforms on a sample holding AT LEAST 350.
+    assert evaluate(_range(), result) is (result != "2500")
+    assert evaluate(_range(), result, floor=True) is False
+
+
+@pytest.mark.parametrize("result, max_value", [("250", "350"), ("2500", None)])
+def test_a_floor_that_cannot_be_judged_aborts(result, max_value):
+    # Below the limit the true value is unknown; with no upper limit there is
+    # nothing for a floor to reach. Fail closed either way.
+    assert evaluate(_range(max_value), result) is True
+    with pytest.raises(SpecRuleError, match="floor"):
+        evaluate(_range(max_value), result, floor=True)
+
+
+@pytest.mark.parametrize("spec", [
+    SimpleNamespace(rule_kind="equals", equals_value="Not Detected",
+                    min_value=None, max_value=None),
+    SimpleNamespace(rule_kind="informational", equals_value=None,
+                    min_value=None, max_value=None),
+])
+def test_a_floor_on_a_non_range_spec_aborts(spec):
+    # Only a numeric range can say whether a floor already fails. An
+    # informational row returns None for an ordinary result but must not
+    # silently swallow a floor it was never asked to judge.
+    with pytest.raises(SpecRuleError, match="floor"):
+        evaluate(spec, "2500", floor=True)
+
+
 # ── report-only specs ("as measured", 2026-08-22) ────────────────────────────
 # NOT added to PARITY_CASES: informational rows never reach the old engine —
 # a wire dict spec bypasses COABuilder's _verdict entirely, so there is no

@@ -17,6 +17,10 @@ export interface EndoPrepRule {
   /** Band: weight > min_mg (null: no lower bound) and <= max_mg (null: no upper bound). */
   min_mg: number | null
   max_mg: number | null
+  /** The reconstitution water this band is prepped in, mL; null keeps the
+   *  method's standard. Powder rows only: a liquid vial's volume is what the
+   *  customer sent, so a rule never supplies it (waterOf). */
+  recon_water_ml: number | null
   /** null: the method's standard. */
   total_dilution: number | null
   step1_ratio: number | null
@@ -47,10 +51,13 @@ export interface PrepRuleLock {
 export interface PrepHistoryEntry {
   at: string
   by: number | null
-  why: 'reapply' | 'override'
+  why: 'reapply' | 'override' | 'replaced'
   lock: PrepRuleLock | null
   total_dilution: number
   step1_ratio: number
+  /** The water that run used, mL. Optional: entries written before a rule
+   *  could set one carry none, and such a run was at the standard. */
+  recon_water_ml?: number | null
   cartridge_type_id: number | null
   result_reading: string | null
   reader_test_id: string | null
@@ -156,6 +163,7 @@ export function ruleText(
   cartridge: (id: number) => string = id => `cartridge #${id}`
 ): string {
   const values = [
+    r.recon_water_ml !== null ? `${r.recon_water_ml} mL water` : null,
     r.total_dilution !== null ? `1:${r.total_dilution} total` : null,
     r.step1_ratio !== null ? `step 1 1:${r.step1_ratio}` : null,
     r.cartridge_type_id !== null ? cartridge(r.cartridge_type_id) : null,

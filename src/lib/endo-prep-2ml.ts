@@ -207,7 +207,12 @@ export function waterOf(s: EndoSample, ctx: EndoCtx): number | null {
   if (form === 'bac') return null
   const own = fin(s.waterMl)
   if (own !== null && own > 0) return own
-  return form === 'liquid' ? null : ctx.params.reconWaterMl
+  // Powder only (Handler 2026-10-26): a liquid vial arrived reconstituted, so
+  // its volume is what the customer sent, not a prep choice. Neither the
+  // rule's water nor the standard may be put in one. Mirrors the server's
+  // effective_values.
+  if (form === 'liquid') return null
+  return ruleWaterOf(s) ?? ctx.params.reconWaterMl
 }
 
 /* ---------------- limits ---------------- */
@@ -240,6 +245,26 @@ export function mvcFor(lambda: number | null, s: EndoSample): number | null {
 function ruleTotalOf(s: EndoSample): number | null {
   const r = fin(s.rule?.total_dilution)
   return r !== null && r > 0 ? r : null
+}
+
+/** The rule's reconstitution water when it sets one (> 0), else null. */
+function ruleWaterOf(s: EndoSample): number | null {
+  const r = fin(s.rule?.recon_water_ml)
+  return r !== null && r > 0 ? r : null
+}
+
+/**
+ * The row's water came from its method rule: not typed, not the standard.
+ * Powder rows only, as waterOf. The bench sheet marks such a cell "R", like
+ * a ruled cartridge, so the tech does not add the standard volume to a vial
+ * the sheet has already scaled by another one.
+ */
+export function waterRuled(s: EndoSample): boolean {
+  const form = formOf(s)
+  if (form === 'bac' || form === 'liquid') return false
+  const own = fin(s.waterMl)
+  if (own !== null && own > 0) return false
+  return ruleWaterOf(s) !== null
 }
 
 /** The rule's step 1 ratio when it sets one (>= 1), else null. */
@@ -519,29 +544,43 @@ export function prep2Check(s: EndoSample, ctx: EndoCtx): EndoCheck {
  */
 export function parseReading(
   text: string | null
-): { lt: boolean; value: number } | null {
+): { lt: boolean; gt: boolean; value: number } | null {
   const t = (text ?? '').trim()
   if (t.length > 40) return null // result_reading is varchar(40); the server's parse_reading refuses longer
-  const m = /^(<)?(\d*\.?\d+)$/.exec(t.replace(/\s+/g, ''))
+  // "<" is below the cartridge's lowest standard, ">" above its top one. The
+  // server's parse_reading takes the same grammar; keep the two in lockstep.
+  const m = /^([<>])?(\d*\.?\d+)$/.exec(t.replace(/\s+/g, ''))
   if (!m) return null
   const lt = m[1] === '<'
+  const gt = m[1] === '>'
   const value = Number(m[2])
-  return lt && value <= 0 ? null : { lt, value }
+  return lt && value <= 0 ? null : { lt, gt, value }
 }
 
-function judgeResult(lt: boolean, euPerVial: number): EndoVerdict {
+function judgeResult(lt: boolean, euPerVial: number, gt: boolean): EndoVerdict {
+  // A ">" says the vial holds at least this much: already over the limit is a
+  // fail whatever the true number, under it proves nothing (Handler ruling
+  // 2026-10-26, Dennis d1fdacc). It can never read as a pass.
+  if (gt) return euPerVial >= LIMIT_EU_PER_VIAL ? 'fail' : 'inconclusive'
   if (euPerVial <= LIMIT_EU_PER_VIAL) return 'pass'
   return lt ? 'inconclusive' : 'fail'
 }
 
 /** Bac water: the reading itself against 0.25 EU/mL. */
-export function judgeWater(lt: boolean, euPerMl: number): EndoVerdict {
+export function judgeWater(
+  lt: boolean,
+  euPerMl: number,
+  gt: boolean
+): EndoVerdict {
+  if (gt) return euPerMl >= BW_LIMIT_EU_PER_ML ? 'fail' : 'inconclusive'
   if (euPerMl <= BW_LIMIT_EU_PER_ML) return 'pass'
   return lt ? 'inconclusive' : 'fail'
 }
 
 export interface EndoResult {
   lt: boolean | null
+  /** The reading was ">": the value is a floor, not the result. */
+  gt: boolean
   value: number | null
   euPerMlVial: number | null
   euPerVial: number | null
@@ -558,6 +597,7 @@ function prep2ResultRaw(s: EndoSample, ctx: EndoCtx): EndoResult {
   const bac = formOf(s) === 'bac'
   const none: EndoResult = {
     lt: false,
+    gt: false,
     value: null,
     euPerMlVial: null,
     euPerVial: null,
@@ -573,6 +613,7 @@ function prep2ResultRaw(s: EndoSample, ctx: EndoCtx): EndoResult {
   const out: EndoResult = {
     ...none,
     lt: p.lt,
+    gt: p.gt,
     value: p.value,
     expectedFloor: k.floorShown,
   }
@@ -580,7 +621,7 @@ function prep2ResultRaw(s: EndoSample, ctx: EndoCtx): EndoResult {
     out.floorMismatch = true
   if (bac) {
     // the reading is EU/mL of the bac water (the instrument applies the 20x)
-    out.verdict = judgeWater(p.lt, p.value)
+    out.verdict = judgeWater(p.lt, p.value, p.gt)
     return out
   }
   if (k.dilution === null || k.water === null) return out // nothing to scale by
@@ -592,7 +633,7 @@ function prep2ResultRaw(s: EndoSample, ctx: EndoCtx): EndoResult {
     euPerMlVial,
     euPerVial,
     euPerMg: w ? euPerVial / w : null,
-    verdict: judgeResult(p.lt, euPerVial),
+    verdict: judgeResult(p.lt, euPerVial, p.gt),
   }
 }
 
@@ -608,10 +649,10 @@ export function prep2Result(s: EndoSample, ctx: EndoCtx): EndoResult {
   return out
 }
 
-/** "<2.5" style: the "<" kept, 3 decimals. */
-export function fmtEu(lt: boolean, v: number | null): string {
+/** "<2.5" or ">250" style: the qualifier kept, 3 decimals. */
+export function fmtEu(lt: boolean, v: number | null, gt = false): string {
   if (v === null || !Number.isFinite(v)) return ''
-  return (lt ? '<' : '') + fmt(v)
+  return (lt ? '<' : gt ? '>' : '') + fmt(v)
 }
 
 /** Concentrations on the cartridge: two significant figures below 0.01. */
@@ -624,6 +665,12 @@ export function fmtConc(v: number | null | undefined): string {
  * The value for Accu-Mk1 (Dennis 2026-10-09): EU per vial for peptides, the
  * reading itself in EU/mL for bac water, the "<" kept. null until there is a
  * number, and for an invalid test (rerun, never reported).
+ *
+ * A ">" keeps its qualifier too: the number is a floor, and Accu-Mk1 stores
+ * it as one (lims_analyses.result_floor) so the spec engine judges it as "at
+ * least this much" instead of as a measurement. Whether it may be promoted is
+ * a separate question, answered by the eligibility gate (src/lib/endo-promote)
+ * and again by the server: only a floor that already fails can be reported.
  */
 export function mk1Value(
   s: EndoSample,
@@ -635,10 +682,18 @@ export function mk1Value(
   if (formOf(s) === 'bac')
     return rs.value === null
       ? null
-      : { value: fmtEu(lt, rs.value), unit: 'EU/mL', verdict: rs.verdict }
+      : {
+          value: fmtEu(lt, rs.value, rs.gt),
+          unit: 'EU/mL',
+          verdict: rs.verdict,
+        }
   return rs.euPerVial === null
     ? null
-    : { value: fmtEu(lt, rs.euPerVial), unit: 'EU/vial', verdict: rs.verdict }
+    : {
+        value: fmtEu(lt, rs.euPerVial, rs.gt),
+        unit: 'EU/vial',
+        verdict: rs.verdict,
+      }
 }
 
 /* ---------------- order ---------------- */

@@ -128,12 +128,13 @@ def _imported(test_id, result, **over):
     return {**_record(test_id=test_id), "result": result, "valid": True, "why": [], **over}
 
 
-def _line(item, value=25, *, unit="EU/vial", loq=25, lod=0.05, lod_unit="EU/mL"):
+def _line(item, value=25, *, unit="EU/vial", loq=25, lod=0.05, lod_unit="EU/mL",
+          result_floor=False):
     """One ticked row as the confirm dialog sends it. The default is a
     peptide "<0.05" on the 0.05 cartridge at the standard 2 mL and 1:250:
     <25 EU per vial (0.05 x 250 x 2), sent as 25 with LOQ 25 and LOD 0.05."""
     return {"item_id": item.id, "value": value, "unit": unit, "loq": loq, "lod": lod,
-            "lod_unit": lod_unit}
+            "lod_unit": lod_unit, "result_floor": result_floor}
 
 
 def _promote(client, ws, *lines):
@@ -178,6 +179,80 @@ def test_a_below_loq_peptide_row_fills_the_vial_and_promotes_it(client, db):
             parent.method_id) == ("25", "EU/vial", 25.0, 0.05, "EU/mL", w.mid)
 
 
+def test_a_rules_water_moves_the_promoted_value_and_its_loq(client, db):
+    """Dennis's ask (Handler 2026-10-26): a line can prescribe more than the
+    standard 2 mL. Water multiplies into both the value and the LOQ, so the
+    server must resolve it through the same chain the browser does, or it
+    refuses its own numbers. The reading is saved through the API, as the
+    bench saves it: that is what locks the row to the line (row_rule)."""
+    from models import EndoPrepRule
+    from tests.test_endo_prep_rule_rows import _anchor
+    from tests.test_spec_rules import _mk_peptide
+
+    w = _world(client, db)
+    w.ws.endo_prep = "2ml"   # a line never applies on a stock worksheet
+    pep = _mk_peptide(db, "RETA", "Retatrutide")
+    db.add(EndoPrepRule(peptide_id=pep.id, recon_water_ml=3))
+    item, _ = _row(db, w, reading=None)
+    _anchor(db, "P-4001", pep)   # the line matches on the parent's catalog peptide
+    db.commit()
+    url = f"/worksheets/{w.ws.id}/items/{item.id}"
+    assert client.patch(url, json={"result_reading": "<0.05",
+                                   "cartridge_type_id": w.c05.id}).status_code == 200
+    db.refresh(item)
+    assert item.prep_rule["rule"]["recon_water_ml"] == 3.0
+
+    # <0.05 x 250 x 3 mL = <37.5 EU/vial, where the standard 2 mL gives <25.
+    [res] = _results(_promote(client, w.ws, _line(item, 37.5, loq=37.5)))
+    assert res["promoted"] is True, res
+    # The anchor analysis sits on the parent too, so pick the endotoxin row.
+    [parent] = [r for r in _parent_rows(db, "P-4001") if r.keyword == w.svc.keyword]
+    assert (parent.result_value, parent.loq) == ("37.5", 37.5)
+    audit = db.query(AuditLog).filter(AuditLog.operation == "endo_worksheet_promoted").one()
+    assert audit.details["water_ml"] == 3.0
+
+    # The standard numbers are now the wrong ones, and are refused.
+    other, _ = _row(db, w, "P-4002-S01", reading=None)
+    _anchor(db, "P-4002", pep)
+    db.commit()
+    assert client.patch(f"/worksheets/{w.ws.id}/items/{other.id}",
+                        json={"result_reading": "<0.05",
+                              "cartridge_type_id": w.c05.id}).status_code == 200
+    assert _results(_promote(client, w.ws, _line(other))) == [
+        _refused(other, worksheets_endo_promote.REASON_BAD_NUMBERS)]
+
+
+def test_a_rules_water_never_reaches_a_liquid_row_on_promote(client, db):
+    """Powder only (Handler 2026-10-26): a liquid vial arrived reconstituted,
+    so a line may not put water in it. Without a typed volume such a row has
+    no value at all, which is how the browser refuses it too."""
+    from models import EndoPrepRule
+    from tests.test_endo_prep_rule_rows import _anchor
+    from tests.test_spec_rules import _mk_peptide
+
+    w = _world(client, db)
+    w.ws.endo_prep = "2ml"
+    pep = _mk_peptide(db, "RETA", "Retatrutide")
+    db.add(EndoPrepRule(peptide_id=pep.id, recon_water_ml=3))
+    item, _ = _row(db, w, reading=None)
+    _anchor(db, "P-4001", pep)
+    db.commit()
+    url = f"/worksheets/{w.ws.id}/items/{item.id}"
+    assert client.patch(url, json={"prep_form": "liquid", "result_reading": "<0.05",
+                                   "cartridge_type_id": w.c05.id}).status_code == 200
+    # The line is still the row's; it just supplies no water.
+    db.refresh(item)
+    assert item.prep_rule["rule"]["recon_water_ml"] == 3.0
+    assert _results(_promote(client, w.ws, _line(item, 37.5, loq=37.5))) == [
+        _refused(item, worksheets_endo_promote.REASON_BAD_NUMBERS)]
+    # With the customer's own volume typed, that is the water used.
+    assert client.patch(url, json={"prep_water_ml": 1}).status_code == 200
+    [res] = _results(_promote(client, w.ws, _line(item, 12.5, loq=12.5)))
+    assert res["promoted"] is True, res
+    audit = db.query(AuditLog).filter(AuditLog.operation == "endo_worksheet_promoted").one()
+    assert audit.details["water_ml"] == 1
+
+
 def test_bac_water_promotes_in_eu_ml_judged_by_its_own_spec(client, db):
     w = _world(client, db)
     item, _ = _row(db, w, "BW-0100-S01", sample_type="Bacteriostatic Water", reading="<0.2",
@@ -206,7 +281,8 @@ def test_the_promote_records_where_each_value_came_from(client, db):
         "user_id": 1, "worksheet_id": ws_id, "item_id": item_id, "sample_id": "P-4001-S01",
         "reading": "<0.05", "reader_test_id": "T-7", "cartridge_type_id": w.c05.id,
         "cartridge_sensitivity": 0.05, "total_dilution": 250, "water_ml": 2,
-        "value": 25.0, "unit": "EU/vial", "loq": 25.0, "lod": 0.05, "lod_unit": "EU/mL"}
+        "value": 25.0, "unit": "EU/vial", "loq": 25.0, "lod": 0.05, "lod_unit": "EU/mL",
+        "result_floor": False}
     submit = db.query(LimsAnalysisTransition).filter_by(analysis_id=vial_id,
                                                         transition_kind="submit").one()
     assert submit.reason == why
@@ -416,6 +492,85 @@ def test_a_peptide_row_set_to_the_bac_water_form_is_refused(client, db):
     db.commit()
     assert _results(_promote(client, w.ws, _line(item, 0.2, unit="EU/mL", loq=0.2, lod=0.01))) == [
         _refused(item, "peptides promote in EU/vial")]
+
+
+@pytest.mark.parametrize("reading, value", [(">5", 2500), (">0.7", 350)])
+def test_a_gt_reading_that_already_fails_promotes_as_a_floor(client, db, reading, value):
+    """Handler ruling 2026-10-26: a ">" is judged as "at least this much". Once
+    the floor itself reaches the 350 EU/vial limit it is a definitive failure
+    whatever the true value is, so it reports. 350 exactly fails: the bound is
+    inclusive, and "at least 350" is not a pass. The row carries result_floor,
+    so the spec engine judges it as a floor instead of as a measurement."""
+    w = _world(client, db)
+    item, vial = _row(db, w, reading=reading, cartridge=w.c05)
+    db.commit()
+    vial_id = vial.id
+    [res] = _results(_promote(client, w.ws,
+                              _line(item, value, loq=25, result_floor=True)))
+    assert res["promoted"] is True, res
+    [parent] = _parent_rows(db, "P-4001")
+    vial = db.get(LimsAnalysis, vial_id)
+    # The floor flag rides the value from the vial to the parent, and the LOQ
+    # stays the run's (25), unlike a "<" where value and LOQ are one number.
+    assert (vial.result_value, vial.result_floor, vial.loq) == (str(value), True, 25.0)
+    assert (parent.result_value, parent.result_unit, parent.result_floor,
+            parent.loq) == (str(value), "EU/vial", True, 25.0)
+    audit = db.query(AuditLog).filter(AuditLog.operation == "endo_worksheet_promoted").one()
+    assert audit.details["result_floor"] is True
+
+
+def test_bac_water_promotes_a_floor_in_its_own_unit(client, db):
+    """Bac water has its own unit, its own spec (0 to 0.25 EU/mL) and scale=1:
+    the reading IS the result, the instrument having applied the 20x. ">20"
+    against 0.25 is a definitive failure by a wide margin."""
+    w = _world(client, db)
+    item, _ = _row(db, w, "BW-0200-S01", sample_type="Bacteriostatic Water", reading=">20",
+                   cartridge=w.c01)
+    db.commit()
+    [res] = _results(_promote(client, w.ws,
+                              _line(item, 20, unit="EU/mL", loq=0.2, lod=0.01,
+                                    result_floor=True)))
+    assert res["promoted"] is True, res
+    [parent] = _parent_rows(db, "BW-0200")
+    assert (parent.result_value, parent.result_unit, parent.result_floor,
+            parent.loq) == ("20", "EU/mL", True, 0.2)
+    # And a bac water floor under its own limit is refused, in EU/mL.
+    under, _ = _row(db, w, "BW-0201-S01", sample_type="Bacteriostatic Water", reading=">0.1",
+                    cartridge=w.c01)
+    db.commit()
+    assert _results(_promote(client, w.ws, _line(under, 0.1, unit="EU/mL", loq=0.2, lod=0.01,
+                                                 result_floor=True))) == [
+        _refused(under, "inconclusive: a floor of 0.1 EU/mL does not reach the "
+                        f"0.25 limit; {worksheets_endo_promote.REASON_GT}")]
+
+
+def test_a_gt_reading_under_the_limit_is_refused_as_inconclusive(client, db):
+    """A floor that stops short of the limit says nothing: the true value may
+    be either side of it. Refused, with the re-run instruction."""
+    w = _world(client, db)
+    item, _ = _row(db, w, reading=">0.5", cartridge=w.c05)
+    db.commit()
+    assert _results(_promote(client, w.ws, _line(item, 250, loq=25, result_floor=True))) == [
+        _refused(item, "inconclusive: a floor of 250 EU/vial does not reach the "
+                       f"350 limit; {worksheets_endo_promote.REASON_GT}")]
+
+
+@pytest.mark.parametrize("reading, value, floor", [
+    (">5", 2500, False),   # a floor passed off as a measurement
+    ("<0.05", 25, True),   # a measurement passed off as a floor
+])
+def test_the_browser_cannot_lie_about_whether_the_value_is_a_floor(client, db, reading,
+                                                                   value, floor):
+    """result_floor is checked against the stored reading like every other
+    number (final review I-3). Claiming a ">2500" is a measurement would have
+    the spec engine judge the floor; claiming a measurement is a floor would
+    print a ">" the bench never wrote."""
+    w = _world(client, db)
+    item, _ = _row(db, w, reading=reading, cartridge=w.c05)
+    db.commit()
+    assert _results(_promote(client, w.ws,
+                             _line(item, value, loq=25, result_floor=floor))) == [
+        _refused(item, worksheets_endo_promote.REASON_BAD_NUMBERS)]
 
 
 def test_a_bw_sample_set_to_the_powder_form_is_refused(client, db):
@@ -733,7 +888,7 @@ def test_numbers_rounded_to_box_3s_three_decimals_still_match(client, db, readin
 
 
 def test_an_exact_row_with_an_loq_far_above_its_value_is_refused(client, db):
-    # The D8 case: an LOQ of 1000 would print "< LOQ" and Pass for 50 EU per vial.
+    # The D8 case: an LOQ of 1000 would print "< 1000" and Pass for 50 EU per vial.
     w = _world(client, db)
     item, vial = _row(db, w, reading="0.1")
     db.commit()
@@ -838,7 +993,7 @@ def test_a_promote_request_refuses_an_unusable_loq_or_lod(field, value):
     assert [e["loc"] for e in caught.value.errors()] == [(field,)]
 
 
-# --- end to end: the promoted "<" result prints "< LOQ" on the COA -----------
+# --- end to end: the promoted "<" result prints "< <LOQ>" on the COA ---------
 
 @pytest.mark.parametrize("sample_id, sample_type, reading, sensitivity, sent, loq", [
     # <0.05 on the 0.05 at the standard 1:250 and 2 mL: <25 EU per vial.
@@ -881,7 +1036,8 @@ def test_a_promoted_below_loq_result_prints_less_than_loq_on_the_coa(
     [section] = build_native_sections(db, parent)["sections"]
     [row] = section["rows"]
     assert (row["result"], row["unit"], row["result_display"], row["conforms"],
-            row["specification"]["loq"]) == (stored.result_value, sent["unit"], "< LOQ", True, loq)
+            row["specification"]["loq"]) == (stored.result_value, sent["unit"], f"< {loq:g}", True, loq)
+    assert row["result_display"] in ("< 25", "< 0.2", "< 2.5")
 
 
 # --- endo_analysis on worksheet items ----------------------------------------

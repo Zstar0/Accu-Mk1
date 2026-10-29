@@ -946,9 +946,18 @@ function TwoMlPrepCells({
         <Select
           value={form}
           disabled={isCompleted}
-          onValueChange={v =>
-            onUpdateItem(item.id, { prep_form: v as EndoForm })
-          }
+          onValueChange={v => {
+            const next = v as EndoForm
+            // A water volume typed under one form is never carried into the
+            // other; only the liquid-ness matters. See EndoPrepLine.
+            onUpdateItem(
+              item.id,
+              (form === 'liquid') !== (next === 'liquid') &&
+                item.prep_water_ml != null
+                ? { prep_form: next, prep_water_ml: null }
+                : { prep_form: next }
+            )
+          }}
         >
           <SelectTrigger
             aria-label="Form the vial arrived in"
@@ -981,7 +990,11 @@ function TwoMlPrepCells({
             unit="mL"
             value={water}
             overridden={item.prep_water_ml != null}
-            computed={form === 'liquid' ? null : ctx.params.reconWaterMl}
+            // What the row would use if nothing were typed: its rule's water
+            // when a line sets one, else the method's standard. Not the
+            // standard flat, or an overridden ruled row is told the wrong
+            // figure to clear back to.
+            computed={waterOf({ ...sample, waterMl: null }, ctx)}
             disabled={isCompleted}
             onCommit={v => onUpdateItem(item.id, { prep_water_ml: v })}
           />

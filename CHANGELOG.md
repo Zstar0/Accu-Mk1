@@ -1,5 +1,39 @@
 # Changelog
 
+## v1.54.0 - 2026-10-27
+
+### Endotoxin: set the reader up from Mk1
+- **A "Reader CSV" button on 2 mL worksheets writes the EndoScan-V Sample Database file**, so a run planned in Mk1 no longer has to be keyed into the instrument by hand or exported from a second tool. Every prep number comes from Mk1's own prep check and dilution plan, and the rows come from the same document the bench sheet prints, so the file and the worksheet cannot disagree.
+- **A row the reader could not be set up for is named rather than written wrong.** A duplicate vial ID, a liquid vial with no volume typed, or a dilution that cannot be made as typed is listed in a message instead of going into the file.
+- **The exported limit is never above the real cut.** It is rounded down to the digits written, so the instrument can only ever be stricter than Mk1, never laxer: a false fail costs a re-run, a false pass would ship. This is a deliberate difference from the tool it replaces, which rounds to nearest.
+- Blends go out under the lab's nickname (KLOW, GLOW), and a long name is cut to the 40 characters the importer accepts, measured as the file will carry it rather than as it arrives.
+
+### Endotoxin: two fixes from the bench
+- **The water cell no longer carries over when a row's Form changes.** Typing a liquid vial's own volume and then switching the row to lyophilized left that volume in place, so the prep was figured on the customer's water instead of the standard reconstitution, and the same the other way round.
+- **A typed reading the reader replaces is kept in the row's history.** The import already refuses to overwrite a reading silently, so a replace is always deliberate, but the typed value was then lost unless the cartridge happened to move with it. Only the cartridge-moved rows still raise the override audit entry.
+
+## v1.53.0 - 2026-10-27
+
+### Endotoxin: a ">" reading is reported instead of re-run
+- **The bench can record a ">" reading now**, and so can a reader import. Before this a ">" could not be parsed at all: typing one was refused, and an imported one sat on the row as text with no verdict.
+- **A ">" is judged as "at least this much".** The reading is above the cartridge's top standard, so the number is a floor. A floor that already reaches the limit fails the vial whatever the true value is; a floor under the limit proves nothing and is refused rather than guessed. A ">" can never read as a pass.
+- **A definitive ">" failure now reaches the certificate**, printing for example `> 2500` and marking the result non-conforming. A vial known to hold at least the limit no longer has to be re-run at a higher dilution before anything can be reported.
+- A floor below the limit is still refused, on the worksheet and on the server, with the same wording in both places.
+
+### Endotoxin: a prep rule can set the reconstitution water
+- **A rule line can prescribe the reconstitution water** for products that need more than the standard 2 mL, so the bench does not have to remember which. Blank keeps the method's standard, and what the analyst types on the row still wins.
+- **Powder only.** A liquid vial arrived reconstituted, so its volume is what the customer sent rather than a prep choice: neither a rule's water nor the standard is ever put in one. Bacteriostatic water is never ruled either.
+- **The water multiplies into both the reported value and the LOQ**, so a 3 mL line moves every number on the rows it touches. Existing rules are unaffected, because the field starts blank everywhere.
+- **The printed bench sheet marks a ruled volume**, underlined and with an "R", so a tech working from the paper adds the right amount. Before this a ruled 3 mL printed unmarked under a legend reading "2 mL, underlined where a sample was given its own".
+- A row's prep history now keeps the water the run used, so Re-apply and the history view rebuild a past run with the volume it actually had.
+
+### COAs: a below-LOQ result prints the number
+- **A result at or below the LOQ now prints `< 25` instead of `< LOQ`.** Another lab read the old layout ("< LOQ" in Result, 25 in the LOQ column) as oddly laid out; the result is "< 25 EU/vial". Endotoxin and heavy metals alike, and the verdict still judges the raw number.
+- Published COAs keep their stored text until they are regenerated.
+
+### Bench sheet: the summary agrees with the rows
+- **The "Off the standard" tile counts exactly what the rows underline.** It used to miss a volume a rule set, and to count both a liquid vial's customer volume and a powder typed at exactly the standard, neither of which the rows mark.
+
 ## v1.52.3 - 2026-10-23
 
 ### Sample COAs on non-variance samples use the chromatogram on the sample page

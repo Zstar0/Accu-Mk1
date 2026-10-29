@@ -45,6 +45,7 @@ import {
   fmtEu,
   formOf,
   mk1Value,
+  waterRuled,
   orderByTotal,
   prep2Check,
   prep2Result,
@@ -833,13 +834,22 @@ export function buildEndoBenchSheet2Html(
       tally.bg += plan.steps[2]?.diluentUl ?? 0
     }
     const liquid = formOf(s) === 'liquid'
-    const waterOwn = !liquid && s.waterMl !== null && s.waterMl !== reconMl
-    if (!plan.standard || s.waterMl !== null) tally.own++
+    // The EFFECTIVE water, not just a typed one: a rule's volume is off the
+    // standard too, and the tech reads this sheet to know what to add. The
+    // summary tile counts the SAME predicate the row underlines, so a run
+    // whose only deviation came from a rule does not read "Off the standard:
+    // 0", and a liquid's customer volume or a powder typed at the standard
+    // does not read 1 with nothing underlined to show for it.
+    const waterR = waterRuled(s)
+    const waterOwn = !liquid && k.water !== null && k.water !== reconMl
+    if (waterR) tally.ruled++
+    if (!plan.standard || waterOwn) tally.own++
     if (liquid) tally.liquid++
     if (waterOwn || plan.steps.some(st => st.own)) tally.typed++
     return (
       lead +
       `<td class="m r vial${waterOwn ? ' own' : ''}">${k.water === null ? '' : escapeHtml(fmt(k.water))}` +
+      `${waterR ? '<sup class="rmark">R</sup>' : ''}` +
       `${liquid ? '<sup class="lmark">L</sup>' : ''}</td>` +
       plan.steps.map((st, si) => stepPrint(st, si, i)).join('') +
       ticks

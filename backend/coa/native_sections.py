@@ -209,7 +209,8 @@ def _method_label(db: Session, method_id: Optional[int]) -> str:
 
 
 # Rule kinds whose printed result is censored against an LOQ. A report-only
-# (informational) row censors too: no verdict, but "< LOQ" when at or below it.
+# (informational) row censors too: no verdict, but "< <LOQ>" (e.g. "< 0.5")
+# when at or below it.
 _LOQ_KINDS = ("range", "informational")
 
 
@@ -242,15 +243,22 @@ def effective_loq(row, spec) -> Optional[float]:
     return float(loq) if loq is not None else None
 
 
-def _result_display(spec, result, loq: Optional[float]) -> Optional[str]:
+def _result_display(spec, result, loq: Optional[float], *,
+                    floor: bool = False) -> Optional[str]:
     """Mk1's applied lab-reporting convention for the PRINTED result; the
-    verdict never reads it. Only convention today: LOQ censoring on range and
-    report-only rows, against the effective LOQ (effective_loq). Runs after
-    evaluate(), which guarantees a finite numeric for range rows but NOT for
-    report-only ones (evaluate() returns None without reading the result), so
-    the float/isfinite guards below are policy for those: a text result
-    ("ND", "Not Detected") is never censored."""
-    if spec.rule_kind not in _LOQ_KINDS or loq is None:
+    verdict never reads it. Two conventions: LOQ censoring on range and
+    report-only rows, against the effective LOQ (effective_loq), and a floor
+    reading (endo ">"), range rows only: evaluate() refuses a floor on any
+    other kind before this runs. evaluate() guarantees a finite numeric for
+    range rows but NOT for report-only ones (it returns None without reading
+    the result), so the float/isfinite guards below are policy for those: a
+    text result ("ND", "Not Detected") is never censored.
+
+    Every surface downstream mirrors result_display verbatim (coabuilder's
+    validator, its fixed digital key list, the PDF cell, the AccuVerify page
+    and badge, the customer portal), so this string is the whole printed
+    convention — no new wire key, no coabuilder or WordPress change."""
+    if spec.rule_kind not in _LOQ_KINDS or (loq is None and not floor):
         return None
     try:
         value = float(str(result or "").strip())
@@ -258,11 +266,23 @@ def _result_display(spec, result, loq: Optional[float]) -> Optional[str]:
         return None
     if not math.isfinite(value):
         return None
-    # At-or-below the LOQ prints "< LOQ" (Handler ruling 2026-09-14: a result
-    # reported AT the LOQ is the reporting floor, not a quantified figure,
-    # Endotoxin USP85 2.50 vs LOQ 2.5). The verdict still uses the raw number.
+    # A floor prints the number it is at least. The qualifier is the whole
+    # point of the row, so it is never censored away by the LOQ rule below:
+    # a floor is by definition above its own LOQ. evaluate(floor=True) has
+    # already refused anything that is not a definitive failure, so the only
+    # floor that reaches here is one the certificate marks non-conforming.
+    # It returns before the LOQ rule, so a floor with no LOQ never reaches
+    # the f-string below.
+    if floor:
+        return f"> {value:g}"
+    # At-or-below the LOQ prints "< <LOQ>", e.g. "< 25" (Handler ruling
+    # 2026-09-14: a result reported AT the LOQ is the reporting floor, not a
+    # quantified figure, Endotoxin USP85 2.50 vs LOQ 2.5). The number, not the
+    # word "LOQ", since 2026-10-17 (Handler: another lab read "< LOQ" as
+    # oddly laid out). `:g` is COABuilder's LOQ-column format, so the two
+    # cells always agree. The verdict still uses the raw number.
     # A "<25 EU/vial" result is stored as 25 with LOQ 25 (endo slice 3).
-    return "< LOQ" if value <= loq else None
+    return f"< {loq:g}" if value <= loq else None
 
 
 def _section_footnotes(raw, values: dict) -> list:
@@ -438,15 +458,16 @@ def build_native_sections(db: Session, parent, *, vial_parent_ids=None) -> dict:
                     f"{matrix or 'any sample type'}. File one in "
                     f"analysis_service_specs"
                 )
+            floor = bool(row.result_floor)
             try:
-                conforms = evaluate(spec, row.result_value)
+                conforms = evaluate(spec, row.result_value, floor=floor)
             except SpecRuleError as e:
                 raise NativeSectionsError(
                     f"native sections: profile '{prof.key}' row "
                     f"'{svc.keyword}' on {sample_id}: {e.detail}"
                 ) from e
             # The result's own LOQ wins over the spec's (endo slice 3, spec
-            # section 7): it decides "< LOQ" and rides specification.loq, the
+            # section 7): it decides "< <LOQ>" and rides specification.loq, the
             # field coabuilder's LOQ column and the digital COA already read.
             # Range and report-only rows, as _spec_wire_dict publishes it. A
             # row without its own LOQ (every heavy metal) keeps the spec's,
@@ -463,7 +484,8 @@ def build_native_sections(db: Session, parent, *, vial_parent_ids=None) -> dict:
                 "method": _method_label(db, row.method_id),
                 "specification": specification,
                 "conforms": conforms,
-                "result_display": _result_display(spec, row.result_value, loq),
+                "result_display": _result_display(spec, row.result_value, loq,
+                                                  floor=floor),
             })
             limits.append((row.lod, row.lod_unit))
         if not rows:
