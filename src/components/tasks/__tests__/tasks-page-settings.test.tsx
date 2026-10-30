@@ -146,6 +146,27 @@ describe('useTasksPageSettings', () => {
     )
   })
 
+  it('a save keeps keys and column ids this build does not know', async () => {
+    get.mockResolvedValue({
+      v: 2,
+      tab: 'watching',
+      density: 'compact',
+      columnSizing: { title: 300, priority: 120 },
+    })
+    const { result, unmount } = await mountReady()
+    act(() => result.current.update({ tab: 'raised' }))
+    act(() => result.current.update({ columnSizing: { title: 400 } }))
+    unmount()
+    expect(put).toHaveBeenCalledTimes(1)
+    expect(put).toHaveBeenCalledWith('tasks.page', {
+      v: 2,
+      tab: 'raised',
+      density: 'compact',
+      sorting: [],
+      columnSizing: { title: 400, priority: 120 },
+    })
+  })
+
   it('a pending save flushes on unmount', async () => {
     const { result, unmount } = await mountReady()
     act(() => result.current.update({ tab: 'raised' }))

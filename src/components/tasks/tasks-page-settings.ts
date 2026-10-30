@@ -91,7 +91,7 @@ export function parseTasksSettings(raw: unknown): TasksPageSettings {
 
 interface PendingSave {
   timer: ReturnType<typeof setTimeout> | null
-  value: TasksPageSettings | null
+  value: Record<string, unknown> | null
 }
 
 function flushSave(save: PendingSave) {
@@ -131,8 +131,20 @@ export function useTasksPageSettings(): {
   const update = (patch: Partial<Omit<TasksPageSettings, 'v'>>) => {
     // Merge from the cache, not render-time settings: two calls in one tick
     // (a sort and a resize) must both land.
-    const current = parseTasksSettings(queryClient.getQueryData(queryKey))
-    const merged = parseTasksSettings({ ...current, ...patch })
+    const cached: unknown = queryClient.getQueryData(queryKey)
+    const raw = isPlainObject(cached) ? cached : {}
+    const known = parseTasksSettings({ ...raw, ...patch })
+    // The server stores the value wholesale, so keys, column ids and a `v`
+    // this build doesn't know (a newer build wrote them) are carried over.
+    const merged: Record<string, unknown> = {
+      ...raw,
+      ...known,
+      v: raw.v ?? known.v,
+      columnSizing: {
+        ...(isPlainObject(raw.columnSizing) ? raw.columnSizing : {}),
+        ...known.columnSizing,
+      },
+    }
     queryClient.setQueryData(queryKey, merged)
     const pending = save.current
     pending.value = merged
