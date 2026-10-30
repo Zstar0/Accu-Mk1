@@ -94,6 +94,30 @@ describe('Copy link to a flag', () => {
     )
   })
 
+  it('links to the server origin from the desktop app, not tauri://', async () => {
+    const { setOverride, clearOverride } = await import('@/lib/api-profiles')
+    setOverride('https://mk1.example.com/api')
+    Object.defineProperty(window, '__TAURI_INTERNALS__', {
+      value: {},
+      configurable: true,
+    })
+    try {
+      const { FlagThread } = await import('@/components/flags/FlagThread')
+      render(<FlagThread flagId={7} tabLabel="Assigned to me" />)
+      fireEvent.click(
+        screen.getByRole('button', { name: 'Copy link to this flag' })
+      )
+      await waitFor(() =>
+        expect(writeText).toHaveBeenCalledWith(
+          'https://mk1.example.com/#tasks/overview?flag=7'
+        )
+      )
+    } finally {
+      delete (window as { __TAURI_INTERNALS__?: unknown }).__TAURI_INTERNALS__
+      clearOverride()
+    }
+  })
+
   it('shows the link when the clipboard write fails', async () => {
     writeText.mockRejectedValue(new Error('denied'))
     const { FlagThread } = await import('@/components/flags/FlagThread')

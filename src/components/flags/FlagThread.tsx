@@ -33,6 +33,7 @@ import {
   TooltipTrigger,
 } from '@/components/ui/tooltip'
 import { cn } from '@/lib/utils'
+import { getServerUrl } from '@/lib/api-profiles'
 import { useAuthStore } from '@/store/auth-store'
 import { useUIStore } from '@/store/ui-store'
 import {
@@ -698,7 +699,13 @@ export function FlagThread({
 /** Shareable URL for one flag: the Tasks page with that flag's thread open.
  *  `?flag=` is parsed by hash-navigation, same as the Slack DM link. */
 function flagLinkUrl(flagId: number): string {
-  return `${window.location.origin}/#tasks/overview?flag=${flagId}`
+  // The desktop webview's origin (tauri://localhost) opens nothing for a
+  // teammate; the API server shares the web app's origin, so use that.
+  const origin =
+    '__TAURI_INTERNALS__' in window
+      ? new URL(getServerUrl()).origin
+      : window.location.origin
+  return `${origin}/#tasks/overview?flag=${flagId}`
 }
 
 function copyFlagLink(flagId: number) {
