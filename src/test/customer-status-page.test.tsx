@@ -16,7 +16,13 @@
  */
 
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
-import { render, screen, fireEvent, waitFor, within } from '@testing-library/react'
+import {
+  render,
+  screen,
+  fireEvent,
+  waitFor,
+  within,
+} from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import React from 'react'
@@ -28,10 +34,7 @@ import type { ExplorerCustomer, ExplorerOrder } from '@/lib/api'
 // resetState() in beforeEach and per-test via direct assignment.
 vi.mock('@/store/ui-store', () => {
   const state = {
-    activeSubSection: 'customers' as
-      | 'customers'
-      | 'customer-detail'
-      | string,
+    activeSubSection: 'customers' as 'customers' | 'customer-detail' | string,
     customerDetailTargetId: null as number | null,
     customerDetailKey: null as string | null,
     customerListPage: 0,
@@ -50,6 +53,7 @@ vi.mock('@/store/ui-store', () => {
     navigateToCustomer: vi.fn(),
     navigateToCustomerKey: vi.fn(),
     navigateToCustomers: vi.fn(),
+    navigateBackFromCustomer: vi.fn(),
     setCustomerListPage: vi.fn(),
     setHideTestAccounts: vi.fn(),
     setSearchAndResetPage: vi.fn(),
@@ -62,7 +66,8 @@ vi.mock('@/store/ui-store', () => {
     // mount the placeholder which doesn't touch it):
     navigateToSample: vi.fn(),
   }
-  const useUIStore = <T,>(selector: (s: typeof state) => T): T => selector(state)
+  const useUIStore = <T,>(selector: (s: typeof state) => T): T =>
+    selector(state)
   useUIStore.getState = () => state
   // Expose the raw state object for tests to mutate.
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -91,6 +96,12 @@ vi.mock('@/lib/api', async () => {
 })
 
 // --- Mock api-profiles so envName has a deterministic value (RESEARCH Risks #9) ---
+vi.mock('@/lib/api-ai-review', () => ({
+  getReviews: vi.fn().mockResolvedValue({ latest: null, history: [] }),
+  getReviewRun: vi.fn(),
+  startReview: vi.fn(),
+}))
+
 vi.mock('@/lib/api-profiles', () => ({
   getActiveEnvironmentName: vi.fn().mockReturnValue('test-env'),
   API_PROFILE_CHANGED_EVENT: 'api-profile-changed',
@@ -154,9 +165,8 @@ const {
   getExplorerCustomers,
   getExplorerOrdersByCustomer,
 } = await import('@/lib/api')
-const { enqueueSenaiteLookup } = await import(
-  '@/components/explorer/senaite-queue'
-)
+const { enqueueSenaiteLookup } =
+  await import('@/components/explorer/senaite-queue')
 const { useUIStore } = await import('@/store/ui-store')
 const { CustomerStatusPage } = await import('@/components/CustomerStatusPage')
 
@@ -178,6 +188,7 @@ const mockState = (useUIStore as any).__state as {
   navigateToCustomer: ReturnType<typeof vi.fn>
   navigateToCustomerKey: ReturnType<typeof vi.fn>
   navigateToCustomers: ReturnType<typeof vi.fn>
+  navigateBackFromCustomer: ReturnType<typeof vi.fn>
   setCustomerListPage: ReturnType<typeof vi.fn>
   setHideTestAccounts: ReturnType<typeof vi.fn>
   setSearchAndResetPage: ReturnType<typeof vi.fn>
@@ -195,7 +206,9 @@ function wrapper({ children }: { children: React.ReactNode }) {
   return <QueryClientProvider client={qc}>{children}</QueryClientProvider>
 }
 
-function makeCustomer(overrides: Partial<ExplorerCustomer> = {}): ExplorerCustomer {
+function makeCustomer(
+  overrides: Partial<ExplorerCustomer> = {}
+): ExplorerCustomer {
   return {
     customer_id: 42,
     email: 'alice@example.com',
@@ -210,11 +223,32 @@ function makeCustomer(overrides: Partial<ExplorerCustomer> = {}): ExplorerCustom
 }
 
 const FIVE_CUSTOMERS_PLUS_GUEST: ExplorerCustomer[] = [
-  makeCustomer({ customer_id: 1, email: 'a@example.com', display_name: 'Alice A' }),
-  makeCustomer({ customer_id: 2, email: 'b@example.com', display_name: 'Bob B' }),
-  makeCustomer({ customer_id: 3, email: 'c@example.com', display_name: 'Carol C' }),
-  makeCustomer({ customer_id: 4, email: 'd@example.com', display_name: 'Dan D', outstanding_orders: 0 }),
-  makeCustomer({ customer_id: 5, email: 'e@example.com', display_name: 'Eve E' }),
+  makeCustomer({
+    customer_id: 1,
+    email: 'a@example.com',
+    display_name: 'Alice A',
+  }),
+  makeCustomer({
+    customer_id: 2,
+    email: 'b@example.com',
+    display_name: 'Bob B',
+  }),
+  makeCustomer({
+    customer_id: 3,
+    email: 'c@example.com',
+    display_name: 'Carol C',
+  }),
+  makeCustomer({
+    customer_id: 4,
+    email: 'd@example.com',
+    display_name: 'Dan D',
+    outstanding_orders: 0,
+  }),
+  makeCustomer({
+    customer_id: 5,
+    email: 'e@example.com',
+    display_name: 'Eve E',
+  }),
   makeCustomer({
     customer_id: null,
     email: 'guest@example.com',
@@ -235,10 +269,16 @@ function resetState() {
   mockState.customerSearchTerm = ''
   mockState.hideTestAccounts = true
   mockState.customerDetailTab = 'orders'
-  mockState.customerOrderSearch = { order_number: '', sample_id: '', analyte: '', lot: '' }
+  mockState.customerOrderSearch = {
+    order_number: '',
+    sample_id: '',
+    analyte: '',
+    lot: '',
+  }
   mockState.navigateToCustomer.mockReset()
   mockState.navigateToCustomerKey.mockReset()
   mockState.navigateToCustomers.mockReset()
+  mockState.navigateBackFromCustomer.mockReset()
   mockState.setCustomerListPage.mockReset()
   mockState.setHideTestAccounts.mockReset()
   mockState.setSearchAndResetPage.mockReset()
@@ -334,6 +374,12 @@ describe('CustomerStatusPage — list view', () => {
       samples: 7,
       usual_gap_days: 12,
       last_order_at: null,
+      first_order_at: null,
+      testing_orders: 0,
+      spend_12m: '0.00',
+      testing_orders_12m: 0,
+      samples_12m: 0,
+      segment: null,
       top_tests: ['HPLC'],
       status: 'growing',
       monthly: [],
@@ -374,6 +420,12 @@ describe('CustomerStatusPage — list view', () => {
       samples: 1,
       usual_gap_days: null,
       last_order_at: null,
+      first_order_at: null,
+      testing_orders: 0,
+      spend_12m: '0.00',
+      testing_orders_12m: 0,
+      samples_12m: 0,
+      segment: null,
       top_tests: [],
       status,
       monthly: [],
@@ -574,8 +626,12 @@ describe('CustomerStatusPage — list view', () => {
 
     const errorTitle = await screen.findByText('Could not load customers')
     expect(errorTitle).toBeInTheDocument()
-    expect(screen.getByText(/Check your connection and try again/)).toBeInTheDocument()
-    expect(screen.queryByText(/secret-internal-db-detail/)).not.toBeInTheDocument()
+    expect(
+      screen.getByText(/Check your connection and try again/)
+    ).toBeInTheDocument()
+    expect(
+      screen.queryByText(/secret-internal-db-detail/)
+    ).not.toBeInTheDocument()
     expect(screen.queryByText(/leaked-PII-12345/)).not.toBeInTheDocument()
   })
 
@@ -596,16 +652,24 @@ describe('CustomerStatusPage — list view', () => {
   })
 
   it('renders "No customers found" + no-search body when empty (UI-07)', async () => {
-    vi.mocked(getExplorerCustomers).mockResolvedValue({ customers: [], total_count: 0 })
+    vi.mocked(getExplorerCustomers).mockResolvedValue({
+      customers: [],
+      total_count: 0,
+    })
     render(<CustomerStatusPage />, { wrapper })
 
     await screen.findByText('No customers found')
-    expect(screen.getByText('No customer records available yet.')).toBeInTheDocument()
+    expect(
+      screen.getByText('No customer records available yet.')
+    ).toBeInTheDocument()
   })
 
   it('renders search-empty body with the literal search term (UI-07)', async () => {
     mockState.customerSearchTerm = 'foo'
-    vi.mocked(getExplorerCustomers).mockResolvedValue({ customers: [], total_count: 0 })
+    vi.mocked(getExplorerCustomers).mockResolvedValue({
+      customers: [],
+      total_count: 0,
+    })
     render(<CustomerStatusPage />, { wrapper })
 
     await screen.findByText('No customers found')
@@ -619,22 +683,31 @@ describe('CustomerStatusPage — list view', () => {
     render(<CustomerStatusPage />, { wrapper })
 
     await screen.findByText('Could not load customers')
-    const retry = screen.getByRole('button', { name: 'Retry loading customers' })
+    const retry = screen.getByRole('button', {
+      name: 'Retry loading customers',
+    })
     expect(retry).toBeInTheDocument()
     fireEvent.click(retry)
     // Refetch should re-invoke the query function.
     // We assert it via call count: 1 from initial mount + 1 from retry = 2.
     // (initial may have one or two depending on React-Query retry settings; we use
     // retry:false in the QueryClient so it's exactly 1 then +1.)
-    expect(vi.mocked(getExplorerCustomers).mock.calls.length).toBeGreaterThanOrEqual(2)
+    expect(
+      vi.mocked(getExplorerCustomers).mock.calls.length
+    ).toBeGreaterThanOrEqual(2)
   })
 
   it('disconnected: renders banner, no skeletons, does NOT call getExplorerCustomers (D-17)', async () => {
-    vi.mocked(getExplorerStatus).mockResolvedValue({ connected: false, error: 'down' })
+    vi.mocked(getExplorerStatus).mockResolvedValue({
+      connected: false,
+      error: 'down',
+    })
     render(<CustomerStatusPage />, { wrapper })
 
     await screen.findByText(/Failed to connect to database: down/)
-    expect(screen.queryByTestId('customer-row-skeleton')).not.toBeInTheDocument()
+    expect(
+      screen.queryByTestId('customer-row-skeleton')
+    ).not.toBeInTheDocument()
     // getExplorerCustomers must not be called when disconnected (gated by enabled).
     expect(getExplorerCustomers).not.toHaveBeenCalled()
   })
@@ -723,10 +796,10 @@ function renderDetailWithCache(
   if (customer) {
     // Seed under the SAME key shape the list view uses
     // (CustomerListView's queryKey is ['explorer','customers',search,page,hideTest,envName]).
-    qc.setQueryData(
-      ['explorer', 'customers', '', 0, true, 'test-env'],
-      { customers: [customer], total_count: 1 }
-    )
+    qc.setQueryData(['explorer', 'customers', '', 0, true, 'test-env'], {
+      customers: [customer],
+      total_count: 1,
+    })
   }
   const result = render(
     <QueryClientProvider client={qc}>
@@ -772,6 +845,35 @@ describe('CustomerStatusPage — detail view', () => {
 
     expect(getExplorerOrdersByCustomer).toHaveBeenCalled()
     expect(vi.mocked(getExplorerOrdersByCustomer).mock.calls[0]?.[0]).toBe(42)
+  })
+
+  it('shows the CRM and Support tabs to admins only', async () => {
+    const { useAuthStore } = await import('@/store/auth-store')
+    const before = useAuthStore.getState().user
+    try {
+      useAuthStore.setState({
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        user: { id: 1, email: 's@x', role: 'standard' } as any,
+      })
+      renderDetailWithCache(makeCustomer({ customer_id: 42 }))
+      await screen.findByText('No orders for this customer')
+      expect(screen.queryByRole('tab', { name: 'CRM' })).toBeNull()
+      expect(screen.queryByRole('tab', { name: 'Support' })).toBeNull()
+      expect(screen.queryByRole('tab', { name: 'AI review' })).toBeNull()
+      ;(await import('@testing-library/react')).cleanup()
+      useAuthStore.setState({
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        user: { id: 1, email: 'a@x', role: 'admin' } as any,
+      })
+      renderDetailWithCache(makeCustomer({ customer_id: 42 }))
+      expect(
+        await screen.findByRole('tab', { name: 'CRM' })
+      ).toBeInTheDocument()
+      expect(screen.getByRole('tab', { name: 'Support' })).toBeInTheDocument()
+      expect(screen.getByRole('tab', { name: 'AI review' })).toBeInTheDocument()
+    } finally {
+      useAuthStore.setState({ user: before })
+    }
   })
 
   it('with neither a target id nor a key, falls back to the list and never fetches orders', async () => {
@@ -923,12 +1025,12 @@ describe('CustomerStatusPage — detail view', () => {
 
   // --- Back navigation (D-11) ---
 
-  it('clicking ← Back to Customers calls navigateToCustomers', async () => {
+  it('clicking ← Back to Customers calls navigateBackFromCustomer', async () => {
     renderDetailWithCache(makeCustomer({ customer_id: 42 }))
 
     const back = await screen.findByText('← Back to Customers')
     fireEvent.click(back)
-    expect(mockState.navigateToCustomers).toHaveBeenCalled()
+    expect(mockState.navigateBackFromCustomer).toHaveBeenCalled()
   })
 
   // --- Empty state ---
@@ -976,7 +1078,9 @@ describe('CustomerStatusPage — detail view', () => {
       await screen.findByText('No orders for this customer')
     ).toBeInTheDocument()
     expect(
-      screen.getByText('Orders will appear here when this customer places them.')
+      screen.getByText(
+        'Orders will appear here when this customer places them.'
+      )
     ).toBeInTheDocument()
   })
 
@@ -986,16 +1090,18 @@ describe('CustomerStatusPage — detail view', () => {
     vi.mocked(getExplorerOrdersByCustomer).mockRejectedValue(new Error('boom'))
     renderDetailWithCache(makeCustomer({ customer_id: 42 }))
 
-    expect(await screen.findByText('Could not load customer')).toBeInTheDocument()
+    expect(
+      await screen.findByText('Could not load customer')
+    ).toBeInTheDocument()
     const retry = screen.getByRole('button', { name: 'Retry loading customer' })
     expect(retry).toBeInTheDocument()
 
     const callsBefore = vi.mocked(getExplorerOrdersByCustomer).mock.calls.length
     fireEvent.click(retry)
     // Refetch invokes the queryFn again
-    expect(vi.mocked(getExplorerOrdersByCustomer).mock.calls.length).toBeGreaterThan(
-      callsBefore
-    )
+    expect(
+      vi.mocked(getExplorerOrdersByCustomer).mock.calls.length
+    ).toBeGreaterThan(callsBefore)
   })
 
   // --- Loading state ---
@@ -1064,8 +1170,8 @@ describe('CustomerStatusPage — detail view', () => {
         completed_at: null,
         created_at: '2026-05-05T00:00:00Z',
         sample_results: {
-          's1': { senaite_id: 'AS-200', status: 'received' },
-          's2': { senaite_id: 'AS-201', status: 'received' },
+          s1: { senaite_id: 'AS-200', status: 'received' },
+          s2: { senaite_id: 'AS-201', status: 'received' },
         },
       }),
     ]
@@ -1077,7 +1183,8 @@ describe('CustomerStatusPage — detail view', () => {
     await screen.findAllByTestId('order-row')
     await new Promise(r => setTimeout(r, 0))
 
-    const callsBeforeReRender = vi.mocked(enqueueSenaiteLookup).mock.calls.length
+    const callsBeforeReRender =
+      vi.mocked(enqueueSenaiteLookup).mock.calls.length
     expect(callsBeforeReRender).toBeGreaterThan(0)
 
     // Re-render the SAME tree under the SAME QueryClient so the cache hit
@@ -1324,7 +1431,12 @@ describe('CustomerStatusPage — detail view tabs (Phase 30)', () => {
     mockState.activeSubSection = 'customer-detail'
     mockState.customerDetailTargetId = 42
     mockState.customerDetailTab = 'orders'
-    mockState.customerOrderSearch = { order_number: '', sample_id: '', analyte: '', lot: '' }
+    mockState.customerOrderSearch = {
+      order_number: '',
+      sample_id: '',
+      analyte: '',
+      lot: '',
+    }
   })
 
   afterEach(() => {

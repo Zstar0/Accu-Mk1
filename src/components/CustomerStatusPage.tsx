@@ -87,6 +87,13 @@ import {
   STATUS_LABEL,
 } from '@/components/customers/insights-utils'
 import { CustomerDashboard } from '@/components/customers/CustomerDashboard'
+import { CustomerCrmTab } from '@/components/customers/CustomerCrmTab'
+import { CustomerSupportTab } from '@/components/customers/CustomerSupportTab'
+import { FlaggedItemOpener } from '@/components/customers/FlaggedItemOpener'
+import { BackToOrigin } from '@/components/customers/BackToOrigin'
+import { useSupportSeat } from '@/components/customers/useSupportSeat'
+import { CustomerAiReviewTab } from '@/components/customers/CustomerAiReviewTab'
+import { useAuthStore } from '@/store/auth-store'
 import {
   NO_INSIGHT,
   UNASSIGNED,
@@ -771,16 +778,19 @@ function InsightCells({ insight }: { insight?: InsightRow }) {
  * Selector syntax mandate (AGENTS.md): every useUIStore call uses
  * `state => state.x`. ast-grep enforces.
  *
- * Back navigation (D-11): a single `navigateToCustomers()` call atomically
- * sets activeSubSection='customers' AND clears customerDetailTargetId. The
- * store action is the source of truth — see src/store/ui-store.ts:317-326.
+ * Back navigation (D-11): `BackToOrigin` calls `navigateBackFromCustomer()`,
+ * which returns to Customers or Customer Insights (by `customerDetailOrigin`)
+ * AND clears customerDetailTargetId; `navigateToCustomers()` always goes to
+ * the list (QuickNav, sidebar). The store actions are the source of truth.
  */
 function CustomerDetailView() {
+  const isAdminUser = useAuthStore(state => state.user)?.role === 'admin'
+  const supportSeat = useSupportSeat()
+  const canSupport = isAdminUser || supportSeat.data?.has_seat === true
   // --- Store reads (selector syntax mandatory — ast-grep enforced) ---
   const customerDetailTargetId = useUIStore(
     state => state.customerDetailTargetId
   )
-  const navigateToCustomers = useUIStore(state => state.navigateToCustomers)
   // Phase 30 — Task 6: detail-view tab selection
   const customerDetailTab = useUIStore(state => state.customerDetailTab)
   const setCustomerDetailTab = useUIStore(state => state.setCustomerDetailTab)
@@ -964,13 +974,7 @@ function CustomerDetailView() {
       {/* Back link — D-11. Use a plain <button> (not shadcn Button) per
           UI-SPEC §Back Navigation (matches the text-primary link pattern). */}
       <div>
-        <button
-          type="button"
-          className="text-sm text-primary hover:underline mb-4"
-          onClick={() => navigateToCustomers()}
-        >
-          ← Back to Customers
-        </button>
+        <BackToOrigin />
       </div>
 
       {/* Disconnected banner — inlined verbatim from the list view (D-16). */}
@@ -1050,15 +1054,28 @@ function CustomerDetailView() {
       {/* Phase 30 — Task 6: Tabs wrap everything below the header card.
           Customer Orders is the default; Dashboard is the insights dossier. */}
       <Tabs
-        value={customerDetailTab}
+        value={
+          ((customerDetailTab === 'crm' || customerDetailTab === 'ai-review') &&
+            !isAdminUser) ||
+          (customerDetailTab === 'support' && !canSupport)
+            ? 'orders'
+            : customerDetailTab
+        }
         onValueChange={v =>
-          setCustomerDetailTab(v as 'orders' | 'dashboard')
+          setCustomerDetailTab(
+            v as 'orders' | 'dashboard' | 'crm' | 'support' | 'ai-review'
+          )
         }
         className="mt-4"
       >
         <TabsList>
           <TabsTrigger value="orders">Customer Orders</TabsTrigger>
           <TabsTrigger value="dashboard">Dashboard</TabsTrigger>
+          {isAdminUser && <TabsTrigger value="crm">CRM</TabsTrigger>}
+          {canSupport && <TabsTrigger value="support">Support</TabsTrigger>}
+          {isAdminUser && (
+            <TabsTrigger value="ai-review">AI review</TabsTrigger>
+          )}
         </TabsList>
         <TabsContent value="orders" className="mt-4">
           <CustomerOrdersTab
@@ -1081,7 +1098,23 @@ function CustomerDetailView() {
             onOpenAnalyte={() => navigateTo('reports', 'dashboard')}
           />
         </TabsContent>
+        {isAdminUser && (
+          <TabsContent value="crm" className="mt-4">
+            <CustomerCrmTab customerKey={`wc:${customerDetailTargetId}`} />
+          </TabsContent>
+        )}
+        {canSupport && (
+          <TabsContent value="support" className="mt-4">
+            <CustomerSupportTab customerKey={`wc:${customerDetailTargetId}`} />
+          </TabsContent>
+        )}
+        {isAdminUser && (
+          <TabsContent value="ai-review" className="mt-4">
+            <CustomerAiReviewTab customerKey={`wc:${customerDetailTargetId}`} />
+          </TabsContent>
+        )}
       </Tabs>
+      <FlaggedItemOpener customerKey={`wc:${customerDetailTargetId}`} />
     </div>
   )
 }
@@ -1538,7 +1571,9 @@ function CustomerOrdersTab({
  * Dashboard read the insights dossier (one shared query).
  */
 function GuestCustomerDetailView({ customerKey }: { customerKey: string }) {
-  const navigateToCustomers = useUIStore(state => state.navigateToCustomers)
+  const isAdminUser = useAuthStore(state => state.user)?.role === 'admin'
+  const supportSeat = useSupportSeat()
+  const canSupport = isAdminUser || supportSeat.data?.has_seat === true
   const navigateTo = useUIStore(state => state.navigateTo)
   const { data } = useQuery(dossierQuery(customerKey))
   const email = customerKey.slice('email:'.length)
@@ -1546,13 +1581,7 @@ function GuestCustomerDetailView({ customerKey }: { customerKey: string }) {
   return (
     <div className="flex flex-col gap-4 p-4">
       <div>
-        <button
-          type="button"
-          className="text-sm text-primary hover:underline mb-4"
-          onClick={() => navigateToCustomers()}
-        >
-          ← Back to Customers
-        </button>
+        <BackToOrigin />
       </div>
       <Card className="py-0">
         <CardContent className="flex flex-wrap items-center gap-x-2 gap-y-1 px-4 py-2">
@@ -1577,6 +1606,27 @@ function GuestCustomerDetailView({ customerKey }: { customerKey: string }) {
         customerKey={customerKey}
         onOpenAnalyte={() => navigateTo('reports', 'dashboard')}
       />
+      <FlaggedItemOpener customerKey={customerKey} />
+      {isAdminUser && (
+        <>
+          <section className="mt-4">
+            <h2 className="mb-2 text-sm font-medium">CRM</h2>
+            <CustomerCrmTab customerKey={customerKey} />
+          </section>
+        </>
+      )}
+      {canSupport && (
+        <section className="mt-4">
+          <h2 className="mb-2 text-sm font-medium">Support</h2>
+          <CustomerSupportTab customerKey={customerKey} />
+        </section>
+      )}
+      {isAdminUser && (
+        <section className="mt-4">
+          <h2 className="mb-2 text-sm font-medium">AI review</h2>
+          <CustomerAiReviewTab customerKey={customerKey} />
+        </section>
+      )}
     </div>
   )
 }

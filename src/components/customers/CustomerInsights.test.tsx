@@ -1,10 +1,15 @@
-import { render, screen } from '@testing-library/react'
+import { render, screen, waitFor, within } from '@testing-library/react'
+import userEvent from '@testing-library/user-event'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { cloneElement, type ReactElement } from 'react'
-import { describe, expect, it, vi } from 'vitest'
+import { beforeEach, describe, expect, it, vi } from 'vitest'
 import type * as Recharts from 'recharts'
 import * as api from '@/lib/api'
+import * as supportApi from '@/lib/api-support'
+import { useAuthStore } from '@/store/auth-store'
+import { useUIStore } from '@/store/ui-store'
 import { CustomerInsights } from './CustomerInsights'
+import { row } from './insights-test-fixtures'
 
 vi.mock('@/lib/api', async () => {
   const actual = await vi.importActual<typeof api>('@/lib/api')
@@ -14,6 +19,9 @@ vi.mock('@/lib/api', async () => {
     getCustomerCohorts: vi.fn(),
     getCustomerAtRisk: vi.fn(),
     getCustomerChurnSignals: vi.fn(),
+    getCustomerTouchpoints: vi.fn(),
+    getCustomerList: vi.fn(),
+    getCustomerSegments: vi.fn(),
   }
 })
 vi.mock('recharts', async importOriginal => {
@@ -27,10 +35,74 @@ vi.mock('recharts', async importOriginal => {
     }) => cloneElement(children, { width: 800, height: 240 }),
   }
 })
+vi.mock('@/lib/api-support', async () => {
+  const actual = await vi.importActual<typeof supportApi>('@/lib/api-support')
+  return { ...actual, getSupportMe: vi.fn() }
+})
 
 const k = <T,>(value: T, prior: T | null = null) => ({ value, prior })
+const ADMIN = {
+  id: 1,
+  email: 'admin@accumark.example',
+  role: 'admin',
+  is_active: true,
+  created_at: '2026-01-01T00:00:00Z',
+  senaite_configured: false,
+}
 
-function setup(riskFails = false) {
+const EMPTY_LIST: api.CustomerListResponse = {
+  tz: 'America/Los_Angeles',
+  synced_at: null,
+  total: 0,
+  page: 1,
+  page_size: 25,
+  rows: [],
+}
+const listOf = (total: number, rows: api.CustomerListResponse['rows']) => ({
+  ...EMPTY_LIST,
+  total,
+  rows,
+})
+const CRM_OK: api.CrmTouch = {
+  state: 'ok',
+  at: '2026-10-12T15:00:00Z',
+  type: 'email',
+  direction: 'outbound',
+  who: 'Scott',
+  title: 'Checking in',
+  preview: '',
+  lead_name: 'Halcyon',
+  lead_url: null,
+  stale: false,
+  reason: null,
+}
+const CRM_ONLY: api.TouchpointsResponse = {
+  crm_visible: true,
+  support_visible: false,
+  rows: { 'wc:1': { crm: CRM_OK, support: null } },
+}
+
+function setup({
+  riskFails = false,
+  onOpen = vi.fn(),
+  list = EMPTY_LIST,
+  touch = CRM_ONLY,
+  touchPending = false,
+}: {
+  riskFails?: boolean
+  onOpen?: (key: string, tab?: 'crm' | 'support') => void
+  list?: api.CustomerListResponse
+  touch?: api.TouchpointsResponse
+  /** Leave the touchpoints request in flight for the whole test. */
+  touchPending?: boolean
+} = {}) {
+  vi.mocked(supportApi.getSupportMe).mockResolvedValue({
+    has_seat: false,
+    plain_user_id: null,
+    name: null,
+    email: null,
+    unavailable: false,
+  })
   vi.mocked(api.getCustomerSummary).mockResolvedValue({
     tz: 'America/Los_Angeles',
     synced_at: '2026-10-05T18:00:00Z',
@@ -92,10 +164,15 @@ function setup(riskFails = false) {
         samples: 142,
         usual_gap_days: 9,
         last_order_at: '2026-08-21T15:00:00Z',
+        first_order_at: '2026-03-02T15:00:00Z',
+        testing_orders: 29,
         top_tests: ['HPLC'],
         status: 'at_risk',
         monthly: [],
         spend_12m: '84210.00',
+        testing_orders_12m: 29,
+        samples_12m: 142,
+        segment: 'key',
         overdue: 5.2,
       },
     ],
@@ -109,22 +186,78 @@ function setup(riskFails = false) {
       { signal: 'conformance', group: 'any_fail', orders: 14, returned: 0.36 },
     ],
   })
+  vi.mocked(api.getCustomerTouchpoints).mockResolvedValue(touch)
+  if (touchPending)
+    vi.mocked(api.getCustomerTouchpoints).mockReturnValue(
+      new Promise<api.TouchpointsResponse>(() => undefined)
+    )
+  vi.mocked(api.getCustomerList).mockResolvedValue(list)
+  vi.mocked(api.getCustomerSegments).mockResolvedValue({
+    tz: 'America/Los_Angeles',
+    synced_at: null,
+    window_days: 365,
+    segments: [
+      {
+        segment: 'key',
+        customers: 23,
+        revenue_12m: '1000.00',
+        share: 0.69,
+        median_testing_orders_12m: 10,
+        median_samples_12m: 43,
+      },
+      {
+        segment: 'growth',
+        customers: 52,
+        revenue_12m: '1000.00',
+        share: 0.15,
+        median_testing_orders_12m: 3,
+        median_samples_12m: 14,
+      },
+      {
+        segment: 'regular',
+        customers: 95,
+        revenue_12m: '1000.00',
+        share: 0.06,
+        median_testing_orders_12m: 3,
+        median_samples_12m: 3,
+      },
+      {
+        segment: 'trial',
+        customers: 721,
+        revenue_12m: '1000.00',
+        share: 0.1,
+        median_testing_orders_12m: 1,
+        median_samples_12m: 1,
+      },
+    ],
+  })
   if (riskFails)
     vi.mocked(api.getCustomerAtRisk).mockRejectedValue(new Error('boom'))
   const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } })
   return render(
     <QueryClientProvider client={qc}>
-      <CustomerInsights onOpenCustomer={vi.fn()} />
+      <CustomerInsights onOpenCustomer={onOpen} />
     </QueryClientProvider>
   )
 }
 
 describe('CustomerInsights', () => {
-  it('renders KPIs, cohort cell, at-risk row and freshness line', async () => {
+  beforeEach(() => {
+    useUIStore.setState({
+      insightsView: {
+        tab: 'at-risk',
+        period: '90d',
+        segment: 'key',
+        excludeLaunch: false,
+      },
+    })
+    useAuthStore.setState({ user: null })
+  })
+
+  it('renders KPIs, at-risk row and freshness line', async () => {
     setup()
     expect(await screen.findByText('$1.07M')).toBeInTheDocument()
     expect(screen.getByText('24.0%')).toBeInTheDocument()
-    expect(await screen.findByText('12.9%')).toBeInTheDocument()
     expect(
       await screen.findByText('Halcyon Research Supply')
     ).toBeInTheDocument()
@@ -150,12 +283,233 @@ describe('CustomerInsights', () => {
       expect(screen.getByRole('heading', { name: h })).toBeInTheDocument()
   })
 
-  it('shows an error with Retry, and no overdue badge, when at-risk fails', async () => {
-    setup(true)
+  it('shows an error with Retry, and a plain At risk tab label, when at-risk fails', async () => {
+    setup({ riskFails: true })
     expect(
       await screen.findByText(/Failed to load at-risk customers/)
     ).toBeInTheDocument()
     expect(screen.getByRole('button', { name: 'Retry' })).toBeInTheDocument()
-    expect(screen.queryByText(/overdue$/)).not.toBeInTheDocument()
+    expect(screen.getByRole('tab', { name: 'At risk' })).toBeInTheDocument()
+  })
+
+  it('shows Last support and not Last CRM to a support-only reader', async () => {
+    setup({
+      touch: {
+        crm_visible: false,
+        support_visible: true,
+        rows: {
+          'wc:1': {
+            crm: null,
+            support: {
+              state: 'ok',
+              at: '2026-10-10T15:00:00Z',
+              thread_id: 'th_1',
+              title: 'COA question',
+              status: 'done',
+              waiting_since: null,
+              plain_url: null,
+              open_count: 0,
+              stale: false,
+              reason: null,
+            },
+          },
+        },
+      },
+    })
+    expect(
+      await screen.findByRole('columnheader', { name: 'Last support' })
+    ).toBeInTheDocument()
+    expect(screen.queryByRole('columnheader', { name: 'Last CRM' })).toBeNull()
+  })
+
+  it('an admin sees both touch columns with loading cells before the first response', async () => {
+    useAuthStore.setState({ user: ADMIN })
+    setup({ touchPending: true })
+    expect(
+      await screen.findByRole('columnheader', { name: 'Last CRM' })
+    ).toBeInTheDocument()
+    expect(
+      screen.getByRole('columnheader', { name: 'Last support' })
+    ).toBeInTheDocument()
+    const row = (await screen.findByText('Halcyon Research Supply')).closest(
+      'tr'
+    ) as HTMLElement
+    const loading = within(row).getAllByLabelText(/loading/i)
+    expect(loading).toHaveLength(2)
+    expect(loading[0]).toHaveAttribute('aria-busy', 'true')
+  })
+
+  it('fetches touches only for the visible tab', async () => {
+    vi.mocked(api.getCustomerTouchpoints).mockClear()
+    setup({
+      list: listOf(1, [row({ key: 'wc:2243', name: 'Zackary Smith' })]),
+    })
+    // The New customers page has loaded (its count is on the tab) while At risk shows.
+    expect(
+      await screen.findByRole('tab', { name: 'New customers (1)' })
+    ).toBeInTheDocument()
+    await waitFor(() =>
+      expect(vi.mocked(api.getCustomerTouchpoints)).toHaveBeenCalledWith([
+        'wc:1',
+      ])
+    )
+    expect(vi.mocked(api.getCustomerTouchpoints)).not.toHaveBeenCalledWith([
+      'wc:2243',
+    ])
+    await userEvent.click(screen.getByRole('tab', { name: /New customers/ }))
+    await waitFor(() =>
+      expect(vi.mocked(api.getCustomerTouchpoints)).toHaveBeenCalledWith([
+        'wc:2243',
+      ])
+    )
+  })
+
+  it('has three tabs, shows the CRM touch on the at-risk row and opens the CRM tab from it', async () => {
+    const onOpen = vi.fn()
+    setup({ onOpen })
+    expect(
+      await screen.findByRole('tab', { name: /At risk/ })
+    ).toBeInTheDocument()
+    expect(
+      screen.getByRole('tab', { name: /New customers/ })
+    ).toBeInTheDocument()
+    expect(screen.getByRole('tab', { name: /Segments/ })).toBeInTheDocument()
+    const row = (await screen.findByText('Halcyon Research Supply')).closest(
+      'tr'
+    ) as HTMLElement
+    expect(row).toHaveTextContent('Oct 12')
+    expect(
+      screen.getByRole('columnheader', { name: 'Last CRM' })
+    ).toBeInTheDocument()
+    expect(
+      screen.queryByRole('columnheader', { name: 'Last support' })
+    ).toBeNull()
+    await userEvent.click(within(row).getByRole('button'))
+    expect(onOpen).toHaveBeenCalledWith('wc:1', 'crm')
+    await userEvent.click(within(row).getByText('Halcyon Research Supply'))
+    expect(onOpen).toHaveBeenLastCalledWith('wc:1')
+  })
+
+  it('New customers tab queries new_only with the period and the launch switch', async () => {
+    setup({ list: listOf(1, [row({ key: 'wc:2243', name: 'Zackary Smith' })]) })
+    await userEvent.click(
+      await screen.findByRole('tab', { name: /New customers/ })
+    )
+    expect(await screen.findByText('Zackary Smith')).toBeInTheDocument()
+    expect(vi.mocked(api.getCustomerList)).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        new_only: true,
+        period: '90d',
+        exclude_launch_accounts: false,
+        sort: 'lifetime',
+        dir: 'desc',
+        page: 1,
+        page_size: 25,
+      })
+    )
+    expect(
+      screen.getByText(
+        'First testing order in this period, ranked by lifetime spend'
+      )
+    ).toBeInTheDocument()
+  })
+
+  it('resets New customers paging when the period or launch switch changes', async () => {
+    setup({
+      list: listOf(60, [row({ key: 'wc:2243', name: 'Zackary Smith' })]),
+    })
+    await userEvent.click(
+      await screen.findByRole('tab', { name: /New customers/ })
+    )
+    await screen.findByText('Zackary Smith')
+    await userEvent.click(screen.getByRole('button', { name: 'Next' }))
+    await waitFor(() =>
+      expect(vi.mocked(api.getCustomerList)).toHaveBeenLastCalledWith(
+        expect.objectContaining({ page: 2 })
+      )
+    )
+    const reset = expect.objectContaining({
+      page: 1,
+      sort: 'lifetime',
+      dir: 'desc',
+    })
+    await userEvent.click(screen.getByRole('button', { name: '30D' }))
+    await waitFor(() =>
+      expect(vi.mocked(api.getCustomerList)).toHaveBeenLastCalledWith(
+        expect.objectContaining({ period: '30d', page: 1 })
+      )
+    )
+    await userEvent.click(screen.getByRole('button', { name: '90D' }))
+    await waitFor(() =>
+      expect(vi.mocked(api.getCustomerList)).toHaveBeenLastCalledWith(reset)
+    )
+    await userEvent.click(screen.getByRole('button', { name: 'Next' }))
+    await userEvent.click(
+      screen.getByRole('switch', { name: 'Exclude launch accounts' })
+    )
+    await waitFor(() =>
+      expect(vi.mocked(api.getCustomerList)).toHaveBeenLastCalledWith(
+        expect.objectContaining({ exclude_launch_accounts: true, page: 1 })
+      )
+    )
+    expect(useUIStore.getState().insightsView.excludeLaunch).toBe(true)
+  })
+
+  it('a persisted launch switch renders checked and filters New customers', async () => {
+    useUIStore.setState({
+      insightsView: {
+        tab: 'new',
+        period: '90d',
+        segment: 'key',
+        excludeLaunch: true,
+      },
+    })
+    setup()
+    expect(
+      await screen.findByRole('switch', { name: 'Exclude launch accounts' })
+    ).toBeChecked()
+    await waitFor(() =>
+      expect(vi.mocked(api.getCustomerList)).toHaveBeenCalledWith(
+        expect.objectContaining({
+          new_only: true,
+          exclude_launch_accounts: true,
+        })
+      )
+    )
+  })
+
+  it('shows the re-order cohort grid beside the chart, not in a tab', async () => {
+    setup()
+    expect(
+      await screen.findByRole('heading', { name: 'Re-order cohorts' })
+    ).toBeInTheDocument()
+    expect(await screen.findByText('12.9%')).toBeInTheDocument()
+    expect(screen.queryByRole('tab', { name: /Cohorts/ })).toBeNull()
+  })
+
+  it('Segments tab shows the four tiles and lists the chosen segment, kept in the store', async () => {
+    setup({
+      list: listOf(23, [row({ key: 'wc:2243', name: 'Zackary Smith' })]),
+    })
+    await userEvent.click(await screen.findByRole('tab', { name: /Segments/ }))
+    const key = await screen.findByRole('button', { name: /Key accounts/ })
+    expect(key).toHaveAttribute('aria-pressed', 'true')
+    expect(key).toHaveTextContent('23')
+    expect(key).toHaveTextContent('69% of revenue')
+    expect(key).toHaveTextContent('Median 10 orders, 43 samples')
+    expect(await screen.findByText('Zackary Smith')).toBeInTheDocument()
+    expect(vi.mocked(api.getCustomerList)).toHaveBeenLastCalledWith(
+      expect.objectContaining({ segment: 'key', period: 'all', page: 1 })
+    )
+    await userEvent.click(screen.getByRole('button', { name: /Growth/ }))
+    await waitFor(() =>
+      expect(vi.mocked(api.getCustomerList)).toHaveBeenLastCalledWith(
+        expect.objectContaining({ segment: 'growth', page: 1 })
+      )
+    )
+    expect(useUIStore.getState().insightsView).toMatchObject({
+      tab: 'segments',
+      segment: 'growth',
+    })
   })
 })

@@ -1,6 +1,7 @@
 /** TanStack Query hooks for planning boards. Mirrors services/groups.ts. One place handles 409. */
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { toast } from 'sonner'
+import { flagKeys } from '@/hooks/use-flags'
 import { useAuthStore } from '@/store/auth-store'
 import {
   boardsForEntity,
@@ -12,6 +13,7 @@ import {
   deleteNode,
   getBoard,
   isStale,
+  listBoardFlags,
   listBoards,
   patchBoard,
   patchEdge,
@@ -41,6 +43,16 @@ export function useBoards() {
     queryKey: boardKeys.list,
     queryFn: listBoards,
     staleTime: 30_000,
+  })
+}
+
+/** Every open flag on the board, once; nodes, the dock and the header read this one query. */
+export function useBoardFlags(slug: string | null) {
+  return useQuery({
+    queryKey: flagKeys.board(slug ?? ''),
+    queryFn: () => listBoardFlags(slug as string),
+    enabled: slug != null,
+    staleTime: 5_000,
   })
 }
 

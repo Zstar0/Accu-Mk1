@@ -15,6 +15,7 @@ import {
 import { useAnalysisServices } from '@/services/analysis-services'
 import { formatLabDateTime, parseUtcIfNaive } from '@/lib/lab-time'
 import { ruleLabel, tierChip } from '@/components/hplc/ServiceSpecsSection'
+import { SampleFormIconById } from '@/components/common/SampleFormIcon'
 import { useUIStore } from '@/store/ui-store'
 
 /**
@@ -120,7 +121,16 @@ export function AnalysisServiceTooltip({
         ) : (
           shown.map(s => (
             <div key={s.id}>
-              <span className="opacity-60">{tierChip(s)}:</span> {ruleLabel(s)}
+              <span className="opacity-60">
+                {s.sample_form_id != null && (
+                  <SampleFormIconById
+                    id={s.sample_form_id}
+                    className="me-1 inline size-3 align-[-2px]"
+                  />
+                )}
+                {tierChip(s)}:
+              </span>{' '}
+              {ruleLabel(s)}
             </div>
           ))
         )}

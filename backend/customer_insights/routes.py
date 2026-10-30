@@ -3,6 +3,9 @@ from __future__ import annotations
 
 import csv
 import io
+import logging
+import re
+from collections import Counter
 from datetime import date, datetime, timezone
 from decimal import Decimal
 from typing import Literal, Optional
@@ -12,10 +15,13 @@ from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
 from auth import get_current_user
-from customer_insights import metrics, rules, sources
+from customer_insights import metrics, rules, sources, touchpoints
+from customer_insights.touchpoints import TouchpointsResponse
 from database import get_db
 
+logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/reports/customers", tags=["customer-insights"])
+_TOUCH_KEY = re.compile(r"wc:\d+|email:.+")
 Period = Literal["30d", "90d", "6m", "1y", "all"]
 
 
@@ -134,14 +140,33 @@ class CustomerRow(BaseModel):
     samples: int
     usual_gap_days: Optional[float] = None
     last_order_at: Optional[str] = None
+    first_order_at: Optional[str] = None
+    testing_orders: int
     top_tests: list[str]
     status: str
     monthly: list[MonthSpend]
+    spend_12m: str
+    testing_orders_12m: int
+    samples_12m: int
+    segment: Optional[Literal["key", "growth", "regular", "trial"]] = None
 
 
 class AtRiskRow(CustomerRow):
-    spend_12m: str
     overdue: float
+
+
+class SegmentSummary(BaseModel):
+    segment: Literal["key", "growth", "regular", "trial"]
+    customers: int
+    revenue_12m: str
+    share: float
+    median_testing_orders_12m: Optional[float] = None
+    median_samples_12m: Optional[float] = None
+
+
+class SegmentsResponse(Meta):
+    window_days: int
+    segments: list[SegmentSummary]
 
 
 class AtRiskResponse(Meta):
@@ -176,8 +201,10 @@ class OrdersResponse(Meta):
 
 
 SortField = Literal["key", "name", "email", "company", "rep", "period_spend", "prior_spend", "delta_pct", "lifetime",
-                    "orders", "samples", "usual_gap_days", "last_order_at", "status"]
-_MONEY_FIELDS = {"period_spend", "prior_spend", "lifetime"}
+                    "orders", "samples", "usual_gap_days", "last_order_at", "first_order_at", "testing_orders", "status",
+                    "spend_12m", "testing_orders_12m", "samples_12m"]
+_MONEY_FIELDS = {"period_spend", "prior_spend", "lifetime", "spend_12m"}
+Segment = Literal["key", "growth", "regular", "trial"]
 
 
 def _dates(start: Optional[date] = None, end: Optional[date] = None,
@@ -220,10 +247,18 @@ def customers_at_risk(exclude_launch_accounts: bool = False, db: Session = Depen
 def customers_list(period: Period = "90d", dates: tuple = Depends(_dates),
                    exclude_launch_accounts: bool = False, search: str = "", sort: SortField = "period_spend",
                    dir: Literal["asc", "desc"] = "desc", page: int = Query(1, ge=1),
-                   page_size: int = Query(50, ge=1, le=200), db: Session = Depends(get_db),
-                   _u=Depends(get_current_user)):
+                   page_size: int = Query(50, ge=1, le=200), new_only: bool = False,
+                   cohort: Optional[str] = Query(None, pattern=r"^\d{4}-\d{2}$"),
+                   returned_in: Optional[str] = Query(None, pattern=r"^\d{4}-\d{2}$"),
+                   segment: Optional[Segment] = None,
+                   db: Session = Depends(get_db), _u=Depends(get_current_user)):
+    if returned_in and (not cohort or returned_in == cohort):
+        raise HTTPException(422, "returned_in needs a different cohort month")
     ds, lo, hi, tz, meta = _ctx(db, period, *dates, exclude_launch_accounts)
     rows = metrics.customer_rows(ds, start=lo, end=hi, tz=tz)
+    rows = metrics.filter_rows(rows, ds, lo=lo, hi=hi, tz=tz, new_only=new_only, cohort=cohort, returned_in=returned_in)
+    if segment:
+        rows = [r for r in rows if r["segment"] == segment]
     q = search.strip().lower()
     if q:
         rows = [r for r in rows if q in " ".join(str(r.get(f) or "") for f in ("name", "email", "company", "key", "rep")).lower()]
@@ -233,6 +268,15 @@ def customers_list(period: Period = "90d", dates: tuple = Depends(_dates),
     total = len(rows)
     return {**meta, "rows": rows[(page - 1) * page_size: page * page_size], "total": total,
             "page": page, "page_size": page_size}
+
+
+@router.get("/segments", response_model=SegmentsResponse)
+def customers_segments(exclude_launch_accounts: bool = False, db: Session = Depends(get_db),
+                       _u=Depends(get_current_user)):
+    """Key / growth / regular / trial on a fixed trailing 12 months (not the page period)."""
+    ds, _lo, hi, tz, meta = _ctx(db, "all", None, None, exclude_launch_accounts)
+    rows = metrics.customer_rows(ds, start=None, end=hi, tz=tz)
+    return {**meta, "window_days": rules.SEGMENT_WINDOW_DAYS, "segments": metrics.segment_summary(rows)}
 
 
 @router.get("/orders", response_model=OrdersResponse)
@@ -406,6 +450,21 @@ def customers_changes(since: datetime, db: Session = Depends(get_db), _u=Depends
         raise HTTPException(status_code=422, detail="since is in the future")
     ds, _lo, hi, tz, meta = _ctx(db, "all", None, None, False)
     return {**meta, "since": since_utc.isoformat(), "events": metrics.changes(ds, since=since_utc, end=hi, tz=tz)}
+
+
+@router.get("/touchpoints", response_model=TouchpointsResponse)
+def customers_touchpoints(keys: list[str] = Query(...), _u=Depends(get_current_user)):
+    if len(keys) > rules.TOUCH_MAX_KEYS:
+        raise HTTPException(status_code=422, detail=f"at most {rules.TOUCH_MAX_KEYS} keys")
+    if not all(_TOUCH_KEY.fullmatch(k) for k in keys):
+        raise HTTPException(status_code=422, detail="keys must be wc:<id> or email:<address>")
+    crm_visible = _u.role == "admin"
+    support_visible = touchpoints._is_support_reader(_u)
+    rows = touchpoints.collect(keys, crm=crm_visible, support=support_visible)
+    states = Counter(f"{f}_{r[f]['state']}" for r in rows.values() for f in ("crm", "support") if r[f] is not None)
+    logger.info("customer_insights.touchpoints keys=%d crm_visible=%s support_visible=%s states=%s",
+                len(keys), crm_visible, support_visible, dict(states))
+    return {"crm_visible": crm_visible, "support_visible": support_visible, "rows": rows}
 
 
 # Declared LAST: FastAPI matches in order, so every fixed path above wins over the key.

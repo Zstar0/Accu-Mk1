@@ -157,6 +157,12 @@ class Instrument(Base):
     Each instrument can be associated with multiple HPLC methods.
     """
     __tablename__ = "instruments"
+    __table_args__ = (
+        # Endo worksheet v2 (spec 2026-10-10 section 3.5): unique among rows that have one.
+        Index("uq_instruments_serial_number", "serial_number", unique=True,
+              postgresql_where=text("serial_number IS NOT NULL"),
+              sqlite_where=text("serial_number IS NOT NULL")),
+    )
 
     id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
     name: Mapped[str] = mapped_column(String(200), nullable=False, unique=True)
@@ -173,6 +179,8 @@ class Instrument(Base):
         ForeignKey("departments.id", ondelete="SET NULL"), nullable=True)
     origin: Mapped[str] = mapped_column(String(20), nullable=False, default="mk1",
                                         server_default="mk1")
+    # Endo worksheet v2: the reader import stamps the instrument by this serial.
+    serial_number: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
 
     # Relationships
     methods: Mapped[list["HplcMethod"]] = relationship("HplcMethod", secondary="instrument_methods", back_populates="instruments")
@@ -233,15 +241,26 @@ class AnalysisService(Base):
         return f"<AnalysisService(id={self.id}, title='{self.title}')>"
 
 
+# One active spec per scope per unit (endo slice 3, spec 2026-10-12 section
+# 6). trim() here, btrim() in database._SPEC_UNIT_INDEX_SWAP: Postgres stores
+# trim(x) as btrim(x), and SQLite test databases have no btrim.
+_SPEC_UNIT_KEY = text("lower(trim(coalesce(unit, '')))")
+
+
 class AnalysisServiceSpec(Base):
     """Lab-owned pass/fail rule for a native COA row (spec-ownership slice 1,
-    peptide tier added in slice 2).
+    peptide tier added in slice 2, unit added in endo slice 3).
 
-    Three tiers per service, in resolution precedence: a peptide-bound row
-    (peptide_id set, matrix NULL — the identity anchor is the peptide FK,
-    never the keyword), a named-matrix row (matrix set, peptide_id NULL),
-    and the wildcard row (both NULL — applies to every matrix/peptide).
-    matrix and peptide_id are mutually exclusive (ck_analysis_service_specs_tier).
+    Four tiers per service, in resolution precedence: a peptide-bound row
+    (peptide_id set, matrix NULL; the identity anchor is the peptide FK,
+    never the keyword), a sample-form row (sample_form_id set; applies to
+    samples of that dosage form), a named-matrix row (matrix set,
+    peptide_id NULL), and the wildcard row (all three NULL, applies to every
+    matrix/peptide/form). matrix, peptide_id and sample_form_id are
+    mutually exclusive (ck_analysis_service_specs_tier).
+    Each tier holds one active row per unit (trimmed, case-insensitive, NULL
+    as ""), so an EU/mL row and an EU/vial row stand side by side and
+    coa.spec_rules.resolve_spec picks by the result's unit.
     The identity join is always the FK, never the keyword. Rows are
     deactivated, never deleted; every write goes through
     catalog/service_spec_audit.record_spec_change.
@@ -254,37 +273,50 @@ class AnalysisServiceSpec(Base):
             "(rule_kind = 'equals' AND equals_value IS NOT NULL "
             "AND min_value IS NULL AND max_value IS NULL) OR "
             "(rule_kind = 'informational' AND equals_value IS NULL "
-            "AND min_value IS NULL AND max_value IS NULL AND loq IS NULL)",
+            "AND min_value IS NULL AND max_value IS NULL)",
             name="ck_analysis_service_specs_rule_shape",
         ),
         CheckConstraint(
-            "NOT (matrix IS NOT NULL AND peptide_id IS NOT NULL)",
+            "(CASE WHEN matrix IS NOT NULL THEN 1 ELSE 0 END + "
+            "CASE WHEN peptide_id IS NOT NULL THEN 1 ELSE 0 END + "
+            "CASE WHEN sample_form_id IS NOT NULL THEN 1 ELSE 0 END) <= 1",
             name="ck_analysis_service_specs_tier",
         ),
         # Postgres treats NULLs as distinct in unique indexes, so each tier
-        # (named matrix / peptide-bound / both-NULL wildcard) needs its own
-        # partial index — see uq_analysis_service_specs_peptide and _wildcard
-        # below for the other two.
+        # (named matrix / peptide-bound / sample-form / all-NULL wildcard)
+        # needs its own partial index, and each keys on the normalized unit as
+        # well (endo slice 3): one active row per tier per unit.
         Index(
-            "uq_analysis_service_specs_matrix",
-            "analysis_service_id", "matrix",
+            "uq_analysis_service_specs_matrix_unit",
+            "analysis_service_id", "matrix", _SPEC_UNIT_KEY,
             unique=True,
             postgresql_where=text("active AND matrix IS NOT NULL"),
             sqlite_where=text("active AND matrix IS NOT NULL"),
         ),
         Index(
-            "uq_analysis_service_specs_peptide",
-            "analysis_service_id", "peptide_id",
+            "uq_analysis_service_specs_peptide_unit",
+            "analysis_service_id", "peptide_id", _SPEC_UNIT_KEY,
             unique=True,
             postgresql_where=text("active AND peptide_id IS NOT NULL"),
             sqlite_where=text("active AND peptide_id IS NOT NULL"),
         ),
         Index(
-            "uq_analysis_service_specs_wildcard",
-            "analysis_service_id",
+            "uq_analysis_service_specs_form_unit",
+            "analysis_service_id", "sample_form_id", _SPEC_UNIT_KEY,
             unique=True,
-            postgresql_where=text("active AND matrix IS NULL AND peptide_id IS NULL"),
-            sqlite_where=text("active AND matrix IS NULL AND peptide_id IS NULL"),
+            postgresql_where=text("active AND sample_form_id IS NOT NULL"),
+            sqlite_where=text("active AND sample_form_id IS NOT NULL"),
+        ),
+        # _v2: the wildcard slot now also excludes form rows. A new name, so a
+        # deployed database builds it rather than keeping the old predicate.
+        Index(
+            "uq_analysis_service_specs_wildcard_unit_v2",
+            "analysis_service_id", _SPEC_UNIT_KEY,
+            unique=True,
+            postgresql_where=text(
+                "active AND matrix IS NULL AND peptide_id IS NULL AND sample_form_id IS NULL"),
+            sqlite_where=text(
+                "active AND matrix IS NULL AND peptide_id IS NULL AND sample_form_id IS NULL"),
         ),
     )
 
@@ -295,6 +327,11 @@ class AnalysisServiceSpec(Base):
     matrix: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
     peptide_id: Mapped[Optional[int]] = mapped_column(
         ForeignKey("peptides.id"), nullable=True
+    )
+    # Sample-form tier: applies to samples of this dosage form. Mutually
+    # exclusive with matrix and peptide_id (ck_analysis_service_specs_tier).
+    sample_form_id: Mapped[Optional[int]] = mapped_column(
+        ForeignKey("lims_sample_forms.id"), nullable=True
     )
     rule_kind: Mapped[str] = mapped_column(String(16), nullable=False)  # range | equals
     min_value: Mapped[Optional[Decimal]] = mapped_column(Numeric, nullable=True)
@@ -665,6 +702,10 @@ class HplcMethod(Base):
                                           server_default="1")
     activated_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
     retired_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
+    # Endo worksheet v2 (spec 2026-10-10 section 3.4): revision-locked run
+    # parameters keyed by block, e.g. {"endotoxin": {"std_total_dilution": 250}}.
+    # Validated by catalog/method_run_params.py; a missing key means Dennis's value.
+    run_parameters: Mapped[Optional[dict]] = mapped_column(JSON, nullable=True)
 
     # Relationships
     instruments: Mapped[list["Instrument"]] = relationship("Instrument", secondary=instrument_methods, back_populates="methods")
@@ -676,6 +717,100 @@ class HplcMethod(Base):
 
     def __repr__(self) -> str:
         return f"<HplcMethod(id={self.id}, name='{self.name}')>"
+
+
+class ConsumableType(Base):
+    """A kind of consumable the lab buys, e.g. an endotoxin cartridge (endo
+    worksheet v2, spec 2026-10-10 section 3.1). `kind` is a key of
+    catalog/consumables.py CONSUMABLE_KINDS and `specs` holds that kind's
+    numbers. Retired with active=False, never deleted. Once a worksheet or a
+    worksheet item references a type, its kind and specs are locked."""
+    __tablename__ = "consumable_types"
+    __table_args__ = (UniqueConstraint("kind", "name", name="uq_consumable_types_kind_name"),)
+
+    id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
+    kind: Mapped[str] = mapped_column(String(40), nullable=False)
+    name: Mapped[str] = mapped_column(String(200), nullable=False)
+    manufacturer: Mapped[Optional[str]] = mapped_column(String(200), nullable=True)
+    part_number: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
+    instrument_id: Mapped[Optional[int]] = mapped_column(
+        ForeignKey("instruments.id", ondelete="SET NULL"), nullable=True)
+    specs: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict,
+                                        server_default=text("'{}'"))
+    active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True,
+                                         server_default=text("true"))
+    origin: Mapped[str] = mapped_column(String(20), nullable=False, default="mk1",
+                                        server_default="mk1")
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    def __repr__(self) -> str:
+        return f"<ConsumableType(id={self.id}, kind='{self.kind}', name='{self.name}')>"
+
+
+# A part number is unique per manufacturer; no manufacturer counts as ''.
+# Declared after the class because an expression index needs the columns.
+Index("uq_consumable_types_part_number",
+      func.coalesce(ConsumableType.manufacturer, ""), ConsumableType.part_number,
+      unique=True,
+      postgresql_where=ConsumableType.part_number.is_not(None),
+      sqlite_where=ConsumableType.part_number.is_not(None))
+
+
+# M2M junction: method <-> consumable type (spec 2026-10-10 section 3.3).
+# kind is copied from the type so "one default per method per kind" is an
+# index. Edited on draft methods only; new-revision copies every row WITH
+# is_default (the default belongs to one method, so it cannot clash).
+method_consumables = Table(
+    "method_consumables",
+    Base.metadata,
+    Column("method_id", Integer, ForeignKey("hplc_methods.id", ondelete="CASCADE"), primary_key=True),
+    Column("consumable_type_id", Integer, ForeignKey("consumable_types.id"), primary_key=True),
+    Column("kind", String(40), nullable=False),
+    Column("is_default", Boolean, nullable=False, default=False, server_default=text("false")),
+    Index("uq_method_consumable_default", "method_id", "kind", unique=True,
+          postgresql_where=text("is_default"), sqlite_where=text("is_default")),
+)
+
+
+class EndoPrepRule(Base):
+    """A 2 mL endotoxin prep rule (endo slice 5, spec 2026-10-14 section 3).
+    For one catalog peptide and a weight band (weight > min_mg and <= max_mg,
+    a null bound meaning none) it sets the row's default total dilution,
+    step 1 ratio and cartridge; a null value means the standard. status is a
+    label only (D4). Never deleted: active=False retires a line. Matching and
+    the row lock read endo_prep_rules.snapshot(), never this row."""
+    __tablename__ = "endo_prep_rules"
+
+    id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
+    # No ON DELETE, as analysis_service_specs.peptide_id: a peptide that has a
+    # rule cannot be deleted.
+    peptide_id: Mapped[int] = mapped_column(ForeignKey("peptides.id"), nullable=False)
+    min_mg: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    max_mg: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    total_dilution: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    step1_ratio: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    # The reconstitution water this band is prepped in, mL; NULL keeps the
+    # method's standard. Powder rows only: a liquid vial's volume is what the
+    # customer sent, so a rule never supplies it (endo_prep_rules).
+    recon_water_ml: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    cartridge_type_id: Mapped[Optional[int]] = mapped_column(
+        ForeignKey("consumable_types.id"), nullable=True)
+    status: Mapped[str] = mapped_column(String(10), nullable=False, default="trial",
+                                        server_default="trial")
+    note: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True,
+                                         server_default=text("true"))
+    sort_order: Mapped[int] = mapped_column(Integer, nullable=False, default=0,
+                                            server_default="0")
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow,
+                                                 onupdate=datetime.utcnow)
+    updated_by_id: Mapped[Optional[int]] = mapped_column(
+        ForeignKey("users.id", ondelete="SET NULL"), nullable=True)
+
+    def __repr__(self) -> str:
+        return f"<EndoPrepRule(id={self.id}, peptide_id={self.peptide_id})>"
 
 
 class MethodAttachment(Base):
@@ -1079,6 +1214,17 @@ class Worksheet(Base):
     well_high_water: Mapped[Optional[dict]] = mapped_column(JSON, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+    # Endo worksheet v2 (spec 2026-10-10 section 3.6). endo_prep picks the prep
+    # maths per worksheet: '2ml' (Dennis's 2 mL prep, the default for new rows)
+    # or 'stock' (the 1 mg/mL stock maths). Non-endo worksheets carry it
+    # harmlessly. No server_default here on purpose: database.
+    # _run_endo_v2_migrations adds the column bare, switches existing rows once,
+    # and only then sets the DB default (spec 3.8).
+    endo_prep: Mapped[Optional[str]] = mapped_column(String(10), nullable=True, default="2ml")
+    # The run's cartridge, and the method revision pinned at first print or
+    # first reading. Plain FKs: a used type or a pinned method must not vanish.
+    cartridge_type_id: Mapped[Optional[int]] = mapped_column(ForeignKey("consumable_types.id"), nullable=True)
+    endo_method_id: Mapped[Optional[int]] = mapped_column(ForeignKey("hplc_methods.id"), nullable=True)
 
     def __repr__(self) -> str:
         return f"<Worksheet(id={self.id}, title='{self.title}', status='{self.status}')>"
@@ -1143,6 +1289,33 @@ class WorksheetItem(Base):
     # col + 6). NULL = not frozen yet; the layout is free to move the row.
     plate_no: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
     well_pos: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    # Endo worksheet v2 (spec 2026-10-10 section 3.7), read on 2 mL worksheets
+    # only. NULL means "worked out from the sample" or "the method's standard".
+    # prep_volume_ml above keeps its stock meaning.
+    prep_form: Mapped[Optional[str]] = mapped_column(String(10), nullable=True)  # powder | liquid | bac
+    prep_water_ml: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    prep_total_dilution: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    # [[sample_ul, ratio] or null, [sample_ul] or null, [sample_ul] or null]
+    prep_steps: Mapped[Optional[list]] = mapped_column(JSON, nullable=True)
+    cartridge_type_id: Mapped[Optional[int]] = mapped_column(ForeignKey("consumable_types.id"), nullable=True)
+    # The reading exactly as the instrument shows it ("<0.05", "0.8", "0"),
+    # the reader's record for the test, and who entered it when.
+    result_reading: Mapped[Optional[str]] = mapped_column(String(40), nullable=True)
+    result_reader: Mapped[Optional[dict]] = mapped_column(JSON, nullable=True)
+    result_entered_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
+    result_entered_by_user_id: Mapped[Optional[int]] = mapped_column(
+        ForeignKey("users.id", ondelete="SET NULL"), nullable=True)
+    # Endo slice 5 (spec 2026-10-14 sections 6 to 8), 2 mL rows only. The
+    # method prep rule locked onto the row, {"rule": <a copy of the line, or
+    # null for the standard>, "locked_at", "locked_by", "user_id"}; the "no
+    # rule" switch; the optional special-prep note; and the append-only list
+    # of runs a Re-apply or an override replaced. Server-owned JSON: always
+    # assigned a new dict or list, a plain JSON column misses in-place edits.
+    prep_rule: Mapped[Optional[dict]] = mapped_column(JSON, nullable=True)
+    prep_rules_off: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=False, server_default="false")
+    prep_note: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    prep_history: Mapped[Optional[list]] = mapped_column(JSON, nullable=True)
 
     def __repr__(self) -> str:
         return f"<WorksheetItem(id={self.id}, worksheet_id={self.worksheet_id}, sample_uid='{self.sample_uid}')>"
@@ -1247,6 +1420,11 @@ class LimsSample(Base):
     sla_priority_source: Mapped[Optional[str]] = mapped_column(String(10), nullable=True)
     sla_target_minutes: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
     sla_snapshot_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
+    # Dosage form (Sample Forms). NULL = unclassified; Peptide/Peptide Blend
+    # samples are backfilled to the default form by database._run_migrations.
+    sample_form_id: Mapped[Optional[int]] = mapped_column(
+        ForeignKey("lims_sample_forms.id"), nullable=True
+    )
     external_lims_system: Mapped[Optional[str]] = mapped_column(String(50), default="senaite")
     client_id: Mapped[Optional[str]] = mapped_column(String(100))
     client_uid: Mapped[Optional[str]] = mapped_column(String(100))
@@ -1874,6 +2052,7 @@ PRIORITY_ICONS = ("chevrons-up", "chevron-up", "minus", "chevron-down", "chevron
 PRIORITY_COLORS = ("red", "amber", "emerald", "sky", "violet", "zinc")
 PRIORITY_LEVELS = ("customer", "order", "sample", "vial")
 PRIORITY_SOURCES = ("ui", "order-payload", "migration", "bulk")
+SAMPLE_FORM_ROUTES = ("injectable", "nasal_inhaled", "oral")
 
 
 class Priority(Base):
@@ -1903,6 +2082,45 @@ class Priority(Base):
 
     def __repr__(self) -> str:
         return f"<Priority(key='{self.key}', rank={self.rank}, active={self.is_active})>"
+
+
+class LimsSampleForm(Base):
+    """A managed dosage form for a sample (Lyophilized Powder, Pen, Nasal Spray...).
+
+    `route` groups forms for the spec resolver. Exactly one row is the default
+    (partial unique index); names are unique case-insensitively. Rows are
+    retired via `active`, never deleted. Seeded into an empty table only, so UI
+    renames and retirements survive reboots (see database._run_migrations).
+    """
+
+    __tablename__ = "lims_sample_forms"
+    __table_args__ = (
+        Index("uq_lims_sample_forms_name", text("lower(trim(name))"), unique=True),
+        Index("uq_lims_sample_forms_single_default", "is_default", unique=True,
+              postgresql_where=text("is_default"), sqlite_where=text("is_default")),
+        CheckConstraint("route IN ('injectable','nasal_inhaled','oral')",
+                        name="ck_lims_sample_forms_route"),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
+    name: Mapped[str] = mapped_column(String(100), nullable=False)
+    route: Mapped[str] = mapped_column(String(20), nullable=False)
+    is_default: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+    sort_order: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    # A key into the frontend icon set (sample_forms.routes.FormIcon); NULL
+    # draws the generic icon. No CHECK, so a new icon is a code-only change.
+    icon: Mapped[Optional[str]] = mapped_column(String(30), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime, default=datetime.utcnow, onupdate=datetime.utcnow
+    )
+    updated_by_id: Mapped[Optional[int]] = mapped_column(
+        ForeignKey("users.id", ondelete="SET NULL"), nullable=True
+    )
+
+    def __repr__(self) -> str:
+        return f"<LimsSampleForm(id={self.id}, name='{self.name}', route='{self.route}')>"
 
 
 class CustomerPriority(Base):
@@ -2134,6 +2352,18 @@ class LimsAnalysis(Base):
 
     result_value: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     result_unit: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    # Endo slice 3 (spec 2026-10-12 section 4): the result's own limit of
+    # quantitation (in result_unit) and limit of detection (in lod_unit, the
+    # cartridge sensitivity's unit). Plain floats so the amendment audit can
+    # record them. A below-LOQ result is stored as the number equal to its LOQ.
+    loq: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    lod: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    lod_unit: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    # Endo ">" on the certificate: result_value is a FLOOR ("at least this
+    # much"), not a measurement. A "<" needs no flag — it is derived from
+    # value <= loq — but a floor of 2500 is indistinguishable from a measured
+    # 2500, so it has to be stored. NULL/false = an ordinary measured result.
+    result_floor: Mapped[Optional[bool]] = mapped_column(Boolean, nullable=True)
 
     review_state: Mapped[str] = mapped_column(
         Text, nullable=False, default="unassigned", server_default="unassigned",
@@ -2601,3 +2831,78 @@ class SlackDmPrefs(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow,
                                                  onupdate=datetime.utcnow, nullable=False)
+
+
+class CustomerAiReview(Base):
+    """One AI customer review run (spec 2026-10-08-customer-ai-review-design.md, 3.5).
+
+    Written by the run; never edited after finished_at.
+    """
+    __tablename__ = "customer_ai_reviews"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    customer_key: Mapped[str] = mapped_column(String(255), nullable=False, index=True)
+    status: Mapped[str] = mapped_column(String(20), nullable=False, default="running")
+    created_by: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    finished_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    model: Mapped[str] = mapped_column(String(64), nullable=False)
+    review: Mapped[Optional[dict]] = mapped_column(JSONB().with_variant(JSON(), "sqlite"), nullable=True)
+    steps: Mapped[list] = mapped_column(JSONB().with_variant(JSON(), "sqlite"), nullable=False, default=list)
+    tool_calls: Mapped[list] = mapped_column(JSONB().with_variant(JSON(), "sqlite"), nullable=False, default=list)
+    input_tokens: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    output_tokens: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    cost_usd: Mapped[Decimal] = mapped_column(Numeric(8, 4), nullable=False, default=0)
+    citations_dropped: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    error: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    document_id: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    document_code: Mapped[Optional[str]] = mapped_column(String(32), nullable=True)
+    names_scrubbed: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    document_error: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+
+
+class SupportAction(Base):
+    """One attempted Support ticket action from Mk1 (spec 2026-10-09-support-ticket-actions-design.md, 3.5).
+
+    Never stores message text: Plain holds it; the hash and length prove what was sent.
+    """
+    __tablename__ = "support_actions"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, index=True)
+    mk1_user_id: Mapped[int] = mapped_column(Integer, nullable=False, index=True)
+    plain_user_id: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
+    customer_key: Mapped[str] = mapped_column(String(255), nullable=False)
+    thread_id: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
+    action: Mapped[str] = mapped_column(String(16), nullable=False)
+    args: Mapped[dict] = mapped_column(JSONB().with_variant(JSON(), "sqlite"), nullable=False, default=dict)
+    body_sha256: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
+    body_len: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    outcome: Mapped[str] = mapped_column(String(32), nullable=False)
+    error_code: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
+
+
+class IntegrationKey(Base):
+    """A third-party API key saved from Settings > Integrations, Fernet-encrypted (spec 2026-10-10, 3.2).
+
+    The plaintext never touches this table; last4 is for display only.
+    """
+    __tablename__ = "integration_keys"
+
+    name: Mapped[str] = mapped_column(String(64), primary_key=True)
+    ciphertext: Mapped[str] = mapped_column(Text, nullable=False)
+    last4: Mapped[str] = mapped_column(String(4), nullable=False)
+    updated_by: Mapped[int] = mapped_column(Integer, nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+
+
+class IntegrationKeyEvent(Base):
+    """Audit of integration key changes and tests. Never holds a key value."""
+    __tablename__ = "integration_key_events"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, index=True)
+    name: Mapped[str] = mapped_column(String(64), nullable=False)
+    action: Mapped[str] = mapped_column(String(16), nullable=False)
+    user_id: Mapped[int] = mapped_column(Integer, nullable=False)
+    outcome: Mapped[str] = mapped_column(String(16), nullable=False)

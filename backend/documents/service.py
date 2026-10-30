@@ -13,13 +13,14 @@ import re
 from datetime import date, datetime
 from functools import lru_cache
 from pathlib import Path
-from typing import Optional
+from typing import Callable, Optional
 
 from sqlalchemy import and_, case, func, or_, select
 from sqlalchemy.orm import Session, lazyload
 
-from documents.errors import BadRequestError, ConflictError, NotFoundError
-from documents.models import Document, DocumentCategory, DocumentCodeCounter
+from documents.errors import BadRequestError, ConflictError, DuplicateContentError, NotFoundError
+from documents.models import (Document, DocumentCategory, DocumentCodeCounter, DocumentSpace,
+                              DocumentSpaceGrant, SPACE_VISIBILITIES)
 from documents.storage import get_storage
 
 PREFIX_RE = re.compile(r"^[A-Z0-9]{2,10}$")
@@ -27,6 +28,8 @@ CODE_RE = re.compile(r"^[A-Z0-9]+-[A-Z0-9-]+$")
 MAX_BYTES = 16 * 1024 * 1024
 STATUSES = ("draft", "active", "retired")
 SORTS = ("updated_at", "title", "code", "effective_date")
+GENERAL_SLUG = "general"
+SPACE_SLUG_RE = re.compile(r"^[a-z0-9][a-z0-9-]{0,59}$")
 
 # (name, code_prefix, description, sort_order) — seeded idempotently at boot.
 _SEED_CATEGORIES = (
@@ -162,6 +165,166 @@ def resolve_category(db: Session, *, category: Optional[str] = None,
     return cat
 
 
+# --- spaces (spec 2026-10-06 section 4) ------------------------------------------------
+
+def seed_spaces(db: Session) -> None:
+    """Idempotent: upsert General, then backfill any document row without a space.
+    Runs at every boot; a no-op after the first."""
+    general = db.execute(select(DocumentSpace).where(DocumentSpace.slug == GENERAL_SLUG)
+                         ).scalar_one_or_none()
+    if general is None:
+        general = DocumentSpace(slug=GENERAL_SLUG, name="General",
+                                description="Documents every login can read", visibility="company",
+                                sort_order=0)
+        db.add(general)
+        db.flush()
+    db.execute(Document.__table__.update().where(Document.space_id.is_(None))
+               .values(space_id=general.id))
+    db.commit()
+
+
+def general_space(db: Session) -> DocumentSpace:
+    sp = db.execute(select(DocumentSpace).where(DocumentSpace.slug == GENERAL_SLUG)).scalar_one_or_none()
+    if sp is None:
+        seed_spaces(db)
+        sp = db.execute(select(DocumentSpace).where(DocumentSpace.slug == GENERAL_SLUG)).scalar_one()
+    return sp
+
+
+def _clean_slug(slug: str) -> str:
+    slug = (slug or "").strip().lower()
+    if not SPACE_SLUG_RE.match(slug):
+        raise BadRequestError("slug must be 1-60 chars of a-z, 0-9 and '-', starting with a letter or digit")
+    return slug
+
+
+def get_space(db: Session, space_id: int) -> DocumentSpace:
+    sp = db.get(DocumentSpace, space_id)
+    if sp is None:
+        raise NotFoundError(f"space {space_id} not found")
+    return sp
+
+
+def get_space_by_slug(db: Session, slug: str) -> DocumentSpace:
+    sp = db.execute(select(DocumentSpace).where(DocumentSpace.slug == (slug or "").strip().lower())
+                    ).scalar_one_or_none()
+    if sp is None:
+        raise NotFoundError(f"space {slug!r} not found")
+    return sp
+
+
+def resolve_space(db: Session, *, space: Optional[str] = None,
+                  space_id: Optional[int] = None) -> DocumentSpace:
+    """Slug or id; neither means General."""
+    if space_id is not None:
+        return get_space(db, int(space_id))
+    if space and space.strip():
+        return get_space_by_slug(db, space)
+    return general_space(db)
+
+
+def _space_counts(db: Session) -> dict[int, int]:
+    """Distinct codes per space whose rows are draft or active (what the default list
+    shows). A code with only retired rows does not count. NULL space_id reads as General."""
+    general_id = db.execute(select(DocumentSpace.id).where(DocumentSpace.slug == GENERAL_SLUG)
+                            ).scalar_one_or_none()
+    sid = func.coalesce(Document.space_id, general_id) if general_id is not None else Document.space_id
+    rows = db.execute(select(sid, func.count(func.distinct(Document.code)))
+                      .where(Document.status.in_(("draft", "active")))
+                      .group_by(sid)).all()
+    return {k: n for k, n in rows}
+
+
+def list_spaces(db: Session, include_inactive: bool = False) -> list[tuple[DocumentSpace, int]]:
+    stmt = select(DocumentSpace)
+    if not include_inactive:
+        stmt = stmt.where(DocumentSpace.is_active.is_(True))
+    rows = db.execute(stmt.order_by(DocumentSpace.sort_order, func.lower(DocumentSpace.name))).scalars().all()
+    counts = _space_counts(db)
+    # General first regardless of sort_order (spec 9.1).
+    rows = sorted(rows, key=lambda sp: (0 if sp.slug == GENERAL_SLUG else 1))
+    return [(sp, counts.get(sp.id, 0)) for sp in rows]
+
+
+
+def create_space(db: Session, *, slug: str, name: str, description: Optional[str] = None,
+                 visibility: str = "company", sort_order: int = 0) -> DocumentSpace:
+    slug = _clean_slug(slug)
+    name = _clean_name(name)
+    if visibility not in SPACE_VISIBILITIES:
+        raise BadRequestError(f"visibility must be one of {SPACE_VISIBILITIES}")
+    if db.execute(select(DocumentSpace.id).where(DocumentSpace.slug == slug)).scalar_one_or_none():
+        raise ConflictError(f"space slug {slug!r} is taken")
+    sp = DocumentSpace(slug=slug, name=name, description=(description or "").strip() or None,
+                       visibility=visibility, sort_order=int(sort_order))
+    db.add(sp)
+    db.commit()
+    db.refresh(sp)
+    return sp
+
+
+def update_space(db: Session, space_id: int, **fields) -> DocumentSpace:
+    sp = get_space(db, space_id)
+    allowed = {"name", "description", "visibility", "is_active", "sort_order"}
+    unknown = set(fields) - allowed
+    if unknown:
+        raise BadRequestError(f"cannot update {sorted(unknown)}")
+    if sp.slug == GENERAL_SLUG:
+        if fields.get("visibility") == "restricted":
+            raise BadRequestError("General is always company-visible")
+        if fields.get("is_active") is False:
+            raise BadRequestError("General cannot be deactivated")
+    if fields.get("visibility") is not None and fields["visibility"] not in SPACE_VISIBILITIES:
+        raise BadRequestError(f"visibility must be one of {SPACE_VISIBILITIES}")
+    if fields.get("name") is not None:
+        sp.name = _clean_name(fields["name"])
+    if "description" in fields:
+        sp.description = (fields["description"] or "").strip() or None
+    if fields.get("visibility") is not None:
+        sp.visibility = fields["visibility"]
+    if fields.get("is_active") is not None:
+        sp.is_active = bool(fields["is_active"])
+    if fields.get("sort_order") is not None:
+        sp.sort_order = int(fields["sort_order"])
+    db.commit()
+    db.refresh(sp)
+    return sp
+
+
+def list_space_grants(db: Session, space_id: int) -> list[int]:
+    get_space(db, space_id)
+    return sorted(int(g) for g in db.execute(
+        select(DocumentSpaceGrant.group_id).where(DocumentSpaceGrant.space_id == space_id)).scalars())
+
+
+def replace_space_grants(db: Session, space_id: int, group_ids: list[int]) -> list[int]:
+    """Whole-list replace. Every id must be an ACTIVE group (spec 8.1)."""
+    from groups.models import UserGroup
+    get_space(db, space_id)
+    wanted = sorted(set(int(g) for g in group_ids))
+    if wanted:
+        ok = set(db.execute(select(UserGroup.id).where(UserGroup.id.in_(wanted),
+                                                       UserGroup.is_active.is_(True))).scalars())
+        bad = [g for g in wanted if g not in ok]
+        if bad:
+            raise BadRequestError(f"unknown or inactive group ids: {bad}")
+    db.query(DocumentSpaceGrant).filter(DocumentSpaceGrant.space_id == space_id).delete()
+    db.add_all([DocumentSpaceGrant(space_id=space_id, group_id=g) for g in wanted])
+    db.commit()
+    return wanted
+
+
+def delete_space(db: Session, space_id: int) -> None:
+    sp = get_space(db, space_id)
+    if sp.slug == GENERAL_SLUG:
+        raise BadRequestError("General cannot be deleted")
+    held = db.execute(select(func.count(Document.id)).where(Document.space_id == sp.id)).scalar_one()
+    if held:
+        raise ConflictError(f"space {sp.slug!r} still holds {held} document revision(s); move them first")
+    db.delete(sp)
+    db.commit()
+
+
 # --- code minting --------------------------------------------------------------
 
 def mint_code(db: Session, prefix: str) -> str:
@@ -198,8 +361,8 @@ THEME_PATH = Path(__file__).with_name("accumark-docs.css")
 THEME_MARKER_RE = re.compile(r"/\*\s*accumark-docs v\d+")
 FONTS_HOST = "fonts.googleapis.com"
 FONTS_LINK = ('<link rel="stylesheet" href="https://fonts.googleapis.com/css2'
-              '?family=Archivo:wght@500;600;700&family=IBM+Plex+Sans:wght@400;500;600'
-              '&family=IBM+Plex+Mono:wght@400;500&display=swap">')
+              '?family=Poppins:wght@500;600;700&family=Open+Sans:wght@400;600'
+              '&family=JetBrains+Mono:wght@400;500&display=swap">')
 
 
 @lru_cache(maxsize=1)
@@ -297,14 +460,23 @@ def _lab_today(db: Session) -> date:
     return lab_day(datetime.utcnow(), tz)
 
 
-def create_document(db: Session, *, title: str, html, category: Optional[DocumentCategory],
+def create_document(db: Session, *, title: str = "", html, category: Optional[DocumentCategory],
                     description: Optional[str] = None, code: Optional[str] = None,
                     author: Optional[str] = None, source_session: Optional[str] = None,
                     effective_date: Optional[date] = None, activate: bool = True,
                     user_id: Optional[int] = None,
-                    co_author: Optional[str] = None) -> tuple[Document, bool]:
+                    co_author: Optional[str] = None,
+                    space: Optional[DocumentSpace] = None,
+                    may_revise: Optional[Callable[[Document], bool]] = None,
+                    provenance: Optional[dict] = None) -> tuple[Document, bool]:
     """Create revision 1 of a new code, or the next revision of an existing one.
-    Identical bytes on an existing code => metadata patch, no new row (§5.5)."""
+    Identical bytes on an existing code => metadata patch, no new row (§5.5).
+    `provenance` is a dict of the new row's provenance columns, already validated
+    (documents/provenance.py). It lands only on a NEW row: the identical-bytes branch
+    keeps the existing revision's provenance untouched.
+    `may_revise` is checked under the row lock: False reads as an unknown code, so a
+    code minted into a hidden space between the caller's check and this lock is never
+    revised (or named) by a caller who cannot see it."""
     title = (title or "").strip()
     data = validate_html(html)
     sha = hashlib.sha256(data).hexdigest()
@@ -313,6 +485,8 @@ def create_document(db: Session, *, title: str, html, category: Optional[Documen
     if code:
         code = _clean_code(code)
         latest = _latest(db, code, for_update=True)  # serialize same-code pushes
+        if latest is not None and may_revise is not None and not may_revise(latest):
+            raise NotFoundError(f"document {code!r} not found")
 
     if latest is not None:
         # A revision push may omit title and description: "revise SOP-0001 with this
@@ -329,6 +503,10 @@ def create_document(db: Session, *, title: str, html, category: Optional[Documen
             # row whenever the bytes happen to match.
             raise BadRequestError(
                 f"code prefix must be {category.code_prefix} for category {category.name}")
+        if space is not None and space.id != (latest.space_id or general_space(db).id):
+            raise BadRequestError(
+                f"revisions stay in the document's space; move {code} with PATCH space_id instead")
+        space_id = latest.space_id if latest.space_id is not None else general_space(db).id
         if latest.content_sha256 == sha:
             latest.title = title
             if description is not None:
@@ -345,17 +523,20 @@ def create_document(db: Session, *, title: str, html, category: Optional[Documen
         if category is None:
             raise BadRequestError("category is required for a new document")
         cat = category
+        space_id = (space or general_space(db)).id
         if code:
             if code.split("-", 1)[0] != cat.code_prefix:
                 raise BadRequestError(
                     f"code prefix must be {cat.code_prefix} for category {cat.name}")
         else:
             existing = db.execute(
-                select(Document.code, Document.revision)
+                select(Document)
                 .where(Document.content_sha256 == sha,
-                       Document.category_id == cat.id)
+                       Document.category_id == cat.id,
+                       (or_(Document.space_id == space_id, Document.space_id.is_(None))
+                        if space_id == general_space(db).id else Document.space_id == space_id))
                 .order_by(Document.id).limit(1)
-            ).first()
+            ).scalars().first()
             if existing is not None:
                 # Without this a retry mints a SECOND controlled document holding
                 # identical content, which is how ART-0002 was born. Dedupe on an
@@ -364,22 +545,26 @@ def create_document(db: Session, *, title: str, html, category: Optional[Documen
                 # Scoped to the category on purpose: an SOP and an artifact that
                 # share bytes are different controlled documents, and the code
                 # prefix a category fixes is what makes them different.
-                raise ConflictError(
-                    f"this content is already published as {existing[0]} "
-                    f"r{existing[1]}; pass code={existing[0]} to publish it as a new "
-                    f"revision, or change the content to mint a new document")
+                # Scoped to the category AND the space: a 409 that named a code in a
+                # space the caller cannot see would confirm that document exists
+                # (spec 5.2).
+                raise DuplicateContentError(
+                    f"this content is already published as {existing.code} "
+                    f"r{existing.revision}; pass code={existing.code} to publish it as a new "
+                    f"revision, or change the content to mint a new document", existing)
             code = mint_code(db, cat.code_prefix)
         revision = 1
         supersedes_id = None
 
     key = get_storage().save(code, revision, data)
     doc = Document(code=code, revision=revision, title=title, description=description,
-                   category_id=cat.id, status="draft", effective_date=effective_date,
+                   category_id=cat.id, space_id=space_id,
+                   status="draft", effective_date=effective_date,
                    supersedes_id=supersedes_id, author=author, updated_by=author,
                    co_author=co_author,
                    source_session=source_session,
                    created_by_user_id=user_id, storage_key=key, size_bytes=len(data),
-                   content_sha256=sha)
+                   content_sha256=sha, **(provenance or {}))
     db.add(doc)
     db.flush()
     if activate:
@@ -399,6 +584,39 @@ def get_document(db: Session, doc_id: int) -> Document:
 def get_revisions(db: Session, code: str) -> list[Document]:
     return db.execute(select(Document).where(Document.code == code)
                       .order_by(Document.revision)).scalars().all()
+
+
+def latest_revision(db: Session, code: str) -> Optional[Document]:
+    """Highest revision of a code, or None. Public twin of _latest without the lock."""
+    try:
+        return _latest(db, _clean_code(code))
+    except BadRequestError:
+        return None
+
+
+def move_document_space(db: Session, code: str, space_id: int, *, updated_by: Optional[str]) -> list[Document]:
+    """Move EVERY revision of a code to another space in one transaction (spec 4.3)."""
+    space = get_space(db, int(space_id))
+    if not space.is_active:
+        raise BadRequestError(f"space {space.slug!r} is inactive")
+    code = _clean_code(code)
+    # Take the same row lock create_document holds while it inserts revision r+1, so
+    # a concurrent push either lands before this read (and is moved) or waits until
+    # the move commits (and inherits the new space). Without it the newest revision
+    # could be left behind in the old, possibly more visible, space.
+    _latest(db, code, for_update=True)
+    rows = get_revisions(db, code)
+    if not rows:
+        raise NotFoundError(f"document {code!r} not found")
+    for r in rows:
+        r.space_id = space.id
+        if updated_by:
+            r.updated_by = updated_by
+    db.commit()
+    for r in rows:
+        db.refresh(r)
+    logging.getLogger(__name__).info("documents.space_moved code=%s to=%s by=%s", code, space.slug, updated_by)
+    return rows
 
 
 def revision_count(db: Session, code: str) -> int:
@@ -453,6 +671,8 @@ def delete_document(db: Session, doc_id: int, *, expect_code: str,
         raise ConflictError(
             f"revision {doc.id} is superseded by {dependent}; retire instead")
     key, code, revision = doc.storage_key, doc.code, doc.revision
+    from documents import comments as _comments  # local: comments imports this module lazily too
+    comment_blob_keys = _comments.purge_for_document(db, doc.id)
     db.delete(doc)
     db.commit()
     # Row first, bytes second. A failed blob delete leaves an inert orphan;
@@ -462,6 +682,7 @@ def delete_document(db: Session, doc_id: int, *, expect_code: str,
     except Exception as e:
         logging.getLogger(__name__).warning(
             "documents blob orphaned key=%s err=%s", key, e)
+    _comments._delete_blobs(comment_blob_keys)
     return {"deleted": True, "code": code, "revision": revision}
 
 
@@ -469,7 +690,9 @@ def patch_document(db: Session, doc_id: int, **fields) -> Document:
     """Metadata only (§5.1 PATCH). Never bumps revision, never touches content.
     Every field is validated BEFORE any attribute is assigned: a half-applied
     patch would leave the row dirty in the session, and the next autoflush would
-    persist it even though the caller saw an exception."""
+    persist it even though the caller saw an exception.
+    `space_id` is not a patch field here: the route routes it to move_document_space
+    because it rewrites every revision."""
     doc = get_document(db, doc_id)
     updated_by = fields.pop("updated_by", None)
     allowed = {"title", "description", "category_id", "effective_date"}
@@ -507,6 +730,7 @@ def patch_document(db: Session, doc_id: int, **fields) -> Document:
 
 
 def list_documents(db: Session, *, q: Optional[str] = None, category_id: Optional[int] = None,
+                   space_id: Optional[int] = None, visible_spaces=None,
                    statuses=("draft", "active"), sort: str = "updated_at",
                    page: int = 1, page_size: int = 50) -> tuple[list[tuple[Document, int]], int]:
     """Latest revision per code AMONG the rows matching `statuses`, then the other
@@ -536,6 +760,16 @@ def list_documents(db: Session, *, q: Optional[str] = None, category_id: Optiona
             .join(counts, Document.code == counts.c.code))
     if category_id is not None:
         stmt = stmt.where(Document.category_id == category_id)
+    if space_id is not None:
+        space_id = int(space_id)
+        if space_id == general_space(db).id:
+            # NULL reads as General everywhere (spec 4.4).
+            stmt = stmt.where(or_(Document.space_id == space_id, Document.space_id.is_(None)))
+        else:
+            stmt = stmt.where(Document.space_id == space_id)
+    if visible_spaces is not None:
+        # NULL = General = company (spec 4.4), so it is always inside a visibility filter.
+        stmt = stmt.where(or_(Document.space_id.in_(visible_spaces), Document.space_id.is_(None)))
     if q and q.strip():
         like = f"%{q.strip()}%"
         stmt = stmt.where(or_(Document.code.ilike(like), Document.title.ilike(like),
@@ -554,3 +788,47 @@ def list_documents(db: Session, *, q: Optional[str] = None, category_id: Optiona
 
 def read_content(doc: Document) -> bytes:
     return get_storage().fetch(doc.storage_key)
+
+
+def replace_draft_content(db: Session, doc_id: int, *, html, updated_by: Optional[str],
+                          expected_sha256: Optional[str] = None,
+                          edited_by_user_id: Optional[int] = None) -> tuple[Document, bool]:
+    """In-place content replace for a DRAFT only (spec §10.3). Anything that was
+    ever active is immutable: an edit to it is a new revision through
+    create_document. Blob ordering mirrors delete_document: write the new
+    bytes, commit the row, THEN best-effort delete the old blob, so a failed
+    delete leaves an orphan and never a row pointing at missing bytes."""
+    doc = get_document(db, doc_id)
+    if doc.status != "draft":
+        raise ConflictError(
+            f"only a draft takes in-place content (this revision is {doc.status}); "
+            f"save it as a new revision instead")
+    dependent = db.execute(
+        select(Document.id).where(Document.supersedes_id == doc.id).limit(1)
+    ).scalar_one_or_none()
+    if dependent is not None:
+        raise ConflictError(f"revision {doc.id} is superseded by {dependent}; edit that one")
+    data = validate_html(html)
+    sha = hashlib.sha256(data).hexdigest()
+    if sha == doc.content_sha256:
+        return doc, False  # before the hash check: a retried PUT that already landed is a 200
+    if expected_sha256 is not None and expected_sha256 != doc.content_sha256:
+        raise ConflictError("this draft changed since you opened it; reload and edit again")
+    old_key = doc.storage_key
+    doc.storage_key = get_storage().save(doc.code, doc.revision, data)
+    doc.size_bytes = len(data)
+    doc.content_sha256 = sha
+    if updated_by:
+        doc.updated_by = updated_by
+    doc.updated_at = datetime.utcnow()
+    # The bytes are no longer only the creator's: provenance says who rewrote them.
+    doc.content_edited_by_user_id = edited_by_user_id
+    doc.content_edited_at = doc.updated_at
+    db.commit()
+    db.refresh(doc)
+    if old_key != doc.storage_key:
+        try:
+            get_storage().delete(old_key)
+        except Exception as e:  # noqa: BLE001
+            logging.getLogger(__name__).warning("documents blob orphaned key=%s err=%s", old_key, e)
+    return doc, True

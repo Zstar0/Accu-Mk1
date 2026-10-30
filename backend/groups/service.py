@@ -88,6 +88,10 @@ def delete_group(db: Session, group_id: int) -> None:
             used = None
     if used is not None:
         raise ConflictError("group has members or board grants; deactivate it instead")
+    from documents.models import DocumentSpaceGrant  # lazy: documents imports groups
+    if db.execute(select(DocumentSpaceGrant.id).where(DocumentSpaceGrant.group_id == g.id)
+                  .limit(1)).scalar_one_or_none() is not None:
+        raise ConflictError("group is granted on document spaces; remove the grants first")
     db.delete(g)
     db.commit()
 

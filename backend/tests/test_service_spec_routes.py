@@ -18,7 +18,7 @@ from fastapi.testclient import TestClient
 from main import app
 from auth import get_current_user
 from database import get_db, Base
-from models import AnalysisService, AnalysisServiceSpec, AuditLog, Peptide
+from models import AnalysisService, AnalysisServiceSpec, AuditLog, LimsSampleForm, Peptide
 
 
 @pytest.fixture
@@ -325,14 +325,33 @@ def test_create_informational_spec(client, svc):
     {"min_value": "1"},
     {"max_value": "5"},
     {"equals_value": "x"},
-    {"loq": "0.5"},
 ])
 def test_create_informational_rejects_bounds_loudly(client, svc, extra):
-    # R3: bounds/expected/LOQ on an informational row 422 by name — never
+    # R3: bounds/expected on an informational row 422 by name — never
     # silently nulled (a value the lab typed and lost is the confusion this
-    # arm exists to prevent).
+    # arm exists to prevent). LOQ is the one value a report-only row carries
+    # (sample forms task 7), so it is NOT in this list.
     r = client.post(f"/analysis-services/{svc.id}/specs",
                     json={"rule_kind": "informational", **extra})
+    assert r.status_code == 422
+
+
+def test_create_informational_accepts_loq(client, svc):
+    # Sample forms task 7: a report-only row may carry an LOQ (censors the
+    # printed result; the verdict still never reads it).
+    r = client.post(f"/analysis-services/{svc.id}/specs",
+                    json={"rule_kind": "informational", "unit": "ppm", "loq": "0.5"})
+    assert r.status_code == 201
+    body = r.json()
+    assert body["rule_kind"] == "informational"
+    assert body["loq"] == "0.5"
+    assert body["min_value"] is None and body["max_value"] is None
+
+
+@pytest.mark.parametrize("bad", ["-1", "nan", "abc"])
+def test_create_informational_loq_keeps_parse_loq_rules(client, svc, bad):
+    r = client.post(f"/analysis-services/{svc.id}/specs",
+                    json={"rule_kind": "informational", "loq": bad})
     assert r.status_code == 422
 
 
@@ -354,3 +373,142 @@ def test_patch_to_informational_requires_explicit_bound_clearing(client, svc):
     body = r.json()
     assert body["rule_kind"] == "informational"
     assert body["max_value"] is None and body["loq"] is None
+
+
+def test_patch_to_informational_keeps_loq_when_not_sent(client, svc):
+    # Sample forms task 7: an informational row may carry an LOQ, so a kind
+    # flip that clears the bounds but does not send loq keeps the stored one.
+    spec_id = client.post(
+        f"/analysis-services/{svc.id}/specs",
+        json={"rule_kind": "range", "max_value": "0.5", "loq": "0.1"},
+    ).json()["id"]
+    r = client.patch(
+        f"/analysis-service-specs/{spec_id}",
+        json={"rule_kind": "informational", "max_value": None},
+    )
+    assert r.status_code == 200
+    body = r.json()
+    assert body["rule_kind"] == "informational"
+    assert body["max_value"] is None and body["loq"] == "0.1"
+
+
+# ── Endo slice 3 (spec 2026-10-12 sections 6 and 8): one active spec per
+# tier AND unit; the index raises the existing duplicate message ───────────
+
+def test_eu_ml_and_eu_vial_rows_stay_active_side_by_side_in_one_tier(client, svc):
+    base = {"rule_kind": "range", "min_value": "0", "matrix": "Peptide"}
+    assert client.post(f"/analysis-services/{svc.id}/specs",
+                       json={**base, "max_value": "5", "unit": "EU/mL"}).status_code == 201
+    assert client.post(f"/analysis-services/{svc.id}/specs",
+                       json={**base, "max_value": "350", "unit": "EU/vial"}).status_code == 201
+    # The same tier and unit in another spelling is a duplicate.
+    r = client.post(f"/analysis-services/{svc.id}/specs",
+                    json={**base, "max_value": "300", "unit": " eu/VIAL "})
+    assert r.status_code == 409
+    assert r.json()["detail"].startswith("an active spec already exists for this tier")
+    assert sorted(s["unit"] for s in client.get(f"/analysis-services/{svc.id}/specs").json()) == [
+        "EU/mL", "EU/vial"]
+
+
+def test_patching_a_unit_into_an_occupied_tier_and_unit_conflicts(client, svc):
+    p = {"rule_kind": "range", "max_value": "1"}
+    client.post(f"/analysis-services/{svc.id}/specs", json={**p, "unit": "EU/mL"})
+    vial_id = client.post(f"/analysis-services/{svc.id}/specs",
+                          json={**p, "unit": "EU/vial"}).json()["id"]
+    r = client.patch(f"/analysis-service-specs/{vial_id}", json={"unit": "eu/ml"})
+    assert r.status_code == 409
+    body = client.get(f"/analysis-services/{svc.id}/specs").json()
+    assert {s["id"]: s["unit"] for s in body}[vial_id] == "EU/vial"
+
+
+# --- Form tier (sample-forms Task 6) ---------------------------------------
+
+
+@pytest.fixture
+def form(db_session):
+    f = LimsSampleForm(name="Nasal Spray", route="nasal_inhaled")
+    db_session.add(f)
+    db_session.commit()
+    return f
+
+
+def test_create_form_tier_spec_returns_form_name(client, svc, form):
+    r = client.post(f"/analysis-services/{svc.id}/specs",
+                    json={"rule_kind": "range", "max_value": "1",
+                          "sample_form_id": form.id})
+    assert r.status_code == 201
+    body = r.json()
+    assert body["sample_form_id"] == form.id
+    assert body["sample_form_name"] == "Nasal Spray"
+    assert body["matrix"] is None and body["peptide_id"] is None
+    listed = client.get(f"/analysis-services/{svc.id}/specs").json()
+    assert [(s["sample_form_id"], s["sample_form_name"]) for s in listed] == [
+        (form.id, "Nasal Spray")]
+
+
+def test_form_and_matrix_together_422(client, svc, form):
+    r = client.post(f"/analysis-services/{svc.id}/specs",
+                    json={"rule_kind": "range", "max_value": "1",
+                          "matrix": "Peptide", "sample_form_id": form.id})
+    assert r.status_code == 422
+
+
+def test_form_and_peptide_together_422(client, svc, form, peptide):
+    r = client.post(f"/analysis-services/{svc.id}/specs",
+                    json={"rule_kind": "range", "max_value": "1",
+                          "peptide_id": peptide.id, "sample_form_id": form.id})
+    assert r.status_code == 422
+
+
+def test_unknown_form_422(client, svc):
+    r = client.post(f"/analysis-services/{svc.id}/specs",
+                    json={"rule_kind": "range", "max_value": "1",
+                          "sample_form_id": 99999})
+    assert r.status_code == 422
+
+
+def test_inactive_form_spec_allowed(client, db_session, svc, form):
+    form.active = False
+    db_session.commit()
+    r = client.post(f"/analysis-services/{svc.id}/specs",
+                    json={"rule_kind": "range", "max_value": "1",
+                          "sample_form_id": form.id})
+    assert r.status_code == 201
+    assert r.json()["sample_form_name"] == "Nasal Spray"
+
+
+def test_list_orders_peptide_form_matrix_wildcard(client, db_session, svc, form, peptide):
+    url = f"/analysis-services/{svc.id}/specs"
+    # Created in the reverse of the expected order so id alone cannot pass it.
+    wild = client.post(url, json={"rule_kind": "range", "max_value": "1"}).json()
+    matrix = client.post(url, json={"rule_kind": "range", "max_value": "2",
+                                    "matrix": "Peptide"}).json()
+    form_row = client.post(url, json={"rule_kind": "range", "max_value": "3",
+                                      "sample_form_id": form.id}).json()
+    pep = client.post(url, json={"rule_kind": "range", "max_value": "4",
+                                 "peptide_id": peptide.id}).json()
+    got = [s["id"] for s in client.get(url).json()]
+    assert got == [pep["id"], form_row["id"], matrix["id"], wild["id"]]
+
+
+def test_form_spec_change_audited_with_form_id(client, db_session, svc, form):
+    r = client.post(f"/analysis-services/{svc.id}/specs",
+                    json={"rule_kind": "range", "max_value": "1",
+                          "sample_form_id": form.id})
+    assert r.status_code == 201
+    log = db_session.execute(select(AuditLog).where(
+        AuditLog.operation == "analysis_service_spec_changed"
+    ).order_by(AuditLog.id)).scalars().all()[-1]
+    assert log.details["before"] is None
+    assert log.details["after"]["sample_form_id"] == form.id
+
+
+def test_patch_form_spec_revalidates_and_keeps_tier(client, svc, form):
+    created = client.post(f"/analysis-services/{svc.id}/specs",
+                          json={"rule_kind": "range", "max_value": "1",
+                                "sample_form_id": form.id}).json()
+    r = client.patch(f"/analysis-service-specs/{created['id']}",
+                     json={"max_value": "2"})
+    assert r.status_code == 200
+    assert r.json()["sample_form_id"] == form.id
+    assert r.json()["sample_form_name"] == "Nasal Spray"

@@ -149,3 +149,40 @@ def test_senaite_is_not_called_for_a_native_born_sample_or_its_vials(db):
     assert _senaite_has_no_ar(db, "P-0456") is False           # legacy: keep attaching
     assert _senaite_has_no_ar(db, "P-0456-S02") is False
     assert _senaite_has_no_ar(db, "P-9999") is False           # unknown: legacy behaviour
+
+
+# --- sample forms: the parent's dosage form is a spec tier -------------------
+
+def _nasal_purity_family(db, *, on_parent):
+    from decimal import Decimal
+    from models import LimsSampleForm
+    parent, services, _, vial_pk, rows = _family(db)
+    nasal = LimsSampleForm(name="Nasal Spray", route="nasal_inhaled")
+    db.add(nasal)
+    db.flush()
+    db.add(AnalysisServiceSpec(analysis_service_id=services[KW_PURITY].id,
+                               sample_form_id=nasal.id, rule_kind="range",
+                               max_value=Decimal("1"), unit="%"))
+    if on_parent:
+        parent.sample_form_id = nasal.id
+    db.flush()
+    _submit(db, {r.keyword: r for r in rows}[KW_PURITY], "99")
+    return parent, vial_pk
+
+
+def test_spec_column_listing_uses_form_tier(db):
+    """A vial row resolves through its parent: Nasal Spray purity is max 1,
+    not the wildcard's min 98, on the vial listing and the parent listing."""
+    parent, vial_pk = _nasal_purity_family(db, on_parent=True)
+
+    vial = _by_kw(list_analyses_in_senaite_shape(db, host_kind="sub_sample", host_pk=vial_pk))
+    assert vial[(KW_PURITY, 1)].specification["max"] == 1.0
+    assert vial[(KW_PURITY, 1)].conforms is False
+
+
+def test_spec_column_listing_without_a_form_keeps_the_wildcard(db):
+    parent, vial_pk = _nasal_purity_family(db, on_parent=False)
+
+    vial = _by_kw(list_analyses_in_senaite_shape(db, host_kind="sub_sample", host_pk=vial_pk))
+    assert vial[(KW_PURITY, 1)].specification["min"] == 98.0
+    assert vial[(KW_PURITY, 1)].conforms is True

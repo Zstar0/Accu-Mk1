@@ -1,0 +1,13 @@
+Customer Insights tabs follow-ups stack e2e, 2026-10-20 (PR #321).
+Stack: insfu (devbox, golden-20260911-233650). Mk1 = feat/insights-tabs-followups at 83bc578c, mounted (clean checkout, no working-tree changes).
+IS = integration-service origin/master 3030efb mounted, alembic upgraded to z4a5b6c7d8e9 (wc_orders); the golden IS image predates the order mirror.
+wc_orders: 258 stack orders (149 paid), loaded from an in-WP rest_do_request dump through IS upsert_order_if_newer (258 upserted, 0 errors; WC REST basic auth fails on the HTTP stack).
+DEV DATA: golden/stack data. Money values mean nothing. Close and Plain are not configured on stacks.
+Command: . <stack env> && node node_modules/@playwright/test/cli.js test e2e/customer-insights.spec.ts --reporter=list
+Result: 4 passed (28.9s).
+01-at-risk.png: period 90D; the at-risk list is empty on this stack (At risk (0), "No customers are overdue right now"), so the at-risk n/a check was skipped.
+02-new-customers.png: New customers tab subtitle; no first orders in the 90D window on this stack.
+03-cohorts.png: cohort 2026-04 (2 customers) selected; header "2026-04 cohort · 2 customers" and list total 2 match the grid; the n/a helper waited for both the Last CRM and Last support column headers, then every cell in both columns read n/a.
+The n/a assertion ran on the cohort member table because the at-risk list is empty.
+01-insights.png, 02-customer-dashboard.png: the existing tests' shots for this run (no at-risk row, so the dashboard opens from the Customers list and its back button reads Back to Customers).
+The spec's SHOTS constant still points at the 2026-10-19 directory; these PNGs were moved here after the run and that directory was restored unchanged.

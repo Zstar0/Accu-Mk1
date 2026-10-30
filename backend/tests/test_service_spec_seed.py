@@ -122,3 +122,26 @@ def test_seed_writes_audit_rows(db_session):
     assert entry.details["before"] is None
     assert entry.details["actor_user_id"] is None
     assert entry.details["after"]["rule_kind"] in ("range", "equals")
+
+
+def test_seed_ignores_form_tier_row_and_still_seeds_wildcard(db_session):
+    """A sample-form spec row (matrix and peptide_id both NULL, sample_form_id
+    set) must not be mistaken for the wildcard slot by the seeder's probe."""
+    from models import AnalysisServiceSpec, LimsSampleForm
+    svcs = _mk_native_services(db_session, keywords=("HM-PB",))
+    nasal = LimsSampleForm(name="Nasal Spray", route="nasal_inhaled")
+    db_session.add(nasal)
+    db_session.flush()
+    db_session.add(AnalysisServiceSpec(
+        analysis_service_id=svcs["HM-PB"].id, sample_form_id=nasal.id,
+        rule_kind="range", max_value=Decimal("9.9"), unit="ppm"))
+    db_session.flush()
+
+    assert seed_service_specs(db_session) == 1
+    wildcards = (db_session.query(AnalysisServiceSpec)
+                 .filter(AnalysisServiceSpec.matrix.is_(None),
+                         AnalysisServiceSpec.peptide_id.is_(None),
+                         AnalysisServiceSpec.sample_form_id.is_(None))
+                 .all())
+    assert len(wildcards) == 1
+    assert seed_service_specs(db_session) == 0

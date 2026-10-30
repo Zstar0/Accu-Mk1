@@ -7,6 +7,10 @@ export function registerCommands(commands: AppCommand[]): void {
   commands.forEach(cmd => commandRegistry.set(cmd.id, cmd))
 }
 
+export function unregisterCommands(ids: string[]): void {
+  ids.forEach(id => commandRegistry.delete(id))
+}
+
 export function getAllCommands(
   context: CommandContext,
   searchValue = '',
@@ -19,7 +23,7 @@ export function getAllCommands(
   if (searchValue.trim() && t) {
     const search = searchValue.toLowerCase()
     return allCommands.filter(cmd => {
-      const label = t(cmd.labelKey).toLowerCase()
+      const label = (cmd.label ?? t(cmd.labelKey)).toLowerCase()
       const description = cmd.descriptionKey
         ? t(cmd.descriptionKey).toLowerCase()
         : ''

@@ -36,6 +36,19 @@ LAUNCH_ACCOUNT_KEYS: frozenset[str] = frozenset({
     "wc:1552",  # Walt Moscoso, Rapid
 })
 PERIOD_DAYS = {"30d": 30, "90d": 90, "6m": 182, "1y": 365}
+# /touchpoints (spec 2026-10-19, 4.1): summary TTL, items scanned per page, fan-out width, key cap.
+# Customer segments (Handler 2026-10-20): trailing 12 months of paid spend and testing orders.
+# Prod 10-20: key 23 customers / 69% of revenue, growth 52 / 15%, regular 95 / 6%, trial 721 / 10%.
+SEGMENT_WINDOW_DAYS = 365
+SEGMENT_KEY_SPEND = Decimal("10000")
+SEGMENT_GROWTH_SPEND = Decimal("2500")
+SEGMENT_REGULAR_ORDERS = 2
+SEGMENTS = ("key", "growth", "regular", "trial")
+TOUCH_TTL = 900
+TOUCH_SCAN = 10
+TOUCH_WORKERS = 4
+TOUCH_MAX_KEYS = 50
+TOUCH_EMAIL_STATUSES = frozenset({"sent", "inbox"})
 
 
 def customer_key(customer_id: int | None, email: str | None) -> str | None:
@@ -96,6 +109,17 @@ def spend_status(*, paid_orders: int, at_risk: bool, period: Decimal, prior: Dec
     if prior > 0 and period >= prior * (1 + TREND_PCT):
         return "growing"
     return "steady"
+
+
+def segment(spend_12m: Decimal, testing_orders_12m: int) -> str | None:
+    """Key / growth by 12-month spend, then regular (2+ testing orders) or trial; None = nothing paid in 12 months."""
+    if spend_12m <= 0 and testing_orders_12m == 0:
+        return None
+    if spend_12m >= SEGMENT_KEY_SPEND:
+        return "key"
+    if spend_12m >= SEGMENT_GROWTH_SPEND:
+        return "growth"
+    return "regular" if testing_orders_12m >= SEGMENT_REGULAR_ORDERS else "trial"
 
 
 def lab_month(t: datetime, tz: str) -> str:

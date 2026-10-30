@@ -20,7 +20,21 @@ vi.mock('@/components/intake/ReceiveWizard/PackagingImagesList', () => ({
 
 // Stub the remaining heavy children so the wizard renders in isolation.
 vi.mock('@/components/intake/ReceiveWizard/WizardHeader', () => ({
-  WizardHeader: () => <div />,
+  WizardHeader: ({ formControl }: { formControl?: React.ReactNode }) => (
+    <div data-testid="wizard-header">{formControl}</div>
+  ),
+}))
+// Sentinel: the real picker reads react-query, which this suite has no provider for.
+vi.mock('@/components/common/SampleFormSelect', () => ({
+  SampleFormSelect: (p: {
+    sampleId: string
+    valueId: number | null
+    valueName: string | null
+  }) => (
+    <div data-testid="form-select">
+      {p.sampleId}:{String(p.valueId)}:{String(p.valueName)}
+    </div>
+  ),
 }))
 vi.mock('@/components/intake/ReceiveWizard/WizardSidebar', () => ({
   WizardSidebar: () => <div />,
@@ -66,8 +80,16 @@ vi.mock('@/components/intake/ReceiveWizard/useReceiveWizard', () => ({
     deleteSessionVial: vi.fn(),
   }),
 }))
+const parentState = vi.hoisted(() => ({
+  details: null as Record<string, unknown> | null,
+}))
 vi.mock('@/components/intake/ReceiveWizard/useParentSampleDetails', () => ({
-  useParentSampleDetails: () => ({ details: null, loading: false, error: null }),
+  useParentSampleDetails: () => ({
+    details: parentState.details,
+    loading: false,
+    error: null,
+    refresh: vi.fn(),
+  }),
 }))
 
 const receiveSenaiteSample = vi.hoisted(() => vi.fn())
@@ -203,5 +225,48 @@ describe('ReceiveWizard print labels tab', () => {
     render(<ReceiveWizard parent={parent} onClose={() => {}} />)
 
     expect(screen.getByRole('tab', { name: 'Print Labels' })).toBeDisabled()
+  })
+})
+
+describe('ReceiveWizard form control', () => {
+  const onClose = vi.fn()
+  beforeEach(() => {
+    vi.clearAllMocks()
+    wizState.vials = []
+    parentState.details = null
+  })
+
+  it('passes the form picker to the header for a form-eligible parent', () => {
+    parentState.details = {
+      sample_form_eligible: true,
+      sample_form_id: 2,
+      sample_form_name: 'Pen',
+    }
+    render(<ReceiveWizard parent={parent} onClose={onClose} />)
+    expect(
+      within(screen.getByTestId('wizard-header')).getByTestId('form-select')
+    ).toHaveTextContent('P-1:2:Pen')
+  })
+
+  it('still offers the picker when an eligible parent has no form yet', () => {
+    parentState.details = {
+      sample_form_eligible: true,
+      sample_form_id: null,
+      sample_form_name: null,
+    }
+    render(<ReceiveWizard parent={parent} onClose={onClose} />)
+    expect(screen.getByTestId('form-select')).toHaveTextContent('P-1:null:null')
+  })
+
+  it('passes no form control for a Bacteriostatic Water parent or while loading', () => {
+    parentState.details = { sample_form_eligible: false, sample_form_id: null }
+    const { unmount } = render(
+      <ReceiveWizard parent={parent} onClose={onClose} />
+    )
+    expect(screen.queryByTestId('form-select')).not.toBeInTheDocument()
+    unmount()
+    parentState.details = null
+    render(<ReceiveWizard parent={parent} onClose={onClose} />)
+    expect(screen.queryByTestId('form-select')).not.toBeInTheDocument()
   })
 })

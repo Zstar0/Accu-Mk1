@@ -79,6 +79,8 @@ function eventToLevel(event: string): EventLevel {
     // Basic-info field edits through the generic field editor (who changed
     // what; `senaite: 'locked'` when SENAITE refused and Mk1 kept the edit).
     case 'sample_field_updated': return 'accent'
+    // Sample form (dosage form) changes are deliberate operator edits.
+    case 'sample_form_changed': return 'accent'
     default:                  return 'dim'
   }
 }
@@ -122,6 +124,7 @@ export function eventIcon(event: string): string {
     case 'result_entered':      return '■' // ■
     case 'analysis_amended':    return '✎' // ✎
     case 'sample_field_updated': return '✎' // ✎
+    case 'sample_form_changed': return '✎' // ✎
     default:                    return '\u2022' // •
   }
 }

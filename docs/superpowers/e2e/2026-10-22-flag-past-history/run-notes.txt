@@ -1,0 +1,27 @@
+Past flags beside the Flag button: devbox stack smoke, 2026-10-22
+Stack: pastflags (devbox, golden golden-20260911-233650), Mk1 branch fix/flag-entity-past-flags @ 189ef6a3 mounted.
+Calls go through the Mk1 frontend port; the proxy strips /api, so the flags router is at /api/api/flags.
+
+BEFORE (unmounted image, health 1.21.0)
+  raise question flag on sample P-0155 -> 201 flag=8; resolve -> 200 status=resolved
+  GET tab=all_open&entity_type=sample&entity_id=P-0155&include_descendants=true -> 200 []
+  GET tab=all&entity_type=sample&entity_id=P-0155&include_descendants=true      -> 400 {"detail":"unknown tab 'all'"}
+
+AFTER (branch mounted, health 1.51.0, validate 21/21)
+  GET tab=all_open&entity_type=sample&entity_id=P-0155&include_descendants=true -> 200 []            (open-only callers unchanged)
+  GET tab=all&entity_type=sample&entity_id=P-0155&include_descendants=true      -> 200 [(8, resolved)]
+  GET tab=all  (no entity)                                                      -> 400 {"detail":"tab 'all' needs entity_type and entity_id"}
+
+UI (browser via ssh -L 15532:localhost:5532, logged in as the stack's seeded dev admin)
+  01  P-0155 sample page: outline Flag button + "1 past" chip
+      (accessible name "1 past flag · latest Resolved Oct 22, 8:24 PM. View history.")
+  02  chip click -> "Flags on P-0155" flyout, All statuses, lists the resolved flag
+  live: raise open blocker flag 9 on P-0155 from the devbox (no reload)
+      -> flyout lists it; pill label "Flag (Blocker) ... Open · Oct 22, 8:28 PM. Open it. (+ 1 past)"
+  03  resolve flag 9 from the devbox (no reload) -> chip "2 past"
+  rollup: raise + resolve question flag 10 on vial 1299 (P-0155-S02)
+      -> GET tab=all on P-0155 with descendants -> [(10, sub_sample, resolved), (9, sample, resolved), (8, sample, resolved)]
+      -> parent page chip updates live to "3 past flags · latest Resolved Oct 22, 8:34 PM"
+      -> vial page P-0155-S02 shows "1 past flag"
+
+Stack destroyed after the run.

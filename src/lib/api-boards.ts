@@ -1,5 +1,6 @@
 /** Planning boards API client (spec 2026-09-26 §7.2, §7.3). Sibling of api-groups.ts. */
 import { apiFetch } from '@/lib/api'
+import type { FlagResponse } from '@/lib/flags-api'
 
 export type NodeKind =
   | 'frame'
@@ -22,6 +23,7 @@ export interface Board {
   created_by: number | null
   default_viewport: { x: number; y: number; zoom: number } | null
   node_count: number
+  open_flag_count: number
   can_edit: boolean
   created_at: string
   updated_at: string
@@ -249,4 +251,11 @@ export function deleteEdge(slug: string, id: number): Promise<void> {
 /** apiFetch throws `Error("<METHOD> <path> failed: <status>")`; 409 is the optimistic-lock miss. */
 export function isStale(err: unknown): boolean {
   return err instanceof Error && /failed: 409$/.test(err.message)
+}
+
+/** Open flags on every anchor of the board (the board, its items, the entities behind entity items). */
+export function listBoardFlags(slug: string): Promise<FlagResponse[]> {
+  return apiFetch<FlagResponse[]>(
+    `/api/boards/${encodeURIComponent(slug)}/flags`
+  )
 }

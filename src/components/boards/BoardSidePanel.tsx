@@ -18,6 +18,7 @@ import {
 import { useDirectoryUsers } from '@/services/groups'
 import { displayName } from '@/lib/user-display'
 import type { BoardDetail, BoardNode } from '@/lib/api-boards'
+import { AttentionDock } from './AttentionDock'
 import { DocumentPreviewFrame } from './DocumentPreviewFrame'
 import type { PersonNodeData } from './nodes/PersonNode'
 import { isSafeHttpUrl, openExternal } from './open-external'
@@ -42,8 +43,11 @@ export function BoardSidePanel({
   const node = board.nodes.find(n => n.id === selectedId) ?? null
   if (!node) {
     return (
-      <div className="p-3 text-sm text-muted-foreground">
-        Select a node to see its flags and details.
+      <div className="flex h-full flex-col gap-3 overflow-y-auto p-3 text-sm">
+        <AttentionDock board={board} />
+        <p className="text-xs text-muted-foreground">
+          Select an item to see its flags and details.
+        </p>
       </div>
     )
   }
@@ -121,6 +125,30 @@ function NodePanel({
             </Button>
           </div>
         </div>
+      )}
+
+      {canEdit && node.parent_id != null && (
+        <Button
+          size="sm"
+          variant="outline"
+          className="w-fit"
+          disabled={patch.isPending}
+          onClick={() => {
+            const frame = board.nodes.find(n => n.id === node.parent_id)
+            // Keep the item where it is on the canvas: relative becomes absolute.
+            patch.mutate({
+              id: node.id,
+              data: {
+                version: node.version,
+                parent_id: null,
+                x: node.x + (frame?.x ?? 0),
+                y: node.y + (frame?.y ?? 0),
+              },
+            })
+          }}
+        >
+          Remove from frame
+        </Button>
       )}
 
       <section>

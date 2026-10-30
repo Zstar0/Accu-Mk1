@@ -21,6 +21,7 @@ from sqlalchemy.orm import Session
 from models import (LimsAnalysis, LimsSample, LimsSampleRemark, LimsSubSample,
                     LimsSubSampleEvent, SamplePriority, User, Worksheet,
                     WorksheetItem)
+from sample_forms.service import apply_default_form, copy_form_from_original, is_form_eligible
 from sub_samples import native
 from sub_samples import senaite
 from sub_samples.native_id import mint_native_id
@@ -166,6 +167,10 @@ def _create_sample_row(db: Session, parent_sample_id: str, meta: dict) -> LimsSa
         container_mode=meta.get("review_state") in _PRE_RECEIVED_STATES,
     )
     _populate_basic_info(row, meta)
+    # Birth-time form default. Deliberately NOT in _populate_basic_info: that
+    # runs on every refresh/replay (and on the transient row in registry_debug)
+    # and would clobber a PATCHed form.
+    apply_default_form(db, row)
     db.add(row)
     db.flush()
     return row
@@ -401,6 +406,9 @@ def upsert_sample_from_signal(db: Session, sample_id: Optional[str],
         db, senaite_sample_id=sample_id, sample_type_title=sample_type_title,
     )
     row = _create_sample_row(db, sample_id, meta)
+    # A retest inherits its original's form (signal time only, so it is set
+    # before native auto check-in runs and never re-applied on a replay).
+    copy_form_from_original(db, row)
     if meta.get("VendorName"):
         row.vendor_name = str(meta["VendorName"])[:200]
     row.native_id = native_id_value
@@ -3018,6 +3026,8 @@ def board_vials(
                     client_sample_id=par.client_sample_id,
                     priority=priority_by_uid.get(par.external_lims_uid or "", "normal"),
                     is_test_order=par.sample_id in test_ids,
+                    sample_form_id=(par.sample_form_id
+                                    if is_form_eligible(par.sample_type_title) else None),
                 ),
                 analyses=[
                     BoardAnalysisOut(

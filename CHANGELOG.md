@@ -1,6 +1,317 @@
 # Changelog
 
-## Unreleased
+## v1.55.0 - 2026-10-28
+
+Needs COA Builder 2.35.6 (deployed first, 2026-10-28).
+
+### Sample forms: record what a sample physically is
+- **Check-in records each sample's dosage form**: Lyophilized Powder, Reconstituted Solution, Pen, Nasal Spray, and more. The Receive Wizard header has a Form picker preset to the default, and the Sample Info card on the sample page shows the form and can change it. Peptide-type samples only; Bac Water gets no form. Existing peptide samples start as Lyophilized Powder.
+- **Settings → Sample Forms manages the list**: add a form, rename it, reorder it, pick the default and an icon, or retire it (forms are never deleted).
+- **Each sample's form icon shows next to its id** on Order Status, the customer status page, the vial board and the COA Explorer, with the form name on hover. The certificate does not print the form.
+
+### Specs and the bench: a form can carry its own rules
+- **The spec editor has a Form tier.** Precedence is Peptide, then Form, then product type, then All, per unit, so a nasal spray can have its own heavy-metal rules, unit and LOQ.
+- **A report-only rule can carry an LOQ.** At or below it the COA prints `< 0.5` (the LOQ), the LOQ column shows, and there is no pass/fail verdict.
+- **The bench presets the result unit from the form's rule**, with a dropdown to change it. A unit no rule or catalog entry allows is refused.
+- **A result in a unit the form's rules don't cover stops the certificate** with "has no active spec", instead of falling back to the injectable pass/fail. Re-enter it in the form's unit, or file the form rule in that unit too.
+- **A section's basis note is left off only when every row is a form's report-only rule** (nasal heavy metals). Sections that are report-only for every sample, like the vial vacuum test, keep their note.
+
+### Sample page header
+- Form and Priority moved into the Sample Info card; the read-source badge and override moved into the admin registry panel.
+- The vial photo sits on the right across the whole header, Flag and Watch follow Actions, and two buttons are shorter: "Sub-Samples" and "Variance".
+
+## v1.54.0 - 2026-10-27
+
+### Endotoxin: set the reader up from Mk1
+- **A "Reader CSV" button on 2 mL worksheets writes the EndoScan-V Sample Database file**, so a run planned in Mk1 no longer has to be keyed into the instrument by hand or exported from a second tool. Every prep number comes from Mk1's own prep check and dilution plan, and the rows come from the same document the bench sheet prints, so the file and the worksheet cannot disagree.
+- **A row the reader could not be set up for is named rather than written wrong.** A duplicate vial ID, a liquid vial with no volume typed, or a dilution that cannot be made as typed is listed in a message instead of going into the file.
+- **The exported limit is never above the real cut.** It is rounded down to the digits written, so the instrument can only ever be stricter than Mk1, never laxer: a false fail costs a re-run, a false pass would ship. This is a deliberate difference from the tool it replaces, which rounds to nearest.
+- Blends go out under the lab's nickname (KLOW, GLOW), and a long name is cut to the 40 characters the importer accepts, measured as the file will carry it rather than as it arrives.
+
+### Endotoxin: two fixes from the bench
+- **The water cell no longer carries over when a row's Form changes.** Typing a liquid vial's own volume and then switching the row to lyophilized left that volume in place, so the prep was figured on the customer's water instead of the standard reconstitution, and the same the other way round.
+- **A typed reading the reader replaces is kept in the row's history.** The import already refuses to overwrite a reading silently, so a replace is always deliberate, but the typed value was then lost unless the cartridge happened to move with it. Only the cartridge-moved rows still raise the override audit entry.
+
+## v1.53.0 - 2026-10-27
+
+### Endotoxin: a ">" reading is reported instead of re-run
+- **The bench can record a ">" reading now**, and so can a reader import. Before this a ">" could not be parsed at all: typing one was refused, and an imported one sat on the row as text with no verdict.
+- **A ">" is judged as "at least this much".** The reading is above the cartridge's top standard, so the number is a floor. A floor that already reaches the limit fails the vial whatever the true value is; a floor under the limit proves nothing and is refused rather than guessed. A ">" can never read as a pass.
+- **A definitive ">" failure now reaches the certificate**, printing for example `> 2500` and marking the result non-conforming. A vial known to hold at least the limit no longer has to be re-run at a higher dilution before anything can be reported.
+- A floor below the limit is still refused, on the worksheet and on the server, with the same wording in both places.
+
+### Endotoxin: a prep rule can set the reconstitution water
+- **A rule line can prescribe the reconstitution water** for products that need more than the standard 2 mL, so the bench does not have to remember which. Blank keeps the method's standard, and what the analyst types on the row still wins.
+- **Powder only.** A liquid vial arrived reconstituted, so its volume is what the customer sent rather than a prep choice: neither a rule's water nor the standard is ever put in one. Bacteriostatic water is never ruled either.
+- **The water multiplies into both the reported value and the LOQ**, so a 3 mL line moves every number on the rows it touches. Existing rules are unaffected, because the field starts blank everywhere.
+- **The printed bench sheet marks a ruled volume**, underlined and with an "R", so a tech working from the paper adds the right amount. Before this a ruled 3 mL printed unmarked under a legend reading "2 mL, underlined where a sample was given its own".
+- A row's prep history now keeps the water the run used, so Re-apply and the history view rebuild a past run with the volume it actually had.
+
+### COAs: a below-LOQ result prints the number
+- **A result at or below the LOQ now prints `< 25` instead of `< LOQ`.** Another lab read the old layout ("< LOQ" in Result, 25 in the LOQ column) as oddly laid out; the result is "< 25 EU/vial". Endotoxin and heavy metals alike, and the verdict still judges the raw number.
+- Published COAs keep their stored text until they are regenerated.
+
+### Bench sheet: the summary agrees with the rows
+- **The "Off the standard" tile counts exactly what the rows underline.** It used to miss a volume a rule set, and to count both a liquid vial's customer volume and a powder typed at exactly the standard, neither of which the rows mark.
+
+## v1.52.3 - 2026-10-23
+
+### Sample COAs on non-variance samples use the chromatogram on the sample page
+- **Generate COA works again when the chromatogram CSV was uploaded on the sample page** without picking a vial. 1.52.1 stopped these with "No chromatogram is linked to core vial" (P-5556). A sample with no variance vials has one HPLC vial, so a sample-level file can only be that vial's; the sample COA now uses it, and the same for the photo.
+- The core vial's own linked chromatogram and photo still win when they exist. Variance lots keep the strict rule: only the core vial's own media.
+
+## v1.52.2 - 2026-10-23
+
+### Generate Per-Vial COAs never publishes
+- **The button only makes drafts now**, even when the sample COA is already published. In 1.52.0 it sent the new vial COAs straight to the customer in that case. Preview them with the PDF button; they go out with the next Publish or Regen & Republish.
+
+## v1.52.1 - 2026-10-23
+
+### Fix: a COA uses only its own vial's chromatogram and photo
+- **The sample COA reads only the core HPLC vial.** Its chromatogram and photo come from the core vial: one filed for that vial, or the vial's own HPLC trace or check-in photo. It no longer falls back to an unlabelled upload on the sample or to another vial's file.
+- **Missing means stop, not guess.** When the core vial has neither, generating the COA stops with a message naming the vial and how to fix it, instead of printing another file or no chromatogram.
+- Samples with no HPLC vial (micro-only) are unchanged.
+
+## v1.52.0 - 2026-10-23
+
+### Fix: customers get the Analyzing email when HPLC prep starts
+- **Starting an HPLC sample prep on a vial now moves the order to Analyzing.** HPLC-only native samples never go on a worksheet, and a worksheet add was the only thing that sent Analyzing, so since 09-22 about two thirds of native orders went from Sample Received straight to Under Review with no "Analysis in progress" email. Creating a vial prep session now tells the Integration Service, the same way adding to a worksheet does. Standards preps do not notify, and an order already past Analyzing is unchanged.
+
+### Per-vial COAs carry each vial's own results
+- **A vial COA now shows every test run on that vial.** Besides its own HPLC figures, each per-vial certificate carries the other results the lab promoted from that vial (for example endotoxin on the vial it was run on). Results from other vials are left off.
+- **Only used vials get a certificate.** Every vial is checked; a vial with no results gets none.
+- **Vials without HPLC are listed, not generated yet.** A certificate with no HPLC results needs a COA Builder change that is still being designed, so such a vial is named in the result instead of failing the run.
+- **No more Core COA for variance lots.** The sample COA already carries everything the Core COA had; new generates and regenerates no longer produce one. Existing Core COAs are unchanged.
+- **Regen & Republish refreshes the vial COAs too.** They are regenerated and published with the new sample COA.
+- **Generate Per-Vial COAs publishes them when the sample COA is already published**, and is refused for samples that are not variance lots.
+- **Publish refuses a stale draft.** If the draft that would be published is older than the published COA, Publish stops and says so.
+
+### Flags: past flags show on the Flag button and in its history
+- **The "N past" chip beside the Flag button now appears** once a flag on that item has been resolved; before, it never showed on a real page.
+- **Clicking it opens that item's full flag history**, every status, instead of an empty list filtered to open flags.
+- Board side panels and the endotoxin worksheet still show open flags only.
+
+### COA console: native-born samples no longer show SENAITE steps
+- **Generate and Publish consoles name the real last step.** For a sample born in Mk1 the generate console ends with "Recording in sample registry" instead of "Attaching to SENAITE", and the publish console ends with "Updating sample registry" instead of "SENAITE transition"; the backend already skipped the SENAITE attach and transition for those samples. SENAITE-born samples keep the SENAITE labels in both read modes. Labels only; step ids and timings are unchanged.
+
+## v1.51.0 - 2026-10-21
+
+### Customer Insights: segments instead of a cohort tab
+- **The re-order cohort grid is back beside the revenue chart**, where it was before 1.50.0.
+- **New Segments tab.** Customers are classed on their last 12 months: Key accounts ($10K or more paid), Growth ($2.5K to $10K), Regular (under $2.5K with 2 or more testing orders) and Trial (0 or 1 testing order). Each tile shows how many customers, their share of revenue and their median orders and samples; click one to list its customers, with the same CRM and support columns as the other lists.
+
+## v1.50.0 - 2026-10-20
+
+### Customer Insights: at-risk, new customers and cohorts in one place
+- **Three tabs replace the at-risk card.** At risk is unchanged. New customers lists everyone whose first testing order fell in the selected period, biggest lifetime spend first. Cohorts shows the full 12-month re-order grid; click a cohort to see its customers, or a cell to see who came back that month.
+- **Last CRM and last support contact on every list.** Admins see the last human email or call from Close (sequence and bulk sends do not count); admins and Plain seat holders see the last support thread. Click either to open that tab on the customer.
+- **Back from a customer returns to Insights** when that is where you came from, on the same tab and selection.
+- **Exclude launch accounts moved to the page header**, and now applies to New customers too.
+- **CRM tab:** sequence, bulk and AI-agent emails now sit behind "include automated". The AI review tab's CRM tool, like the CRM tab, no longer sees sequence and bulk sends.
+
+## v1.49.6 - 2026-10-20
+
+### Per-vial COAs: PDF preview
+- **Each per-vial COA card has a PDF button.** Open a vial certificate's PDF from Sample Details to check it before Publish, the same way the sample COA cards already do.
+
+## v1.49.5 - 2026-10-20
+
+### Change: Generate Per-Vial COAs regenerates every vial
+- **Every run makes fresh per-vial COAs.** Generate Per-Vial COAs no longer skips vials that already have a COA. It mints a new draft for every vial each time, and the Integration Service (1.0.37) retires that vial's previous draft, so only one draft per vial stays live. Published vial COAs are unchanged until the next Publish. The message now reads "Regenerated N per-vial COA(s)".
+
+## v1.49.4 - 2026-10-20
+
+### Fix: per-vial COAs print their own vial photo
+- **Each vial certificate shows its own vial.** On a variance lot, every per-vial COA printed vial 1's photo. A vial certificate now uses only a photo filed for that vial, and when none is filed it takes the vial's own check-in photo and files it. A vial with no photo on file is skipped with a message naming the vial, rather than borrowing a sibling's.
+- **The sample COA never borrows a variance vial's photo.** When the core vial has no filed photo, regenerating the sample COA files the core vial's own check-in photo first, and otherwise falls back only to photos not tied to another vial.
+
+## v1.49.3 - 2026-10-19
+
+### Fix: per-vial COAs on samples born in Mk1
+- **A pushed chromatogram now records which vial it came from.** On samples born in Mk1, pushing a vial's chromatogram did not note the vial, so the per-vial COAs quietly did not generate. It now records the vial, the same way SENAITE-born samples already did. Chromatograms pushed before this release are repaired by a one-time backfill at deploy.
+- **A vial without a pushed chromatogram uses its own trace.** When a per-vial COA is generated and no chromatogram was pushed for that vial, Mk1 now takes the trace from that vial's own HPLC analysis and files it as the vial's chromatogram, instead of skipping the vial's COA. A vial whose analysis holds no trace is still skipped, and a sibling vial's trace is never used.
+- **The sample COA never borrows a variance vial's trace.** When the core vial has no filed chromatogram, regenerating the sample COA now files the core vial's own trace first, and otherwise falls back only to chromatograms not tied to another vial.
+
+## v1.49.2 - 2026-10-16
+
+### Re-test: HPLC on samples ordered before the HPLC switch
+- **Verified HPLC can be carried.** On a sample ordered before September 22, the Re-test dialog showed verified HPLC as "Not verified" and would not carry it. It now reads the HPLC results the lab verified in Mk1 and carries them to the new sample.
+- **A carry is complete or refused.** If any HPLC line is only in SENAITE, or is being re-run, the carry is refused and the dialog names the line, so a re-test COA never drops a result.
+- **Re-testing HPLC creates the HPLC lines.** Re-testing HPLC on such a sample now gives the new sample its HPLC lines; before, it got none.
+- **Clearer reasons.** When something cannot be carried, the dialog says why, and the Retesting tag shows on the HPLC lines.
+
+## v1.49.1 - 2026-10-15
+
+### Fixes: inbox, reader import, worksheet links
+- **Open vials on a partially published sample show in the inbox.** When a sample's first COA is published while an add-on test (such as endotoxin) is still open, the sample is "Partially Published". Its open vials now appear in the worksheet inbox. Before, they never did.
+- **The endotoxin reader import reads either field order.** It finds the Sample ID in whichever of the reader's typed fields holds one, so an export with the Sample ID typed first now matches its worksheet rows.
+- **Sample IDs and order numbers are links on the worksheet.** A vial ID opens its sub-sample page, a sample ID opens the sample page, and an order number opens Order Status with that order filled in.
+
+## v1.49.0 - 2026-10-15
+
+### Endotoxin: the 2 mL worksheet, promote, LOD on the COA, and prep rules
+- **2 mL Endotoxin worksheet.** A three-box bench flow: prep, dilution and results. It adds a reader import, cartridges as consumables, and a printable bench sheet.
+- **Promote to Parent from the worksheet.**
+  - Each result carries its LOQ, LOD and LOD unit.
+  - Promote checks each value against its LOQ, and the parent lands in "to verify".
+  - Peptide endotoxin is judged per vial (0 to 350 EU/vial). Bacteriostatic water stays EU/mL.
+- **Unit-aware spec matching.** A result in its service's catalog unit keeps today's spec. A result in another unit is judged only against specs filed in that unit.
+- **LOD on the COA.** A profile's COA text can carry `{lod}`, which is filled from the section's results. The profile editor refuses unknown macros.
+- **Endotoxin prep rules** (HPLC Automation > Endo prep rules).
+  - For each peptide and weight band, a rule sets the default total dilution, step 1 ratio and cartridge.
+  - Rows lock to their rule at print, at the first result and at completion.
+  - Re-apply moves locked rows onto today's rules. A row that already has a reading moves that reading to its history, to be re-run.
+  - Overrides are recorded in the row's history.
+- **A promoted endotoxin row is final.** Correct it by retest.
+- **Worksheet edits no longer stall the server** while another edit holds the same worksheet.
+
+## v1.48.0 - 2026-10-14
+
+### Planning boards: pull items out of frames
+- **Pull an item through its frame edge to pop it out.** Drag it against the edge and it leans toward the pointer; pull about 50 px past the edge and it pops out of the frame and follows the mouse. Let go earlier and it springs back inside. The side panel's Remove from frame button still works, and dropping an item into a frame still adopts it.
+
+## v1.47.1 - 2026-10-13
+
+### Agents can read lab data without a switch
+- **Every agent can now read lab data and reports** (samples, analyses, media, flags, reports, COA history): read-only Mk1 data is fine for agents. The switches gate writes only: **Lab tools** lets an agent raise and comment on flags, and **COA publishing** lets it generate and publish COAs (still needs Lab tools).
+
+## v1.47.0 - 2026-10-12
+
+### Flags on Support tickets and CRM items
+- **Flag a ticket or a CRM item** from its slide-out on the customer page, and assign it to anyone (for example a tech when a ticket needs lab help). Flagged rows show a flag in the Support and CRM lists.
+- **Whoever is on the flag can read that one item**, even without a Plain seat or admin access: the flag's link opens the customer page with the ticket or item open, read-only. Lists and replies keep their usual access.
+
+### Agents get their own Mk1 accounts
+- **Settings > Agents (admins):** create a machine user for an AI agent with a username; Mk1 shows its key once. No password, no server change, works on the next request.
+- **Least privilege by default:** an agent can read and write documents in the spaces it can see (General plus its groups) and nothing else. **Lab tools** (lab reads, reports, flags) and **COA publishing** are separate switches per agent; COA publishing needs Lab tools.
+- **Revoke instantly:** deactivate the agent or rotate its key; the old key stops on the next request. Everything an agent writes is attributed to it.
+- Agents never appear in staff lists, cannot log in, and cannot be edited as people.
+
+### Planning boards, slice 4: flags on the board
+- **Flag a board.** Editors raise flags on the board itself from the header; board-level flags show in the attention dock and count on the board card. A board with open flags cannot be deleted.
+- **Every flag on a board, once.** `GET /api/boards/{slug}/flags` returns the open flags on the board, its items and the entities behind entity items, under the caller's visibility. Frames show blocking and open counts, entity items show an open count, person cards show how many of the board's flags are assigned to them, and board cards show the open count.
+- **Attention dock.** With nothing selected, the side panel lists the board's blocking and past-due flags, overdue first, with Locate to centre the item.
+
+### Planning boards, slice 4: canvas live
+- **Zoomed out, items show their label only** (below 0.5 zoom); frames keep their title and pills.
+- **Cmd+K lists the open board's items**; pick one to centre it.
+- **Remove from frame** in the side panel; the item keeps its spot on the canvas (drag it out of the frame's area to keep it out, a drop inside re-adopts it). **Notes resize** from their corner and keep their size.
+- **Live boards.** Another editor's change appears on your open board without a reload.
+
+## v1.46.0 - 2026-10-12
+
+### Documents say where they came from
+- **Every revision has a Provenance section** in the document viewer and in embedded views: who asked for it, who or what created it, and which system, task and run it came from. Switching revisions shows that revision's own provenance.
+- **Each fact says how it was established.** The creator comes from the login or agent token that wrote it. The requester is "verified" only when it is the Mk1 login itself; a name an agent passes on is "supplied". A source system, task or run sent by a caller is "reported". AI customer reviews carry a verified AccuMk1 source because Mk1 made them itself.
+- **Editing details never rewrites history.** Retitling, moving or re-describing a document leaves each revision's provenance as it was, and an in-place draft edit adds "Content edited by" instead of crediting the original author with new text.
+- Documents from before this release show "not recorded" for anything Mk1 cannot prove; nothing is guessed from old notes.
+
+### Read-only document embeds for Paperclip
+- **`/embed.html` shows one pinned revision** inside an allowed site (set by `MK1_EMBED_FRAME_ANCESTORS`, default none). It renders only when the document id, code, revision and content hash all match, signs in with your own Mk1 login, and shows a clear Draft or Retired badge.
+
+## v1.45.2 - 2026-10-11
+
+### Flags
+- **You can now tell when an item has had flags before.** If every flag on a sample, vial, worksheet or document is resolved or closed, a small "N past" chip appears next to the Flag button; click it to see the whole history. When there are open flags, the colored flag button also notes how many past ones there are.
+
+## v1.45.1 - 2026-10-11
+
+### Support tickets
+- **After you send a reply or note, the conversation scrolls to it.** Only after your own send, so a refresh never moves you while you read.
+- **Clearer error when the Plain key is missing a permission.** Instead of "Plain is unavailable", Mk1 now says the key in Settings > Integrations needs the permission added in Plain (for example reply, note, edit or labels).
+
+## v1.45.0 - 2026-10-11
+
+### Support tickets look and work like Plain
+- **Two columns:** the conversation on the left and Plain's details sidebar on the right, in Plain's colors (light and dark follow Mk1's theme). The slide-out opens wider and remembers its own width; on a narrow window the details fold behind a Details button.
+- **Easier to follow:** team replies, customer messages and internal notes each have their own card, notes say who they are hidden from, automatic replies are collapsed, status and label changes are one-line events, and days are separated. Oldest first, scrolled to the latest.
+- **Action bar like Plain's:** Reply (R), Add note (N) and More (mark done, waiting for customer, snooze, back to todo). Esc closes the composer and keeps the draft.
+- **Details sidebar:** status in Plain's words (including Waiting for customer), assignee plus additional assignees you can add or remove, priority, labels, tier, the thread fields (WP user, orders, spent, sales rep and the rest), customer details with a link to their WordPress profile, and the customer's other tickets.
+
+## v1.44.0 - 2026-10-10
+
+### Answer and manage support tickets from Mk1
+- **Reply to customers from the Support tab.** Open a ticket on the customer page and write back in the composer at the bottom of the slide-out. The reply goes out from your own Plain account, under your name, and asks you to confirm the first time each time you open a ticket. Drafts are kept if you close the slide-out.
+- **Internal notes** from the same composer (Note tab). The team sees them in Plain, prefixed with your name.
+- **Manage the ticket in place:** mark it Done or back to Todo, snooze it (1 hour, tomorrow morning, next Monday, or a date you pick), assign it, set its priority, and add or remove labels.
+- **Your Plain account is your permission.** Anyone whose Mk1 email matches an active Plain user can work tickets, and now sees the Support tab even if they are not an admin.
+- **Built not to double-send.** A reply is never sent twice by retrying. If Plain does not confirm a reply, Mk1 checks the ticket and tells you whether it went out before you try again. Every action is recorded, without storing message text.
+- Replying needs the new Plain key with reply permission, set in Settings > Integrations.
+
+## v1.43.0 - 2026-10-10
+
+### API keys in Settings
+- **New Settings > Integrations page (admins only)** for the Close, Plain and Anthropic API keys. Each row shows where the key comes from (saved in Settings or the server), its last four characters, and who changed it and when, with **Replace**, **Test** and **Use server env**.
+- **A new key is tested with the provider before it is saved**, so a typo never takes an integration down, and it takes effect right away with no restart.
+- **Keys are encrypted and write-only.** Nobody, admins included, can read a saved key back, and every change and test is recorded.
+
+### Blend results fill themselves
+- **When every peptide in a blend has a quantity of 0, blend total and blend purity now fill in as 0 on their own** and lock, instead of waiting to be typed (PB-1062). This replaces the typed entry from 1.42.1. The certificate still prints both as N/A whenever identity fails.
+- Verified blend lines with a zero total now stay verified when the parent recalculates.
+
+## v1.42.1 - 2026-10-09
+
+### Blend results you can finish
+- **Blend total and blend purity can now be typed when they can't be calculated.** When every peptide in a blend has a quantity of 0 (for example, none was identified), there is nothing to calculate, so these two lines used to sit at Pending with no way to fill them (PB-1062). While they are empty you can now type a value, and once saved they lock again. Whenever the figure can be calculated, the calculated one still replaces anything typed.
+- Pairs with COA Builder 2.35.1, which prints blend total and blend purity as N/A on the certificate when any peptide fails identity.
+
+## v1.42.0 - 2026-10-09
+
+### New document look
+- **Every new document now looks like the AccuVerify Integration Guide:** Poppins headings, Open Sans text, the teal accent, and the guide's building blocks (numbered steps, colored callouts, cards, checklists, fact rows, button chips). This applies to artifacts, SOPs, reports and AI reviews published from now on; existing documents keep their look until their next revision.
+- **AI reviews** use the same look: an "At a glance" card row, severity-colored callouts, shortfalls grouped by theme, a next-steps checklist, and links to every source.
+
+## v1.41.0 - 2026-10-09
+
+### AI review becomes a document
+- **AI reviews are now documents.** Each review is published to the Documents library in a new "Customer reviews" space (readable by everyone for now): one document per customer, a new revision every time it is regenerated. Comments and annotations work on reviews like any other document.
+- **New AI review tab** on the customer page, after Support. It shows a summary bar (sentiment, headline, counts, cost, Generate or Regenerate with live progress, Open in Documents) and the review document itself.
+- **Easier to read:** the review opens with a one or two sentence headline, metric cards (lifetime spend and rank, spend change, on-time rate vs the lab, days since the last order), "Needs attention" cards sorted by severity, where we fell short grouped by theme, next steps as a checklist, and what is going well. Links open the Plain ticket, the Close lead, or the sample or order in Mk1.
+- **No staff names:** staff names are now removed from reviews before they are published, including citation labels.
+
+## v1.40.0 - 2026-10-08
+
+### AI customer review (admin)
+- **An AI review card at the top of the customer page.** Click Generate and an AI agent (Claude Sonnet 5.5) reads the customer's history across Close, Plain and Mk1 (orders, samples, SLA, retests, COA versions) and writes a review: sentiment with its trend, open issues, where we fell short, strengths, and suggested next steps.
+- Every finding links to its source: ticket chips open the Support slide-out, Close chips open the CRM slide-out, sample and order chips open the sample or order. Findings that cannot point at something the agent actually read are dropped.
+- Findings describe events and process, never individual staff.
+- The card shows live progress while the agent works (about a minute), keeps previous reviews in a history menu, and shows the lookups made and the cost of each run.
+- On demand only. Admin only. Needs `ANTHROPIC_API_KEY` in the backend env; a daily cap (`AI_REVIEW_DAILY_CAP`, default 50 runs) guards spend.
+
+## v1.39.0 - 2026-10-08
+
+### Customer page slide-outs
+- **Resizable:** the Support and CRM side panels have a drag handle on their left edge. Drag to widen or narrow (400 px up to 90% of the window); the width is remembered in your browser for both panels. Double-click the handle to reset; arrow keys nudge it.
+- **Newest first:** a Support conversation now opens with the newest message on top. The Newest first / Oldest first button flips it, and your choice is remembered.
+
+## v1.38.0 - 2026-10-08
+
+### Customer Support tab (admin)
+- **A Support tab on the customer page**, next to CRM, lists the customer's Plain support tickets: status (Open, Snoozed, Done) with filter chips, priority, labels, assignee, last update and a preview. A red **Waiting on us** badge shows how long the customer has been waiting for a reply.
+- Click a ticket to read the whole conversation: emails, website contact-form messages, chat and Slack, plus the team's **internal notes and internal discussions** on an amber card marked Internal. Status, label and assignment changes show as one-line markers. "Open in Plain" jumps to the ticket.
+- Read live from Plain and cached for 5 minutes; **Refresh** pulls the latest (once per 10 seconds). If Plain is down the last copy is shown, marked stale.
+- Admin only. Needs `PLAIN_API_KEY` in the backend env; without it the tab says Support is not configured.
+
+## v1.37.0 - 2026-10-07
+
+### Customer CRM tab (admin)
+- **A CRM tab on the customer page** shows the customer's Close communication log (emails, calls, SMS, meetings) and account notes, newest first and grouped by day, with type chips and Load more. Click any item to read the full email thread, call notes, SMS, meeting or note.
+- The customer is matched to Close leads by their account and billing emails. Lead cards show status, owner and open opportunity value.
+- Automated order emails (subject `[Accumark Labs]:`) are hidden by default; "Show automated" brings them back.
+- Data is read live from Close and cached for 5 minutes; **Refresh** pulls the latest (once per 10 seconds). If Close is down the last copy is shown, marked stale.
+- Admin only. Needs `CLOSE_API_KEY` in the backend env; without it the tab says CRM is not configured.
+
+## v1.36.0 - 2026-10-07
+
+### Document spaces
+- **Spaces are the first level of the Documents page** and decide who can read what. A company space is readable by every login; a restricted space only by the user groups you grant. General is seeded and every existing document now lives in it.
+- The document list, search, the document routes and the document flag threads answer 404 for a document the caller cannot see, exactly as for a missing one. Comments, attachments, the comment index and export, and in-place content edits honour the same gate.
+- Admins create and grant spaces in Settings > Documents, and move a document (every revision together) from Edit details. The publish skill and labmanager-mcp take a `space`; agent tokens may carry a space allow-list (`name:token:slug+slug`, absent = General only).
+
+### Document annotations
+- **Comments on documents.** Any login or named agent token can leave numbered comments and suggestions anchored to a passage, reply one level deep, label them, resolve or reopen them, attach images, and export a document's thread as Markdown. Comments live on the document code, so they follow it across revisions. A cross-document index (`GET /api/documents/comments`) serves agents and the inbox.
+- **Annotations in the viewer** (plannotator v0.27.25 vendored under `src/vendor/plannotator/`): highlight a passage to comment, see open threads in a side panel, and pin-point comments on images.
+- **Admin edit mode:** an admin can edit a draft revision in place (`PUT /api/documents/{id}/content`, admin login only), apply a suggestion with one click, and a **New document** dialog creates a draft from a blank page (opens in edit mode) or an uploaded HTML file.
 
 ## v1.35.2 - 2026-10-07
 

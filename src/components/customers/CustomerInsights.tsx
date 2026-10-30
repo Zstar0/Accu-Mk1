@@ -15,15 +15,13 @@ import {
   getCustomerAtRisk,
   getCustomerChurnSignals,
   getCustomerCohorts,
+  getCustomerList,
+  getCustomerSegments,
   getCustomerSummary,
   type InsightsPeriod,
 } from '@/lib/api'
 import { Switch } from '@/components/ui/switch'
-import {
-  Tooltip,
-  TooltipContent,
-  TooltipTrigger,
-} from '@/components/ui/tooltip'
+import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import {
   cohortTint,
   fmtDelta,
@@ -31,7 +29,16 @@ import {
   fmtPct,
   fmtPrice,
   fmtPoints,
+  SEGMENT_LABEL,
+  SEGMENT_RULE,
 } from './insights-utils'
+import { AtRiskTable } from './AtRiskTable'
+import {
+  InsightsCustomerTable,
+  type InsightsSortField,
+} from './InsightsCustomerTable'
+import { useTouchpoints } from './useTouchpoints'
+import { useUIStore, type InsightsTab } from '@/store/ui-store'
 
 const PERIODS: { key: InsightsPeriod; label: string }[] = [
   { key: '30d', label: '30D' },
@@ -40,6 +47,12 @@ const PERIODS: { key: InsightsPeriod; label: string }[] = [
   { key: '1y', label: '1Y' },
   { key: 'all', label: 'All' },
 ]
+// Reset to page 1 / lifetime desc from the period and launch handlers.
+const LIST_DEFAULT = {
+  page: 1,
+  sort: 'lifetime' as InsightsSortField,
+  dir: 'desc' as 'asc' | 'desc',
+}
 const NEW = '#60a5fa'
 const RETURNING = '#34d399'
 const FIRST_ORDER_LABEL: Record<string, string> = {
@@ -122,10 +135,13 @@ const relStr = (v: string, p: string | null) =>
 export function CustomerInsights({
   onOpenCustomer,
 }: {
-  onOpenCustomer: (key: string) => void
+  onOpenCustomer: (key: string, tab?: 'crm' | 'support') => void
 }) {
-  const [period, setPeriod] = useState<InsightsPeriod>('90d')
-  const [excludeLaunch, setExcludeLaunch] = useState(false)
+  const period = useUIStore(state => state.insightsView.period)
+  const tab = useUIStore(state => state.insightsView.tab)
+  const segment = useUIStore(state => state.insightsView.segment)
+  const setInsightsView = useUIStore(state => state.setInsightsView)
+  const excludeLaunch = useUIStore(state => state.insightsView.excludeLaunch)
   const summary = useQuery({
     queryKey: ['customers', 'summary', period, excludeLaunch],
     queryFn: () => getCustomerSummary(period, excludeLaunch),
@@ -141,11 +157,86 @@ export function CustomerInsights({
     queryFn: getCustomerAtRisk,
     staleTime: 60_000,
   })
+  // Only the visible tab's keys fan out to Close and Plain; resolved chunks stay
+  // cached for the hook's staleTime, so switching back does not refetch.
+  const touch = useTouchpoints(
+    tab === 'at-risk' ? (risk.data?.rows.map(r => r.key) ?? []) : []
+  )
   const churn = useQuery({
     queryKey: ['customers', 'churn-signals'],
     queryFn: getCustomerChurnSignals,
     staleTime: 60_000,
   })
+  const [newView, setNewView] = useState(LIST_DEFAULT)
+  const { page: newPage, sort: newSort, dir: newDir } = newView
+  const setNew = (v: Partial<typeof LIST_DEFAULT>) =>
+    setNewView(cur => ({ ...cur, ...v }))
+  const newCustomers = useQuery({
+    queryKey: [
+      'customers',
+      'list',
+      'new',
+      period,
+      excludeLaunch,
+      newSort,
+      newDir,
+      newPage,
+    ],
+    queryFn: () =>
+      getCustomerList({
+        period,
+        new_only: true,
+        exclude_launch_accounts: excludeLaunch,
+        sort: newSort,
+        dir: newDir,
+        page: newPage,
+        page_size: 25,
+      }),
+    staleTime: 60_000,
+    placeholderData: prev => prev,
+  })
+  const newTouch = useTouchpoints(
+    tab === 'new' ? (newCustomers.data?.rows.map(r => r.key) ?? []) : []
+  )
+  // Segments: fixed trailing 12 months, launch accounts included (Handler 2026-10-20).
+  const segments = useQuery({
+    queryKey: ['customers', 'segments'],
+    queryFn: getCustomerSegments,
+    enabled: tab === 'segments',
+    staleTime: 60_000,
+  })
+  const [segView, setSegView] = useState(LIST_DEFAULT)
+  const { page: segPage, sort: segSort, dir: segDir } = segView
+  const setSeg = (v: Partial<typeof LIST_DEFAULT>) =>
+    setSegView(cur => ({ ...cur, ...v }))
+  const segMembers = useQuery({
+    queryKey: [
+      'customers',
+      'list',
+      'segment',
+      segment,
+      segSort,
+      segDir,
+      segPage,
+    ],
+    queryFn: () =>
+      getCustomerList({
+        segment,
+        period: 'all',
+        sort: segSort,
+        dir: segDir,
+        page: segPage,
+        page_size: 25,
+      }),
+    staleTime: 60_000,
+    enabled: tab === 'segments',
+    // Keep rows while paging or sorting, never across a segment change.
+    placeholderData: (prev, prevQuery) =>
+      prevQuery?.queryKey[3] === segment ? prev : undefined,
+  })
+  const segTouch = useTouchpoints(
+    tab === 'segments' ? (segMembers.data?.rows.map(r => r.key) ?? []) : []
+  )
   const s = summary.data
 
   return (
@@ -159,23 +250,39 @@ export function CustomerInsights({
             {s && ` · lab time (${s.tz}) · ${minutesAgo(s.synced_at)}`}
           </p>
         </div>
-        <div className="flex overflow-hidden rounded-md border border-border/50">
-          {PERIODS.map(p => (
-            <button
-              key={p.key}
-              type="button"
-              aria-pressed={period === p.key}
-              onClick={() => setPeriod(p.key)}
-              className={cn(
-                'cursor-pointer px-3 py-1 text-xs font-medium',
-                period === p.key
-                  ? 'bg-primary text-primary-foreground'
-                  : 'text-muted-foreground hover:bg-muted/50 hover:text-foreground'
-              )}
-            >
-              {p.label}
-            </button>
-          ))}
+        <div className="flex items-center gap-4">
+          <label className="flex items-center gap-2 text-xs text-muted-foreground">
+            <Switch
+              checked={excludeLaunch}
+              onCheckedChange={v => {
+                setInsightsView({ excludeLaunch: v })
+                setNewView(LIST_DEFAULT)
+              }}
+              aria-label="Exclude launch accounts"
+            />
+            Exclude launch accounts
+          </label>
+          <div className="flex overflow-hidden rounded-md border border-border/50">
+            {PERIODS.map(p => (
+              <button
+                key={p.key}
+                type="button"
+                aria-pressed={period === p.key}
+                onClick={() => {
+                  setInsightsView({ period: p.key })
+                  setNewView(LIST_DEFAULT)
+                }}
+                className={cn(
+                  'cursor-pointer px-3 py-1 text-xs font-medium',
+                  period === p.key
+                    ? 'bg-primary text-primary-foreground'
+                    : 'text-muted-foreground hover:bg-muted/50 hover:text-foreground'
+                )}
+              >
+                {p.label}
+              </button>
+            ))}
+          </div>
         </div>
       </div>
 
@@ -256,19 +363,9 @@ export function CustomerInsights({
 
           <div className="grid gap-3 xl:grid-cols-[1.45fr_1fr]">
             <section className={CARD}>
-              <div className="flex items-center justify-between">
-                <h2 className="text-sm font-medium">
-                  Revenue by month: new vs returning customers
-                </h2>
-                <label className="flex items-center gap-2 text-xs text-muted-foreground">
-                  <Switch
-                    checked={excludeLaunch}
-                    onCheckedChange={setExcludeLaunch}
-                    aria-label="Exclude launch accounts"
-                  />
-                  Exclude launch accounts
-                </label>
-              </div>
+              <h2 className="text-sm font-medium">
+                Revenue by month: new vs returning customers
+              </h2>
               <div className="h-[230px]">
                 <ResponsiveContainer width="100%" height="100%">
                   <BarChart
@@ -334,7 +431,7 @@ export function CustomerInsights({
                 <table className="w-full text-xs tabular-nums">
                   <thead>
                     <tr className="text-muted-foreground">
-                      <th className="py-1 text-left font-medium">Cohort</th>
+                      <th className="py-1 text-start font-medium">Cohort</th>
                       <th className="font-medium">n</th>
                       {cohorts.data?.months.slice(0, 6).map(m => (
                         <th key={m} className="font-medium">
@@ -365,126 +462,163 @@ export function CustomerInsights({
           </div>
 
           <section className={CARD}>
-            <h2 className="text-sm font-medium">
-              At-risk customers
-              {risk.data && (
-                <span className="ml-2 rounded-full bg-red-500/15 px-2 text-xs text-red-700 dark:text-red-300">
-                  {risk.data.rows.length} overdue
-                </span>
-              )}
-            </h2>
-            <p className="mb-2 text-[11px] text-muted-foreground">
-              Overdue against their own usual re-order gap, ranked by 12-month
-              spend
-            </p>
-            {risk.error ? (
-              <SectionError
-                label="at-risk customers"
-                onRetry={() => risk.refetch()}
-              />
-            ) : risk.data && risk.data.rows.length === 0 ? (
-              <p className="py-4 text-center text-sm text-muted-foreground">
-                No customers are overdue right now
-              </p>
-            ) : (
-              <table className="w-full text-sm tabular-nums">
-                <thead>
-                  <tr className="text-[11px] uppercase tracking-wider text-muted-foreground">
-                    <th className="py-1 text-left font-medium">Customer</th>
-                    <th className="text-left font-medium">Rep</th>
-                    <th className="text-right font-medium">12-mo spend</th>
-                    <th className="text-right font-medium">Orders</th>
-                    <th className="text-right font-medium">Usual gap</th>
-                    <th className="text-right font-medium">Last order</th>
-                    <th className="text-right font-medium">Overdue</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {risk.data?.rows.map(r => {
-                    // Every row opens: wc: keys get the full detail, guest
-                    // email: keys the Dashboard-only detail.
-                    return (
-                      <Tooltip key={r.key}>
-                        <TooltipTrigger asChild>
-                          <tr
-                            className="cursor-pointer border-t border-border/20 hover:bg-muted/30"
-                            tabIndex={0}
-                            onClick={() => onOpenCustomer(r.key)}
-                            onKeyDown={e => {
-                              if (e.key === 'Enter') onOpenCustomer(r.key)
-                            }}
-                          >
-                            <td className="py-1.5 font-medium">{r.name}</td>
-                            <td className="text-muted-foreground">
-                              {r.rep ?? 'Unassigned'}
-                            </td>
-                            <td className="text-right">
-                              {fmtMoney(r.spend_12m)}
-                            </td>
-                            <td className="text-right">{r.orders}</td>
-                            <td className="text-right">
-                              {r.usual_gap_days == null
-                                ? 'n/a'
-                                : `${r.usual_gap_days} d`}
-                            </td>
-                            <td className="text-right">
-                              {r.last_order_at
-                                ? new Date(r.last_order_at).toLocaleDateString(
-                                    'en-US',
-                                    {
-                                      month: 'short',
-                                      day: 'numeric',
-                                      timeZone: s.tz,
-                                    }
-                                  )
-                                : ''}
-                            </td>
-                            <td className="text-right">
-                              <span
-                                className={cn(
-                                  'rounded-full px-2 text-xs font-semibold',
-                                  r.overdue >= 3
-                                    ? 'bg-red-500/15 text-red-700 dark:text-red-300'
-                                    : 'bg-amber-500/15 text-amber-700 dark:text-amber-300'
-                                )}
-                              >
-                                {r.overdue}× gap
-                              </span>
-                            </td>
-                          </tr>
-                        </TooltipTrigger>
-                        <TooltipContent className="max-w-xs p-0">
-                          <div className="flex flex-col gap-1.5 p-3 font-mono text-xs">
-                            <div className="border-b border-primary-foreground/20 pb-1.5 font-semibold">
-                              {r.name}
-                            </div>
-                            <div>{r.email ?? 'no email'}</div>
-                            <div>Rep: {r.rep ?? 'unassigned'}</div>
-                            <div>
-                              Usual gap{' '}
-                              {r.usual_gap_days == null
-                                ? 'n/a'
-                                : `${r.usual_gap_days} d`}
-                              {' · '}last order{' '}
-                              {r.last_order_at
-                                ? r.last_order_at.slice(0, 10)
-                                : 'n/a'}
-                            </div>
-                            <div className="border-t border-primary-foreground/20 pt-1.5">
-                              Lifetime {fmtMoney(r.lifetime)} · {r.samples}{' '}
-                              samples
-                            </div>
-                            <div>
-                              Top tests: {r.top_tests.join(', ') || 'n/a'}
-                            </div>
-                          </div>
-                        </TooltipContent>
-                      </Tooltip>
-                    )
-                  })}
-                </tbody>
-              </table>
-            )}
+            <Tabs
+              value={tab}
+              onValueChange={t => setInsightsView({ tab: t as InsightsTab })}
+            >
+              <TabsList>
+                <TabsTrigger value="at-risk">
+                  At risk{risk.data && ` (${risk.data.rows.length})`}
+                </TabsTrigger>
+                <TabsTrigger value="new">
+                  New customers
+                  {newCustomers.data && ` (${newCustomers.data.total})`}
+                </TabsTrigger>
+                <TabsTrigger value="segments">Segments</TabsTrigger>
+              </TabsList>
+              <TabsContent value="at-risk" className="mt-2">
+                <p className="mb-2 text-[11px] text-muted-foreground">
+                  Overdue against their own usual re-order gap, ranked by
+                  12-month spend
+                </p>
+                {risk.error ? (
+                  <SectionError
+                    label="at-risk customers"
+                    onRetry={() => risk.refetch()}
+                  />
+                ) : risk.data && risk.data.rows.length === 0 ? (
+                  <p className="py-4 text-center text-sm text-muted-foreground">
+                    No customers are overdue right now
+                  </p>
+                ) : (
+                  <AtRiskTable
+                    rows={risk.data?.rows ?? []}
+                    tz={s.tz}
+                    touch={touch}
+                    onOpenCustomer={onOpenCustomer}
+                  />
+                )}
+              </TabsContent>
+              <TabsContent value="new" className="mt-2">
+                <p className="mb-2 text-[11px] text-muted-foreground">
+                  First testing order in this period, ranked by lifetime spend
+                </p>
+                {newCustomers.error ? (
+                  <SectionError
+                    label="new customers"
+                    onRetry={() => newCustomers.refetch()}
+                  />
+                ) : (
+                  newCustomers.data && (
+                    <InsightsCustomerTable
+                      rows={newCustomers.data.rows}
+                      total={newCustomers.data.total}
+                      page={newPage}
+                      pageSize={25}
+                      onPage={page => setNew({ page })}
+                      sort={newSort}
+                      dir={newDir}
+                      onSort={f =>
+                        setNew(
+                          f === newSort
+                            ? {
+                                dir: newDir === 'asc' ? 'desc' : 'asc',
+                                page: 1,
+                              }
+                            : { sort: f, dir: 'desc', page: 1 }
+                        )
+                      }
+                      tz={s.tz}
+                      touch={newTouch}
+                      onOpenCustomer={onOpenCustomer}
+                      emptyText="No new customers in this period"
+                    />
+                  )
+                )}
+              </TabsContent>
+              <TabsContent value="segments" className="mt-2">
+                <p className="mb-2 text-[11px] text-muted-foreground">
+                  Customers by their last 12 months of paid spend and testing
+                  orders (launch accounts included)
+                </p>
+                {segments.error ? (
+                  <SectionError
+                    label="segments"
+                    onRetry={() => segments.refetch()}
+                  />
+                ) : (
+                  <div className="mb-3 grid grid-cols-2 gap-2 lg:grid-cols-4">
+                    {segments.data?.segments.map(g => (
+                      <button
+                        key={g.segment}
+                        type="button"
+                        aria-pressed={segment === g.segment}
+                        onClick={() => {
+                          setInsightsView({ segment: g.segment })
+                          setSegView(LIST_DEFAULT)
+                        }}
+                        className={cn(
+                          'cursor-pointer rounded-lg border px-3 py-2 text-start',
+                          segment === g.segment
+                            ? 'border-primary bg-primary/10'
+                            : 'border-border/50 bg-card/50 hover:bg-muted/30'
+                        )}
+                      >
+                        <div className="text-sm font-medium">
+                          {SEGMENT_LABEL[g.segment]}
+                        </div>
+                        <div className="text-[11px] text-muted-foreground">
+                          {SEGMENT_RULE[g.segment]}
+                        </div>
+                        <div className="mt-1 text-2xl font-bold tabular-nums">
+                          {g.customers.toLocaleString('en-US')}
+                        </div>
+                        <div className="text-xs tabular-nums text-muted-foreground">
+                          {fmtPct(g.share, 0)} of revenue,{' '}
+                          {fmtMoney(g.revenue_12m)}
+                        </div>
+                        <div className="text-xs tabular-nums text-muted-foreground">
+                          Median {g.median_testing_orders_12m ?? 'n/a'} orders,{' '}
+                          {g.median_samples_12m ?? 'n/a'} samples
+                        </div>
+                      </button>
+                    ))}
+                  </div>
+                )}
+                {segMembers.error ? (
+                  <SectionError
+                    label="segment customers"
+                    onRetry={() => segMembers.refetch()}
+                  />
+                ) : (
+                  segMembers.data && (
+                    <InsightsCustomerTable
+                      rows={segMembers.data.rows}
+                      total={segMembers.data.total}
+                      page={segPage}
+                      pageSize={25}
+                      onPage={page => setSeg({ page })}
+                      sort={segSort}
+                      dir={segDir}
+                      onSort={f =>
+                        setSeg(
+                          f === segSort
+                            ? {
+                                dir: segDir === 'asc' ? 'desc' : 'asc',
+                                page: 1,
+                              }
+                            : { sort: f, dir: 'desc', page: 1 }
+                        )
+                      }
+                      tz={s.tz}
+                      touch={segTouch}
+                      onOpenCustomer={onOpenCustomer}
+                      emptyText="No customers in this segment"
+                    />
+                  )
+                )}
+              </TabsContent>
+            </Tabs>
           </section>
 
           <div className="grid gap-3 lg:grid-cols-3">

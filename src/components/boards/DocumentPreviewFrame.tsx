@@ -20,7 +20,13 @@ export function DocumentPreviewFrame({ id }: { id: number }) {
   if (content.isLoading)
     return <Loader2 className="h-4 w-4 animate-spin text-muted-foreground" />
   if (!content.data)
-    return <p className="text-xs text-muted-foreground">No preview.</p>
+    return (
+      <p className="text-xs text-muted-foreground">
+        {content.error
+          ? 'This document is restricted or no longer exists.'
+          : 'No preview.'}
+      </p>
+    )
   return (
     <iframe
       title="Document preview"

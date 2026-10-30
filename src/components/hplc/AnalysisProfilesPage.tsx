@@ -1109,6 +1109,9 @@ export default function AnalysisProfilesPage() {
                     section. Same "settable at CREATE, inert until archetype
                     armed" contract as Section Title/Order above. */}
                 <div className="space-y-4 border-t pt-4">
+                  <p className="text-xs text-muted-foreground" data-testid="coa-macro-hint">
+                    Macros: {'{lod}'}. Wrap optional text in [ ], for example [LOD {'{lod}'}.]
+                  </p>
                   <div className="space-y-1.5">
                     <div className="flex items-center gap-1.5">
                       <label htmlFor="coa-basis-note" className="text-sm font-medium">

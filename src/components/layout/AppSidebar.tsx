@@ -89,6 +89,7 @@ const navItems: NavItem[] = [
     subItems: [
       { id: 'instruments', label: 'Instruments' },
       { id: 'methods', label: 'Methods' },
+      { id: 'consumables', label: 'Consumables' },
       { id: 'peptide-config', label: 'Peptides' },
       { id: 'analysis-services', label: 'Analysis Services' },
       { id: 'service-groups', label: 'Service Groups', adminOnly: true },
@@ -114,6 +115,7 @@ const navItems: NavItem[] = [
       { id: 'sample-preps', label: 'Sample Preps' },
       { id: 'inbox', label: 'Inbox' },
       { id: 'worksheets', label: 'Worksheets' },
+      { id: 'endo-prep-rules', label: 'Endo prep rules' },
     ],
   },
   {

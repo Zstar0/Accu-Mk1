@@ -61,6 +61,7 @@ import {
 import { useUIStore } from '@/store/ui-store'
 import { ResultOptionsEditor, type ResultOption } from './ResultOptionsEditor'
 import { ServiceSpecsSection } from './ServiceSpecsSection'
+import { ServiceEndoJudgedPanel } from './ServiceEndoJudgedPanel'
 import { AnalysisServicesGuide } from './AnalysisServicesGuide'
 
 export function AnalysisServicesPage() {
@@ -979,6 +980,8 @@ function ServicePanel({
           <ServiceSpecsSection serviceId={service.id} peptides={peptides} />
 
           <ServiceMethodsSection serviceId={service.id} />
+
+          <ServiceEndoJudgedPanel service={service} />
 
           <div className="border-t pt-4 text-xs text-muted-foreground space-y-1">
             {service!.senaite_uid && (

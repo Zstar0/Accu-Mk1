@@ -34,7 +34,11 @@ export function AccuMarkTools() {
       return (
         // wc:<id> keys route through the numeric id flow inside the store;
         // guest email: keys open the Dashboard-only detail.
-        <CustomerInsights onOpenCustomer={navigateToCustomerKey} />
+        <CustomerInsights
+          onOpenCustomer={(key, tab) =>
+            navigateToCustomerKey(key, { tab, origin: 'customer-insights' })
+          }
+        />
       )
     case 'customers':
     case 'customer-detail':

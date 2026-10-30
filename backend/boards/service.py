@@ -1,9 +1,10 @@
 """Boards, grants, reverse lookup (spec §4.8, §5, §7.2). Nodes and edges: Task 6."""
 from __future__ import annotations
 
+import logging
 from typing import Iterable, Optional
 
-from sqlalchemy import func, select
+from sqlalchemy import String, and_, cast, func, or_, select
 from sqlalchemy.orm import Session
 
 from boards import access
@@ -18,6 +19,8 @@ from groups.service import clean_slug
 # (slice 2: point-read gate, list clause, target guards, SSE audience). Left as a constant
 # so a stack can lock them off again with a one-line change.
 RESTRICTED_BOARDS_ENABLED = True
+
+log = logging.getLogger(__name__)
 
 
 def _require_admin(user) -> None:
@@ -58,6 +61,15 @@ def open_flag_count(db: Session, node_ids: Iterable[int]) -> int:
         FlagFlag.status.in_(OPEN_STATES))).scalar_one())
 
 
+def open_board_flag_count(db: Session, board_id: int) -> int:
+    """Open flags anchored on the board itself (entity_type 'board', spec 14 slice 4d)."""
+    from flags.catalog import OPEN_STATES
+    from flags.models import FlagFlag
+    return int(db.execute(select(func.count()).select_from(FlagFlag).where(
+        FlagFlag.entity_type == "board", FlagFlag.entity_id == str(board_id),
+        FlagFlag.status.in_(OPEN_STATES))).scalar_one())
+
+
 # --- boards ---------------------------------------------------------------------
 
 def list_boards(db: Session, user) -> list[Board]:
@@ -71,6 +83,24 @@ def get_board(db: Session, user, slug: str) -> Board:
         raise NotFoundError(f"board {slug!r} not found")
     access.require_view(db, user, board)
     return board
+
+
+def _board_changed_event(db: Session, board: Board, user) -> dict:
+    """Live hint for other open canvases (spec 8.6), stamped with the board's audience like a flag
+    event. Built BEFORE commit so no post-commit SELECT can abort the transaction."""
+    from boards.flag_entity import _board_audience_of
+    return {"event_type": "board_changed", "board_slug": board.slug, "board_id": board.id,
+            "actor_id": getattr(user, "id", None), "event_id": None,
+            "audience": _board_audience_of(db, board)}
+
+
+def _emit_board_changed(event: dict) -> None:
+    """Rides the flag event sink and bus. Best effort: a sink failure never fails the write."""
+    from flags import seams
+    try:
+        seams.EVENT_SINK.emit(event)
+    except Exception:
+        log.warning("board_changed_emit_failed board=%s", event["board_slug"], exc_info=True)
 
 
 def create_board(db: Session, user, *, slug: str, name: str, kind: str, visibility: str) -> Board:
@@ -99,7 +129,9 @@ def patch_board(db: Session, user, slug: str, **fields) -> Board:
     if "default_viewport" in fields:
         vp = fields["default_viewport"]
         board.default_viewport = None if vp is None else (vp if isinstance(vp, dict) else vp.model_dump())
+    ev = _board_changed_event(db, board, user)
     db.commit()
+    _emit_board_changed(ev)
     db.refresh(board)
     return board
 
@@ -108,9 +140,9 @@ def delete_board(db: Session, user, slug: str) -> None:
     board = get_board(db, user, slug)
     _require_admin(user)
     node_ids = list(db.execute(select(BoardNode.id).where(BoardNode.board_id == board.id)).scalars())
-    n = open_flag_count(db, node_ids)
+    n = open_flag_count(db, node_ids) + open_board_flag_count(db, board.id)
     if n:
-        raise ConflictError(f"board has {n} open flag(s) on its nodes; resolve them first")
+        raise ConflictError(f"board has {n} open flag(s); resolve them first")
     # Explicit cascade so SQLite tests and Postgres behave the same (spec §14).
     db.query(BoardEdge).filter(BoardEdge.board_id == board.id).delete()
     db.query(BoardNode).filter(BoardNode.board_id == board.id).update({BoardNode.parent_id: None})
@@ -127,6 +159,55 @@ def node_counts(db: Session, board_ids: Iterable[int]) -> dict[int, int]:
     rows = db.execute(select(BoardNode.board_id, func.count()).where(BoardNode.board_id.in_(ids))
                       .group_by(BoardNode.board_id)).all()
     return {bid: n for bid, n in rows}
+
+
+def open_flag_counts(db: Session, board_ids: Iterable[int]) -> dict[int, int]:
+    """Open flags per board: those on the board itself plus those on its items. Entity
+    anchors (a sample pinned to the board) are left out: their visibility is per viewer
+    and the list is one query for everyone."""
+    from flags.catalog import OPEN_STATES
+    from flags.models import FlagFlag
+    ids = list(board_ids)
+    if not ids:
+        return {}
+    out: dict[int, int] = {}
+    node_rows = db.execute(
+        select(BoardNode.board_id, func.count())
+        .select_from(FlagFlag)
+        .join(BoardNode, cast(BoardNode.id, String) == FlagFlag.entity_id)
+        .where(FlagFlag.entity_type == "board_node", FlagFlag.status.in_(OPEN_STATES),
+               BoardNode.board_id.in_(ids))
+        .group_by(BoardNode.board_id)).all()
+    for bid, n in node_rows:
+        out[bid] = out.get(bid, 0) + int(n)
+    board_rows = db.execute(
+        select(FlagFlag.entity_id, func.count())
+        .where(FlagFlag.entity_type == "board", FlagFlag.entity_id.in_([str(i) for i in ids]),
+               FlagFlag.status.in_(OPEN_STATES))
+        .group_by(FlagFlag.entity_id)).all()
+    for eid, n in board_rows:
+        out[int(eid)] = out.get(int(eid), 0) + int(n)
+    return out
+
+
+def board_open_flags(db: Session, user, slug: str) -> list:
+    """Open flags on every anchor of one board, under the caller's visibility (spec 14,
+    slice 4d): the board, its generic items, and the entities behind its entity items."""
+    from flags import seams
+    from flags.catalog import OPEN_STATES
+    from flags.models import FlagFlag
+    board = get_board(db, user, slug)
+    pairs = [("board", str(board.id))]
+    for n in db.execute(select(BoardNode).where(BoardNode.board_id == board.id)).scalars():
+        if n.kind == "entity" and n.entity_type and n.entity_id:
+            pairs.append((n.entity_type, str(n.entity_id)))
+        else:
+            pairs.append(("board_node", str(n.id)))
+    stmt = (select(FlagFlag)
+            .where(FlagFlag.status.in_(OPEN_STATES), seams.visibility_clause(db, user),
+                   or_(*[and_(FlagFlag.entity_type == et, FlagFlag.entity_id == eid) for et, eid in pairs]))
+            .order_by(FlagFlag.updated_at.desc()))
+    return list(db.execute(stmt).scalars().all())
 
 
 # --- grants -----------------------------------------------------------------------
@@ -159,7 +240,10 @@ def replace_grants(db: Session, user, slug: str, grants) -> list[GrantOut]:
 # --- reverse lookup ----------------------------------------------------------------
 
 def boards_for_entity(db: Session, user, entity_type: str, entity_id: str) -> list[tuple[Board, BoardNode]]:
-    rows = db.execute(select(Board, BoardNode).join(BoardNode, BoardNode.board_id == Board.id)
+    from flags import seams
+    if seams.is_view_scoped(entity_type) and not seams.can_view_entity(db, user, entity_type, entity_id):
+        return []  # a hidden entity reads as one that is on no board (node labels hold titles)
+    rows =db.execute(select(Board, BoardNode).join(BoardNode, BoardNode.board_id == Board.id)
                       .where(BoardNode.entity_type == entity_type, BoardNode.entity_id == str(entity_id),
                              Board.id.in_(access.visible_board_ids(db, user)))
                       .order_by(Board.name, BoardNode.id)).all()
@@ -168,11 +252,35 @@ def boards_for_entity(db: Session, user, entity_type: str, entity_id: str) -> li
 
 # --- serialization -----------------------------------------------------------------
 
-def board_out(db: Session, user, board: Board, counts: Optional[dict] = None) -> BoardOut:
+def board_out(db: Session, user, board: Board, counts: Optional[dict] = None,
+              flag_counts: Optional[dict] = None) -> BoardOut:
     out = BoardOut.model_validate(board)
-    out.node_count = (counts or node_counts(db, [board.id])).get(board.id, 0)
+    if counts is None:
+        counts = node_counts(db, [board.id])
+    if flag_counts is None:
+        flag_counts = open_flag_counts(db, [board.id])
+    out.node_count = counts.get(board.id, 0)
+    out.open_flag_count = flag_counts.get(board.id, 0)
     out.can_edit = access.can_edit_board(db, user, board)
     return out
+
+
+def _restricted_context(entity_type: str, entity_id: str) -> dict:
+    """Spec 9.3: a node pointing at an entity the viewer cannot see keeps its code and
+    says "Restricted"; title and deep link never leave the server."""
+    return {"entity_type": entity_type, "entity_id": entity_id, "label": "Restricted",
+            "sample_id": None, "analyses": [], "lot": None, "deep_link": None}
+
+
+def _hidden_from(db: Session, user, node: BoardNode) -> bool:
+    from flags import seams
+    return (seams.is_view_scoped(node.entity_type)
+            and not seams.can_view_entity(db, user, node.entity_type, node.entity_id))
+
+
+def _mask(out: NodeOut, node: BoardNode) -> None:
+    out.label = node.entity_id
+    out.context = _restricted_context(node.entity_type, node.entity_id)
 
 
 def board_detail_payload(db: Session, user, board: Board) -> BoardDetail:
@@ -192,7 +300,10 @@ def board_detail_payload(db: Session, user, board: Board) -> BoardDetail:
     for n in nodes:
         o = NodeOut.model_validate(n)
         if n.kind == "entity":
-            o.context = ctx.get((n.entity_type, n.entity_id))
+            if n.entity_type and n.entity_id and _hidden_from(db, user, n):
+                _mask(o, n)
+            else:
+                o.context = ctx.get((n.entity_type, n.entity_id))
         detail.nodes.append(o)
     detail.edges = [EdgeOut.model_validate(e) for e in edges]
     detail.grants = list_grants(db, board)
@@ -218,7 +329,7 @@ class StaleVersionError(ConflictError):
         self.stale_ids = stale_ids or []
 
 
-def validate_node_data(db: Session, *, kind: str, data: Optional[dict], entity_type: Optional[str],
+def validate_node_data(db: Session, user, *, kind: str, data: Optional[dict], entity_type: Optional[str],
                        entity_id: Optional[str]) -> tuple[dict, Optional[str]]:
     """Returns (clean_data, label_from_registry_or_None). Raises BadRequestError."""
     from flags import seams
@@ -237,7 +348,9 @@ def validate_node_data(db: Session, *, kind: str, data: Optional[dict], entity_t
         if not seams.is_registered(entity_type):
             raise BadRequestError(f"unknown entity_type {entity_type!r}")
         ctx = seams.resolve_context(db, entity_type, str(entity_id))
-        if ctx is None:
+        # A hidden entity reads exactly like a missing one: same text, no title echoed.
+        if ctx is None or (seams.is_view_scoped(entity_type)
+                           and not seams.can_view_entity(db, user, entity_type, str(entity_id))):
             raise BadRequestError(f"{entity_type} {entity_id!r} not found")
         label = ctx.get("label")
     elif entity_type is not None or entity_id is not None:
@@ -283,17 +396,20 @@ def _editable(db: Session, user, slug: str) -> Board:
     return board
 
 
-def _node_out(db: Session, node: BoardNode) -> NodeOut:
+def _node_out(db: Session, user, node: BoardNode) -> NodeOut:
     from flags import seams
     out = NodeOut.model_validate(node)
     if node.kind == "entity" and node.entity_type and node.entity_id:
-        out.context = seams.resolve_context(db, node.entity_type, node.entity_id)
+        if _hidden_from(db, user, node):
+            _mask(out, node)
+        else:
+            out.context = seams.resolve_context(db, node.entity_type, node.entity_id)
     return out
 
 
 def create_node(db: Session, user, slug: str, body) -> NodeOut:
     board = _editable(db, user, slug)
-    clean, reg_label = validate_node_data(db, kind=body.kind, data=body.data,
+    clean, reg_label = validate_node_data(db, user, kind=body.kind, data=body.data,
                                           entity_type=body.entity_type, entity_id=body.entity_id)
     _check_parent(db, board, body.parent_id)
     uid = getattr(user, "id", None)
@@ -303,9 +419,11 @@ def create_node(db: Session, user, slug: str, body) -> NodeOut:
                      entity_id=str(body.entity_id) if body.kind == "entity" else None,
                      data=clean, created_by=uid, updated_by=uid)
     db.add(node)
+    ev = _board_changed_event(db, board, user)
     db.commit()
+    _emit_board_changed(ev)
     db.refresh(node)
-    return _node_out(db, node)
+    return _node_out(db, user, node)
 
 
 def patch_node(db: Session, user, slug: str, node_id: int, *, version: int, **fields) -> NodeOut:
@@ -314,7 +432,7 @@ def patch_node(db: Session, user, slug: str, node_id: int, *, version: int, **fi
     if node.version != version:
         raise StaleVersionError("stale version; reload the node", current=node)
     if "data" in fields and fields["data"] is not None:
-        clean, _ = validate_node_data(db, kind=node.kind, data=fields["data"],
+        clean, _ = validate_node_data(db, user, kind=node.kind, data=fields["data"],
                                       entity_type=node.entity_type, entity_id=node.entity_id)
         node.data = clean
     if "parent_id" in fields:
@@ -328,9 +446,11 @@ def patch_node(db: Session, user, slug: str, node_id: int, *, version: int, **fi
             setattr(node, f, fields[f])
     node.version += 1
     node.updated_by = getattr(user, "id", None)
+    ev = _board_changed_event(db, board, user)
     db.commit()
+    _emit_board_changed(ev)
     db.refresh(node)
-    return _node_out(db, node)
+    return _node_out(db, user, node)
 
 
 def patch_positions(db: Session, user, slug: str, items) -> list[NodeOut]:
@@ -355,8 +475,10 @@ def patch_positions(db: Session, user, slug: str, items) -> list[NodeOut]:
         n.x, n.y = it.x, it.y
         n.version += 1
         n.updated_by = uid
+    ev = _board_changed_event(db, board, user)
     db.commit()
-    return [_node_out(db, n) for n, _ in nodes]
+    _emit_board_changed(ev)
+    return [_node_out(db, user, n) for n, _ in nodes]
 
 
 def delete_node(db: Session, user, slug: str, node_id: int) -> None:
@@ -375,7 +497,9 @@ def delete_node(db: Session, user, slug: str, node_id: int) -> None:
     db.query(BoardEdge).filter((BoardEdge.source_id == node.id) | (BoardEdge.target_id == node.id)).delete(
         synchronize_session=False)
     db.delete(node)
+    ev = _board_changed_event(db, board, user)
     db.commit()
+    _emit_board_changed(ev)
 
 
 # --- edges ------------------------------------------------------------------------
@@ -408,7 +532,9 @@ def create_edge(db: Session, user, slug: str, body) -> BoardEdge:
     e = BoardEdge(board_id=board.id, source_id=body.source_id, target_id=body.target_id,
                   kind=kind, label=body.label)
     db.add(e)
+    ev = _board_changed_event(db, board, user)
     db.commit()
+    _emit_board_changed(ev)
     db.refresh(e)
     return e
 
@@ -420,7 +546,9 @@ def patch_edge(db: Session, user, slug: str, edge_id: int, **fields) -> BoardEdg
         e.kind = _check_edge_kind(fields["kind"])
     if "label" in fields:
         e.label = fields["label"]
+    ev = _board_changed_event(db, board, user)
     db.commit()
+    _emit_board_changed(ev)
     db.refresh(e)
     return e
 
@@ -428,4 +556,6 @@ def patch_edge(db: Session, user, slug: str, edge_id: int, **fields) -> BoardEdg
 def delete_edge(db: Session, user, slug: str, edge_id: int) -> None:
     board = _editable(db, user, slug)
     db.delete(_edge_on_board(db, board, edge_id))
+    ev = _board_changed_event(db, board, user)
     db.commit()
+    _emit_board_changed(ev)

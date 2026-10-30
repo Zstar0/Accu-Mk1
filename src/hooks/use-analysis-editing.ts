@@ -1,12 +1,21 @@
 import { useState, useRef, useCallback } from 'react'
+import { useQueryClient } from '@tanstack/react-query'
 import { toast } from 'sonner'
 import { setAnalysisResult, type SenaiteAnalysis } from '@/lib/api'
+import { invalidateAnalysisListings } from '@/lib/vial-assignment'
 
 // --- Types ---
 
 interface UseAnalysisEditingOptions {
   analyses: SenaiteAnalysis[]
-  onResultSaved?: (uid: string, newResult: string, newReviewState: string | null) => void
+  /** `newUnit` is the unit the save stored (native rows with unit options);
+   *  undefined when the save sent none. */
+  onResultSaved?: (
+    uid: string,
+    newResult: string,
+    newReviewState: string | null,
+    newUnit?: string | null
+  ) => void
 }
 
 export interface UseAnalysisEditingReturn {
@@ -16,9 +25,20 @@ export interface UseAnalysisEditingReturn {
   startEditing: (uid: string, currentResult: string | null) => void
   cancelEditing: () => void
   setDraft: (value: string) => void
-  handleKeyDown: (e: React.KeyboardEvent, uid: string) => void
-  /** Pass valueOverride to save a specific value instead of the current draft (used by autoEdit inline inputs). */
-  save: (uid: string, valueOverride?: string) => Promise<void>
+  /** Pass unitOverride when the analyst has picked a unit in the cell. */
+  handleKeyDown: (
+    e: React.KeyboardEvent,
+    uid: string,
+    unitOverride?: string
+  ) => void
+  /** Pass valueOverride to save a specific value instead of the current draft (used by autoEdit inline inputs).
+   *  Pass unitOverride for a unit the analyst picked; otherwise a native row
+   *  sends the unit it shows (see presetUnit). */
+  save: (
+    uid: string,
+    valueOverride?: string,
+    unitOverride?: string
+  ) => Promise<void>
   /** Ref guard — exposed so onBlur can check before cancelling */
   savePendingRef: React.RefObject<boolean>
 }
@@ -39,6 +59,28 @@ function isEditable(a: SenaiteAnalysis): boolean {
     : EDITABLE_STATES.has(a.review_state)
 }
 
+/** The units a row offers at result entry. Native (mk1:) rows only; a SENAITE
+ *  row never sends a unit. */
+export function unitChoices(a: SenaiteAnalysis | undefined): string[] {
+  return a?.uid?.startsWith('mk1:') ? (a.unit_options ?? []) : []
+}
+
+/** Several units on offer, the sample's form picks none, and nothing is
+ *  resulted yet: the analyst must pick one, so nothing saves until they do. */
+export function unitPickRequired(a: SenaiteAnalysis | undefined): boolean {
+  return (
+    !!a && !a.result && unitChoices(a).length > 1 && a.default_unit === null
+  )
+}
+
+/** The unit a row shows before the analyst touches the dropdown, and the one a
+ *  save sends when they never do. null = none (a SENAITE row, no options, a
+ *  stored unit outside the options, or a pick-required row). */
+export function presetUnit(a: SenaiteAnalysis | undefined): string | null {
+  if (!a || unitPickRequired(a)) return null
+  return a.unit && unitChoices(a).includes(a.unit) ? a.unit : null
+}
+
 // --- Hook ---
 
 export function useAnalysisEditing({
@@ -49,6 +91,7 @@ export function useAnalysisEditing({
   const [draft, setDraft] = useState('')
   const [isSaving, setIsSaving] = useState(false)
   const savePendingRef = useRef(false)
+  const queryClient = useQueryClient()
 
   const cancelEditing = useCallback(() => {
     setEditingUid(null)
@@ -62,16 +105,27 @@ export function useAnalysisEditing({
   }, [])
 
   const save = useCallback(
-    async (uid: string, valueOverride?: string) => {
+    async (uid: string, valueOverride?: string, unitOverride?: string) => {
       if (savePendingRef.current) return
+      const row = analyses.find(a => a.uid === uid)
+      const unit = unitOverride ?? presetUnit(row) ?? undefined
+      if (!unit && unitPickRequired(row)) {
+        toast.error('Pick a unit first', {
+          description: `${row?.title ?? 'This analysis'} has more than one unit. Choose one to save the result.`,
+        })
+        return
+      }
       savePendingRef.current = true
       setIsSaving(true)
       const valueToSave = valueOverride !== undefined ? valueOverride : draft.trim()
 
       try {
-        const response = await setAnalysisResult(uid, valueToSave)
+        const response = await setAnalysisResult(uid, valueToSave, unit)
         if (response.success) {
-          onResultSaved?.(uid, valueToSave, response.new_review_state)
+          onResultSaved?.(uid, valueToSave, response.new_review_state, unit)
+          // The spec is resolved per unit: a save in a different unit leaves
+          // every cached listing's spec column describing the old one.
+          if (unit && unit !== row?.unit) invalidateAnalysisListings(queryClient)
           toast.success('Result saved')
           cancelEditing()
         } else {
@@ -85,24 +139,33 @@ export function useAnalysisEditing({
         savePendingRef.current = false
       }
     },
-    [draft, onResultSaved, cancelEditing]
+    [analyses, draft, onResultSaved, cancelEditing, queryClient]
   )
 
   const handleKeyDown = useCallback(
-    (e: React.KeyboardEvent, uid: string) => {
+    (e: React.KeyboardEvent, uid: string, unitOverride?: string) => {
       if (e.key === 'Enter') {
         e.preventDefault()
         // Save, then advance is NOT needed on Enter — just save
-        save(uid)
+        save(uid, undefined, unitOverride)
       } else if (e.key === 'Escape') {
         e.preventDefault()
         cancelEditing()
       } else if (e.key === 'Tab') {
         e.preventDefault()
+        // A row that needs a unit pick cannot save yet: stay on it (the save
+        // explains why) so advancing does not discard the typed value.
+        if (
+          !unitOverride &&
+          unitPickRequired(analyses.find(a => a.uid === uid))
+        ) {
+          void save(uid)
+          return
+        }
         // Save current, then advance to next editable cell
         const currentIndex = analyses.findIndex(a => a.uid === uid)
         if (currentIndex === -1) {
-          save(uid)
+          save(uid, undefined, unitOverride)
           return
         }
 
@@ -116,7 +179,7 @@ export function useAnalysisEditing({
           }
         }
 
-        save(uid).then(() => {
+        save(uid, undefined, unitOverride).then(() => {
           if (nextAnalysis?.uid) {
             // Only start editing next if the save succeeded (editing was cancelled)
             // We need a small delay so React state settles from cancelEditing()

@@ -14,6 +14,7 @@ const h = vi.hoisted(() => ({
       created_by: 1,
       default_viewport: null,
       node_count: 12,
+      open_flag_count: 3,
       can_edit: true,
       created_at: '',
       updated_at: '',
@@ -27,6 +28,7 @@ const h = vi.hoisted(() => ({
       created_by: 1,
       default_viewport: null,
       node_count: 3,
+      open_flag_count: 0,
       can_edit: false,
       created_at: '',
       updated_at: '',
@@ -123,6 +125,12 @@ describe('BoardsPage', () => {
       .setup()
       .click(screen.getAllByRole('button', { name: 'Open' })[0] as HTMLElement)
     expect(h.navigateToBoard).toHaveBeenCalledWith('org')
+  })
+
+  it('shows the open-flag count on a card', async () => {
+    render(<BoardsPage />)
+    expect(await screen.findByText('3 open flags')).toBeInTheDocument()
+    expect(screen.queryByText('0 open flags')).toBeNull()
   })
 
   it('admin can create a board', async () => {

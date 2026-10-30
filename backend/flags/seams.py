@@ -795,19 +795,36 @@ def register_mk1_entities() -> None:
                 break
         return out
 
+    from documents.flag_entity import audience as _document_audience
+    from documents.flag_entity import can_raise as _document_can_raise
+    from documents.flag_entity import can_view as _document_can_view
+    from documents.flag_entity import search_scoped as _document_search_scoped
+    from documents.flag_entity import visible_ids as _document_visible_ids
     register_entity("document",
                     label=_document_label,
                     deep_link=lambda eid: "/#reports/documents",
-                    can_flag=lambda user, eid: True,
+                    can_flag=lambda user, eid: True,   # never consulted: can_raise wins
+                    can_raise=_document_can_raise,
+                    can_view=_document_can_view,
+                    visible_entity_ids=_document_visible_ids,
                     context=_document_context,
                     state=_document_state,
                     search=_document_search,
+                    search_scoped=_document_search_scoped,
                     snapshot=_document_snapshot,
+                    audience=_document_audience,
                     must_exist=True)
 
     # --- planning boards (2026-09-26): closures live in boards.flag_entity -----------
-    from boards.flag_entity import register_board_node
+    from boards.flag_entity import register_board, register_board_node
     register_board_node()
+    register_board()
+
+    # --- Support tickets + CRM items (2026-10-12): closures live in each integration --------
+    from support_plain.flag_entity import register_support_ticket
+    register_support_ticket()
+    from crm_close.flag_entity import register_crm_item
+    register_crm_item()
 
     from groups.access import is_admin, user_group_ids
     set_membership_resolver(lambda db, user: (user_group_ids(db, user), is_admin(user)))

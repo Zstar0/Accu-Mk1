@@ -1,5 +1,6 @@
 import { create } from 'zustand'
 import { devtools } from 'zustand/middleware'
+import type { CustomerSegment, InsightsPeriod } from '@/lib/api'
 
 // Navigation sections for main content area
 export type ActiveSection =
@@ -17,6 +18,12 @@ export type ActiveSection =
 
 // Sub-sections within each main section
 export type DashboardSubSection = 'orders' | 'analytics'
+/** A flagged Support ticket or CRM item to open on arrival at its customer
+ *  page. entityId is the flag entity id (`{customer_key}|...`). */
+export interface PendingCustomerItem {
+  kind: 'support' | 'crm'
+  entityId: string
+}
 export type SenaiteSubSection =
   | 'samples'
   | 'event-log'
@@ -26,6 +33,7 @@ export type SenaiteSubSection =
 export type LIMSSubSection =
   | 'instruments'
   | 'methods'
+  | 'consumables'
   | 'peptide-config'
   | 'analysis-services'
   | 'service-groups'
@@ -41,6 +49,8 @@ export type HPLCAnalysisSubSection =
   | 'inbox'
   | 'worksheets'
   | 'worksheet-detail'
+  | 'worksheet'
+  | 'endo-prep-rules'
 export type WorksheetSubSection = 'inbox' | 'worksheets' | 'worksheet-detail'
 export type AccuMarkToolsSubSection =
   | 'overview'
@@ -65,6 +75,42 @@ export type ReportsSubSection =
   | 'sync-debug'
 export type AccountSubSection = 'profile' | 'user-management'
 export type PeptideRequestsSubSection = 'list' | 'detail'
+
+export type CustomerDetailTab =
+  | 'orders'
+  | 'dashboard'
+  | 'crm'
+  | 'support'
+  | 'ai-review'
+
+export type InsightsTab = 'at-risk' | 'new' | 'segments'
+
+export interface InsightsView {
+  tab: InsightsTab
+  period: InsightsPeriod
+  segment: CustomerSegment
+  // The "Exclude launch accounts" switch; kept here so it survives opening a
+  // customer from Insights and coming back.
+  excludeLaunch: boolean
+}
+/** What leaving the customer detail clears, whichever list it returns to:
+ *  the detail target, its tab (Phase 30, T-30-03) and the four order-search
+ *  slots, so search and tab state never leak between drill-throughs. */
+function leaveCustomerDetail(state: { navigationKey: number }) {
+  return {
+    customerDetailOrigin: 'customers' as const,
+    customerDetailTargetId: null,
+    customerDetailKey: null,
+    customerDetailTab: 'orders' as const,
+    customerOrderSearch: {
+      order_number: '',
+      sample_id: '',
+      analyte: '',
+      lot: '',
+    },
+    navigationKey: state.navigationKey + 1,
+  }
+}
 export type BoardsSubSection = 'overview' | 'board'
 // Settings panes double as subsections so #settings/<pane> round-trips through
 // the same hash-navigation as every other section.
@@ -80,7 +126,10 @@ export type SettingsSubSection =
   | 'groups'
   | 'documents'
   | 'checkIn'
+  | 'sampleForms'
   | 'workflow'
+  | 'integrations'
+  | 'agents'
   | 'advanced'
 export type ActiveSubSection =
   | DashboardSubSection
@@ -124,11 +173,21 @@ interface UIState {
   // customerDetailTargetId; generic navigateTo clears it so the sidebar
   // entry always lands on the list.
   documentViewerTargetId: number | null
+  documentsSpaceSlug: string | null
+  // One-shot: the viewer enters edit mode on arrival (New document dialog).
+  // Consumed by the viewer; any other navigation drops it.
+  documentViewerEditRequested: boolean
   // Planning boards (slice 3): sticky like documentViewerTargetId, cleared by
   // the generic navigateTo. pendingBoardNode is consume-once: the canvas
   // reads it via consumePendingBoardNode() to focus/select a node on arrival.
   boardTargetSlug: string | null
   pendingBoardNode: string | null
+  // Endo worksheet page (#hplc-analysis/worksheet?id=N, spec 2026-10-10
+  // 6.1). Sticky like documentViewerTargetId; generic navigateTo clears it.
+  worksheetPageId: number | null
+  // Flags on Support tickets / CRM items (2026-10-12): consume-once, read by
+  // FlaggedItemOpener on the customer page to open the flagged item.
+  pendingCustomerItem: PendingCustomerItem | null
   customerListPage: number
   customerSearchTerm: string
   hideTestAccounts: boolean
@@ -138,7 +197,11 @@ interface UIState {
    *  on arrival. */
   orderStatusPrefill: { orderId: string } | null
   // Customer detail page — Phase 30
-  customerDetailTab: 'orders' | 'dashboard'
+  customerDetailTab: CustomerDetailTab
+  // Where the open customer detail came from; back-nav returns there.
+  customerDetailOrigin: 'customers' | 'customer-insights'
+  // Customer Insights page view, kept across the detail round trip.
+  insightsView: InsightsView
   // UX revision: four independent search slots, AND-combined server-side.
   // Each slot is the raw committed value (post-debounce) for one input. Empty
   // string = "no filter on that axis" (back-compat with debounce-flush flow).
@@ -175,15 +238,34 @@ interface UIState {
   /** Open a customer by insights key on the Dashboard tab. "wc:<id>" keys
    *  route through the numeric id flow; anything else (guest "email:")
    *  sets customerDetailKey. */
-  navigateToCustomerKey: (key: string) => void
+  navigateToCustomerKey: (
+    key: string,
+    opts?: {
+      tab?: CustomerDetailTab
+      origin?: 'customers' | 'customer-insights'
+    }
+  ) => void
+  setInsightsView: (patch: Partial<InsightsView>) => void
   navigateToDocument: (id: number) => void
+  navigateToDocumentSpace: (slug: string | null) => void
+  /** The endo worksheet page; closes the worksheet flyout. */
+  navigateToWorksheet: (id: number) => void
+  openDocumentForEditing: (id: number) => void
+  consumeDocumentEditRequest: () => void
   clearDocumentViewer: () => void
   navigateToBoards: () => void
   navigateToBoard: (slug: string) => void
   navigateToBoardNode: (slug: string, nodeId: string) => void
   setPendingBoardNode: (nodeId: string | null) => void
   consumePendingBoardNode: () => string | null
+  setPendingCustomerItem: (item: PendingCustomerItem | null) => void
+  consumePendingCustomerItem: () => PendingCustomerItem | null
+  /** Go to the Customers list. Always the list, whatever the open detail's
+   *  origin: QuickNav and the sidebar use this to GET there. */
   navigateToCustomers: () => void
+  /** The customer detail's Back button: returns to wherever the customer was
+   *  opened from (Customers list or Customer Insights). */
+  navigateBackFromCustomer: () => void
   /** Order Status with ONLY the Order ID text filter set (other text axes
    *  cleared by the page so the result is unambiguous). */
   navigateToOrderStatus: (orderId: string) => void
@@ -191,7 +273,7 @@ interface UIState {
   setCustomerListPage: (page: number) => void
   setHideTestAccounts: (hide: boolean) => void
   setSearchAndResetPage: (term: string) => void
-  setCustomerDetailTab: (tab: 'orders' | 'dashboard') => void
+  setCustomerDetailTab: (tab: CustomerDetailTab) => void
   // Per-axis setter: writes ONE slot, leaves the others unchanged. This is
   // how the four-input UI commits debounced values independently per axis.
   setCustomerOrderSearchField: (
@@ -295,13 +377,24 @@ export const useUIStore = create<UIState>()(
       customerDetailTargetId: null,
       customerDetailKey: null,
       documentViewerTargetId: null,
+      documentsSpaceSlug: null,
+      documentViewerEditRequested: false,
       boardTargetSlug: null,
       pendingBoardNode: null,
+      worksheetPageId: null,
+      pendingCustomerItem: null,
       customerListPage: 0,
       customerSearchTerm: '',
       hideTestAccounts: true,
       orderStatusPrefill: null,
       customerDetailTab: 'orders',
+      customerDetailOrigin: 'customers',
+      insightsView: {
+        tab: 'at-risk',
+        period: '90d',
+        segment: 'key',
+        excludeLaunch: false,
+      },
       customerOrderSearch: {
         order_number: '',
         sample_id: '',
@@ -386,7 +479,10 @@ export const useUIStore = create<UIState>()(
             activeSection: section,
             activeSubSection: subSection,
             documentViewerTargetId: null,
+            documentsSpaceSlug: null,
+            documentViewerEditRequested: false,
             boardTargetSlug: null,
+            worksheetPageId: null,
             navigationKey: state.navigationKey + 1,
           }),
           undefined,
@@ -447,14 +543,65 @@ export const useUIStore = create<UIState>()(
             activeSection: 'reports',
             activeSubSection: 'documents',
             documentViewerTargetId: id,
+            documentViewerEditRequested: false,
             navigationKey: state.navigationKey + 1,
           }),
           undefined,
           'navigateToDocument'
         ),
 
+      navigateToWorksheet: id =>
+        set(
+          state => ({
+            activeSection: 'hplc-analysis',
+            activeSubSection: 'worksheet',
+            worksheetPageId: id,
+            worksheetDrawerOpen: false,
+            navigationKey: state.navigationKey + 1,
+          }),
+          undefined,
+          'navigateToWorksheet'
+        ),
+
+      openDocumentForEditing: id =>
+        set(
+          state => ({
+            activeSection: 'reports',
+            activeSubSection: 'documents',
+            documentViewerTargetId: id,
+            documentViewerEditRequested: true,
+            navigationKey: state.navigationKey + 1,
+          }),
+          undefined,
+          'openDocumentForEditing'
+        ),
+
+      consumeDocumentEditRequest: () =>
+        set(
+          { documentViewerEditRequested: false },
+          undefined,
+          'consumeDocumentEditRequest'
+        ),
+
       clearDocumentViewer: () =>
-        set({ documentViewerTargetId: null }, undefined, 'clearDocumentViewer'),
+        set(
+          { documentViewerTargetId: null, documentViewerEditRequested: false },
+          undefined,
+          'clearDocumentViewer'
+        ),
+      navigateToDocumentSpace: slug =>
+        set(
+          state => ({
+            activeSection: 'reports',
+            activeSubSection: 'documents',
+            documentsSpaceSlug: slug,
+            documentViewerTargetId: null,
+            documentViewerEditRequested: false,
+            navigationKey: state.navigationKey + 1,
+          }),
+          undefined,
+          'navigateToDocumentSpace'
+        ),
 
       navigateToBoards: () =>
         set(
@@ -503,6 +650,20 @@ export const useUIStore = create<UIState>()(
         if (id != null)
           set({ pendingBoardNode: null }, undefined, 'consumePendingBoardNode')
         return id
+      },
+
+      setPendingCustomerItem: item =>
+        set({ pendingCustomerItem: item }, undefined, 'setPendingCustomerItem'),
+
+      consumePendingCustomerItem: () => {
+        const item = get().pendingCustomerItem
+        if (item != null)
+          set(
+            { pendingCustomerItem: null },
+            undefined,
+            'consumePendingCustomerItem'
+          )
+        return item
       },
 
       navigateToSamplePrep: prepId =>
@@ -583,13 +744,14 @@ export const useUIStore = create<UIState>()(
             activeSubSection: 'customer-detail',
             customerDetailTargetId: id,
             customerDetailKey: null,
+            customerDetailOrigin: 'customers',
             navigationKey: state.navigationKey + 1,
           }),
           undefined,
           'navigateToCustomer'
         ),
 
-      navigateToCustomerKey: key => {
+      navigateToCustomerKey: (key, opts) => {
         const wcId = key.startsWith('wc:') ? Number(key.slice(3)) : NaN
         const isWc = Number.isInteger(wcId) && wcId > 0
         set(
@@ -598,7 +760,8 @@ export const useUIStore = create<UIState>()(
             activeSubSection: 'customer-detail',
             customerDetailTargetId: isWc ? wcId : null,
             customerDetailKey: isWc ? null : key,
-            customerDetailTab: 'dashboard',
+            customerDetailTab: opts?.tab ?? 'dashboard',
+            customerDetailOrigin: opts?.origin ?? 'customers',
             navigationKey: state.navigationKey + 1,
           }),
           undefined,
@@ -606,33 +769,43 @@ export const useUIStore = create<UIState>()(
         )
       },
 
-      // Back-nav from detail view (D-11). Explicitly clears customerDetailTargetId
-      // but PRESERVES customerListPage + customerSearchTerm so the user returns
-      // to the exact list slice they left (D-08).
+      // To the Customers list (D-11): always the list, whatever the detail's
+      // origin, because QuickNav and the sidebar call this to GET there.
+      // Explicitly clears customerDetailTargetId but PRESERVES
+      // customerListPage + customerSearchTerm so the user returns to the
+      // exact list slice they left (D-08).
       navigateToCustomers: () =>
         set(
           state => ({
+            ...leaveCustomerDetail(state),
             activeSection: 'accumark-tools',
             activeSubSection: 'customers',
-            customerDetailTargetId: null,
-            customerDetailKey: null,
-            // Phase 30 (T-30-03): reset customer-detail page state when going
-            // back to the list so search/tab state never leaks between
-            // customer drill-throughs.
-            customerDetailTab: 'orders',
-            // UX revision: clear all four search slots when navigating back
-            // to the customer list — same intent as the old single-field
-            // reset, just applied per-axis.
-            customerOrderSearch: {
-              order_number: '',
-              sample_id: '',
-              analyte: '',
-              lot: '',
-            },
-            navigationKey: state.navigationKey + 1,
           }),
           undefined,
           'navigateToCustomers'
+        ),
+
+      // The detail page's Back button: back to wherever the customer was
+      // opened from, clearing the same detail state as navigateToCustomers.
+      navigateBackFromCustomer: () =>
+        set(
+          state => ({
+            ...leaveCustomerDetail(state),
+            activeSection: 'accumark-tools',
+            activeSubSection:
+              state.customerDetailOrigin === 'customer-insights'
+                ? 'customer-insights'
+                : 'customers',
+          }),
+          undefined,
+          'navigateBackFromCustomer'
+        ),
+
+      setInsightsView: patch =>
+        set(
+          state => ({ insightsView: { ...state.insightsView, ...patch } }),
+          undefined,
+          'setInsightsView'
         ),
 
       setCustomerListPage: page =>

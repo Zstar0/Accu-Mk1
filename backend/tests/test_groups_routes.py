@@ -23,6 +23,7 @@ def client():
     from database import Base, get_db
     import models  # noqa: F401
     import groups.models  # noqa: F401
+    import documents.models  # noqa: F401
     import boards.models  # noqa: F401
     from models import User
 
@@ -175,3 +176,16 @@ def test_delete_only_when_unused(client):
     client.put(f"/api/groups/{g['id']}/members", json={"user_ids": []})
     assert client.delete(f"/api/groups/{g['id']}").status_code == 204
     assert client.delete(f"/api/groups/{g['id']}").status_code == 404
+
+
+def test_group_delete_refused_while_granted_on_a_space(client):
+    """Review Focus 3: a Leadership grant cannot vanish by deleting its group."""
+    from documents.models import DocumentSpace, DocumentSpaceGrant
+    g = _mk(client)
+    client.as_user(ADMIN)
+    sp = DocumentSpace(slug="leadership", name="L", visibility="restricted")
+    client.db.add(sp)
+    client.db.flush()
+    client.db.add(DocumentSpaceGrant(space_id=sp.id, group_id=g["id"]))
+    client.db.commit()
+    assert client.delete(f"/api/groups/{g['id']}").status_code == 409

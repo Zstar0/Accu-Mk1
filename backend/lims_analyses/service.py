@@ -342,12 +342,12 @@ def own_promotions_for_source(db: Session, source_analysis_id: int) -> list:
 # ─── Amendment audit (spec 2026-08-07)───────────────────────────────────────
 # Fields whose changes are captured as before/after into
 # lims_analysis_transitions.details. Values must stay JSON-serializable
-# (str/int/bool/None) — never add a datetime here; per-state timestamps are
-# derivable from the transition rows themselves.
+# (str/int/float/bool/None); never add a datetime here, per-state timestamps
+# are derivable from the transition rows themselves.
 TRACKED_FIELDS = (
     "result_value", "result_unit", "method_id", "instrument_id",
     "reportable", "reportable_reason", "analyst_user_id", "processed_by_user_id",
-    "retested",
+    "retested", "loq", "lod", "lod_unit", "result_floor",
 )
 
 
@@ -364,6 +364,18 @@ def _deltas(before: dict, row) -> dict:
         f: {"before": before[f], "after": after[f]}
         for f in TRACKED_FIELDS if before[f] != after[f]
     }}
+
+
+def clear_result_limits(row) -> None:
+    """Endo slice 3: a result's LOQ and LOD go wherever its value goes. Called
+    by every path that clears result_value (reset, both un-promote paths), so
+    a regenerated COA can never print a stale "< <LOQ>" off a cleared result.
+    result_floor rides with them: a floor describes one number, so leaving it
+    behind would print "> " in front of its replacement."""
+    row.loq = None
+    row.lod = None
+    row.lod_unit = None
+    row.result_floor = None
 
 
 # ─── Transitions ─────────────────────────────────────────────────────────────
@@ -406,6 +418,11 @@ def apply_transition(
     method_id: Optional[int] = None,
     instrument_id: Optional[int] = None,
     processed_by_user_id: Optional[int] = None,
+    result_unit: Optional[str] = None,
+    loq: Optional[float] = None,
+    lod: Optional[float] = None,
+    lod_unit: Optional[str] = None,
+    result_floor: Optional[bool] = None,
     commit: bool = True,
     preserve_draft: bool = False,
 ) -> LimsAnalysis:
@@ -433,6 +450,15 @@ def apply_transition(
     If any is provided with kind != 'submit', raises BadRequestError up
     front (Task 3, 2026-08-19 bench-stamping slice) — see the guard right
     after the row load.
+    result_unit / loq / lod / lod_unit (endo slice 3) and result_floor (the
+    endo ">" certificate slice): the result's unit, its own limits and whether
+    the value is a floor rather than a measurement, filled with the value by
+    the 2 mL worksheet's Promote to Parent (worksheets_endo_promote).
+    Submit-only and applied after the snapshot, like the stamps, so the
+    amendment audit records them. None is a no-op. A submit that changes
+    result_value first clears the old limits (clear_result_limits): they
+    describe the old value, so a hand correction sending none drops them and
+    a fill sending new ones replaces them.
     """
     row = get_analysis(db, analysis_id)
 
@@ -450,6 +476,10 @@ def apply_transition(
         raise BadRequestError(
             "method_id/instrument_id/processed_by_user_id only apply to kind='submit'"
         )
+    if (result_unit is not None or loq is not None or lod is not None
+            or lod_unit is not None or result_floor is not None) and kind != "submit":
+        raise BadRequestError(
+            "result_unit/loq/lod/lod_unit/result_floor only apply to kind='submit'")
 
     from_state = row.review_state
     before = _snapshot(row)
@@ -465,6 +495,18 @@ def apply_transition(
         row.instrument_id = instrument_id
     if processed_by_user_id is not None:
         row.processed_by_user_id = processed_by_user_id
+    if kind == "submit" and result_value is not None and result_value != row.result_value:
+        clear_result_limits(row)
+    if result_unit is not None:
+        row.result_unit = result_unit
+    if loq is not None:
+        row.loq = loq
+    if lod is not None:
+        row.lod = lod
+    if lod_unit is not None:
+        row.lod_unit = lod_unit
+    if result_floor is not None:
+        row.result_floor = result_floor
 
     if is_terminal(from_state):
         # State machine will also reject this, but we surface a clearer
@@ -603,6 +645,7 @@ def apply_transition(
         # Clear any draft result + provenance on the way back to unassigned.
         row.result_value = None
         row.result_unit = None
+        clear_result_limits(row)
         row.method_id = None
         row.instrument_id = None
         row.captured_at = None
@@ -836,9 +879,21 @@ def promote_to_parent(
     parent_keyword: Optional[str] = None,
     parent_analysis_service_id: Optional[int] = None,
     parent_title: Optional[str] = None,
+    loq: Optional[float] = None,
+    lod: Optional[float] = None,
+    lod_unit: Optional[str] = None,
+    result_floor: Optional[bool] = None,
+    audit_reason: Optional[str] = None,
     commit: bool = True,
 ) -> Tuple[LimsAnalysis, List["LimsAnalysisPromotion"]]:
     """Phase 4a: create a parent-tier verified row from N vial-tier sources.
+
+    Endo slice 3: loq / lod / lod_unit are the new parent row's result limits;
+    when all three are None the result-bearing source's own are copied.
+    result_floor (the endo ">" certificate slice) rides with them: it says the
+    promoted value is a floor, and it is carried or copied the same way.
+    audit_reason, when given, is appended to every transition reason written
+    here (for example "promoted from worksheet WS-24 row P-3001-S02").
 
     sources is a list of {analysis_id: int, contribution_kind: str}. The
     parent_sample_pk is derived from the first source's host (sub-sample →
@@ -1033,6 +1088,7 @@ def promote_to_parent(
             eff_result_unit = target_svc.unit
 
     now = datetime.utcnow()
+    _audit = f"; {audit_reason}" if audit_reason else ""
 
     # ── Retest-source supersession ────────────────────────────────────────────
     # When ALL sources are retest rows (retest_of_id IS NOT NULL), the caller
@@ -1090,7 +1146,7 @@ def promote_to_parent(
                 to_state="retracted",
                 transition_kind="auto",
                 user_id=user_id,
-                reason="superseded by retest promotion",
+                reason="superseded by retest promotion" + _audit,
                 details=_deltas(old_parent_before, old_parent),
             ))
             db.flush()   # emit UPDATE before INSERT so Postgres sees vacated index slot
@@ -1101,6 +1157,17 @@ def promote_to_parent(
 
     _captured_at, _analyst_id, _processed_by_id = _carried_result_provenance(
         db, sources, source_rows, user_id)
+
+    # Result limits (endo slice 3, spec section 4): the caller's when it sends
+    # any of the three, else the result-bearing source's own (the same lead
+    # row _carried_result_provenance reads), so a vial filled with its LOQ
+    # keeps it when promoted from the sample page. Never mixed: one row's LOQ
+    # with another's LOD would describe no result.
+    if loq is None and lod is None and lod_unit is None and result_floor is None:
+        lead = next(source_rows[s["analysis_id"]] for s in sources
+                    if s["contribution_kind"] in ("chosen", "aggregated_in"))
+        loq, lod, lod_unit = lead.loq, lead.lod, lead.lod_unit
+        result_floor = lead.result_floor
 
     # Promotion mints the parent-tier row in 'parent_to_verify' — it is the
     # submission, not the sign-off. verified_at stays NULL until a reviewer
@@ -1114,6 +1181,10 @@ def promote_to_parent(
         title=eff_title,
         result_value=result_value,
         result_unit=eff_result_unit,
+        loq=loq,
+        lod=lod,
+        lod_unit=lod_unit,
+        result_floor=result_floor,
         review_state="parent_to_verify",
         method_id=method_id,
         instrument_id=instrument_id,
@@ -1133,7 +1204,7 @@ def promote_to_parent(
         to_state="parent_to_verify",
         transition_kind="auto",
         user_id=user_id,
-        reason=f"promoted from sources {source_ids}",
+        reason=f"promoted from sources {source_ids}{_audit}",
         details={"changed": {}},
     ))
 
@@ -1168,7 +1239,7 @@ def promote_to_parent(
             to_state="promoted",
             transition_kind="auto",
             user_id=user_id,
-            reason=f"promoted to parent #{parent_row.id} (kind={kind})",
+            reason=f"promoted to parent #{parent_row.id} (kind={kind}){_audit}",
             details=_deltas(src_before, src),
         ))
 
@@ -1345,6 +1416,17 @@ _LEGACY_SECTION_RULES: tuple = (
 )
 
 
+def legacy_family(keyword: str | None) -> tuple | None:
+    """(family key, sort) for a SENAITE-era keyword per _LEGACY_SECTION_RULES,
+    else None. 'core' is the legacy HPLC family."""
+    kw = (keyword or "").upper()
+    if kw:
+        for key, _label, sort, prefixes in _LEGACY_SECTION_RULES:
+            if any(kw.startswith(p) or (len(p) > 3 and p in kw) for p in prefixes):
+                return (key, sort)
+    return None
+
+
 def _annotate_profile_sections(db: Session, parent, shaped: list) -> None:
     """Fill profile_section_* on shaped rows, in place (mk1 main table).
 
@@ -1381,13 +1463,7 @@ def _annotate_profile_sections(db: Session, parent, shaped: list) -> None:
         sid = row.analysis_service_id
         if sid is not None and sid in section_by_service:
             return section_by_service[sid]
-        kw = (row.keyword or "").upper()
-        if kw:
-            for key, _label, sort, prefixes in _LEGACY_SECTION_RULES:
-                if any(kw.startswith(p) or (len(p) > 3 and p in kw)
-                       for p in prefixes):
-                    return (key, sort)
-        return (None, None)
+        return legacy_family(row.keyword) or (None, None)
 
     resolved = [_classify(r) for r in shaped]
     needed_keys = {key for key, _ in resolved if key}
@@ -1716,6 +1792,20 @@ def native_parent_line_states(db: Session, parent_sample_id: str) -> Dict[str, s
     return states
 
 
+def canonical_ever_keys(db: Session, parent_pk: int) -> set:
+    """(keyword, slot or 0) of every canonical parent-tier row the parent ever
+    held, in any state: the lines the canonical tier owns. A shadow row for
+    one of them never surfaces (list_parent_analyses_senaite_shape, so the
+    COA row set); the retest carry judges legacy HPLC lines by the same rule."""
+    return {(kw, slot or 0) for kw, slot in db.execute(
+        select(LimsAnalysis.keyword, LimsAnalysis.slot).where(
+            LimsAnalysis.lims_sample_pk == parent_pk,
+            LimsAnalysis.lims_sub_sample_pk.is_(None),
+            LimsAnalysis.provenance == "canonical",
+        ).distinct()
+    ).all()}
+
+
 def list_parent_analyses_senaite_shape(
     db: Session,
     parent_sample_id: str,
@@ -1881,13 +1971,7 @@ def list_parent_analyses_senaite_shape(
     # collapses only its own slot's shadow/placeholder counterpart, never a
     # sibling slot sharing the same keyword (spec 2026-09-10 M6 addendum).
     live_canonical_kw_keys = {kw_slot_key(r) for r in rows if r.provenance == "canonical"}
-    canonical_ever = {(kw, slot or 0) for kw, slot in db.execute(
-        select(LimsAnalysis.keyword, LimsAnalysis.slot).where(
-            LimsAnalysis.lims_sample_pk == parent.id,
-            LimsAnalysis.lims_sub_sample_pk.is_(None),
-            LimsAnalysis.provenance == "canonical",
-        ).distinct()
-    ).all()} | live_canonical_kw_keys
+    canonical_ever = canonical_ever_keys(db, parent.id) | live_canonical_kw_keys
     rows = [
         r for r in rows
         if r.provenance == "canonical"
@@ -2054,7 +2138,8 @@ def list_analysis_change_events_for_parent(
         where = f" ({vial.sample_id})" if vial else ""
 
         rv = changed.get("result_value")
-        only_result = set(changed) <= {"result_value", "result_unit"}
+        only_result = set(changed) <= {"result_value", "result_unit", "loq", "lod",
+                                       "lod_unit", "result_floor"}
         if rv and rv["before"] is None and rv["after"] is not None and only_result:
             event = "result_entered"
             label = f"Result entered — {a.title}: {rv['after']}{where}"
@@ -2368,6 +2453,7 @@ def cascade_parent_retest_to_sources(
         # The superseded SOURCE vial row keeps the old value for history.
         parent_analysis.result_value = None
         parent_analysis.result_unit = None
+        clear_result_limits(parent_analysis)
         parent_analysis.updated_at = datetime.utcnow()
         db.add(LimsAnalysisTransition(
             analysis_id=parent_analysis.id,
@@ -2757,6 +2843,7 @@ def vial_source_retest(
                 # state, so a retracted parent still renders otherwise.
                 parent.result_value = None
                 parent.result_unit = None
+                clear_result_limits(parent)
                 parent.updated_at = datetime.utcnow()
                 db.add(LimsAnalysisTransition(
                     analysis_id=parent.id,
@@ -3847,7 +3934,8 @@ def _serialize_senaite_shape_rows(
     # blend = ~14 keys); bulk-load analysis_service_specs for service_ids and
     # apply the precedence in Python if this listing ever shows up in a profile.
     from coa.identity_verdict import identity_wire_result
-    from coa.spec_rules import display_spec_fields, normalize_matrix
+    from coa.spec_rules import display_spec_fields, effective_unit, normalize_matrix
+    from lims_analyses.result_units import UnitChoices, unit_choices
     from models import LimsSample, LimsSubSample
     _vial_pks = {r.lims_sub_sample_pk for r in rows if r.lims_sub_sample_pk}
     _parent_pk_by_vial = dict(db.execute(
@@ -3856,28 +3944,21 @@ def _serialize_senaite_shape_rows(
     ).all()) if _vial_pks else {}
     _sample_pks = ({r.lims_sample_pk for r in rows if r.lims_sample_pk}
                    | set(_parent_pk_by_vial.values()))
-    _matrix_by_sample = {
-        pk: normalize_matrix(title)
-        for pk, title in (db.execute(
-            select(LimsSample.id, LimsSample.sample_type_title)
-            .where(LimsSample.id.in_(_sample_pks))
-        ).all() if _sample_pks else [])
-    }
+    _sample_facts = (db.execute(
+        select(LimsSample.id, LimsSample.sample_type_title, LimsSample.sample_form_id)
+        .where(LimsSample.id.in_(_sample_pks))
+    ).all() if _sample_pks else [])
+    _matrix_by_sample = {pk: normalize_matrix(title) for pk, title, _ in _sample_facts}
+    # The parent's dosage form is a spec tier, keyed like the matrix (a vial
+    # row reaches it through its sub-sample).
+    _form_by_sample = {pk: form_id for pk, _, form_id in _sample_facts}
     _spec_cache: dict = {}
+    _unit_cache: dict = {}
 
     out = []
     for r in rows:
         svc = services_by_id.get(r.analysis_service_id)
-        _spec_fields = display_spec_fields(
-            db, service_id=r.analysis_service_id,
-            matrix=_matrix_by_sample.get(
-                r.lims_sample_pk or _parent_pk_by_vial.get(r.lims_sub_sample_pk)),
-            peptide_id=r.peptide_id,
-            wire_result=identity_wire_result(
-                db, keyword=r.keyword, result=r.result_value,
-                analysis_service_id=r.analysis_service_id),
-            cache=_spec_cache,
-        )
+        _host_pk = r.lims_sample_pk or _parent_pk_by_vial.get(r.lims_sub_sample_pk)
         method_name = None
         if r.method_id and r.method_id in methods_by_id:
             method_name = getattr(methods_by_id[r.method_id], "name", None)
@@ -3909,6 +3990,36 @@ def _serialize_senaite_shape_rows(
         if r.provenance == "shadow" and (r.senaite_analysis_uid or "").strip():
             _uid = r.senaite_analysis_uid.strip()
 
+        # Result units (sample forms): a native row reports the units its
+        # test's spec rows allow, defaulting to its sample's form. An
+        # unresulted row shows that default over its seeded result_unit
+        # (vial rows are seeded with the catalog unit); a resulted row keeps
+        # the unit it was entered in. SENAITE-owned rows keep today's unit.
+        _unit = r.result_unit or (svc.unit if svc else None)
+        _choices = UnitChoices([], None)
+        if svc is not None and _uid.startswith("mk1:"):
+            # The form tier is peptide-family only (resolve_spec): a stray form on
+            # a Bac Water sample must not steer its default unit.
+            _row_form_id = (_form_by_sample.get(_host_pk)
+                            if _matrix_by_sample.get(_host_pk) == "Peptide" else None)
+            _choices = unit_choices(db, svc, _row_form_id, _unit_cache)
+            if not (r.result_value or "").strip():
+                _unit = _choices.default or _unit
+        # The spec column resolves in the unit shown (a seeded result_unit would
+        # file the row under the wildcard limit beside a form unit).
+        _spec_fields = display_spec_fields(
+            db, service_id=r.analysis_service_id,
+            matrix=_matrix_by_sample.get(_host_pk),
+            sample_form_id=_form_by_sample.get(_host_pk),
+            peptide_id=r.peptide_id,
+            wire_result=identity_wire_result(
+                db, keyword=r.keyword, result=r.result_value,
+                analysis_service_id=r.analysis_service_id),
+            cache=_spec_cache,
+            unit=effective_unit(_unit, svc.unit if svc else None),
+            floor=bool(r.result_floor),
+        )
+
         out.append(SenaiteShapeAnalysisResponse(
             uid=_uid,
             keyword=r.keyword,
@@ -3916,7 +4027,9 @@ def _serialize_senaite_shape_rows(
             result=r.result_value,
             result_options=svc_options,
             result_type=getattr(svc, "result_type", None),
-            unit=r.result_unit or (svc.unit if svc else None),
+            unit=_unit,
+            unit_options=_choices.allowed,
+            default_unit=_choices.default,
             method=method_name,
             method_uid=str(r.method_id) if r.method_id else None,
             method_options=method_options,
@@ -3943,6 +4056,10 @@ def _serialize_senaite_shape_rows(
             reportable=r.reportable,
             peptide_id=r.peptide_id,
             slot=r.slot,
+            loq=r.loq,
+            lod=r.lod,
+            lod_unit=r.lod_unit,
+            result_floor=r.result_floor,
             **_spec_fields,
         ))
     return out

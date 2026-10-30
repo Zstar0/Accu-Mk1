@@ -301,6 +301,64 @@ def list_hplc_vials_with_figures(db: Session, parent) -> list[tuple[int, dict]]:
     return out
 
 
+# Promotion links that make a parent result this vial's own (2026-10-20).
+# 'reference' means looked at, not used; 'carried' points at another sample.
+_VIAL_LINEAGE_KINDS = ("chosen", "aggregated_in")
+# Certified parent-tier states, same set native_sections.ELIGIBLE_STATES uses.
+_CERTIFIED_STATES = ("verified", "published")
+
+
+def vial_parent_row_ids(db: Session, sub: LimsSubSample) -> set[int]:
+    """Ids of the certified parent-tier rows promoted from vial `sub`: the
+    results that print on that vial's own certificate. Verify is a parent-tier
+    verb, so a vial row reaches its certified value only through its
+    promotion link; a vial result never promoted for the lot has no verdict
+    and is not counted."""
+    from models import LimsAnalysisPromotion
+    source = LimsAnalysis.__table__.alias("src")
+    target = LimsAnalysis.__table__.alias("tgt")
+    rows = db.execute(
+        select(LimsAnalysisPromotion.parent_analysis_id, target.c.keyword)
+        .join(source, source.c.id == LimsAnalysisPromotion.source_analysis_id)
+        .join(target, target.c.id == LimsAnalysisPromotion.parent_analysis_id)
+        .where(
+            source.c.lims_sub_sample_pk == sub.id,
+            LimsAnalysisPromotion.contribution_kind.in_(_VIAL_LINEAGE_KINDS),
+            target.c.lims_sub_sample_pk.is_(None),
+            target.c.review_state.in_(_CERTIFIED_STATES),
+        )
+    ).all()
+    # HPLC is the vial's own figure (build_vial_figures), never the parent's
+    # aggregate: a parent HPLC row stays off the vial's native sections even
+    # when it was aggregated in from this vial.
+    return {
+        pid for pid, kw in rows
+        if _category(kw) is None and (kw or "").upper() not in AGGREGATES
+    }
+
+
+def list_vials_for_certificates(db: Session, parent) -> list[tuple[int, dict, set[int]]]:
+    """[(vial_sequence, vial_figures, parent_row_ids), ...] for every USED vial
+    of the parent (any assignment role), in vial_sequence order: the source
+    set for per-vial COAs (Handler ruling 2026-10-20). Walks the sub-samples,
+    so no vial is missed. A vial is used when it has its own HPLC figures or
+    at least one certified parent result promoted from it; an unused vial
+    gets no certificate. vial_figures is {} for a vial without HPLC."""
+    qty_unit = _parent_quantity_unit(db, parent) or "mg"
+    subs = db.execute(
+        select(LimsSubSample)
+        .where(LimsSubSample.parent_sample_pk == parent.id)
+        .order_by(LimsSubSample.vial_sequence, LimsSubSample.id)
+    ).scalars().all()
+    out: list[tuple[int, dict, set[int]]] = []
+    for sub in subs:
+        figs = build_vial_figures(db, sub, qty_unit) if sub.assignment_role == "hplc" else {}
+        ids = vial_parent_row_ids(db, sub)
+        if figs or ids:
+            out.append((sub.vial_sequence, figs, ids))
+    return out
+
+
 def process_variance_fields(db: Session, parent) -> dict:
     """The variance portion of the COABuilder /process body for a parent.
 

@@ -24,7 +24,11 @@ from auth import get_current_user
 from database import get_db
 from lims_analyses.retest_carry import (
     HPLC_PROFILE_KEYS,
+    LEGACY_HPLC_KEY,
+    _legacy_hplc_rows,
+    carry_blocked_reason,
     carry_eligible_profile_keys,
+    judged_service_ids,
     parse_retest_spec,
     snapshot_profile_keys,
     validate_retest_spec,
@@ -110,6 +114,19 @@ def _latest_verified_at(db: Session, sample: LimsSample, service_ids: set[int]):
     return max(times) if times else None
 
 
+def _senaite_verified_label(db: Session, sample: LimsSample) -> str:
+    """Label for an alias carried from SENAITE-only rows (CARRY_SHADOW_ONLY_HPLC).
+    The mirror rarely stamps verified_at on a shadow: published_at, then
+    captured_at, stand in; no date when none is set."""
+    stamps = (r.verified_at or r.published_at or r.captured_at
+              for r in _legacy_hplc_rows(db, sample, "shadow"))
+    times = [t for t in stamps if t]
+    if not times:
+        return "Verified (SENAITE)"
+    t = max(times)
+    return f"Verified (SENAITE) {t.month}/{t.day}"
+
+
 def _state_label(state: str | None, verified_at) -> str:
     if verified_at:
         return f"Verified {verified_at.month}/{verified_at.day}"
@@ -130,15 +147,19 @@ def retest_options(sample_id: str, db: Session = Depends(get_db), _user=Depends(
     out_profiles = []
     for key in have:
         prof = profiles.get(key)
-        svc_ids = {s.id for s in prof.analysis_services} if prof else set()
+        svc_ids = judged_service_ids(db, sample, prof) if prof else set()
         state = _best_state(db, sample, svc_ids)
         verified_at = _latest_verified_at(db, sample, svc_ids)
+        label = _state_label(state, verified_at)
+        if key == LEGACY_HPLC_KEY and key in eligible and verified_at is None:
+            label = _senaite_verified_label(db, sample)
         out_profiles.append({
             "key": key, "name": prof.name if prof else key,
             "carry_eligible": key in eligible,
+            "carry_blocked_reason": None if key in eligible else carry_blocked_reason(db, sample, prof),
             "state": state,
             "verified_at": verified_at.isoformat() if verified_at else None,
-            "state_label": _state_label(state, verified_at),
+            "state_label": label,
         })
     context = _fetch_retest_context(sample.sample_id)
     price_map = (context or {}).get("addons") or {}

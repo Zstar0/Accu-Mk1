@@ -14,6 +14,7 @@
  *  - accumark-tools/customer-detail → customerDetailTargetId
  *  - lims/peptide-config            → peptideConfigTargetId
  *  - reports/documents              → documentViewerTargetId
+ *  - hplc-analysis/worksheet       → worksheetPageId
  */
 
 import { useEffect } from 'react'
@@ -50,9 +51,11 @@ interface ParsedNav {
   /** Planning boards deep link: `?node=<id>` focuses that node on arrival.
    *  One-shot: buildHash never re-emits it. */
   nodeId: string | null
+  /** Documents library: `?space=<slug>` scopes the list to one space. */
+  spaceSlug: string | null
 }
 
-function parseNavHash(hash: string): ParsedNav | null {
+export function parseNavHash(hash: string): ParsedNav | null {
   const clean = hash.replace(/^#/, '')
   if (!clean) return null
 
@@ -71,12 +74,14 @@ function parseNavHash(hash: string): ParsedNav | null {
   let targetId: string | null = null
   let flagId: number | null = null
   let nodeId: string | null = null
+  let spaceSlug: string | null = null
   if (query) {
     const params = new URLSearchParams(query)
     targetId = params.get('id')
     const rawFlag = params.get('flag')
     if (rawFlag && !Number.isNaN(Number(rawFlag))) flagId = Number(rawFlag)
     nodeId = params.get('node')
+    spaceSlug = params.get('space')
   }
 
   return {
@@ -85,11 +90,12 @@ function parseNavHash(hash: string): ParsedNav | null {
     targetId,
     flagId,
     nodeId,
+    spaceSlug,
   }
 }
 
 /** Apply a parsed nav to the store, including any target ID. */
-function applyNavToStore(nav: ParsedNav) {
+export function applyNavToStore(nav: ParsedNav) {
   const store = useUIStore.getState()
   const { section, subSection, targetId } = nav
 
@@ -110,6 +116,13 @@ function applyNavToStore(nav: ParsedNav) {
     store.navigateToCustomer(Number(targetId))
   } else if (subSection === 'peptide-config' && targetId) {
     store.navigateToPeptide(Number(targetId))
+  } else if (
+    subSection === 'worksheet' &&
+    targetId &&
+    !Number.isNaN(Number(targetId))
+  ) {
+    // The endo worksheet page; a non-numeric id falls through to a plain navigate.
+    store.navigateToWorksheet(Number(targetId))
   } else if (subSection === 'worksheet-detail' && targetId) {
     store.openWorksheetDrawer(Number(targetId))
   } else if (
@@ -118,6 +131,9 @@ function applyNavToStore(nav: ParsedNav) {
     !Number.isNaN(Number(targetId))
   ) {
     store.navigateToDocument(Number(targetId))
+  } else if (subSection === 'documents' && nav.spaceSlug) {
+    // Ordered after the ?id= branch: a hash carrying both honours id.
+    store.navigateToDocumentSpace(nav.spaceSlug)
   } else if (section === 'boards' && subSection === 'board' && targetId) {
     store.navigateToBoard(targetId)
   } else {
@@ -147,7 +163,7 @@ function applyNavToStore(nav: ParsedNav) {
 }
 
 /** Build the hash string from the current store state, including target IDs. */
-function buildHash(state: {
+export function buildHash(state: {
   activeSection: string
   activeSubSection: string
   sampleDetailsTargetId: string | null
@@ -155,7 +171,9 @@ function buildHash(state: {
   customerDetailTargetId: number | null
   peptideConfigTargetId: number | null
   documentViewerTargetId: number | null
+  documentsSpaceSlug: string | null
   boardTargetSlug: string | null
+  worksheetPageId: number | null
 }): string {
   let hash = `#${state.activeSection}/${state.activeSubSection}`
 
@@ -186,11 +204,21 @@ function buildHash(state: {
   ) {
     hash += `?id=${encodeURIComponent(String(state.documentViewerTargetId))}`
   } else if (
+    state.activeSubSection === 'documents' &&
+    state.documentsSpaceSlug
+  ) {
+    hash += `?space=${encodeURIComponent(state.documentsSpaceSlug)}`
+  } else if (
     state.activeSection === 'boards' &&
     state.activeSubSection === 'board' &&
     state.boardTargetSlug
   ) {
     hash += `?id=${encodeURIComponent(state.boardTargetSlug)}`
+  } else if (
+    state.activeSubSection === 'worksheet' &&
+    state.worksheetPageId != null
+  ) {
+    hash += `?id=${encodeURIComponent(String(state.worksheetPageId))}`
   }
 
   return hash
@@ -224,7 +252,9 @@ export function useHashNavigation() {
         state.customerDetailTargetId !== prev.customerDetailTargetId ||
         state.peptideConfigTargetId !== prev.peptideConfigTargetId ||
         state.documentViewerTargetId !== prev.documentViewerTargetId ||
-        state.boardTargetSlug !== prev.boardTargetSlug
+        state.documentsSpaceSlug !== prev.documentsSpaceSlug ||
+        state.boardTargetSlug !== prev.boardTargetSlug ||
+        state.worksheetPageId !== prev.worksheetPageId
       ) {
         const newHash = buildHash(state)
         if (window.location.hash !== newHash) {

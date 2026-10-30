@@ -176,6 +176,32 @@ def cohorts(ds: Dataset, *, end: datetime, tz: str, max_months: int = 12) -> dic
     return {"months": [f"M{k}" for k in range(1, max_months + 1)], "rows": rows}
 
 
+def filter_rows(rows: list[dict[str, Any]], ds: Dataset, *, lo: datetime | None, hi: datetime, tz: str,
+                new_only: bool = False, cohort: str | None = None, returned_in: str | None = None) -> list[dict[str, Any]]:
+    """Keep rows by first testing order (new_only / cohort) and by a later testing-order month (returned_in)."""
+    if not (new_only or cohort or returned_in):
+        return rows
+    active: dict[str, set[str]] = defaultdict(set)
+    if returned_in:  # same testing-order months cohorts() counts, so drill-down totals match the grid
+        for x in ds.orders:
+            if x.is_testing and x.paid_at <= hi:
+                active[x.customer_key].add(rules.lab_month(x.paid_at, tz))
+    out = []
+    for r in rows:
+        raw = r.get("first_order_at")
+        first = datetime.fromisoformat(raw) if raw else None
+        if (new_only or cohort) and first is None:
+            continue
+        if new_only and not ((lo is None or lo <= first) and first <= hi):
+            continue
+        if cohort and rules.lab_month(first, tz) != cohort:
+            continue
+        if returned_in and returned_in not in active[r["key"]]:
+            continue
+        out.append(r)
+    return out
+
+
 def _spend(orders: list[Order], start: datetime | None, end: datetime) -> Decimal:
     return sum((o.net for o in orders if (start is None or o.paid_at >= start) and o.paid_at <= end), ZERO)
 
@@ -202,6 +228,9 @@ def customer_rows(ds: Dataset, *, start: datetime | None, end: datetime, tz: str
         for x in orders:
             monthly[rules.lab_month(x.paid_at, tz)] += x.net
         tests = Counter(t for x in orders for t in x.tests)
+        y_start = end - timedelta(days=rules.SEGMENT_WINDOW_DAYS)
+        spend_12m = _spend(orders, y_start, end)
+        testing_12m = [x for x in orders if x.is_testing and x.paid_at >= y_start]
         rows.append({
             "key": key, "name": c.name if c else key, "email": c.email if c else None,
             "company": c.company if c else None, "rep": c.rep if c else None,
@@ -211,18 +240,39 @@ def customer_rows(ds: Dataset, *, start: datetime | None, end: datetime, tz: str
             "samples": sum(x.samples for x in orders),
             "usual_gap_days": round(rules.usual_gap_days(dates), 1) if len(dates) >= 3 else None,
             "last_order_at": max(dates).isoformat() if dates else None,
+            "first_order_at": min(dates).isoformat() if dates else None,
+            "testing_orders": len(dates),
             "top_tests": [t for t, _ in tests.most_common(3)],
             "status": rules.spend_status(paid_orders=len(orders), at_risk=risk, period=period, prior=prior),
             "monthly": [{"month": m, "spend": money(v)} for m, v in sorted(monthly.items())],
+            "spend_12m": money(spend_12m),
+            "testing_orders_12m": len(testing_12m),
+            "samples_12m": sum(x.samples for x in testing_12m),
+            "segment": rules.segment(spend_12m, len(testing_12m)),
         })
     return rows
+
+
+def segment_summary(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """One entry per segment, in rules.SEGMENTS order: customers, 12-month revenue and share, median activity."""
+    total = sum((Decimal(r["spend_12m"]) for r in rows if r["segment"]), ZERO)
+    out = []
+    for seg in rules.SEGMENTS:
+        group = [r for r in rows if r["segment"] == seg]
+        revenue = sum((Decimal(r["spend_12m"]) for r in group), ZERO)
+        out.append({
+            "segment": seg, "customers": len(group), "revenue_12m": money(revenue),
+            "share": round(float(revenue / total), 4) if total else 0.0,
+            "median_testing_orders_12m": _med([r["testing_orders_12m"] for r in group]),
+            "median_samples_12m": _med([r["samples_12m"] for r in group]),
+        })
+    return out
 
 
 def at_risk(ds: Dataset, *, end: datetime, tz: str) -> list[dict[str, Any]]:
     rows = [r for r in customer_rows(ds, start=end - timedelta(days=90), end=end, tz=tz) if r["status"] == "at_risk"]
     by = _by_customer(ds, end)
     for r in rows:
-        r["spend_12m"] = money(_spend(by[r["key"]], end - timedelta(days=365), end))
         r["overdue"] = rules.overdue_ratio([x.paid_at for x in by[r["key"]] if x.is_testing], end)
     return sorted(rows, key=lambda r: Decimal(r["spend_12m"]), reverse=True)
 

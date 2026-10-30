@@ -1,0 +1,319 @@
+"""/support/* routes: admin gate, shapes, filters, refresh, failures, detail scoping."""
+from unittest.mock import MagicMock
+
+import psycopg2
+import pytest
+from fastapi.testclient import TestClient
+
+from auth import get_current_user
+from support_plain import client as plain_client
+from support_plain import queries, service
+
+
+def thread(tid, status="TODO", updated="2026-09-02T10:00:00.000Z", inbound=None, outbound=None):
+    return {"id": tid, "ref": "T-" + tid[3:], "title": "t " + tid, "previewText": "p", "status": status, "priority": 2,
+            "isTestThread": False, "createdAt": {"iso8601": "2026-09-01T00:00:00.000Z"}, "updatedAt": {"iso8601": updated},
+            "customer": {"id": "c_1", "fullName": "Kyle R"}, "labels": [], "assignedTo": None,
+            "lastInboundMessageInfo": inbound and {"timestamp": {"iso8601": inbound}},
+            "lastOutboundMessageInfo": outbound and {"timestamp": {"iso8601": outbound}}}
+
+
+THREADS = [thread("th_a", "DONE", "2026-09-01T00:00:00.000Z"),
+           thread("th_b", "TODO", "2026-09-03T00:00:00.000Z", inbound="2026-09-03T00:00:00.000Z"),
+           thread("th_c", "SNOOZED", "2026-09-02T00:00:00.000Z")]
+ENTRY = {"id": "e1", "timestamp": {"iso8601": "2026-09-03T00:00:00.000Z"},
+         "actor": {"__typename": "CustomerActor", "customer": {"fullName": "Kyle R"}},
+         "entry": {"__typename": "ChatEntry", "chatText": "hello"}}
+
+
+class FakePlain:
+    def __init__(self, fail=False, extras_fail=False):
+        self.fail, self.ops, self.extras_fail = fail, [], extras_fail
+
+    def query(self, q, variables=None):
+        op = {queries.WORKSPACE: "ws", queries.CUSTOMER_BY_EMAIL: "cust", queries.THREADS: "threads",
+              queries.THREAD: "thread", queries.USER_BY_EMAIL: "user", queries.USERS: "users",
+              queries.LABEL_TYPES: "labels", queries.THREAD_FIELD_SCHEMAS: "schemas",
+              getattr(queries, "THREAD_EXTRAS", "_none_"): "extras"}[q]
+        self.ops.append(op)
+        if self.fail:
+            raise plain_client.SupportUnavailable("http_503")
+        if op == "ws":
+            return {"myWorkspace": {"id": "w_1"}}
+        if op == "cust":  # both test emails resolve to the same Plain customer
+            return {"customerByEmail": {"id": "c_1", "fullName": "Kyle R"}}
+        if op == "threads":
+            assert variables["customerIds"] == ["c_1"]
+            return {"threads": {"pageInfo": {"hasNextPage": False, "endCursor": None},
+                                "edges": [{"node": t} for t in THREADS + THREADS[:1]]}}
+        if op == "user":
+            u = {"sam@accumark.example": {"id": "u_1", "fullName": "Sam Parker", "publicName": "Sam",
+                                          "email": "sam@accumark.example", "isDeleted": False}}
+            return {"userByEmail": u.get(variables["email"])}
+        if op == "users":
+            return {"users": {"pageInfo": {"hasNextPage": False, "endCursor": None},
+                              "edges": [{"node": {"id": "u_1", "fullName": "Sam Parker", "email": "sam@accumark.example",
+                                                  "isDeleted": False}},
+                                        {"node": {"id": "u_2", "fullName": "Gone", "email": "g@x", "isDeleted": True}}]}}
+        if op == "labels":
+            return {"labelTypes": {"pageInfo": {"hasNextPage": False, "endCursor": None},
+                                   "edges": [{"node": {"id": "lt_1", "name": "Lab", "color": "#fff"}}]}}
+        if op == "extras":
+            if self.extras_fail:
+                raise plain_client.SupportUnavailable("graphql_errors")
+            t = next(x for x in THREADS if x["id"] == variables["threadId"])
+            return {"thread": {**t, "tier": {"name": "Regular Support", "color": "#00f"}}}
+        if op == "schemas":
+            return {"threadFieldSchemas": {"pageInfo": {"hasNextPage": False, "endCursor": None}, "edges": []}}
+        t = next(x for x in THREADS if x["id"] == variables["threadId"])
+        return {"thread": {**t, "timelineEntries": {"pageInfo": {"hasNextPage": False, "endCursor": None},
+                                                    "edges": [{"node": ENTRY}]}}}
+
+
+@pytest.fixture
+def api(monkeypatch):
+    import main
+
+    fake = {"plain": FakePlain()}
+    monkeypatch.setattr(service, "_client_factory", lambda: fake["plain"])
+    monkeypatch.setattr(service, "_emails_fn",
+                        lambda key: {"wc:1": ["k@x.example", "k2@x.example"], "wc:2": [], "wc:3": ["o@x.example"]}.get(key))
+    service.CACHE.drop("")
+    service.CACHE._refresh.clear()
+    main.app.dependency_overrides[get_current_user] = lambda: MagicMock(id=1, role="admin", email="admin@accumark.example")
+    yield TestClient(main.app), fake
+    main.app.dependency_overrides.clear()
+
+
+def test_standard_user_is_forbidden_on_both_routes(api):
+    import main
+
+    client, _ = api
+    main.app.dependency_overrides[get_current_user] = lambda: MagicMock(id=2, role="standard")
+    assert client.get("/support/customers/wc:1").status_code == 403
+    assert client.get("/support/customers/wc:1/threads/th_b").status_code == 403
+
+
+def test_list_dedupes_sorts_counts_and_declares_every_key(api):
+    client, _ = api
+    body = client.get("/support/customers/wc:1").json()
+    assert set(body) == {"customer_key", "matched", "threads", "total", "page", "page_size", "counts",
+                         "last_contact_at", "oldest_waiting_since", "fetched_at", "stale", "refresh_throttled"}
+    assert body["matched"] == 1
+    assert [t["id"] for t in body["threads"]] == ["th_b", "th_c", "th_a"]
+    assert body["counts"] == {"open": 1, "snoozed": 1, "done": 1, "waiting": 1}
+    assert body["last_contact_at"] == "2026-09-03T00:00:00.000Z"
+    assert body["oldest_waiting_since"] == "2026-09-03T00:00:00.000Z"
+    assert set(body["threads"][0]) == {"id", "ref", "title", "status", "priority", "labels", "assignee", "created_at",
+                                       "updated_at", "preview", "waiting_since", "plain_url",
+                                       "assignee_id", "customer_plain_id", "label_refs", "status_detail",
+                                       "assignees", "tier", "fields", "customer"}
+
+
+def test_list_declares_new_thread_keys(api):
+    client, _ = api
+    t = client.get("/support/customers/wc:1").json()["threads"][0]
+    assert t["customer_plain_id"] == "c_1" and t["label_refs"] == [] and t["assignee_id"] is None
+
+
+def test_status_filter_keeps_counts_whole(api):
+    client, _ = api
+    body = client.get("/support/customers/wc:1?status=done&status=snoozed").json()
+    assert [t["id"] for t in body["threads"]] == ["th_c", "th_a"] and body["total"] == 2
+    assert body["counts"]["open"] == 1
+
+
+def test_unknown_customer_404_and_no_email_is_empty(api):
+    client, fake = api
+    assert client.get("/support/customers/wc:404").status_code == 404
+    body = client.get("/support/customers/wc:2").json()
+    assert body["threads"] == [] and body["matched"] == 0 and fake["plain"].ops == []
+
+
+def test_detail_returns_thread_and_entries(api):
+    client, _ = api
+    body = client.get("/support/customers/wc:1/threads/th_b").json()
+    assert set(body) == {"thread", "entries", "fetched_at", "stale", "via_flag"}
+    assert body["thread"]["id"] == "th_b"
+    assert body["entries"] == [{"id": "e1", "at": "2026-09-03T00:00:00.000Z", "kind": "chat", "author": "Kyle R",
+                                "author_kind": "customer", "internal": False, "subject": None, "text": "hello",
+                                "author_avatar_url": None, "automated": False, "email_to": None, "email_from": None,
+                                "markdown": None, "event": None}]
+
+
+def test_foreign_or_unknown_thread_is_404_without_a_thread_query(api, monkeypatch):
+    client, fake = api
+    monkeypatch.setattr(service, "_emails_fn", lambda key: {"wc:1": ["k@x.example"], "wc:3": ["o@x.example"]}.get(key))
+    assert client.get("/support/customers/wc:1/threads/th_zzz").status_code == 404
+    assert "thread" not in fake["plain"].ops
+
+
+def test_malformed_thread_id_is_422(api):
+    client, _ = api
+    assert client.get("/support/customers/wc:1/threads/abc").status_code == 422
+
+
+def test_refresh_is_throttled(api):
+    client, _ = api
+    assert client.get("/support/customers/wc:1?refresh=true").json()["refresh_throttled"] is False
+    assert client.get("/support/customers/wc:1?refresh=true").json()["refresh_throttled"] is True
+
+
+def test_failed_refresh_keeps_cached_list_and_conversation(api):
+    client, fake = api
+    client.get("/support/customers/wc:1")
+    client.get("/support/customers/wc:1/threads/th_b")
+    fake["plain"] = FakePlain(fail=True)
+    assert client.get("/support/customers/wc:1?refresh=true").json()["stale"] is True
+    later = client.get("/support/customers/wc:1")
+    assert later.status_code == 200 and later.json()["stale"] is False
+    detail = client.get("/support/customers/wc:1/threads/th_b")
+    assert detail.status_code == 200 and detail.json()["stale"] is False
+
+
+def test_plain_down_on_uncached_detail_is_502_and_cached_detail_is_stale(api):
+    client, fake = api
+    client.get("/support/customers/wc:1")
+    client.get("/support/customers/wc:1/threads/th_c")
+    fake["plain"] = FakePlain(fail=True)
+    assert client.get("/support/customers/wc:1/threads/th_b").status_code == 502
+    stale = client.get("/support/customers/wc:1/threads/th_c?refresh=true")
+    assert stale.status_code == 200 and stale.json()["stale"] is True
+
+
+def test_plain_down_with_nothing_cached_is_502(api):
+    client, fake = api
+    fake["plain"] = FakePlain(fail=True)
+    r = client.get("/support/customers/wc:1")
+    assert r.status_code == 502 and r.json()["detail"]["code"] == "support_unavailable"
+
+
+def test_not_configured_is_503(api, monkeypatch):
+    client, _ = api
+
+    def boom():
+        raise plain_client.SupportNotConfigured()
+
+    monkeypatch.setattr(service, "_client_factory", boom)
+    r = client.get("/support/customers/wc:1")
+    assert r.status_code == 503 and r.json()["detail"]["code"] == "support_not_configured"
+
+
+def test_integration_db_error_is_502(api, monkeypatch):
+    client, _ = api
+
+    def db_down(key):
+        raise psycopg2.OperationalError("down")
+
+    monkeypatch.setattr(service, "_emails_fn", db_down)
+    assert client.get("/support/customers/wc:1").status_code == 502
+
+
+class ShapelessPlain(FakePlain):
+    """Plain answers 200 with data that lacks the fields we read."""
+
+    def query(self, q, variables=None):
+        self.ops.append("shapeless")
+        return {"customerByEmail": {"id": "c_1"}} if q == queries.CUSTOMER_BY_EMAIL else {}
+
+
+def test_malformed_plain_data_falls_back_to_stale_not_500(api):
+    client, fake = api
+    client.get("/support/customers/wc:1")
+    client.get("/support/customers/wc:1/threads/th_b")
+    fake["plain"] = ShapelessPlain()
+    listing = client.get("/support/customers/wc:1?refresh=true")
+    assert listing.status_code == 200 and listing.json()["stale"] is True
+    detail = client.get("/support/customers/wc:1/threads/th_b?refresh=true")
+    assert detail.status_code == 200 and detail.json()["stale"] is True
+    service.CACHE.drop("")
+    assert client.get("/support/customers/wc:1").status_code == 502
+
+
+def _as(email, role="standard"):
+    import main
+    main.app.dependency_overrides[get_current_user] = lambda: MagicMock(id=3, role=role, email=email)
+
+
+def test_seat_holder_without_admin_reads(api):
+    client, _ = api
+    _as("sam@accumark.example")
+    assert client.get("/support/customers/wc:1").status_code == 200
+    assert client.get("/support/customers/wc:1/threads/th_b").status_code == 200
+
+
+def test_no_seat_non_admin_is_403_even_when_plain_is_down(api):
+    client, fake = api
+    _as("nobody@x.example")
+    assert client.get("/support/customers/wc:1").status_code == 403
+    fake["plain"] = FakePlain(fail=True)
+    service.CACHE.drop("")
+    assert client.get("/support/customers/wc:1").status_code == 403
+
+
+def test_me_reports_the_seat(api):
+    client, _ = api
+    _as("sam@accumark.example")
+    assert client.get("/support/me").json() == {"has_seat": True, "plain_user_id": "u_1", "name": "Sam Parker",
+                                                "email": "sam@accumark.example", "unavailable": False}
+    _as("nobody@x.example", role="admin")
+    assert client.get("/support/me").json()["has_seat"] is False
+
+
+def test_me_when_plain_is_down(api):
+    client, fake = api
+    fake["plain"] = FakePlain(fail=True)
+    _as("sam@accumark.example")
+    body = client.get("/support/me").json()
+    assert body["has_seat"] is False and body["unavailable"] is True
+
+
+def test_workspace_needs_a_seat_and_lists_active_teammates(api):
+    client, _ = api
+    _as("nobody@x.example", role="admin")
+    assert client.get("/support/workspace").status_code == 403
+    _as("sam@accumark.example")
+    body = client.get("/support/workspace").json()
+    assert body == {"teammates": [{"plain_user_id": "u_1", "name": "Sam Parker", "email": "sam@accumark.example"}],
+                    "label_types": [{"id": "lt_1", "name": "Lab", "color": "#fff"}]}
+
+
+def test_detail_declares_the_view_keys(api):
+    client, _ = api
+    body = client.get("/support/customers/wc:1/threads/th_b").json()
+    assert {"status_detail", "assignees", "tier", "fields", "customer"} <= set(body["thread"])
+    assert {"author_avatar_url", "automated", "email_to", "email_from", "markdown", "event"} <= set(body["entries"][0])
+
+
+def test_sidebar_extras_come_from_their_own_query(api):
+    client, fake = api
+    body = client.get("/support/customers/wc:1/threads/th_b").json()
+    assert "extras" in fake["plain"].ops and body["thread"]["tier"] == {"name": "Regular Support", "color": "#00f"}
+
+
+def test_extras_failure_degrades_to_placeholders(api):
+    client, fake = api
+    fake["plain"] = FakePlain(extras_fail=True)
+    r = client.get("/support/customers/wc:1/threads/th_b")
+    assert r.status_code == 200
+    t = r.json()["thread"]
+    assert t["tier"] is None and t["fields"] == [] and t["status_detail"]["kind"] == "needs_next_response"
+    assert r.json()["entries"]  # the conversation still loads
+
+
+def test_refresh_drops_the_touch_summary(api):
+    client, _ = api
+    service.CACHE.put("touch:wc:1:", {"state": "none"})
+    service.CACHE.put("touch:wc:10:", {"state": "none"})
+    assert client.get("/support/customers/wc:1?refresh=true").status_code == 200
+    assert service.CACHE.peek("touch:wc:1:") is None
+    assert service.CACHE.peek("touch:wc:10:") is not None  # wc:1's drop spares wc:10
+
+
+def test_action_invalidation_drops_the_touch_summary(api):
+    """A reply, close or snooze goes through service.invalidate; the Insights cell must follow."""
+    service.CACHE.put("touch:wc:1:", {"state": "none"})
+    service.CACHE.put("touch:wc:10:", {"state": "none"})
+    service.invalidate("wc:1", "th_a")
+    assert service.CACHE.peek("touch:wc:1:") is None
+    assert service.CACHE.peek("touch:wc:10:") is not None
