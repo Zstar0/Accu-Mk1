@@ -41,6 +41,8 @@ def test_s3_prefix_nests_under_the_photo_prefix(monkeypatch):
     assert _flag_attach_s3_prefix() == "stack-photos/flag-attachments/"
     monkeypatch.setenv("MK1_FLAG_ATTACH_S3_PREFIX", "elsewhere/")
     assert _flag_attach_s3_prefix() == "elsewhere/"
+    monkeypatch.setenv("MK1_FLAG_ATTACH_S3_PREFIX", "")  # set-but-empty = bucket root, as before
+    assert _flag_attach_s3_prefix() == ""
 
 
 def test_singleton_override_for_tests():

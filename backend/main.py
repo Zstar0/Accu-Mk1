@@ -408,9 +408,9 @@ def _flag_attach_s3_prefix() -> str:
     """flag-attachments/ NESTED UNDER the vial-photo prefix, like documents.
     Prod's IAM key is scoped to the photo prefix, so the old top-level default
     was AccessDenied on every upload (prod logs 2026-10-29).
-    MK1_FLAG_ATTACH_S3_PREFIX still overrides."""
+    MK1_FLAG_ATTACH_S3_PREFIX still overrides; set-but-empty means bucket root."""
     explicit = os.environ.get("MK1_FLAG_ATTACH_S3_PREFIX")
-    if explicit:
+    if explicit is not None:
         return explicit
     photo = os.environ.get("MK1_PHOTO_S3_PREFIX", "sub-sample-photos/")
     if photo and not photo.endswith("/"):
