@@ -201,3 +201,29 @@ def test_partial_services_on_bw_parent_with_live_panel_raises_no_slot_flag(db, c
     assert db.execute(select(FlagFlag).where(FlagFlag.entity_type == "sample",
                                              FlagFlag.entity_id == str(p.id))).scalars().all() == []
     assert all(r.slot is None for r in _ordered(db, p))
+
+
+def test_retest_of_legacy_bw_original_keeps_native_bw_key(db, caplog):
+    """A SENAITE-born BW original's spec retests the legacy `bac_water_panel`;
+    after the WP flip the retest order carries only the native key. The seeded
+    demand must be the native key (alias, like HPLC), so the retest is a BW
+    parent: 3 placeholders, no peptide-slot flag."""
+    from lims_analyses.retest_carry import _demand_services, _seed_keys, apply_retest_spec, parse_retest_spec
+    _catalog(db)
+    db.add(LimsSample(sample_id="BW-0100", external_lims_system="senaite", status="published",
+                      catalog_snapshot={"profiles": [{"key": "bac_water_panel", "profile_id": 0,
+                                                      "service_ids": []}]}))
+    p = _bw_parent(db, system="mk1", sample_id="BW-1032")
+    raw = {"retest_of_sample_id": "BW-0100", "retest": ["bac_water_panel"], "carry": [], "drop": [],
+           "add": {"profiles": [], "variance_points": 0, "additional_vials": 0},
+           "fee": "free", "reason": "rerun", "requested_by_user_id": 9}
+    wp = {"bacteriostatic-water-panel": True}
+    assert _demand_services(parse_retest_spec(raw), wp, _seed_keys(db)) == {"bacteriostatic-water-panel": True}
+    with caplog.at_level(logging.ERROR):
+        out = apply_retest_spec(db, parent=p, raw_spec=raw, services=wp, package=None, source="test")
+    db.commit()
+    assert out["applied"] is True
+    assert sorted((r.keyword, r.slot) for r in _ordered(db, p)) == [
+        ("BENZYL-ALCOHOL-BW", None), ("FILL-VOLUME-BW", None), ("PH-BW", None)]
+    assert not any("native_placeholder_no_analyte_slots" in r.message for r in caplog.records)
+    assert db.execute(select(FlagFlag).where(FlagFlag.entity_id == str(p.id))).scalars().all() == []
