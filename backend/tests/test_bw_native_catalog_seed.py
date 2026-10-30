@@ -256,6 +256,10 @@ def test_init_db_calls_bw_seed_after_hplc_and_before_specs(monkeypatch):
     monkeypatch.setattr(database, "_run_migrations", _rec("migrations"))
     monkeypatch.setattr(database.Base.metadata, "create_all", _rec("create_all"))
     monkeypatch.setattr(database, "_seed_federal_holidays_window", _rec("holidays"))
+    # Master's post-create_all boot steps touch the real engine; stub them as
+    # test_hplc_native_catalog_seed's init_db order test does.
+    monkeypatch.setattr(database, "_ensure_documents_space_column", _rec("documents_space_column"))
+    monkeypatch.setattr(database, "_run_endo_v2_migrations", _rec("endo_v2"))
     monkeypatch.setattr(database, "SessionLocal", lambda: _FakeSession())
 
     import catalog.bw_native_seed as bn

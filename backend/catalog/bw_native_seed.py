@@ -149,7 +149,8 @@ def seed_bw_native_catalog(db: Session) -> dict[str, int]:
         existing = (db.query(AnalysisServiceSpec)
                     .filter(AnalysisServiceSpec.analysis_service_id == svc.id,
                             AnalysisServiceSpec.matrix.is_(None),
-                            AnalysisServiceSpec.peptide_id.is_(None))
+                            AnalysisServiceSpec.peptide_id.is_(None),
+                            AnalysisServiceSpec.sample_form_id.is_(None))
                     .first())
         if existing is not None:
             continue
