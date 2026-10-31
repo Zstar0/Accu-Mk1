@@ -1,9 +1,11 @@
 import { useEffect, useRef, useState } from 'react'
 import { useQueryClient } from '@tanstack/react-query'
+import { toast } from 'sonner'
 import {
   ArrowLeft,
   ArrowUpRight,
   Check,
+  Link2,
   Send,
   Bold,
   Italic,
@@ -24,7 +26,14 @@ import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Textarea } from '@/components/ui/textarea'
 import { Skeleton } from '@/components/ui/skeleton'
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipProvider,
+  TooltipTrigger,
+} from '@/components/ui/tooltip'
 import { cn } from '@/lib/utils'
+import { getServerUrl } from '@/lib/api-profiles'
 import { useAuthStore } from '@/store/auth-store'
 import { useUIStore } from '@/store/ui-store'
 import {
@@ -322,6 +331,23 @@ export function FlagThread({
             )}
           </span>
           <div className="flex items-center gap-2">
+            <TooltipProvider delayDuration={200}>
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="icon"
+                    className="h-7 w-7"
+                    aria-label="Copy link to this flag"
+                    onClick={() => copyFlagLink(flagId)}
+                  >
+                    <Link2 className="h-3.5 w-3.5" />
+                  </Button>
+                </TooltipTrigger>
+                <TooltipContent>Copy link to this flag</TooltipContent>
+              </Tooltip>
+            </TooltipProvider>
             <ThreadViewToggle mode={threadView} onChange={setThreadView} />
             {status !== 'resolved' && status !== 'closed' && (
               <Button
@@ -667,6 +693,31 @@ export function FlagThread({
         </Button>
       </div>
     </div>
+  )
+}
+
+/** Shareable URL for one flag: the Tasks page with that flag's thread open.
+ *  `?flag=` is parsed by hash-navigation, same as the Slack DM link. */
+function flagLinkUrl(flagId: number): string {
+  // The desktop webview's origin (tauri://localhost) opens nothing for a
+  // teammate; the API server shares the web app's origin, so use that.
+  const origin =
+    '__TAURI_INTERNALS__' in window
+      ? new URL(getServerUrl()).origin
+      : window.location.origin
+  return `${origin}/#tasks/overview?flag=${flagId}`
+}
+
+function copyFlagLink(flagId: number) {
+  const url = flagLinkUrl(flagId)
+  // Clipboard needs a secure context; show the URL so it can still be copied.
+  if (!navigator.clipboard) {
+    toast.error(`Couldn't copy. Link: ${url}`)
+    return
+  }
+  navigator.clipboard.writeText(url).then(
+    () => toast.success('Link copied'),
+    () => toast.error(`Couldn't copy. Link: ${url}`)
   )
 }
 
