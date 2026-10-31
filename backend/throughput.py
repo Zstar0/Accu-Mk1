@@ -31,6 +31,8 @@ from datetime import date, datetime, timedelta, timezone
 from typing import Iterable, Optional
 from zoneinfo import ZoneInfo
 
+from catalog.bw_keys import BW_NATIVE_KEYWORDS
+
 # January 2026 is a migration artifact (every sample shares one receipt
 # timestamp), so the series never starts before February.
 SERIES_START = date(2026, 2, 1)
@@ -44,7 +46,8 @@ HPLC_KEYWORDS = frozenset({
     "HPLC-IDENTITY", "HPLC-PURITY", "HPLC-QUANTITY", "HPLC-BLEND-PURITY", "HPLC-BLEND-TOTAL",
 })
 HPLC_PREFIXES = ("ID_", "ANALYTE-", "PUR_", "QTY_")
-BACW_KEYWORDS = frozenset({"Benzyl_Alcohol_Assay", "PH-DETERM", "FILL-NET-CONTENT"})
+# Legacy SENAITE trio + the native-born trio (spec 2026-10-05, MB2).
+BACW_KEYWORDS = frozenset({"Benzyl_Alcohol_Assay", "PH-DETERM", "FILL-NET-CONTENT"}) | BW_NATIVE_KEYWORDS
 # Legacy SENAITE keyword + the catalog-arc forms live in prod since 2026-09-01.
 STER_KEYWORDS = frozenset({"STER-PCR", "STERILITY-PCR", "STERILITY-USP71"})
 STER_CATEGORY = "Sterility"
