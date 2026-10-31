@@ -9,9 +9,11 @@ vi.mock('@/hooks/use-flags', () => ({
 vi.mock('@/components/flags/FlagActivityRow', () => ({
   FlagActivityRow: ({
     item,
+    returnTo,
   }: {
     item: { id: number; flag: { title: string } }
-  }) => <div>{item.flag.title}</div>,
+    returnTo?: string
+  }) => <div data-return-to={String(returnTo)}>{item.flag.title}</div>,
 }))
 
 const page = (titles: string[], next: string | null) => ({
@@ -55,5 +57,24 @@ describe('FlagActivityFeed', () => {
       await import('@/components/flags/FlagActivityFeed')
     render(<FlagActivityFeed />)
     expect(screen.getByText('No activity yet')).toBeInTheDocument()
+  })
+
+  it('passes returnTo to its rows', async () => {
+    mockUseFlagActivity.mockReturnValue({
+      data: { pages: [page(['a'], null)] },
+      isLoading: false,
+      isError: false,
+      refetch: vi.fn(),
+      fetchNextPage: vi.fn(),
+      hasNextPage: false,
+      isFetchingNextPage: false,
+    })
+    const { FlagActivityFeed } =
+      await import('@/components/flags/FlagActivityFeed')
+    const flyout = render(<FlagActivityFeed />)
+    expect(screen.getByText('a')).toHaveAttribute('data-return-to', 'undefined')
+    flyout.unmount()
+    render(<FlagActivityFeed returnTo="page" />)
+    expect(screen.getByText('a')).toHaveAttribute('data-return-to', 'page')
   })
 })

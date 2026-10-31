@@ -19,7 +19,7 @@ def test_assigned_message_has_action_title_context_and_link():
     assert "Vial cloudy" in text
     flat = str(blocks)
     assert "Vial 42" in flat and "Blocker" in flat and "Open" in flat
-    assert "https://mk1.example/#dashboard/orders?flag=7" in flat
+    assert "https://mk1.example/#tasks/overview?flag=7" in flat
 
 
 def test_comment_excerpt_truncated():
@@ -42,10 +42,12 @@ def test_link_hash_for_routes_to_the_entity_page():
     # seams._order_context's deep_link is {"kind": "order", "id": ...}).
     assert link_hash_for({"kind": "order", "id": "WP-6344"}, 7) == (
         "#senaite/receive-sample?id=WP-6344&flag=7")
-    # No usable deep link → dashboard fallback (thread still opens).
+    # No usable deep link → Tasks page fallback (thread still opens).
     assert link_hash_for({"kind": "none", "id": "42"}, 7) == (
-        "#dashboard/orders?flag=7")
-    assert link_hash_for(None, 7) == "#dashboard/orders?flag=7"
+        "#tasks/overview?flag=7")
+    assert link_hash_for({"kind": "document", "id": "5"}, 7) == (
+        "#tasks/overview?flag=7")
+    assert link_hash_for(None, 7) == "#tasks/overview?flag=7"
 
 
 def test_crafted_title_cannot_spoof_a_slack_link():
@@ -60,7 +62,7 @@ def test_crafted_title_cannot_spoof_a_slack_link():
     # the raw injected link markup must be gone
     assert "<https://evil.example|here>" not in flat
     # the legitimate deep link (its & is part of the URL) stays intact
-    assert "https://mk1.example/#dashboard/orders?flag=7" in flat
+    assert "https://mk1.example/#tasks/overview?flag=7" in flat
 
 
 def test_comment_excerpt_and_actor_label_are_escaped():
@@ -81,6 +83,7 @@ def test_build_message_uses_entity_link_hash_when_given():
     flat = str(blocks)
     assert "https://mk1.example/#senaite/sample-details?id=P-0134&flag=7" in flat
     assert "#dashboard/orders" not in flat
+    assert "#tasks/overview" not in flat
 
 
 def test_interactive_adds_action_buttons():

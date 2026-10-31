@@ -11,7 +11,11 @@ vi.mock('@/lib/flags-api', () => ({
 
 describe('hash navigation ?flag= deep link', () => {
   beforeEach(() => {
-    useUIStore.setState({ flagsFlyoutOpen: false, flagsThreadId: null })
+    useUIStore.setState({
+      flagsFlyoutOpen: false,
+      flagsThreadId: null,
+      flagsThreadReturnTo: null,
+    })
     queryClient.clear()
     vi.mocked(getFlag).mockClear()
   })
@@ -31,6 +35,36 @@ describe('hash navigation ?flag= deep link', () => {
     expect(getFlag).toHaveBeenCalledWith(42)
     // Seeded under the same key useFlag(42) reads — no duplicate fetch later.
     expect(queryClient.getQueryState(['flags', 42])).toBeDefined()
+  })
+
+  it('#tasks/overview?flag=42 opens the Tasks page with the thread marked', () => {
+    window.location.hash = '#tasks/overview?flag=42'
+    renderHook(() => useHashNavigation())
+    expect(useUIStore.getState()).toMatchObject({
+      activeSection: 'tasks',
+      flagsFlyoutOpen: true,
+      flagsThreadId: 42,
+      flagsThreadReturnTo: 'page',
+    })
+  })
+
+  it('a non-Tasks ?flag= open drops the page marker (per open, not per page)', () => {
+    // e.g. browser Back from the Tasks page to an earlier Slack-link entry.
+    useUIStore.getState().openFlagThread(5, { returnTo: 'page' })
+    window.location.hash = '#dashboard/orders?flag=9'
+    renderHook(() => useHashNavigation())
+    expect(useUIStore.getState()).toMatchObject({
+      flagsFlyoutOpen: true,
+      flagsThreadId: 9,
+      flagsThreadReturnTo: null,
+    })
+  })
+
+  it('navigating to a non-Tasks section clears the page marker', () => {
+    useUIStore.getState().openFlagThread(5, { returnTo: 'page' })
+    window.location.hash = '#dashboard/orders'
+    renderHook(() => useHashNavigation())
+    expect(useUIStore.getState().flagsThreadReturnTo).toBeNull()
   })
 
   it('ignores a non-numeric flag param', () => {

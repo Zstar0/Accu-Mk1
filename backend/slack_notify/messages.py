@@ -36,7 +36,7 @@ def _entity_label(flag: dict) -> str:
 def link_hash_for(deep_link: Optional[dict], flag_id: int) -> str:
     """Hash fragment for the DM's tap-through URL: land on the flagged
     entity's page AND open the flag thread (`?flag=` composes with any
-    route). Unresolvable entity → dashboard fallback, thread still opens."""
+    route). Unresolvable entity → Tasks page fallback, thread still opens."""
     kind = (deep_link or {}).get("kind")
     eid = quote(str((deep_link or {}).get("id", "")), safe="")
     if kind == "sample" and eid:
@@ -45,7 +45,7 @@ def link_hash_for(deep_link: Optional[dict], flag_id: int) -> str:
         return f"#hplc-analysis/worksheet-detail?id={eid}&flag={flag_id}"
     if kind == "order" and eid:
         return f"#senaite/receive-sample?id={eid}&flag={flag_id}"
-    return f"#dashboard/orders?flag={flag_id}"
+    return f"#tasks/overview?flag={flag_id}"
 
 
 def build_message(event: dict, category: str, actor_label: str,
