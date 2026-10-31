@@ -85,4 +85,19 @@ describe('CommentBody', () => {
     fireEvent.keyDown(dialog, { key: 'Escape' })
     await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull())
   })
+
+  // A deleted (404) or still-loading attachment keeps a src-less placeholder;
+  // clicking it must not open an empty full-screen dialog.
+  it('does not open the lightbox for an attachment that never resolved', async () => {
+    fetchUrl.mockResolvedValue(null)
+    const { CommentBody } = await import('@/components/flags/CommentBody')
+    render(
+      <CommentBody body="{attachment:5}" mentions={[]} users={new Map()} />
+    )
+    await waitFor(() => expect(fetchUrl).toHaveBeenCalledWith(5))
+    const img = document.querySelector('img.flag-attach') as HTMLImageElement
+    expect(img.getAttribute('src')).toBeNull()
+    fireEvent.click(img)
+    expect(screen.queryByRole('dialog')).toBeNull()
+  })
 })

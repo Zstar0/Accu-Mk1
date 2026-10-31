@@ -72,7 +72,7 @@ export function CommentBody({
         }}
       />
       <AttachmentLightbox
-        open={lightbox !== null}
+        open={!!lightbox}
         onOpenChange={open => {
           if (!open) setLightbox(null)
         }}
