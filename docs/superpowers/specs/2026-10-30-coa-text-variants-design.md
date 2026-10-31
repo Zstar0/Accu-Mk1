@@ -53,7 +53,8 @@ When a sample of that form gets a COA, the variant applies. A sample of any othe
 
 ## Anti-goals
 
-- **A certificate printing text meant for another form.** The variant must be picked by exactly the same form the spec resolver uses, so a section's text and its limits can never disagree.
+- **A certificate printing text meant for another form.** The variant must be picked by exactly the same form the spec resolver uses.
+- **A certificate that judges against powder limits without the powder disclosure.** The resolver falls back to the matrix or wildcard row for any service that has no row for the sample's form (backend/coa/spec_rules.py:139-168), and a peptide-tier row beats a form row. A variant must not strip the basis note or footnotes from a section whose limits did not come from that form's rules (see "Limits guard" below).
 - **A blank box that silently means "same as default" when the user meant "leave off".** Today the profile editor saves `trim() || null` (src/components/hplc/AnalysisProfilesPage.tsx:360-363 and 386-389), so blank and unset collapse into one value. Variants need an explicit three-way choice per field.
 - **Lost history.** Variants are switched off, never deleted, and every write is logged.
 - **A macro typo on a certificate.** Variant text goes through the same validators as profile text.
@@ -61,7 +62,7 @@ When a sample of that form gets a COA, the variant applies. A sample of any othe
 
 ## Constraints
 
-- **Additive only:** one new table, three new routes, one lookup in the section builder and one new editor block. Profile columns and profile routes are untouched.
+- **Additive only:** one new table, three new routes, one lookup in the section builder and one new editor block. Profile columns are untouched. The only profile route change is that profile delete logs the variants it removes (see Data).
 - Mk1 frontend stays on npm.
 - Backend suites run in a stack container, never against the host dev Postgres.
 - Deploy after lab hours.
@@ -87,6 +88,7 @@ New table `analysis_profile_coa_variants`, with its model in backend/models.py n
 
 - One active variant per profile and form: a partial unique index on `(analysis_profile_id, sample_form_id) WHERE active`. This is the pattern of `uq_analysis_service_specs_form_unit` (models.py:303-309).
 - Column names and lengths match the profile's, so the existing validators apply unchanged.
+- Profile delete: `DELETE /analysis-profiles/{id}` (main.py:21988) hard-deletes a profile with no custody history, and the CASCADE takes its variants with it. That route writes a `log_delete` row (`entity_type="profile_coa_variant"`) for each of the profile's variants, active or not, before the delete, so no variant disappears unlogged. My call: RESTRICT would turn this into an opaque 500, the failure the custody guard's comment there warns about.
 - Naming: catalog tables use the `analysis_` prefix (`analysis_service_specs`). The `lims_` prefix is for LIMS sample-side tables.
 
 ### Which text prints
@@ -104,13 +106,24 @@ For each section (the dict built at 514-529), each field resolves as follows:
 
 - A custom or leave-off basis note overrides the 1.55.0 hide, because the lab chose that text for this form on purpose. "Same as default" falls through to the default, and the hide still applies.
 - Title is `variant title or coa_section_title or name`.
-- `None` and `[]` are the exact values Josh's blanking produced on prod (basis note and footnotes were set to NULL), and those COAs published normally. COA Builder treats empty values as absent in both outputs:
+- `None` and `[]` are the exact values Josh's blanking produced on prod (basis note and footnotes were set to NULL), and those COAs published normally. COA Builder treats empty values as absent in both outputs. Line numbers are from coab master 2fba4f5 (2.35.6, the prod release); the workspace `coabuilder` checkout is older and has no native_sections.py.
   - PDF basis note: src/coabuilder_core/generator.py:1001
   - PDF footnotes: generator.py:1070
   - PDF method and prep line: src/coabuilder_core/native_sections.py:337-340
   - Digital payload: native_sections.py:440-443
 - `build_native_sections` has two callers, the parent document and the per-vial certificate (backend/coa/wire_document.py:29 and 51). Both get variants. Vials are judged by their parent's form (native_sections.py:364-365), and so is their text.
 - No new wire key. The published COA's stored document already records the text that printed.
+
+### Limits guard (proposed, Handler to confirm)
+
+Basis note and footnotes describe the limits; title, method and prep describe what the lab did to the sample. So the variant applies differently to the two groups:
+
+- **Title, method, prep:** follow the variant whenever the sample has that form.
+- **Basis note, footnotes:** follow the variant only when every printed row in the section was judged by a spec row filed for this sample's form (`spec.sample_form_id == sample_form_id`, tracked in the row loop next to `all_form_report_only` at 494-496).
+  - Otherwise these two fields use the default, with today's 1.55.0 hide.
+  - The builder logs `native_section_variant_limits_guard sample=... profile=...` so the fallback is visible.
+
+This keeps the powder disclosure on any section still judged by powder rows, for example a metal with no Nasal Spray rule, or a peptide-tier override. It still lets nasal prep text print on that section. Heavy metals does not trip the guard today: all four metals have Nasal Spray rules.
 
 ### API
 
@@ -143,9 +156,10 @@ The changes go in the COA display block of the profile slide-out panel (Analysis
 - Below them is a **Variants by sample form** list.
   - Each row shows the form with its icon (`SampleFormIcon`) and a one-line summary of what differs, for example "Prep: custom · Basis: left off · Footnotes: none".
   - Each row has Edit and Switch off.
-- **Add variant** asks for a form first (`SampleFormSelect`, leaving out forms that already have an active variant). Then each field gets a three-way control: Same as default / Custom / Leave off.
+- **Add variant** asks for a form first. Then each field gets a three-way control: Same as default / Custom / Leave off.
+  - The form picker copies the inline Form `Select` in ServiceSpecsSection.tsx:438-460 (`listSampleForms` + `SampleFormIcon`), leaving out forms that already have an active variant. Do not use `SampleFormSelect`: it PATCHes one sample's form.
   - Custom opens the input, prefilled with the default's text so the lab edits rather than retypes.
-  - Custom footnotes reuse the existing footnote list editor (the helpers at 460-484).
+  - Custom footnotes need the footnote list editor. Today it is inline markup driven by the helpers at 460-486. Pull it out into a small component that both the default and the variant editor use. The default editor's behavior does not change.
   - Title offers Same as default / Custom only.
 - A variant saves on its own (its own POST or PATCH), apart from the profile's Save, the way `ServiceSpecsSection` saves spec rows.
 - The macro hint at line 1112 applies to variant fields too.
@@ -153,15 +167,16 @@ The changes go in the COA display block of the profile slide-out panel (Analysis
 
 ### Rollout
 
-1. Ship Mk1 only, after lab hours. No COA Builder, IS or WP release.
-2. Josh adds the Heavy Metals / Nasal Spray variant with:
+1. Before building: confirm with Josh that the default prep he set at 19:09:59 on 10-30 is the wording he wants for powder. It prints on every powder heavy metals COA now. If it is not, correct the default first (a normal profile edit, logged).
+2. Ship Mk1 only, after lab hours. No COA Builder, IS or WP release.
+3. Josh adds the Heavy Metals / Nasal Spray variant with:
    - his nasal prep wording
    - basis note: Leave off
    - footnotes: none
    - method: Same as default, or Custom if the nasal method line differs
    - No seed data: the text is Josh's.
-3. Build one nasal sample's sections read-only on prod (build in a transaction that is rolled back, nothing generated) and confirm the text before anyone regenerates a nasal COA.
-4. The four 10-30 nasal COAs are correct as published. They can be regenerated safely only after step 3.
+4. Build one nasal sample's and one powder sample's sections read-only on prod (in a transaction that is rolled back, nothing generated). Confirm the nasal one prints the variant and the powder one prints the default, before anyone regenerates a nasal COA.
+5. The four 10-30 nasal COAs are correct as published. They can be regenerated safely only after step 4.
 
 ### Tests
 
@@ -176,6 +191,9 @@ Backend, in a stack container:
 - Leave off gives `None` / `[]` on the wire.
 - "Same as default" keeps the 1.55.0 basis note hide. A custom basis note overrides it.
 - A per-vial certificate uses the parent's form.
+- Limits guard, a section where one row is judged by a matrix or wildcard row (no form rule for that service): the variant's prep prints, but its leave-off basis note and footnotes do not, so the default prints, and the guard log line fires.
+- Limits guard, a peptide-tier row in the section: same fallback.
+- Deleting a profile that has variants writes one `log_delete` row per variant.
 - A second active variant for the same profile and form returns 409. After switching the first off, the create succeeds.
 - An unknown macro returns 400, and so does a macro in a footnote label. `[]` footnotes are accepted.
 - Audit rows:
@@ -196,6 +214,13 @@ Frontend:
 - Switched-off variants are not listed in the editor. They stay in the table and the change log.
 - A variant whose form is later deactivated keeps working for samples that already have that form.
 - No new wire key records which variant printed.
+- Profile delete keeps CASCADE and logs each variant it removes.
+- The footnote list editor is pulled out into a shared component.
+
+## Open for the Handler
+
+- **Limits guard:** keep it as proposed (basis note and footnotes follow the variant only when the form's own rules judged every row), or drop it, so the variant always wins and keeping the variant's text in step with the spec rules is on the lab.
+- **Default prep wording (Josh):** is the 10-30 19:09:59 prep text right for powder? See Rollout step 1.
 
 ## Left to the builder
 
