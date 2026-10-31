@@ -61,4 +61,28 @@ describe('CommentBody', () => {
       screen.getByRole('dialog', { name: /attachment/i })
     ).toBeInTheDocument()
   })
+
+  // A transformed or contained ancestor (the slide-in flyout, the Tasks page
+  // root) becomes the containing block for `position: fixed`, so a lightbox
+  // rendered inside the comment was trapped in the message area (prod 10-30).
+  it('opens the lightbox outside the thread, full screen, and Escape closes it', async () => {
+    fetchUrl.mockResolvedValue('blob:abc')
+    const { CommentBody } = await import('@/components/flags/CommentBody')
+    render(
+      <div data-testid="thread" style={{ transform: 'translateX(0)' }}>
+        <CommentBody body="{attachment:5}" mentions={[]} users={new Map()} />
+      </div>
+    )
+    const img = await waitFor(() => {
+      const el = document.querySelector('img.flag-attach') as HTMLImageElement
+      expect(el.getAttribute('src')).toBe('blob:abc')
+      return el
+    })
+    fireEvent.click(img)
+    const dialog = screen.getByRole('dialog', { name: /attachment/i })
+    expect(screen.getByTestId('thread')).not.toContainElement(dialog)
+    expect(dialog.querySelector('img')?.getAttribute('src')).toBe('blob:abc')
+    fireEvent.keyDown(dialog, { key: 'Escape' })
+    await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull())
+  })
 })
