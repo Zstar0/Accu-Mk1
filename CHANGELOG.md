@@ -1,5 +1,17 @@
 # Changelog
 
+## v1.56.0 - 2026-10-30
+
+### Tasks: a full page for your flags
+- **Tasks is a new sidebar item for everyone.** It is the flags flyout as a full page, with the same tabs (Assigned to me, Raised by me, Watching, All open, Unread, Activity) laid out as a table: Item, Type, Title, Assignee, Status, Due, Last activity and Created.
+- **Sort by a column and drag a column edge to resize it.** The tab, the sort and the widths are saved to your account, so the page looks the way you left it on the next visit and on another computer.
+- **A task opens in the flyout you already know**, and closing it leaves you on the Tasks page.
+- **A Slack flag link whose item can't be opened now lands on the Tasks page** with the thread open, instead of the Orders dashboard.
+
+### Flags: copy a link, paste a screenshot
+- **Every flag has a "Copy link to this flag" button.** The link opens the Tasks page with that flag's thread open. From the desktop app it copies the web app link.
+- **Pasting a screenshot into a flag comment works on the live site now.** Before this, a pasted image never saved in production: storage refused the upload and the error was swallowed, so nothing happened. Uploads now go where the server is allowed to write, and an image that can't attach shows "Image didn't attach" with the reason. Images in document comments use the same storage and are fixed too.
+
 ## v1.55.0 - 2026-10-28
 
 Needs COA Builder 2.35.6 (deployed first, 2026-10-28).
