@@ -1,5 +1,11 @@
 # Changelog
 
+## v1.56.1 - 2026-10-30
+
+### Flags and Tasks
+- **A screenshot in a flag comment opens full screen.** Clicking the image used to show it inside the message area; now it covers the whole window. Escape closes the image and leaves the thread open. Images in document comments work the same way.
+- **The top bar has a Tasks button** between Worksheets and Flags. It opens the Tasks page. Flags still opens the flyout and keeps its counts.
+
 ## v1.56.0 - 2026-10-30
 
 ### Tasks: a full page for your flags

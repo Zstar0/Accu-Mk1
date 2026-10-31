@@ -2,7 +2,9 @@
  * Renders one comment body: markdown-lite HTML (via renderCommentHtml) set with
  * dangerouslySetInnerHTML, then an effect resolves each attachment token's
  * <img> to a bearer-authed blob object URL (module-pure: the backend serves
- * bytes, not public URLs). Clicking an attachment image opens a lightbox.
+ * bytes, not public URLs). Clicking an attachment image opens the app's
+ * lightbox, portaled to <body>: the thread sits in a transformed flyout, which
+ * traps any `position: fixed` overlay rendered inside it.
  */
 import { useEffect, useMemo, useRef, useState } from 'react'
 import {
@@ -10,6 +12,7 @@ import {
   type MentionToken,
 } from '@/components/flags/comment-markdown'
 import { nameForUser, type UserMap } from '@/components/flags/flag-users'
+import { AttachmentLightbox } from '@/components/senaite/AttachmentLightbox'
 import { fetchFlagAttachmentUrl } from '@/lib/flags-api'
 
 export function CommentBody({
@@ -58,7 +61,7 @@ export function CommentBody({
     <>
       <div
         ref={ref}
-        className="flag-body break-words [overflow-wrap:anywhere] text-[13px] leading-relaxed text-foreground/90 [&_p]:m-0 [&_a]:text-primary [&_a]:underline [&_code]:rounded [&_code]:bg-muted [&_code]:px-1 [&_pre]:max-w-full [&_pre]:overflow-x-auto [&_pre]:rounded [&_pre]:bg-muted [&_pre]:p-2 [&_ul]:list-disc [&_ul]:pl-4 [&_ol]:list-decimal [&_ol]:pl-4 [&_.flag-mention]:rounded [&_.flag-mention]:bg-primary/15 [&_.flag-mention]:px-1 [&_.flag-mention]:font-medium [&_.flag-mention]:text-primary [&_img.flag-attach]:mt-1 [&_img.flag-attach]:max-h-48 [&_img.flag-attach]:cursor-pointer [&_img.flag-attach]:rounded [&_img.flag-attach]:border"
+        className="flag-body break-words [overflow-wrap:anywhere] text-[13px] leading-relaxed text-foreground/90 [&_p]:m-0 [&_a]:text-primary [&_a]:underline [&_code]:rounded [&_code]:bg-muted [&_code]:px-1 [&_pre]:max-w-full [&_pre]:overflow-x-auto [&_pre]:rounded [&_pre]:bg-muted [&_pre]:p-2 [&_ul]:list-disc [&_ul]:pl-4 [&_ol]:list-decimal [&_ol]:pl-4 [&_.flag-mention]:rounded [&_.flag-mention]:bg-primary/15 [&_.flag-mention]:px-1 [&_.flag-mention]:font-medium [&_.flag-mention]:text-primary [&_img.flag-attach]:mt-1 [&_img.flag-attach]:max-h-48 [&_img.flag-attach]:cursor-zoom-in [&_img.flag-attach]:rounded [&_img.flag-attach]:border"
         // Safe: `html` is DOMPurify-sanitized in renderCommentHtml (spec §6/§11).
         dangerouslySetInnerHTML={{ __html: html }}
         onClick={e => {
@@ -68,20 +71,15 @@ export function CommentBody({
           }
         }}
       />
-      {lightbox && (
-        <div
-          role="dialog"
-          aria-label="attachment preview"
-          className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-4"
-          onClick={() => setLightbox(null)}
-        >
-          <img
-            src={lightbox}
-            alt="attachment full size"
-            className="max-h-full max-w-full rounded"
-          />
-        </div>
-      )}
+      <AttachmentLightbox
+        open={!!lightbox}
+        onOpenChange={open => {
+          if (!open) setLightbox(null)
+        }}
+        src={lightbox}
+        alt="Attachment"
+        meta={{}}
+      />
     </>
   )
 }
