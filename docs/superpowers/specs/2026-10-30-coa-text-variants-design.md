@@ -41,6 +41,7 @@ When a sample of that form gets a COA, the variant applies. A sample of any othe
 - The lab manages variants in the Mk1 profile editor. A text change needs no deploy.
 - Variant edits are audited like every other catalog edit.
 - Generating, regenerating or reissuing a COA picks up the variant with no extra step.
+- The flow and the overrides are obvious in the editor: which text prints for a form, where it came from, and why any of it is being held back (Handler, 2026-10-30).
 
 ## Non-goals (for now)
 
@@ -114,7 +115,7 @@ For each section (the dict built at 514-529), each field resolves as follows:
 - `build_native_sections` has two callers, the parent document and the per-vial certificate (backend/coa/wire_document.py:29 and 51). Both get variants. Vials are judged by their parent's form (native_sections.py:364-365), and so is their text.
 - No new wire key. The published COA's stored document already records the text that printed.
 
-### Limits guard (proposed, Handler to confirm)
+### Limits guard (Handler kept it, 2026-10-30)
 
 Basis note and footnotes describe the limits; title, method and prep describe what the lab did to the sample. So the variant applies differently to the two groups:
 
@@ -150,20 +151,66 @@ These routes mirror the spec routes (main.py:4773-4870).
 
 ### Profile editor
 
-The changes go in the COA display block of the profile slide-out panel (AnalysisProfilesPage.tsx, from line 1107).
+The Handler approved this layout from a clickable mockup on 2026-11-02: [2026-10-30-coa-text-variants-mockup.html](2026-10-30-coa-text-variants-mockup.html). Its nasal prep and footnote text are placeholders. Where the mockup and this section differ, this section wins.
 
-- The existing fields get a **Default** heading. Their behavior does not change.
-- Below them is a **Variants by sample form** list.
-  - Each row shows the form with its icon (`SampleFormIcon`) and a one-line summary of what differs, for example "Prep: custom · Basis: left off · Footnotes: none".
-  - Each row has Edit and Switch off.
-- **Add variant** asks for a form first. Then each field gets a three-way control: Same as default / Custom / Leave off.
-  - The form picker copies the inline Form `Select` in ServiceSpecsSection.tsx:438-460 (`listSampleForms` + `SampleFormIcon`), leaving out forms that already have an active variant. Do not use `SampleFormSelect`: it PATCHes one sample's form.
-  - Custom opens the input, prefilled with the default's text so the lab edits rather than retypes.
-  - Custom footnotes need the footnote list editor. Today it is inline markup driven by the helpers at 460-486. Pull it out into a small component that both the default and the variant editor use. The default editor's behavior does not change.
-  - Title offers Same as default / Custom only.
-- A variant saves on its own (its own POST or PATCH), apart from the profile's Save, the way `ServiceSpecsSection` saves spec rows.
-- The macro hint at line 1112 applies to variant fields too.
-- Variants can be set up before the profile is armed (`coa_archetype` NULL). Like the default text, they do nothing until then.
+The test for every choice below: someone opening the panel can see which text prints for a form, and why, without being told. On screen the word is "version". "Variant" is only for code and schema.
+
+**Where it lives.** A new section, "COA text by sample form", in the profile slide-out panel (src/components/hplc/AnalysisProfilesPage.tsx). It goes after the Save Changes button (1367-1373) and before Members (1376), in edit mode only. Members and Ride Hosts already sit there with their own Save buttons. Its intro line: "Every sample prints the Default text above. A form listed here prints its own version instead, field by field."
+
+**The Default fields.** They behave as they do today. The COA display block (1111) gets a "Default text" heading. When the profile has versions, it also gets one line per form that overrides something, for example "Nasal Spray overrides prep, basis note and footnotes", so whoever edits the Default sees which forms do not follow it.
+
+**The list.** One card per active version.
+- Closed, a card shows the form's icon and name, a summary, and Edit. The summary reads "Overrides: basis note left off, prep custom", or "Same as default (no changes yet)".
+- Edit opens the editor in place. One card is open at a time.
+- A card with unsaved edits shows an "Unsaved" tag.
+
+**Add form.** The button opens a form picker that copies the inline `Select` in ServiceSpecsSection.tsx:438-460 (`listSampleForms` + `SampleFormIcon`), listing active forms that have no active version. Do not use `SampleFormSelect`: it PATCHes one sample's form. Picking a form opens a new card with every field on Same as default. Nothing is written until Save.
+
+**The editor.** From top to bottom: the guard line, the macro hint (the text at line 1112), five field rows, the preview, the buttons.
+
+| Field | Choices | Label |
+|---|---|---|
+| Section title | Same as default, Custom | |
+| Basis note | Same as default, Custom, Leave off | "describes the limits" |
+| Method | Same as default, Custom, Leave off | |
+| Sample prep | Same as default, Custom, Leave off | |
+| Footnotes | Same as default, Custom, Leave off | "describes the limits" |
+
+The choice is a `ToggleGroup type="single"` (src/components/ui/toggle-group.tsx). Radix sends an empty value when the active item is clicked again: ignore it, so a field always has a choice. Each choice shows what it means right under the control:
+
+- **Same as default:** the Default's text, grayed, tagged "Default". The title falls back to the profile name, as it does on the wire. A blank Default says "The Default is blank, so nothing prints".
+- **Custom:** the input, prefilled with the Default's text so the lab edits rather than retypes. Footnotes use the footnote list editor. Today that is inline markup driven by the helpers at 460-486. Pull it out into a small component that both the Default and the version editor use, with no change to the Default's behavior.
+- **Leave off:** "Not printed on Nasal Spray COAs".
+
+Inherited and prefilled text come from the saved profile (`editingProfile`), not from unsaved typing in the Default boxes, because only saved text prints. Text typed under Custom survives switching to another choice and back while the editor stays open.
+
+**The guard line.** It shows only while Basis note or Footnotes is on something other than Same as default, because the guard changes nothing otherwise. It reads the rules of the panel's members (`selectedOrder`), with one `listServiceSpecs` call per member via `useQueries`, only while an editor is open. That route returns active rows only, with `sample_form_id` and `peptide_id`. A member "has a rule" when one of its rows has `sample_form_id` equal to this form and no `peptide_id`.
+
+| State | Line |
+|---|---|
+| Loading | "Checking the Nasal Spray rules..." |
+| Any call failed, or the profile has no members | "Could not confirm the Nasal Spray rules." Never green. |
+| Every member has a rule (green) | "All 4 services have a Nasal Spray rule, so this version's basis note and footnotes print." |
+| A member has none (amber) | "Arsenic has no Nasal Spray rule, so it is judged on its general limits. A Nasal Spray COA that includes it keeps the Default basis note and footnotes. Title, method and prep still use this version." Each name links to its rules with `navigateToAnalysisService` (src/store/ui-store.ts), labeled "Add the rule". |
+
+- When a member has an active peptide rule, either line adds: "A peptide-specific rule also keeps the Default basis note and footnotes." The editor cannot resolve this per sample.
+- In the amber state, Basis note and Footnotes (when overridden) also say "Held: the Default prints on a COA that includes Arsenic".
+- This line is advice. A COA prints only the rows on that sample, so the line can warn about a service a given sample does not have. The builder's check on printed rows (Limits guard, above) decides what prints.
+
+**The preview.** Caption: "What prints on a Nasal Spray COA". It is built in the browser from the editor's current state, so it shows what Save would do. It shows the title and basis note, the members as rows with a dash for the result, the method and prep line, and the footnotes.
+- Every piece carries a tag: "Default", "Nasal Spray", or "Default, held". A missing piece says so: "no basis note", "no footnotes".
+- It assumes every member is on the COA. Its held state matches the guard line.
+- A basis note on Same as default follows the 1.55.0 hide. When every member's rule for this form has `rule_kind == "informational"`, the preview says "no basis note" and tags it "Default, hidden: every row is report only". Without this, the preview would show a basis note that the COA leaves off.
+- `{lod}` and `[ ]` print as typed, with the note "{lod} fills in from each sample's results". The preview makes no backend call and does not try to match the PDF layout.
+
+**The buttons.**
+- **Save Nasal Spray text:** POST or PATCH, disabled until something changed. The PATCH sends all five `coa_*` fields, with `null` for Same as default. Custom with blank text blocks Save with "Type the text, or choose Leave off" (for the title: "Type the title, or choose Same as default").
+- **Cancel:** drops the edits and closes the card.
+- **Stop using this version** (existing versions only): `window.confirm`, the page's pattern at line 405, with "Stop using the Nasal Spray version? Nasal Spray COAs go back to the Default text. Published COAs stay as they are until they are regenerated." Then PATCH `active: false`. Adding that form again starts on Same as default. The old text stays in the change log.
+
+**Unsaved edits.** Save Changes closes the panel (line 396), so it would silently drop an open version's edits. `closePanel` and the "Add the rule" links ask first through `window.confirm` when a version has unsaved edits.
+
+Variants can be set up before the profile is armed (`coa_archetype` NULL). Like the default text, they do nothing until then.
 
 ### Rollout
 
@@ -172,7 +219,7 @@ The changes go in the COA display block of the profile slide-out panel (Analysis
 3. Josh adds the Heavy Metals / Nasal Spray variant with:
    - his nasal prep wording
    - basis note: Leave off
-   - footnotes: none
+   - footnotes: Leave off
    - method: Same as default, or Custom if the nasal method line differs
    - No seed data: the text is Josh's.
 4. Build one nasal sample's and one powder sample's sections read-only on prod (in a transaction that is rolled back, nothing generated). Confirm the nasal one prints the variant and the powder one prints the default, before anyone regenerates a nasal COA.
@@ -203,7 +250,17 @@ Backend, in a stack container:
 
 Frontend:
 - Each three-way control maps correctly: Same as default → `null`, Leave off → `''` (footnotes `[]`), Custom → text.
-- Custom with empty or whitespace-only text blocks Save.
+- Clicking the active choice again keeps it.
+- Custom with empty or whitespace-only text blocks Save, with its message.
+- Guard line:
+  - green only when every call succeeded and every member has a rule for this form
+  - a failed call or no members is never green
+  - hidden while Basis note and Footnotes are both Same as default
+  - amber names the service and marks the overridden limit fields "Held"
+- Preview:
+  - tags follow the choice: Default, the form's name, or "Default, held"
+  - a basis note on Same as default shows as hidden when every member's rule for this form is `informational`
+- Closing the panel with unsaved version edits asks first. Cancelling that keeps the panel and the edits.
 
 ## My calls (Handler to confirm)
 
@@ -216,10 +273,16 @@ Frontend:
 - No new wire key records which variant printed.
 - Profile delete keeps CASCADE and logs each variant it removes.
 - The footnote list editor is pulled out into a shared component.
+- The section sits under Save Changes and above Members.
+- One card is open at a time. A new form writes nothing until Save.
+- The form picker lists active forms only.
+- The guard line shows only while Basis note or Footnotes is overridden. The peptide sentence shows only when a member has an active peptide rule.
+- The preview is built in the browser and is not a real render. Macros print as typed.
+- Closing the panel with unsaved version edits asks first. This is new behavior: the panel has no such check for its other sections, and Save Changes closes it.
 
 ## Open for the Handler
 
-- **Limits guard:** keep it as proposed (basis note and footnotes follow the variant only when the form's own rules judged every row), or drop it, so the variant always wins and keeping the variant's text in step with the spec rules is on the lab.
+- ~~Limits guard~~: kept (Handler, 10-30).
 - **Default prep wording (Josh):** is the 10-30 19:09:59 prep text right for powder? See Rollout step 1.
 
 ## Left to the builder
