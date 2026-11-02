@@ -442,6 +442,17 @@ git commit -- backend/calculations/hplc_processor.py backend/tests/test_hplc_pro
     problems with whatever this function returns. Without the scoping, every liquid row is
     flagged and the declared volume is never read, which no unit test in this task would catch
     because they all pass forward weights.
+  - **A stock-only problem must stop nulling the dilution factor** (Task 2's review, Minor 2).
+    Task 2 carries one `problem` value and wraps both `dilution_factor` and `stock_volume_ml`
+    in `None if problem else ...`, so a row whose dilution legs are fine loses a perfectly
+    good factor. Two of the five flagged production rows are exactly that: a diluent leg of
+    `0.0` and a sample leg of `1500.0`, giving a legitimate dilution factor of `1.0` for a
+    neat injection, with only the stock leg unentered. Once the stock-leg test lives in
+    `stock_volume_ml`, keep the two decisions separate: a stock problem nulls
+    `stock_volume_ml` only, a dilution-leg problem nulls `dilution_factor` only, and
+    `quantity_mg` is None whenever either is. `problem` keeps reporting the first code by the
+    precedence Task 2 pinned. This narrows the sign-off again, so **the sign-off text is
+    written from the end of this plan, never from Task 2's commits.**
   - `calculate_dilution_factor`'s `density` parameter widens from `float` to
     `Optional[float]`, which is what the `no_density` guard below requires. Task 2's and
     Task 3's narrower annotation is superseded here.
@@ -533,6 +544,23 @@ def test_an_unweighed_stock_vial_is_flagged_for_powder_but_not_for_liquid():
     assert stock_volume_ml("powder", w, 997.1)[1] == "stock_diluent"
     assert stock_volume_ml("bac", w, 997.1)[1] == "stock_diluent"
     assert stock_volume_ml("liquid", w, 997.1, declared_volume_ml=3.0) == (3.0, None)
+
+def test_a_stock_only_problem_keeps_a_computable_dilution_factor():
+    # The two prod rows behind Task 2's review Minor 2: dilution legs fine, stock
+    # leg unentered. The factor is a real 1.0 and only the stock volume is unknown.
+    w = replace(FORWARD_WEIGHTS, stock_vial_empty=0.0, stock_vial_with_diluent=0.0,
+                dil_vial_with_diluent=FORWARD_WEIGHTS.dil_vial_empty)
+    d = calculate_dilution_factor(w, 997.1)
+    assert d["problem"] == "stock_diluent"
+    assert d["stock_volume_ml"] is None
+    assert d["dilution_factor"] is not None
+
+def test_a_dilution_leg_problem_keeps_a_computable_stock_volume():
+    w = replace(FORWARD_WEIGHTS, dil_vial_with_diluent=FORWARD_WEIGHTS.dil_vial_empty - 1)
+    d = calculate_dilution_factor(w, 997.1)
+    assert d["problem"] == "diluent"
+    assert d["dilution_factor"] is None
+    assert d["stock_volume_ml"] is not None
 
 def test_calculate_dilution_factor_reaches_the_declared_volume_for_a_liquid_row():
     # The integration path: the whole point of scoping stock_diluent by form.
