@@ -1026,12 +1026,21 @@ class HPLCAnalysis(Base):
     sample_id_label: Mapped[str] = mapped_column(String(200), nullable=False)  # e.g., "P-0142"
     peptide_id: Mapped[int] = mapped_column(ForeignKey("peptides.id"), nullable=False)
 
-    # Tech inputs: 5 balance weights (mg)
-    stock_vial_empty: Mapped[float] = mapped_column(Float, nullable=False)
-    stock_vial_with_diluent: Mapped[float] = mapped_column(Float, nullable=False)
+    # Tech inputs: 5 balance weights (mg). The two stock-vial weighings are nullable
+    # because a liquid prep never weighs its stock vial (its volume is declared).
+    stock_vial_empty: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    stock_vial_with_diluent: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
     dil_vial_empty: Mapped[float] = mapped_column(Float, nullable=False)
     dil_vial_with_diluent: Mapped[float] = mapped_column(Float, nullable=False)
     dil_vial_with_diluent_and_sample: Mapped[float] = mapped_column(Float, nullable=False)
+
+    # Prep form and the weighings that only some preps have. All nullable: rows written
+    # before these existed are one-step powder rows and carry NULL.
+    prep_form: Mapped[Optional[str]] = mapped_column(String(10), nullable=True)  # powder | liquid | bac
+    declared_volume_ml: Mapped[Optional[float]] = mapped_column(Float, nullable=True)  # liquid: the declared stock volume
+    int_vial_empty: Mapped[Optional[float]] = mapped_column(Float, nullable=True)  # mg, two-step dilution's intermediate vial
+    int_vial_with_diluent: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    int_vial_with_diluent_and_sample: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
 
     # Intermediate calculations
     dilution_factor: Mapped[Optional[float]] = mapped_column(Float, nullable=True)

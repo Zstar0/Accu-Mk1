@@ -44,7 +44,7 @@ class CalibrationParams:
 class PeptideParams:
     """Peptide reference parameters for identity check."""
     reference_rt: Optional[float]
-    rt_tolerance: float
+    rt_tolerance: Optional[float]  # nullable column; calculate_identity gives a reason for None
     diluent_density: float  # mg/mL
     # Phase 13: standard injection RT override
     standard_injection_rt: Optional[float] = None
@@ -64,6 +64,11 @@ class AnalysisInput:
     peptide: PeptideParams
     # Intermediate vial of a two-step dilution; None for the usual one-step prep
     intermediate: Optional[IntermediateWeights] = None
+    # How the stock volume is obtained (stock_volume_ml). The defaults are the only path
+    # that existed before the form reached the engine, so every caller that sets neither
+    # computes exactly as it always did.
+    form: str = "powder"
+    declared_volume_ml: Optional[float] = None
 
 
 def _round_or_none(value: Optional[float], places: int) -> Optional[float]:
@@ -664,6 +669,14 @@ def calculate_identity(
             "error": "No reference RT set for this peptide",
         }
 
+    # rt_tolerance is a nullable column passed straight through. Compared as None it
+    # raises; compared as NaN it is a silent False, which reads as "does not conform".
+    if not _finite(peptide.rt_tolerance):
+        return {
+            "conforms": None,
+            "error": "No RT tolerance set for this peptide",
+        }
+
     rts = []
     for inj in injections:
         main_idx = inj.get("main_peak_index", -1)
@@ -706,6 +719,8 @@ def process_hplc_analysis(input_data: AnalysisInput) -> dict:
         input_data.weights,
         input_data.peptide.diluent_density,
         intermediate=input_data.intermediate,
+        form=input_data.form,
+        declared_volume_ml=input_data.declared_volume_ml,
     )
     trace["dilution"] = dilution
 

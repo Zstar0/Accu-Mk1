@@ -440,6 +440,16 @@ def _run_migrations():
         "ALTER TABLE calibration_curves ADD COLUMN IF NOT EXISTS updated_by_email VARCHAR(320)",
         "ALTER TABLE hplc_analyses ADD COLUMN IF NOT EXISTS processed_by_user_id INTEGER",
         "ALTER TABLE hplc_analyses ADD COLUMN IF NOT EXISTS processed_by_email VARCHAR(320)",
+        # HPLC results engine (2026-11): prep form, declared volume and the intermediate vial's weighings.
+        # A swallowed failure here leaves the column missing in prod: check information_schema after deploy.
+        "ALTER TABLE hplc_analyses ADD COLUMN IF NOT EXISTS prep_form VARCHAR(10)",
+        "ALTER TABLE hplc_analyses ADD COLUMN IF NOT EXISTS declared_volume_ml DOUBLE PRECISION",
+        "ALTER TABLE hplc_analyses ADD COLUMN IF NOT EXISTS int_vial_empty DOUBLE PRECISION",
+        "ALTER TABLE hplc_analyses ADD COLUMN IF NOT EXISTS int_vial_with_diluent DOUBLE PRECISION",
+        "ALTER TABLE hplc_analyses ADD COLUMN IF NOT EXISTS int_vial_with_diluent_and_sample DOUBLE PRECISION",
+        # A liquid prep never weighs its stock vial, so those two weighings are NULL for it.
+        "ALTER TABLE hplc_analyses ALTER COLUMN stock_vial_empty DROP NOT NULL",
+        "ALTER TABLE hplc_analyses ALTER COLUMN stock_vial_with_diluent DROP NOT NULL",
         # Phase 17: Worksheet item SENAITE received date + prep status
         "ALTER TABLE worksheet_items ADD COLUMN IF NOT EXISTS date_received TIMESTAMP",
         "ALTER TABLE worksheet_items ADD COLUMN IF NOT EXISTS prep_status VARCHAR(20) DEFAULT 'ready'",

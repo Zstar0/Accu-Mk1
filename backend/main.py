@@ -6,6 +6,7 @@ Provides REST API for scientific calculations, database access, and audit loggin
 import asyncio
 import functools
 import json
+import math
 import os
 import re
 import secrets
@@ -16,7 +17,7 @@ from datetime import datetime, date, time, timezone, timedelta
 from decimal import Decimal, InvalidOperation
 from zoneinfo import ZoneInfo
 from pathlib import Path
-from typing import Any, Literal, Optional, Union
+from typing import Annotated, Any, Literal, Optional, Union
 from uuid import UUID
 
 # App version: prefer APP_VERSION env var (set by Docker build-arg),
@@ -34,7 +35,8 @@ APP_VERSION = _read_app_version()
 
 from fastapi import BackgroundTasks, FastAPI, Body, Depends, Form, HTTPException, Header, Query, Request, Response, UploadFile, status
 from fastapi.middleware.cors import CORSMiddleware
-from pydantic import BaseModel, ConfigDict, Field, field_validator, validator, PrivateAttr
+from pydantic import BaseModel, BeforeValidator, ConfigDict, Field, ValidationError, field_validator, model_validator, validator, PrivateAttr
+from pydantic_core import InitErrorDetails, PydanticCustomError
 from sqlalchemy.orm import Session, joinedload
 from sqlalchemy import select, desc, delete, update, func, extract, and_, or_
 from sqlalchemy.exc import IntegrityError
@@ -94,7 +96,8 @@ from parsers.peakdata_csv_parser import parse_hplc_files, calculate_purity
 from calculations import CalculationEngine
 from calculations.calibration import calculate_calibration_curve
 from calculations.hplc_processor import (
-    process_hplc_analysis, AnalysisInput, WeightInputs, CalibrationParams, PeptideParams
+    PREP_FORMS, process_hplc_analysis, AnalysisInput, IntermediateWeights, WeightInputs,
+    CalibrationParams, PeptideParams,
 )
 from file_watcher import FileWatcher
 from sub_samples.routes import router as sub_samples_router
@@ -6753,13 +6756,51 @@ async def delete_calibration(
 
 # --- Full HPLC Analysis Endpoint ---
 
+# A balance reading is in milligrams. These ceilings are typo guards, not calibration
+# limits: 1e9 mg is a tonne, far past the heaviest bench balance, so no real reading is
+# anywhere near it. They keep NaN, infinity and a stray exponent out of the engine (two
+# readings near 1e308 would otherwise subtract to infinity). Zero is allowed: both
+# frontend callers send 0 for an unentered weighing, and the engine already turns that
+# into a refused row with a problem code.
+MAX_WEIGHING_MG = 1e9
+MAX_DECLARED_VOLUME_ML = 1e6
+
+
+def _text_if_not_finite(value):
+    """Python's json module accepts NaN and Infinity, so a raw client can send them. The
+    422 FastAPI builds for a refused value echoes it back, and Starlette cannot encode a
+    NaN, so the refusal would surface as a 500. Handing the field its text form ("nan")
+    gets the same refusal with a value that serializes."""
+    return repr(value) if isinstance(value, float) and not math.isfinite(value) else value
+
+
+_Weighing = Annotated[
+    float,
+    Field(allow_inf_nan=False, ge=-MAX_WEIGHING_MG, le=MAX_WEIGHING_MG),
+    BeforeValidator(_text_if_not_finite),  # after Field, or Field's constraints are not applied to the float
+]
+
+_STOCK_WEIGHINGS = ("stock_vial_empty", "stock_vial_with_diluent")
+_DILUTION_WEIGHINGS = ("dil_vial_empty", "dil_vial_with_diluent", "dil_vial_with_diluent_and_sample")
+_INTERMEDIATE_WEIGHINGS = ("int_vial_empty", "int_vial_with_diluent", "int_vial_with_diluent_and_sample")
+
+
 class HPLCWeightsInput(BaseModel):
-    """Five balance weights from the tech."""
-    stock_vial_empty: float
-    stock_vial_with_diluent: float
-    dil_vial_empty: float
-    dil_vial_with_diluent: float
-    dil_vial_with_diluent_and_sample: float
+    """Balance weights from the tech, in mg.
+
+    Every field is optional here because which ones a prep needs depends on its form,
+    and that is checked by HPLCAnalyzeRequest. A blank weighing arrives as None (a
+    missing key or null), never 0: the engine reads only None as "not weighed".
+    The three int_vial_* weighings are the intermediate vial of a two-step dilution.
+    """
+    stock_vial_empty: Optional[_Weighing] = None
+    stock_vial_with_diluent: Optional[_Weighing] = None
+    dil_vial_empty: Optional[_Weighing] = None
+    dil_vial_with_diluent: Optional[_Weighing] = None
+    dil_vial_with_diluent_and_sample: Optional[_Weighing] = None
+    int_vial_empty: Optional[_Weighing] = None
+    int_vial_with_diluent: Optional[_Weighing] = None
+    int_vial_with_diluent_and_sample: Optional[_Weighing] = None
 
 
 class HPLCAnalyzeRequest(BaseModel):
@@ -6769,6 +6810,14 @@ class HPLCAnalyzeRequest(BaseModel):
     calibration_curve_id: Optional[int] = None  # If provided, use this specific curve
     weights: HPLCWeightsInput
     injections: list[dict]  # Parsed injection data from /hplc/parse-files
+    # How the stock volume is obtained: powder and bac weigh the stock vial, liquid
+    # declares its volume. The route does not resolve this from the sample; the caller says.
+    prep_form: str = "powder"
+    declared_volume_ml: Annotated[
+        Optional[float],
+        Field(gt=0, le=MAX_DECLARED_VOLUME_ML, allow_inf_nan=False),
+        BeforeValidator(_text_if_not_finite),
+    ] = None
     # Provenance fields (Phase 10.5)
     sample_prep_id: Optional[int] = None
     instrument_id: Optional[int] = None
@@ -6781,6 +6830,57 @@ class HPLCAnalyzeRequest(BaseModel):
     # Phase 13.5: Audit trail — debug log and source file archive
     debug_log: Optional[list[dict]] = None  # [{level: str, msg: str}] from frontend buildDebugLines()
     source_files: Optional[list[dict]] = None  # [{filename: str, content: str, sha256: str}] archived source files
+
+    @field_validator("prep_form")
+    @classmethod
+    def _known_prep_form(cls, value: str) -> str:
+        if value not in PREP_FORMS:
+            raise ValueError(f"prep_form must be one of {', '.join(PREP_FORMS)}")
+        return value
+
+    @model_validator(mode="after")
+    def _required_inputs_for_the_form(self) -> "HPLCAnalyzeRequest":
+        """A blank required input is a request error naming the field, not a problem code
+        buried in a calculation trace. The engine guards the same conditions on its own;
+        this is the trust boundary in front of it.
+
+        powder and bac weigh a stock vial, so all five stock and dilution weighings are
+        needed. liquid never weighs its stock vial, so only the dilution vial's three are,
+        but it must declare its volume. The intermediate vial is all or nothing: a partly
+        weighed one passed through as "no intermediate" would print a one-step quantity,
+        too low by the intermediate factor.
+
+        The engine's codes for these (stock_diluent on a blank, intermediate_unweighed,
+        no_declared_volume) are unreachable from this route but not from the engine: a worksheet
+        path or a future caller reaches the engine directly, and it must keep refusing.
+        """
+        w = self.weights
+        needed = _DILUTION_WEIGHINGS if self.prep_form == "liquid" else _STOCK_WEIGHINGS + _DILUTION_WEIGHINGS
+        errors = [
+            (("weights", name), f"weights.{name} is required for a {self.prep_form} prep")
+            for name in needed
+            if getattr(w, name) is None
+        ]
+        if any(getattr(w, name) is not None for name in _INTERMEDIATE_WEIGHINGS):
+            errors += [
+                (
+                    ("weights", name),
+                    f"weights.{name} is required once any intermediate weighing is given (a two-step prep needs all three)",
+                )
+                for name in _INTERMEDIATE_WEIGHINGS
+                if getattr(w, name) is None
+            ]
+        if self.prep_form == "liquid" and self.declared_volume_ml is None:
+            errors.append((("declared_volume_ml",), "declared_volume_ml is required for a liquid prep"))
+        if errors:
+            raise ValidationError.from_exception_data(
+                type(self).__name__,
+                [
+                    InitErrorDetails(type=PydanticCustomError("missing_input", message), loc=loc, input=None)
+                    for loc, message in errors
+                ],
+            )
+        return self
 
 
 class HPLCAnalysisResponse(BaseModel):
@@ -6812,11 +6912,16 @@ class HPLCAnalysisResponse(BaseModel):
     identity_reference_source_id: Optional[str] = None  # e.g. "P-0111" for standard injection
     # Phase 13.5: Audit trail
     debug_log: Optional[list[dict]] = None
+    # HPLC results engine. Both are None for rows saved before they existed, and
+    # dilution_factor_steps is None again for a row whose quantity was refused.
+    prep_form: Optional[str] = None
+    dilution_factor_steps: Optional[dict] = None  # {"intermediate": float | None, "final": float}
 
 
 def _analysis_to_response(analysis: "HPLCAnalysis", peptide_abbreviation: str) -> "HPLCAnalysisResponse":
     """Convert an HPLCAnalysis ORM object to an HPLCAnalysisResponse."""
     identity_trace = (analysis.calculation_trace or {}).get("identity", {})
+    quantity_trace = (analysis.calculation_trace or {}).get("quantity", {})
     return HPLCAnalysisResponse(
         id=analysis.id,
         sample_id_label=analysis.sample_id_label,
@@ -6844,6 +6949,9 @@ def _analysis_to_response(analysis: "HPLCAnalysis", peptide_abbreviation: str) -
         identity_reference_source_id=identity_trace.get("reference_source_id"),
         # Phase 13.5: Audit trail
         debug_log=analysis.debug_log,
+        # HPLC results engine: the per-step factors live in the trace, not in a column
+        prep_form=analysis.prep_form,
+        dilution_factor_steps=quantity_trace.get("dilution_factor_steps"),
     )
 
 
@@ -6933,6 +7041,18 @@ async def run_hplc_analysis(
                 std_injection_rt = unlabeled[0][1].get("rt")
                 std_injection_source = unlabeled[0][1].get("source_sample_id")
 
+    # The intermediate vial of a two-step dilution. Passed whenever ANY of its weighings
+    # is present: the request layer already refuses a partial one, and if that were ever
+    # bypassed the engine reports it as unweighed rather than computing a one-step quantity.
+    w = request.weights
+    intermediate = None
+    if any(getattr(w, name) is not None for name in _INTERMEDIATE_WEIGHINGS):
+        intermediate = IntermediateWeights(
+            int_vial_empty=w.int_vial_empty,
+            int_vial_with_diluent=w.int_vial_with_diluent,
+            int_vial_with_diluent_and_sample=w.int_vial_with_diluent_and_sample,
+        )
+
     # Build analysis input
     analysis_input = AnalysisInput(
         injections=request.injections,
@@ -6951,6 +7071,9 @@ async def run_hplc_analysis(
             standard_injection_rt=std_injection_rt,
             standard_injection_source=std_injection_source,
         ),
+        intermediate=intermediate,
+        form=request.prep_form,
+        declared_volume_ml=request.declared_volume_ml,
     )
 
     # Run analysis
@@ -6965,6 +7088,11 @@ async def run_hplc_analysis(
         dil_vial_empty=request.weights.dil_vial_empty,
         dil_vial_with_diluent=request.weights.dil_vial_with_diluent,
         dil_vial_with_diluent_and_sample=request.weights.dil_vial_with_diluent_and_sample,
+        prep_form=request.prep_form,
+        declared_volume_ml=request.declared_volume_ml,
+        int_vial_empty=request.weights.int_vial_empty,
+        int_vial_with_diluent=request.weights.int_vial_with_diluent,
+        int_vial_with_diluent_and_sample=request.weights.int_vial_with_diluent_and_sample,
         dilution_factor=result.get("dilution_factor"),
         stock_volume_ml=result.get("stock_volume_ml"),
         avg_main_peak_area=result.get("avg_main_peak_area"),
