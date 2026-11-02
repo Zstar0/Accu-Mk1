@@ -257,6 +257,14 @@ injection while zero added stock is not.
   `"problem": Optional[str]` with the values `"stock_diluent"`, `"diluent"`, `"stock"` or
   `None`. When `problem` is not None, `dilution_factor` and `stock_volume_ml` are `None`
   rather than a number. Later tasks read `problem` to short-circuit.
+- **`stock_diluent` is computed inline and unconditionally in this task, and Task 4 relocates
+  it.** There is one prep form at this point and it is the default, so unconditional is
+  correct here. Task 4 introduces `form` and moves the stock-leg determination into
+  `stock_volume_ml`, where a `liquid` form must NOT raise it (its stock vial is never weighed,
+  so its stock leg is zero, and its volume is the declared one). Keep the stock-leg test in
+  one place and do not spread the threshold across helpers, so that relocation stays a move
+  rather than a rewrite. The two dilution-leg problems stay in `calculate_dilution_factor` for
+  good: every form has a final dilution vial.
 
 - [ ] **Step 1: Write the failing tests**
 
@@ -424,6 +432,16 @@ git commit -- backend/calculations/hplc_processor.py backend/tests/test_hplc_pro
   - `bac_volume_ml(mass_mg: Optional[float], water_density: Optional[float] = DILUENT_DENSITY_MG_ML, ba_density: float = BENZYL_ALCOHOL_DENSITY, bac_stock_ug_ml: float = BAC_STOCK_UG_ML) -> Optional[float]`
   - `stock_volume_ml(form: str, weights: WeightInputs, density: Optional[float], *, declared_volume_ml: Optional[float] = None, ba_density: float = BENZYL_ALCOHOL_DENSITY, bac_stock_ug_ml: float = BAC_STOCK_UG_ML) -> tuple[Optional[float], Optional[str]]`
     returning `(volume_ml, problem)`.
+  - **This function takes over Task 2's `stock_diluent` problem and scopes it by form.** Move
+    the threshold here; do not leave a second copy in `calculate_dilution_factor`. `powder`
+    and `bac` both weigh a stock vial, so both still raise `stock_diluent` when
+    `stock_vial_with_diluent - stock_vial_empty <= 0`. **`liquid` must not raise it**: its
+    stock vial is never weighed, so its stock leg is zero on every real row, and its volume is
+    the declared one. This mirrors `calc.js:204`, where the stock-leg problem is guarded by
+    `!preDissolved`. `calculate_dilution_factor` then combines its own two dilution-leg
+    problems with whatever this function returns. Without the scoping, every liquid row is
+    flagged and the declared volume is never read, which no unit test in this task would catch
+    because they all pass forward weights.
   - `calculate_dilution_factor`'s `density` parameter widens from `float` to
     `Optional[float]`, which is what the `no_density` guard below requires. Task 2's and
     Task 3's narrower annotation is superseded here.
@@ -493,6 +511,22 @@ def test_an_unknown_form_names_the_accepted_list():
 
 def test_a_null_diluent_density_says_why_instead_of_raising():
     assert stock_volume_ml("powder", FORWARD_WEIGHTS, None)[1] == "no_density"
+
+def test_an_unweighed_stock_vial_is_flagged_for_powder_but_not_for_liquid():
+    # A liquid row never weighs its stock vial, so its stock leg is zero on
+    # every real row. Powder keeps Task 2's behaviour.
+    w = replace(FORWARD_WEIGHTS, stock_vial_empty=0.0, stock_vial_with_diluent=0.0)
+    assert stock_volume_ml("powder", w, 997.1)[1] == "stock_diluent"
+    assert stock_volume_ml("bac", w, 997.1)[1] == "stock_diluent"
+    assert stock_volume_ml("liquid", w, 997.1, declared_volume_ml=3.0) == (3.0, None)
+
+def test_calculate_dilution_factor_reaches_the_declared_volume_for_a_liquid_row():
+    # The integration path: the whole point of scoping stock_diluent by form.
+    w = replace(FORWARD_WEIGHTS, stock_vial_empty=0.0, stock_vial_with_diluent=0.0)
+    d = calculate_dilution_factor(w, 997.1, form="liquid", declared_volume_ml=3.0)
+    assert d["problem"] is None
+    assert d["stock_volume_ml"] == 3.0
+    assert d["dilution_factor"] is not None
 ```
 
 - [ ] **Step 2: Run to verify they fail**
