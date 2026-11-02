@@ -138,7 +138,8 @@ def stock_volume_ml(
 
     Problems, and the stock-leg problem is decided HERE and nowhere else:
 
-        "stock_diluent"       powder or bac: the stock vial leg is <= 0 or not finite
+        "stock_diluent"       powder or bac: the stock vial leg is <= 0 or not finite,
+                              or its volume overflows (a density near zero)
                               (calc.js guards this with !preDissolved, so "liquid"
                               never raises it: its stock leg is zero on every real row)
         "no_density"          powder or bac: the diluent density is missing, not finite
@@ -167,12 +168,18 @@ def stock_volume_ml(
 
     if form == "bac":
         volume = bac_volume_ml(mass_mg, density, ba_density, bac_stock_ug_ml)
+        if volume is None:
+            # bac_volume_ml refuses only what was checked above or an overridden benzyl
+            # alcohol density or stock that makes the correction meaningless: a
+            # density-side gap, not a bench reading.
+            return None, "no_density"
     else:
         volume = mass_mg / density  # mg / (mg/mL) = mL
-    # bac_volume_ml refuses only what was checked above or an overridden benzyl alcohol
-    # density or stock that makes the correction meaningless; either way it is a
-    # density-side gap, not a bench reading.
-    return (None, "no_density") if volume is None else (volume, None)
+    if not _finite(volume):
+        # A usable density that is so small the volume overflows. Not a volume, and
+        # the stock leg's own code is the honest one for it.
+        return None, "stock_diluent"
+    return volume, None
 
 
 def calculate_intermediate(
@@ -197,8 +204,11 @@ def calculate_intermediate(
     finite number (NaN, infinity: calc.js num() reads those as null too), leaves the
     volumes that need it None and is NOT a problem: "dilution_factor" is then None
     with "problem" None, which the caller reads as unweighed. The same goes for a
-    density that is None, zero or not finite. Under a problem the two leg volumes
-    stay, so a tech can see them, and everything worked out from them is None.
+    density that is None, zero, negative or not finite (the one predicate the final
+    vial uses too; calc.js would turn a negative density into negative volumes), and
+    a volume or factor that overflows (calc.js round() reads that as null as well).
+    Under a problem the two leg volumes stay, so a tech can see them, and everything
+    worked out from them is None.
 
     THE CALLER'S OBLIGATION: a blank weighing must arrive as None, never as 0. A
     blank that arrives as 0.0 is not read as unweighed. An empty added-stock or
@@ -217,9 +227,10 @@ def calculate_intermediate(
     concentrations are.
     """
     def volume_ul(heavier: Optional[float], lighter: Optional[float]) -> Optional[float]:
-        if not (_finite(heavier) and _finite(lighter) and _finite(density)) or density == 0:
+        if not (_finite(heavier) and _finite(lighter) and _finite(density)) or density <= 0:
             return None
-        return (heavier - lighter) / density * 1000
+        volume = (heavier - lighter) / density * 1000
+        return volume if _finite(volume) else None
 
     diluent_vol_ul = volume_ul(weights.int_vial_with_diluent, weights.int_vial_empty)
     stock_vol_ul = volume_ul(weights.int_vial_with_diluent_and_sample, weights.int_vial_with_diluent)
@@ -236,6 +247,8 @@ def calculate_intermediate(
 
     # Past the guards above, a total means stock_vol_ul > 0, so neither division can fail.
     dilution_factor = None if total_vol_ul is None else total_vol_ul / stock_vol_ul
+    if not _finite(dilution_factor):  # a total or factor that overflowed is not a number
+        total_vol_ul = dilution_factor = None
 
     result = {
         "diluent_vol_ul": _round_or_none(diluent_vol_ul, 4),
@@ -281,9 +294,11 @@ def calculate_dilution_factor(
 
     Zero added diluent is a legal neat injection; zero added stock is not. A leg
     that is not a finite number (NaN, infinity: calc.js num() reads those as null)
-    counts as that leg's problem, and a leg so large its difference overflows is the
-    same. The stock-leg code is decided by stock_volume_ml, which raises it for
-    "powder" and "bac" only (a "liquid" stock vial is never weighed), and which adds
+    counts as that leg's problem. So does a leg whose difference, volume or factor
+    overflows (absurd magnitudes, or a density near zero): it is not a number the
+    arithmetic can use, and no NaN or infinity reaches the stored trace. The
+    stock-leg code is decided by stock_volume_ml, which raises it for "powder" and
+    "bac" only (a "liquid" stock vial is never weighed), and which adds
     "no_declared_volume" for a liquid row without a usable declared volume. A diluent
     density that is None, not finite or <= 0 is "no_density" (reported by the stock
     leg for powder and bac, and by the dilution vial for every form), so a nullable
@@ -308,7 +323,9 @@ def calculate_dilution_factor(
     calculate_quantity gates on: no quantity unless both are known. The audit values
     (masses, volumes) stay under a problem so a tech can see which weighing is wrong,
     except a number that cannot be made from a non-finite weighing, which is None
-    rather than NaN so the stored trace stays valid JSON.
+    rather than NaN so the stored trace stays valid JSON. A liquid row's stock vial is
+    never weighed, so its weighings are not read (they may be None) and its
+    "stock_mass_mg" is None.
 
     A two-step dilution declares an intermediate vial (calculate_intermediate), and
     "dilution_factor" stays the final step's factor. "dilution_factor_total" is the
@@ -334,8 +351,7 @@ def calculate_dilution_factor(
     concentration (its concForFinal): that is display before the balance, and a
     quantity from a plan rather than a reading would be a made-up result. So
     "dilution_factor_total" is None whenever the final or intermediate leg has a
-    problem or is unweighed. Weighings so large that a volume overflows are bounded
-    at the request boundary, not here.
+    problem or is unweighed.
 
     The stock concentration is not known here, so the stored "intermediate" dict
     has no "actual_conc_ug_ml" key. Its absence means "not computed here", not
@@ -350,9 +366,14 @@ def calculate_dilution_factor(
     diluent_mass_mg = weights.dil_vial_with_diluent - weights.dil_vial_empty
     sample_mass_mg = weights.dil_vial_with_diluent_and_sample - weights.dil_vial_with_diluent
 
-    # Volumes (µL), only from finite masses and a usable density.
+    # Volumes (µL), only from finite masses and a usable density. A volume that
+    # overflows (a density near zero) is not a volume.
     diluent_vol_ul = (diluent_mass_mg / density) * 1000 if density_ok and _finite(diluent_mass_mg) else None
     sample_vol_ul = (sample_mass_mg / density) * 1000 if density_ok and _finite(sample_mass_mg) else None
+    if not _finite(diluent_vol_ul):
+        diluent_vol_ul = None
+    if not _finite(sample_vol_ul):
+        sample_vol_ul = None
 
     # Dilution factor
     total_vol_ul = None
@@ -360,6 +381,8 @@ def calculate_dilution_factor(
     if diluent_vol_ul is not None and sample_vol_ul is not None:
         total_vol_ul = diluent_vol_ul + sample_vol_ul
         dilution_factor = total_vol_ul / sample_vol_ul if sample_vol_ul > 0 else 0
+    if not _finite(dilution_factor):  # also a total that overflowed
+        total_vol_ul = dilution_factor = None
 
     dilution_problem = None
     if not _finite(diluent_mass_mg) or diluent_mass_mg < 0:
@@ -368,11 +391,19 @@ def calculate_dilution_factor(
         dilution_problem = "stock"
     elif not density_ok:
         dilution_problem = "no_density"
+    elif diluent_vol_ul is None:  # past the checks above, only an overflow gets here
+        dilution_problem = "diluent"
+    elif dilution_factor is None:  # the sample volume, the total or the factor overflowed
+        dilution_problem = "stock"
 
     # Stock volume (mL) for the prep form. The stock-leg problem is decided by
     # stock_volume_ml and nowhere else: a liquid prep never weighs its stock vial, so
-    # its leg is always zero and must not be flagged.
-    stock_mass_mg = weights.stock_vial_with_diluent - weights.stock_vial_empty
+    # its leg is always zero and must not be flagged. For the same reason a liquid
+    # row's stock weighings are not read at all: a caller with nothing to weigh may
+    # pass None, which a subtraction would turn into a TypeError.
+    stock_mass_mg = (
+        None if form == "liquid" else weights.stock_vial_with_diluent - weights.stock_vial_empty
+    )
     stock_vol_ml, stock_problem = stock_volume_ml(
         form, weights, density, declared_volume_ml=declared_volume_ml
     )

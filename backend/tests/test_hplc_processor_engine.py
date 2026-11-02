@@ -341,8 +341,11 @@ def test_a_non_finite_intermediate_weighing_is_unweighed_not_a_nan_total(field, 
     json.dumps(d, allow_nan=False)  # the stored trace must stay valid JSON
 
 
-@pytest.mark.parametrize("bad", [math.nan, math.inf, 0.0, None])
+@pytest.mark.parametrize("bad", [math.nan, math.inf, 0.0, None, -DENSITY, -math.inf])
 def test_an_unusable_density_leaves_the_intermediate_unweighed(bad):
+    # One predicate for the whole engine: missing, not finite, zero or negative. A
+    # negative density used to give negative intermediate volumes and the bench code
+    # "diluent" while the final vial called the same input "no_density".
     i = calculate_intermediate(INT_WEIGHTS, STOCK_CONC, bad)
     assert i["problem"] is None and i["dilution_factor"] is None
 
@@ -611,9 +614,14 @@ def test_the_default_form_is_powder_and_the_form_changes_only_the_stock_volume()
     bac = calculate_dilution_factor(FORWARD_WEIGHTS, DENSITY, form="bac")
     for other in (liquid, bac):
         assert other["stock_volume_ml"] != default["stock_volume_ml"]
-        assert {k: v for k, v in other.items() if k != "stock_volume_ml"} == {
-            k: v for k, v in default.items() if k != "stock_volume_ml"
-        }
+    # Only the stock volume differs for bac; a liquid row also has no stock vial mass.
+    assert {k: v for k, v in bac.items() if k != "stock_volume_ml"} == {
+        k: v for k, v in default.items() if k != "stock_volume_ml"
+    }
+    assert liquid["stock_mass_mg"] is None
+    assert {k: v for k, v in liquid.items() if k not in ("stock_volume_ml", "stock_mass_mg")} == {
+        k: v for k, v in default.items() if k not in ("stock_volume_ml", "stock_mass_mg")
+    }
 
 
 def test_the_stock_volume_keeps_its_six_place_rounding_for_every_form():
@@ -626,14 +634,21 @@ def test_the_stock_volume_keeps_its_six_place_rounding_for_every_form():
     assert liquid["stock_volume_ml"] == 3.123457
 
 
-def test_a_liquid_row_never_reads_its_stock_vial():
+@pytest.mark.parametrize(
+    "stock_empty, stock_full",
+    [(math.nan, math.inf), (None, None), (0.0, 0.0)],
+    ids=["garbage", "absent", "zero"],
+)
+def test_a_liquid_row_never_reads_its_stock_vial(stock_empty, stock_full):
     # Not even to flag a garbage value: the stock vial of a pre-dissolved sample is
-    # never weighed (calc.js:204 guards the stock-leg problem with !preDissolved).
-    w = replace(FORWARD_WEIGHTS, stock_vial_empty=math.nan, stock_vial_with_diluent=math.inf)
+    # never weighed (calc.js:204 guards the stock-leg problem with !preDissolved), so
+    # a caller with nothing to weigh may pass None as well as zero. Reading None
+    # raised a TypeError before the stock volume was reached.
+    w = replace(FORWARD_WEIGHTS, stock_vial_empty=stock_empty, stock_vial_with_diluent=stock_full)
     d = calculate_dilution_factor(w, DENSITY, form="liquid", declared_volume_ml=3.0)
     assert d["problem"] is None
     assert d["stock_volume_ml"] == 3.0
-    assert d["stock_mass_mg"] is None  # an audit number the engine cannot make; not NaN
+    assert d["stock_mass_mg"] is None  # never weighed, so no audit mass
     json.dumps(d, allow_nan=False)
 
 
@@ -717,19 +732,23 @@ def test_a_final_dilution_leg_problem_nulls_the_factor_and_the_total_and_keeps_t
     assert d["intermediate"] == ok["intermediate"]
 
 
-def test_an_intermediate_problem_nulls_the_total_alone():
-    ok = _two_step()
-    d = _two_step(intermediate=INT_LEG_BAD)
-    assert d["problem"] == "intermediate_stock"
-    assert d["dilution_factor_total"] is None
-    assert d["dilution_factor"] == ok["dilution_factor"]
-    assert d["stock_volume_ml"] == ok["stock_volume_ml"]
+INT_DILUENT_BAD = replace(INT_WEIGHTS, int_vial_with_diluent=INT_WEIGHTS.int_vial_empty - 1)
+INT_UNWEIGHED = replace(INT_WEIGHTS, int_vial_with_diluent=None)
 
 
-def test_an_unweighed_intermediate_nulls_the_total_alone():
+@pytest.mark.parametrize(
+    "bad_intermediate, code",
+    [
+        (INT_LEG_BAD, "intermediate_stock"),
+        (INT_DILUENT_BAD, "intermediate_diluent"),
+        (INT_UNWEIGHED, "intermediate_unweighed"),
+    ],
+    ids=["intermediate_stock", "intermediate_diluent", "intermediate_unweighed"],
+)
+def test_an_intermediate_problem_nulls_the_total_alone(bad_intermediate, code):
     ok = _two_step()
-    d = _two_step(intermediate=replace(INT_WEIGHTS, int_vial_with_diluent=None))
-    assert d["problem"] == "intermediate_unweighed"
+    d = _two_step(intermediate=bad_intermediate)
+    assert d["problem"] == code
     assert d["dilution_factor_total"] is None
     assert d["dilution_factor"] == ok["dilution_factor"]
     assert d["stock_volume_ml"] == ok["stock_volume_ml"]
@@ -843,3 +862,106 @@ def test_a_non_finite_stock_vial_does_not_poison_a_bac_row():
         replace(FORWARD_WEIGHTS, stock_vial_with_diluent=math.nan), DENSITY, form="bac"
     )
     assert d["problem"] == "stock_diluent" and d["stock_volume_ml"] is None
+
+
+# ---- Task 4: nothing non-finite comes OUT either ------------------------------
+#
+# The inputs are checked above; a usable density can still overflow the arithmetic.
+# 1e-310 is positive and finite, but every volume divided by it is infinite and the
+# dilution factor (inf / inf) NaN. The density arrives from the nullable
+# calibration_curves.diluent_density column, not the request body, so Task 6's
+# request-boundary checks do not cover it.
+def _assert_nothing_non_finite(d):
+    json.dumps(d, allow_nan=False)  # the stored trace must stay valid JSON
+
+
+def test_a_density_that_overflows_every_volume_is_a_problem_not_a_nan_factor():
+    d = calculate_dilution_factor(FORWARD_WEIGHTS, 1e-310)
+    assert d["problem"] == "stock_diluent"
+    assert d["stock_volume_ml"] is None
+    assert d["dilution_factor"] is None and d["dilution_factor_total"] is None
+    _assert_nothing_non_finite(d)
+
+
+def test_a_density_that_overflows_a_volume_is_never_a_quantity():
+    inp = _input_from(FORWARD_CASE)
+    result = process_hplc_analysis(replace(inp, peptide=replace(inp.peptide, diluent_density=1e-310)))
+    assert result["quantity_mg"] is None
+    assert result["dilution_factor"] is None and result["stock_volume_ml"] is None
+    assert result["calculation_trace"]["quantity"]["error"] == "stock_diluent"
+    json.dumps(result, allow_nan=False)
+
+
+def test_a_density_that_overflows_the_intermediate_does_not_leak_nan_into_it():
+    d = calculate_dilution_factor(FORWARD_WEIGHTS, 1e-310, intermediate=INT_WEIGHTS)
+    assert d["intermediate"]["dilution_factor"] is None
+    assert d["dilution_factor_total"] is None
+    _assert_nothing_non_finite(d)
+
+
+def test_an_overflowing_stock_volume_nulls_only_the_stock_volume():
+    # A stock leg of 1e300 mg at density 1e-10 is 1e310 mL, which does not exist; the
+    # dilution vial (about 1e16 uL) is fine, so only the stock leg is at fault.
+    w = replace(FORWARD_WEIGHTS, stock_vial_empty=0.0, stock_vial_with_diluent=1e300)
+    d = calculate_dilution_factor(w, 1e-10)
+    assert d["problem"] == "stock_diluent"
+    assert d["stock_volume_ml"] is None
+    assert d["dilution_factor"] is not None and math.isfinite(d["dilution_factor"])
+    _assert_nothing_non_finite(d)
+
+
+def test_an_overflowing_bac_stock_volume_is_the_stock_legs_problem():
+    w = replace(FORWARD_WEIGHTS, stock_vial_empty=0.0, stock_vial_with_diluent=1e300)
+    d = calculate_dilution_factor(w, 1e-10, form="bac")
+    assert d["problem"] == "stock_diluent" and d["stock_volume_ml"] is None
+    _assert_nothing_non_finite(d)
+
+
+def test_a_total_volume_that_overflows_is_the_dilution_vials_problem():
+    # Each leg is a finite volume (about 1.0e308 and 8.0e307 uL) but their sum is not.
+    w = replace(
+        FORWARD_WEIGHTS,
+        dil_vial_empty=-1.0e308,
+        dil_vial_with_diluent=0.0,
+        dil_vial_with_diluent_and_sample=0.8e308,
+    )
+    d = calculate_dilution_factor(w, DENSITY)
+    assert d["problem"] == "stock"
+    assert d["dilution_factor"] is None and d["dilution_factor_total"] is None
+    assert d["total_vol_ul"] is None
+    assert d["stock_volume_ml"] == calculate_dilution_factor(FORWARD_WEIGHTS, DENSITY)["stock_volume_ml"]
+    _assert_nothing_non_finite(d)
+
+
+def test_an_overflowing_diluent_volume_is_the_diluent_legs_problem():
+    w = replace(FORWARD_WEIGHTS, dil_vial_empty=0.0, dil_vial_with_diluent=1.7e308,
+                dil_vial_with_diluent_and_sample=1.7e308 + 1e300)
+    d = calculate_dilution_factor(w, 1e-5)
+    assert d["problem"] == "diluent"
+    assert d["dilution_factor"] is None
+    _assert_nothing_non_finite(d)
+
+
+def test_an_overflowing_intermediate_is_unweighed_not_a_nan_total():
+    # Same rule as a non-finite intermediate weighing: calc.js round() reads a
+    # non-finite number as null, so the vial reads as unweighed.
+    i = calculate_intermediate(INT_WEIGHTS, STOCK_CONC, 1e-310)
+    assert i["problem"] is None and i["dilution_factor"] is None
+    assert i["diluent_vol_ul"] is None and i["stock_vol_ul"] is None
+    assert i["actual_conc_ug_ml"] is None
+    json.dumps(i, allow_nan=False)
+
+
+def test_an_intermediate_factor_that_overflows_is_unweighed_not_infinite():
+    # Both volumes are finite (about 1e308 uL of diluent and 1e-320 uL of stock) but
+    # their ratio is not.
+    tiny_stock = IntermediateWeights(int_vial_empty=-1e308, int_vial_with_diluent=0.0,
+                                     int_vial_with_diluent_and_sample=1e-320)
+    i = calculate_intermediate(tiny_stock, STOCK_CONC, DENSITY)
+    assert i["problem"] is None
+    assert i["dilution_factor"] is None and i["total_vol_ul"] is None
+    assert i["actual_conc_ug_ml"] is None
+    json.dumps(i, allow_nan=False)
+    d = calculate_dilution_factor(FORWARD_WEIGHTS, DENSITY, intermediate=tiny_stock)
+    assert d["problem"] == "intermediate_unweighed" and d["dilution_factor_total"] is None
+    json.dumps(d, allow_nan=False)

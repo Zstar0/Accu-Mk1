@@ -53,15 +53,17 @@ interface IdentityTrace {
 }
 
 interface DilutionTrace {
-  diluent_mass_mg: number
+  // A mass is null when a weighing is not a finite number, and the stock vial's is
+  // null for a liquid row (never weighed). The engine never stores NaN or infinity.
+  diluent_mass_mg: number | null
   // Null when the diluent density is missing (problem "no_density"): a volume needs it.
   diluent_vol_ul: number | null
-  sample_mass_mg: number
+  sample_mass_mg: number | null
   sample_vol_ul: number | null
   total_vol_ul: number | null
   // Null when a weighing problem means they cannot be determined.
   dilution_factor: number | null
-  stock_mass_mg: number
+  stock_mass_mg: number | null
   stock_volume_ml: number | null
   problem?: string | null
 }
@@ -423,8 +425,8 @@ function IdentityVisual({ trace }: { trace: IdentityTrace }) {
 
 function DilutionBreakdown({ trace }: { trace: DilutionTrace }) {
   const rows: [string, string, string][] = [
-    ['Diluent mass', `${trace.diluent_mass_mg.toFixed(2)} mg`, fixed(trace.diluent_vol_ul, 1, ' µL')],
-    ['Sample mass', `${trace.sample_mass_mg.toFixed(2)} mg`, fixed(trace.sample_vol_ul, 1, ' µL')],
+    ['Diluent mass', fixed(trace.diluent_mass_mg, 2, ' mg'), fixed(trace.diluent_vol_ul, 1, ' µL')],
+    ['Sample mass', fixed(trace.sample_mass_mg, 2, ' mg'), fixed(trace.sample_vol_ul, 1, ' µL')],
     ['Total volume', '', fixed(trace.total_vol_ul, 1, ' µL')],
   ]
 
@@ -470,7 +472,7 @@ function DilutionBreakdown({ trace }: { trace: DilutionTrace }) {
             <div className="space-y-2 text-xs">
               <div className="flex justify-between">
                 <span className="text-slate-400">Diluent mass</span>
-                <span className="font-mono">{trace.stock_mass_mg.toFixed(2)} mg</span>
+                <span className="font-mono">{fixed(trace.stock_mass_mg, 2, ' mg')}</span>
               </div>
               <div className="flex items-baseline justify-between rounded-md bg-blue-500/10 border border-blue-500/20 px-2 py-1.5">
                 <span className="text-slate-400">Stock Volume</span>
@@ -479,7 +481,8 @@ function DilutionBreakdown({ trace }: { trace: DilutionTrace }) {
             </div>
             <p className="mt-3 text-[10px] text-muted-foreground leading-relaxed">
               DF = (diluent + sample) / sample<br />
-              Stock vol = mass / 1000
+              Stock vol = mass / density<br />
+              (liquid: the declared volume; bac water: density corrected)
             </p>
           </div>
         </div>

@@ -225,6 +225,8 @@ describe('CalculationVisuals with no diluent density', () => {
     expect(screen.getByText('1234.66 mg')).toBeInTheDocument()
     expect(screen.getByText('219.93 mg')).toBeInTheDocument()
     expect(screen.getByText('2959.75 mg')).toBeInTheDocument()
+    // The raw code is pinned as it prints TODAY. It is not the wanted wording: Task 6
+    // supplies the copy for no_density, and this line should change with it.
     expect(screen.getByText(/not determined: no_density/)).toBeInTheDocument()
   })
 
@@ -249,5 +251,68 @@ describe('CalculationVisuals with no diluent density', () => {
     expect(screen.getByText('1238.2 µL')).toBeInTheDocument()
     expect(screen.getByText('220.6 µL')).toBeInTheDocument()
     expect(screen.getByText('1458.8 µL')).toBeInTheDocument()
+  })
+})
+
+// Masses are null too: a non-finite weighing nulls the masses and volumes that need
+// it, and a liquid row's stock vial is never weighed, so it has no mass. Both traces
+// are captured from calculate_dilution_factor, not hand-built.
+const NON_FINITE_WEIGHING_DILUTION = {
+  diluent_mass_mg: null,
+  diluent_vol_ul: null,
+  sample_mass_mg: null,
+  sample_vol_ul: null,
+  total_vol_ul: null,
+  dilution_factor: null,
+  stock_mass_mg: 2959.75,
+  stock_volume_ml: 2.968358,
+  problem: 'diluent',
+  dilution_factor_total: null,
+  intermediate: null,
+}
+
+const LIQUID_DILUTION = {
+  diluent_mass_mg: 1234.66,
+  diluent_vol_ul: 1238.2509,
+  sample_mass_mg: 219.93,
+  sample_vol_ul: 220.5697,
+  total_vol_ul: 1458.8206,
+  dilution_factor: 6.613877,
+  stock_mass_mg: null,
+  stock_volume_ml: 3.0,
+  problem: null,
+  dilution_factor_total: 6.613877,
+  intermediate: null,
+}
+
+describe('CalculationVisuals with null masses', () => {
+  it('shows the masses and volumes a non-finite weighing nulled as not determined', () => {
+    expect(() =>
+      render(
+        <CalculationVisuals
+          trace={{ dilution: NON_FINITE_WEIGHING_DILUTION }}
+        />
+      )
+    ).not.toThrow()
+    // Two masses, three volumes and the dilution factor; the stock vial is fine.
+    expect(screen.getAllByText('not determined')).toHaveLength(6)
+    expect(screen.getByText('2959.75 mg')).toBeInTheDocument()
+    expect(screen.getByText('2.9684 mL')).toBeInTheDocument()
+  })
+
+  it('renders a liquid row, whose stock vial was never weighed, without a stock mass', () => {
+    expect(() =>
+      render(<CalculationVisuals trace={{ dilution: LIQUID_DILUTION }} />)
+    ).not.toThrow()
+    // Only the stock vial mass is undetermined; the declared volume is the stock volume.
+    expect(screen.getAllByText('not determined')).toHaveLength(1)
+    expect(screen.getByText('3.0000 mL')).toBeInTheDocument()
+    expect(screen.getByText('6.61×')).toBeInTheDocument()
+  })
+
+  it('captions the stock volume as mass over density, not over 1000', () => {
+    render(<CalculationVisuals trace={{ dilution: LIQUID_DILUTION }} />)
+    expect(screen.getByText(/Stock vol = mass \/ density/)).toBeInTheDocument()
+    expect(document.body.textContent).not.toContain('mass / 1000')
   })
 })
