@@ -68,7 +68,7 @@ interface DilutionTrace {
   stock_volume_ml: number | null
   problem?: string | null
   // The prep form that produced the row. Absent on a trace stored before the engine
-  // wrote it, which was a powder row: every row computed as one.
+  // wrote it, which means "not known to be liquid", not "powder": see stockMassText.
   form?: string
 }
 
@@ -164,9 +164,10 @@ const NOT_APPLICABLE = 'not applicable'
 
 // A liquid prep never weighs its stock vial, so its stock mass does not exist; it is not
 // a weighing that went missing. The trace says which form produced the row, so this reads
-// that rather than guessing from which values are null. A trace without the key is a
-// powder row, not an unknown one, so it stays "not determined": an old trace must not
-// start claiming a measurement is inapplicable.
+// that rather than guessing from which values are null. A trace without the key is not
+// known to be liquid (a row stored before the engine wrote it can be any form), so it
+// keeps the existing "not determined": an old trace must not start claiming a
+// measurement is inapplicable.
 function stockMassText(trace: DilutionTrace): string {
   if (trace.form === 'liquid' && trace.stock_mass_mg == null) {
     return NOT_APPLICABLE

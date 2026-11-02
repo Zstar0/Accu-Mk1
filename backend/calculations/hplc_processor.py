@@ -380,7 +380,10 @@ def calculate_dilution_factor(
     a fact of the row like "problem". A reader that needs to know which measurements
     exist for the row (a liquid row has no stock vial mass) reads it here instead of
     inferring it from which values are None. A trace stored before this key existed
-    has no "form"; that reads as a powder row, which is all there was.
+    has no "form", and that means "not known", not "powder": the form reached the
+    engine one commit before this key did, so a row from that window can be a liquid
+    or bac row without one (its prep_form column still records the truth). A reader
+    must keep its existing behaviour for a trace with no "form".
 
     An unknown form raises ValueError (see stock_volume_ml).
     """

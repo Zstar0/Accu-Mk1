@@ -666,8 +666,8 @@ describe('CalculationVisuals with null masses', () => {
     expect(screen.queryByText('not applicable')).not.toBeInTheDocument()
   })
 
-  // A trace stored before the engine wrote the form was a powder row, so it stays "not
-  // determined" instead of claiming a measurement is inapplicable.
+  // A trace stored before the engine wrote the form is not known to be liquid, so it
+  // keeps "not determined" instead of claiming a measurement is inapplicable.
   it('says not determined for a null stock mass on a trace that carries no form', () => {
     const legacy = { ...LIQUID_DILUTION, form: undefined }
     render(<CalculationVisuals trace={{ dilution: legacy }} />)
