@@ -161,8 +161,8 @@ The test for every choice below: someone opening the panel can see which text pr
 
 **The list.** One card per active version.
 - Closed, a card shows the form's icon and name, a summary, and Edit. The summary reads "Overrides: basis note left off, prep custom", or "Same as default (no changes yet)".
-- Edit opens the editor in place. One card is open at a time.
-- A card with unsaved edits shows an "Unsaved" tag.
+- Edit opens the editor in place. One card is open at a time. Opening another card, or Add form, keeps the first card's edits. Only Cancel drops them.
+- A card with unsaved edits shows an "Unsaved" tag, open or closed.
 
 **Add form.** The button opens a form picker that copies the inline `Select` in ServiceSpecsSection.tsx:438-460 (`listSampleForms` + `SampleFormIcon`), listing active forms that have no active version. Do not use `SampleFormSelect`: it PATCHes one sample's form. Picking a form opens a new card with every field on Same as default. Nothing is written until Save.
 
@@ -182,9 +182,9 @@ The choice is a `ToggleGroup type="single"` (src/components/ui/toggle-group.tsx)
 - **Custom:** the input, prefilled with the Default's text so the lab edits rather than retypes. Footnotes use the footnote list editor. Today that is inline markup driven by the helpers at 460-486. Pull it out into a small component that both the Default and the version editor use, with no change to the Default's behavior.
 - **Leave off:** "Not printed on Nasal Spray COAs".
 
-Inherited and prefilled text come from the saved profile (`editingProfile`), not from unsaved typing in the Default boxes, because only saved text prints. Text typed under Custom survives switching to another choice and back while the editor stays open.
+Inherited and prefilled text come from the saved profile (`editingProfile`), not from unsaved typing in the Default boxes, because only saved text prints. After a successful Save Changes, point `editingProfile` at the refreshed row before `closePanel` runs, so cancelling the unsaved-edits prompt does not leave the cards showing the old Default. Text typed under Custom survives switching to another choice and back while the editor stays open.
 
-**The guard line.** It shows only while Basis note or Footnotes is on something other than Same as default, because the guard changes nothing otherwise. It reads the rules of the panel's members (`selectedOrder`), with one `listServiceSpecs` call per member via `useQueries`, only while an editor is open. That route returns active rows only, with `sample_form_id` and `peptide_id`. A member "has a rule" when one of its rows has `sample_form_id` equal to this form and no `peptide_id`.
+**The guard line.** It shows only while Basis note or Footnotes is on something other than Same as default, because the guard changes nothing otherwise. It reads the rules of the profile's saved members, as last loaded or saved by Save Members. It does not use `selectedOrder`, which also holds unsaved Members edits. There is one `listServiceSpecs` call per member via `useQueries`, only while an editor is open. That route returns active rows only, with `sample_form_id` and `peptide_id`. A member "has a rule" when one of its rows has `sample_form_id` equal to this form and no `peptide_id`.
 
 | State | Line |
 |---|---|
@@ -197,14 +197,14 @@ Inherited and prefilled text come from the saved profile (`editingProfile`), not
 - In the amber state, Basis note and Footnotes (when overridden) also say "Held: the Default prints on a COA that includes Arsenic".
 - This line is advice. A COA prints only the rows on that sample, so the line can warn about a service a given sample does not have. The builder's check on printed rows (Limits guard, above) decides what prints.
 
-**The preview.** Caption: "What prints on a Nasal Spray COA". It is built in the browser from the editor's current state, so it shows what Save would do. It shows the title and basis note, the members as rows with a dash for the result, the method and prep line, and the footnotes.
+**The preview.** Caption: "What prints on a Nasal Spray COA". It is built in the browser from the editor's current state, so it shows what Save would do. It shows the title and basis note, the saved members as rows with a dash for the result, the method and prep line, and the footnotes.
 - Every piece carries a tag: "Default", "Nasal Spray", or "Default, held". A missing piece says so: "no basis note", "no footnotes".
 - It assumes every member is on the COA. Its held state matches the guard line.
 - A basis note on Same as default follows the 1.55.0 hide. When every member's rule for this form has `rule_kind == "informational"`, the preview says "no basis note" and tags it "Default, hidden: every row is report only". Without this, the preview would show a basis note that the COA leaves off.
 - `{lod}` and `[ ]` print as typed, with the note "{lod} fills in from each sample's results". The preview makes no backend call and does not try to match the PDF layout.
 
 **The buttons.**
-- **Save Nasal Spray text:** POST or PATCH, disabled until something changed. The PATCH sends all five `coa_*` fields, with `null` for Same as default. Custom with blank text blocks Save with "Type the text, or choose Leave off" (for the title: "Type the title, or choose Same as default").
+- **Save Nasal Spray text:** POST or PATCH, disabled until something changed. The PATCH sends all five `coa_*` fields, with `null` for Same as default. Custom with blank text blocks Save with "Type the text, or choose Leave off" (for the title: "Type the title, or choose Same as default"). Custom footnotes with no filled-in rows block it the same way, because cleaning them would produce `[]`, which means Leave off.
 - **Cancel:** drops the edits and closes the card.
 - **Stop using this version** (existing versions only): `window.confirm`, the page's pattern at line 405, with "Stop using the Nasal Spray version? Nasal Spray COAs go back to the Default text. Published COAs stay as they are until they are regenerated." Then PATCH `active: false`. Adding that form again starts on Same as default. The old text stays in the change log.
 
@@ -251,16 +251,18 @@ Backend, in a stack container:
 Frontend:
 - Each three-way control maps correctly: Same as default → `null`, Leave off → `''` (footnotes `[]`), Custom → text.
 - Clicking the active choice again keeps it.
-- Custom with empty or whitespace-only text blocks Save, with its message.
+- Custom with empty or whitespace-only text blocks Save, with its message. So do Custom footnotes with no filled-in rows.
+- Opening another card keeps the first card's edits and its "Unsaved" tag.
 - Guard line:
-  - green only when every call succeeded and every member has a rule for this form
+  - green only when every call succeeded and every saved member has a rule for this form
   - a failed call or no members is never green
+  - an unsaved Members edit does not change it
   - hidden while Basis note and Footnotes are both Same as default
   - amber names the service and marks the overridden limit fields "Held"
 - Preview:
   - tags follow the choice: Default, the form's name, or "Default, held"
   - a basis note on Same as default shows as hidden when every member's rule for this form is `informational`
-- Closing the panel with unsaved version edits asks first. Cancelling that keeps the panel and the edits.
+- Closing the panel with unsaved version edits asks first. Cancelling that keeps the panel and the edits. After Save Changes, the cards show the new Default.
 
 ## My calls (Handler to confirm)
 
