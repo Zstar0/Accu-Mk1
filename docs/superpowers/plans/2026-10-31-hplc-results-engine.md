@@ -787,7 +787,12 @@ git commit -- backend/calculations/hplc_processor.py backend/tests/test_hplc_pro
     infinity are not valid JSON, but Python's `json` module accepts both, so a raw API client
     can send either and reach the engine. Validate every weighing field, the five existing
     ones included. This is the trust boundary; the engine's own finiteness checks are defence
-    in depth behind it, not a substitute.
+    in depth behind it, not a substitute. **Bound the magnitude too**: Task 3's re-review found
+    that two finite weighings near 1e308 overflow their difference to infinity, giving a
+    `dilution_factor_total` of `inf` that still passes an `is not None` check (`calc.js`
+    overflows identically, so this is not a divergence). A balance reading is in milligrams, so
+    a generous sanity ceiling costs nothing and closes the overflow class entirely. This is a
+    typo guard, not a calibration limit, so keep it well clear of any real reading.
   - **The three intermediate problem codes get UI copy here** (found by Task 3).
     `WEIGHING_PROBLEM_TEXT` in `src/components/hplc/CalculationVisuals.tsx:117` maps only
     `stock_diluent`, `diluent` and `stock`; an unmapped code prints raw. Task 3 added
