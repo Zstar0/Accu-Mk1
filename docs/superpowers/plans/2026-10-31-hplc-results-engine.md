@@ -728,11 +728,25 @@ reports today. A single golden failure here stops the task.
 
 - [ ] **Step 5: Port Dennis's two-step expectation as an independent check**
 
-From `C:/tmp/tools-dennis/tools/hplc-peptide-quant/expected_output` and `sample_input`, take
-one two-step case's numbers into `backend/tests/fixtures/hplc_dennis_cases.json`, scrubbing
-sample identities, client names and lot numbers (numbers only). Assert the engine's
-`dilution_factor_total` and quantity match his, so "Mk1 agrees with Dennis" is a test rather
-than an opinion.
+**This step is unsatisfiable as written, and the substitution below is what shipped.**
+Dennis's stored `expected_output` and `sample_input` contain no complete two-step row: his
+only two-step sample has an unweighed intermediate and therefore a blank result. So instead of
+porting a stored case, run `calc.js` under node on this task's own test weighings and curve
+with `INT_WEIGHTS` as the intermediate, and pin what it returns. That is a live oracle rather
+than a stored one, which is stronger evidence, and no fixture file is needed. Two things to
+state when you do it: `sampleResult` takes a single area, so averaging the areas is a hand
+step outside `calc.js`; and the engine differs from `calc.js` in the seventh significant
+figure (39.720445 against 39.720449, 97.029 against 97.02898), which is the deliberate
+rounding of each step before multiplying, not an error. Assert the engine's
+`dilution_factor_total` and quantity match his within that tolerance, so "Mk1 agrees with
+Dennis" is a test rather than an opinion.
+
+**Three defects in this task's own test code, found by its implementer 2026-11-02.** My
+errors, recorded so the next reader does not inherit them: the third test above passes against
+the unchanged engine, so it discriminates nothing and needs a stronger assertion; `INJECTIONS`
+and `CAL` are used without being defined anywhere in this task; and the second test compares
+`quantity_mg`, whose 4-place rounding swallows the difference it is meant to show, so it must
+compare `mass_ug` instead.
 
 - [ ] **Step 6: Run the full backend suite and diff the failure set**
 
@@ -834,6 +848,13 @@ git commit -- backend/calculations/hplc_processor.py backend/tests/test_hplc_pro
     claim about the weighing's value. Two overflow sites in one path carrying different codes
     is a known imprecision, recorded rather than fixed because bounding magnitudes here makes
     both unreachable.
+  - **`quantity_not_finite` needs copy too** (Task 5). `calculate_quantity` now refuses a
+    non-finite result rather than returning one, so that is a sixth code a tech can meet. Its
+    sibling `dilution_incomplete` is **deliberately unreachable** on any dilution dict the
+    engine produces: it exists so the quantity gate fails closed if Task 4's invariant (a
+    problem is set exactly when the total or the stock volume is missing) is ever broken by a
+    later change. Do not give it copy, and **do not delete it as dead code**: gating on
+    `problem` alone would silently compute a quantity from a partial dict.
   - **Five new problem codes get UI copy here** (found by Tasks 3 and 4).
     `WEIGHING_PROBLEM_TEXT` in `src/components/hplc/CalculationVisuals.tsx:117` maps only
     `stock_diluent`, `diluent` and `stock`; an unmapped code prints raw. Task 3 added
