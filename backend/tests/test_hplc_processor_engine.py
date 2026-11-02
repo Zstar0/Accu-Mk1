@@ -12,6 +12,7 @@ strictly negative branch has no real row and is covered by the handwritten
 cases below only.
 """
 import json
+import math
 from dataclasses import replace
 from pathlib import Path
 
@@ -241,7 +242,11 @@ def test_the_intermediate_factor_does_not_need_the_stock_concentration():
     # so the factor must not depend on it; only the concentration display does.
     i = calculate_intermediate(INT_WEIGHTS, None, DENSITY)
     assert i["dilution_factor"] == INT_FROM_BENCH_SHEET["dilution_factor"]
-    assert i["actual_conc_ug_ml"] is None
+    # Absent, not None: a stored null would read as "unknown for this row" when it
+    # means "never asked for here". None is kept for "asked for, not determinable".
+    assert "actual_conc_ug_ml" not in i
+    unweighed = calculate_intermediate(replace(INT_WEIGHTS, int_vial_with_diluent_and_sample=None), STOCK_CONC, DENSITY)
+    assert "actual_conc_ug_ml" in unweighed and unweighed["actual_conc_ug_ml"] is None
 
 
 def test_intermediate_with_zero_added_stock_is_flagged():
@@ -264,6 +269,15 @@ def test_intermediate_with_negative_added_diluent_is_flagged():
     i = calculate_intermediate(iw, STOCK_CONC, DENSITY)
     assert i["problem"] == "diluent"
     assert i["dilution_factor"] is None
+
+
+def test_when_both_intermediate_legs_are_bad_the_diluent_is_reported_first():
+    # Both legs run backwards: 5000 -> 4000 -> 3000. calc.js reports "diluent", so
+    # swapping the two branches would change which vial a tech is sent to check.
+    both_bad = IntermediateWeights(5000.0, 4000.0, 3000.0)
+    assert calculate_intermediate(both_bad, STOCK_CONC, DENSITY)["problem"] == "diluent"
+    d = calculate_dilution_factor(FORWARD_WEIGHTS, DENSITY, intermediate=both_bad)
+    assert d["problem"] == "intermediate_diluent"
 
 
 def test_intermediate_with_zero_added_diluent_is_legal():
@@ -292,9 +306,38 @@ def test_declared_intermediate_with_missing_weighings_does_not_compute(field):
     # No fallback to a planned number: nothing the engine returns is a stand-in
     # for the weighing that was not made.
     assert d["intermediate"]["dilution_factor"] is None
-    assert d["intermediate"]["actual_conc_ug_ml"] is None
+    assert "actual_conc_ug_ml" not in d["intermediate"]
     # A row with a problem has neither derived value, same as every other problem.
     assert d["dilution_factor"] is None and d["stock_volume_ml"] is None
+
+
+@pytest.mark.parametrize(
+    "field",
+    ["int_vial_empty", "int_vial_with_diluent", "int_vial_with_diluent_and_sample"],
+)
+@pytest.mark.parametrize("bad", [math.nan, math.inf, -math.inf])
+def test_a_non_finite_intermediate_weighing_is_unweighed_not_a_nan_total(field, bad):
+    # calc.js num() reads NaN and infinity as null, so the sheet calls the vial
+    # unweighed. Without the check the total came out NaN, which "is not None" and
+    # so sailed past the problem gate.
+    iw = replace(INT_WEIGHTS, **{field: bad})
+    d = calculate_dilution_factor(FORWARD_WEIGHTS, DENSITY, intermediate=iw)
+    assert d["problem"] == "intermediate_unweighed"
+    assert d["dilution_factor_total"] is None
+    json.dumps(d, allow_nan=False)  # the stored trace must stay valid JSON
+
+
+@pytest.mark.parametrize("bad", [math.nan, math.inf, 0.0, None])
+def test_an_unusable_density_leaves_the_intermediate_unweighed(bad):
+    i = calculate_intermediate(INT_WEIGHTS, STOCK_CONC, bad)
+    assert i["problem"] is None and i["dilution_factor"] is None
+
+
+@pytest.mark.parametrize("bad", [math.nan, math.inf])
+def test_a_non_finite_stock_concentration_is_treated_as_not_supplied(bad):
+    i = calculate_intermediate(INT_WEIGHTS, bad, DENSITY)
+    assert i["dilution_factor"] == INT_FROM_BENCH_SHEET["dilution_factor"]
+    assert "actual_conc_ug_ml" not in i
 
 
 def test_declared_intermediate_with_nothing_weighed_does_not_compute():

@@ -6,6 +6,7 @@ Takes parsed peak data + calibration curve + weight inputs and produces
 all three results with a complete calculation trace for audit.
 """
 
+import math
 from dataclasses import dataclass
 from typing import Optional
 
@@ -69,6 +70,11 @@ def _round_or_none(value: Optional[float], places: int) -> Optional[float]:
     return None if value is None else round(value, places)
 
 
+def _finite(value: Optional[float]) -> bool:
+    """A number the arithmetic can use: not None, not NaN, not infinite (calc.js num())."""
+    return value is not None and math.isfinite(value)
+
+
 def calculate_intermediate(
     weights: IntermediateWeights,
     stock_conc_ug_ml: Optional[float],
@@ -83,18 +89,35 @@ def calculate_intermediate(
         "diluent"  diluent added is < 0 (zero is a legal neat transfer)
         "stock"    stock added is <= 0
 
-    A weighing that was not made leaves the volumes that need it None and is NOT a
-    problem: "dilution_factor" is then None with "problem" None, which the caller
-    reads as unweighed. Under a problem the two leg volumes stay, so a tech can see
-    them, and everything worked out from them is None.
+    When both apply, "diluent" wins, as in calc.js. In real production data a leg
+    that is zero or negative is an UNENTERED weighing, not a reversed one: the
+    reading was never typed in.
+
+    Only a missing weighing counts as unweighed. A weighing that is None, or not a
+    finite number (NaN, infinity: calc.js num() reads those as null too), leaves the
+    volumes that need it None and is NOT a problem: "dilution_factor" is then None
+    with "problem" None, which the caller reads as unweighed. The same goes for a
+    density that is None, zero or not finite. Under a problem the two leg volumes
+    stay, so a tech can see them, and everything worked out from them is None.
+
+    THE CALLER'S OBLIGATION: a blank weighing must arrive as None, never as 0. A
+    blank that arrives as 0.0 is not read as unweighed. An empty added-stock or
+    added-diluent leg surfaces as the problem "stock" or "diluent", and an unentered
+    TARE of 0.0 computes with no problem at all (the whole vial weight reads as
+    diluent and the factor comes out far too high). calc.js does exactly the same,
+    so this mirrors it rather than regressing from it; the guard is at the request
+    boundary, not here.
 
     "dilution_factor" is total volume / stock volume and never uses the stock
-    concentration, which only gives "actual_conc_ug_ml" (None when it is unknown).
-    Rounding matches calculate_dilution_factor, place for place: volumes to 4, the
-    factor to 6, and the concentration to 4 as quantity's concentrations are.
+    concentration. That only gives "actual_conc_ug_ml", and the key is present only
+    when a finite stock concentration was supplied: a missing key means "not asked
+    for", a None value means "asked for and not determinable" (a problem, or
+    unweighed). Rounding matches calculate_dilution_factor, place for place:
+    volumes to 4, the factor to 6, and the concentration to 4 as quantity's
+    concentrations are.
     """
     def volume_ul(heavier: Optional[float], lighter: Optional[float]) -> Optional[float]:
-        if heavier is None or lighter is None or not density:
+        if not (_finite(heavier) and _finite(lighter) and _finite(density)) or density == 0:
             return None
         return (heavier - lighter) / density * 1000
 
@@ -113,18 +136,20 @@ def calculate_intermediate(
 
     # Past the guards above, a total means stock_vol_ul > 0, so neither division can fail.
     dilution_factor = None if total_vol_ul is None else total_vol_ul / stock_vol_ul
-    actual_conc_ug_ml = None
-    if total_vol_ul is not None and stock_conc_ug_ml is not None:
-        actual_conc_ug_ml = stock_conc_ug_ml * stock_vol_ul / total_vol_ul
 
-    return {
+    result = {
         "diluent_vol_ul": _round_or_none(diluent_vol_ul, 4),
         "stock_vol_ul": _round_or_none(stock_vol_ul, 4),
         "total_vol_ul": _round_or_none(total_vol_ul, 4),
-        "actual_conc_ug_ml": _round_or_none(actual_conc_ug_ml, 4),
         "dilution_factor": _round_or_none(dilution_factor, 6),
         "problem": problem,
     }
+    if _finite(stock_conc_ug_ml):
+        actual_conc_ug_ml = None
+        if total_vol_ul is not None:
+            actual_conc_ug_ml = stock_conc_ug_ml * stock_vol_ul / total_vol_ul
+        result["actual_conc_ug_ml"] = _round_or_none(actual_conc_ug_ml, 4)
+    return result
 
 
 def calculate_dilution_factor(
@@ -166,10 +191,24 @@ def calculate_dilution_factor(
         "intermediate_stock"      its added stock is <= 0
         "intermediate_unweighed"  declared, but not every weighing was made
 
+    In real production data a zero or negative intermediate leg is an UNENTERED
+    weighing, not a reversed one. Only None (or a non-finite number) counts as
+    unweighed, so THE CALLER'S OBLIGATION is that a blank intermediate weighing
+    arrives as None, never as 0: a blank that arrives as 0.0 shows up as
+    "intermediate_stock" or "intermediate_diluent" instead of
+    "intermediate_unweighed", and an unentered tare of 0.0 computes with no problem
+    at all. calc.js does the same; see calculate_intermediate.
+
     The unweighed case never falls back to the bench sheet's planned target
     concentration (its concForFinal): that is display before the balance, and a
     quantity from a plan rather than a reading would be a made-up result. So
-    "dilution_factor_total" is None exactly when "problem" is set.
+    "dilution_factor_total" is None exactly when "problem" is set, given finite
+    stock and dilution vial weighings; this function does not check those five for
+    NaN or infinity, which belongs at the request boundary.
+
+    The stock concentration is not known here, so the stored "intermediate" dict
+    has no "actual_conc_ug_ml" key. Its absence means "not computed here", not
+    "unknown for this row".
     """
     # Diluent volume in the dilution vial (µL)
     diluent_mass_mg = weights.dil_vial_with_diluent - weights.dil_vial_empty
@@ -205,8 +244,11 @@ def calculate_dilution_factor(
     intermediate_problem = None
     if intermediate is not None:
         intermediate_result = calculate_intermediate(intermediate, None, density)
-        if intermediate_result["problem"]:
-            intermediate_problem = "intermediate_" + intermediate_result["problem"]
+        # Literals, not built strings, so a grep for a code finds this line.
+        if intermediate_result["problem"] == "diluent":
+            intermediate_problem = "intermediate_diluent"
+        elif intermediate_result["problem"] == "stock":
+            intermediate_problem = "intermediate_stock"
         elif intermediate_result["dilution_factor"] is None:
             intermediate_problem = "intermediate_unweighed"
 
