@@ -54,10 +54,11 @@ interface IdentityTrace {
 
 interface DilutionTrace {
   diluent_mass_mg: number
-  diluent_vol_ul: number
+  // Null when the diluent density is missing (problem "no_density"): a volume needs it.
+  diluent_vol_ul: number | null
   sample_mass_mg: number
-  sample_vol_ul: number
-  total_vol_ul: number
+  sample_vol_ul: number | null
+  total_vol_ul: number | null
   // Null when a weighing problem means they cannot be determined.
   dilution_factor: number | null
   stock_mass_mg: number
@@ -422,9 +423,9 @@ function IdentityVisual({ trace }: { trace: IdentityTrace }) {
 
 function DilutionBreakdown({ trace }: { trace: DilutionTrace }) {
   const rows: [string, string, string][] = [
-    ['Diluent mass', `${trace.diluent_mass_mg.toFixed(2)} mg`, `${trace.diluent_vol_ul.toFixed(1)} µL`],
-    ['Sample mass', `${trace.sample_mass_mg.toFixed(2)} mg`, `${trace.sample_vol_ul.toFixed(1)} µL`],
-    ['Total volume', '', `${trace.total_vol_ul.toFixed(1)} µL`],
+    ['Diluent mass', `${trace.diluent_mass_mg.toFixed(2)} mg`, fixed(trace.diluent_vol_ul, 1, ' µL')],
+    ['Sample mass', `${trace.sample_mass_mg.toFixed(2)} mg`, fixed(trace.sample_vol_ul, 1, ' µL')],
+    ['Total volume', '', fixed(trace.total_vol_ul, 1, ' µL')],
   ]
 
   return (

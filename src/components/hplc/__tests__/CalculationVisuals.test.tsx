@@ -184,3 +184,70 @@ describe('CalculationVisuals with a weighing problem', () => {
     expect(screen.queryByText('not determined')).not.toBeInTheDocument()
   })
 })
+
+// The dilution trace calculate_dilution_factor stores when the calibration curve has no
+// diluent density (problem "no_density"), captured from the engine on a prod-shaped row
+// with the density None, not hand-built. A volume needs the density, so the three
+// volumes are null while the masses stay numbers. isDilutionTrace only checks that the
+// keys are present, so the block renders; before the volumes were read null-safely this
+// threw on `null.toFixed`.
+const NO_DENSITY_DILUTION = {
+  diluent_mass_mg: 1234.66,
+  diluent_vol_ul: null,
+  sample_mass_mg: 219.93,
+  sample_vol_ul: null,
+  total_vol_ul: null,
+  dilution_factor: null,
+  stock_mass_mg: 2959.75,
+  stock_volume_ml: null,
+  problem: 'no_density',
+  dilution_factor_total: null,
+  intermediate: null,
+}
+
+const NO_DENSITY_QUANTITY = {
+  quantity_mg: null,
+  error: 'no_density',
+  individual_areas: [7456.6389],
+  avg_main_peak_area: 7456.6389,
+  concentration_ug_ml: 822.9454,
+  calibration_slope: 9.038015,
+  calibration_intercept: 18.846082,
+}
+
+describe('CalculationVisuals with no diluent density', () => {
+  it('shows the three volumes as not determined and keeps the masses', () => {
+    expect(() =>
+      render(<CalculationVisuals trace={{ dilution: NO_DENSITY_DILUTION }} />)
+    ).not.toThrow()
+    // Diluent, sample and total volume, then the dilution factor and the stock volume.
+    expect(screen.getAllByText('not determined')).toHaveLength(5)
+    expect(screen.getByText('1234.66 mg')).toBeInTheDocument()
+    expect(screen.getByText('219.93 mg')).toBeInTheDocument()
+    expect(screen.getByText('2959.75 mg')).toBeInTheDocument()
+    expect(screen.getByText(/not determined: no_density/)).toBeInTheDocument()
+  })
+
+  it('renders the whole trace of a no_density row without throwing', () => {
+    expect(() =>
+      render(
+        <CalculationVisuals
+          trace={{
+            dilution: NO_DENSITY_DILUTION,
+            quantity: NO_DENSITY_QUANTITY,
+          }}
+        />
+      )
+    ).not.toThrow()
+    // Five in the dilution panel; undiluted concentration and mass in the quantity panel.
+    expect(screen.getAllByText('not determined')).toHaveLength(7)
+    expect(screen.getByText('822.95 µg/mL')).toBeInTheDocument()
+  })
+
+  it('still prints the volumes when the density is there', () => {
+    render(<CalculationVisuals trace={{ dilution: PROBLEM_DILUTION }} />)
+    expect(screen.getByText('1238.2 µL')).toBeInTheDocument()
+    expect(screen.getByText('220.6 µL')).toBeInTheDocument()
+    expect(screen.getByText('1458.8 µL')).toBeInTheDocument()
+  })
+})
