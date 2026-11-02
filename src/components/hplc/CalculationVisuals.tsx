@@ -29,13 +29,16 @@ interface PurityTrace {
 
 interface QuantityTrace {
   quantity_mg: number | null
+  // Set when a weighing problem stopped the mass (see WEIGHING_PROBLEM_TEXT).
+  error?: string
   individual_areas: number[]
   avg_main_peak_area: number
   concentration_ug_ml: number
-  undiluted_concentration_ug_ml: number
-  mass_ug: number
-  stock_volume_ml: number
-  dilution_factor: number
+  // Absent under a weighing problem: they need a dilution factor and a stock volume.
+  undiluted_concentration_ug_ml?: number
+  mass_ug?: number
+  stock_volume_ml?: number
+  dilution_factor?: number
   calibration_slope: number
   calibration_intercept: number
 }
@@ -55,9 +58,11 @@ interface DilutionTrace {
   sample_mass_mg: number
   sample_vol_ul: number
   total_vol_ul: number
-  dilution_factor: number
+  // Null when a weighing problem means they cannot be determined.
+  dilution_factor: number | null
   stock_mass_mg: number
-  stock_volume_ml: number
+  stock_volume_ml: number | null
+  problem?: string | null
 }
 
 interface CalculationTrace {
@@ -104,13 +109,34 @@ function isDilutionTrace(v: unknown): v is DilutionTrace {
   )
 }
 
+// ── Weighing problems ──────────────────────────────────────────
+
+const NOT_DETERMINED = 'not determined'
+
+// What the engine's `problem` codes mean in the lab (calculate_dilution_factor).
+const WEIGHING_PROBLEM_TEXT: Record<string, string> = {
+  stock_diluent:
+    'The stock vial weighing is missing, or not heavier than the empty vial.',
+  diluent: 'The dilution vial with diluent weighs less than the empty vial.',
+  stock:
+    'The dilution vial with sample weighs no more than the vial with diluent.',
+}
+
+function weighingProblemText(code: string): string {
+  return WEIGHING_PROBLEM_TEXT[code] ?? code
+}
+
+function fixed(v: number | null | undefined, dp: number, unit = ''): string {
+  return v == null ? NOT_DETERMINED : `${v.toFixed(dp)}${unit}`
+}
+
 // ── Chart colors (explicit for dark-mode visibility) ──────────
 
-const CHART_BLUE = '#60a5fa'       // bright blue — bars, primary data
-const CHART_AMBER = '#fbbf24'      // amber — accent, sample point
-const CHART_SLATE = '#94a3b8'      // slate-400 — axis text, labels
-const CHART_GRID = '#334155'        // slate-700 — grid lines
-const CHART_AVG_LINE = '#f97316'   // orange — average/reference lines
+const CHART_BLUE = '#60a5fa'       // bright blue, bars, primary data
+const CHART_AMBER = '#fbbf24'      // amber, accent, sample point
+const CHART_SLATE = '#94a3b8'      // slate-400, axis text, labels
+const CHART_GRID = '#334155'        // slate-700, grid lines
+const CHART_AVG_LINE = '#f97316'   // orange, average/reference lines
 
 // ── Purity Bar Chart ───────────────────────────────────────────
 
@@ -287,14 +313,19 @@ function QuantityChart({ trace }: { trace: QuantityTrace }) {
             <span>{trace.concentration_ug_ml.toFixed(2)} µg/mL</span>
           </div>
           <div className="flex justify-between">
-            <span className="text-muted-foreground">Undiluted = Conc &times; DF ({trace.dilution_factor.toFixed(2)}&times;)</span>
-            <span>{trace.undiluted_concentration_ug_ml.toFixed(2)} µg/mL</span>
+            <span className="text-muted-foreground">Undiluted = Conc &times; DF ({fixed(trace.dilution_factor, 2, '\u00d7')})</span>
+            <span>{fixed(trace.undiluted_concentration_ug_ml, 2, ' µg/mL')}</span>
           </div>
           <div className="flex justify-between border-t border-border pt-1 font-semibold">
-            <span>Mass = Undiluted &times; Stock ({trace.stock_volume_ml.toFixed(4)} mL) / 1000</span>
-            <span>{trace.quantity_mg?.toFixed(2)} mg</span>
+            <span>Mass = Undiluted &times; Stock ({fixed(trace.stock_volume_ml, 4, ' mL')}) / 1000</span>
+            <span>{fixed(trace.quantity_mg, 2, ' mg')}</span>
           </div>
         </div>
+        {trace.error && (
+          <p className="mt-2 text-xs text-amber-400">
+            Mass {NOT_DETERMINED}: {weighingProblemText(trace.error)}
+          </p>
+        )}
       </CardContent>
     </Card>
   )
@@ -428,7 +459,7 @@ function DilutionBreakdown({ trace }: { trace: DilutionTrace }) {
             </table>
             <div className="mt-2 flex items-baseline justify-between rounded-md bg-blue-500/10 border border-blue-500/20 px-2 py-1.5">
               <span className="text-xs text-slate-400">Dilution Factor</span>
-              <span className="text-sm font-bold tabular-nums text-blue-400">{trace.dilution_factor.toFixed(2)}&times;</span>
+              <span className="text-sm font-bold tabular-nums text-blue-400">{fixed(trace.dilution_factor, 2, '\u00d7')}</span>
             </div>
           </div>
 
@@ -442,7 +473,7 @@ function DilutionBreakdown({ trace }: { trace: DilutionTrace }) {
               </div>
               <div className="flex items-baseline justify-between rounded-md bg-blue-500/10 border border-blue-500/20 px-2 py-1.5">
                 <span className="text-slate-400">Stock Volume</span>
-                <span className="text-sm font-bold tabular-nums text-blue-400">{trace.stock_volume_ml.toFixed(4)} mL</span>
+                <span className="text-sm font-bold tabular-nums text-blue-400">{fixed(trace.stock_volume_ml, 4, ' mL')}</span>
               </div>
             </div>
             <p className="mt-3 text-[10px] text-muted-foreground leading-relaxed">
@@ -451,6 +482,11 @@ function DilutionBreakdown({ trace }: { trace: DilutionTrace }) {
             </p>
           </div>
         </div>
+        {trace.problem && (
+          <p className="mt-3 text-xs text-amber-400">
+            Dilution factor and stock volume {NOT_DETERMINED}: {weighingProblemText(trace.problem)}
+          </p>
+        )}
       </CardContent>
     </Card>
   )

@@ -20,10 +20,12 @@ capture fed it.
 """
 import json
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
 from calculations.hplc_processor import process_hplc_analysis
+from scripts.capture_hplc_golden import build_case
 from scripts.capture_hplc_golden import input_from_case as _input_from
 
 FIXTURES = Path(__file__).parent / "fixtures"
@@ -65,6 +67,23 @@ def test_rows_with_impossible_weighings_now_refuse(case_id):
     assert result["quantity_mg"] is None
     assert result["calculation_trace"]["dilution"]["problem"] is not None
     assert case["expected"]["quantity_mg"] is not None   # it used to produce a number
+    # Nothing that does not depend on the weighings changes: the sign-off is
+    # quantity, dilution factor and stock volume only.
+    assert result["concentration_ug_ml"] == case["expected"]["concentration_ug_ml"]
+    assert result["purity_percent"] == case["expected"]["purity_percent"]
+    # A recapture rebuilds a row's inputs from its stored trace. If a problem
+    # collapsed the quantity section, every flagged row would drop out of the
+    # next capture as a skip, taking the proof of this change with it.
+    row = SimpleNamespace(
+        calculation_trace=result["calculation_trace"],
+        diluent_density=case["diluent_density"],
+        **case["weights"],
+    )
+    rebuilt, skipped = build_case(row)
+    assert skipped is None
+    assert (rebuilt["areas"], rebuilt["slope"], rebuilt["intercept"]) == (
+        case["areas"], case["slope"], case["intercept"]
+    )
 
 
 def test_golden_fixture_is_not_empty():

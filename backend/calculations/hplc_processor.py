@@ -172,12 +172,12 @@ def calculate_quantity(
     4. Calculate mass: mass_mg = undiluted_conc * stock_vol / 1000
 
     Returns quantity result with calculation trace. A weighing problem from
-    calculate_dilution_factor gives no quantity at all, never a number computed
-    from a bad weighing.
+    calculate_dilution_factor gives no quantity, never a number computed from a
+    bad weighing: "quantity_mg" is None and "error" names the problem. What does
+    not depend on the weighings is still returned (areas, calibration, and the
+    concentration, which is (avg_area - intercept) / slope), so the trace stays
+    readable and a recapture can still rebuild the row's inputs from it.
     """
-    if dilution.get("problem"):
-        return {"quantity_mg": None, "error": dilution["problem"]}
-
     areas = []
     for inj in injections:
         main_idx = inj.get("main_peak_index", -1)
@@ -196,6 +196,19 @@ def calculate_quantity(
         return {"quantity_mg": None, "error": "Calibration slope is zero"}
 
     concentration = (avg_area - calibration.intercept) / calibration.slope  # µg/mL
+
+    problem = dilution.get("problem")
+    if problem:
+        # No dilution factor or stock volume, so no undiluted concentration or mass.
+        return {
+            "quantity_mg": None,
+            "error": problem,
+            "individual_areas": [round(a, 4) for a in areas],
+            "avg_main_peak_area": round(avg_area, 4),
+            "concentration_ug_ml": round(concentration, 4),
+            "calibration_slope": calibration.slope,
+            "calibration_intercept": calibration.intercept,
+        }
 
     # Apply dilution factor
     undiluted_conc = concentration * dilution["dilution_factor"]  # µg/mL in stock

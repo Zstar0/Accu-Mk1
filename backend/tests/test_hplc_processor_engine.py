@@ -121,5 +121,27 @@ def test_a_problem_gives_no_quantity_rather_than_a_crash():
     assert result["quantity_mg"] is None
     assert result["dilution_factor"] is None and result["stock_volume_ml"] is None
     assert result["calculation_trace"]["dilution"]["problem"] == "stock_diluent"
-    # Purity does not depend on the weighings.
+    # Purity and concentration do not depend on the weighings.
     assert result["purity_percent"] == FORWARD_CASE["expected"]["purity_percent"]
+    assert result["concentration_ug_ml"] == FORWARD_CASE["expected"]["concentration_ug_ml"]
+
+
+def test_a_problem_keeps_the_quantity_trace_inputs_and_drops_only_the_weighing_values():
+    # The capture script and the trace UI read the areas, the calibration and the
+    # concentration out of trace["quantity"], so a problem must not collapse it.
+    inp = _input_from(FORWARD_CASE)
+    ok = process_hplc_analysis(inp)["calculation_trace"]["quantity"]
+    bad_weights = replace(inp.weights, stock_vial_with_diluent=inp.weights.stock_vial_empty)
+    bad = process_hplc_analysis(replace(inp, weights=bad_weights))["calculation_trace"]["quantity"]
+    assert set(bad) == {
+        "quantity_mg", "error", "individual_areas", "avg_main_peak_area",
+        "concentration_ug_ml", "calibration_slope", "calibration_intercept",
+    }
+    assert bad["quantity_mg"] is None and bad["error"] == "stock_diluent"
+    for key in ("individual_areas", "avg_main_peak_area", "concentration_ug_ml",
+                "calibration_slope", "calibration_intercept"):
+        assert bad[key] == ok[key]
+    # Everything that needs a dilution factor or a stock volume is gone.
+    assert set(ok) - set(bad) == {
+        "undiluted_concentration_ug_ml", "mass_ug", "stock_volume_ml", "dilution_factor",
+    }
