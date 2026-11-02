@@ -464,6 +464,12 @@ git commit -- backend/calculations/hplc_processor.py backend/tests/test_hplc_pro
     `declared_volume_ml: Optional[float] = None` keywords, and routes its `stock_volume_ml`
     through the new function. The default keeps today's behaviour exactly.
 
+**Why a density test lives here and not in the golden master:** every one of the 66
+calibration curves on prod carries `diluent_density` 997.1 (checked 2026-11-02), so the Task 1
+fixture has no density variation to pin and cannot acquire any without fabricating cases. This
+task's handwritten tests are the right place for synthetic variation, and
+`test_stock_volume_tracks_the_density_it_is_given` is what catches a hardcoded constant.
+
 The bac algorithm, which the signature does not determine (`calc.js:262`, benzyl alcohol at
 0.9 percent):
 
@@ -488,6 +494,14 @@ def test_powder_stock_volume_is_todays_formula():
     vol, problem = stock_volume_ml("powder", FORWARD_WEIGHTS, 997.1)
     assert problem is None
     assert vol == (FORWARD_WEIGHTS.stock_vial_with_diluent - FORWARD_WEIGHTS.stock_vial_empty) / 997.1
+
+def test_stock_volume_tracks_the_density_it_is_given():
+    # The golden master cannot cover this: all 66 prod curves are 997.1, so an
+    # engine that hardcoded that constant would pass the test above and the pin.
+    mass = FORWARD_WEIGHTS.stock_vial_with_diluent - FORWARD_WEIGHTS.stock_vial_empty
+    assert stock_volume_ml("powder", FORWARD_WEIGHTS, 500.0)[0] == mass / 500.0
+    assert (stock_volume_ml("powder", FORWARD_WEIGHTS, 500.0)[0]
+            != stock_volume_ml("powder", FORWARD_WEIGHTS, 997.1)[0])
 
 def test_liquid_stock_volume_is_the_declared_volume():
     vol, problem = stock_volume_ml("liquid", FORWARD_WEIGHTS, 997.1, declared_volume_ml=3.0)
