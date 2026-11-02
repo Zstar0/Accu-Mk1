@@ -18,7 +18,11 @@ and never goes in git.
 
 Rows captured: the LIMIT most recent with a calculation_trace, plus EVERY row
 whose weighings run backwards by the Task 2 rules (so the set of rows whose
-reported quantity will change is complete, not sampled). `flagged` lists those.
+reported quantity will change is complete, not sampled; `flagged` lists those),
+plus EVERY row with more than one injection (individual_areas longer than 1).
+The third criterion exists because the recent rows are almost all single
+injection, so without it the engine's averaging path (and the purity average
+over several injections) would be pinned by no real row at all.
 
 It is NOT a test and the app never imports it. It takes no arguments and no
 credentials: it uses the container's own engine (database.SessionLocal).
@@ -26,7 +30,9 @@ credentials: it uses the container's own engine (database.SessionLocal).
 Read-only, and careful about size: hplc_analyses carries two huge JSON columns
 (the parsed injections and the chromatogram, ~7 GB of TOAST on a one-vCPU
 instance). The query below names its columns one by one and never selects the
-HPLCAnalysis entity or either of those two columns. Do not widen it.
+HPLCAnalysis entity or either of those two columns. Do not widen it. The
+multi-injection predicate reads calculation_trace on every row, which is a
+small JSON document per row, not those two columns.
 
 Fixture JSON goes to stdout, counts to stderr. Prod (stdin form, per the
 data-fix runbook), after lab hours:
@@ -47,7 +53,8 @@ from datetime import datetime, timezone
 if "__file__" in globals():
     sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from sqlalchemy import or_, select, text
+from sqlalchemy import case as sql_case
+from sqlalchemy import func, or_, select, text
 
 from calculations.hplc_processor import (
     AnalysisInput,
@@ -135,9 +142,9 @@ def build_case(row):
 
 
 def input_from_case(case):
-    """The engine input a case describes. Keep identical to _input_from in
-    tests/test_hplc_processor_golden.py: the pin only means something if the test
-    feeds the engine exactly what this script fed it."""
+    """The engine input a case describes. The single definition: the pin test
+    imports this, because the pin only means something if the test feeds the
+    engine exactly what this script fed it."""
     injections = []
     for i, area in enumerate(case["areas"]):
         peak = {"area": area}
@@ -167,6 +174,14 @@ def fetch_rows(db):
         HPLCAnalysis.dil_vial_with_diluent - HPLCAnalysis.dil_vial_empty < 0,
         HPLCAnalysis.dil_vial_with_diluent_and_sample - HPLCAnalysis.dil_vial_with_diluent <= 0,
     )
+    # More than one injection: individual_areas is a JSON array longer than 1.
+    # CASE guards json_array_length, which errors on a non-array (a missing key
+    # is NULL and is fine; a scalar is not).
+    areas = HPLCAnalysis.calculation_trace["quantity"]["individual_areas"]
+    multi_injection = sql_case(
+        (func.json_typeof(areas) == "array", func.json_array_length(areas)),
+        else_=0,
+    ) > 1
     # Ids rise with insertion and the primary key is indexed; created_at is not.
     recent = (
         select(HPLCAnalysis.id)
@@ -186,7 +201,7 @@ def fetch_rows(db):
             weighs_backwards.label("weighs_backwards"),
         )
         .outerjoin(CalibrationCurve, CalibrationCurve.id == HPLCAnalysis.calibration_curve_id)
-        .where(or_(HPLCAnalysis.id.in_(recent), weighs_backwards))
+        .where(or_(HPLCAnalysis.id.in_(recent), weighs_backwards, multi_injection))
         .order_by(HPLCAnalysis.id)
     )
     return db.execute(stmt).all()
@@ -196,7 +211,7 @@ def capture(rows, source):
     """Build the fixture and the counts from fetched rows."""
     cases, flagged, drifted, case_ids = [], [], [], {}
     skipped, skipped_but_backwards, density_defaulted = Counter(), [], Counter()
-    purity_values_absent = 0
+    purity_values_absent = multi_injection_cases = 0
     for row in rows:
         case, reason = build_case(row)
         if case is None:
@@ -213,6 +228,8 @@ def capture(rows, source):
         cases.append(case)
         if case["area_percents"] is None:
             purity_values_absent += 1
+        if len(case["areas"]) > 1:
+            multi_injection_cases += 1
         if row.weighs_backwards:
             flagged.append(case["id"])
         if row.quantity_mg != case["expected"]["quantity_mg"]:
@@ -228,6 +245,7 @@ def capture(rows, source):
         "limit": LIMIT,
         "rows_selected": len(rows),
         "cases": len(cases),
+        "cases_with_multiple_injections": multi_injection_cases,  # the averaging path's real-row coverage
         "skipped": dict(skipped),
         "skipped_but_backwards": skipped_but_backwards,  # flagged rows NOT in the fixture: must be empty to call it complete
         "case_ids": case_ids,  # opaque id -> sample_id_label#row id. Operator's record: stderr only, never git
@@ -246,8 +264,9 @@ def main():
         db.execute(text("SET TRANSACTION READ ONLY"))  # the server refuses any write from here on
         source = (
             f"hplc_analyses in {db.get_bind().url.database}: the {LIMIT} most recent rows with a "
-            "calculation_trace, plus every row whose weighings run backwards; inputs rebuilt from "
-            "calculation_trace, expected recomputed by process_hplc_analysis at capture time"
+            "calculation_trace, plus every row whose weighings run backwards, plus every row with more "
+            "than one injection; inputs rebuilt from calculation_trace, expected recomputed by "
+            "process_hplc_analysis at capture time"
         )
         rows = fetch_rows(db)
     fixture, counts = capture(rows, source)
