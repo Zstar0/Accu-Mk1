@@ -158,8 +158,13 @@ def test_a_weighed_form_refuses_a_blank_weighing_naming_the_field(form, field, h
 
 def test_every_blank_weighing_is_named_not_just_the_first():
     weights = {"dil_vial_empty": 1.0, "dil_vial_with_diluent": 2.0}
-    names = {e["loc"][-1] for e in _errors(_body(weights=weights))}
-    assert names == {"stock_vial_empty", "stock_vial_with_diluent", "dil_vial_with_diluent_and_sample"}
+    errors = _errors(_body(weights=weights))
+    assert {e["loc"][-1] for e in errors} == {
+        "stock_vial_empty", "stock_vial_with_diluent", "dil_vial_with_diluent_and_sample"
+    }
+    # pydantic's own "missing" error carries the same loc, so the loc alone proves nothing:
+    # ours has its own type and says which form needed the weighing.
+    assert all(e["type"] == "missing_input" and "powder" in e["msg"] for e in errors)
 
 
 def test_a_liquid_row_may_leave_its_stock_vial_unweighed():
