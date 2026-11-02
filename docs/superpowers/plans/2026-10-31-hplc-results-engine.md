@@ -823,6 +823,17 @@ git commit -- backend/calculations/hplc_processor.py backend/tests/test_hplc_pro
     through, so it is the first task where a liquid row can reach the panel at all.
     Distinguish the two cases: null because a problem prevented the calculation, and null
     because this form has no such measurement.
+  - **The copy must not say "zero or negative"** (Task 4's round-4 re-review). Each problem
+    code now has a second, rarer cause: arithmetic that overflowed on inputs which were all
+    positive and finite. `intermediate_stock` in particular is reported both for a
+    non-positive intermediate stock leg and for the product of two finite step factors
+    overflowing, and `intermediate_unweighed` is reported both for a missing weighing and for
+    the intermediate's own factor overflowing. So copy phrased as "the weighing is zero or
+    negative" or "the weighing is missing" would be false in the overflow case. Phrase each
+    sentence around what could not be determined and what the tech should check, not around a
+    claim about the weighing's value. Two overflow sites in one path carrying different codes
+    is a known imprecision, recorded rather than fixed because bounding magnitudes here makes
+    both unreachable.
   - **Five new problem codes get UI copy here** (found by Tasks 3 and 4).
     `WEIGHING_PROBLEM_TEXT` in `src/components/hplc/CalculationVisuals.tsx:117` maps only
     `stock_diluent`, `diluent` and `stock`; an unmapped code prints raw. Task 3 added
