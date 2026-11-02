@@ -623,7 +623,7 @@ def calculate_quantity(
         "stock_volume_ml": round(stock_vol, 6),
         "dilution_factor": round(total, 6),
         "dilution_factor_steps": {
-            "intermediate": None if intermediate is None else intermediate["dilution_factor"],
+            "intermediate": None if intermediate is None else intermediate.get("dilution_factor"),
             "final": dilution.get("dilution_factor"),
         },
         "calibration_slope": calibration.slope,
