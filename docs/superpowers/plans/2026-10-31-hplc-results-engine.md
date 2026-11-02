@@ -582,8 +582,29 @@ git commit -- backend/calculations/hplc_processor.py backend/tests/test_hplc_pro
   `dilution["dilution_factor"]` today. Its returned `"dilution_factor"` key carries the
   TOTAL, which is the value `calc.js:3354` sends to Mk1 ("stock to final vial, both steps if
   two"). It gains `"dilution_factor_steps": {"intermediate": float|None, "final": float}`.
-  When `dilution["problem"]` is set it returns `{"quantity_mg": None, "error": <problem>}`.
+  When `dilution["problem"]` is set it returns `quantity_mg: None` and `error: <problem>`
+  **while keeping the quantity section's inputs and its concentration**:
+  `individual_areas`, `avg_main_peak_area`, `calibration_slope`,
+  `calibration_intercept` and `concentration_ug_ml` all stay. Only the values that
+  genuinely cannot be computed without a dilution factor or a stock volume are
+  omitted (`undiluted_concentration_ug_ml`, `mass_ug`, and the `dilution_factor`
+  and `stock_volume_ml` echoes). Task 2 already shipped this shape; do not
+  reintroduce the collapse.
   `process_hplc_analysis`'s returned `"dilution_factor"` is likewise the total.
+
+  **Why the collapse is wrong, since an earlier pass of this plan asked for it.** A
+  two-key `{"quantity_mg": None, "error": ...}` quantity section is self-defeating
+  three ways. `backend/scripts/capture_hplc_golden.py`'s `build_case` rebuilds engine
+  inputs by reading `individual_areas`, `calibration_slope` and
+  `calibration_intercept` out of `trace["quantity"]`, so a future golden recapture
+  would skip every flagged row as `no_individual_areas` and the fixture would lose
+  exactly the cases that prove this slice's behaviour change. `isQuantityTrace`
+  (`src/components/hplc/CalculationVisuals.tsx:79`) requires `calibration_slope` and
+  `avg_main_peak_area`, so the whole quantity panel would vanish with no explanation
+  instead of showing the measured concentration beside the reason the mass could not
+  be determined. And the concentration does not depend on the weighings at all: it is
+  `(avg_area - intercept) / slope`, and `calc.js`'s `sampleResult` keeps
+  `determinedConc` while nulling only `determinedStock`.
 
 **The rounding order is load-bearing and must not be tidied.** Today's chain multiplies a
 `dilution_factor` already rounded to 6 places by a `stock_volume_ml` already rounded to 6
