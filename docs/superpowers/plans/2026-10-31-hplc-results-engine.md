@@ -460,6 +460,33 @@ git commit -- backend/calculations/hplc_processor.py backend/tests/test_hplc_pro
     `quantity_mg` is None whenever either is. `problem` keeps reporting the first code by the
     precedence Task 2 pinned. This narrows the sign-off again, so **the sign-off text is
     written from the end of this plan, never from Task 2's commits.**
+  - **The separation is three-way, not two-way, and Task 3's tests pin the old behaviour**
+    (found by Task 3's review). Task 3 added an intermediate leg, so there are three places a
+    weighing can fail and each nulls only what it actually touches:
+
+    | problem | nulled | kept |
+    |---|---|---|
+    | stock leg | `stock_volume_ml` | `dilution_factor`, and the total if the legs allow |
+    | final dilution leg | `dilution_factor`, so also `dilution_factor_total` | `stock_volume_ml` |
+    | intermediate leg | `dilution_factor_total` only | `dilution_factor`, `stock_volume_ml` |
+
+    `quantity_mg` is None whenever `dilution_factor_total` or `stock_volume_ml` is None.
+    `problem` keeps reporting the first code by Task 2's and Task 3's pinned precedence.
+
+    An intermediate-only problem is the case the plan had never decided: the final vial's
+    weighings are fine, so nulling its factor and stock volume throws away two good numbers.
+    Task 3 pinned today's wider behaviour at
+    `backend/tests/test_hplc_processor_engine.py:297` and `:314`. **Those two assertions are
+    stale by design once this task lands**, which is the additive-only doctrine's "a failing
+    test defaults to the test being stale" working as intended: update them deliberately and
+    say so in the commit message, rather than meeting them as a surprise.
+  - **Close the final vial's non-finite hole while you are here** (Task 3's review, Minor 1).
+    Task 3 added a finiteness check to the intermediate leg only. The final vial's legs still
+    accept NaN or infinity and produce a non-finite factor with `problem: None`, which then
+    passes an `is not None` check into `calculate_quantity`. Dennis's `num()` rejects
+    non-finite input, so this is a divergence from the authority rather than a design choice.
+    Task 6 also rejects non-finite floats at the request boundary; both belong, because the
+    engine is reachable from the worksheet path too.
   - `calculate_dilution_factor`'s `density` parameter widens from `float` to
     `Optional[float]`, which is what the `no_density` guard below requires. Task 2's and
     Task 3's narrower annotation is superseded here.
@@ -626,6 +653,12 @@ git commit -- backend/calculations/hplc_processor.py backend/tests/test_hplc_pro
   and `stock_volume_ml` echoes). Task 2 already shipped this shape; do not
   reintroduce the collapse.
   `process_hplc_analysis`'s returned `"dilution_factor"` is likewise the total.
+  **Block the quantity on `dilution_factor_total` and `stock_volume_ml`, never on
+  `dilution_factor`** (Task 3's review). After Task 4 an intermediate-only problem leaves a
+  perfectly good final-step `dilution_factor` in place while the total is None, so a guard
+  written against the final factor would compute a quantity from one step of a two-step prep:
+  the same roughly 6x understatement that the Task 5 before Task 6 constraint exists to
+  prevent.
 
   **Why the collapse is wrong, since an earlier pass of this plan asked for it.** A
   two-key `{"quantity_mg": None, "error": ...}` quantity section is self-defeating
@@ -744,6 +777,17 @@ git commit -- backend/calculations/hplc_processor.py backend/tests/test_hplc_pro
     live in `calculation_trace.quantity.dilution_factor_steps`.
   - `HPLCAnalysisResponse` and `_analysis_to_response` declare `prep_form` and
     `dilution_factor_steps`. Anything not declared on the model is dropped silently.
+  - **A blank weighing must arrive as `None`, never `0`** (Task 3's review, Minor 3). The
+    engine treats only `None` as unweighed, so a blank sent as `0.0` is reported as
+    `intermediate_stock` or `intermediate_diluent` rather than `intermediate_unweighed`, and
+    an unentered **tare** of `0.0` computes with no problem at all. That mirrors Dennis, so it
+    is the caller's obligation rather than an engine bug, and this request model is that
+    caller.
+  - **Reject non-finite floats at the request boundary** (Task 3's review, Minor 1). NaN and
+    infinity are not valid JSON, but Python's `json` module accepts both, so a raw API client
+    can send either and reach the engine. Validate every weighing field, the five existing
+    ones included. This is the trust boundary; the engine's own finiteness checks are defence
+    in depth behind it, not a substitute.
   - **The three intermediate problem codes get UI copy here** (found by Task 3).
     `WEIGHING_PROBLEM_TEXT` in `src/components/hplc/CalculationVisuals.tsx:117` maps only
     `stock_diluent`, `diluent` and `stock`; an unmapped code prints raw. Task 3 added
