@@ -830,8 +830,9 @@ FINAL_VIAL_FIELDS = [
 
 
 @pytest.mark.parametrize("field, code, is_stock_vial", FINAL_VIAL_FIELDS)
-@pytest.mark.parametrize("bad", [math.nan, math.inf, -math.inf])
-def test_a_non_finite_final_vial_weighing_is_a_problem_not_a_nan_value(field, code, is_stock_vial, bad):
+@pytest.mark.parametrize("bad", [math.nan, math.inf, -math.inf, None], ids=["nan", "inf", "-inf", "none"])
+def test_a_missing_or_non_finite_final_vial_weighing_is_a_problem_not_a_crash(field, code, is_stock_vial, bad):
+    # None is how a blank weighing arrives (Task 6): it was a TypeError at the subtraction.
     ok = calculate_dilution_factor(FORWARD_WEIGHTS, DENSITY)
     d = calculate_dilution_factor(replace(FORWARD_WEIGHTS, **{field: bad}), DENSITY)
     assert d["problem"] == code
@@ -848,8 +849,8 @@ def test_a_non_finite_final_vial_weighing_is_a_problem_not_a_nan_value(field, co
 
 
 @pytest.mark.parametrize("field, code, is_stock_vial", FINAL_VIAL_FIELDS)
-@pytest.mark.parametrize("bad", [math.nan, math.inf])
-def test_a_non_finite_final_vial_weighing_gives_no_quantity(field, code, is_stock_vial, bad):
+@pytest.mark.parametrize("bad", [math.nan, math.inf, None], ids=["nan", "inf", "none"])
+def test_a_missing_or_non_finite_final_vial_weighing_gives_no_quantity(field, code, is_stock_vial, bad):
     inp = _input_from(FORWARD_CASE)
     result = process_hplc_analysis(replace(inp, weights=replace(inp.weights, **{field: bad})))
     assert result["quantity_mg"] is None
@@ -965,3 +966,24 @@ def test_an_intermediate_factor_that_overflows_is_unweighed_not_infinite():
     d = calculate_dilution_factor(FORWARD_WEIGHTS, DENSITY, intermediate=tiny_stock)
     assert d["problem"] == "intermediate_unweighed" and d["dilution_factor_total"] is None
     json.dumps(d, allow_nan=False)
+
+
+@pytest.mark.parametrize("form", ["powder", "bac"])
+@pytest.mark.parametrize("field", ["stock_vial_empty", "stock_vial_with_diluent"])
+def test_a_weighed_form_with_a_blank_stock_weighing_says_stock_diluent(form, field):
+    # powder and bac genuinely need the stock vial; a blank (None) one is "missing",
+    # which is what the stock_diluent sentence already tells a tech. A liquid row, whose
+    # stock vial is never weighed, is the contrast and is covered above.
+    w = replace(FORWARD_WEIGHTS, **{field: None})
+    assert stock_volume_ml(form, w, DENSITY) == (None, "stock_diluent")
+    d = calculate_dilution_factor(w, DENSITY, form=form)
+    assert d["problem"] == "stock_diluent"
+    assert d["stock_volume_ml"] is None and d["stock_mass_mg"] is None
+    # The dilution vial is fine, so its factor survives, as for any stock-leg problem.
+    assert d["dilution_factor"] == calculate_dilution_factor(FORWARD_WEIGHTS, DENSITY)["dilution_factor"]
+    json.dumps(d, allow_nan=False)
+
+
+def test_a_blank_stock_weighing_does_not_make_a_liquid_row_a_problem():
+    w = replace(FORWARD_WEIGHTS, stock_vial_empty=None, stock_vial_with_diluent=None)
+    assert stock_volume_ml("liquid", w, DENSITY, declared_volume_ml=3.0) == (3.0, None)

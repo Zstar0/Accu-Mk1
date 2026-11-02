@@ -75,6 +75,16 @@ def _finite(value: Optional[float]) -> bool:
     return value is not None and math.isfinite(value)
 
 
+def _leg_mg(heavier: Optional[float], lighter: Optional[float]) -> Optional[float]:
+    """One weighing leg in mg: heavier - lighter, or None when either weighing is missing.
+
+    WeightInputs is annotated float, but a blank weighing reaches the engine as None
+    (the request layer's convention) and a lower layer must not raise for it. None
+    flows into the same checks as NaN, which already refuse a leg that is not a number.
+    """
+    return None if heavier is None or lighter is None else heavier - lighter
+
+
 # The prep forms the engine understands. The endo bench accepts the same three
 # (worksheets_endo.ENDO_FORMS); a test pins that set(ENDO_FORMS) <= set(PREP_FORMS)
 # instead of importing the tuple, because worksheets_endo imports models and this
@@ -138,8 +148,9 @@ def stock_volume_ml(
 
     Problems, and the stock-leg problem is decided HERE and nowhere else:
 
-        "stock_diluent"       powder or bac: the stock vial leg is <= 0 or not finite,
-                              or its volume overflows (a density near zero)
+        "stock_diluent"       powder or bac: the stock vial leg is <= 0, missing (a
+                              None weighing) or not finite, or its volume overflows
+                              (a density near zero)
                               (calc.js guards this with !preDissolved, so "liquid"
                               never raises it: its stock leg is zero on every real row)
         "no_density"          powder or bac: the diluent density is missing, not finite
@@ -160,7 +171,7 @@ def stock_volume_ml(
             return declared_volume_ml, None
         return None, "no_declared_volume"
 
-    mass_mg = weights.stock_vial_with_diluent - weights.stock_vial_empty
+    mass_mg = _leg_mg(weights.stock_vial_with_diluent, weights.stock_vial_empty)
     if not _finite(mass_mg) or mass_mg <= 0:
         return None, "stock_diluent"
     if not _finite(density) or density <= 0:
@@ -293,8 +304,10 @@ def calculate_dilution_factor(
         "stock"          stock added to the dilution vial is <= 0
 
     Zero added diluent is a legal neat injection; zero added stock is not. A leg
-    that is not a finite number (NaN, infinity: calc.js num() reads those as null)
-    counts as that leg's problem. So does a leg whose difference, volume or factor
+    with a missing weighing (None, which is how a blank one arrives) or one that is
+    not a finite number (NaN, infinity: calc.js num() reads those as null) counts as
+    that leg's problem, so the engine never raises for a blank. So does a leg whose
+    difference, volume or factor
     overflows (absurd magnitudes, or a density near zero): it is not a number the
     arithmetic can use, and no NaN or infinity reaches the stored trace. The
     stock-leg code is decided by stock_volume_ml, which raises it for "powder" and
@@ -363,8 +376,8 @@ def calculate_dilution_factor(
 
     # Diluent and sample masses in the dilution vial (mg). Every prep form ends in a
     # dilution vial, so its two problems are decided here, permanently.
-    diluent_mass_mg = weights.dil_vial_with_diluent - weights.dil_vial_empty
-    sample_mass_mg = weights.dil_vial_with_diluent_and_sample - weights.dil_vial_with_diluent
+    diluent_mass_mg = _leg_mg(weights.dil_vial_with_diluent, weights.dil_vial_empty)
+    sample_mass_mg = _leg_mg(weights.dil_vial_with_diluent_and_sample, weights.dil_vial_with_diluent)
 
     # Volumes (µL), only from finite masses and a usable density. A volume that
     # overflows (a density near zero) is not a volume.
@@ -402,7 +415,7 @@ def calculate_dilution_factor(
     # row's stock weighings are not read at all: a caller with nothing to weigh may
     # pass None, which a subtraction would turn into a TypeError.
     stock_mass_mg = (
-        None if form == "liquid" else weights.stock_vial_with_diluent - weights.stock_vial_empty
+        None if form == "liquid" else _leg_mg(weights.stock_vial_with_diluent, weights.stock_vial_empty)
     )
     stock_vol_ml, stock_problem = stock_volume_ml(
         form, weights, density, declared_volume_ml=declared_volume_ml
