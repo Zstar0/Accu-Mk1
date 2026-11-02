@@ -814,6 +814,15 @@ git commit -- backend/calculations/hplc_processor.py backend/tests/test_hplc_pro
     overflows identically, so this is not a divergence). A balance reading is in milligrams, so
     a generous sanity ceiling costs nothing and closes the overflow class entirely. This is a
     typo guard, not a calibration limit, so keep it well clear of any real reading.
+  - **A liquid row's stock-vial masses read "not applicable", not "not determined"**
+    (Task 4's re-review). `src/components/hplc/CalculationVisuals.tsx:475` prints "not
+    determined" for a healthy liquid row's diluent and stock masses, because a liquid prep
+    never weighs its stock vial so those keys are null. The value is not missing, it does not
+    exist, and a tech reading "not determined" on a row with no problem will go looking for a
+    weighing that was never meant to be taken. This is the first task that wires `form`
+    through, so it is the first task where a liquid row can reach the panel at all.
+    Distinguish the two cases: null because a problem prevented the calculation, and null
+    because this form has no such measurement.
   - **Five new problem codes get UI copy here** (found by Tasks 3 and 4).
     `WEIGHING_PROBLEM_TEXT` in `src/components/hplc/CalculationVisuals.tsx:117` maps only
     `stock_diluent`, `diluent` and `stock`; an unmapped code prints raw. Task 3 added
