@@ -27,6 +27,16 @@ over several injections) would be pinned by no real row at all.
 It is NOT a test and the app never imports it. It takes no arguments and no
 credentials: it uses the container's own engine (database.SessionLocal).
 
+The prep form travels with the case. A liquid or bac row computes its stock volume
+differently, so rebuilding it as a powder would pin a WRONG expected value and still
+look like a clean capture. The query therefore selects prep_form, declared_volume_ml and
+the intermediate vial's three weighings, and a case carries those keys ONLY when they
+differ from the default (a powder row with no intermediate), so a capture of an
+all-powder table is byte-identical to the one before. A NULL prep_form is a row saved
+before the column existed, which is a one-step powder row: it is defaulted, and counted
+(`prep_form_defaulted_to_powder`, `cases_by_prep_form`) so a recapture shows at a glance
+whether any non-powder rows are in it.
+
 Read-only, and careful about size: hplc_analyses carries two huge JSON columns
 (the parsed injections and the chromatogram, ~7 GB of TOAST on a one-vCPU
 instance). The query below names its columns one by one and never selects the
@@ -59,6 +69,7 @@ from sqlalchemy import func, or_, select, text
 from calculations.hplc_processor import (
     AnalysisInput,
     CalibrationParams,
+    IntermediateWeights,
     PeptideParams,
     WeightInputs,
     process_hplc_analysis,
@@ -74,6 +85,9 @@ WEIGHT_FIELDS = (
     "dil_vial_with_diluent",
     "dil_vial_with_diluent_and_sample",
 )
+# The intermediate vial of a two-step dilution; also hplc_analyses column names.
+INTERMEDIATE_FIELDS = ("int_vial_empty", "int_vial_with_diluent", "int_vial_with_diluent_and_sample")
+DEFAULT_PREP_FORM = "powder"  # what every row saved before the prep_form column is
 EXPECTED_KEYS = ("quantity_mg", "dilution_factor", "stock_volume_ml", "purity_percent", "concentration_ug_ml")
 
 
@@ -111,7 +125,7 @@ def build_case(row):
         return None, "no_calibration_intercept"
 
     density = row.diluent_density if row.diluent_density is not None else DEFAULT_DILUENT_DENSITY
-    weights = {name: getattr(row, name) for name in WEIGHT_FIELDS}
+    weights = {name: getattr(row, name) for name in WEIGHT_FIELDS}  # a liquid row has None stock weighings
     # The trace's own per-injection purity and RT values, when it has one per
     # area. None when absent: the peak then simply omits the key, as the engine
     # tolerates. They ride in the case so the test rebuilds the SAME injections.
@@ -128,14 +142,29 @@ def build_case(row):
         "diluent_density": density,
         "expected": None,
     }
+    # The form, the declared volume and the intermediate vial, only when they are not the
+    # default, so the case shape (and a fixture of all-powder rows) is unchanged. getattr,
+    # not row.prep_form: a row without the attribute is the old shape. capture_statement
+    # selects all of them, and a test pins that, so this cannot hide a dropped column.
+    prep_form = getattr(row, "prep_form", None) or DEFAULT_PREP_FORM
+    declared_volume_ml = getattr(row, "declared_volume_ml", None)
+    if prep_form != DEFAULT_PREP_FORM or declared_volume_ml is not None:
+        case["prep_form"] = prep_form
+        case["declared_volume_ml"] = declared_volume_ml
+    intermediate = {name: getattr(row, name, None) for name in INTERMEDIATE_FIELDS}
+    if any(v is not None for v in intermediate.values()):
+        case["intermediate"] = intermediate
     try:
         result = process_hplc_analysis(input_from_case(case))
     except Exception as exc:  # a row the engine cannot process is a counted skip, never a silent drop
         return None, f"engine_raised_{type(exc).__name__}"
     case["expected"] = {key: result[key] for key in EXPECTED_KEYS}
 
-    numbers = [slope, intercept, density, *weights.values(), *areas, *(area_percents or []),
-               *(retention_times or []), *(v for v in case["expected"].values() if v is not None)]
+    numbers = [slope, intercept, density, *areas, *(area_percents or []), *(retention_times or []),
+               *(v for v in weights.values() if v is not None),
+               *(v for v in intermediate.values() if v is not None),
+               *([declared_volume_ml] if declared_volume_ml is not None else []),
+               *(v for v in case["expected"].values() if v is not None)]
     if not all(math.isfinite(n) for n in numbers):
         return None, "non_finite_number"  # NaN never equals itself, so it could never pass the pin
     return case, None
@@ -153,18 +182,24 @@ def input_from_case(case):
         if case["retention_times"] is not None:
             peak["retention_time"] = case["retention_times"][i]
         injections.append({"peaks": [peak], "main_peak_index": 0})
+    intermediate = case.get("intermediate")
     return AnalysisInput(
         injections=injections,
         weights=WeightInputs(**case["weights"]),
         calibration=CalibrationParams(slope=case["slope"], intercept=case["intercept"]),
         # No reference RT, so identity is not computed or pinned here.
         peptide=PeptideParams(reference_rt=None, rt_tolerance=0.5, diluent_density=case["diluent_density"]),
+        # Absent keys are the defaults, which is every case captured before the form existed.
+        intermediate=None if intermediate is None else IntermediateWeights(**intermediate),
+        form=case.get("prep_form", DEFAULT_PREP_FORM),
+        declared_volume_ml=case.get("declared_volume_ml"),
     )
 
 
-def fetch_rows(db):
-    """ONE read-only query. Columns are named one by one on purpose: never the
-    HPLCAnalysis entity, never the two huge JSON columns (see module docstring)."""
+def capture_statement():
+    """The ONE read-only query. Columns are named one by one on purpose: never the
+    HPLCAnalysis entity, never the two huge JSON columns (see module docstring).
+    Split from fetch_rows so a test can read which columns it selects."""
     from models import CalibrationCurve, HPLCAnalysis
 
     # Task 2's rules, by role: stock leg <= 0, added diluent < 0, added stock <= 0.
@@ -194,6 +229,9 @@ def fetch_rows(db):
             HPLCAnalysis.id,
             HPLCAnalysis.sample_id_label,
             *(getattr(HPLCAnalysis, name) for name in WEIGHT_FIELDS),
+            HPLCAnalysis.prep_form,
+            HPLCAnalysis.declared_volume_ml,
+            *(getattr(HPLCAnalysis, name) for name in INTERMEDIATE_FIELDS),
             HPLCAnalysis.quantity_mg,
             HPLCAnalysis.calibration_curve_id,
             HPLCAnalysis.calculation_trace,
@@ -204,13 +242,18 @@ def fetch_rows(db):
         .where(or_(HPLCAnalysis.id.in_(recent), weighs_backwards, multi_injection))
         .order_by(HPLCAnalysis.id)
     )
-    return db.execute(stmt).all()
+    return stmt
+
+
+def fetch_rows(db):
+    return db.execute(capture_statement()).all()
 
 
 def capture(rows, source):
     """Build the fixture and the counts from fetched rows."""
     cases, flagged, drifted, case_ids = [], [], [], {}
     skipped, skipped_but_backwards, density_defaulted = Counter(), [], Counter()
+    form_defaulted, cases_by_form, two_step_cases = 0, Counter(), 0
     purity_values_absent = multi_injection_cases = 0
     for row in rows:
         case, reason = build_case(row)
@@ -223,6 +266,10 @@ def capture(rows, source):
             density_defaulted["no_curve" if row.calibration_curve_id is None else "curve_density_null"] += 1
         # Opaque, sequential in row-id order (the query's order_by), so the same
         # capture always numbers its cases the same way.
+        row_form = getattr(row, "prep_form", None)
+        form_defaulted += row_form is None
+        cases_by_form[row_form or DEFAULT_PREP_FORM] += 1
+        two_step_cases += "intermediate" in case
         case = {"id": f"case-{len(cases) + 1:03d}", **case}
         case_ids[case["id"]] = f"{row.sample_id_label}#{row.id}"
         cases.append(case)
@@ -252,6 +299,9 @@ def capture(rows, source):
         "flagged": len(flagged),
         "drifted": len(drifted),
         "diluent_density_defaulted_to_997.1": dict(density_defaulted),
+        "prep_form_defaulted_to_powder": form_defaulted,  # NULL prep_form: a row saved before the column existed
+        "cases_by_prep_form": dict(cases_by_form),  # anything but powder here means the fixture is no longer all-powder
+        "cases_with_intermediate": two_step_cases,
         "cases_without_trace_purity_values": purity_values_absent,  # their pinned purity_percent is the engine's 0 default
     }
     return fixture, counts

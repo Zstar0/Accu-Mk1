@@ -25,7 +25,7 @@ from types import SimpleNamespace
 import pytest
 
 from calculations.hplc_processor import process_hplc_analysis
-from scripts.capture_hplc_golden import build_case
+from scripts.capture_hplc_golden import build_case, capture, capture_statement
 from scripts.capture_hplc_golden import input_from_case as _input_from
 
 FIXTURES = Path(__file__).parent / "fixtures"
@@ -121,3 +121,125 @@ def test_flagged_ids_are_real_case_ids():
 
 def test_fixture_records_its_source():
     assert isinstance(GOLDEN["source"], str) and GOLDEN["source"].strip()
+
+
+# ---- Task 6a: the capture script carries the prep form ------------------------
+#
+# A liquid or bac row rebuilt as a powder would pin a WRONG expected value into the
+# artefact the sign-off rests on, and the capture would still look clean. These pin that
+# the form, the declared volume and the intermediate vial ride in the case, and that an
+# all-powder table still captures to exactly the shape it always had.
+
+LEGACY_CASE_KEYS = {
+    "weights", "areas", "area_percents", "retention_times", "slope", "intercept", "diluent_density", "expected",
+}
+INT_WEIGHINGS = {"int_vial_empty": 8000.0, "int_vial_with_diluent": 8500.0, "int_vial_with_diluent_and_sample": 8550.0}
+NO_INTERMEDIATE = {name: None for name in INT_WEIGHINGS}
+
+
+def _forward_pinned_case():
+    """A pinned prod row with all three legs comfortably positive (so every form below
+    computes), chosen by property because the opaque ids renumber on a recapture."""
+    for case in GOLDEN["cases"]:
+        w = case["weights"]
+        legs = (
+            w["stock_vial_with_diluent"] - w["stock_vial_empty"],
+            w["dil_vial_with_diluent"] - w["dil_vial_empty"],
+            w["dil_vial_with_diluent_and_sample"] - w["dil_vial_with_diluent"],
+        )
+        if case["id"] not in FLAGGED and all(leg > 1.0 for leg in legs):
+            return case
+    raise AssertionError("no unflagged pinned case has three legs above 1.0 mg")
+
+
+FWD = _forward_pinned_case()
+
+
+def _fetched_row(case=FWD, **over):
+    """A row as capture_statement returns it: a stored trace that carries the inputs."""
+    trace = {"quantity": {
+        "individual_areas": case["areas"],
+        "calibration_slope": case["slope"],
+        "calibration_intercept": case["intercept"],
+    }}
+    if case["area_percents"] is not None:
+        trace["purity"] = {"individual_values": case["area_percents"]}
+    if case["retention_times"] is not None:
+        trace["identity"] = {"individual_rts": case["retention_times"]}
+    attrs = {
+        "id": 1, "sample_id_label": "X", "weighs_backwards": False, "quantity_mg": None,
+        "calibration_curve_id": 1, "diluent_density": case["diluent_density"],
+        "prep_form": None, "declared_volume_ml": None, **NO_INTERMEDIATE, **case["weights"],
+    }
+    return SimpleNamespace(calculation_trace=trace, **{**attrs, **over})
+
+
+def test_a_powder_row_rebuilds_the_pinned_case_with_the_shape_it_always_had():
+    for prep_form in (None, "powder"):
+        case, skipped = build_case(_fetched_row(prep_form=prep_form))
+        assert skipped is None
+        assert set(case) == LEGACY_CASE_KEYS  # no new key, so the fixture stays byte-identical
+        assert case == {key: FWD[key] for key in LEGACY_CASE_KEYS}
+
+
+def test_a_case_without_the_new_keys_is_a_one_step_powder_input():
+    inp = _input_from(FWD)
+    assert (inp.form, inp.declared_volume_ml, inp.intermediate) == ("powder", None, None)
+
+
+def test_a_liquid_row_carries_its_form_and_pins_the_declared_volume():
+    row = _fetched_row(prep_form="liquid", declared_volume_ml=3.0, stock_vial_empty=None, stock_vial_with_diluent=None)
+    case, skipped = build_case(row)  # None stock weighings must not reach math.isfinite
+    assert skipped is None
+    assert (case["prep_form"], case["declared_volume_ml"]) == ("liquid", 3.0)
+    assert case["weights"]["stock_vial_empty"] is None
+    assert case["expected"]["stock_volume_ml"] == 3.0
+    assert case["expected"]["stock_volume_ml"] != FWD["expected"]["stock_volume_ml"]  # not rebuilt as a powder
+    assert case["expected"]["quantity_mg"] is not None
+
+
+def test_a_bac_row_is_pinned_with_the_density_correction():
+    case, skipped = build_case(_fetched_row(prep_form="bac"))
+    assert skipped is None and case["prep_form"] == "bac"
+    assert case["declared_volume_ml"] is None
+    # A little denser than water, so a little less volume for the same mass (about 0.03 %).
+    assert 0 < case["expected"]["stock_volume_ml"] < FWD["expected"]["stock_volume_ml"]
+    assert case["expected"]["stock_volume_ml"] == pytest.approx(FWD["expected"]["stock_volume_ml"], rel=1e-3)
+
+
+def test_a_two_step_row_carries_its_intermediate_vial():
+    case, skipped = build_case(_fetched_row(**INT_WEIGHINGS))
+    assert skipped is None and case["intermediate"] == INT_WEIGHINGS
+    # The intermediate step is 550 / 50 = 11, so the total is 11x the one-step factor.
+    assert case["expected"]["dilution_factor"] == pytest.approx(FWD["expected"]["dilution_factor"] * 11, rel=1e-5)
+    assert case["expected"]["quantity_mg"] == pytest.approx(FWD["expected"]["quantity_mg"] * 11, rel=1e-5)
+
+
+def test_a_captured_non_default_case_replays_through_the_shared_builder():
+    case, _ = build_case(_fetched_row(prep_form="liquid", declared_volume_ml=3.0, **NO_INTERMEDIATE))
+    result = process_hplc_analysis(_input_from(case))
+    assert {key: result[key] for key in case["expected"]} == case["expected"]
+
+
+def test_the_capture_counts_how_many_rows_defaulted_to_powder():
+    old = _fetched_row()  # then made into a row from before the columns: the attributes do not exist at all
+    for name in ("prep_form", "declared_volume_ml", *INT_WEIGHINGS):
+        delattr(old, name)
+    rows = [
+        old,
+        _fetched_row(prep_form=None),
+        _fetched_row(prep_form="powder"),
+        _fetched_row(prep_form="liquid", declared_volume_ml=3.0),
+    ]
+    fixture, counts = capture(rows, "test")
+    assert len(fixture["cases"]) == 4
+    assert counts["prep_form_defaulted_to_powder"] == 2
+    assert counts["cases_by_prep_form"] == {"powder": 3, "liquid": 1}
+    assert counts["cases_with_intermediate"] == 0
+
+
+def test_the_capture_query_selects_every_column_the_form_needs():
+    # build_case reads these with getattr (a row of the old shape has none), so a dropped
+    # column would default every row to powder without a single error. Pin the query.
+    selected = set(capture_statement().selected_columns.keys())
+    assert {"prep_form", "declared_volume_ml", *INT_WEIGHINGS} <= selected
