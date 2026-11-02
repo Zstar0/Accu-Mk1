@@ -23,11 +23,13 @@ from calculations.hplc_processor import (
     BENZYL_ALCOHOL_DENSITY,
     DILUENT_DENSITY_MG_ML,
     PREP_FORMS,
+    CalibrationParams,
     IntermediateWeights,
     WeightInputs,
     bac_volume_ml,
     calculate_dilution_factor,
     calculate_intermediate,
+    calculate_quantity,
     process_hplc_analysis,
     stock_volume_ml,
 )
@@ -156,7 +158,7 @@ def test_a_problem_gives_no_quantity_rather_than_a_crash():
     assert result["concentration_ug_ml"] == FORWARD_CASE["expected"]["concentration_ug_ml"]
 
 
-def test_a_problem_keeps_the_quantity_trace_inputs_and_drops_only_the_weighing_values():
+def test_a_problem_keeps_the_quantity_trace_inputs_and_drops_only_the_derived_echoes():
     # The capture script and the trace UI read the areas, the calibration and the
     # concentration out of trace["quantity"], so a problem must not collapse it.
     inp = _input_from(FORWARD_CASE)
@@ -174,6 +176,7 @@ def test_a_problem_keeps_the_quantity_trace_inputs_and_drops_only_the_weighing_v
     # Everything that needs a dilution factor or a stock volume is gone.
     assert set(ok) - set(bad) == {
         "undiluted_concentration_ug_ml", "mass_ug", "stock_volume_ml", "dilution_factor",
+        "dilution_factor_steps",
     }
 
 
@@ -790,8 +793,9 @@ def test_every_combination_of_failing_legs_nulls_exactly_what_it_touches(bad, no
         d["dilution_factor"] is None,
         d["dilution_factor_total"] is None,
     ) == none_values
-    # The invariant calculate_quantity relies on: it gates on "problem", and the
-    # rule is "no quantity when the total or the stock volume is None".
+    # The invariant behind calculate_quantity's gate: "problem" is None exactly when the
+    # total and the stock volume are both set. The gate also checks the values themselves
+    # (Task 5), so on a dict that calculate_dilution_factor built the two never disagree.
     assert (d["problem"] is None) == (d["stock_volume_ml"] is not None and d["dilution_factor_total"] is not None)
 
 
@@ -1192,3 +1196,289 @@ def test_the_same_promises_hold_on_a_grid_of_extreme_vials():
     # a few hundred product overflows over several thousand reached totals.
     assert reached >= 1000 and product_overflows >= 50, (reached, product_overflows)
     assert volume_overflows >= 1
+
+
+# ---- Task 5: the quantity reads the total factor ------------------------------
+#
+# Until Task 5, calculate_quantity multiplied by the final step's factor alone, so a
+# complete two-step row would have printed a quantity too LOW by the intermediate
+# factor (about 6x here). It now reads dilution_factor_total, and its gate stands on
+# that and on stock_volume_ml, never on dilution_factor: an intermediate-only problem
+# leaves a perfectly good final factor in place, and computing from it would be the
+# same understatement reached by a different route.
+_FORWARD_INPUT = _input_from(FORWARD_CASE)
+INJECTIONS, CAL = _FORWARD_INPUT.injections, _FORWARD_INPUT.calibration
+
+# What Dennis's calc.js says for FORWARD_CASE's weighings, areas and curve with INT_WEIGHTS
+# as the intermediate vial: stockPrep, dilutionActual for each vial, the product of the two
+# unrounded factors (calc.js:1832) and sampleResult (calc.js:1254), run under node. An
+# oracle written by someone else, not this engine's output. He rounds nothing; the engine
+# rounds each factor and the stock volume to 6 places and the mass to 4, so the two agree to
+# a few parts in 1e7, not exactly.
+DENNIS_TWO_STEP = {"dilution_factor_total": 39.720449314194, "peptide_mass_mg": 97.02898393319467}
+DENNIS_ONE_STEP_MASS_MG = 16.156357495897744
+
+
+def test_quantity_uses_the_total_factor_on_a_two_step_row():
+    d = calculate_dilution_factor(FORWARD_WEIGHTS, DENSITY, intermediate=INT_WEIGHTS)
+    q = calculate_quantity(INJECTIONS, CAL, d)
+    assert q["dilution_factor"] == d["dilution_factor_total"] != d["dilution_factor"]
+    assert q["dilution_factor_steps"] == {
+        "intermediate": d["intermediate"]["dilution_factor"],
+        "final": d["dilution_factor"],
+    }
+
+
+def test_a_one_step_row_reports_its_single_factor_as_the_total():
+    d = calculate_dilution_factor(FORWARD_WEIGHTS, DENSITY)
+    q = calculate_quantity(INJECTIONS, CAL, d)
+    assert q["dilution_factor"] == d["dilution_factor"] == d["dilution_factor_total"]
+    assert q["dilution_factor_steps"] == {"intermediate": None, "final": d["dilution_factor"]}
+    # The same number the golden pin holds for this row.
+    assert q["quantity_mg"] == FORWARD_CASE["expected"]["quantity_mg"]
+
+
+def test_two_step_quantity_is_the_one_step_quantity_times_the_intermediate_factor():
+    one = calculate_quantity(INJECTIONS, CAL, calculate_dilution_factor(FORWARD_WEIGHTS, DENSITY))
+    two = calculate_quantity(
+        INJECTIONS, CAL, calculate_dilution_factor(FORWARD_WEIGHTS, DENSITY, intermediate=INT_WEIGHTS)
+    )
+    factor = calculate_intermediate(INT_WEIGHTS, STOCK_CONC, DENSITY)["dilution_factor"]
+    # mass_ug, not quantity_mg: the mg figure is rounded to 4 places, which would swamp a
+    # tight comparison. A 6x mistake would miss by far more than this.
+    assert two["mass_ug"] == pytest.approx(one["mass_ug"] * factor, rel=1e-6)
+
+
+def test_two_step_quantity_agrees_with_dennis_calc_js():
+    two = process_hplc_analysis(replace(_FORWARD_INPUT, intermediate=INT_WEIGHTS))
+    assert two["dilution_factor"] == two["calculation_trace"]["dilution"]["dilution_factor_total"]
+    assert two["dilution_factor"] == pytest.approx(DENNIS_TWO_STEP["dilution_factor_total"], abs=1e-5)
+    assert two["quantity_mg"] == pytest.approx(DENNIS_TWO_STEP["peptide_mass_mg"], rel=1e-6, abs=5e-5)
+    # And his one-step figure for the same row is the number the golden pin holds.
+    one = process_hplc_analysis(_FORWARD_INPUT)
+    assert one["quantity_mg"] == pytest.approx(DENNIS_ONE_STEP_MASS_MG, abs=5e-5)
+
+
+def test_a_flagged_dilution_refuses_to_report_a_quantity():
+    # A regression guard: Task 2's gate already did this on a one-step row.
+    q = calculate_quantity(INJECTIONS, CAL, calculate_dilution_factor(FINAL_LEG_BAD, DENSITY))
+    assert q["quantity_mg"] is None
+    assert q["error"] == "stock"
+
+
+def test_an_intermediate_only_problem_gives_no_quantity_from_one_step_of_the_prep():
+    d = _two_step(intermediate=INT_LEG_BAD)
+    # The premise: a good final factor is in place and only the total is lost.
+    assert d["dilution_factor"] is not None and d["dilution_factor_total"] is None
+    q = calculate_quantity(INJECTIONS, CAL, d)
+    assert q["quantity_mg"] is None
+    assert q["error"] == "intermediate_stock"
+    assert "dilution_factor_steps" not in q
+
+
+@pytest.mark.parametrize("hole", ["dilution_factor_total", "stock_volume_ml"])
+def test_the_quantity_gate_stands_on_the_total_and_the_stock_volume_not_on_problem_or_the_final_factor(hole):
+    d = _two_step()
+    d[hole] = None
+    d["problem"] = None  # a dict whose problem does not say what is missing
+    assert d["dilution_factor"] is not None  # the final factor alone would have let a quantity through
+    q = calculate_quantity(INJECTIONS, CAL, d)
+    assert q["quantity_mg"] is None
+    assert q["error"] == "dilution_incomplete"
+
+
+def test_a_problem_still_wins_over_complete_values():
+    d = _two_step()
+    d["problem"] = "stock"
+    q = calculate_quantity(INJECTIONS, CAL, d)
+    assert q["quantity_mg"] is None and q["error"] == "stock"
+
+
+# calculate_quantity returns no NaN or infinity, like calculate_dilution_factor (Task 4).
+# A finite factor times a large concentration can overflow, and so can the concentration
+# itself (a tiny slope), and a number that does is not a quantity.
+_OK_DILUTION = calculate_dilution_factor(FORWARD_WEIGHTS, DENSITY)
+_FAILURE_KEYS = {
+    "quantity_mg", "error", "individual_areas", "avg_main_peak_area",
+    "concentration_ug_ml", "calibration_slope", "calibration_intercept",
+}
+
+
+def _one_injection(*areas):
+    return [{"peaks": [{"area": area}], "main_peak_index": 0} for area in areas]
+
+
+@pytest.mark.parametrize(
+    "area, slope, intercept, concentration_survives",
+    [
+        (1e307, 1.0, 0.0, True),         # only the mass overflows: a finite factor times a large concentration
+        (1e308, 1.0, 0.0, True),         # the undiluted concentration overflows
+        (1.0, 5e-324, 0.0, False),       # the concentration itself overflows (a tiny slope)
+        (1.7e308, 1.0, -1.7e308, False),  # area minus intercept overflows
+    ],
+    ids=["mass", "undiluted", "tiny_slope", "area_minus_intercept"],
+)
+def test_an_overflowing_quantity_is_refused_not_infinity(area, slope, intercept, concentration_survives):
+    q = calculate_quantity(_one_injection(area), CalibrationParams(slope, intercept), _OK_DILUTION)
+    assert q["quantity_mg"] is None
+    assert q["error"] == "quantity_not_finite"
+    # The failure keeps the quantity section's inputs; only a concentration that overflowed is None.
+    assert set(q) == _FAILURE_KEYS
+    assert (q["concentration_ug_ml"] is not None) == concentration_survives
+    json.dumps(q, allow_nan=False)  # the stored trace must stay valid JSON
+
+
+def test_an_overflowing_quantity_survives_the_pipeline_as_valid_json():
+    inp = replace(
+        _FORWARD_INPUT, injections=_one_injection(1e307), calibration=CalibrationParams(1.0, 0.0)
+    )
+    result = process_hplc_analysis(inp)
+    assert result["quantity_mg"] is None
+    assert result["calculation_trace"]["quantity"]["error"] == "quantity_not_finite"
+    json.dumps(result, allow_nan=False)
+
+
+@pytest.mark.parametrize(
+    "injections, calibration",
+    [
+        (_one_injection(math.nan), CalibrationParams(1.0, 0.0)),
+        (_one_injection(math.inf), CalibrationParams(1.0, 0.0)),
+        (_one_injection(1.7e308, 1.7e308), CalibrationParams(1.0, 0.0)),  # finite areas, the sum overflows
+        (_one_injection(1.0), CalibrationParams(math.nan, 0.0)),
+        (_one_injection(1.0), CalibrationParams(1.0, math.inf)),
+    ],
+    ids=["nan_area", "inf_area", "area_sum_overflows", "nan_slope", "inf_intercept"],
+)
+def test_a_non_finite_area_or_calibration_is_refused_not_echoed(injections, calibration):
+    q = calculate_quantity(injections, calibration, _OK_DILUTION)
+    assert q == {"quantity_mg": None, "error": "quantity_not_finite"}
+    json.dumps(q, allow_nan=False)
+
+
+# The sweep for calculate_quantity. Its domain is what the function is really handed:
+# dilution dicts that calculate_dilution_factor produced (one step, two steps, every
+# problem code, a huge but finite total, a huge stock volume) crossed with finite areas,
+# slopes and intercepts that include the extremes. Non-finite areas and calibrations are
+# the input boundary's job and have their own cases above; they are not drawn here.
+#
+# The expected error is worked out independently, in the precedence the function
+# documents: a zero slope, then non-finite areas or calibration, then the dilution's
+# problem, then a missing total or stock volume, then an overflow in the arithmetic.
+_QUANTITY_AREAS = [0.0, 1.0, 1234.5, 23396.5746, -1.0, 1e100, 1e300, 1e307, 1.7e308, -1e300]
+_QUANTITY_SLOPES = [9.038015, 1.0, -9.038015, 1e-5, 1e-300, 5e-324, 1e300, 0.0]
+_QUANTITY_INTERCEPTS = [0.0, 18.846082, -1e300, 1e300, 1.7e308, -1.7e308]
+
+
+def _handbuilt_dilutions():
+    plain = calculate_dilution_factor(FORWARD_WEIGHTS, DENSITY)
+    hole = _two_step()
+    hole["dilution_factor_total"], hole["problem"] = None, None
+    return [
+        plain,
+        _two_step(),
+        _two_step(weights=STOCK_LEG_BAD),
+        _two_step(weights=FINAL_LEG_BAD),
+        _two_step(intermediate=INT_LEG_BAD),
+        _two_step(intermediate=INT_UNWEIGHED),
+        calculate_dilution_factor(FORWARD_WEIGHTS, DENSITY, form="liquid", declared_volume_ml=3.0),
+        calculate_dilution_factor(FORWARD_WEIGHTS, DENSITY, form="bac"),
+        calculate_dilution_factor(FORWARD_WEIGHTS, 1e-5),  # a stock volume near 3e8 mL
+        calculate_dilution_factor(FORWARD_WEIGHTS, 1e-310),  # every volume overflows
+        calculate_dilution_factor(_HUGE_FACTOR_FINAL, DENSITY, intermediate=INT_WEIGHTS),  # a total above 1e300
+        calculate_dilution_factor(_HUGE_FACTOR_FINAL, DENSITY, intermediate=_HUGE_FACTOR_INTERMEDIATE),
+        hole,  # a dict whose problem is None but whose total is missing
+    ]
+
+
+def _expected_quantity_error(areas, calibration, d):
+    """(the error the function must give or None for a quantity, whether it was an overflow)."""
+    if calibration.slope == 0:
+        return "Calibration slope is zero", False
+    avg = sum(areas) / len(areas)
+    if not all(math.isfinite(v) for v in (avg, calibration.slope, calibration.intercept, *areas)):
+        return "quantity_not_finite", False
+    if d["problem"]:
+        return d["problem"], False
+    total, volume = d["dilution_factor_total"], d["stock_volume_ml"]
+    if total is None or volume is None:
+        return "dilution_incomplete", False
+    conc = (avg - calibration.intercept) / calibration.slope
+    if not all(math.isfinite(v) for v in (conc, conc * total, conc * total * volume)):
+        return "quantity_not_finite", True
+    return None, False
+
+
+def _quantity_failure(areas, calibration, d):
+    """(why this call breaks a promise or None, whether a quantity came out, whether it overflowed)."""
+    try:
+        q = calculate_quantity(_one_injection(*areas), calibration, d)
+        json.dumps(q, allow_nan=False)
+    except Exception as error:  # noqa: BLE001 - the point is that nothing may escape
+        return (repr(error)[:80], areas, calibration, d), False, False
+    expected, overflowed = _expected_quantity_error(areas, calibration, d)
+    if q.get("error") != expected:
+        return (f"error {q.get('error')!r}, expected {expected!r}", areas, calibration, d), False, False
+    if (q["quantity_mg"] is None) != (expected is not None):
+        return ("quantity_mg and error disagree", areas, calibration, d), False, False
+    if expected is None:
+        steps = q["dilution_factor_steps"]
+        step = None if d["intermediate"] is None else d["intermediate"]["dilution_factor"]
+        if (
+            q["dilution_factor"] != d["dilution_factor_total"]
+            or q["stock_volume_ml"] != d["stock_volume_ml"]
+            or steps != {"intermediate": step, "final": d["dilution_factor"]}
+            or not math.isfinite(q["quantity_mg"])
+        ):
+            return ("a quantity that does not read the total", areas, calibration, d), False, False
+    elif "individual_areas" in q and set(q) != _FAILURE_KEYS:
+        return ("a failure that collapsed the section", areas, calibration, d), False, False
+    return None, expected is None, overflowed
+
+
+def test_no_input_makes_the_quantity_raise_or_leak_a_non_finite_number():
+    import random
+
+    rng = random.Random(20261104)
+    pool = _handbuilt_dilutions()
+    for _ in range(3000):  # real dilutions from random finite weighings, most of them refusals
+        w = WeightInputs(*(rng.choice(_FINITE_VALUES) for _ in range(5)))
+        inter = None if rng.random() < 0.3 else IntermediateWeights(*(rng.choice(_FINITE_VALUES) for _ in range(3)))
+        pool.append(
+            calculate_dilution_factor(
+                w, rng.choice(_FINITE_DENSITIES), inter,
+                form=rng.choice(PREP_FORMS), declared_volume_ml=rng.choice(_FINITE_DECLARED),
+            )
+        )
+    failures, reached, overflowed = [], 0, 0
+    for _ in range(40_000):
+        areas = [rng.choice(_QUANTITY_AREAS) for _ in range(rng.randint(1, 3))]
+        calibration = CalibrationParams(rng.choice(_QUANTITY_SLOPES), rng.choice(_QUANTITY_INTERCEPTS))
+        failure, got, over = _quantity_failure(areas, calibration, rng.choice(pool))
+        if failure:
+            failures.append(failure)
+        reached += got
+        overflowed += over
+    assert failures == []
+    # The coverage this sweep exists for. Measured: 450 quantities reached and 716 overflow
+    # refusals; the floors leave room for a different Python's random.choice and fail loudly
+    # if an edit starves either path. Only about 3 % of the drawn dilutions can reach a
+    # quantity at all (most random weighings are refusals), which is why the grid below exists.
+    assert reached >= 200 and overflowed >= 300, (reached, overflowed)
+
+
+def test_the_same_promises_hold_on_a_grid_of_every_area_slope_and_intercept():
+    import itertools
+
+    failures, reached, overflowed = [], 0, 0
+    for d in _handbuilt_dilutions():
+        for area, slope, intercept in itertools.product(_QUANTITY_AREAS, _QUANTITY_SLOPES, _QUANTITY_INTERCEPTS):
+            failure, got, over = _quantity_failure([area], CalibrationParams(slope, intercept), d)
+            if failure:
+                failures.append(failure)
+            reached += got
+            overflowed += over
+    assert failures == []
+    # The guarantee: every dilution shape meets every extreme, on every run. Deterministic,
+    # so the floors sit close to the measured 1058 quantities and 1462 overflow refusals
+    # out of 6240 calls.
+    assert reached >= 1000 and overflowed >= 1400, (reached, overflowed)

@@ -524,15 +524,40 @@ def calculate_quantity(
     Steps:
     1. Average main peak areas across injections
     2. Solve calibration equation: Conc = (avg_area - intercept) / slope
-    3. Apply dilution factor: undiluted_conc = conc * DF
+    3. Apply the TOTAL dilution factor: undiluted_conc = conc * DF, where DF is
+       dilution["dilution_factor_total"], stock vial to final vial (both steps when
+       the prep has an intermediate), the same factor calc.js sends to Mk1
     4. Calculate mass: mass_mg = undiluted_conc * stock_vol / 1000
 
-    Returns quantity result with calculation trace. A weighing problem from
-    calculate_dilution_factor gives no quantity, never a number computed from a
-    bad weighing: "quantity_mg" is None and "error" names the problem. What does
-    not depend on the weighings is still returned (areas, calibration, and the
-    concentration, which is (avg_area - intercept) / slope), so the trace stays
-    readable and a recapture can still rebuild the row's inputs from it.
+    The rounding order is load-bearing and pinned by the golden fixture: the total and
+    the stock volume arrive already rounded to 6 places, are multiplied as they are, and
+    only the products are rounded for the trace. Do not multiply unrounded values.
+
+    The gate stands on the total and the stock volume, never on "dilution_factor": an
+    intermediate-only problem leaves a good final-step factor in place, and a quantity
+    from one step of a two-step prep is low by the intermediate factor. So no quantity
+    is computed unless "problem" is None AND both values are finite numbers.
+
+    Returns quantity result with calculation trace. A problem, or an overflow in the
+    arithmetic, gives no quantity, never a number computed from a bad weighing:
+    "quantity_mg" is None and "error" names why, as one of:
+
+        the dilution's "problem" code    (see calculate_dilution_factor)
+        "dilution_incomplete"            problem is None but the total or the stock
+                                         volume is not a finite number (a dict that
+                                         calculate_dilution_factor did not build)
+        "quantity_not_finite"            the concentration, the undiluted concentration
+                                         or the mass overflowed
+
+    What does not depend on the weighings is still returned (areas, calibration, and
+    the concentration, which is (avg_area - intercept) / slope; None if that overflowed),
+    so the trace stays readable and a recapture can still rebuild the row's inputs from
+    it. Only the values that need a factor or a stock volume are dropped.
+
+    No NaN or infinity reaches the return value, so the stored trace stays valid JSON.
+    A non-finite area or calibration (or areas whose average overflows) is refused
+    before any of that with just {"quantity_mg": None, "error": "quantity_not_finite"}:
+    nothing in it could be reported, and a recapture cannot use it either.
     """
     areas = []
     for inj in injections:
@@ -551,30 +576,42 @@ def calculate_quantity(
     if calibration.slope == 0:
         return {"quantity_mg": None, "error": "Calibration slope is zero"}
 
+    if not all(_finite(v) for v in (avg_area, calibration.slope, calibration.intercept, *areas)):
+        return {"quantity_mg": None, "error": "quantity_not_finite"}
+
     concentration = (avg_area - calibration.intercept) / calibration.slope  # µg/mL
 
-    problem = dilution.get("problem")
-    if problem:
-        # The total dilution factor or the stock volume is not known (see
-        # calculate_dilution_factor for which problem nulls which), so there is no
-        # undiluted concentration or mass.
+    total = dilution.get("dilution_factor_total")
+    stock_vol = dilution.get("stock_volume_ml")
+    error = dilution.get("problem")
+    if not error and not (_finite(total) and _finite(stock_vol)):
+        error = "dilution_incomplete"
+
+    undiluted_conc = mass_ug = None
+    if not error:
+        # Apply the total dilution factor
+        undiluted_conc = concentration * total  # µg/mL in stock
+
+        # Mass = undiluted_conc (µg/mL) * stock_volume (mL) / 1000 (µg→mg)
+        mass_ug = undiluted_conc * stock_vol
+        if not all(_finite(v) for v in (concentration, undiluted_conc, mass_ug)):
+            error = "quantity_not_finite"
+
+    if error:
+        # No total or no stock volume, or an overflow: there is no mass. The measured
+        # concentration is kept when it is a number.
         return {
             "quantity_mg": None,
-            "error": problem,
+            "error": error,
             "individual_areas": [round(a, 4) for a in areas],
             "avg_main_peak_area": round(avg_area, 4),
-            "concentration_ug_ml": round(concentration, 4),
+            "concentration_ug_ml": round(concentration, 4) if _finite(concentration) else None,
             "calibration_slope": calibration.slope,
             "calibration_intercept": calibration.intercept,
         }
 
-    # Apply dilution factor
-    undiluted_conc = concentration * dilution["dilution_factor"]  # µg/mL in stock
-
-    # Mass = undiluted_conc (µg/mL) * stock_volume (mL) / 1000 (µg→mg)
-    stock_vol = dilution["stock_volume_ml"]
-    mass_ug = undiluted_conc * stock_vol
     mass_mg = mass_ug / 1000
+    intermediate = dilution.get("intermediate")
 
     return {
         "quantity_mg": round(mass_mg, 4),
@@ -584,7 +621,11 @@ def calculate_quantity(
         "undiluted_concentration_ug_ml": round(undiluted_conc, 4),
         "mass_ug": round(mass_ug, 4),
         "stock_volume_ml": round(stock_vol, 6),
-        "dilution_factor": round(dilution["dilution_factor"], 6),
+        "dilution_factor": round(total, 6),
+        "dilution_factor_steps": {
+            "intermediate": None if intermediate is None else intermediate["dilution_factor"],
+            "final": dilution.get("dilution_factor"),
+        },
         "calibration_slope": calibration.slope,
         "calibration_intercept": calibration.intercept,
     }
@@ -687,7 +728,7 @@ def process_hplc_analysis(input_data: AnalysisInput) -> dict:
         "quantity_mg": quantity.get("quantity_mg"),
         "identity_conforms": identity.get("conforms"),
         "identity_rt_delta": identity.get("rt_delta"),
-        "dilution_factor": dilution.get("dilution_factor"),
+        "dilution_factor": dilution.get("dilution_factor_total"),  # stock vial to final vial, both steps if two
         "stock_volume_ml": dilution.get("stock_volume_ml"),
         "avg_main_peak_area": quantity.get("avg_main_peak_area"),
         "concentration_ug_ml": quantity.get("concentration_ug_ml"),
