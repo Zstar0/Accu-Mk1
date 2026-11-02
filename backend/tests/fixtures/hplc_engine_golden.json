@@ -1,0 +1,5843 @@
+{
+ "captured_at": "2026-11-02T17:24:59+00:00",
+ "source": "hplc_analyses in accumark_mk1: the 200 most recent rows with a calculation_trace, plus every row whose weighings run backwards; inputs rebuilt from calculation_trace, expected recomputed by process_hplc_analysis at capture time",
+ "drifted": [],
+ "flagged": [
+  "case-001",
+  "case-002",
+  "case-003",
+  "case-004",
+  "case-005"
+ ],
+ "cases": [
+  {
+   "id": "case-001",
+   "weights": {
+    "stock_vial_empty": 1.0,
+    "stock_vial_with_diluent": 1.0,
+    "dil_vial_empty": 1.0,
+    "dil_vial_with_diluent": 1.0,
+    "dil_vial_with_diluent_and_sample": 1.0
+   },
+   "areas": [
+    8951.8424
+   ],
+   "area_percents": [
+    98.4513
+   ],
+   "retention_times": [
+    3.625
+   ],
+   "slope": 6.908941,
+   "intercept": 1.211325,
+   "diluent_density": 997.1,
+   "expected": {
+    "quantity_mg": 0.0,
+    "dilution_factor": 0,
+    "stock_volume_ml": 0.0,
+    "purity_percent": 98.4513,
+    "concentration_ug_ml": 1295.5142
+   }
+  },
+  {
+   "id": "case-002",
+   "weights": {
+    "stock_vial_empty": 0.0,
+    "stock_vial_with_diluent": 0.0,
+    "dil_vial_empty": 0.0,
+    "dil_vial_with_diluent": 0.0,
+    "dil_vial_with_diluent_and_sample": 0.0
+   },
+   "areas": [
+    534.4491
+   ],
+   "area_percents": [
+    99.7616
+   ],
+   "retention_times": [
+    3.33
+   ],
+   "slope": 1.016147,
+   "intercept": 0.516685,
+   "diluent_density": 997.1,
+   "expected": {
+    "quantity_mg": 0.0,
+    "dilution_factor": 0,
+    "stock_volume_ml": 0.0,
+    "purity_percent": 99.7616,
+    "concentration_ug_ml": 525.448
+   }
+  },
+  {
+   "id": "case-003",
+   "weights": {
+    "stock_vial_empty": 0.0,
+    "stock_vial_with_diluent": 0.0,
+    "dil_vial_empty": 0.0,
+    "dil_vial_with_diluent": 0.0,
+    "dil_vial_with_diluent_and_sample": 0.0
+   },
+   "areas": [
+    534.4491
+   ],
+   "area_percents": [
+    99.7616
+   ],
+   "retention_times": [
+    3.33
+   ],
+   "slope": 1.016147,
+   "intercept": 0.516685,
+   "diluent_density": 997.1,
+   "expected": {
+    "quantity_mg": 0.0,
+    "dilution_factor": 0,
+    "stock_volume_ml": 0.0,
+    "purity_percent": 99.7616,
+    "concentration_ug_ml": 525.448
+   }
+  },
+  {
+   "id": "case-004",
+   "weights": {
+    "stock_vial_empty": 1.0,
+    "stock_vial_with_diluent": 1.0,
+    "dil_vial_empty": 3000.0,
+    "dil_vial_with_diluent": 3000.0,
+    "dil_vial_with_diluent_and_sample": 4500.0
+   },
+   "areas": [
+    2544.2176
+   ],
+   "area_percents": [
+    99.9525
+   ],
+   "retention_times": [
+    1.194
+   ],
+   "slope": 7.876207,
+   "intercept": 12.433225,
+   "diluent_density": 997.1,
+   "expected": {
+    "quantity_mg": 0.0,
+    "dilution_factor": 1.0,
+    "stock_volume_ml": 0.0,
+    "purity_percent": 99.9525,
+    "concentration_ug_ml": 321.4472
+   }
+  },
+  {
+   "id": "case-005",
+   "weights": {
+    "stock_vial_empty": 1.0,
+    "stock_vial_with_diluent": 1.0,
+    "dil_vial_empty": 3000.0,
+    "dil_vial_with_diluent": 3000.0,
+    "dil_vial_with_diluent_and_sample": 4500.0
+   },
+   "areas": [
+    2544.2176
+   ],
+   "area_percents": [
+    99.9525
+   ],
+   "retention_times": [
+    1.194
+   ],
+   "slope": 7.876207,
+   "intercept": 12.433225,
+   "diluent_density": 997.1,
+   "expected": {
+    "quantity_mg": 0.0,
+    "dilution_factor": 1.0,
+    "stock_volume_ml": 0.0,
+    "purity_percent": 99.9525,
+    "concentration_ug_ml": 321.4472
+   }
+  },
+  {
+   "id": "case-006",
+   "weights": {
+    "stock_vial_empty": 5631.26,
+    "stock_vial_with_diluent": 8627.66,
+    "dil_vial_empty": 2286.89,
+    "dil_vial_with_diluent": 3690.9,
+    "dil_vial_with_diluent_and_sample": 3784.19
+   },
+   "areas": [
+    1972.9711
+   ],
+   "area_percents": [
+    99.9758
+   ],
+   "retention_times": [
+    6.649
+   ],
+   "slope": 8.323497,
+   "intercept": 55.28973,
+   "diluent_density": 997.1,
+   "expected": {
+    "quantity_mg": 11.1123,
+    "dilution_factor": 16.049952,
+    "stock_volume_ml": 3.005115,
+    "purity_percent": 99.9758,
+    "concentration_ug_ml": 230.3937
+   }
+  },
+  {
+   "id": "case-007",
+   "weights": {
+    "stock_vial_empty": 5458.93,
+    "stock_vial_with_diluent": 8460.47,
+    "dil_vial_empty": 2274.84,
+    "dil_vial_with_diluent": 3733.16,
+    "dil_vial_with_diluent_and_sample": 3778.13
+   },
+   "areas": [
+    1668.8118
+   ],
+   "area_percents": [
+    99.9267
+   ],
+   "retention_times": [
+    6.659
+   ],
+   "slope": 8.323497,
+   "intercept": 55.28973,
+   "diluent_density": 997.1,
+   "expected": {
+    "quantity_mg": 19.5072,
+    "dilution_factor": 33.42873,
+    "stock_volume_ml": 3.01027,
+    "purity_percent": 99.9267,
+    "concentration_ug_ml": 193.8515
+   }
+  },
+  {
+   "id": "case-008",
+   "weights": {
+    "stock_vial_empty": 5638.71,
+    "stock_vial_with_diluent": 8632.79,
+    "dil_vial_empty": 2275.82,
+    "dil_vial_with_diluent": 3739.66,
+    "dil_vial_with_diluent_and_sample": 3769.82
+   },
+   "areas": [
+    1943.3909
+   ],
+   "area_percents": [
+    99.9685
+   ],
+   "retention_times": [
+    6.654
+   ],
+   "slope": 8.323497,
+   "intercept": 55.28973,
+   "diluent_density": 997.1,
+   "expected": {
+    "quantity_mg": 33.7414,
+    "dilution_factor": 49.535809,
+    "stock_volume_ml": 3.002788,
+    "purity_percent": 99.9685,
+    "concentration_ug_ml": 226.8399
+   }
+  },
+  {
+   "id": "case-009",
+   "weights": {
+    "stock_vial_empty": 14295.34,
+    "stock_vial_with_diluent": 24342.05,
+    "dil_vial_empty": 0.0,
+    "dil_vial_with_diluent": 1493.3548,
+    "dil_vial_with_diluent_and_sample": 1495.65
+   },
+   "areas": [
+    1682.3677
+   ],
+   "area_percents": [
+    99.9901
+   ],
+   "retention_times": [
+    1.309
+   ],
+   "slope": 15.782452,
+   "intercept": -33.766783,
+   "diluent_density": 997.1,
+   "expected": {
+    "quantity_mg": 713.956,
+    "dilution_factor": 651.642558,
+    "stock_volume_ml": 10.07593,
+    "purity_percent": 99.9901,
+    "concentration_ug_ml": 108.7369
+   }
+  },
+  {
+   "id": "case-010",
+   "weights": {
+    "stock_vial_empty": 12881.75,
+    "stock_vial_with_diluent": 22825.24,
+    "dil_vial_empty": 0.0,
+    "dil_vial_with_diluent": 1493.4127,
+    "dil_vial_with_diluent_and_sample": 1495.65
+   },
+   "areas": [
+    1125.3809
+   ],
+   "area_percents": [
+    99.8821
+   ],
+   "retention_times": [
+    1.303
+   ],
+   "slope": 15.782452,
+   "intercept": -33.766783,
+   "diluent_density": 997.1,
+   "expected": {
+    "quantity_mg": 489.6324,
+    "dilution_factor": 668.506682,
+    "stock_volume_ml": 9.97241,
+    "purity_percent": 99.8821,
+    "concentration_ug_ml": 73.4453
+   }
+  },
+  {
+   "id": "case-011",
+   "weights": {
+    "stock_vial_empty": 5465.18,
+    "stock_vial_with_diluent": 8486.89,
+    "dil_vial_empty": 2269.91,
+    "dil_vial_with_diluent": 3741.25,
+    "dil_vial_with_diluent_and_sample": 3771.91
+   },
+   "areas": [
+    539.9757
+   ],
+   "area_percents": [
+    99.932
+   ],
+   "retention_times": [
+    6.689
+   ],
+   "slope": 8.323497,
+   "intercept": 55.28973,
+   "diluent_density": 997.1,
+   "expected": {
+    "quantity_mg": 8.645,
+    "dilution_factor": 48.988911,
+    "stock_volume_ml": 3.030498,
+    "purity_percent": 99.932,
+    "concentration_ug_ml": 58.2311
+   }
+  },
+  {
+   "id": "case-012",
+   "weights": {
+    "stock_vial_empty": 5465.18,
+    "stock_vial_with_diluent": 8486.89,
+    "dil_vial_empty": 2269.91,
+    "dil_vial_with_diluent": 3741.25,
+    "dil_vial_with_diluent_and_sample": 3771.91
+   },
+   "areas": [
+    539.9757
+   ],
+   "area_percents": [
+    99.932
+   ],
+   "retention_times": [
+    6.689
+   ],
+   "slope": 8.323497,
+   "intercept": 55.28973,
+   "diluent_density": 997.1,
+   "expected": {
+    "quantity_mg": 8.645,
+    "dilution_factor": 48.988911,
+    "stock_volume_ml": 3.030498,
+    "purity_percent": 99.932,
+    "concentration_ug_ml": 58.2311
+   }
+  },
+  {
+   "id": "case-013",
+   "weights": {
+    "stock_vial_empty": 5465.18,
+    "stock_vial_with_diluent": 8486.89,
+    "dil_vial_empty": 2269.91,
+    "dil_vial_with_diluent": 3741.25,
+    "dil_vial_with_diluent_and_sample": 3771.91
+   },
+   "areas": [
+    539.9757
+   ],
+   "area_percents": [
+    99.932
+   ],
+   "retention_times": [
+    6.689
+   ],
+   "slope": 8.323497,
+   "intercept": 55.28973,
+   "diluent_density": 997.1,
+   "expected": {
+    "quantity_mg": 8.645,
+    "dilution_factor": 48.988911,
+    "stock_volume_ml": 3.030498,
+    "purity_percent": 99.932,
+    "concentration_ug_ml": 58.2311
+   }
+  },
+  {
+   "id": "case-014",
+   "weights": {
+    "stock_vial_empty": 5667.47,
+    "stock_vial_with_diluent": 8681.62,
+    "dil_vial_empty": 2271.25,
+    "dil_vial_with_diluent": 3732.46,
+    "dil_vial_with_diluent_and_sample": 3776.58
+   },
+   "areas": [
+    1492.0842
+   ],
+   "area_percents": [
+    99.9452
+   ],
+   "retention_times": [
+    6.663
+   ],
+   "slope": 8.323497,
+   "intercept": 55.28973,
+   "diluent_density": 997.1,
+   "expected": {
+    "quantity_mg": 17.8037,
+    "dilution_factor": 34.118994,
+    "stock_volume_ml": 3.022916,
+    "purity_percent": 99.9452,
+    "concentration_ug_ml": 172.6191
+   }
+  },
+  {
+   "id": "case-015",
+   "weights": {
+    "stock_vial_empty": 5630.83,
+    "stock_vial_with_diluent": 8649.83,
+    "dil_vial_empty": 2270.67,
+    "dil_vial_with_diluent": 3732.12,
+    "dil_vial_with_diluent_and_sample": 3761.32
+   },
+   "areas": [
+    1484.1329
+   ],
+   "area_percents": [
+    99.9556
+   ],
+   "retention_times": [
+    6.664
+   ],
+   "slope": 8.323497,
+   "intercept": 55.28973,
+   "diluent_density": 997.1,
+   "expected": {
+    "quantity_mg": 26.5336,
+    "dilution_factor": 51.049658,
+    "stock_volume_ml": 3.027781,
+    "purity_percent": 99.9556,
+    "concentration_ug_ml": 171.6638
+   }
+  },
+  {
+   "id": "case-016",
+   "weights": {
+    "stock_vial_empty": 5559.67,
+    "stock_vial_with_diluent": 8574.69,
+    "dil_vial_empty": 2297.97,
+    "dil_vial_with_diluent": 3756.14,
+    "dil_vial_with_diluent_and_sample": 3785.64
+   },
+   "areas": [
+    1527.568
+   ],
+   "area_percents": [
+    99.975
+   ],
+   "retention_times": [
+    6.66
+   ],
+   "slope": 8.323497,
+   "intercept": 55.28973,
+   "diluent_density": 997.1,
+   "expected": {
+    "quantity_mg": 26.9724,
+    "dilution_factor": 50.429492,
+    "stock_volume_ml": 3.023789,
+    "purity_percent": 99.975,
+    "concentration_ug_ml": 176.8822
+   }
+  },
+  {
+   "id": "case-017",
+   "weights": {
+    "stock_vial_empty": 5667.47,
+    "stock_vial_with_diluent": 8681.62,
+    "dil_vial_empty": 2271.25,
+    "dil_vial_with_diluent": 3732.46,
+    "dil_vial_with_diluent_and_sample": 3776.58
+   },
+   "areas": [
+    1492.0842
+   ],
+   "area_percents": [
+    99.9452
+   ],
+   "retention_times": [
+    6.663
+   ],
+   "slope": 8.323497,
+   "intercept": 55.28973,
+   "diluent_density": 997.1,
+   "expected": {
+    "quantity_mg": 17.8037,
+    "dilution_factor": 34.118994,
+    "stock_volume_ml": 3.022916,
+    "purity_percent": 99.9452,
+    "concentration_ug_ml": 172.6191
+   }
+  },
+  {
+   "id": "case-018",
+   "weights": {
+    "stock_vial_empty": 5494.85,
+    "stock_vial_with_diluent": 8518.13,
+    "dil_vial_empty": 2273.32,
+    "dil_vial_with_diluent": 2864.49,
+    "dil_vial_with_diluent_and_sample": 3780.07
+   },
+   "areas": [
+    16673.8664
+   ],
+   "area_percents": [
+    99.0149
+   ],
+   "retention_times": [
+    6.53
+   ],
+   "slope": 8.323497,
+   "intercept": 55.28973,
+   "diluent_density": 997.1,
+   "expected": {
+    "quantity_mg": 9.9626,
+    "dilution_factor": 1.645678,
+    "stock_volume_ml": 3.032073,
+    "purity_percent": 99.0149,
+    "concentration_ug_ml": 1996.5859
+   }
+  },
+  {
+   "id": "case-019",
+   "weights": {
+    "stock_vial_empty": 5685.84,
+    "stock_vial_with_diluent": 8690.49,
+    "dil_vial_empty": 2272.27,
+    "dil_vial_with_diluent": 3497.42,
+    "dil_vial_with_diluent_and_sample": 3771.65
+   },
+   "areas": [
+    1909.1329
+   ],
+   "area_percents": [
+    100
+   ],
+   "retention_times": [
+    5.969
+   ],
+   "slope": 6.283847,
+   "intercept": -101.134218,
+   "diluent_density": 997.1,
+   "expected": {
+    "quantity_mg": 5.2708,
+    "dilution_factor": 5.4676,
+    "stock_volume_ml": 3.013389,
+    "purity_percent": 100.0,
+    "concentration_ug_ml": 319.9103
+   }
+  },
+  {
+   "id": "case-020",
+   "weights": {
+    "stock_vial_empty": 5685.84,
+    "stock_vial_with_diluent": 8690.49,
+    "dil_vial_empty": 2272.27,
+    "dil_vial_with_diluent": 3497.42,
+    "dil_vial_with_diluent_and_sample": 3771.65
+   },
+   "areas": [
+    1906.6214
+   ],
+   "area_percents": [
+    99.9703
+   ],
+   "retention_times": [
+    5.969
+   ],
+   "slope": 6.283847,
+   "intercept": -101.134218,
+   "diluent_density": 997.1,
+   "expected": {
+    "quantity_mg": 5.2643,
+    "dilution_factor": 5.4676,
+    "stock_volume_ml": 3.013389,
+    "purity_percent": 99.9703,
+    "concentration_ug_ml": 319.5106
+   }
+  },
+  {
+   "id": "case-021",
+   "weights": {
+    "stock_vial_empty": 5685.84,
+    "stock_vial_with_diluent": 8690.49,
+    "dil_vial_empty": 2272.27,
+    "dil_vial_with_diluent": 3497.42,
+    "dil_vial_with_diluent_and_sample": 3771.65
+   },
+   "areas": [
+    1865.1668
+   ],
+   "area_percents": [
+    99.9696
+   ],
+   "retention_times": [
+    5.969
+   ],
+   "slope": 6.283847,
+   "intercept": -101.134218,
+   "diluent_density": 997.1,
+   "expected": {
+    "quantity_mg": 5.1556,
+    "dilution_factor": 5.4676,
+    "stock_volume_ml": 3.013389,
+    "purity_percent": 99.9696,
+    "concentration_ug_ml": 312.9136
+   }
+  },
+  {
+   "id": "case-022",
+   "weights": {
+    "stock_vial_empty": 5465.18,
+    "stock_vial_with_diluent": 8486.89,
+    "dil_vial_empty": 2269.91,
+    "dil_vial_with_diluent": 3741.25,
+    "dil_vial_with_diluent_and_sample": 3771.91
+   },
+   "areas": [
+    539.9757
+   ],
+   "area_percents": [
+    99.932
+   ],
+   "retention_times": [
+    6.689
+   ],
+   "slope": 8.323497,
+   "intercept": 55.28973,
+   "diluent_density": 997.1,
+   "expected": {
+    "quantity_mg": 8.645,
+    "dilution_factor": 48.988911,
+    "stock_volume_ml": 3.030498,
+    "purity_percent": 99.932,
+    "concentration_ug_ml": 58.2311
+   }
+  },
+  {
+   "id": "case-023",
+   "weights": {
+    "stock_vial_empty": 5471.33,
+    "stock_vial_with_diluent": 8500.45,
+    "dil_vial_empty": 2258.03,
+    "dil_vial_with_diluent": 3688.18,
+    "dil_vial_with_diluent_and_sample": 3761.3
+   },
+   "areas": [
+    790.5675
+   ],
+   "area_percents": [
+    99.9608
+   ],
+   "retention_times": [
+    6.091
+   ],
+   "slope": 6.283847,
+   "intercept": -101.134218,
+   "diluent_density": 997.1,
+   "expected": {
+    "quantity_mg": 8.8628,
+    "dilution_factor": 20.558944,
+    "stock_volume_ml": 3.03793,
+    "purity_percent": 99.9608,
+    "concentration_ug_ml": 141.9038
+   }
+  },
+  {
+   "id": "case-024",
+   "weights": {
+    "stock_vial_empty": 5507.36,
+    "stock_vial_with_diluent": 8514.41,
+    "dil_vial_empty": 2295.11,
+    "dil_vial_with_diluent": 3678.79,
+    "dil_vial_with_diluent_and_sample": 3789.56
+   },
+   "areas": [
+    1645.6228
+   ],
+   "area_percents": [
+    99.9672
+   ],
+   "retention_times": [
+    5.977
+   ],
+   "slope": 6.283847,
+   "intercept": -101.134218,
+   "diluent_density": 997.1,
+   "expected": {
+    "quantity_mg": 11.3101,
+    "dilution_factor": 13.491469,
+    "stock_volume_ml": 3.015796,
+    "purity_percent": 99.9672,
+    "concentration_ug_ml": 277.9757
+   }
+  },
+  {
+   "id": "case-025",
+   "weights": {
+    "stock_vial_empty": 5423.78,
+    "stock_vial_with_diluent": 8436.03,
+    "dil_vial_empty": 2274.53,
+    "dil_vial_with_diluent": 3700.32,
+    "dil_vial_with_diluent_and_sample": 3772.89
+   },
+   "areas": [
+    1063.1189
+   ],
+   "area_percents": [
+    99.8134
+   ],
+   "retention_times": [
+    6.026
+   ],
+   "slope": 6.283847,
+   "intercept": -101.134218,
+   "diluent_density": 997.1,
+   "expected": {
+    "quantity_mg": 11.5567,
+    "dilution_factor": 20.647099,
+    "stock_volume_ml": 3.021011,
+    "purity_percent": 99.8134,
+    "concentration_ug_ml": 185.2771
+   }
+  },
+  {
+   "id": "case-026",
+   "weights": {
+    "stock_vial_empty": 5469.49,
+    "stock_vial_with_diluent": 8456.09,
+    "dil_vial_empty": 2244.02,
+    "dil_vial_with_diluent": 3706.56,
+    "dil_vial_with_diluent_and_sample": 3735.82
+   },
+   "areas": [
+    1975.3562
+   ],
+   "area_percents": [
+    99.9755
+   ],
+   "retention_times": [
+    7.376
+   ],
+   "slope": 10.064396,
+   "intercept": -14.156457,
+   "diluent_density": 997.1,
+   "expected": {
+    "quantity_mg": 30.1879,
+    "dilution_factor": 50.984279,
+    "stock_volume_ml": 2.995286,
+    "purity_percent": 99.9755,
+    "concentration_ug_ml": 197.6783
+   }
+  },
+  {
+   "id": "case-027",
+   "weights": {
+    "stock_vial_empty": 5420.57,
+    "stock_vial_with_diluent": 8413.1,
+    "dil_vial_empty": 2286.57,
+    "dil_vial_with_diluent": 3746.24,
+    "dil_vial_with_diluent_and_sample": 3776.96
+   },
+   "areas": [
+    2412.7829
+   ],
+   "area_percents": [
+    99.907
+   ],
+   "retention_times": [
+    7.377
+   ],
+   "slope": 10.064396,
+   "intercept": -14.156457,
+   "diluent_density": 997.1,
+   "expected": {
+    "quantity_mg": 35.1115,
+    "dilution_factor": 48.515299,
+    "stock_volume_ml": 3.001234,
+    "purity_percent": 99.907,
+    "concentration_ug_ml": 241.1411
+   }
+  },
+  {
+   "id": "case-028",
+   "weights": {
+    "stock_vial_empty": 5462.7,
+    "stock_vial_with_diluent": 8464.87,
+    "dil_vial_empty": 2271.18,
+    "dil_vial_with_diluent": 3737.2,
+    "dil_vial_with_diluent_and_sample": 3762.79
+   },
+   "areas": [
+    2072.9212
+   ],
+   "area_percents": [
+    99.9848
+   ],
+   "retention_times": [
+    7.373
+   ],
+   "slope": 10.064396,
+   "intercept": -14.156457,
+   "diluent_density": 997.1,
+   "expected": {
+    "quantity_mg": 36.3942,
+    "dilution_factor": 58.288785,
+    "stock_volume_ml": 3.010902,
+    "purity_percent": 99.9848,
+    "concentration_ug_ml": 207.3724
+   }
+  },
+  {
+   "id": "case-029",
+   "weights": {
+    "stock_vial_empty": 5534.16,
+    "stock_vial_with_diluent": 8550.93,
+    "dil_vial_empty": 2282.19,
+    "dil_vial_with_diluent": 3741.78,
+    "dil_vial_with_diluent_and_sample": 3772.21
+   },
+   "areas": [
+    2516.9382
+   ],
+   "area_percents": [
+    99.9825
+   ],
+   "retention_times": [
+    7.372
+   ],
+   "slope": 10.064396,
+   "intercept": -14.156457,
+   "diluent_density": 997.1,
+   "expected": {
+    "quantity_mg": 37.2576,
+    "dilution_factor": 48.965495,
+    "stock_volume_ml": 3.025544,
+    "purity_percent": 99.9825,
+    "concentration_ug_ml": 251.49
+   }
+  },
+  {
+   "id": "case-030",
+   "weights": {
+    "stock_vial_empty": 5753.48,
+    "stock_vial_with_diluent": 8739.1,
+    "dil_vial_empty": 2245.16,
+    "dil_vial_with_diluent": 3726.17,
+    "dil_vial_with_diluent_and_sample": 3734.84
+   },
+   "areas": [
+    2228.5172
+   ],
+   "area_percents": [
+    99.9812
+   ],
+   "retention_times": [
+    7.364
+   ],
+   "slope": 10.064396,
+   "intercept": -14.156457,
+   "diluent_density": 997.1,
+   "expected": {
+    "quantity_mg": 114.6431,
+    "dilution_factor": 171.820069,
+    "stock_volume_ml": 2.994303,
+    "purity_percent": 99.9812,
+    "concentration_ug_ml": 222.8324
+   }
+  },
+  {
+   "id": "case-031",
+   "weights": {
+    "stock_vial_empty": 5399.99,
+    "stock_vial_with_diluent": 8408.2,
+    "dil_vial_empty": 2304.79,
+    "dil_vial_with_diluent": 3744.98,
+    "dil_vial_with_diluent_and_sample": 3803.92
+   },
+   "areas": [
+    1973.2613
+   ],
+   "area_percents": [
+    99.9802
+   ],
+   "retention_times": [
+    7.386
+   ],
+   "slope": 10.064396,
+   "intercept": -14.156457,
+   "diluent_density": 997.1,
+   "expected": {
+    "quantity_mg": 15.153,
+    "dilution_factor": 25.434849,
+    "stock_volume_ml": 3.016959,
+    "purity_percent": 99.9802,
+    "concentration_ug_ml": 197.4701
+   }
+  },
+  {
+   "id": "case-032",
+   "weights": {
+    "stock_vial_empty": 5447.83,
+    "stock_vial_with_diluent": 8470.03,
+    "dil_vial_empty": 2300.86,
+    "dil_vial_with_diluent": 3776.15,
+    "dil_vial_with_diluent_and_sample": 3806.72
+   },
+   "areas": [
+    1344.1661
+   ],
+   "area_percents": [
+    99.9019
+   ],
+   "retention_times": [
+    5.606
+   ],
+   "slope": 8.97197,
+   "intercept": -23.790815,
+   "diluent_density": 997.1,
+   "expected": {
+    "quantity_mg": 22.7645,
+    "dilution_factor": 49.259405,
+    "stock_volume_ml": 3.03099,
+    "purity_percent": 99.9019,
+    "concentration_ug_ml": 152.4701
+   }
+  },
+  {
+   "id": "case-033",
+   "weights": {
+    "stock_vial_empty": 5297.99,
+    "stock_vial_with_diluent": 8317.83,
+    "dil_vial_empty": 2267.12,
+    "dil_vial_with_diluent": 3734.83,
+    "dil_vial_with_diluent_and_sample": 3765.21
+   },
+   "areas": [
+    2172.1621
+   ],
+   "area_percents": [
+    99.9792
+   ],
+   "retention_times": [
+    7.394
+   ],
+   "slope": 10.064396,
+   "intercept": -14.156457,
+   "diluent_density": 997.1,
+   "expected": {
+    "quantity_mg": 32.443,
+    "dilution_factor": 49.311718,
+    "stock_volume_ml": 3.028623,
+    "purity_percent": 99.9792,
+    "concentration_ug_ml": 217.233
+   }
+  },
+  {
+   "id": "case-034",
+   "weights": {
+    "stock_vial_empty": 5438.64,
+    "stock_vial_with_diluent": 8427.29,
+    "dil_vial_empty": 2261.65,
+    "dil_vial_with_diluent": 3664.69,
+    "dil_vial_with_diluent_and_sample": 3755.49
+   },
+   "areas": [
+    2302.4092
+   ],
+   "area_percents": [
+    99.9013
+   ],
+   "retention_times": [
+    5.634
+   ],
+   "slope": 8.97197,
+   "intercept": -23.790815,
+   "diluent_density": 997.1,
+   "expected": {
+    "quantity_mg": 12.7854,
+    "dilution_factor": 16.451982,
+    "stock_volume_ml": 2.997342,
+    "purity_percent": 99.9013,
+    "concentration_ug_ml": 259.2742
+   }
+  },
+  {
+   "id": "case-035",
+   "weights": {
+    "stock_vial_empty": 5472.68,
+    "stock_vial_with_diluent": 8453.33,
+    "dil_vial_empty": 2236.24,
+    "dil_vial_with_diluent": 3682.95,
+    "dil_vial_with_diluent_and_sample": 3726.36
+   },
+   "areas": [
+    2207.4945
+   ],
+   "area_percents": [
+    99.9821
+   ],
+   "retention_times": [
+    5.67
+   ],
+   "slope": 8.97197,
+   "intercept": -23.790815,
+   "diluent_density": 997.1,
+   "expected": {
+    "quantity_mg": 25.5194,
+    "dilution_factor": 34.326653,
+    "stock_volume_ml": 2.989319,
+    "purity_percent": 99.9821,
+    "concentration_ug_ml": 248.6951
+   }
+  },
+  {
+   "id": "case-036",
+   "weights": {
+    "stock_vial_empty": 5535.96,
+    "stock_vial_with_diluent": 8516.41,
+    "dil_vial_empty": 2265.33,
+    "dil_vial_with_diluent": 3601.6,
+    "dil_vial_with_diluent_and_sample": 3755.22
+   },
+   "areas": [
+    9615.5767
+   ],
+   "area_percents": [
+    99.511
+   ],
+   "retention_times": [
+    3.476
+   ],
+   "slope": 66.586244,
+   "intercept": 48.303528,
+   "diluent_density": 997.1,
+   "expected": {
+    "quantity_mg": 4.1654,
+    "dilution_factor": 9.698542,
+    "stock_volume_ml": 2.989118,
+    "purity_percent": 99.511,
+    "concentration_ug_ml": 143.6824
+   }
+  },
+  {
+   "id": "case-037",
+   "weights": {
+    "stock_vial_empty": 5535.96,
+    "stock_vial_with_diluent": 8516.41,
+    "dil_vial_empty": 2265.33,
+    "dil_vial_with_diluent": 3601.6,
+    "dil_vial_with_diluent_and_sample": 3755.22
+   },
+   "areas": [
+    1868.4936
+   ],
+   "area_percents": [
+    99.5708
+   ],
+   "retention_times": [
+    10.551
+   ],
+   "slope": 5.502741,
+   "intercept": 12.241879,
+   "diluent_density": 997.1,
+   "expected": {
+    "quantity_mg": 9.7793,
+    "dilution_factor": 9.698542,
+    "stock_volume_ml": 2.989118,
+    "purity_percent": 99.5708,
+    "concentration_ug_ml": 337.3322
+   }
+  },
+  {
+   "id": "case-038",
+   "weights": {
+    "stock_vial_empty": 5429.81,
+    "stock_vial_with_diluent": 8409.63,
+    "dil_vial_empty": 2271.55,
+    "dil_vial_with_diluent": 3609.36,
+    "dil_vial_with_diluent_and_sample": 3762.65
+   },
+   "areas": [
+    9565.9542
+   ],
+   "area_percents": [
+    99.3432
+   ],
+   "retention_times": [
+    3.475
+   ],
+   "slope": 66.586244,
+   "intercept": 48.303528,
+   "diluent_density": 997.1,
+   "expected": {
+    "quantity_mg": 4.1552,
+    "dilution_factor": 9.727314,
+    "stock_volume_ml": 2.988487,
+    "purity_percent": 99.3432,
+    "concentration_ug_ml": 142.9372
+   }
+  },
+  {
+   "id": "case-039",
+   "weights": {
+    "stock_vial_empty": 5429.81,
+    "stock_vial_with_diluent": 8409.63,
+    "dil_vial_empty": 2271.55,
+    "dil_vial_with_diluent": 3609.36,
+    "dil_vial_with_diluent_and_sample": 3762.65
+   },
+   "areas": [
+    1856.0842
+   ],
+   "area_percents": [
+    99.4601
+   ],
+   "retention_times": [
+    10.554
+   ],
+   "slope": 5.502741,
+   "intercept": 12.241879,
+   "diluent_density": 997.1,
+   "expected": {
+    "quantity_mg": 9.7407,
+    "dilution_factor": 9.727314,
+    "stock_volume_ml": 2.988487,
+    "purity_percent": 99.4601,
+    "concentration_ug_ml": 335.0771
+   }
+  },
+  {
+   "id": "case-040",
+   "weights": {
+    "stock_vial_empty": 5520.34,
+    "stock_vial_with_diluent": 8499.1,
+    "dil_vial_empty": 2279.49,
+    "dil_vial_with_diluent": 3617.27,
+    "dil_vial_with_diluent_and_sample": 3772.37
+   },
+   "areas": [
+    9661.8058
+   ],
+   "area_percents": [
+    99.4228
+   ],
+   "retention_times": [
+    3.474
+   ],
+   "slope": 66.586244,
+   "intercept": 48.303528,
+   "diluent_density": 997.1,
+   "expected": {
+    "quantity_mg": 4.1515,
+    "dilution_factor": 9.625274,
+    "stock_volume_ml": 2.987424,
+    "purity_percent": 99.4228,
+    "concentration_ug_ml": 144.3767
+   }
+  },
+  {
+   "id": "case-041",
+   "weights": {
+    "stock_vial_empty": 5520.34,
+    "stock_vial_with_diluent": 8499.1,
+    "dil_vial_empty": 2279.49,
+    "dil_vial_with_diluent": 3617.27,
+    "dil_vial_with_diluent_and_sample": 3772.37
+   },
+   "areas": [
+    1883.5542
+   ],
+   "area_percents": [
+    99.5783
+   ],
+   "retention_times": [
+    10.552
+   ],
+   "slope": 5.502741,
+   "intercept": 12.241879,
+   "diluent_density": 997.1,
+   "expected": {
+    "quantity_mg": 9.7786,
+    "dilution_factor": 9.625274,
+    "stock_volume_ml": 2.987424,
+    "purity_percent": 99.5783,
+    "concentration_ug_ml": 340.0691
+   }
+  },
+  {
+   "id": "case-042",
+   "weights": {
+    "stock_vial_empty": 5445.0,
+    "stock_vial_with_diluent": 8432.11,
+    "dil_vial_empty": 2261.11,
+    "dil_vial_with_diluent": 3665.74,
+    "dil_vial_with_diluent_and_sample": 3755.4
+   },
+   "areas": [
+    1687.3907
+   ],
+   "area_percents": [
+    99.9575
+   ],
+   "retention_times": [
+    5.966
+   ],
+   "slope": 8.375789,
+   "intercept": 8.424767,
+   "diluent_density": 997.1,
+   "expected": {
+    "quantity_mg": 10.0084,
+    "dilution_factor": 16.666183,
+    "stock_volume_ml": 2.995798,
+    "purity_percent": 99.9575,
+    "concentration_ug_ml": 200.4547
+   }
+  },
+  {
+   "id": "case-043",
+   "weights": {
+    "stock_vial_empty": 5351.99,
+    "stock_vial_with_diluent": 8338.0,
+    "dil_vial_empty": 2253.59,
+    "dil_vial_with_diluent": 3710.14,
+    "dil_vial_with_diluent_and_sample": 3741.48
+   },
+   "areas": [
+    519.4276
+   ],
+   "area_percents": [
+    99.848
+   ],
+   "retention_times": [
+    10.048
+   ],
+   "slope": 7.271226,
+   "intercept": 22.495052,
+   "diluent_density": 997.1,
+   "expected": {
+    "quantity_mg": 9.7166,
+    "dilution_factor": 47.47575,
+    "stock_volume_ml": 2.994695,
+    "purity_percent": 99.848,
+    "concentration_ug_ml": 68.3423
+   }
+  },
+  {
+   "id": "case-044",
+   "weights": {
+    "stock_vial_empty": 5351.99,
+    "stock_vial_with_diluent": 8338.0,
+    "dil_vial_empty": 2253.59,
+    "dil_vial_with_diluent": 3710.14,
+    "dil_vial_with_diluent_and_sample": 3741.48
+   },
+   "areas": [
+    3310.3518
+   ],
+   "area_percents": [
+    99.9592
+   ],
+   "retention_times": [
+    1.148
+   ],
+   "slope": 7.982219,
+   "intercept": 61.108024,
+   "diluent_density": 997.1,
+   "expected": {
+    "quantity_mg": 57.8739,
+    "dilution_factor": 47.47575,
+    "stock_volume_ml": 2.994695,
+    "purity_percent": 99.9592,
+    "concentration_ug_ml": 407.0602
+   }
+  },
+  {
+   "id": "case-045",
+   "weights": {
+    "stock_vial_empty": 5351.99,
+    "stock_vial_with_diluent": 8338.0,
+    "dil_vial_empty": 2253.59,
+    "dil_vial_with_diluent": 3710.14,
+    "dil_vial_with_diluent_and_sample": 3741.48
+   },
+   "areas": [
+    468.103
+   ],
+   "area_percents": [
+    99.0205
+   ],
+   "retention_times": [
+    3.977
+   ],
+   "slope": 6.068889,
+   "intercept": 12.587773,
+   "diluent_density": 997.1,
+   "expected": {
+    "quantity_mg": 10.6713,
+    "dilution_factor": 47.47575,
+    "stock_volume_ml": 2.994695,
+    "purity_percent": 99.0205,
+    "concentration_ug_ml": 75.0574
+   }
+  },
+  {
+   "id": "case-046",
+   "weights": {
+    "stock_vial_empty": 5351.99,
+    "stock_vial_with_diluent": 8338.0,
+    "dil_vial_empty": 2253.59,
+    "dil_vial_with_diluent": 3710.14,
+    "dil_vial_with_diluent_and_sample": 3741.48
+   },
+   "areas": [
+    338.1359
+   ],
+   "area_percents": [
+    99.6807
+   ],
+   "retention_times": [
+    11.911
+   ],
+   "slope": 4.729207,
+   "intercept": 40.908706,
+   "diluent_density": 997.1,
+   "expected": {
+    "quantity_mg": 8.9356,
+    "dilution_factor": 47.47575,
+    "stock_volume_ml": 2.994695,
+    "purity_percent": 99.6807,
+    "concentration_ug_ml": 62.8493
+   }
+  },
+  {
+   "id": "case-047",
+   "weights": {
+    "stock_vial_empty": 5449.93,
+    "stock_vial_with_diluent": 8441.56,
+    "dil_vial_empty": 2277.16,
+    "dil_vial_with_diluent": 3739.27,
+    "dil_vial_with_diluent_and_sample": 3770.8
+   },
+   "areas": [
+    547.5381
+   ],
+   "area_percents": [
+    99.8306
+   ],
+   "retention_times": [
+    10.056
+   ],
+   "slope": 7.271226,
+   "intercept": 22.495052,
+   "diluent_density": 997.1,
+   "expected": {
+    "quantity_mg": 10.2631,
+    "dilution_factor": 47.372027,
+    "stock_volume_ml": 3.000331,
+    "purity_percent": 99.8306,
+    "concentration_ug_ml": 72.2083
+   }
+  },
+  {
+   "id": "case-048",
+   "weights": {
+    "stock_vial_empty": 5449.93,
+    "stock_vial_with_diluent": 8441.56,
+    "dil_vial_empty": 2277.16,
+    "dil_vial_with_diluent": 3739.27,
+    "dil_vial_with_diluent_and_sample": 3770.8
+   },
+   "areas": [
+    2770.931
+   ],
+   "area_percents": [
+    99.9508
+   ],
+   "retention_times": [
+    1.144
+   ],
+   "slope": 7.982219,
+   "intercept": 61.108024,
+   "diluent_density": 997.1,
+   "expected": {
+    "quantity_mg": 48.2512,
+    "dilution_factor": 47.372027,
+    "stock_volume_ml": 3.000331,
+    "purity_percent": 99.9508,
+    "concentration_ug_ml": 339.4824
+   }
+  },
+  {
+   "id": "case-049",
+   "weights": {
+    "stock_vial_empty": 5449.93,
+    "stock_vial_with_diluent": 8441.56,
+    "dil_vial_empty": 2277.16,
+    "dil_vial_with_diluent": 3739.27,
+    "dil_vial_with_diluent_and_sample": 3770.8
+   },
+   "areas": [
+    475.5107
+   ],
+   "area_percents": [
+    99.4687
+   ],
+   "retention_times": [
+    3.96
+   ],
+   "slope": 6.068889,
+   "intercept": 12.587773,
+   "diluent_density": 997.1,
+   "expected": {
+    "quantity_mg": 10.8415,
+    "dilution_factor": 47.372027,
+    "stock_volume_ml": 3.000331,
+    "purity_percent": 99.4687,
+    "concentration_ug_ml": 76.278
+   }
+  },
+  {
+   "id": "case-050",
+   "weights": {
+    "stock_vial_empty": 5449.93,
+    "stock_vial_with_diluent": 8441.56,
+    "dil_vial_empty": 2277.16,
+    "dil_vial_with_diluent": 3739.27,
+    "dil_vial_with_diluent_and_sample": 3770.8
+   },
+   "areas": [
+    547.5381
+   ],
+   "area_percents": [
+    99.8306
+   ],
+   "retention_times": [
+    10.056
+   ],
+   "slope": 7.271226,
+   "intercept": 22.495052,
+   "diluent_density": 997.1,
+   "expected": {
+    "quantity_mg": 10.2631,
+    "dilution_factor": 47.372027,
+    "stock_volume_ml": 3.000331,
+    "purity_percent": 99.8306,
+    "concentration_ug_ml": 72.2083
+   }
+  },
+  {
+   "id": "case-051",
+   "weights": {
+    "stock_vial_empty": 5449.93,
+    "stock_vial_with_diluent": 8441.56,
+    "dil_vial_empty": 2277.16,
+    "dil_vial_with_diluent": 3739.27,
+    "dil_vial_with_diluent_and_sample": 3770.8
+   },
+   "areas": [
+    2770.931
+   ],
+   "area_percents": [
+    99.9508
+   ],
+   "retention_times": [
+    1.144
+   ],
+   "slope": 7.982219,
+   "intercept": 61.108024,
+   "diluent_density": 997.1,
+   "expected": {
+    "quantity_mg": 48.2512,
+    "dilution_factor": 47.372027,
+    "stock_volume_ml": 3.000331,
+    "purity_percent": 99.9508,
+    "concentration_ug_ml": 339.4824
+   }
+  },
+  {
+   "id": "case-052",
+   "weights": {
+    "stock_vial_empty": 5449.93,
+    "stock_vial_with_diluent": 8441.56,
+    "dil_vial_empty": 2277.16,
+    "dil_vial_with_diluent": 3739.27,
+    "dil_vial_with_diluent_and_sample": 3770.8
+   },
+   "areas": [
+    475.5107
+   ],
+   "area_percents": [
+    99.4687
+   ],
+   "retention_times": [
+    3.96
+   ],
+   "slope": 6.068889,
+   "intercept": 12.587773,
+   "diluent_density": 997.1,
+   "expected": {
+    "quantity_mg": 10.8415,
+    "dilution_factor": 47.372027,
+    "stock_volume_ml": 3.000331,
+    "purity_percent": 99.4687,
+    "concentration_ug_ml": 76.278
+   }
+  },
+  {
+   "id": "case-053",
+   "weights": {
+    "stock_vial_empty": 5449.93,
+    "stock_vial_with_diluent": 8441.56,
+    "dil_vial_empty": 2277.16,
+    "dil_vial_with_diluent": 3739.27,
+    "dil_vial_with_diluent_and_sample": 3770.8
+   },
+   "areas": [
+    209.2335
+   ],
+   "area_percents": [
+    99.957
+   ],
+   "retention_times": [
+    6.848
+   ],
+   "slope": 2.633702,
+   "intercept": 4.602973,
+   "diluent_density": 997.1,
+   "expected": {
+    "quantity_mg": 11.0432,
+    "dilution_factor": 47.372027,
+    "stock_volume_ml": 3.000331,
+    "purity_percent": 99.957,
+    "concentration_ug_ml": 77.6969
+   }
+  },
+  {
+   "id": "case-054",
+   "weights": {
+    "stock_vial_empty": 5483.28,
+    "stock_vial_with_diluent": 8478.07,
+    "dil_vial_empty": 2277.09,
+    "dil_vial_with_diluent": 3741.14,
+    "dil_vial_with_diluent_and_sample": 3772.36
+   },
+   "areas": [
+    489.7439
+   ],
+   "area_percents": [
+    99.7184
+   ],
+   "retention_times": [
+    10.051
+   ],
+   "slope": 7.271226,
+   "intercept": 22.495052,
+   "diluent_density": 997.1,
+   "expected": {
+    "quantity_mg": 9.2439,
+    "dilution_factor": 47.894619,
+    "stock_volume_ml": 3.0035,
+    "purity_percent": 99.7184,
+    "concentration_ug_ml": 64.26
+   }
+  },
+  {
+   "id": "case-055",
+   "weights": {
+    "stock_vial_empty": 5483.28,
+    "stock_vial_with_diluent": 8478.07,
+    "dil_vial_empty": 2277.09,
+    "dil_vial_with_diluent": 3741.14,
+    "dil_vial_with_diluent_and_sample": 3772.36
+   },
+   "areas": [
+    2228.9533
+   ],
+   "area_percents": [
+    99.8476
+   ],
+   "retention_times": [
+    1.142
+   ],
+   "slope": 7.982219,
+   "intercept": 61.108024,
+   "diluent_density": 997.1,
+   "expected": {
+    "quantity_mg": 39.0678,
+    "dilution_factor": 47.894619,
+    "stock_volume_ml": 3.0035,
+    "purity_percent": 99.8476,
+    "concentration_ug_ml": 271.5843
+   }
+  },
+  {
+   "id": "case-056",
+   "weights": {
+    "stock_vial_empty": 5483.28,
+    "stock_vial_with_diluent": 8478.07,
+    "dil_vial_empty": 2277.09,
+    "dil_vial_with_diluent": 3741.14,
+    "dil_vial_with_diluent_and_sample": 3772.36
+   },
+   "areas": [
+    489.7439
+   ],
+   "area_percents": [
+    99.7184
+   ],
+   "retention_times": [
+    10.051
+   ],
+   "slope": 7.271226,
+   "intercept": 22.495052,
+   "diluent_density": 997.1,
+   "expected": {
+    "quantity_mg": 9.2439,
+    "dilution_factor": 47.894619,
+    "stock_volume_ml": 3.0035,
+    "purity_percent": 99.7184,
+    "concentration_ug_ml": 64.26
+   }
+  },
+  {
+   "id": "case-057",
+   "weights": {
+    "stock_vial_empty": 5483.28,
+    "stock_vial_with_diluent": 8478.07,
+    "dil_vial_empty": 2277.09,
+    "dil_vial_with_diluent": 3741.14,
+    "dil_vial_with_diluent_and_sample": 3772.36
+   },
+   "areas": [
+    2228.9533
+   ],
+   "area_percents": [
+    99.8476
+   ],
+   "retention_times": [
+    1.142
+   ],
+   "slope": 7.982219,
+   "intercept": 61.108024,
+   "diluent_density": 997.1,
+   "expected": {
+    "quantity_mg": 39.0678,
+    "dilution_factor": 47.894619,
+    "stock_volume_ml": 3.0035,
+    "purity_percent": 99.8476,
+    "concentration_ug_ml": 271.5843
+   }
+  },
+  {
+   "id": "case-058",
+   "weights": {
+    "stock_vial_empty": 5483.28,
+    "stock_vial_with_diluent": 8478.07,
+    "dil_vial_empty": 2277.09,
+    "dil_vial_with_diluent": 3741.14,
+    "dil_vial_with_diluent_and_sample": 3772.36
+   },
+   "areas": [
+    169.9014
+   ],
+   "area_percents": [
+    99.8678
+   ],
+   "retention_times": [
+    6.855
+   ],
+   "slope": 2.633702,
+   "intercept": 4.602973,
+   "diluent_density": 997.1,
+   "expected": {
+    "quantity_mg": 9.0285,
+    "dilution_factor": 47.894619,
+    "stock_volume_ml": 3.0035,
+    "purity_percent": 99.8678,
+    "concentration_ug_ml": 62.7628
+   }
+  },
+  {
+   "id": "case-059",
+   "weights": {
+    "stock_vial_empty": 5406.79,
+    "stock_vial_with_diluent": 8389.64,
+    "dil_vial_empty": 2232.94,
+    "dil_vial_with_diluent": 3690.45,
+    "dil_vial_with_diluent_and_sample": 3722.0
+   },
+   "areas": [
+    3235.4359
+   ],
+   "area_percents": [
+    99.9682
+   ],
+   "retention_times": [
+    1.145
+   ],
+   "slope": 7.982219,
+   "intercept": 61.108024,
+   "diluent_density": 997.1,
+   "expected": {
+    "quantity_mg": 56.1479,
+    "dilution_factor": 47.19683,
+    "stock_volume_ml": 2.991525,
+    "purity_percent": 99.9682,
+    "concentration_ug_ml": 397.6749
+   }
+  },
+  {
+   "id": "case-060",
+   "weights": {
+    "stock_vial_empty": 5672.43,
+    "stock_vial_with_diluent": 8682.94,
+    "dil_vial_empty": 2268.28,
+    "dil_vial_with_diluent": 3727.64,
+    "dil_vial_with_diluent_and_sample": 3758.65
+   },
+   "areas": [
+    541.5144
+   ],
+   "area_percents": [
+    99.2619
+   ],
+   "retention_times": [
+    10.23
+   ],
+   "slope": 7.271226,
+   "intercept": 22.495052,
+   "diluent_density": 997.1,
+   "expected": {
+    "quantity_mg": 10.3578,
+    "dilution_factor": 48.060948,
+    "stock_volume_ml": 3.019266,
+    "purity_percent": 99.2619,
+    "concentration_ug_ml": 71.3799
+   }
+  },
+  {
+   "id": "case-061",
+   "weights": {
+    "stock_vial_empty": 5672.43,
+    "stock_vial_with_diluent": 8682.94,
+    "dil_vial_empty": 2268.28,
+    "dil_vial_with_diluent": 3727.64,
+    "dil_vial_with_diluent_and_sample": 3758.65
+   },
+   "areas": [
+    3108.3301
+   ],
+   "area_percents": [
+    99.9534
+   ],
+   "retention_times": [
+    1.145
+   ],
+   "slope": 7.982219,
+   "intercept": 61.108024,
+   "diluent_density": 997.1,
+   "expected": {
+    "quantity_mg": 55.3955,
+    "dilution_factor": 48.060948,
+    "stock_volume_ml": 3.019266,
+    "purity_percent": 99.9534,
+    "concentration_ug_ml": 381.7512
+   }
+  },
+  {
+   "id": "case-062",
+   "weights": {
+    "stock_vial_empty": 5672.43,
+    "stock_vial_with_diluent": 8682.94,
+    "dil_vial_empty": 2268.28,
+    "dil_vial_with_diluent": 3727.64,
+    "dil_vial_with_diluent_and_sample": 3758.65
+   },
+   "areas": [
+    425.2666
+   ],
+   "area_percents": [
+    99.4202
+   ],
+   "retention_times": [
+    3.993
+   ],
+   "slope": 6.068889,
+   "intercept": 12.587773,
+   "diluent_density": 997.1,
+   "expected": {
+    "quantity_mg": 9.8673,
+    "dilution_factor": 48.060948,
+    "stock_volume_ml": 3.019266,
+    "purity_percent": 99.4202,
+    "concentration_ug_ml": 67.9991
+   }
+  },
+  {
+   "id": "case-063",
+   "weights": {
+    "stock_vial_empty": 5672.43,
+    "stock_vial_with_diluent": 8682.94,
+    "dil_vial_empty": 2268.28,
+    "dil_vial_with_diluent": 3727.64,
+    "dil_vial_with_diluent_and_sample": 3758.65
+   },
+   "areas": [
+    355.8736
+   ],
+   "area_percents": [
+    99.5875
+   ],
+   "retention_times": [
+    11.963
+   ],
+   "slope": 4.729207,
+   "intercept": 40.908706,
+   "diluent_density": 997.1,
+   "expected": {
+    "quantity_mg": 9.6642,
+    "dilution_factor": 48.060948,
+    "stock_volume_ml": 3.019266,
+    "purity_percent": 99.5875,
+    "concentration_ug_ml": 66.5999
+   }
+  },
+  {
+   "id": "case-064",
+   "weights": {
+    "stock_vial_empty": 5676.83,
+    "stock_vial_with_diluent": 8697.11,
+    "dil_vial_empty": 2272.98,
+    "dil_vial_with_diluent": 3736.73,
+    "dil_vial_with_diluent_and_sample": 3769.05
+   },
+   "areas": [
+    492.556
+   ],
+   "area_percents": [
+    99.7208
+   ],
+   "retention_times": [
+    10.053
+   ],
+   "slope": 7.271226,
+   "intercept": 22.495052,
+   "diluent_density": 997.1,
+   "expected": {
+    "quantity_mg": 9.0643,
+    "dilution_factor": 46.289295,
+    "stock_volume_ml": 3.029064,
+    "purity_percent": 99.7208,
+    "concentration_ug_ml": 64.6467
+   }
+  },
+  {
+   "id": "case-065",
+   "weights": {
+    "stock_vial_empty": 5676.83,
+    "stock_vial_with_diluent": 8697.11,
+    "dil_vial_empty": 2272.98,
+    "dil_vial_with_diluent": 3736.73,
+    "dil_vial_with_diluent_and_sample": 3769.05
+   },
+   "areas": [
+    3006.1192
+   ],
+   "area_percents": [
+    99.8733
+   ],
+   "retention_times": [
+    1.141
+   ],
+   "slope": 7.982219,
+   "intercept": 61.108024,
+   "diluent_density": 997.1,
+   "expected": {
+    "quantity_mg": 51.7312,
+    "dilution_factor": 46.289295,
+    "stock_volume_ml": 3.029064,
+    "purity_percent": 99.8733,
+    "concentration_ug_ml": 368.9464
+   }
+  },
+  {
+   "id": "case-066",
+   "weights": {
+    "stock_vial_empty": 5676.83,
+    "stock_vial_with_diluent": 8697.11,
+    "dil_vial_empty": 2272.98,
+    "dil_vial_with_diluent": 3736.73,
+    "dil_vial_with_diluent_and_sample": 3769.05
+   },
+   "areas": [
+    455.2531
+   ],
+   "area_percents": [
+    99.3093
+   ],
+   "retention_times": [
+    3.951
+   ],
+   "slope": 6.068889,
+   "intercept": 12.587773,
+   "diluent_density": 997.1,
+   "expected": {
+    "quantity_mg": 10.2272,
+    "dilution_factor": 46.289295,
+    "stock_volume_ml": 3.029064,
+    "purity_percent": 99.3093,
+    "concentration_ug_ml": 72.9401
+   }
+  },
+  {
+   "id": "case-067",
+   "weights": {
+    "stock_vial_empty": 5676.83,
+    "stock_vial_with_diluent": 8697.11,
+    "dil_vial_empty": 2272.98,
+    "dil_vial_with_diluent": 3736.73,
+    "dil_vial_with_diluent_and_sample": 3769.05
+   },
+   "areas": [
+    492.556
+   ],
+   "area_percents": [
+    99.7208
+   ],
+   "retention_times": [
+    10.053
+   ],
+   "slope": 7.271226,
+   "intercept": 22.495052,
+   "diluent_density": 997.1,
+   "expected": {
+    "quantity_mg": 9.0643,
+    "dilution_factor": 46.289295,
+    "stock_volume_ml": 3.029064,
+    "purity_percent": 99.7208,
+    "concentration_ug_ml": 64.6467
+   }
+  },
+  {
+   "id": "case-068",
+   "weights": {
+    "stock_vial_empty": 5676.83,
+    "stock_vial_with_diluent": 8697.11,
+    "dil_vial_empty": 2272.98,
+    "dil_vial_with_diluent": 3736.73,
+    "dil_vial_with_diluent_and_sample": 3769.05
+   },
+   "areas": [
+    3006.1192
+   ],
+   "area_percents": [
+    99.8733
+   ],
+   "retention_times": [
+    1.141
+   ],
+   "slope": 7.982219,
+   "intercept": 61.108024,
+   "diluent_density": 997.1,
+   "expected": {
+    "quantity_mg": 51.7312,
+    "dilution_factor": 46.289295,
+    "stock_volume_ml": 3.029064,
+    "purity_percent": 99.8733,
+    "concentration_ug_ml": 368.9464
+   }
+  },
+  {
+   "id": "case-069",
+   "weights": {
+    "stock_vial_empty": 5676.83,
+    "stock_vial_with_diluent": 8697.11,
+    "dil_vial_empty": 2272.98,
+    "dil_vial_with_diluent": 3736.73,
+    "dil_vial_with_diluent_and_sample": 3769.05
+   },
+   "areas": [
+    455.2531
+   ],
+   "area_percents": [
+    99.3093
+   ],
+   "retention_times": [
+    3.951
+   ],
+   "slope": 6.068889,
+   "intercept": 12.587773,
+   "diluent_density": 997.1,
+   "expected": {
+    "quantity_mg": 10.2272,
+    "dilution_factor": 46.289295,
+    "stock_volume_ml": 3.029064,
+    "purity_percent": 99.3093,
+    "concentration_ug_ml": 72.9401
+   }
+  },
+  {
+   "id": "case-070",
+   "weights": {
+    "stock_vial_empty": 5676.83,
+    "stock_vial_with_diluent": 8697.11,
+    "dil_vial_empty": 2272.98,
+    "dil_vial_with_diluent": 3736.73,
+    "dil_vial_with_diluent_and_sample": 3769.05
+   },
+   "areas": [
+    222.7317
+   ],
+   "area_percents": [
+    99.6009
+   ],
+   "retention_times": [
+    6.855
+   ],
+   "slope": 2.633702,
+   "intercept": 4.602973,
+   "diluent_density": 997.1,
+   "expected": {
+    "quantity_mg": 11.6128,
+    "dilution_factor": 46.289295,
+    "stock_volume_ml": 3.029064,
+    "purity_percent": 99.6009,
+    "concentration_ug_ml": 82.8221
+   }
+  },
+  {
+   "id": "case-071",
+   "weights": {
+    "stock_vial_empty": 14295.34,
+    "stock_vial_with_diluent": 24342.05,
+    "dil_vial_empty": 0.0,
+    "dil_vial_with_diluent": 1493.3417,
+    "dil_vial_with_diluent_and_sample": 1495.65
+   },
+   "areas": [
+    1699.4391
+   ],
+   "area_percents": [
+    99.9614
+   ],
+   "retention_times": [
+    1.288
+   ],
+   "slope": 15.782452,
+   "intercept": -33.766783,
+   "diluent_density": 997.1,
+   "expected": {
+    "quantity_mg": 716.966,
+    "dilution_factor": 647.944375,
+    "stock_volume_ml": 10.07593,
+    "purity_percent": 99.9614,
+    "concentration_ug_ml": 109.8185
+   }
+  },
+  {
+   "id": "case-072",
+   "weights": {
+    "stock_vial_empty": 5222.89,
+    "stock_vial_with_diluent": 8201.2,
+    "dil_vial_empty": 2284.78,
+    "dil_vial_with_diluent": 3679.93,
+    "dil_vial_with_diluent_and_sample": 3770.33
+   },
+   "areas": [
+    1280.0763
+   ],
+   "area_percents": [
+    99.9556
+   ],
+   "retention_times": [
+    5.53
+   ],
+   "slope": 5.502741,
+   "intercept": 12.241879,
+   "diluent_density": 997.1,
+   "expected": {
+    "quantity_mg": 11.3092,
+    "dilution_factor": 16.433075,
+    "stock_volume_ml": 2.986972,
+    "purity_percent": 99.9556,
+    "concentration_ug_ml": 230.4005
+   }
+  },
+  {
+   "id": "case-073",
+   "weights": {
+    "stock_vial_empty": 5339.11,
+    "stock_vial_with_diluent": 8339.21,
+    "dil_vial_empty": 2290.86,
+    "dil_vial_with_diluent": 3687.77,
+    "dil_vial_with_diluent_and_sample": 3777.7
+   },
+   "areas": [
+    1293.7275
+   ],
+   "area_percents": [
+    99.9628
+   ],
+   "retention_times": [
+    5.567
+   ],
+   "slope": 5.502741,
+   "intercept": 12.241879,
+   "diluent_density": 997.1,
+   "expected": {
+    "quantity_mg": 11.5849,
+    "dilution_factor": 16.533304,
+    "stock_volume_ml": 3.008826,
+    "purity_percent": 99.9628,
+    "concentration_ug_ml": 232.8813
+   }
+  },
+  {
+   "id": "case-074",
+   "weights": {
+    "stock_vial_empty": 5253.71,
+    "stock_vial_with_diluent": 8202.72,
+    "dil_vial_empty": 2306.08,
+    "dil_vial_with_diluent": 3703.18,
+    "dil_vial_with_diluent_and_sample": 3793.32
+   },
+   "areas": [
+    1284.0518
+   ],
+   "area_percents": [
+    99.9757
+   ],
+   "retention_times": [
+    5.555
+   ],
+   "slope": 5.502741,
+   "intercept": 12.241879,
+   "diluent_density": 997.1,
+   "expected": {
+    "quantity_mg": 11.2783,
+    "dilution_factor": 16.499223,
+    "stock_volume_ml": 2.957587,
+    "purity_percent": 99.9757,
+    "concentration_ug_ml": 231.123
+   }
+  },
+  {
+   "id": "case-075",
+   "weights": {
+    "stock_vial_empty": 12881.75,
+    "stock_vial_with_diluent": 22825.24,
+    "dil_vial_empty": 0.0,
+    "dil_vial_with_diluent": 1493.4186,
+    "dil_vial_with_diluent_and_sample": 1495.65
+   },
+   "areas": [
+    1130.9593
+   ],
+   "area_percents": [
+    99.9253
+   ],
+   "retention_times": [
+    1.275
+   ],
+   "slope": 15.782452,
+   "intercept": -33.766783,
+   "diluent_density": 997.1,
+   "expected": {
+    "quantity_mg": 493.2896,
+    "dilution_factor": 670.274267,
+    "stock_volume_ml": 9.97241,
+    "purity_percent": 99.9253,
+    "concentration_ug_ml": 73.7988
+   }
+  },
+  {
+   "id": "case-076",
+   "weights": {
+    "stock_vial_empty": 12881.75,
+    "stock_vial_with_diluent": 22825.24,
+    "dil_vial_empty": 0.0,
+    "dil_vial_with_diluent": 1493.4186,
+    "dil_vial_with_diluent_and_sample": 1495.65
+   },
+   "areas": [
+    1130.9593
+   ],
+   "area_percents": [
+    99.9253
+   ],
+   "retention_times": [
+    1.275
+   ],
+   "slope": 15.782452,
+   "intercept": -33.766783,
+   "diluent_density": 997.1,
+   "expected": {
+    "quantity_mg": 493.2896,
+    "dilution_factor": 670.274267,
+    "stock_volume_ml": 9.97241,
+    "purity_percent": 99.9253,
+    "concentration_ug_ml": 73.7988
+   }
+  },
+  {
+   "id": "case-077",
+   "weights": {
+    "stock_vial_empty": 0.0,
+    "stock_vial_with_diluent": 9971.0,
+    "dil_vial_empty": 0.0,
+    "dil_vial_with_diluent": 1493.4023,
+    "dil_vial_with_diluent_and_sample": 1495.65
+   },
+   "areas": [
+    2402.4856
+   ],
+   "area_percents": [
+    99.9777
+   ],
+   "retention_times": [
+    1.301
+   ],
+   "slope": 15.782452,
+   "intercept": -33.766783,
+   "diluent_density": 997.1,
+   "expected": {
+    "quantity_mg": 1027.1631,
+    "dilution_factor": 665.413534,
+    "stock_volume_ml": 10.0,
+    "purity_percent": 99.9777,
+    "concentration_ug_ml": 154.3646
+   }
+  },
+  {
+   "id": "case-078",
+   "weights": {
+    "stock_vial_empty": 9575.69,
+    "stock_vial_with_diluent": 15537.19,
+    "dil_vial_empty": 2252.48,
+    "dil_vial_with_diluent": 3656.98,
+    "dil_vial_with_diluent_and_sample": 3747.62
+   },
+   "areas": [
+    1226.3883
+   ],
+   "area_percents": [
+    99.6901
+   ],
+   "retention_times": [
+    5.532
+   ],
+   "slope": 5.502741,
+   "intercept": 12.241879,
+   "diluent_density": 997.1,
+   "expected": {
+    "quantity_mg": 21.7606,
+    "dilution_factor": 16.495366,
+    "stock_volume_ml": 5.978839,
+    "purity_percent": 99.6901,
+    "concentration_ug_ml": 220.6439
+   }
+  },
+  {
+   "id": "case-079",
+   "weights": {
+    "stock_vial_empty": 5447.83,
+    "stock_vial_with_diluent": 8470.03,
+    "dil_vial_empty": 2269.47,
+    "dil_vial_with_diluent": 3735.88,
+    "dil_vial_with_diluent_and_sample": 3766.24
+   },
+   "areas": [
+    1325.9562
+   ],
+   "area_percents": [
+    99.2546
+   ],
+   "retention_times": [
+    5.561
+   ],
+   "slope": 8.97197,
+   "intercept": -23.790815,
+   "diluent_density": 997.1,
+   "expected": {
+    "quantity_mg": 22.4803,
+    "dilution_factor": 49.300725,
+    "stock_volume_ml": 3.03099,
+    "purity_percent": 99.2546,
+    "concentration_ug_ml": 150.4404
+   }
+  },
+  {
+   "id": "case-080",
+   "weights": {
+    "stock_vial_empty": 5161.24,
+    "stock_vial_with_diluent": 8146.34,
+    "dil_vial_empty": 2259.23,
+    "dil_vial_with_diluent": 3662.33,
+    "dil_vial_with_diluent_and_sample": 3751.95
+   },
+   "areas": [
+    1105.1353
+   ],
+   "area_percents": [
+    99.5541
+   ],
+   "retention_times": [
+    5.573
+   ],
+   "slope": 5.502741,
+   "intercept": 12.241879,
+   "diluent_density": 997.1,
+   "expected": {
+    "quantity_mg": 9.9036,
+    "dilution_factor": 16.656104,
+    "stock_volume_ml": 2.993782,
+    "purity_percent": 99.5541,
+    "concentration_ug_ml": 198.6089
+   }
+  },
+  {
+   "id": "case-081",
+   "weights": {
+    "stock_vial_empty": 5447.83,
+    "stock_vial_with_diluent": 8470.03,
+    "dil_vial_empty": 2269.47,
+    "dil_vial_with_diluent": 3735.88,
+    "dil_vial_with_diluent_and_sample": 3766.24
+   },
+   "areas": [
+    1325.9562
+   ],
+   "area_percents": [
+    99.2546
+   ],
+   "retention_times": [
+    5.561
+   ],
+   "slope": 8.97197,
+   "intercept": -23.790815,
+   "diluent_density": 997.1,
+   "expected": {
+    "quantity_mg": 22.4803,
+    "dilution_factor": 49.300725,
+    "stock_volume_ml": 3.03099,
+    "purity_percent": 99.2546,
+    "concentration_ug_ml": 150.4404
+   }
+  },
+  {
+   "id": "case-082",
+   "weights": {
+    "stock_vial_empty": 0.0,
+    "stock_vial_with_diluent": 9971.0,
+    "dil_vial_empty": 2261.82,
+    "dil_vial_with_diluent": 3689.37,
+    "dil_vial_with_diluent_and_sample": 3750.39
+   },
+   "areas": [
+    2087.568
+   ],
+   "area_percents": [
+    99.9042
+   ],
+   "retention_times": [
+    5.542
+   ],
+   "slope": 8.97197,
+   "intercept": -23.790815,
+   "diluent_density": 997.1,
+   "expected": {
+    "quantity_mg": 57.4079,
+    "dilution_factor": 24.394789,
+    "stock_volume_ml": 10.0,
+    "purity_percent": 99.9042,
+    "concentration_ug_ml": 235.3283
+   }
+  },
+  {
+   "id": "case-083",
+   "weights": {
+    "stock_vial_empty": 0.0,
+    "stock_vial_with_diluent": 2991.3,
+    "dil_vial_empty": 2244.8,
+    "dil_vial_with_diluent": 3711.1,
+    "dil_vial_with_diluent_and_sample": 3733.52
+   },
+   "areas": [
+    3678.5721
+   ],
+   "area_percents": [
+    99.8646
+   ],
+   "retention_times": [
+    4.318
+   ],
+   "slope": 16.828134,
+   "intercept": 127.641913,
+   "diluent_density": 997.1,
+   "expected": {
+    "quantity_mg": 42.0344,
+    "dilution_factor": 66.401427,
+    "stock_volume_ml": 3.0,
+    "purity_percent": 99.8646,
+    "concentration_ug_ml": 211.0115
+   }
+  },
+  {
+   "id": "case-084",
+   "weights": {
+    "stock_vial_empty": 5276.98,
+    "stock_vial_with_diluent": 8246.17,
+    "dil_vial_empty": 2261.56,
+    "dil_vial_with_diluent": 3667.21,
+    "dil_vial_with_diluent_and_sample": 3739.57
+   },
+   "areas": [
+    683.6828
+   ],
+   "area_percents": [
+    99.9155
+   ],
+   "retention_times": [
+    6.034
+   ],
+   "slope": 6.283847,
+   "intercept": -101.134218,
+   "diluent_density": 997.1,
+   "expected": {
+    "quantity_mg": 7.5966,
+    "dilution_factor": 20.425788,
+    "stock_volume_ml": 2.977826,
+    "purity_percent": 99.9155,
+    "concentration_ug_ml": 124.8944
+   }
+  },
+  {
+   "id": "case-085",
+   "weights": {
+    "stock_vial_empty": 5592.36,
+    "stock_vial_with_diluent": 8548.69,
+    "dil_vial_empty": 2276.47,
+    "dil_vial_with_diluent": 3681.83,
+    "dil_vial_with_diluent_and_sample": 3752.55
+   },
+   "areas": [
+    1685.1806
+   ],
+   "area_percents": [
+    99.9568
+   ],
+   "retention_times": [
+    5.99
+   ],
+   "slope": 6.283847,
+   "intercept": -101.134218,
+   "diluent_density": 997.1,
+   "expected": {
+    "quantity_mg": 17.592,
+    "dilution_factor": 20.872172,
+    "stock_volume_ml": 2.964928,
+    "purity_percent": 99.9568,
+    "concentration_ug_ml": 284.2709
+   }
+  },
+  {
+   "id": "case-086",
+   "weights": {
+    "stock_vial_empty": 5529.64,
+    "stock_vial_with_diluent": 8479.89,
+    "dil_vial_empty": 2264.15,
+    "dil_vial_with_diluent": 3677.17,
+    "dil_vial_with_diluent_and_sample": 3748.44
+   },
+   "areas": [
+    1947.0956
+   ],
+   "area_percents": [
+    99.8221
+   ],
+   "retention_times": [
+    1.012
+   ],
+   "slope": 6.283847,
+   "intercept": -101.134218,
+   "diluent_density": 997.1,
+   "expected": {
+    "quantity_mg": 20.0856,
+    "dilution_factor": 20.826294,
+    "stock_volume_ml": 2.958831,
+    "purity_percent": 99.8221,
+    "concentration_ug_ml": 325.9516
+   }
+  },
+  {
+   "id": "case-087",
+   "weights": {
+    "stock_vial_empty": 5298.18,
+    "stock_vial_with_diluent": 8285.52,
+    "dil_vial_empty": 2252.58,
+    "dil_vial_with_diluent": 3658.66,
+    "dil_vial_with_diluent_and_sample": 3749.0
+   },
+   "areas": [
+    6335.7349
+   ],
+   "area_percents": [
+    99.9517
+   ],
+   "retention_times": [
+    4.583
+   ],
+   "slope": 26.218741,
+   "intercept": -1.960108,
+   "diluent_density": 997.1,
+   "expected": {
+    "quantity_mg": 11.9961,
+    "dilution_factor": 16.564313,
+    "stock_volume_ml": 2.996028,
+    "purity_percent": 99.9517,
+    "concentration_ug_ml": 241.7238
+   }
+  },
+  {
+   "id": "case-088",
+   "weights": {
+    "stock_vial_empty": 5465.18,
+    "stock_vial_with_diluent": 8486.89,
+    "dil_vial_empty": 2267.67,
+    "dil_vial_with_diluent": 3728.19,
+    "dil_vial_with_diluent_and_sample": 3758.17
+   },
+   "areas": [
+    526.0004
+   ],
+   "area_percents": [
+    99.9433
+   ],
+   "retention_times": [
+    6.687
+   ],
+   "slope": 8.323497,
+   "intercept": 55.28973,
+   "diluent_density": 997.1,
+   "expected": {
+    "quantity_mg": 8.5205,
+    "dilution_factor": 49.716478,
+    "stock_volume_ml": 3.030498,
+    "purity_percent": 99.9433,
+    "concentration_ug_ml": 56.552
+   }
+  },
+  {
+   "id": "case-089",
+   "weights": {
+    "stock_vial_empty": 5465.18,
+    "stock_vial_with_diluent": 8486.89,
+    "dil_vial_empty": 2267.67,
+    "dil_vial_with_diluent": 3728.19,
+    "dil_vial_with_diluent_and_sample": 3758.17
+   },
+   "areas": [
+    526.0004
+   ],
+   "area_percents": [
+    99.9433
+   ],
+   "retention_times": [
+    6.687
+   ],
+   "slope": 8.323497,
+   "intercept": 55.28973,
+   "diluent_density": 997.1,
+   "expected": {
+    "quantity_mg": 8.5205,
+    "dilution_factor": 49.716478,
+    "stock_volume_ml": 3.030498,
+    "purity_percent": 99.9433,
+    "concentration_ug_ml": 56.552
+   }
+  },
+  {
+   "id": "case-090",
+   "weights": {
+    "stock_vial_empty": 0.0,
+    "stock_vial_with_diluent": 1595.36,
+    "dil_vial_empty": 2273.67,
+    "dil_vial_with_diluent": 3747.44,
+    "dil_vial_with_diluent_and_sample": 3763.25
+   },
+   "areas": [
+    1808.4964
+   ],
+   "area_percents": [
+    99.8999
+   ],
+   "retention_times": [
+    6.648
+   ],
+   "slope": 8.323497,
+   "intercept": 55.28973,
+   "diluent_density": 997.1,
+   "expected": {
+    "quantity_mg": 31.7526,
+    "dilution_factor": 94.217584,
+    "stock_volume_ml": 1.6,
+    "purity_percent": 99.8999,
+    "concentration_ug_ml": 210.6334
+   }
+  },
+  {
+   "id": "case-091",
+   "weights": {
+    "stock_vial_empty": 0.0,
+    "stock_vial_with_diluent": 2393.04,
+    "dil_vial_empty": 2283.36,
+    "dil_vial_with_diluent": 3758.43,
+    "dil_vial_with_diluent_and_sample": 3773.36
+   },
+   "areas": [
+    1606.0554
+   ],
+   "area_percents": [
+    99.9472
+   ],
+   "retention_times": [
+    6.66
+   ],
+   "slope": 8.323497,
+   "intercept": 55.28973,
+   "diluent_density": 997.1,
+   "expected": {
+    "quantity_mg": 44.625,
+    "dilution_factor": 99.799062,
+    "stock_volume_ml": 2.4,
+    "purity_percent": 99.9472,
+    "concentration_ug_ml": 186.3118
+   }
+  },
+  {
+   "id": "case-092",
+   "weights": {
+    "stock_vial_empty": 9617.71,
+    "stock_vial_with_diluent": 14550.64,
+    "dil_vial_empty": 2286.06,
+    "dil_vial_with_diluent": 3749.01,
+    "dil_vial_with_diluent_and_sample": 3773.17
+   },
+   "areas": [
+    1797.5428
+   ],
+   "area_percents": [
+    99.8919
+   ],
+   "retention_times": [
+    6.659
+   ],
+   "slope": 8.323497,
+   "intercept": 55.28973,
+   "diluent_density": 997.1,
+   "expected": {
+    "quantity_mg": 63.7408,
+    "dilution_factor": 61.552566,
+    "stock_volume_ml": 4.947277,
+    "purity_percent": 99.8919,
+    "concentration_ug_ml": 209.3174
+   }
+  },
+  {
+   "id": "case-093",
+   "weights": {
+    "stock_vial_empty": 9684.25,
+    "stock_vial_with_diluent": 14516.31,
+    "dil_vial_empty": 2274.31,
+    "dil_vial_with_diluent": 3735.46,
+    "dil_vial_with_diluent_and_sample": 3759.31
+   },
+   "areas": [
+    1793.1866
+   ],
+   "area_percents": [
+    99.9371
+   ],
+   "retention_times": [
+    6.657
+   ],
+   "slope": 8.323497,
+   "intercept": 55.28973,
+   "diluent_density": 997.1,
+   "expected": {
+    "quantity_mg": 63.0014,
+    "dilution_factor": 62.264151,
+    "stock_volume_ml": 4.846114,
+    "purity_percent": 99.9371,
+    "concentration_ug_ml": 208.7941
+   }
+  },
+  {
+   "id": "case-094",
+   "weights": {
+    "stock_vial_empty": 9588.19,
+    "stock_vial_with_diluent": 14546.91,
+    "dil_vial_empty": 2298.34,
+    "dil_vial_with_diluent": 3763.32,
+    "dil_vial_with_diluent_and_sample": 3787.7
+   },
+   "areas": [
+    1876.6621
+   ],
+   "area_percents": [
+    99.8532
+   ],
+   "retention_times": [
+    6.651
+   ],
+   "slope": 8.323497,
+   "intercept": 55.28973,
+   "diluent_density": 997.1,
+   "expected": {
+    "quantity_mg": 66.4798,
+    "dilution_factor": 61.089418,
+    "stock_volume_ml": 4.973142,
+    "purity_percent": 99.8532,
+    "concentration_ug_ml": 218.823
+   }
+  },
+  {
+   "id": "case-095",
+   "weights": {
+    "stock_vial_empty": 5188.56,
+    "stock_vial_with_diluent": 8179.18,
+    "dil_vial_empty": 2308.84,
+    "dil_vial_with_diluent": 3758.41,
+    "dil_vial_with_diluent_and_sample": 3794.82
+   },
+   "areas": [
+    1879.9779
+   ],
+   "area_percents": [
+    99.9286
+   ],
+   "retention_times": [
+    6.656
+   ],
+   "slope": 8.323497,
+   "intercept": 55.28973,
+   "diluent_density": 997.1,
+   "expected": {
+    "quantity_mg": 26.8348,
+    "dilution_factor": 40.812414,
+    "stock_volume_ml": 2.999318,
+    "purity_percent": 99.9286,
+    "concentration_ug_ml": 219.2213
+   }
+  },
+  {
+   "id": "case-096",
+   "weights": {
+    "stock_vial_empty": 5286.06,
+    "stock_vial_with_diluent": 8260.27,
+    "dil_vial_empty": 2289.74,
+    "dil_vial_with_diluent": 3744.9,
+    "dil_vial_with_diluent_and_sample": 3781.83
+   },
+   "areas": [
+    1873.7584
+   ],
+   "area_percents": [
+    99.9536
+   ],
+   "retention_times": [
+    6.66
+   ],
+   "slope": 8.323497,
+   "intercept": 55.28973,
+   "diluent_density": 997.1,
+   "expected": {
+    "quantity_mg": 26.3299,
+    "dilution_factor": 40.403195,
+    "stock_volume_ml": 2.98286,
+    "purity_percent": 99.9536,
+    "concentration_ug_ml": 218.4741
+   }
+  },
+  {
+   "id": "case-097",
+   "weights": {
+    "stock_vial_empty": 5266.01,
+    "stock_vial_with_diluent": 8235.2,
+    "dil_vial_empty": 2277.13,
+    "dil_vial_with_diluent": 3731.34,
+    "dil_vial_with_diluent_and_sample": 3768.9
+   },
+   "areas": [
+    1965.2701
+   ],
+   "area_percents": [
+    99.9458
+   ],
+   "retention_times": [
+    6.661
+   ],
+   "slope": 8.323497,
+   "intercept": 55.28973,
+   "diluent_density": 997.1,
+   "expected": {
+    "quantity_mg": 27.1393,
+    "dilution_factor": 39.716986,
+    "stock_volume_ml": 2.977826,
+    "purity_percent": 99.9458,
+    "concentration_ug_ml": 229.4685
+   }
+  },
+  {
+   "id": "case-098",
+   "weights": {
+    "stock_vial_empty": 5256.4,
+    "stock_vial_with_diluent": 8240.8,
+    "dil_vial_empty": 2262.75,
+    "dil_vial_with_diluent": 3711.31,
+    "dil_vial_with_diluent_and_sample": 3755.94
+   },
+   "areas": [
+    1824.4622
+   ],
+   "area_percents": [
+    99.8807
+   ],
+   "retention_times": [
+    6.656
+   ],
+   "slope": 8.323497,
+   "intercept": 55.28973,
+   "diluent_density": 997.1,
+   "expected": {
+    "quantity_mg": 21.2849,
+    "dilution_factor": 33.457092,
+    "stock_volume_ml": 2.99308,
+    "purity_percent": 99.8807,
+    "concentration_ug_ml": 212.5516
+   }
+  },
+  {
+   "id": "case-099",
+   "weights": {
+    "stock_vial_empty": 5728.77,
+    "stock_vial_with_diluent": 8715.95,
+    "dil_vial_empty": 2255.0,
+    "dil_vial_with_diluent": 3704.75,
+    "dil_vial_with_diluent_and_sample": 3749.64
+   },
+   "areas": [
+    1888.2971
+   ],
+   "area_percents": [
+    99.6354
+   ],
+   "retention_times": [
+    6.657
+   ],
+   "slope": 8.323497,
+   "intercept": 55.28973,
+   "diluent_density": 997.1,
+   "expected": {
+    "quantity_mg": 21.9669,
+    "dilution_factor": 33.295611,
+    "stock_volume_ml": 2.995868,
+    "purity_percent": 99.6354,
+    "concentration_ug_ml": 220.2208
+   }
+  },
+  {
+   "id": "case-100",
+   "weights": {
+    "stock_vial_empty": 5417.87,
+    "stock_vial_with_diluent": 8407.68,
+    "dil_vial_empty": 2263.83,
+    "dil_vial_with_diluent": 3714.95,
+    "dil_vial_with_diluent_and_sample": 3759.7
+   },
+   "areas": [
+    1657.7526
+   ],
+   "area_percents": [
+    99.6956
+   ],
+   "retention_times": [
+    6.647
+   ],
+   "slope": 8.323497,
+   "intercept": 55.28973,
+   "diluent_density": 997.1,
+   "expected": {
+    "quantity_mg": 19.2969,
+    "dilution_factor": 33.427263,
+    "stock_volume_ml": 2.998506,
+    "purity_percent": 99.6956,
+    "concentration_ug_ml": 192.5228
+   }
+  },
+  {
+   "id": "case-101",
+   "weights": {
+    "stock_vial_empty": 5470.65,
+    "stock_vial_with_diluent": 8457.63,
+    "dil_vial_empty": 2255.98,
+    "dil_vial_with_diluent": 3721.25,
+    "dil_vial_with_diluent_and_sample": 3751.04
+   },
+   "areas": [
+    2309.9687
+   ],
+   "area_percents": [
+    99.9643
+   ],
+   "retention_times": [
+    7.381
+   ],
+   "slope": 8.323497,
+   "intercept": 55.28973,
+   "diluent_density": 997.1,
+   "expected": {
+    "quantity_mg": 40.7249,
+    "dilution_factor": 50.18664,
+    "stock_volume_ml": 2.995667,
+    "purity_percent": 99.9643,
+    "concentration_ug_ml": 270.8812
+   }
+  },
+  {
+   "id": "case-102",
+   "weights": {
+    "stock_vial_empty": 5503.74,
+    "stock_vial_with_diluent": 8487.45,
+    "dil_vial_empty": 2276.55,
+    "dil_vial_with_diluent": 3714.12,
+    "dil_vial_with_diluent_and_sample": 3757.8
+   },
+   "areas": [
+    1838.5379
+   ],
+   "area_percents": [
+    99.7792
+   ],
+   "retention_times": [
+    6.639
+   ],
+   "slope": 8.323497,
+   "intercept": 55.28973,
+   "diluent_density": 997.1,
+   "expected": {
+    "quantity_mg": 21.7405,
+    "dilution_factor": 33.911401,
+    "stock_volume_ml": 2.992388,
+    "purity_percent": 99.7792,
+    "concentration_ug_ml": 214.2427
+   }
+  },
+  {
+   "id": "case-103",
+   "weights": {
+    "stock_vial_empty": 5503.74,
+    "stock_vial_with_diluent": 8487.45,
+    "dil_vial_empty": 2276.55,
+    "dil_vial_with_diluent": 3714.12,
+    "dil_vial_with_diluent_and_sample": 3757.8
+   },
+   "areas": [
+    1655.6904
+   ],
+   "area_percents": [
+    99.7611
+   ],
+   "retention_times": [
+    6.641
+   ],
+   "slope": 8.323497,
+   "intercept": 55.28973,
+   "diluent_density": 997.1,
+   "expected": {
+    "quantity_mg": 19.5113,
+    "dilution_factor": 33.911401,
+    "stock_volume_ml": 2.992388,
+    "purity_percent": 99.7611,
+    "concentration_ug_ml": 192.275
+   }
+  },
+  {
+   "id": "case-104",
+   "weights": {
+    "stock_vial_empty": 5585.46,
+    "stock_vial_with_diluent": 8549.12,
+    "dil_vial_empty": 2284.3,
+    "dil_vial_with_diluent": 3736.66,
+    "dil_vial_with_diluent_and_sample": 3766.2
+   },
+   "areas": [
+    1838.5379
+   ],
+   "area_percents": [
+    99.7792
+   ],
+   "retention_times": [
+    6.639
+   ],
+   "slope": 8.323497,
+   "intercept": 55.28973,
+   "diluent_density": 997.1,
+   "expected": {
+    "quantity_mg": 31.9451,
+    "dilution_factor": 50.165877,
+    "stock_volume_ml": 2.97228,
+    "purity_percent": 99.7792,
+    "concentration_ug_ml": 214.2427
+   }
+  },
+  {
+   "id": "case-105",
+   "weights": {
+    "stock_vial_empty": 5503.74,
+    "stock_vial_with_diluent": 8487.45,
+    "dil_vial_empty": 2276.55,
+    "dil_vial_with_diluent": 3714.12,
+    "dil_vial_with_diluent_and_sample": 3757.8
+   },
+   "areas": [
+    1655.6904
+   ],
+   "area_percents": [
+    99.7611
+   ],
+   "retention_times": [
+    6.641
+   ],
+   "slope": 8.323497,
+   "intercept": 55.28973,
+   "diluent_density": 997.1,
+   "expected": {
+    "quantity_mg": 19.5113,
+    "dilution_factor": 33.911401,
+    "stock_volume_ml": 2.992388,
+    "purity_percent": 99.7611,
+    "concentration_ug_ml": 192.275
+   }
+  },
+  {
+   "id": "case-106",
+   "weights": {
+    "stock_vial_empty": 5503.74,
+    "stock_vial_with_diluent": 8487.45,
+    "dil_vial_empty": 2276.55,
+    "dil_vial_with_diluent": 3714.12,
+    "dil_vial_with_diluent_and_sample": 3757.8
+   },
+   "areas": [
+    1655.6904
+   ],
+   "area_percents": [
+    99.7611
+   ],
+   "retention_times": [
+    6.641
+   ],
+   "slope": 8.323497,
+   "intercept": 55.28973,
+   "diluent_density": 997.1,
+   "expected": {
+    "quantity_mg": 19.5113,
+    "dilution_factor": 33.911401,
+    "stock_volume_ml": 2.992388,
+    "purity_percent": 99.7611,
+    "concentration_ug_ml": 192.275
+   }
+  },
+  {
+   "id": "case-107",
+   "weights": {
+    "stock_vial_empty": 5503.74,
+    "stock_vial_with_diluent": 8487.45,
+    "dil_vial_empty": 2276.55,
+    "dil_vial_with_diluent": 3714.12,
+    "dil_vial_with_diluent_and_sample": 3757.8
+   },
+   "areas": [
+    1655.6904
+   ],
+   "area_percents": [
+    99.7611
+   ],
+   "retention_times": [
+    6.641
+   ],
+   "slope": 8.323497,
+   "intercept": 55.28973,
+   "diluent_density": 997.1,
+   "expected": {
+    "quantity_mg": 19.5113,
+    "dilution_factor": 33.911401,
+    "stock_volume_ml": 2.992388,
+    "purity_percent": 99.7611,
+    "concentration_ug_ml": 192.275
+   }
+  },
+  {
+   "id": "case-108",
+   "weights": {
+    "stock_vial_empty": 5503.74,
+    "stock_vial_with_diluent": 8487.45,
+    "dil_vial_empty": 2276.55,
+    "dil_vial_with_diluent": 3714.12,
+    "dil_vial_with_diluent_and_sample": 3757.8
+   },
+   "areas": [
+    1655.6904
+   ],
+   "area_percents": [
+    99.7611
+   ],
+   "retention_times": [
+    6.641
+   ],
+   "slope": 8.323497,
+   "intercept": 55.28973,
+   "diluent_density": 997.1,
+   "expected": {
+    "quantity_mg": 19.5113,
+    "dilution_factor": 33.911401,
+    "stock_volume_ml": 2.992388,
+    "purity_percent": 99.7611,
+    "concentration_ug_ml": 192.275
+   }
+  },
+  {
+   "id": "case-109",
+   "weights": {
+    "stock_vial_empty": 5585.46,
+    "stock_vial_with_diluent": 8549.12,
+    "dil_vial_empty": 2284.3,
+    "dil_vial_with_diluent": 3736.66,
+    "dil_vial_with_diluent_and_sample": 3766.2
+   },
+   "areas": [
+    1838.5379
+   ],
+   "area_percents": [
+    99.7792
+   ],
+   "retention_times": [
+    6.639
+   ],
+   "slope": 8.323497,
+   "intercept": 55.28973,
+   "diluent_density": 997.1,
+   "expected": {
+    "quantity_mg": 31.9451,
+    "dilution_factor": 50.165877,
+    "stock_volume_ml": 2.97228,
+    "purity_percent": 99.7792,
+    "concentration_ug_ml": 214.2427
+   }
+  },
+  {
+   "id": "case-110",
+   "weights": {
+    "stock_vial_empty": 5585.46,
+    "stock_vial_with_diluent": 8549.12,
+    "dil_vial_empty": 2284.3,
+    "dil_vial_with_diluent": 3736.66,
+    "dil_vial_with_diluent_and_sample": 3766.2
+   },
+   "areas": [
+    1838.5379
+   ],
+   "area_percents": [
+    99.7792
+   ],
+   "retention_times": [
+    6.639
+   ],
+   "slope": 8.323497,
+   "intercept": 55.28973,
+   "diluent_density": 997.1,
+   "expected": {
+    "quantity_mg": 31.9451,
+    "dilution_factor": 50.165877,
+    "stock_volume_ml": 2.97228,
+    "purity_percent": 99.7792,
+    "concentration_ug_ml": 214.2427
+   }
+  },
+  {
+   "id": "case-111",
+   "weights": {
+    "stock_vial_empty": 5389.39,
+    "stock_vial_with_diluent": 8400.74,
+    "dil_vial_empty": 2298.35,
+    "dil_vial_with_diluent": 3739.39,
+    "dil_vial_with_diluent_and_sample": 3799.68
+   },
+   "areas": [
+    3702.3011
+   ],
+   "area_percents": [
+    99.9578
+   ],
+   "retention_times": [
+    6.639
+   ],
+   "slope": 8.323497,
+   "intercept": 55.28973,
+   "diluent_density": 997.1,
+   "expected": {
+    "quantity_mg": 32.9522,
+    "dilution_factor": 24.901808,
+    "stock_volume_ml": 3.020108,
+    "purity_percent": 99.9578,
+    "concentration_ug_ml": 438.1585
+   }
+  },
+  {
+   "id": "case-112",
+   "weights": {
+    "stock_vial_empty": 5389.39,
+    "stock_vial_with_diluent": 8400.74,
+    "dil_vial_empty": 2298.35,
+    "dil_vial_with_diluent": 3739.39,
+    "dil_vial_with_diluent_and_sample": 3799.68
+   },
+   "areas": [
+    3702.3011
+   ],
+   "area_percents": [
+    99.9578
+   ],
+   "retention_times": [
+    6.639
+   ],
+   "slope": 8.323497,
+   "intercept": 55.28973,
+   "diluent_density": 997.1,
+   "expected": {
+    "quantity_mg": 32.9522,
+    "dilution_factor": 24.901808,
+    "stock_volume_ml": 3.020108,
+    "purity_percent": 99.9578,
+    "concentration_ug_ml": 438.1585
+   }
+  },
+  {
+   "id": "case-113",
+   "weights": {
+    "stock_vial_empty": 5389.39,
+    "stock_vial_with_diluent": 8400.74,
+    "dil_vial_empty": 2298.35,
+    "dil_vial_with_diluent": 3739.39,
+    "dil_vial_with_diluent_and_sample": 3799.68
+   },
+   "areas": [
+    3702.3011
+   ],
+   "area_percents": [
+    99.9578
+   ],
+   "retention_times": [
+    6.639
+   ],
+   "slope": 8.323497,
+   "intercept": 55.28973,
+   "diluent_density": 997.1,
+   "expected": {
+    "quantity_mg": 32.9522,
+    "dilution_factor": 24.901808,
+    "stock_volume_ml": 3.020108,
+    "purity_percent": 99.9578,
+    "concentration_ug_ml": 438.1585
+   }
+  },
+  {
+   "id": "case-114",
+   "weights": {
+    "stock_vial_empty": 5456.8,
+    "stock_vial_with_diluent": 8452.69,
+    "dil_vial_empty": 2290.77,
+    "dil_vial_with_diluent": 3734.09,
+    "dil_vial_with_diluent_and_sample": 3794.38
+   },
+   "areas": [
+    1829.4653
+   ],
+   "area_percents": [
+    99.9075
+   ],
+   "retention_times": [
+    6.666
+   ],
+   "slope": 8.323497,
+   "intercept": 55.28973,
+   "diluent_density": 997.1,
+   "expected": {
+    "quantity_mg": 15.9723,
+    "dilution_factor": 24.939625,
+    "stock_volume_ml": 3.004603,
+    "purity_percent": 99.9075,
+    "concentration_ug_ml": 213.1527
+   }
+  },
+  {
+   "id": "case-115",
+   "weights": {
+    "stock_vial_empty": 5432.55,
+    "stock_vial_with_diluent": 8427.12,
+    "dil_vial_empty": 2256.97,
+    "dil_vial_with_diluent": 3696.29,
+    "dil_vial_with_diluent_and_sample": 3756.22
+   },
+   "areas": [
+    1966.8916
+   ],
+   "area_percents": [
+    99.9481
+   ],
+   "retention_times": [
+    6.66
+   ],
+   "slope": 8.323497,
+   "intercept": 55.28973,
+   "diluent_density": 997.1,
+   "expected": {
+    "quantity_mg": 17.2551,
+    "dilution_factor": 25.016686,
+    "stock_volume_ml": 3.00328,
+    "purity_percent": 99.9481,
+    "concentration_ug_ml": 229.6633
+   }
+  },
+  {
+   "id": "case-116",
+   "weights": {
+    "stock_vial_empty": 5210.56,
+    "stock_vial_with_diluent": 8196.19,
+    "dil_vial_empty": 2269.68,
+    "dil_vial_with_diluent": 3731.84,
+    "dil_vial_with_diluent_and_sample": 3761.9
+   },
+   "areas": [
+    2072.9395
+   ],
+   "area_percents": [
+    99.9626
+   ],
+   "retention_times": [
+    7.362
+   ],
+   "slope": 10.064396,
+   "intercept": -14.156457,
+   "diluent_density": 997.1,
+   "expected": {
+    "quantity_mg": 30.8245,
+    "dilution_factor": 49.641384,
+    "stock_volume_ml": 2.994314,
+    "purity_percent": 99.9626,
+    "concentration_ug_ml": 207.3742
+   }
+  },
+  {
+   "id": "case-117",
+   "weights": {
+    "stock_vial_empty": 5408.47,
+    "stock_vial_with_diluent": 8395.62,
+    "dil_vial_empty": 2261.26,
+    "dil_vial_with_diluent": 3691.54,
+    "dil_vial_with_diluent_and_sample": 3752.32
+   },
+   "areas": [
+    2391.183
+   ],
+   "area_percents": [
+    99.9576
+   ],
+   "retention_times": [
+    7.356
+   ],
+   "slope": 10.064396,
+   "intercept": -14.156457,
+   "diluent_density": 997.1,
+   "expected": {
+    "quantity_mg": 17.5647,
+    "dilution_factor": 24.532083,
+    "stock_volume_ml": 2.995838,
+    "purity_percent": 99.9576,
+    "concentration_ug_ml": 238.9949
+   }
+  },
+  {
+   "id": "case-118",
+   "weights": {
+    "stock_vial_empty": 5408.47,
+    "stock_vial_with_diluent": 8395.62,
+    "dil_vial_empty": 2261.26,
+    "dil_vial_with_diluent": 3691.54,
+    "dil_vial_with_diluent_and_sample": 3752.32
+   },
+   "areas": [
+    2391.183
+   ],
+   "area_percents": [
+    99.9576
+   ],
+   "retention_times": [
+    7.356
+   ],
+   "slope": 10.064396,
+   "intercept": -14.156457,
+   "diluent_density": 997.1,
+   "expected": {
+    "quantity_mg": 17.5647,
+    "dilution_factor": 24.532083,
+    "stock_volume_ml": 2.995838,
+    "purity_percent": 99.9576,
+    "concentration_ug_ml": 238.9949
+   }
+  },
+  {
+   "id": "case-119",
+   "weights": {
+    "stock_vial_empty": 5401.06,
+    "stock_vial_with_diluent": 8383.9,
+    "dil_vial_empty": 2240.49,
+    "dil_vial_with_diluent": 3702.95,
+    "dil_vial_with_diluent_and_sample": 3733.19
+   },
+   "areas": [
+    2490.6478
+   ],
+   "area_percents": [
+    99.9309
+   ],
+   "retention_times": [
+    7.348
+   ],
+   "slope": 10.064396,
+   "intercept": -14.156457,
+   "diluent_density": 997.1,
+   "expected": {
+    "quantity_mg": 36.7509,
+    "dilution_factor": 49.361772,
+    "stock_volume_ml": 2.991515,
+    "purity_percent": 99.9309,
+    "concentration_ug_ml": 248.8778
+   }
+  },
+  {
+   "id": "case-120",
+   "weights": {
+    "stock_vial_empty": 5582.06,
+    "stock_vial_with_diluent": 8563.93,
+    "dil_vial_empty": 2267.23,
+    "dil_vial_with_diluent": 3727.42,
+    "dil_vial_with_diluent_and_sample": 3757.19
+   },
+   "areas": [
+    2358.4321
+   ],
+   "area_percents": [
+    99.2806
+   ],
+   "retention_times": [
+    7.353
+   ],
+   "slope": 10.064396,
+   "intercept": -14.156457,
+   "diluent_density": 997.1,
+   "expected": {
+    "quantity_mg": 35.2842,
+    "dilution_factor": 50.049043,
+    "stock_volume_ml": 2.990543,
+    "purity_percent": 99.2806,
+    "concentration_ug_ml": 235.7408
+   }
+  },
+  {
+   "id": "case-121",
+   "weights": {
+    "stock_vial_empty": 5608.4,
+    "stock_vial_with_diluent": 8591.91,
+    "dil_vial_empty": 2245.21,
+    "dil_vial_with_diluent": 3707.72,
+    "dil_vial_with_diluent_and_sample": 3737.29
+   },
+   "areas": [
+    2313.6305
+   ],
+   "area_percents": [
+    99.3386
+   ],
+   "retention_times": [
+    7.355
+   ],
+   "slope": 10.064396,
+   "intercept": -14.156457,
+   "diluent_density": 997.1,
+   "expected": {
+    "quantity_mg": 34.9209,
+    "dilution_factor": 50.459249,
+    "stock_volume_ml": 2.992187,
+    "purity_percent": 99.3386,
+    "concentration_ug_ml": 231.2893
+   }
+  },
+  {
+   "id": "case-122",
+   "weights": {
+    "stock_vial_empty": 5460.42,
+    "stock_vial_with_diluent": 8451.69,
+    "dil_vial_empty": 2258.66,
+    "dil_vial_with_diluent": 3721.62,
+    "dil_vial_with_diluent_and_sample": 3751.89
+   },
+   "areas": [
+    2248.17
+   ],
+   "area_percents": [
+    99.966
+   ],
+   "retention_times": [
+    7.36
+   ],
+   "slope": 10.064396,
+   "intercept": -14.156457,
+   "diluent_density": 997.1,
+   "expected": {
+    "quantity_mg": 33.2659,
+    "dilution_factor": 49.33036,
+    "stock_volume_ml": 2.99997,
+    "purity_percent": 99.966,
+    "concentration_ug_ml": 224.7851
+   }
+  },
+  {
+   "id": "case-123",
+   "weights": {
+    "stock_vial_empty": 9850.17,
+    "stock_vial_with_diluent": 15810.95,
+    "dil_vial_empty": 2244.72,
+    "dil_vial_with_diluent": 3717.26,
+    "dil_vial_with_diluent_and_sample": 3734.62
+   },
+   "areas": [
+    2119.4378
+   ],
+   "area_percents": [
+    99.9771
+   ],
+   "retention_times": [
+    7.371
+   ],
+   "slope": 10.064396,
+   "intercept": -14.156457,
+   "diluent_density": 997.1,
+   "expected": {
+    "quantity_mg": 108.7667,
+    "dilution_factor": 85.823733,
+    "stock_volume_ml": 5.978117,
+    "purity_percent": 99.9771,
+    "concentration_ug_ml": 211.9943
+   }
+  },
+  {
+   "id": "case-124",
+   "weights": {
+    "stock_vial_empty": 0.0,
+    "stock_vial_with_diluent": 199420.0,
+    "dil_vial_empty": 3000.0,
+    "dil_vial_with_diluent": 3000.0,
+    "dil_vial_with_diluent_and_sample": 4500.0
+   },
+   "areas": [
+    2547.2925
+   ],
+   "area_percents": [
+    99.6479
+   ],
+   "retention_times": [
+    1.194
+   ],
+   "slope": 7.876207,
+   "intercept": 12.433225,
+   "diluent_density": 997.1,
+   "expected": {
+    "quantity_mg": 64.3675,
+    "dilution_factor": 1.0,
+    "stock_volume_ml": 200.0,
+    "purity_percent": 99.6479,
+    "concentration_ug_ml": 321.8376
+   }
+  },
+  {
+   "id": "case-125",
+   "weights": {
+    "stock_vial_empty": 0.0,
+    "stock_vial_with_diluent": 2991.3,
+    "dil_vial_empty": 2257.95,
+    "dil_vial_with_diluent": 3734.49,
+    "dil_vial_with_diluent_and_sample": 3747.94
+   },
+   "areas": [
+    1149.5507
+   ],
+   "area_percents": [
+    99.8631
+   ],
+   "retention_times": [
+    1.184
+   ],
+   "slope": 7.876207,
+   "intercept": 12.433225,
+   "diluent_density": 997.1,
+   "expected": {
+    "quantity_mg": 47.9811,
+    "dilution_factor": 110.779926,
+    "stock_volume_ml": 3.0,
+    "purity_percent": 99.8631,
+    "concentration_ug_ml": 144.3737
+   }
+  },
+  {
+   "id": "case-126",
+   "weights": {
+    "stock_vial_empty": 5503.61,
+    "stock_vial_with_diluent": 8483.23,
+    "dil_vial_empty": 2255.06,
+    "dil_vial_with_diluent": 3730.15,
+    "dil_vial_with_diluent_and_sample": 3735.48
+   },
+   "areas": [
+    902.6905
+   ],
+   "area_percents": [
+    99.8264
+   ],
+   "retention_times": [
+    1.185
+   ],
+   "slope": 7.876207,
+   "intercept": 12.433225,
+   "diluent_density": 997.1,
+   "expected": {
+    "quantity_mg": 93.8163,
+    "dilution_factor": 277.752345,
+    "stock_volume_ml": 2.988286,
+    "purity_percent": 99.8264,
+    "concentration_ug_ml": 113.0312
+   }
+  },
+  {
+   "id": "case-127",
+   "weights": {
+    "stock_vial_empty": 5517.33,
+    "stock_vial_with_diluent": 8495.48,
+    "dil_vial_empty": 2299.87,
+    "dil_vial_with_diluent": 3712.69,
+    "dil_vial_with_diluent_and_sample": 3803.71
+   },
+   "areas": [
+    5600.0299
+   ],
+   "area_percents": [
+    74.8402
+   ],
+   "retention_times": [
+    4.517
+   ],
+   "slope": 29.670169,
+   "intercept": -1.453427,
+   "diluent_density": 997.1,
+   "expected": {
+    "quantity_mg": 9.3166,
+    "dilution_factor": 16.522083,
+    "stock_volume_ml": 2.986812,
+    "purity_percent": 74.8402,
+    "concentration_ug_ml": 188.7918
+   }
+  },
+  {
+   "id": "case-128",
+   "weights": {
+    "stock_vial_empty": 9845.83,
+    "stock_vial_with_diluent": 14836.67,
+    "dil_vial_empty": 2280.62,
+    "dil_vial_with_diluent": 3749.2,
+    "dil_vial_with_diluent_and_sample": 3780.81
+   },
+   "areas": [
+    4526.8325
+   ],
+   "area_percents": [
+    95.4841
+   ],
+   "retention_times": [
+    4.533
+   ],
+   "slope": 29.670169,
+   "intercept": -1.453427,
+   "diluent_density": 997.1,
+   "expected": {
+    "quantity_mg": 36.2552,
+    "dilution_factor": 47.459348,
+    "stock_volume_ml": 5.005356,
+    "purity_percent": 95.4841,
+    "concentration_ug_ml": 152.6208
+   }
+  },
+  {
+   "id": "case-129",
+   "weights": {
+    "stock_vial_empty": 5992.04,
+    "stock_vial_with_diluent": 8950.68,
+    "dil_vial_empty": 2259.24,
+    "dil_vial_with_diluent": 3709.84,
+    "dil_vial_with_diluent_and_sample": 3739.94
+   },
+   "areas": [
+    1457.764
+   ],
+   "area_percents": [
+    99.5861
+   ],
+   "retention_times": [
+    5.025
+   ],
+   "slope": 6.068889,
+   "intercept": 12.587773,
+   "diluent_density": 997.1,
+   "expected": {
+    "quantity_mg": 34.7589,
+    "dilution_factor": 49.192691,
+    "stock_volume_ml": 2.967245,
+    "purity_percent": 99.5861,
+    "concentration_ug_ml": 238.1286
+   }
+  },
+  {
+   "id": "case-130",
+   "weights": {
+    "stock_vial_empty": 5362.32,
+    "stock_vial_with_diluent": 8342.8,
+    "dil_vial_empty": 2231.19,
+    "dil_vial_with_diluent": 3634.27,
+    "dil_vial_with_diluent_and_sample": 3723.91
+   },
+   "areas": [
+    174.9414
+   ],
+   "area_percents": [
+    99.2984
+   ],
+   "retention_times": [
+    0.812
+   ],
+   "slope": 5.68575,
+   "intercept": -62.960861,
+   "diluent_density": 997.1,
+   "expected": {
+    "quantity_mg": 2.0827,
+    "dilution_factor": 16.652387,
+    "stock_volume_ml": 2.989149,
+    "purity_percent": 99.2984,
+    "concentration_ug_ml": 41.8418
+   }
+  },
+  {
+   "id": "case-131",
+   "weights": {
+    "stock_vial_empty": 0.0,
+    "stock_vial_with_diluent": 9971.0,
+    "dil_vial_empty": 2302.47,
+    "dil_vial_with_diluent": 3787.19,
+    "dil_vial_with_diluent_and_sample": 3802.1
+   },
+   "areas": [
+    1669.7808
+   ],
+   "area_percents": [
+    99.9206
+   ],
+   "retention_times": [
+    6.668
+   ],
+   "slope": 8.323497,
+   "intercept": 55.28973,
+   "diluent_density": 997.1,
+   "expected": {
+    "quantity_mg": 195.0906,
+    "dilution_factor": 100.578806,
+    "stock_volume_ml": 10.0,
+    "purity_percent": 99.9206,
+    "concentration_ug_ml": 193.9679
+   }
+  },
+  {
+   "id": "case-132",
+   "weights": {
+    "stock_vial_empty": 0.0,
+    "stock_vial_with_diluent": 9971.0,
+    "dil_vial_empty": 2273.83,
+    "dil_vial_with_diluent": 3748.4,
+    "dil_vial_with_diluent_and_sample": 3763.78
+   },
+   "areas": [
+    1722.2872
+   ],
+   "area_percents": [
+    99.9405
+   ],
+   "retention_times": [
+    6.668
+   ],
+   "slope": 8.323497,
+   "intercept": 55.28973,
+   "diluent_density": 997.1,
+   "expected": {
+    "quantity_mg": 194.0191,
+    "dilution_factor": 96.875813,
+    "stock_volume_ml": 10.0,
+    "purity_percent": 99.9405,
+    "concentration_ug_ml": 200.2761
+   }
+  },
+  {
+   "id": "case-133",
+   "weights": {
+    "stock_vial_empty": 0.0,
+    "stock_vial_with_diluent": 9971.0,
+    "dil_vial_empty": 2270.87,
+    "dil_vial_with_diluent": 3749.96,
+    "dil_vial_with_diluent_and_sample": 3764.96
+   },
+   "areas": [
+    1659.1658
+   ],
+   "area_percents": [
+    99.9469
+   ],
+   "retention_times": [
+    6.669
+   ],
+   "slope": 8.323497,
+   "intercept": 55.28973,
+   "diluent_density": 997.1,
+   "expected": {
+    "quantity_mg": 191.9334,
+    "dilution_factor": 99.606,
+    "stock_volume_ml": 10.0,
+    "purity_percent": 99.9469,
+    "concentration_ug_ml": 192.6926
+   }
+  },
+  {
+   "id": "case-134",
+   "weights": {
+    "stock_vial_empty": 5296.26,
+    "stock_vial_with_diluent": 8303.53,
+    "dil_vial_empty": 2255.18,
+    "dil_vial_with_diluent": 3720.39,
+    "dil_vial_with_diluent_and_sample": 3750.35
+   },
+   "areas": [
+    1713.386
+   ],
+   "area_percents": [
+    99.7824
+   ],
+   "retention_times": [
+    6.662
+   ],
+   "slope": 8.323497,
+   "intercept": 55.28973,
+   "diluent_density": 997.1,
+   "expected": {
+    "quantity_mg": 29.9838,
+    "dilution_factor": 49.905541,
+    "stock_volume_ml": 3.016016,
+    "purity_percent": 99.7824,
+    "concentration_ug_ml": 199.2067
+   }
+  },
+  {
+   "id": "case-135",
+   "weights": {
+    "stock_vial_empty": 5296.26,
+    "stock_vial_with_diluent": 8303.53,
+    "dil_vial_empty": 2255.18,
+    "dil_vial_with_diluent": 3720.39,
+    "dil_vial_with_diluent_and_sample": 3750.35
+   },
+   "areas": [
+    1713.386
+   ],
+   "area_percents": [
+    99.7824
+   ],
+   "retention_times": [
+    6.662
+   ],
+   "slope": 8.323497,
+   "intercept": 55.28973,
+   "diluent_density": 997.1,
+   "expected": {
+    "quantity_mg": 29.9838,
+    "dilution_factor": 49.905541,
+    "stock_volume_ml": 3.016016,
+    "purity_percent": 99.7824,
+    "concentration_ug_ml": 199.2067
+   }
+  },
+  {
+   "id": "case-136",
+   "weights": {
+    "stock_vial_empty": 5364.01,
+    "stock_vial_with_diluent": 8371.38,
+    "dil_vial_empty": 2275.82,
+    "dil_vial_with_diluent": 3681.23,
+    "dil_vial_with_diluent_and_sample": 3771.7
+   },
+   "areas": [
+    1722.5882
+   ],
+   "area_percents": [
+    99.926
+   ],
+   "retention_times": [
+    6.666
+   ],
+   "slope": 8.323497,
+   "intercept": 55.28973,
+   "diluent_density": 997.1,
+   "expected": {
+    "quantity_mg": 9.9896,
+    "dilution_factor": 16.534542,
+    "stock_volume_ml": 3.016117,
+    "purity_percent": 99.926,
+    "concentration_ug_ml": 200.3123
+   }
+  },
+  {
+   "id": "case-137",
+   "weights": {
+    "stock_vial_empty": 5364.01,
+    "stock_vial_with_diluent": 8371.38,
+    "dil_vial_empty": 2275.82,
+    "dil_vial_with_diluent": 3681.23,
+    "dil_vial_with_diluent_and_sample": 3771.7
+   },
+   "areas": [
+    1722.5882
+   ],
+   "area_percents": [
+    99.926
+   ],
+   "retention_times": [
+    6.666
+   ],
+   "slope": 8.323497,
+   "intercept": 55.28973,
+   "diluent_density": 997.1,
+   "expected": {
+    "quantity_mg": 9.9896,
+    "dilution_factor": 16.534542,
+    "stock_volume_ml": 3.016117,
+    "purity_percent": 99.926,
+    "concentration_ug_ml": 200.3123
+   }
+  },
+  {
+   "id": "case-138",
+   "weights": {
+    "stock_vial_empty": 5383.31,
+    "stock_vial_with_diluent": 8401.45,
+    "dil_vial_empty": 2267.93,
+    "dil_vial_with_diluent": 3691.41,
+    "dil_vial_with_diluent_and_sample": 3766.25
+   },
+   "areas": [
+    1516.7873
+   ],
+   "area_percents": [
+    100
+   ],
+   "retention_times": [
+    1.01
+   ],
+   "slope": 6.283847,
+   "intercept": -101.134218,
+   "diluent_density": 997.1,
+   "expected": {
+    "quantity_mg": 15.6028,
+    "dilution_factor": 20.02031,
+    "stock_volume_ml": 3.026918,
+    "purity_percent": 100.0,
+    "concentration_ug_ml": 257.4731
+   }
+  },
+  {
+   "id": "case-139",
+   "weights": {
+    "stock_vial_empty": 5308.21,
+    "stock_vial_with_diluent": 8294.03,
+    "dil_vial_empty": 2262.04,
+    "dil_vial_with_diluent": 3727.73,
+    "dil_vial_with_diluent_and_sample": 3750.45
+   },
+   "areas": [
+    3843.0272
+   ],
+   "area_percents": [
+    99.9388
+   ],
+   "retention_times": [
+    4.288
+   ],
+   "slope": 16.828134,
+   "intercept": 127.641913,
+   "diluent_density": 997.1,
+   "expected": {
+    "quantity_mg": 43.3119,
+    "dilution_factor": 65.511004,
+    "stock_volume_ml": 2.994504,
+    "purity_percent": 99.9388,
+    "concentration_ug_ml": 220.7842
+   }
+  },
+  {
+   "id": "case-140",
+   "weights": {
+    "stock_vial_empty": 5404.64,
+    "stock_vial_with_diluent": 8392.98,
+    "dil_vial_empty": 2240.52,
+    "dil_vial_with_diluent": 3711.33,
+    "dil_vial_with_diluent_and_sample": 3729.11
+   },
+   "areas": [
+    1724.7188
+   ],
+   "area_percents": [
+    99.9681
+   ],
+   "retention_times": [
+    6.648
+   ],
+   "slope": 8.323497,
+   "intercept": 55.28973,
+   "diluent_density": 997.1,
+   "expected": {
+    "quantity_mg": 50.3265,
+    "dilution_factor": 83.722722,
+    "stock_volume_ml": 2.997031,
+    "purity_percent": 99.9681,
+    "concentration_ug_ml": 200.5682
+   }
+  },
+  {
+   "id": "case-141",
+   "weights": {
+    "stock_vial_empty": 5404.64,
+    "stock_vial_with_diluent": 8392.98,
+    "dil_vial_empty": 2240.52,
+    "dil_vial_with_diluent": 3711.33,
+    "dil_vial_with_diluent_and_sample": 3729.11
+   },
+   "areas": [
+    1724.7188
+   ],
+   "area_percents": [
+    99.9681
+   ],
+   "retention_times": [
+    6.648
+   ],
+   "slope": 8.323497,
+   "intercept": 55.28973,
+   "diluent_density": 997.1,
+   "expected": {
+    "quantity_mg": 50.3265,
+    "dilution_factor": 83.722722,
+    "stock_volume_ml": 2.997031,
+    "purity_percent": 99.9681,
+    "concentration_ug_ml": 200.5682
+   }
+  },
+  {
+   "id": "case-142",
+   "weights": {
+    "stock_vial_empty": 5341.89,
+    "stock_vial_with_diluent": 8329.47,
+    "dil_vial_empty": 2248.1,
+    "dil_vial_with_diluent": 3660.74,
+    "dil_vial_with_diluent_and_sample": 3734.56
+   },
+   "areas": [
+    1583.1952
+   ],
+   "area_percents": [
+    99.8287
+   ],
+   "retention_times": [
+    6.665
+   ],
+   "slope": 8.323497,
+   "intercept": 55.28973,
+   "diluent_density": 997.1,
+   "expected": {
+    "quantity_mg": 11.0752,
+    "dilution_factor": 20.136277,
+    "stock_volume_ml": 2.996269,
+    "purity_percent": 99.8287,
+    "concentration_ug_ml": 183.5653
+   }
+  },
+  {
+   "id": "case-143",
+   "weights": {
+    "stock_vial_empty": 5341.89,
+    "stock_vial_with_diluent": 8329.47,
+    "dil_vial_empty": 2248.1,
+    "dil_vial_with_diluent": 3660.74,
+    "dil_vial_with_diluent_and_sample": 3734.56
+   },
+   "areas": [
+    1583.1952
+   ],
+   "area_percents": [
+    99.8287
+   ],
+   "retention_times": [
+    6.665
+   ],
+   "slope": 8.323497,
+   "intercept": 55.28973,
+   "diluent_density": 997.1,
+   "expected": {
+    "quantity_mg": 11.0752,
+    "dilution_factor": 20.136277,
+    "stock_volume_ml": 2.996269,
+    "purity_percent": 99.8287,
+    "concentration_ug_ml": 183.5653
+   }
+  },
+  {
+   "id": "case-144",
+   "weights": {
+    "stock_vial_empty": 5484.82,
+    "stock_vial_with_diluent": 8471.15,
+    "dil_vial_empty": 2256.34,
+    "dil_vial_with_diluent": 3683.36,
+    "dil_vial_with_diluent_and_sample": 3744.86
+   },
+   "areas": [
+    2091.6268
+   ],
+   "area_percents": [
+    99.9719
+   ],
+   "retention_times": [
+    6.645
+   ],
+   "slope": 8.323497,
+   "intercept": 55.28973,
+   "diluent_density": 997.1,
+   "expected": {
+    "quantity_mg": 17.7346,
+    "dilution_factor": 24.203577,
+    "stock_volume_ml": 2.995016,
+    "purity_percent": 99.9719,
+    "concentration_ug_ml": 244.6492
+   }
+  },
+  {
+   "id": "case-145",
+   "weights": {
+    "stock_vial_empty": 5484.82,
+    "stock_vial_with_diluent": 8471.15,
+    "dil_vial_empty": 2256.34,
+    "dil_vial_with_diluent": 3683.36,
+    "dil_vial_with_diluent_and_sample": 3744.86
+   },
+   "areas": [
+    2091.6268
+   ],
+   "area_percents": [
+    99.9719
+   ],
+   "retention_times": [
+    6.645
+   ],
+   "slope": 8.323497,
+   "intercept": 55.28973,
+   "diluent_density": 997.1,
+   "expected": {
+    "quantity_mg": 17.7346,
+    "dilution_factor": 24.203577,
+    "stock_volume_ml": 2.995016,
+    "purity_percent": 99.9719,
+    "concentration_ug_ml": 244.6492
+   }
+  },
+  {
+   "id": "case-146",
+   "weights": {
+    "stock_vial_empty": 5651.53,
+    "stock_vial_with_diluent": 8639.34,
+    "dil_vial_empty": 2258.74,
+    "dil_vial_with_diluent": 3655.58,
+    "dil_vial_with_diluent_and_sample": 3745.53
+   },
+   "areas": [
+    3947.786
+   ],
+   "area_percents": [
+    99.9621
+   ],
+   "retention_times": [
+    6.618
+   ],
+   "slope": 8.323497,
+   "intercept": 55.28973,
+   "diluent_density": 997.1,
+   "expected": {
+    "quantity_mg": 23.1625,
+    "dilution_factor": 16.529072,
+    "stock_volume_ml": 2.9965,
+    "purity_percent": 99.9621,
+    "concentration_ug_ml": 467.6515
+   }
+  },
+  {
+   "id": "case-147",
+   "weights": {
+    "stock_vial_empty": 5651.53,
+    "stock_vial_with_diluent": 8639.34,
+    "dil_vial_empty": 2258.74,
+    "dil_vial_with_diluent": 3655.58,
+    "dil_vial_with_diluent_and_sample": 3745.53
+   },
+   "areas": [
+    3947.786
+   ],
+   "area_percents": [
+    99.9621
+   ],
+   "retention_times": [
+    6.618
+   ],
+   "slope": 8.323497,
+   "intercept": 55.28973,
+   "diluent_density": 997.1,
+   "expected": {
+    "quantity_mg": 23.1625,
+    "dilution_factor": 16.529072,
+    "stock_volume_ml": 2.9965,
+    "purity_percent": 99.9621,
+    "concentration_ug_ml": 467.6515
+   }
+  },
+  {
+   "id": "case-148",
+   "weights": {
+    "stock_vial_empty": 5651.53,
+    "stock_vial_with_diluent": 8639.34,
+    "dil_vial_empty": 2258.74,
+    "dil_vial_with_diluent": 3655.58,
+    "dil_vial_with_diluent_and_sample": 3745.53
+   },
+   "areas": [
+    3947.786
+   ],
+   "area_percents": [
+    99.9621
+   ],
+   "retention_times": [
+    6.618
+   ],
+   "slope": 8.323497,
+   "intercept": 55.28973,
+   "diluent_density": 997.1,
+   "expected": {
+    "quantity_mg": 23.1625,
+    "dilution_factor": 16.529072,
+    "stock_volume_ml": 2.9965,
+    "purity_percent": 99.9621,
+    "concentration_ug_ml": 467.6515
+   }
+  },
+  {
+   "id": "case-149",
+   "weights": {
+    "stock_vial_empty": 5651.53,
+    "stock_vial_with_diluent": 8639.34,
+    "dil_vial_empty": 2258.74,
+    "dil_vial_with_diluent": 3655.58,
+    "dil_vial_with_diluent_and_sample": 3745.53
+   },
+   "areas": [
+    3947.786
+   ],
+   "area_percents": [
+    99.9621
+   ],
+   "retention_times": [
+    6.618
+   ],
+   "slope": 8.323497,
+   "intercept": 55.28973,
+   "diluent_density": 997.1,
+   "expected": {
+    "quantity_mg": 23.1625,
+    "dilution_factor": 16.529072,
+    "stock_volume_ml": 2.9965,
+    "purity_percent": 99.9621,
+    "concentration_ug_ml": 467.6515
+   }
+  },
+  {
+   "id": "case-150",
+   "weights": {
+    "stock_vial_empty": 0.0,
+    "stock_vial_with_diluent": 4985.5,
+    "dil_vial_empty": 2278.74,
+    "dil_vial_with_diluent": 3754.62,
+    "dil_vial_with_diluent_and_sample": 3769.68
+   },
+   "areas": [
+    2154.0054
+   ],
+   "area_percents": [
+    99.9653
+   ],
+   "retention_times": [
+    7.411
+   ],
+   "slope": 10.064396,
+   "intercept": -14.156457,
+   "diluent_density": 997.1,
+   "expected": {
+    "quantity_mg": 106.6373,
+    "dilution_factor": 99.0,
+    "stock_volume_ml": 5.0,
+    "purity_percent": 99.9653,
+    "concentration_ug_ml": 215.4289
+   }
+  },
+  {
+   "id": "case-151",
+   "weights": {
+    "stock_vial_empty": 0.0,
+    "stock_vial_with_diluent": 9971.0,
+    "dil_vial_empty": 2274.27,
+    "dil_vial_with_diluent": 3752.74,
+    "dil_vial_with_diluent_and_sample": 3767.61
+   },
+   "areas": [
+    2106.2423
+   ],
+   "area_percents": [
+    99.9775
+   ],
+   "retention_times": [
+    7.414
+   ],
+   "slope": 10.064396,
+   "intercept": -14.156457,
+   "diluent_density": 997.1,
+   "expected": {
+    "quantity_mg": 211.5814,
+    "dilution_factor": 100.426362,
+    "stock_volume_ml": 10.0,
+    "purity_percent": 99.9775,
+    "concentration_ug_ml": 210.6832
+   }
+  },
+  {
+   "id": "case-152",
+   "weights": {
+    "stock_vial_empty": 0.0,
+    "stock_vial_with_diluent": 9971.0,
+    "dil_vial_empty": 2274.27,
+    "dil_vial_with_diluent": 3752.74,
+    "dil_vial_with_diluent_and_sample": 3767.61
+   },
+   "areas": [
+    2106.2423
+   ],
+   "area_percents": [
+    99.9775
+   ],
+   "retention_times": [
+    7.414
+   ],
+   "slope": 10.064396,
+   "intercept": -14.156457,
+   "diluent_density": 997.1,
+   "expected": {
+    "quantity_mg": 211.5814,
+    "dilution_factor": 100.426362,
+    "stock_volume_ml": 10.0,
+    "purity_percent": 99.9775,
+    "concentration_ug_ml": 210.6832
+   }
+  },
+  {
+   "id": "case-153",
+   "weights": {
+    "stock_vial_empty": 5252.99,
+    "stock_vial_with_diluent": 8250.79,
+    "dil_vial_empty": 2297.74,
+    "dil_vial_with_diluent": 3761.66,
+    "dil_vial_with_diluent_and_sample": 3792.8
+   },
+   "areas": [
+    2357.9796
+   ],
+   "area_percents": [
+    99.9722
+   ],
+   "retention_times": [
+    7.412
+   ],
+   "slope": 10.064396,
+   "intercept": -14.156457,
+   "diluent_density": 997.1,
+   "expected": {
+    "quantity_mg": 34.0217,
+    "dilution_factor": 48.010918,
+    "stock_volume_ml": 3.006519,
+    "purity_percent": 99.9722,
+    "concentration_ug_ml": 235.6958
+   }
+  },
+  {
+   "id": "case-154",
+   "weights": {
+    "stock_vial_empty": 5405.66,
+    "stock_vial_with_diluent": 8388.36,
+    "dil_vial_empty": 2261.62,
+    "dil_vial_with_diluent": 3729.21,
+    "dil_vial_with_diluent_and_sample": 3746.62
+   },
+   "areas": [
+    2022.297
+   ],
+   "area_percents": [
+    99.9791
+   ],
+   "retention_times": [
+    7.384
+   ],
+   "slope": 10.064396,
+   "intercept": -14.156457,
+   "diluent_density": 997.1,
+   "expected": {
+    "quantity_mg": 51.628,
+    "dilution_factor": 85.295807,
+    "stock_volume_ml": 2.991375,
+    "purity_percent": 99.9791,
+    "concentration_ug_ml": 202.3423
+   }
+  },
+  {
+   "id": "case-155",
+   "weights": {
+    "stock_vial_empty": 5387.37,
+    "stock_vial_with_diluent": 8375.24,
+    "dil_vial_empty": 2246.67,
+    "dil_vial_with_diluent": 3708.47,
+    "dil_vial_with_diluent_and_sample": 3738.14
+   },
+   "areas": [
+    2446.2631
+   ],
+   "area_percents": [
+    99.9669
+   ],
+   "retention_times": [
+    7.376
+   ],
+   "slope": 10.064396,
+   "intercept": -14.156457,
+   "diluent_density": 997.1,
+   "expected": {
+    "quantity_mg": 36.8249,
+    "dilution_factor": 50.268622,
+    "stock_volume_ml": 2.99656,
+    "purity_percent": 99.9669,
+    "concentration_ug_ml": 244.4677
+   }
+  },
+  {
+   "id": "case-156",
+   "weights": {
+    "stock_vial_empty": 5387.37,
+    "stock_vial_with_diluent": 8375.24,
+    "dil_vial_empty": 2246.67,
+    "dil_vial_with_diluent": 3708.47,
+    "dil_vial_with_diluent_and_sample": 3738.14
+   },
+   "areas": [
+    2446.2631
+   ],
+   "area_percents": [
+    99.9669
+   ],
+   "retention_times": [
+    7.376
+   ],
+   "slope": 10.064396,
+   "intercept": -14.156457,
+   "diluent_density": 997.1,
+   "expected": {
+    "quantity_mg": 36.8249,
+    "dilution_factor": 50.268622,
+    "stock_volume_ml": 2.99656,
+    "purity_percent": 99.9669,
+    "concentration_ug_ml": 244.4677
+   }
+  },
+  {
+   "id": "case-157",
+   "weights": {
+    "stock_vial_empty": 5432.73,
+    "stock_vial_with_diluent": 8436.42,
+    "dil_vial_empty": 2283.51,
+    "dil_vial_with_diluent": 3687.0,
+    "dil_vial_with_diluent_and_sample": 3778.37
+   },
+   "areas": [
+    1460.2734
+   ],
+   "area_percents": [
+    99.9046
+   ],
+   "retention_times": [
+    5.381
+   ],
+   "slope": 5.68575,
+   "intercept": -62.960861,
+   "diluent_density": 997.1,
+   "expected": {
+    "quantity_mg": 13.2036,
+    "dilution_factor": 16.360512,
+    "stock_volume_ml": 3.012426,
+    "purity_percent": 99.9046,
+    "concentration_ug_ml": 267.9038
+   }
+  },
+  {
+   "id": "case-158",
+   "weights": {
+    "stock_vial_empty": 9519.06,
+    "stock_vial_with_diluent": 14458.38,
+    "dil_vial_empty": 2274.47,
+    "dil_vial_with_diluent": 3620.29,
+    "dil_vial_with_diluent_and_sample": 3769.69
+   },
+   "areas": [
+    1647.2818
+   ],
+   "area_percents": [
+    99.0458
+   ],
+   "retention_times": [
+    10.032
+   ],
+   "slope": 7.271226,
+   "intercept": 22.495052,
+   "diluent_density": 997.1,
+   "expected": {
+    "quantity_mg": 11.0783,
+    "dilution_factor": 10.008166,
+    "stock_volume_ml": 4.953686,
+    "purity_percent": 99.0458,
+    "concentration_ug_ml": 223.4543
+   }
+  },
+  {
+   "id": "case-159",
+   "weights": {
+    "stock_vial_empty": 9519.06,
+    "stock_vial_with_diluent": 14458.38,
+    "dil_vial_empty": 2274.47,
+    "dil_vial_with_diluent": 3620.29,
+    "dil_vial_with_diluent_and_sample": 3769.69
+   },
+   "areas": [
+    1045.5438
+   ],
+   "area_percents": [
+    99.8474
+   ],
+   "retention_times": [
+    11.859
+   ],
+   "slope": 4.729207,
+   "intercept": 40.908706,
+   "diluent_density": 997.1,
+   "expected": {
+    "quantity_mg": 10.5318,
+    "dilution_factor": 10.008166,
+    "stock_volume_ml": 4.953686,
+    "purity_percent": 99.8474,
+    "concentration_ug_ml": 212.432
+   }
+  },
+  {
+   "id": "case-160",
+   "weights": {
+    "stock_vial_empty": 9575.4,
+    "stock_vial_with_diluent": 14530.07,
+    "dil_vial_empty": 2294.06,
+    "dil_vial_with_diluent": 3640.53,
+    "dil_vial_with_diluent_and_sample": 3789.9
+   },
+   "areas": [
+    1552.6567
+   ],
+   "area_percents": [
+    99.0004
+   ],
+   "retention_times": [
+    10.034
+   ],
+   "slope": 7.271226,
+   "intercept": 22.495052,
+   "diluent_density": 997.1,
+   "expected": {
+    "quantity_mg": 10.4719,
+    "dilution_factor": 10.014327,
+    "stock_volume_ml": 4.96908,
+    "purity_percent": 99.0004,
+    "concentration_ug_ml": 210.4407
+   }
+  },
+  {
+   "id": "case-161",
+   "weights": {
+    "stock_vial_empty": 9575.4,
+    "stock_vial_with_diluent": 14530.07,
+    "dil_vial_empty": 2294.06,
+    "dil_vial_with_diluent": 3640.53,
+    "dil_vial_with_diluent_and_sample": 3789.9
+   },
+   "areas": [
+    1009.3171
+   ],
+   "area_percents": [
+    99.8488
+   ],
+   "retention_times": [
+    11.865
+   ],
+   "slope": 4.729207,
+   "intercept": 40.908706,
+   "diluent_density": 997.1,
+   "expected": {
+    "quantity_mg": 10.1899,
+    "dilution_factor": 10.014327,
+    "stock_volume_ml": 4.96908,
+    "purity_percent": 99.8488,
+    "concentration_ug_ml": 204.7718
+   }
+  },
+  {
+   "id": "case-162",
+   "weights": {
+    "stock_vial_empty": 9405.18,
+    "stock_vial_with_diluent": 14385.96,
+    "dil_vial_empty": 2272.97,
+    "dil_vial_with_diluent": 3620.42,
+    "dil_vial_with_diluent_and_sample": 3768.98
+   },
+   "areas": [
+    1609.0961
+   ],
+   "area_percents": [
+    99.0063
+   ],
+   "retention_times": [
+    10.029
+   ],
+   "slope": 7.271226,
+   "intercept": 22.495052,
+   "diluent_density": 997.1,
+   "expected": {
+    "quantity_mg": 10.9762,
+    "dilution_factor": 10.070073,
+    "stock_volume_ml": 4.995266,
+    "purity_percent": 99.0063,
+    "concentration_ug_ml": 218.2027
+   }
+  },
+  {
+   "id": "case-163",
+   "weights": {
+    "stock_vial_empty": 9405.18,
+    "stock_vial_with_diluent": 14385.96,
+    "dil_vial_empty": 2272.97,
+    "dil_vial_with_diluent": 3620.42,
+    "dil_vial_with_diluent_and_sample": 3768.98
+   },
+   "areas": [
+    1022.2479
+   ],
+   "area_percents": [
+    99.8437
+   ],
+   "retention_times": [
+    11.875
+   ],
+   "slope": 4.729207,
+   "intercept": 40.908706,
+   "diluent_density": 997.1,
+   "expected": {
+    "quantity_mg": 10.4381,
+    "dilution_factor": 10.070073,
+    "stock_volume_ml": 4.995266,
+    "purity_percent": 99.8437,
+    "concentration_ug_ml": 207.5061
+   }
+  },
+  {
+   "id": "case-164",
+   "weights": {
+    "stock_vial_empty": 5349.01,
+    "stock_vial_with_diluent": 8334.77,
+    "dil_vial_empty": 2258.93,
+    "dil_vial_with_diluent": 3656.57,
+    "dil_vial_with_diluent_and_sample": 3746.65
+   },
+   "areas": [
+    1731.0872
+   ],
+   "area_percents": [
+    99.8624
+   ],
+   "retention_times": [
+    10.031
+   ],
+   "slope": 7.271226,
+   "intercept": 22.495052,
+   "diluent_density": 997.1,
+   "expected": {
+    "quantity_mg": 11.6209,
+    "dilution_factor": 16.515542,
+    "stock_volume_ml": 2.994444,
+    "purity_percent": 99.8624,
+    "concentration_ug_ml": 234.9799
+   }
+  },
+  {
+   "id": "case-165",
+   "weights": {
+    "stock_vial_empty": 5349.01,
+    "stock_vial_with_diluent": 8334.77,
+    "dil_vial_empty": 2258.93,
+    "dil_vial_with_diluent": 3656.57,
+    "dil_vial_with_diluent_and_sample": 3746.65
+   },
+   "areas": [
+    691.4355
+   ],
+   "area_percents": [
+    99.9501
+   ],
+   "retention_times": [
+    6.805
+   ],
+   "slope": 2.633702,
+   "intercept": 4.602973,
+   "diluent_density": 997.1,
+   "expected": {
+    "quantity_mg": 12.8971,
+    "dilution_factor": 16.515542,
+    "stock_volume_ml": 2.994444,
+    "purity_percent": 99.9501,
+    "concentration_ug_ml": 260.786
+   }
+  },
+  {
+   "id": "case-166",
+   "weights": {
+    "stock_vial_empty": 5245.7,
+    "stock_vial_with_diluent": 8231.04,
+    "dil_vial_empty": 2274.14,
+    "dil_vial_with_diluent": 3672.89,
+    "dil_vial_with_diluent_and_sample": 3763.15
+   },
+   "areas": [
+    1660.519
+   ],
+   "area_percents": [
+    99.662
+   ],
+   "retention_times": [
+    10.011
+   ],
+   "slope": 7.271226,
+   "intercept": 22.495052,
+   "diluent_density": 997.1,
+   "expected": {
+    "quantity_mg": 11.1268,
+    "dilution_factor": 16.496898,
+    "stock_volume_ml": 2.994023,
+    "purity_percent": 99.662,
+    "concentration_ug_ml": 225.2748
+   }
+  },
+  {
+   "id": "case-167",
+   "weights": {
+    "stock_vial_empty": 5245.7,
+    "stock_vial_with_diluent": 8231.04,
+    "dil_vial_empty": 2274.14,
+    "dil_vial_with_diluent": 3672.89,
+    "dil_vial_with_diluent_and_sample": 3763.15
+   },
+   "areas": [
+    1007.4279
+   ],
+   "area_percents": [
+    99.9369
+   ],
+   "retention_times": [
+    11.846
+   ],
+   "slope": 4.729207,
+   "intercept": 40.908706,
+   "diluent_density": 997.1,
+   "expected": {
+    "quantity_mg": 10.0944,
+    "dilution_factor": 16.496898,
+    "stock_volume_ml": 2.994023,
+    "purity_percent": 99.9369,
+    "concentration_ug_ml": 204.3724
+   }
+  },
+  {
+   "id": "case-168",
+   "weights": {
+    "stock_vial_empty": 5685.87,
+    "stock_vial_with_diluent": 8670.03,
+    "dil_vial_empty": 2265.77,
+    "dil_vial_with_diluent": 3573.72,
+    "dil_vial_with_diluent_and_sample": 3755.5
+   },
+   "areas": [
+    1515.5736
+   ],
+   "area_percents": [
+    99.5552
+   ],
+   "retention_times": [
+    10.016
+   ],
+   "slope": 7.271226,
+   "intercept": 22.495052,
+   "diluent_density": 997.1,
+   "expected": {
+    "quantity_mg": 5.0364,
+    "dilution_factor": 8.195236,
+    "stock_volume_ml": 2.992839,
+    "purity_percent": 99.5552,
+    "concentration_ug_ml": 205.3407
+   }
+  },
+  {
+   "id": "case-169",
+   "weights": {
+    "stock_vial_empty": 5685.87,
+    "stock_vial_with_diluent": 8670.03,
+    "dil_vial_empty": 2265.77,
+    "dil_vial_with_diluent": 3573.72,
+    "dil_vial_with_diluent_and_sample": 3755.5
+   },
+   "areas": [
+    1515.5736
+   ],
+   "area_percents": [
+    99.5552
+   ],
+   "retention_times": [
+    10.016
+   ],
+   "slope": 7.271226,
+   "intercept": 22.495052,
+   "diluent_density": 997.1,
+   "expected": {
+    "quantity_mg": 5.0364,
+    "dilution_factor": 8.195236,
+    "stock_volume_ml": 2.992839,
+    "purity_percent": 99.5552,
+    "concentration_ug_ml": 205.3407
+   }
+  },
+  {
+   "id": "case-170",
+   "weights": {
+    "stock_vial_empty": 5685.87,
+    "stock_vial_with_diluent": 8670.03,
+    "dil_vial_empty": 2265.77,
+    "dil_vial_with_diluent": 3573.72,
+    "dil_vial_with_diluent_and_sample": 3755.5
+   },
+   "areas": [
+    532.7552
+   ],
+   "area_percents": [
+    99.7669
+   ],
+   "retention_times": [
+    6.794
+   ],
+   "slope": 2.633702,
+   "intercept": 4.602973,
+   "diluent_density": 997.1,
+   "expected": {
+    "quantity_mg": 4.9186,
+    "dilution_factor": 8.195236,
+    "stock_volume_ml": 2.992839,
+    "purity_percent": 99.7669,
+    "concentration_ug_ml": 200.5361
+   }
+  },
+  {
+   "id": "case-171",
+   "weights": {
+    "stock_vial_empty": 5473.1,
+    "stock_vial_with_diluent": 8486.3,
+    "dil_vial_empty": 2278.12,
+    "dil_vial_with_diluent": 3685.37,
+    "dil_vial_with_diluent_and_sample": 3776.2
+   },
+   "areas": [
+    1534.7508
+   ],
+   "area_percents": [
+    99.5616
+   ],
+   "retention_times": [
+    10.007
+   ],
+   "slope": 7.271226,
+   "intercept": 22.495052,
+   "diluent_density": 997.1,
+   "expected": {
+    "quantity_mg": 10.366,
+    "dilution_factor": 16.493229,
+    "stock_volume_ml": 3.021964,
+    "purity_percent": 99.5616,
+    "concentration_ug_ml": 207.9781
+   }
+  },
+  {
+   "id": "case-172",
+   "weights": {
+    "stock_vial_empty": 5473.1,
+    "stock_vial_with_diluent": 8486.3,
+    "dil_vial_empty": 2278.12,
+    "dil_vial_with_diluent": 3685.37,
+    "dil_vial_with_diluent_and_sample": 3776.2
+   },
+   "areas": [
+    938.8985
+   ],
+   "area_percents": [
+    99.1998
+   ],
+   "retention_times": [
+    11.842
+   ],
+   "slope": 4.729207,
+   "intercept": 40.908706,
+   "diluent_density": 997.1,
+   "expected": {
+    "quantity_mg": 9.4641,
+    "dilution_factor": 16.493229,
+    "stock_volume_ml": 3.021964,
+    "purity_percent": 99.1998,
+    "concentration_ug_ml": 189.8817
+   }
+  },
+  {
+   "id": "case-173",
+   "weights": {
+    "stock_vial_empty": 0.0,
+    "stock_vial_with_diluent": 9971.0,
+    "dil_vial_empty": 2244.27,
+    "dil_vial_with_diluent": 3470.64,
+    "dil_vial_with_diluent_and_sample": 3736.48
+   },
+   "areas": [
+    1303.8036
+   ],
+   "area_percents": [
+    99.9926
+   ],
+   "retention_times": [
+    12.882
+   ],
+   "slope": 7.891691,
+   "intercept": 5.223693,
+   "diluent_density": 997.1,
+   "expected": {
+    "quantity_mg": 9.2365,
+    "dilution_factor": 5.613188,
+    "stock_volume_ml": 10.0,
+    "purity_percent": 99.9926,
+    "concentration_ug_ml": 164.5503
+   }
+  },
+  {
+   "id": "case-174",
+   "weights": {
+    "stock_vial_empty": 0.0,
+    "stock_vial_with_diluent": 9971.0,
+    "dil_vial_empty": 2244.27,
+    "dil_vial_with_diluent": 3470.64,
+    "dil_vial_with_diluent_and_sample": 3736.48
+   },
+   "areas": [
+    11204.1069
+   ],
+   "area_percents": [
+    99.389
+   ],
+   "retention_times": [
+    6.208
+   ],
+   "slope": 66.586244,
+   "intercept": 48.303528,
+   "diluent_density": 997.1,
+   "expected": {
+    "quantity_mg": 9.4043,
+    "dilution_factor": 5.613188,
+    "stock_volume_ml": 10.0,
+    "purity_percent": 99.389,
+    "concentration_ug_ml": 167.5392
+   }
+  },
+  {
+   "id": "case-175",
+   "weights": {
+    "stock_vial_empty": 5269.07,
+    "stock_vial_with_diluent": 8175.7,
+    "dil_vial_empty": 2291.25,
+    "dil_vial_with_diluent": 3630.5,
+    "dil_vial_with_diluent_and_sample": 3785.69
+   },
+   "areas": [
+    1389.1898
+   ],
+   "area_percents": [
+    99.9896
+   ],
+   "retention_times": [
+    12.758
+   ],
+   "slope": 7.891691,
+   "intercept": 5.223693,
+   "diluent_density": 997.1,
+   "expected": {
+    "quantity_mg": 4.9229,
+    "dilution_factor": 9.629744,
+    "stock_volume_ml": 2.915084,
+    "purity_percent": 99.9896,
+    "concentration_ug_ml": 175.37
+   }
+  },
+  {
+   "id": "case-176",
+   "weights": {
+    "stock_vial_empty": 5269.07,
+    "stock_vial_with_diluent": 8175.7,
+    "dil_vial_empty": 2291.25,
+    "dil_vial_with_diluent": 3630.5,
+    "dil_vial_with_diluent_and_sample": 3785.69
+   },
+   "areas": [
+    12313.4808
+   ],
+   "area_percents": [
+    99.7388
+   ],
+   "retention_times": [
+    5.967
+   ],
+   "slope": 66.586244,
+   "intercept": 48.303528,
+   "diluent_density": 997.1,
+   "expected": {
+    "quantity_mg": 5.1708,
+    "dilution_factor": 9.629744,
+    "stock_volume_ml": 2.915084,
+    "purity_percent": 99.7388,
+    "concentration_ug_ml": 184.1999
+   }
+  },
+  {
+   "id": "case-177",
+   "weights": {
+    "stock_vial_empty": 5217.34,
+    "stock_vial_with_diluent": 8146.85,
+    "dil_vial_empty": 2300.82,
+    "dil_vial_with_diluent": 3642.61,
+    "dil_vial_with_diluent_and_sample": 3797.55
+   },
+   "areas": [
+    1334.2776
+   ],
+   "area_percents": [
+    99.9882
+   ],
+   "retention_times": [
+    12.792
+   ],
+   "slope": 7.891691,
+   "intercept": 5.223693,
+   "diluent_density": 997.1,
+   "expected": {
+    "quantity_mg": 4.7798,
+    "dilution_factor": 9.660062,
+    "stock_volume_ml": 2.93803,
+    "purity_percent": 99.9882,
+    "concentration_ug_ml": 168.4118
+   }
+  },
+  {
+   "id": "case-178",
+   "weights": {
+    "stock_vial_empty": 5217.34,
+    "stock_vial_with_diluent": 8146.85,
+    "dil_vial_empty": 2300.82,
+    "dil_vial_with_diluent": 3642.61,
+    "dil_vial_with_diluent_and_sample": 3797.55
+   },
+   "areas": [
+    11767.7978
+   ],
+   "area_percents": [
+    99.6978
+   ],
+   "retention_times": [
+    6.048
+   ],
+   "slope": 66.586244,
+   "intercept": 48.303528,
+   "diluent_density": 997.1,
+   "expected": {
+    "quantity_mg": 4.9953,
+    "dilution_factor": 9.660062,
+    "stock_volume_ml": 2.93803,
+    "purity_percent": 99.6978,
+    "concentration_ug_ml": 176.0047
+   }
+  },
+  {
+   "id": "case-179",
+   "weights": {
+    "stock_vial_empty": 5307.15,
+    "stock_vial_with_diluent": 8257.04,
+    "dil_vial_empty": 2298.52,
+    "dil_vial_with_diluent": 3634.41,
+    "dil_vial_with_diluent_and_sample": 3789.63
+   },
+   "areas": [
+    1340.9219
+   ],
+   "area_percents": [
+    99.9053
+   ],
+   "retention_times": [
+    12.772
+   ],
+   "slope": 7.891691,
+   "intercept": 5.223693,
+   "diluent_density": 997.1,
+   "expected": {
+    "quantity_mg": 4.8102,
+    "dilution_factor": 9.60643,
+    "stock_volume_ml": 2.95847,
+    "purity_percent": 99.9053,
+    "concentration_ug_ml": 169.2537
+   }
+  },
+  {
+   "id": "case-180",
+   "weights": {
+    "stock_vial_empty": 5307.15,
+    "stock_vial_with_diluent": 8257.04,
+    "dil_vial_empty": 2298.52,
+    "dil_vial_with_diluent": 3634.41,
+    "dil_vial_with_diluent_and_sample": 3789.63
+   },
+   "areas": [
+    11889.645
+   ],
+   "area_percents": [
+    99.8419
+   ],
+   "retention_times": [
+    5.986
+   ],
+   "slope": 66.586244,
+   "intercept": 48.303528,
+   "diluent_density": 997.1,
+   "expected": {
+    "quantity_mg": 5.0541,
+    "dilution_factor": 9.60643,
+    "stock_volume_ml": 2.95847,
+    "purity_percent": 99.8419,
+    "concentration_ug_ml": 177.8347
+   }
+  },
+  {
+   "id": "case-181",
+   "weights": {
+    "stock_vial_empty": 5201.33,
+    "stock_vial_with_diluent": 8205.85,
+    "dil_vial_empty": 2294.56,
+    "dil_vial_with_diluent": 3424.87,
+    "dil_vial_with_diluent_and_sample": 3757.4
+   },
+   "areas": [
+    9397.5773
+   ],
+   "area_percents": [
+    99.4934
+   ],
+   "retention_times": [
+    3.452
+   ],
+   "slope": 66.586244,
+   "intercept": 48.303528,
+   "diluent_density": 997.1,
+   "expected": {
+    "quantity_mg": 1.8612,
+    "dilution_factor": 4.399122,
+    "stock_volume_ml": 3.013258,
+    "purity_percent": 99.4934,
+    "concentration_ug_ml": 140.4085
+   }
+  },
+  {
+   "id": "case-182",
+   "weights": {
+    "stock_vial_empty": 5201.33,
+    "stock_vial_with_diluent": 8205.85,
+    "dil_vial_empty": 2294.56,
+    "dil_vial_with_diluent": 3424.87,
+    "dil_vial_with_diluent_and_sample": 3757.4
+   },
+   "areas": [
+    4388.1583
+   ],
+   "area_percents": [
+    99.2151
+   ],
+   "retention_times": [
+    10.493
+   ],
+   "slope": 5.502741,
+   "intercept": 12.241879,
+   "diluent_density": 997.1,
+   "expected": {
+    "quantity_mg": 10.5413,
+    "dilution_factor": 4.399122,
+    "stock_volume_ml": 3.013258,
+    "purity_percent": 99.2151,
+    "concentration_ug_ml": 795.2249
+   }
+  },
+  {
+   "id": "case-183",
+   "weights": {
+    "stock_vial_empty": 5181.67,
+    "stock_vial_with_diluent": 8156.48,
+    "dil_vial_empty": 2296.91,
+    "dil_vial_with_diluent": 3444.72,
+    "dil_vial_with_diluent_and_sample": 3775.75
+   },
+   "areas": [
+    9888.1845
+   ],
+   "area_percents": [
+    99.4538
+   ],
+   "retention_times": [
+    3.441
+   ],
+   "slope": 66.586244,
+   "intercept": 48.303528,
+   "diluent_density": 997.1,
+   "expected": {
+    "quantity_mg": 1.9696,
+    "dilution_factor": 4.46739,
+    "stock_volume_ml": 2.983462,
+    "purity_percent": 99.4538,
+    "concentration_ug_ml": 147.7765
+   }
+  },
+  {
+   "id": "case-184",
+   "weights": {
+    "stock_vial_empty": 5181.67,
+    "stock_vial_with_diluent": 8156.48,
+    "dil_vial_empty": 2296.91,
+    "dil_vial_with_diluent": 3444.72,
+    "dil_vial_with_diluent_and_sample": 3775.75
+   },
+   "areas": [
+    4622.1698
+   ],
+   "area_percents": [
+    99.4101
+   ],
+   "retention_times": [
+    10.477
+   ],
+   "slope": 5.502741,
+   "intercept": 12.241879,
+   "diluent_density": 997.1,
+   "expected": {
+    "quantity_mg": 11.1658,
+    "dilution_factor": 4.46739,
+    "stock_volume_ml": 2.983462,
+    "purity_percent": 99.4101,
+    "concentration_ug_ml": 837.7512
+   }
+  },
+  {
+   "id": "case-185",
+   "weights": {
+    "stock_vial_empty": 5193.67,
+    "stock_vial_with_diluent": 8156.36,
+    "dil_vial_empty": 2291.25,
+    "dil_vial_with_diluent": 3436.82,
+    "dil_vial_with_diluent_and_sample": 3768.31
+   },
+   "areas": [
+    10390.8432
+   ],
+   "area_percents": [
+    99.5888
+   ],
+   "retention_times": [
+    3.42
+   ],
+   "slope": 66.586244,
+   "intercept": 48.303528,
+   "diluent_density": 997.1,
+   "expected": {
+    "quantity_mg": 2.0564,
+    "dilution_factor": 4.455821,
+    "stock_volume_ml": 2.971307,
+    "purity_percent": 99.5888,
+    "concentration_ug_ml": 155.3255
+   }
+  },
+  {
+   "id": "case-186",
+   "weights": {
+    "stock_vial_empty": 5193.67,
+    "stock_vial_with_diluent": 8156.36,
+    "dil_vial_empty": 2291.25,
+    "dil_vial_with_diluent": 3436.82,
+    "dil_vial_with_diluent_and_sample": 3768.31
+   },
+   "areas": [
+    4869.7848
+   ],
+   "area_percents": [
+    99.4696
+   ],
+   "retention_times": [
+    10.474
+   ],
+   "slope": 5.502741,
+   "intercept": 12.241879,
+   "diluent_density": 997.1,
+   "expected": {
+    "quantity_mg": 11.6873,
+    "dilution_factor": 4.455821,
+    "stock_volume_ml": 2.971307,
+    "purity_percent": 99.4696,
+    "concentration_ug_ml": 882.7497
+   }
+  },
+  {
+   "id": "case-187",
+   "weights": {
+    "stock_vial_empty": 5370.05,
+    "stock_vial_with_diluent": 8348.45,
+    "dil_vial_empty": 2291.17,
+    "dil_vial_with_diluent": 3687.75,
+    "dil_vial_with_diluent_and_sample": 3777.41
+   },
+   "areas": [
+    10.1442
+   ],
+   "area_percents": [
+    100
+   ],
+   "retention_times": [
+    14.197
+   ],
+   "slope": 4.729207,
+   "intercept": 40.908706,
+   "diluent_density": 997.1,
+   "expected": {
+    "quantity_mg": -0.3221,
+    "dilution_factor": 16.5764,
+    "stock_volume_ml": 2.987062,
+    "purity_percent": 100.0,
+    "concentration_ug_ml": -6.5052
+   }
+  },
+  {
+   "id": "case-188",
+   "weights": {
+    "stock_vial_empty": 5370.05,
+    "stock_vial_with_diluent": 8348.45,
+    "dil_vial_empty": 2291.17,
+    "dil_vial_with_diluent": 3687.75,
+    "dil_vial_with_diluent_and_sample": 3777.41
+   },
+   "areas": [
+    10.1442
+   ],
+   "area_percents": [
+    100
+   ],
+   "retention_times": [
+    14.197
+   ],
+   "slope": 4.729207,
+   "intercept": 40.908706,
+   "diluent_density": 997.1,
+   "expected": {
+    "quantity_mg": -0.3221,
+    "dilution_factor": 16.5764,
+    "stock_volume_ml": 2.987062,
+    "purity_percent": 100.0,
+    "concentration_ug_ml": -6.5052
+   }
+  },
+  {
+   "id": "case-189",
+   "weights": {
+    "stock_vial_empty": 5353.95,
+    "stock_vial_with_diluent": 8331.61,
+    "dil_vial_empty": 2239.26,
+    "dil_vial_with_diluent": 3691.45,
+    "dil_vial_with_diluent_and_sample": 3723.13
+   },
+   "areas": [
+    437.6688
+   ],
+   "area_percents": [
+    99.7792
+   ],
+   "retention_times": [
+    10.045
+   ],
+   "slope": 7.271226,
+   "intercept": 22.495052,
+   "diluent_density": 997.1,
+   "expected": {
+    "quantity_mg": 7.9867,
+    "dilution_factor": 46.839331,
+    "stock_volume_ml": 2.98632,
+    "purity_percent": 99.7792,
+    "concentration_ug_ml": 57.0982
+   }
+  },
+  {
+   "id": "case-190",
+   "weights": {
+    "stock_vial_empty": 5353.95,
+    "stock_vial_with_diluent": 8331.61,
+    "dil_vial_empty": 2239.26,
+    "dil_vial_with_diluent": 3691.45,
+    "dil_vial_with_diluent_and_sample": 3723.13
+   },
+   "areas": [
+    2572.1159
+   ],
+   "area_percents": [
+    99.7045
+   ],
+   "retention_times": [
+    1.137
+   ],
+   "slope": 7.982219,
+   "intercept": 61.108024,
+   "diluent_density": 997.1,
+   "expected": {
+    "quantity_mg": 44.0019,
+    "dilution_factor": 46.839331,
+    "stock_volume_ml": 2.98632,
+    "purity_percent": 99.7045,
+    "concentration_ug_ml": 314.5752
+   }
+  },
+  {
+   "id": "case-191",
+   "weights": {
+    "stock_vial_empty": 5804.41,
+    "stock_vial_with_diluent": 8781.3,
+    "dil_vial_empty": 2272.99,
+    "dil_vial_with_diluent": 3729.06,
+    "dil_vial_with_diluent_and_sample": 3760.71
+   },
+   "areas": [
+    566.3621
+   ],
+   "area_percents": [
+    99.7893
+   ],
+   "retention_times": [
+    10.035
+   ],
+   "slope": 7.271226,
+   "intercept": 22.495052,
+   "diluent_density": 997.1,
+   "expected": {
+    "quantity_mg": 10.4968,
+    "dilution_factor": 47.005371,
+    "stock_volume_ml": 2.985548,
+    "purity_percent": 99.7893,
+    "concentration_ug_ml": 74.7972
+   }
+  },
+  {
+   "id": "case-192",
+   "weights": {
+    "stock_vial_empty": 5804.41,
+    "stock_vial_with_diluent": 8781.3,
+    "dil_vial_empty": 2272.99,
+    "dil_vial_with_diluent": 3729.06,
+    "dil_vial_with_diluent_and_sample": 3760.71
+   },
+   "areas": [
+    3212.7768
+   ],
+   "area_percents": [
+    99.9146
+   ],
+   "retention_times": [
+    1.139
+   ],
+   "slope": 7.982219,
+   "intercept": 61.108024,
+   "diluent_density": 997.1,
+   "expected": {
+    "quantity_mg": 55.41,
+    "dilution_factor": 47.005371,
+    "stock_volume_ml": 2.985548,
+    "purity_percent": 99.9146,
+    "concentration_ug_ml": 394.8362
+   }
+  },
+  {
+   "id": "case-193",
+   "weights": {
+    "stock_vial_empty": 5804.41,
+    "stock_vial_with_diluent": 8781.3,
+    "dil_vial_empty": 2272.99,
+    "dil_vial_with_diluent": 3729.06,
+    "dil_vial_with_diluent_and_sample": 3760.71
+   },
+   "areas": [
+    524.5234
+   ],
+   "area_percents": [
+    99.5537
+   ],
+   "retention_times": [
+    3.93
+   ],
+   "slope": 6.068889,
+   "intercept": 12.587773,
+   "diluent_density": 997.1,
+   "expected": {
+    "quantity_mg": 11.838,
+    "dilution_factor": 47.005371,
+    "stock_volume_ml": 2.985548,
+    "purity_percent": 99.5537,
+    "concentration_ug_ml": 84.3541
+   }
+  },
+  {
+   "id": "case-194",
+   "weights": {
+    "stock_vial_empty": 5804.41,
+    "stock_vial_with_diluent": 8781.3,
+    "dil_vial_empty": 2272.99,
+    "dil_vial_with_diluent": 3729.06,
+    "dil_vial_with_diluent_and_sample": 3760.71
+   },
+   "areas": [
+    373.8923
+   ],
+   "area_percents": [
+    99.7842
+   ],
+   "retention_times": [
+    11.871
+   ],
+   "slope": 4.729207,
+   "intercept": 40.908706,
+   "diluent_density": 997.1,
+   "expected": {
+    "quantity_mg": 9.8811,
+    "dilution_factor": 47.005371,
+    "stock_volume_ml": 2.985548,
+    "purity_percent": 99.7842,
+    "concentration_ug_ml": 70.41
+   }
+  },
+  {
+   "id": "case-195",
+   "weights": {
+    "stock_vial_empty": 5353.95,
+    "stock_vial_with_diluent": 8331.61,
+    "dil_vial_empty": 2239.26,
+    "dil_vial_with_diluent": 3691.45,
+    "dil_vial_with_diluent_and_sample": 3723.13
+   },
+   "areas": [
+    437.6688
+   ],
+   "area_percents": [
+    99.7792
+   ],
+   "retention_times": [
+    10.045
+   ],
+   "slope": 7.271226,
+   "intercept": 22.495052,
+   "diluent_density": 997.1,
+   "expected": {
+    "quantity_mg": 7.9867,
+    "dilution_factor": 46.839331,
+    "stock_volume_ml": 2.98632,
+    "purity_percent": 99.7792,
+    "concentration_ug_ml": 57.0982
+   }
+  },
+  {
+   "id": "case-196",
+   "weights": {
+    "stock_vial_empty": 5353.95,
+    "stock_vial_with_diluent": 8331.61,
+    "dil_vial_empty": 2239.26,
+    "dil_vial_with_diluent": 3691.45,
+    "dil_vial_with_diluent_and_sample": 3723.13
+   },
+   "areas": [
+    2572.1159
+   ],
+   "area_percents": [
+    99.7045
+   ],
+   "retention_times": [
+    1.137
+   ],
+   "slope": 7.982219,
+   "intercept": 61.108024,
+   "diluent_density": 997.1,
+   "expected": {
+    "quantity_mg": 44.0019,
+    "dilution_factor": 46.839331,
+    "stock_volume_ml": 2.98632,
+    "purity_percent": 99.7045,
+    "concentration_ug_ml": 314.5752
+   }
+  },
+  {
+   "id": "case-197",
+   "weights": {
+    "stock_vial_empty": 5353.95,
+    "stock_vial_with_diluent": 8331.61,
+    "dil_vial_empty": 2239.26,
+    "dil_vial_with_diluent": 3691.45,
+    "dil_vial_with_diluent_and_sample": 3723.13
+   },
+   "areas": [
+    281.9998
+   ],
+   "area_percents": [
+    99.84
+   ],
+   "retention_times": [
+    11.891
+   ],
+   "slope": 4.729207,
+   "intercept": 40.908706,
+   "diluent_density": 997.1,
+   "expected": {
+    "quantity_mg": 7.1308,
+    "dilution_factor": 46.839331,
+    "stock_volume_ml": 2.98632,
+    "purity_percent": 99.84,
+    "concentration_ug_ml": 50.9792
+   }
+  },
+  {
+   "id": "case-198",
+   "weights": {
+    "stock_vial_empty": 5370.05,
+    "stock_vial_with_diluent": 8348.45,
+    "dil_vial_empty": 2291.17,
+    "dil_vial_with_diluent": 3687.75,
+    "dil_vial_with_diluent_and_sample": 3777.41
+   },
+   "areas": [
+    963.7649
+   ],
+   "area_percents": [
+    99.6972
+   ],
+   "retention_times": [
+    11.836
+   ],
+   "slope": 4.729207,
+   "intercept": 40.908706,
+   "diluent_density": 997.1,
+   "expected": {
+    "quantity_mg": 9.6623,
+    "dilution_factor": 16.5764,
+    "stock_volume_ml": 2.987062,
+    "purity_percent": 99.6972,
+    "concentration_ug_ml": 195.1397
+   }
+  },
+  {
+   "id": "case-199",
+   "weights": {
+    "stock_vial_empty": 5386.19,
+    "stock_vial_with_diluent": 8360.83,
+    "dil_vial_empty": 2293.86,
+    "dil_vial_with_diluent": 3706.33,
+    "dil_vial_with_diluent_and_sample": 3795.86
+   },
+   "areas": [
+    1157.7494
+   ],
+   "area_percents": [
+    99.2851
+   ],
+   "retention_times": [
+    5.515
+   ],
+   "slope": 5.502741,
+   "intercept": 12.241879,
+   "diluent_density": 997.1,
+   "expected": {
+    "quantity_mg": 10.4188,
+    "dilution_factor": 16.776499,
+    "stock_volume_ml": 2.983292,
+    "purity_percent": 99.2851,
+    "concentration_ug_ml": 208.1704
+   }
+  },
+  {
+   "id": "case-200",
+   "weights": {
+    "stock_vial_empty": 5514.13,
+    "stock_vial_with_diluent": 8527.16,
+    "dil_vial_empty": 2315.02,
+    "dil_vial_with_diluent": 3730.51,
+    "dil_vial_with_diluent_and_sample": 3821.7
+   },
+   "areas": [
+    1145.3072
+   ],
+   "area_percents": [
+    99.2979
+   ],
+   "retention_times": [
+    5.505
+   ],
+   "slope": 5.502741,
+   "intercept": 12.241879,
+   "diluent_density": 997.1,
+   "expected": {
+    "quantity_mg": 10.2805,
+    "dilution_factor": 16.522426,
+    "stock_volume_ml": 3.021793,
+    "purity_percent": 99.2979,
+    "concentration_ug_ml": 205.9093
+   }
+  },
+  {
+   "id": "case-201",
+   "weights": {
+    "stock_vial_empty": 5496.39,
+    "stock_vial_with_diluent": 8477.55,
+    "dil_vial_empty": 2306.36,
+    "dil_vial_with_diluent": 3734.38,
+    "dil_vial_with_diluent_and_sample": 3778.1
+   },
+   "areas": [
+    1113.4506
+   ],
+   "area_percents": [
+    99.7331
+   ],
+   "retention_times": [
+    5.53
+   ],
+   "slope": 5.502741,
+   "intercept": 12.241879,
+   "diluent_density": 997.1,
+   "expected": {
+    "quantity_mg": 20.1413,
+    "dilution_factor": 33.662855,
+    "stock_volume_ml": 2.989831,
+    "purity_percent": 99.7331,
+    "concentration_ug_ml": 200.12
+   }
+  }
+ ]
+}
