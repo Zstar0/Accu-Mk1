@@ -383,7 +383,7 @@ function QuantityChart({ trace }: { trace: QuantityTrace }) {
         </div>
         {trace.error && (
           <p className="mt-2 text-xs text-amber-400">
-            Mass {NOT_DETERMINED}: {weighingProblemText(trace.error)}
+            Mass {NOT_DETERMINED}. {weighingProblemText(trace.error)}
           </p>
         )}
       </CardContent>
@@ -545,7 +545,7 @@ function DilutionBreakdown({ trace }: { trace: DilutionTrace }) {
         </div>
         {trace.problem && (
           <p className="mt-3 text-xs text-amber-400">
-            {undeterminedLabel(trace)} {NOT_DETERMINED}: {weighingProblemText(trace.problem)}
+            {undeterminedLabel(trace)} {NOT_DETERMINED}. {weighingProblemText(trace.problem)}
           </p>
         )}
       </CardContent>

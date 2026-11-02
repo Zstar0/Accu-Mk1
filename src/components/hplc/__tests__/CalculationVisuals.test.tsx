@@ -423,7 +423,7 @@ describe('CalculationVisuals with a weighing problem', () => {
     ).toHaveLength(3)
   })
 
-  // The whole visible message, not a fragment of it: the label before the colon and the
+  // The whole visible message, not a fragment of it: the label, the full stop and the
   // sentence after it, matched in full, so a typo that changes or appends text fails.
   it.each(DILUTION_LABEL)(
     'says %s in full in every panel it can reach',
@@ -433,11 +433,11 @@ describe('CalculationVisuals with a weighing problem', () => {
         <CalculationVisuals trace={CAPTURED_ROWS[code]} />
       )
       expect(
-        screen.getByText(`Mass not determined: ${sentence}`)
+        screen.getByText(`Mass not determined. ${sentence}`)
       ).toBeInTheDocument()
       if (label) {
         expect(
-          screen.getByText(`${label} not determined: ${sentence}`)
+          screen.getByText(`${label} not determined. ${sentence}`)
         ).toBeInTheDocument()
         expect(container.textContent?.split(sentence)).toHaveLength(3)
       } else {
@@ -457,7 +457,7 @@ describe('CalculationVisuals with a weighing problem', () => {
         dilution: { ...FLAGGED_ROW_TRACE.dilution, problem: code },
       }
       const { container } = render(<CalculationVisuals trace={trace} />)
-      expect(container.textContent).toContain(`not determined: ${code}`)
+      expect(container.textContent).toContain(`not determined. ${code}`)
     }
   )
 
@@ -468,7 +468,7 @@ describe('CalculationVisuals with a weighing problem', () => {
     expect(screen.getAllByText('not determined')).toHaveLength(2)
     expect(
       screen.getByText(
-        `Dilution factor and stock volume not determined: ${PROBLEM_WORDING.stock_diluent}`
+        `Dilution factor and stock volume not determined. ${PROBLEM_WORDING.stock_diluent}`
       )
     ).toBeInTheDocument()
   })
@@ -481,7 +481,7 @@ describe('CalculationVisuals with a weighing problem', () => {
     // Undiluted concentration and mass: both need the dilution factor and stock volume.
     expect(screen.getAllByText('not determined')).toHaveLength(2)
     expect(
-      screen.getByText(`Mass not determined: ${PROBLEM_WORDING.stock_diluent}`)
+      screen.getByText(`Mass not determined. ${PROBLEM_WORDING.stock_diluent}`)
     ).toBeInTheDocument()
   })
 
@@ -546,7 +546,7 @@ describe('CalculationVisuals with no diluent density', () => {
     expect(screen.getByText('2959.75 mg')).toBeInTheDocument()
     expect(
       screen.getByText(
-        `Dilution factor and stock volume not determined: ${PROBLEM_WORDING.no_density}`
+        `Dilution factor and stock volume not determined. ${PROBLEM_WORDING.no_density}`
       )
     ).toBeInTheDocument()
   })
@@ -630,7 +630,7 @@ describe('CalculationVisuals with null masses', () => {
     // the declared volume is the stock volume. A healthy row has no problem line at all.
     expect(screen.queryByText('not determined')).not.toBeInTheDocument()
     expect(screen.getByText('not applicable')).toBeInTheDocument()
-    expect(document.body.textContent).not.toContain('not determined:')
+    expect(document.body.textContent).not.toContain('not determined.')
     expect(screen.getByText('3.0000 mL')).toBeInTheDocument()
     expect(screen.getByText('6.61×')).toBeInTheDocument()
   })
