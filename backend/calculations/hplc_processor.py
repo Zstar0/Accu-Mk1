@@ -349,7 +349,8 @@ def calculate_dilution_factor(
     only when none of the above applies:
 
         "intermediate_diluent"    its added diluent is < 0
-        "intermediate_stock"      its added stock is <= 0
+        "intermediate_stock"      its added stock is <= 0, or the two steps' factors
+                                  are finite but their product overflows
         "intermediate_unweighed"  declared, but not every weighing was made
 
     In real production data a zero or negative intermediate leg is an UNENTERED
@@ -394,7 +395,7 @@ def calculate_dilution_factor(
     if diluent_vol_ul is not None and sample_vol_ul is not None:
         total_vol_ul = diluent_vol_ul + sample_vol_ul
         dilution_factor = total_vol_ul / sample_vol_ul if sample_vol_ul > 0 else 0
-    if not _finite(dilution_factor):  # also a total that overflowed
+    if not _finite(total_vol_ul) or not _finite(dilution_factor):  # an overflowed total, either sign
         total_vol_ul = dilution_factor = None
 
     dilution_problem = None
@@ -435,6 +436,24 @@ def calculate_dilution_factor(
         elif intermediate_result["dilution_factor"] is None:
             intermediate_problem = "intermediate_unweighed"
 
+    # Total factor, stock vial to final vial. Each step is rounded to 6 places first,
+    # then the rounded steps are multiplied and the product rounded: the same order
+    # calculate_quantity's chain has always used. With no intermediate the total is the
+    # final step's factor, untouched. An intermediate problem leaves the final factor
+    # in place and nulls the total alone.
+    final_factor = None if dilution_problem else round(dilution_factor, 6)
+    total = final_factor
+    if intermediate_result is not None:
+        step = intermediate_result["dilution_factor"]
+        total = None if final_factor is None or step is None else round(step * final_factor, 6)
+        if total is not None and not _finite(total):
+            # Two finite factors whose product overflows (a sample leg a hair above
+            # zero on both vials). Neither step is wrong on its own, so both stay and
+            # only the total is lost, as for any intermediate problem; the code is the
+            # intermediate's stock leg, the near-zero added stock that makes the factor.
+            total = None
+            intermediate_problem = "intermediate_stock"
+
     # Appended last, so a row with no intermediate reports what it always did and an
     # intermediate never displaces an existing problem.
     problem = stock_problem or dilution_problem or intermediate_problem
@@ -445,21 +464,12 @@ def calculate_dilution_factor(
         "sample_mass_mg": _round_or_none(sample_mass_mg if _finite(sample_mass_mg) else None, 4),
         "sample_vol_ul": _round_or_none(sample_vol_ul, 4),
         "total_vol_ul": _round_or_none(total_vol_ul, 4),
-        "dilution_factor": None if dilution_problem else round(dilution_factor, 6),
+        "dilution_factor": final_factor,
         "stock_mass_mg": _round_or_none(stock_mass_mg if _finite(stock_mass_mg) else None, 4),
         "stock_volume_ml": None if stock_problem else round(stock_vol_ml, 6),
         "problem": problem,
     }
 
-    # Total factor, stock vial to final vial. Each step is already rounded to 6
-    # places above, so multiply the rounded steps and round the product: the same
-    # order calculate_quantity's chain has always used. With no intermediate the
-    # total is the final step's factor, untouched. An intermediate problem leaves the
-    # final factor in place and nulls the total alone.
-    total = result["dilution_factor"]
-    if intermediate_result is not None:
-        step = intermediate_result["dilution_factor"]
-        total = None if total is None or step is None else round(step * total, 6)
     result["dilution_factor_total"] = total
     result["intermediate"] = intermediate_result
     return result

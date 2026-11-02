@@ -607,7 +607,7 @@ def test_calculate_dilution_factor_reaches_the_declared_volume_for_a_liquid_row(
 
 # ---- Task 4: the per-form routing inside calculate_dilution_factor ------------
 
-def test_the_default_form_is_powder_and_the_form_changes_only_the_stock_volume():
+def test_the_default_form_is_powder_and_the_forms_differ_only_in_the_stock_leg():
     default = calculate_dilution_factor(FORWARD_WEIGHTS, DENSITY)
     assert default == calculate_dilution_factor(FORWARD_WEIGHTS, DENSITY, form="powder")
     liquid = calculate_dilution_factor(FORWARD_WEIGHTS, DENSITY, form="liquid", declared_volume_ml=3.0)
@@ -987,3 +987,98 @@ def test_a_weighed_form_with_a_blank_stock_weighing_says_stock_diluent(form, fie
 def test_a_blank_stock_weighing_does_not_make_a_liquid_row_a_problem():
     w = replace(FORWARD_WEIGHTS, stock_vial_empty=None, stock_vial_with_diluent=None)
     assert stock_volume_ml("liquid", w, DENSITY, declared_volume_ml=3.0) == (3.0, None)
+
+
+# ---- Task 4: the total itself must be a number --------------------------------
+#
+# Each step's factor can be finite and their product not. A huge tare keeps the
+# diluent volume enormous and a sample leg a hair above zero (a tech entering nearly
+# the same value twice) keeps the factor enormous: about 4.4e305 per vial here, so
+# the total would be inf with problem None, and the stored trace would not survive
+# strict JSON.
+_HUGE_FACTOR_FINAL = replace(
+    FORWARD_WEIGHTS,
+    dil_vial_empty=-1e290, dil_vial_with_diluent=0.0, dil_vial_with_diluent_and_sample=2.3e-16,
+)
+_HUGE_FACTOR_INTERMEDIATE = IntermediateWeights(
+    int_vial_empty=-1e290, int_vial_with_diluent=0.0, int_vial_with_diluent_and_sample=2.3e-16
+)
+
+
+def test_a_total_that_overflows_from_two_finite_steps_is_a_problem_not_infinity():
+    d = calculate_dilution_factor(_HUGE_FACTOR_FINAL, DENSITY, intermediate=_HUGE_FACTOR_INTERMEDIATE)
+    # The premise: both steps really are finite and their product really is not.
+    assert math.isfinite(d["dilution_factor"]) and math.isfinite(d["intermediate"]["dilution_factor"])
+    assert math.isinf(d["dilution_factor"] * d["intermediate"]["dilution_factor"])
+    # The intermediate row of the table: the total alone is null, the good numbers stay.
+    assert d["problem"] == "intermediate_stock"
+    assert d["dilution_factor_total"] is None
+    assert d["stock_volume_ml"] == calculate_dilution_factor(FORWARD_WEIGHTS, DENSITY)["stock_volume_ml"]
+    json.dumps(d, allow_nan=False)
+
+
+def test_a_total_that_overflows_gives_no_quantity():
+    inp = _input_from(FORWARD_CASE)
+    result = process_hplc_analysis(
+        replace(inp, weights=_HUGE_FACTOR_FINAL, intermediate=_HUGE_FACTOR_INTERMEDIATE)
+    )
+    assert result["quantity_mg"] is None
+    assert result["calculation_trace"]["quantity"]["error"] == "intermediate_stock"
+    json.dumps(result, allow_nan=False)
+
+
+def test_a_huge_but_finite_total_is_not_mistaken_for_an_overflow():
+    # One huge step beside an ordinary one multiplies to a finite total: no problem.
+    d = calculate_dilution_factor(_HUGE_FACTOR_FINAL, DENSITY, intermediate=INT_WEIGHTS)
+    assert d["problem"] is None
+    assert math.isfinite(d["dilution_factor_total"]) and d["dilution_factor_total"] > 1e300
+
+
+def test_a_negative_total_volume_that_overflows_is_none_not_minus_infinity():
+    # Found by the sweep below. Both volumes are finite and negative (a backwards
+    # weighing), their sum is -inf, and the dilution factor is 0 because the sample
+    # volume is not positive, so a check on the factor alone missed the total volume.
+    w = replace(
+        FORWARD_WEIGHTS,
+        dil_vial_empty=1e308, dil_vial_with_diluent=-5e-324, dil_vial_with_diluent_and_sample=-1e308,
+    )
+    d = calculate_dilution_factor(w, DENSITY)
+    assert d["problem"] == "diluent"
+    assert d["total_vol_ul"] is None
+    json.dumps(d, allow_nan=False)
+
+
+# A seeded sweep over the whole input space, so the next site in this class is found by
+# the suite and not by a reviewer: every weighing, the density, the form and the
+# declared volume drawn from values that include None, NaN, infinity, zero, a negative,
+# a denormal and the edges of the float range. Whatever is drawn, the engine must not
+# raise, must not put a NaN or infinity anywhere in the trace (strict JSON), and must
+# hold the invariant that a problem is set exactly when the stock volume or the total
+# factor is missing.
+_SWEEP_VALUES = [
+    0.0, 1e-300, 2.3e-16, 1e-320, 5e-324, -5e-324, 1.0, -1.0, 1234.5, 2959.75,
+    1e290, -1e290, 1e308, -1e308, 1.7e308, math.nan, math.inf, -math.inf, None,
+]
+_SWEEP_DENSITIES = [997.1, 1034.72, 500.0, 1e-5, 1e-310, 5e-324, 1e300, 0.0, -997.1, math.nan, math.inf, None]
+_SWEEP_DECLARED = [None, 0.0, -3.0, 3.0, 1e308, 5e-324, math.nan, math.inf]
+
+
+def test_no_input_makes_the_dilution_raise_or_leak_a_non_finite_number():
+    import random
+
+    rng = random.Random(20261102)
+    failures = []
+    for _ in range(40_000):
+        w = WeightInputs(*(rng.choice(_SWEEP_VALUES) for _ in range(5)))
+        inter = None if rng.random() < 0.5 else IntermediateWeights(*(rng.choice(_SWEEP_VALUES) for _ in range(3)))
+        args = (w, rng.choice(_SWEEP_DENSITIES), inter)
+        kwargs = {"form": rng.choice(PREP_FORMS), "declared_volume_ml": rng.choice(_SWEEP_DECLARED)}
+        try:
+            d = calculate_dilution_factor(*args, **kwargs)
+            json.dumps(d, allow_nan=False)
+            has_numbers = d["stock_volume_ml"] is not None and d["dilution_factor_total"] is not None
+            if (d["problem"] is None) != has_numbers:
+                failures.append(("invariant", args, kwargs))
+        except Exception as error:  # noqa: BLE001 - the point is that nothing may escape
+            failures.append((repr(error)[:80], args, kwargs))
+    assert failures == []
