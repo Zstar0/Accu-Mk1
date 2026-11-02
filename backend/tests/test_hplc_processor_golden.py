@@ -31,15 +31,19 @@ from scripts.capture_hplc_golden import input_from_case as _input_from
 FIXTURES = Path(__file__).parent / "fixtures"
 GOLDEN = json.loads((FIXTURES / "hplc_engine_golden.json").read_text(encoding="utf-8"))
 
-# The comparison below is driven by each case's own `expected` dict, so a case
-# with an empty `expected`, or a recapture that drops a key, would pass silently.
-assert all(
-    {"quantity_mg", "dilution_factor", "stock_volume_ml", "purity_percent", "concentration_ug_ml"}
-    <= set(c["expected"])
-    for c in GOLDEN["cases"]
-), "every golden case must carry all five expected keys"
-
 FLAGGED = set(GOLDEN["flagged"])
+
+EXPECTED_KEYS = {"quantity_mg", "dilution_factor", "stock_volume_ml", "purity_percent", "concentration_ug_ml"}
+
+# What the engine reported for every row in `flagged` BEFORE Task 2: exactly
+# 0.0 mg (all five, in the 2026-11-02 pre-change capture), from a zero or
+# negative leg. It is a literal here and NOT read from the fixture on purpose:
+# a recapture runs today's engine, which rewrites each flagged case's own
+# expected["quantity_mg"] to None, and the positional case ids renumber on
+# every recapture, so neither the fixture nor anything keyed by id can carry
+# this. This constant is the repo's only record that these rows ever printed
+# a number.
+SUPERSEDED_QUANTITY_MG = 0.0
 
 
 def _case(case_id):
@@ -61,12 +65,12 @@ def test_rows_with_impossible_weighings_now_refuse(case_id):
     # The one deliberate break from the pin (Task 2): these rows used to produce
     # a garbage number from a zero or negative leg and now give None. Every one
     # is a prod row whose reported quantity changes, so the count goes in the
-    # sign-off. The fixture's `expected` still holds what the old engine gave.
+    # sign-off. Asserts only the NEW behaviour, which survives a recapture; what
+    # the rows used to report is SUPERSEDED_QUANTITY_MG above.
     case = _case(case_id)
     result = process_hplc_analysis(_input_from(case))
-    assert result["quantity_mg"] is None
+    assert result["quantity_mg"] is None, f"used to report {SUPERSEDED_QUANTITY_MG} mg"
     assert result["calculation_trace"]["dilution"]["problem"] is not None
-    assert case["expected"]["quantity_mg"] is not None   # it used to produce a number
     # Nothing that does not depend on the weighings changes: the sign-off is
     # quantity, dilution factor and stock volume only.
     assert result["concentration_ug_ml"] == case["expected"]["concentration_ug_ml"]
@@ -84,6 +88,21 @@ def test_rows_with_impossible_weighings_now_refuse(case_id):
     assert (rebuilt["areas"], rebuilt["slope"], rebuilt["intercept"]) == (
         case["areas"], case["slope"], case["intercept"]
     )
+
+
+def test_exactly_five_prod_rows_change_their_reported_quantity():
+    # The count that goes into the sign-off, pinned. It also guards the
+    # parametrize above, which silently collects zero tests if `flagged` is empty.
+    # A recapture that finds more (or fewer) flagged rows must update this on
+    # purpose, with the sign-off.
+    assert len(GOLDEN["flagged"]) == 5
+
+
+def test_every_golden_case_carries_all_five_expected_keys():
+    # The main comparison is driven by each case's own `expected`, so a case with
+    # an empty `expected`, or a recapture that drops a key, would pass silently.
+    missing = {c["id"]: sorted(EXPECTED_KEYS - set(c["expected"])) for c in GOLDEN["cases"]}
+    assert {cid: keys for cid, keys in missing.items() if keys} == {}
 
 
 def test_golden_fixture_is_not_empty():

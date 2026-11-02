@@ -102,6 +102,20 @@ def test_negative_added_stock_is_flagged():
     assert calculate_dilution_factor(w, 997.1)["problem"] == "stock"
 
 
+def test_when_several_problems_apply_the_stock_leg_is_reported_first():
+    # Three of the five flagged prod rows have all three legs at 0.0, so both
+    # "stock_diluent" and "stock" apply; swapping the operands of the precedence
+    # would change which code those rows report.
+    all_zero_legs = WeightInputs(1.0, 1.0, 1.0, 1.0, 1.0)
+    assert calculate_dilution_factor(all_zero_legs, DENSITY)["problem"] == "stock_diluent"
+    # With the stock leg fine, a negative added diluent outranks a zero added stock.
+    empty = FORWARD_WEIGHTS.dil_vial_empty
+    diluent_then_stock = replace(
+        FORWARD_WEIGHTS, dil_vial_with_diluent=empty - 1, dil_vial_with_diluent_and_sample=empty - 1
+    )
+    assert calculate_dilution_factor(diluent_then_stock, DENSITY)["problem"] == "diluent"
+
+
 def test_a_problem_nulls_both_derived_values_and_keeps_the_audit_keys():
     ok = calculate_dilution_factor(FORWARD_WEIGHTS, DENSITY)
     bad = calculate_dilution_factor(

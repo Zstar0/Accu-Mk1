@@ -44,7 +44,106 @@ const PROBLEM_QUANTITY = {
   calibration_intercept: 0.5,
 }
 
+// The whole trace of a real flagged row: all four sections at once. Captured
+// from process_hplc_analysis on a single-injection prod-shaped row with the
+// stock vial weighing zeroed and a reference RT set, not hand-built.
+const FLAGGED_ROW_TRACE = {
+  dilution: {
+    diluent_mass_mg: 1493.4127,
+    diluent_vol_ul: 1497.7562,
+    sample_mass_mg: 2.2373,
+    sample_vol_ul: 2.2438,
+    total_vol_ul: 1500.0,
+    dilution_factor: null,
+    stock_mass_mg: 0.0,
+    stock_volume_ml: null,
+    problem: 'stock_diluent',
+  },
+  purity: {
+    purity_percent: 99.8821,
+    individual_values: [99.8821],
+    injection_names: [''],
+    rsd_percent: null,
+  },
+  quantity: {
+    quantity_mg: null,
+    error: 'stock_diluent',
+    individual_areas: [1125.3809],
+    avg_main_peak_area: 1125.3809,
+    concentration_ug_ml: 73.4453,
+    calibration_slope: 15.782452,
+    calibration_intercept: -33.766783,
+  },
+  identity: {
+    conforms: true,
+    sample_rt: 1.303,
+    reference_rt: 1.253,
+    rt_delta: 0.05,
+    rt_tolerance: 0.5,
+    individual_rts: [1.303],
+    reference_source: 'calibration_curve',
+    reference_source_id: null,
+    calibration_curve_rt: 1.253,
+  },
+}
+
+// The wording a tech reads for each problem code, exactly. A typo in any entry
+// of WEIGHING_PROBLEM_TEXT, or a code that falls back to its raw name, fails here.
+const PROBLEM_WORDING: [string, string][] = [
+  [
+    'stock_diluent',
+    'The stock vial weighing is missing, or not heavier than the empty vial.',
+  ],
+  [
+    'diluent',
+    'The dilution vial with diluent weighs less than the empty vial.',
+  ],
+  [
+    'stock',
+    'The dilution vial with sample weighs no more than the vial with diluent.',
+  ],
+]
+
 describe('CalculationVisuals with a weighing problem', () => {
+  it('renders every section of a real flagged row without throwing', () => {
+    expect(() =>
+      render(<CalculationVisuals trace={FLAGGED_ROW_TRACE} />)
+    ).not.toThrow()
+    // Dilution factor, stock volume, undiluted concentration, mass.
+    expect(screen.getAllByText('not determined')).toHaveLength(4)
+    // The sections that do not depend on the weighings are all still there.
+    expect(screen.getByText('Dilution & Stock Prep')).toBeInTheDocument()
+    expect(screen.getByText('Sample on Calibration Curve')).toBeInTheDocument()
+    expect(screen.getByText('73.45 µg/mL')).toBeInTheDocument()
+    expect(screen.getByText('Purity per Injection')).toBeInTheDocument()
+    expect(screen.getByText(/Retention Time Match/)).toBeInTheDocument()
+    // One reason line per panel that cannot show a number.
+    expect(
+      document.body.textContent?.split('stock vial weighing is missing')
+    ).toHaveLength(3)
+  })
+
+  it.each(PROBLEM_WORDING)(
+    'explains %s in the dilution panel and the quantity panel',
+    (code, sentence) => {
+      const trace = {
+        ...FLAGGED_ROW_TRACE,
+        dilution: { ...FLAGGED_ROW_TRACE.dilution, problem: code },
+        quantity: { ...FLAGGED_ROW_TRACE.quantity, error: code },
+      }
+      const { container } = render(<CalculationVisuals trace={trace} />)
+      expect(container.textContent?.split(sentence)).toHaveLength(3)
+    }
+  )
+
+  it('falls back to the raw code for a problem it has no wording for', () => {
+    const trace = {
+      dilution: { ...FLAGGED_ROW_TRACE.dilution, problem: 'made_up_code' },
+    }
+    const { container } = render(<CalculationVisuals trace={trace} />)
+    expect(container.textContent).toContain('not determined: made_up_code')
+  })
+
   it('shows the dilution factor and stock volume as not determined, with the reason', () => {
     expect(() =>
       render(<CalculationVisuals trace={{ dilution: PROBLEM_DILUTION }} />)
