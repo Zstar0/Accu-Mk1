@@ -1042,25 +1042,95 @@ def test_a_negative_total_volume_that_overflows_is_none_not_minus_infinity():
         FORWARD_WEIGHTS,
         dil_vial_empty=1e308, dil_vial_with_diluent=-5e-324, dil_vial_with_diluent_and_sample=-1e308,
     )
+    diluent_vol = (w.dil_vial_with_diluent - w.dil_vial_empty) / DENSITY * 1000
+    sample_vol = (w.dil_vial_with_diluent_and_sample - w.dil_vial_with_diluent) / DENSITY * 1000
+    # The premise: both volumes are finite and negative, and their sum really is -inf.
+    assert math.isfinite(diluent_vol) and math.isfinite(sample_vol)
+    assert diluent_vol < 0 and sample_vol < 0 and diluent_vol + sample_vol == -math.inf
     d = calculate_dilution_factor(w, DENSITY)
     assert d["problem"] == "diluent"
     assert d["total_vol_ul"] is None
     json.dumps(d, allow_nan=False)
 
 
-# A seeded sweep over the whole input space, so the next site in this class is found by
-# the suite and not by a reviewer: every weighing, the density, the form and the
-# declared volume drawn from values that include None, NaN, infinity, zero, a negative,
-# a denormal and the edges of the float range. Whatever is drawn, the engine must not
-# raise, must not put a NaN or infinity anywhere in the trace (strict JSON), and must
-# hold the invariant that a problem is set exactly when the stock volume or the total
-# factor is missing.
+# Property checks over the input space, in three layers that promise DIFFERENT things.
+#
+# 1. Adversarial draws (seeded): every weighing, the density, the form and the declared
+#    volume from values that include None, NaN, infinity, zero, a negative, a denormal
+#    and the edges of the float range. This finds problems on the refusal paths and
+#    single-leg sites. It does NOT promise to find a condition that needs both vials to
+#    be extreme at once: about a fifth of the weighing values and more than half the
+#    densities are refusals, so most draws exit early, and a two-vial joint condition
+#    (the product of two huge factors overflowing) is reached by about 2 draws in
+#    40,000. Reordering the rng calls or editing a value list can silently lose it.
+# 2. A finite-only stratum (seeded): about 15 finite values, ordinary densities, and an
+#    intermediate always present, so a total is computed far more often. It asserts its
+#    own coverage, so it cannot decay unnoticed.
+# 3. A deterministic grid of extreme vials: tare, diluent leg and sample leg at their
+#    extremes on BOTH vials, as a plain loop. This is the layer that guarantees the
+#    two-vial joint conditions, and it asserts that it reaches them.
+#
+# Every layer checks the same promises. The engine does not raise. The trace survives
+# strict JSON (no NaN or infinity anywhere). A problem is set exactly when the stock
+# volume or the total factor is missing. And the total is what it should be: never
+# present without a final factor, equal to the final factor when there is no
+# intermediate, else round(step * final, 6). The per-leg tests above pin which leg
+# nulls which value; these catch what no one thought to write a test for.
 _SWEEP_VALUES = [
     0.0, 1e-300, 2.3e-16, 1e-320, 5e-324, -5e-324, 1.0, -1.0, 1234.5, 2959.75,
     1e290, -1e290, 1e308, -1e308, 1.7e308, math.nan, math.inf, -math.inf, None,
 ]
 _SWEEP_DENSITIES = [997.1, 1034.72, 500.0, 1e-5, 1e-310, 5e-324, 1e300, 0.0, -997.1, math.nan, math.inf, None]
 _SWEEP_DECLARED = [None, 0.0, -3.0, 3.0, 1e308, 5e-324, math.nan, math.inf]
+
+_FINITE_VALUES = [
+    0.0, 1e-300, 2.3e-16, 1.0, -1.0, 1234.5, 2959.75, 1e-100, 1e100, 1e290, -1e290,
+    1e308, -1e308, 1.7e308, 5e-324,
+]
+_FINITE_DENSITIES = [997.1, 1034.72, 500.0, 1100.0]
+_FINITE_DECLARED = [3.0, 30.0]
+
+# Leg masses (mg) for the grid. A vial is built as (-diluent leg, 0.0, sample leg), so the
+# two legs are exactly these values whatever their size.
+_GRID_LEGS = [0.0, 5e-324, 1e-300, 2.3e-16, 1.0, 1234.5, 1e290, 1.7e308, -1.0, -1.7e308]
+
+
+def _vial(diluent_leg, sample_leg):
+    return -diluent_leg, 0.0, sample_leg
+
+
+def _dilution_failure(args, kwargs):
+    """(why this call breaks an engine promise or None, the result or None)."""
+    try:
+        d = calculate_dilution_factor(*args, **kwargs)
+        json.dumps(d, allow_nan=False)
+    except Exception as error:  # noqa: BLE001 - the point is that nothing may escape
+        return (repr(error)[:80], args, kwargs), None
+    factor, total = d["dilution_factor"], d["dilution_factor_total"]
+    step = None if d["intermediate"] is None else d["intermediate"]["dilution_factor"]
+    if (d["problem"] is None) != (d["stock_volume_ml"] is not None and total is not None):
+        return ("problem and values disagree", args, kwargs), d
+    if total is not None and factor is None:
+        return ("a total without a factor", args, kwargs), d
+    if d["intermediate"] is None and total != factor:
+        return ("no intermediate, but total != factor", args, kwargs), d
+    if d["intermediate"] is not None and total is not None and total != round(step * factor, 6):
+        return ("total != round(step * final, 6)", args, kwargs), d
+    return None, d
+
+
+def _product_line(d):
+    """(both step factors exist, so a total is computed; their product overflows)."""
+    step = None if d is None or d["intermediate"] is None else d["intermediate"]["dilution_factor"]
+    reached = d is not None and d["dilution_factor"] is not None and step is not None
+    return reached, reached and math.isinf(d["dilution_factor"] * step)
+
+
+def _total_volume_overflows(w, density):
+    """Both dilution volumes are finite but their sum is not (independent arithmetic)."""
+    diluent_vol = (w.dil_vial_with_diluent - w.dil_vial_empty) / density * 1000
+    sample_vol = (w.dil_vial_with_diluent_and_sample - w.dil_vial_with_diluent) / density * 1000
+    return math.isfinite(diluent_vol) and math.isfinite(sample_vol) and not math.isfinite(diluent_vol + sample_vol)
 
 
 def test_no_input_makes_the_dilution_raise_or_leak_a_non_finite_number():
@@ -1073,12 +1143,52 @@ def test_no_input_makes_the_dilution_raise_or_leak_a_non_finite_number():
         inter = None if rng.random() < 0.5 else IntermediateWeights(*(rng.choice(_SWEEP_VALUES) for _ in range(3)))
         args = (w, rng.choice(_SWEEP_DENSITIES), inter)
         kwargs = {"form": rng.choice(PREP_FORMS), "declared_volume_ml": rng.choice(_SWEEP_DECLARED)}
-        try:
-            d = calculate_dilution_factor(*args, **kwargs)
-            json.dumps(d, allow_nan=False)
-            has_numbers = d["stock_volume_ml"] is not None and d["dilution_factor_total"] is not None
-            if (d["problem"] is None) != has_numbers:
-                failures.append(("invariant", args, kwargs))
-        except Exception as error:  # noqa: BLE001 - the point is that nothing may escape
-            failures.append((repr(error)[:80], args, kwargs))
+        failure, _ = _dilution_failure(args, kwargs)
+        if failure:
+            failures.append(failure)
     assert failures == []
+
+
+def test_the_same_promises_hold_on_a_finite_only_stratum_that_reaches_the_total():
+    import random
+
+    rng = random.Random(20261103)
+    failures, reached, overflowed = [], 0, 0
+    for _ in range(40_000):
+        w = WeightInputs(*(rng.choice(_FINITE_VALUES) for _ in range(5)))
+        inter = IntermediateWeights(*(rng.choice(_FINITE_VALUES) for _ in range(3)))
+        args = (w, rng.choice(_FINITE_DENSITIES), inter)
+        kwargs = {"form": rng.choice(PREP_FORMS), "declared_volume_ml": rng.choice(_FINITE_DECLARED)}
+        failure, d = _dilution_failure(args, kwargs)
+        if failure:
+            failures.append(failure)
+        line, over = _product_line(d)
+        reached += line
+        overflowed += over
+    assert failures == []
+    # The coverage this stratum exists for. Measured: 756 and 22; the floors leave room
+    # for a different Python's random.choice, and fail loudly if an edit starves it.
+    assert reached >= 300 and overflowed >= 8, (reached, overflowed)
+
+
+def test_the_same_promises_hold_on_a_grid_of_extreme_vials():
+    import itertools
+
+    base_stock = (0.0, 2959.75)  # a sound stock vial, so the dilution vials are the variable
+    failures, reached, product_overflows, volume_overflows = [], 0, 0, 0
+    intermediates = [IntermediateWeights(*_vial(d, s)) for d, s in itertools.product(_GRID_LEGS, _GRID_LEGS)]
+    for (fd, fs), density in itertools.product(itertools.product(_GRID_LEGS, _GRID_LEGS), (997.1, 1e-5)):
+        w = WeightInputs(*base_stock, *_vial(fd, fs))
+        volume_overflows += _total_volume_overflows(w, density)
+        for inter in [None, *intermediates]:
+            failure, d = _dilution_failure((w, density, inter), {})
+            if failure:
+                failures.append(failure)
+            line, over = _product_line(d)
+            reached += line
+            product_overflows += over
+    assert failures == []
+    # The guarantee: every two-vial joint condition is reached, on every run. Measured at
+    # a few hundred product overflows over several thousand reached totals.
+    assert reached >= 1000 and product_overflows >= 50, (reached, product_overflows)
+    assert volume_overflows >= 1
