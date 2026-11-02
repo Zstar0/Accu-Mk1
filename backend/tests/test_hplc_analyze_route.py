@@ -46,7 +46,7 @@ from main import (
     get_db,
     run_hplc_analysis,
 )
-from models import CalibrationCurve, HPLCAnalysis, Peptide
+from models import CalibrationCurve, HPLCAnalysis, Instrument, Peptide
 
 STOCK = {"stock_vial_empty": 10000.0, "stock_vial_with_diluent": 13000.0}  # 3000 mg of diluent
 DILUTION = {
@@ -654,3 +654,141 @@ def test_the_column_check_passes_only_when_every_column_is_there_and_nullable():
     assert evaluate({**everything, "stock_vial_empty": ("double precision", "NO")})[1] == 1
     # Nothing at all (wrong database, or the table is gone):
     assert evaluate({})[1] == len(EXPECTED)
+
+
+# ---- a hand-picked curve must be from the run's instrument --------------------------
+#
+# A curve maps area to concentration for the instrument that produced it. Another
+# instrument's curve scales every quantity by the ratio of the two slopes, errors nowhere,
+# and prints: four published COAs carried exactly that. The gate fires only when the
+# request names an instrument (NewAnalysis.tsx sends none), and it refuses; it never
+# substitutes the right curve, because a stopped run is recoverable and a certificate is not.
+
+# The `api` fixture seeds one active curve with slope 10 and NO instrument. Every curve made
+# here has slope 20, so concentration says which curve the engine used: 1000 / 20 = 50.
+OTHER_SLOPE_CONC_UG_ML = 50.0
+
+
+def _two_instruments(api):
+    with api.Session() as s:
+        a, b = Instrument(name="HPLC-A"), Instrument(name="HPLC-B")
+        s.add_all([a, b])
+        s.commit()
+        return a.id, b.id
+
+
+def _curve(api, instrument_id, is_active=True):
+    with api.Session() as s:
+        curve = CalibrationCurve(
+            peptide_id=api.peptide_id, slope=20.0, intercept=0.0, r_squared=0.999, is_active=is_active,
+            reference_rt=10.0, rt_tolerance=0.5, diluent_density=DENSITY, instrument_id=instrument_id,
+        )
+        s.add(curve)
+        s.commit()
+        return curve.id
+
+
+def _seeded_curve_id(api):
+    with api.Session() as s:
+        return s.scalar(select(CalibrationCurve.id).where(CalibrationCurve.instrument_id.is_(None)))
+
+
+def test_a_hand_picked_curve_from_another_instrument_is_refused_naming_all_three(api):
+    a, b = _two_instruments(api)
+    on_b = _curve(api, b)
+    r = _post(api, calibration_curve_id=on_b, instrument_id=a)
+    assert r.status_code == 400, r.text
+    assert r.json()["detail"] == (
+        f"Calibration curve {on_b} belongs to instrument 'HPLC-B' (id {b}), but this run is on "
+        f"instrument 'HPLC-A' (id {a}). A curve is specific to the instrument that produced it. "
+        "Pick a curve filed under the run's instrument."
+    )
+    assert _row_count(api) == 0
+
+
+def test_the_refusal_does_not_substitute_the_right_curve(api):
+    # A correct, active curve for the run's instrument exists. A helpful fallback to it
+    # would return 201 and hide the tech's mistake; the run must stop instead.
+    a, b = _two_instruments(api)
+    _curve(api, a)
+    on_b = _curve(api, b)
+    r = _post(api, calibration_curve_id=on_b, instrument_id=a)
+    assert r.status_code == 400, r.text
+    assert _row_count(api) == 0
+
+
+def test_a_hand_picked_curve_on_the_run_instrument_is_used(api):
+    a, b = _two_instruments(api)
+    on_a = _curve(api, a)
+    _curve(api, b)
+    r = _post(api, calibration_curve_id=on_a, instrument_id=a)
+    assert r.status_code == 201, r.text
+    body = r.json()
+    assert body["calibration_curve_id"] == on_a and body["instrument_id"] == a
+    assert body["concentration_ug_ml"] == OTHER_SLOPE_CONC_UG_ML
+
+
+def test_a_hand_picked_inactive_curve_on_the_run_instrument_is_still_accepted(api):
+    # The gate is about whose curve it is, not whether it is starred: picking an older
+    # curve by hand is what the explicit id is for.
+    a, _ = _two_instruments(api)
+    old = _curve(api, a, is_active=False)
+    r = _post(api, calibration_curve_id=old, instrument_id=a)
+    assert r.status_code == 201, r.text
+    assert r.json()["calibration_curve_id"] == old
+
+
+def test_a_hand_picked_curve_with_no_instrument_is_refused_when_the_run_has_one(api):
+    # The column is nullable, so a curve can be filed without an instrument. NULL must not
+    # compare as a match: it cannot be shown to belong to the run's instrument.
+    a, _ = _two_instruments(api)
+    seeded = _seeded_curve_id(api)
+    r = _post(api, calibration_curve_id=seeded, instrument_id=a)
+    assert r.status_code == 400, r.text
+    assert r.json()["detail"] == (
+        f"Calibration curve {seeded} has no instrument, so it cannot be shown to belong to this "
+        f"run's instrument 'HPLC-A' (id {a}). Pick a curve filed under the run's instrument."
+    )
+    assert _row_count(api) == 0
+
+
+def test_the_refusal_names_a_run_instrument_that_has_no_row(api):
+    # A stale or foreign id: the id is still printed, with no name to go with it.
+    _, b = _two_instruments(api)
+    on_b = _curve(api, b)
+    r = _post(api, calibration_curve_id=on_b, instrument_id=999)
+    assert r.status_code == 400, r.text
+    assert "instrument 'HPLC-B' (id %d)" % b in r.json()["detail"]
+    assert "instrument id 999" in r.json()["detail"]
+
+
+@pytest.mark.parametrize("filed_under", ["an_instrument", "no_instrument"])
+def test_a_hand_picked_curve_is_still_accepted_when_the_request_names_no_instrument(api, filed_under):
+    # NewAnalysis.tsx:531 sends sample_id_label, peptide_id, a curve id and NO instrument,
+    # because the ad-hoc screen has no run instrument to compare against. If the gate went
+    # unconditional this is the screen that would break on the first deploy.
+    a, _ = _two_instruments(api)
+    curve_id = _curve(api, a) if filed_under == "an_instrument" else _seeded_curve_id(api)
+    r = _post(api, sample_id_label="Unknown", weights={k: 0 for k in FIVE_WEIGHTS}, calibration_curve_id=curve_id)
+    assert r.status_code == 201, r.text
+    assert r.json()["calibration_curve_id"] == curve_id and r.json()["instrument_id"] is None
+
+
+def test_a_zero_curve_id_still_takes_the_automatic_path_and_is_not_gated(api):
+    # SamplePrepHplcFlyout.tsx:1358 sends `selectedCalId ?? 0`; 0 means "no hand-pick" and
+    # reaches the branch that already filters by instrument. It must not reach the new gate.
+    a, b = _two_instruments(api)
+    on_a = _curve(api, a)
+    _curve(api, b)
+    r = _post(api, calibration_curve_id=0, instrument_id=a)
+    assert r.status_code == 201, r.text
+    assert r.json()["calibration_curve_id"] == on_a
+
+
+def test_an_instrument_id_of_zero_is_a_named_instrument_that_matches_nothing(api):
+    # `is not None`, not truthiness: 0 is not a real id, and treating it as "no instrument"
+    # would wave through a hand-picked curve unchecked.
+    a, _ = _two_instruments(api)
+    on_a = _curve(api, a)
+    r = _post(api, calibration_curve_id=on_a, instrument_id=0)
+    assert r.status_code == 400, r.text

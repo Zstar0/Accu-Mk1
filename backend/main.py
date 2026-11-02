@@ -6956,6 +6956,12 @@ def _analysis_to_response(analysis: "HPLCAnalysis", peptide_abbreviation: str) -
     )
 
 
+def _instrument_label(db: Session, instrument_id: int) -> str:
+    """'Name' (id N), or just id N when no such instrument row exists."""
+    inst = db.get(Instrument, instrument_id)
+    return f"'{inst.name}' (id {instrument_id})" if inst else f"id {instrument_id}"
+
+
 @app.post("/hplc/analyze", response_model=HPLCAnalysisResponse, status_code=201)
 async def run_hplc_analysis(
     request: HPLCAnalyzeRequest,
@@ -6982,6 +6988,24 @@ async def run_hplc_analysis(
         ).scalar_one_or_none()
         if not cal:
             raise HTTPException(404, f"Calibration curve {request.calibration_curve_id} not found for peptide '{peptide.abbreviation}'")
+        # A curve is specific to the instrument that produced it; another instrument's curve
+        # scales the quantity by the ratio of the slopes and nothing errors. Refuse, never
+        # substitute. A curve with no instrument cannot be shown to match, so it fails closed.
+        # Only when the request names an instrument (the ad-hoc screen sends none), so a caller
+        # that omits it is still unchecked: a known, ledgered follow-up. `is not None`, not
+        # truthiness, so an id of 0 is refused rather than read as "no instrument".
+        if request.instrument_id is not None and cal.instrument_id != request.instrument_id:
+            run_inst = _instrument_label(db, request.instrument_id)
+            if cal.instrument_id is None:
+                raise HTTPException(400, (
+                    f"Calibration curve {cal.id} has no instrument, so it cannot be shown to belong to "
+                    f"this run's instrument {run_inst}. Pick a curve filed under the run's instrument."
+                ))
+            raise HTTPException(400, (
+                f"Calibration curve {cal.id} belongs to instrument {_instrument_label(db, cal.instrument_id)}, "
+                f"but this run is on instrument {run_inst}. A curve is specific to the instrument that "
+                f"produced it. Pick a curve filed under the run's instrument."
+            ))
     else:
         # Look up active curve matching the request's instrument
         cal_query = (
