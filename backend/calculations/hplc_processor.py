@@ -13,11 +13,11 @@ from typing import Optional
 @dataclass
 class WeightInputs:
     """Five balance weights entered by the lab tech."""
-    stock_vial_empty: float          # mg — vial + cap
-    stock_vial_with_diluent: float   # mg — vial + cap + diluent
-    dil_vial_empty: float            # mg — vial + cap
-    dil_vial_with_diluent: float     # mg — vial + cap + diluent
-    dil_vial_with_diluent_and_sample: float  # mg — vial + cap + diluent + sample
+    stock_vial_empty: float          # mg, vial + cap
+    stock_vial_with_diluent: float   # mg, vial + cap + diluent
+    dil_vial_empty: float            # mg, vial + cap
+    dil_vial_with_diluent: float     # mg, vial + cap + diluent
+    dil_vial_with_diluent_and_sample: float  # mg, vial + cap + diluent + sample
 
 
 @dataclass
@@ -63,7 +63,18 @@ def calculate_dilution_factor(
         DF = (diluent_vol + sample_vol) / sample_vol
         stock_vol = (stock_vial_diluent - stock_vial_empty) / 1000 [mL]
 
-    Returns dict with all intermediate values for audit trace.
+    Returns dict with all intermediate values for audit trace, plus "problem":
+    None when every weighing is usable, else which one is not. The checks are by
+    ROLE (which weighing is which), never by time order, and they are asymmetric
+    on purpose (the thresholds are calc.js's stockPrep and dilutionActual):
+
+        "stock_diluent"  stock vial leg (with diluent - empty) is <= 0
+        "diluent"        diluent added to the dilution vial is < 0
+        "stock"          stock added to the dilution vial is <= 0
+
+    Zero added diluent is a legal neat injection; zero added stock is not. When
+    several apply, the first listed wins. Under any problem "dilution_factor" and
+    "stock_volume_ml" are None, so no quantity can be computed from the row.
     """
     # Diluent volume in the dilution vial (µL)
     diluent_mass_mg = weights.dil_vial_with_diluent - weights.dil_vial_empty
@@ -77,9 +88,23 @@ def calculate_dilution_factor(
     total_vol_ul = diluent_vol_ul + sample_vol_ul
     dilution_factor = total_vol_ul / sample_vol_ul if sample_vol_ul > 0 else 0
 
-    # Stock volume (mL) — from stock vial weights, using diluent density
+    # Dilution-leg problems. Every prep form ends in a dilution vial, so these two
+    # stay here.
+    dilution_problem = None
+    if diluent_mass_mg < 0:
+        dilution_problem = "diluent"
+    elif sample_mass_mg <= 0:
+        dilution_problem = "stock"
+
+    # Stock volume (mL), from stock vial weights, using diluent density.
+    # The stock-leg problem is decided HERE and nowhere else: it is the one check
+    # that moves out when prep forms arrive (a liquid prep never weighs its stock
+    # vial, so its leg is always zero and must not be flagged).
     stock_mass_mg = weights.stock_vial_with_diluent - weights.stock_vial_empty
     stock_volume_ml = stock_mass_mg / density  # Convert mg to mL using diluent density (mg/mL)
+    stock_problem = "stock_diluent" if stock_mass_mg <= 0 else None
+
+    problem = stock_problem or dilution_problem
 
     return {
         "diluent_mass_mg": round(diluent_mass_mg, 4),
@@ -87,9 +112,10 @@ def calculate_dilution_factor(
         "sample_mass_mg": round(sample_mass_mg, 4),
         "sample_vol_ul": round(sample_vol_ul, 4),
         "total_vol_ul": round(total_vol_ul, 4),
-        "dilution_factor": round(dilution_factor, 6),
+        "dilution_factor": None if problem else round(dilution_factor, 6),
         "stock_mass_mg": round(stock_mass_mg, 4),
-        "stock_volume_ml": round(stock_volume_ml, 6),
+        "stock_volume_ml": None if problem else round(stock_volume_ml, 6),
+        "problem": problem,
     }
 
 
@@ -145,8 +171,13 @@ def calculate_quantity(
     3. Apply dilution factor: undiluted_conc = conc * DF
     4. Calculate mass: mass_mg = undiluted_conc * stock_vol / 1000
 
-    Returns quantity result with calculation trace.
+    Returns quantity result with calculation trace. A weighing problem from
+    calculate_dilution_factor gives no quantity at all, never a number computed
+    from a bad weighing.
     """
+    if dilution.get("problem"):
+        return {"quantity_mg": None, "error": dilution["problem"]}
+
     areas = []
     for inj in injections:
         main_idx = inj.get("main_peak_index", -1)
