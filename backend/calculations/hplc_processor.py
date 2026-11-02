@@ -146,8 +146,9 @@ def stock_volume_ml(
         "no_declared_volume"  liquid: no declared volume, or one that is <= 0 or not
                               finite
 
-    The weighing is checked before the density, so a bench reading is never hidden
-    behind a configuration gap. The volume is returned unrounded; the caller rounds.
+    Within this function the weighing is checked before the density, so a stock vial
+    reading is never hidden behind a configuration gap. The volume is returned
+    unrounded; the caller rounds.
     An unknown form raises ValueError naming the accepted list.
     """
     if form not in PREP_FORMS:
@@ -287,8 +288,12 @@ def calculate_dilution_factor(
     density that is None, not finite or <= 0 is "no_density" (reported by the stock
     leg for powder and bac, and by the dilution vial for every form), so a nullable
     calibration column is a reason and not a ZeroDivisionError. When several apply,
-    the first listed wins: the stock leg, then "diluent", then "stock", then
-    "no_density", then the intermediate's codes below.
+    the first listed wins: the stock leg's code (for powder and bac that includes
+    "no_density", for liquid "no_declared_volume"), then "diluent", then "stock",
+    then "no_density" from the dilution vial (which only decides a liquid row, since
+    the stock leg has already reported it for powder and bac), then the intermediate's
+    codes below. So on a powder or bac row with no usable density, "no_density"
+    outranks a bad diluent or sample leg; the row is refused either way.
 
     EACH PROBLEM NULLS ONLY WHAT IT TOUCHES, and "problem" no longer says which
     values are None:
