@@ -770,7 +770,30 @@ git commit -- backend/calculations/hplc_processor.py backend/tests/test_hplc_pro
   onward, `WeightInputs(` built at 6939, `process_hplc_analysis` called at 6957)
 - Modify: `backend/models.py` (`HPLCAnalysis` 1018)
 - Modify: `backend/database.py` (`_run_migrations` 342)
+- Modify: `backend/calculations/hplc_processor.py` (`AnalysisInput`, `process_hplc_analysis`)
+- Modify: `src/components/hplc/CalculationVisuals.tsx` and its test (the copy obligations)
 - Test: `backend/tests/test_hplc_analyze_route.py` (create)
+
+**This task is dispatched in two halves (controller ruling 2026-11-02).** They touch disjoint
+files in different languages with different risk profiles, and a reviewer can sensibly reject
+one while approving the other.
+
+- **6a, backend:** the request fields and their per-form validation, the `AnalysisInput` and
+  orchestrator wiring below, the model columns and migration, the response fields, and the
+  `rt_tolerance` guard.
+- **6b, frontend:** copy for the six problem codes, the "not applicable" distinction for a
+  liquid row's stock masses, and extending that file's problem-code test. 6b depends only on
+  the codes existing, which they already do, so it does not wait on 6a.
+
+**MISSING OBLIGATION, found while sizing this task: `form` never reaches the engine.** Task 4
+built `stock_volume_ml(form, ...)` and gave `calculate_dilution_factor` its `form` and
+`declared_volume_ml` keywords, but `AnalysisInput` has neither field and
+`process_hplc_analysis` passes only `intermediate`. The route calls the orchestrator, so
+**today every row computes as a powder no matter what a caller sends, and Task 4's per-form
+work is unreachable.** Task 4's review flagged it as Task 5 or 6 wiring and Task 5 correctly
+left it alone. So 6a adds `form: str = "powder"` and `declared_volume_ml: Optional[float] =
+None` to `AnalysisInput` and passes both through, which is also what makes the liquid and bac
+paths testable end to end for the first time.
 
 **Interfaces:**
 - Consumes: Tasks 3 to 5's engine surface.
