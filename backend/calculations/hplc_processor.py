@@ -376,6 +376,12 @@ def calculate_dilution_factor(
     has no "actual_conc_ug_ml" key. Its absence means "not computed here", not
     "unknown for this row".
 
+    "form" echoes the prep form that produced the row ("powder", "bac" or "liquid"), as
+    a fact of the row like "problem". A reader that needs to know which measurements
+    exist for the row (a liquid row has no stock vial mass) reads it here instead of
+    inferring it from which values are None. A trace stored before this key existed
+    has no "form"; that reads as a powder row, which is all there was.
+
     An unknown form raises ValueError (see stock_volume_ml).
     """
     density_ok = _finite(density) and density > 0
@@ -473,6 +479,7 @@ def calculate_dilution_factor(
         "stock_mass_mg": _round_or_none(stock_mass_mg if _finite(stock_mass_mg) else None, 4),
         "stock_volume_ml": None if stock_problem else round(stock_vol_ml, 6),
         "problem": problem,
+        "form": form,
     }
 
     result["dilution_factor_total"] = total

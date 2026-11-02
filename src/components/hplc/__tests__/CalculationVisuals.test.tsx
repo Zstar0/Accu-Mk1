@@ -94,23 +94,23 @@ const FLAGGED_ROW_TRACE = {
 // (see the fallback test).
 const PROBLEM_WORDING = {
   stock_diluent:
-    'The stock volume could not be worked out. Check the stock vial weighings: the empty vial and the vial with diluent must both be entered, and the vial with diluent must be heavier.',
+    'The stock vial weighings need checking: the empty vial and the vial with diluent must both be entered, and the vial with diluent must be heavier.',
   diluent:
-    'The dilution factor could not be worked out. Check the dilution vial weighings: the empty vial and the vial with diluent must both be entered, and the vial with diluent must not be lighter.',
+    'The dilution vial weighings need checking: the empty vial and the vial with diluent must both be entered, and the vial with diluent must not be lighter.',
   stock:
-    'The dilution factor could not be worked out. Check the dilution vial weighings: the vial with diluent and the vial with sample must both be entered, and the vial with sample must be heavier.',
+    'The dilution vial weighings need checking: the vial with diluent and the vial with sample must both be entered, and the vial with sample must be heavier.',
   intermediate_unweighed:
-    'The total dilution factor could not be worked out. Check the intermediate vial weighings: the empty vial, the vial with diluent and the vial with sample must all be entered.',
+    'The intermediate vial weighings need checking: the empty vial, the vial with diluent and the vial with sample must all be entered.',
   intermediate_diluent:
-    'The total dilution factor could not be worked out. Check the intermediate vial weighings: the vial with diluent must not be lighter than the empty vial.',
+    'The intermediate vial weighings need checking: the vial with diluent must not be lighter than the empty vial.',
   intermediate_stock:
-    'The total dilution factor could not be worked out. Check the intermediate vial weighings: the vial with sample must be heavier than the vial with diluent.',
+    'The intermediate vial weighings need checking: the vial with sample must be heavier than the vial with diluent.',
   no_density:
-    'The volumes could not be worked out because the calibration curve has no usable diluent density. This is not a weighing problem: the density needs setting on the curve.',
+    'The calibration curve has no usable diluent density. This is not a weighing problem: the density needs setting on the curve.',
   no_declared_volume:
-    'The stock volume could not be worked out because this liquid sample has no usable declared volume. This is not a weighing problem: record the volume the sample arrived in.',
+    'This liquid sample has no usable declared volume. This is not a weighing problem: record the volume the sample arrived in.',
   quantity_not_finite:
-    'The mass calculation produced a number that is not valid, so no mass is reported. This is not something to fix at the bench; it needs looking at.',
+    'The calculation produced a number that is not valid. This is not something to fix at the bench; it needs looking at.',
 }
 
 // One row per code, captured from process_hplc_analysis (not hand-built): the dilution
@@ -130,6 +130,7 @@ const CAPTURED_ROWS = {
       stock_mass_mg: 0.0,
       stock_volume_ml: null,
       problem: 'stock_diluent',
+      form: 'powder',
       dilution_factor_total: 6.613877,
       intermediate: null,
     },
@@ -154,6 +155,7 @@ const CAPTURED_ROWS = {
       stock_mass_mg: 2959.75,
       stock_volume_ml: 2.968358,
       problem: 'diluent',
+      form: 'powder',
       dilution_factor_total: null,
       intermediate: null,
     },
@@ -178,6 +180,7 @@ const CAPTURED_ROWS = {
       stock_mass_mg: 2959.75,
       stock_volume_ml: 2.968358,
       problem: 'stock',
+      form: 'powder',
       dilution_factor_total: null,
       intermediate: null,
     },
@@ -202,6 +205,7 @@ const CAPTURED_ROWS = {
       stock_mass_mg: 2959.75,
       stock_volume_ml: null,
       problem: 'no_density',
+      form: 'powder',
       dilution_factor_total: null,
       intermediate: null,
     },
@@ -226,6 +230,7 @@ const CAPTURED_ROWS = {
       stock_mass_mg: null,
       stock_volume_ml: null,
       problem: 'no_declared_volume',
+      form: 'liquid',
       dilution_factor_total: 6.613877,
       intermediate: null,
     },
@@ -250,6 +255,7 @@ const CAPTURED_ROWS = {
       stock_mass_mg: 2959.75,
       stock_volume_ml: 2.968358,
       problem: 'intermediate_unweighed',
+      form: 'powder',
       dilution_factor_total: null,
       intermediate: {
         diluent_vol_ul: null,
@@ -280,6 +286,7 @@ const CAPTURED_ROWS = {
       stock_mass_mg: 2959.75,
       stock_volume_ml: 2.968358,
       problem: 'intermediate_diluent',
+      form: 'powder',
       dilution_factor_total: null,
       intermediate: {
         diluent_vol_ul: -100.2908,
@@ -310,6 +317,7 @@ const CAPTURED_ROWS = {
       stock_mass_mg: 2959.75,
       stock_volume_ml: 2.968358,
       problem: 'intermediate_stock',
+      form: 'powder',
       dilution_factor_total: null,
       intermediate: {
         diluent_vol_ul: 100.2908,
@@ -340,6 +348,7 @@ const CAPTURED_ROWS = {
       stock_mass_mg: 2959.75,
       stock_volume_ml: 2.968358,
       problem: null,
+      form: 'powder',
       dilution_factor_total: 6.613877,
       intermediate: null,
     },
@@ -366,6 +375,7 @@ const NON_FINITE_STOCK_ROW = {
     stock_mass_mg: null,
     stock_volume_ml: null,
     problem: 'stock_diluent',
+    form: 'powder',
     dilution_factor_total: 6.613877,
     intermediate: null,
   },
@@ -592,6 +602,7 @@ const LIQUID_DILUTION = {
   stock_mass_mg: null,
   stock_volume_ml: 3.0,
   problem: null,
+  form: 'liquid',
   dilution_factor_total: 6.613877,
   intermediate: null,
 }
@@ -637,6 +648,30 @@ describe('CalculationVisuals with null masses', () => {
     render(<CalculationVisuals trace={NON_FINITE_STOCK_ROW} />)
     // The stock vial mass, the stock volume, the undiluted concentration and the mass.
     expect(screen.getAllByText('not determined')).toHaveLength(4)
+    expect(screen.queryByText('not applicable')).not.toBeInTheDocument()
+  })
+
+  // The form is read from the trace, never guessed from which values are null. A powder
+  // row whose stock mass is null under some code other than stock_diluent (a code that
+  // does not exist today) must not start saying a measurement is inapplicable.
+  it('says not determined for a powder row with a null stock mass, whatever the problem code', () => {
+    const { dilution } = CAPTURED_ROWS.diluent
+    render(
+      <CalculationVisuals
+        trace={{ dilution: { ...dilution, stock_mass_mg: null } }}
+      />
+    )
+    // The dilution factor (this row's problem) and the stock vial mass.
+    expect(screen.getAllByText('not determined')).toHaveLength(2)
+    expect(screen.queryByText('not applicable')).not.toBeInTheDocument()
+  })
+
+  // A trace stored before the engine wrote the form was a powder row, so it stays "not
+  // determined" instead of claiming a measurement is inapplicable.
+  it('says not determined for a null stock mass on a trace that carries no form', () => {
+    const legacy = { ...LIQUID_DILUTION, form: undefined }
+    render(<CalculationVisuals trace={{ dilution: legacy }} />)
+    expect(screen.getByText('not determined')).toBeInTheDocument()
     expect(screen.queryByText('not applicable')).not.toBeInTheDocument()
   })
 

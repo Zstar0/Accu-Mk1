@@ -617,14 +617,26 @@ def test_the_default_form_is_powder_and_the_forms_differ_only_in_the_stock_leg()
     bac = calculate_dilution_factor(FORWARD_WEIGHTS, DENSITY, form="bac")
     for other in (liquid, bac):
         assert other["stock_volume_ml"] != default["stock_volume_ml"]
+    # "form" is each row's own label of which form produced it, not a difference in
+    # outcome, so it is excluded from the comparisons below and asserted per row after them.
     # Only the stock volume differs for bac; a liquid row also has no stock vial mass.
-    assert {k: v for k, v in bac.items() if k != "stock_volume_ml"} == {
-        k: v for k, v in default.items() if k != "stock_volume_ml"
+    assert {k: v for k, v in bac.items() if k not in ("stock_volume_ml", "form")} == {
+        k: v for k, v in default.items() if k not in ("stock_volume_ml", "form")
     }
     assert liquid["stock_mass_mg"] is None
-    assert {k: v for k, v in liquid.items() if k not in ("stock_volume_ml", "stock_mass_mg")} == {
-        k: v for k, v in default.items() if k not in ("stock_volume_ml", "stock_mass_mg")
+    assert {k: v for k, v in liquid.items() if k not in ("stock_volume_ml", "stock_mass_mg", "form")} == {
+        k: v for k, v in default.items() if k not in ("stock_volume_ml", "stock_mass_mg", "form")
     }
+    assert (default["form"], bac["form"], liquid["form"]) == ("powder", "bac", "liquid")
+
+
+def test_the_stored_trace_names_the_form_that_produced_the_row_problem_or_not():
+    inp = _input_from(FORWARD_CASE)
+    for form, declared in (("powder", None), ("bac", None), ("liquid", 3.0), ("liquid", None)):
+        trace = process_hplc_analysis(replace(inp, form=form, declared_volume_ml=declared))["calculation_trace"]
+        assert trace["dilution"]["form"] == form
+    # the last row is a liquid with no declared volume: a problem row still says which form it is
+    assert trace["dilution"]["problem"] == "no_declared_volume"
 
 
 def test_the_stock_volume_keeps_its_six_place_rounding_for_every_form():

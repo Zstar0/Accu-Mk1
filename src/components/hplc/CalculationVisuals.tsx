@@ -67,6 +67,9 @@ interface DilutionTrace {
   stock_mass_mg: number | null
   stock_volume_ml: number | null
   problem?: string | null
+  // The prep form that produced the row. Absent on a trace stored before the engine
+  // wrote it, which was a powder row: every row computed as one.
+  form?: string
 }
 
 interface CalculationTrace {
@@ -128,25 +131,25 @@ const NOT_DETERMINED = 'not determined'
 // add copy that makes it look like an ordinary weighing problem.
 const WEIGHING_PROBLEM_TEXT: Record<string, string> = {
   stock_diluent:
-    'The stock volume could not be worked out. Check the stock vial weighings: the empty vial and the vial with diluent must both be entered, and the vial with diluent must be heavier.',
+    'The stock vial weighings need checking: the empty vial and the vial with diluent must both be entered, and the vial with diluent must be heavier.',
   diluent:
-    'The dilution factor could not be worked out. Check the dilution vial weighings: the empty vial and the vial with diluent must both be entered, and the vial with diluent must not be lighter.',
+    'The dilution vial weighings need checking: the empty vial and the vial with diluent must both be entered, and the vial with diluent must not be lighter.',
   stock:
-    'The dilution factor could not be worked out. Check the dilution vial weighings: the vial with diluent and the vial with sample must both be entered, and the vial with sample must be heavier.',
+    'The dilution vial weighings need checking: the vial with diluent and the vial with sample must both be entered, and the vial with sample must be heavier.',
   intermediate_unweighed:
-    'The total dilution factor could not be worked out. Check the intermediate vial weighings: the empty vial, the vial with diluent and the vial with sample must all be entered.',
+    'The intermediate vial weighings need checking: the empty vial, the vial with diluent and the vial with sample must all be entered.',
   intermediate_diluent:
-    'The total dilution factor could not be worked out. Check the intermediate vial weighings: the vial with diluent must not be lighter than the empty vial.',
+    'The intermediate vial weighings need checking: the vial with diluent must not be lighter than the empty vial.',
   intermediate_stock:
-    'The total dilution factor could not be worked out. Check the intermediate vial weighings: the vial with sample must be heavier than the vial with diluent.',
+    'The intermediate vial weighings need checking: the vial with sample must be heavier than the vial with diluent.',
   // Configuration, not the balance: the fix is in the data.
   no_density:
-    'The volumes could not be worked out because the calibration curve has no usable diluent density. This is not a weighing problem: the density needs setting on the curve.',
+    'The calibration curve has no usable diluent density. This is not a weighing problem: the density needs setting on the curve.',
   no_declared_volume:
-    'The stock volume could not be worked out because this liquid sample has no usable declared volume. This is not a weighing problem: record the volume the sample arrived in.',
+    'This liquid sample has no usable declared volume. This is not a weighing problem: record the volume the sample arrived in.',
   // Only ever the quantity panel's reason, never the dilution panel's.
   quantity_not_finite:
-    'The mass calculation produced a number that is not valid, so no mass is reported. This is not something to fix at the bench; it needs looking at.',
+    'The calculation produced a number that is not valid. This is not something to fix at the bench; it needs looking at.',
 }
 
 function weighingProblemText(code: string): string {
@@ -160,15 +163,12 @@ function fixed(v: number | null | undefined, dp: number, unit = ''): string {
 const NOT_APPLICABLE = 'not applicable'
 
 // A liquid prep never weighs its stock vial, so its stock mass does not exist; it is not
-// a weighing that went missing. The trace carries no form, so this rests on an engine
-// invariant (calculate_dilution_factor): a powder or bac stock mass is null only when the
-// stock leg is not a number, and stock_volume_ml reports exactly that as "stock_diluent",
-// ahead of every other code, while a liquid row can never report it. So a null stock mass
-// under any other code is a form with no stock weighing. Strict null on purpose: a stored
-// trace without the key stays "not determined". If the engine ever puts the form in the
-// trace, read it here instead.
+// a weighing that went missing. The trace says which form produced the row, so this reads
+// that rather than guessing from which values are null. A trace without the key is a
+// powder row, not an unknown one, so it stays "not determined": an old trace must not
+// start claiming a measurement is inapplicable.
 function stockMassText(trace: DilutionTrace): string {
-  if (trace.stock_mass_mg === null && trace.problem !== 'stock_diluent') {
+  if (trace.form === 'liquid' && trace.stock_mass_mg == null) {
     return NOT_APPLICABLE
   }
   return fixed(trace.stock_mass_mg, 2, ' mg')
