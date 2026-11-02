@@ -523,7 +523,17 @@ c   = bac_stock_ug_ml / 1000          # mg/mL
 vol = (mass_mg / water_density) / (1 - c / ba_density + c / water_density)
 ```
 
-returning `None` when `mass_mg <= 0` or either density is non-positive. The mass is the same
+**Correction, 2026-11-02: the volume comes out SMALLER, not larger.** An earlier pass of this
+plan asserted the opposite in the test above and called the correction "upward" here, and both
+were wrong. The denominator is `1 - 9/1034.72 + 9/997.1 = 1.00032817`, which is greater than 1,
+so dividing by it reduces the volume: 29913 mg gives 29.9902 mL against a naive 30.0000, and
+9293.38 mg gives 9.3174 against 9.3204, both matching `calc.js` and its own comment. The
+physical reason is that benzyl alcohol at 1034.72 mg/mL is denser than water at 997.1, so the
+mixture is denser and a given mass takes up less room. The formula was always right; only the
+assertion about it was inverted, which a green suite would have turned into the expected
+behaviour.
+
+The function returns `None` when `mass_mg <= 0` or either density is non-positive. The mass is the same
 `stock_vial_with_diluent - stock_vial_empty` difference as powder, which is how the form's
 legitimately reversed weighing order stays a configuration question rather than a sequence
 one.
@@ -557,9 +567,11 @@ def test_liquid_without_a_declared_volume_says_why():
     assert stock_volume_ml("liquid", FORWARD_WEIGHTS, 997.1, declared_volume_ml=0)[1] == "no_declared_volume"
 
 def test_bac_volume_is_density_corrected_for_benzyl_alcohol():
-    # 30 mL of 0.9 % benzyl alcohol water weighs ~29.91 g; the correction is small and upward
+    # Benzyl alcohol (1034.72) is DENSER than the water (997.1), so the mixture is
+    # denser and a given mass occupies slightly LESS volume. 29913 mg: 29.9902 mL
+    # against a naive 30.0000. Values from calc.js:262, which agrees to the digit.
     assert bac_volume_ml(29_913.0) == pytest.approx(30.0, abs=0.05)
-    assert bac_volume_ml(29_913.0) > 29_913.0 / 997.1
+    assert bac_volume_ml(29_913.0) < 29_913.0 / 997.1
 
 def test_bac_rejects_a_non_positive_mass():
     assert bac_volume_ml(0) is None
@@ -793,14 +805,15 @@ git commit -- backend/calculations/hplc_processor.py backend/tests/test_hplc_pro
     overflows identically, so this is not a divergence). A balance reading is in milligrams, so
     a generous sanity ceiling costs nothing and closes the overflow class entirely. This is a
     typo guard, not a calibration limit, so keep it well clear of any real reading.
-  - **The three intermediate problem codes get UI copy here** (found by Task 3).
+  - **Five new problem codes get UI copy here** (found by Tasks 3 and 4).
     `WEIGHING_PROBLEM_TEXT` in `src/components/hplc/CalculationVisuals.tsx:117` maps only
     `stock_diluent`, `diluent` and `stock`; an unmapped code prints raw. Task 3 added
-    `intermediate_unweighed`, `intermediate_diluent` and `intermediate_stock`, and this is the
-    first task where a caller can set an intermediate, so it is the first task where a tech
-    could see a raw code. Add a sentence for each, in the same voice as the existing three,
-    and extend that file's `it.each` problem-code test to cover them. Until this lands no
-    route can produce those codes, which is why Task 3 correctly left the file alone.
+    `intermediate_unweighed`, `intermediate_diluent` and `intermediate_stock`, and Task 4 added
+    `no_density` and `no_declared_volume`. This is the first task where a caller can set an
+    intermediate or a prep form, so it is the first task where a tech could see any of them
+    raw. Add a sentence for each of the five, in the same voice as the existing three, and
+    extend that file's `it.each` problem-code test to cover them. Until this lands no route can
+    produce those codes, which is why Tasks 3 and 4 correctly left the copy alone.
 
 - [ ] **Step 1: Write the failing tests**
 
