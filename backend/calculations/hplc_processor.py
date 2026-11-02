@@ -75,6 +75,105 @@ def _finite(value: Optional[float]) -> bool:
     return value is not None and math.isfinite(value)
 
 
+# The prep forms the engine understands. The endo bench accepts the same three
+# (worksheets_endo.ENDO_FORMS); a test pins that set(ENDO_FORMS) <= set(PREP_FORMS)
+# instead of importing the tuple, because worksheets_endo imports models and this
+# module is the lower layer.
+PREP_FORMS = ("powder", "liquid", "bac")
+
+DILUENT_DENSITY_MG_ML = 997.1     # calc.js DEFAULTS.diluentDensityMgPerMl
+BENZYL_ALCOHOL_DENSITY = 1034.72  # calc.js benzylAlcoholDensity() default
+BAC_STOCK_UG_ML = 9000.0          # 0.9 % benzyl alcohol, calc.js DEFAULTS.bacWaterStockUgPerMl
+
+
+def bac_volume_ml(
+    mass_mg: Optional[float],
+    water_density: Optional[float] = DILUENT_DENSITY_MG_ML,
+    ba_density: float = BENZYL_ALCOHOL_DENSITY,
+    bac_stock_ug_ml: float = BAC_STOCK_UG_ML,
+) -> Optional[float]:
+    """
+    The volume of bacteriostatic water in a vial from its mass (calc.js bacVolumeMl).
+
+    The liquid is water with benzyl alcohol at c mg/mL. Benzyl alcohol (1034.72 mg/mL)
+    is DENSER than the water (997.1), so the mixture is denser and a given mass
+    occupies slightly LESS volume than mass / water_density (a 0.03 % correction):
+
+        mass = c*V + rho_w*(V - c*V/rho_BA)   =>   V = (mass / rho_w) / (1 - c/rho_BA + c/rho_w)
+
+    with c = bac_stock_ug_ml / 1000 (9 mg/mL at 0.9 %). The mass is the same stock
+    vial difference powder weighs. None for no mass or a mass of 0 or less, a density
+    that is missing, not finite or 0 or less (calc.js num() reads non-finite as null),
+    or a stock that makes the correction non-positive.
+    """
+    if not (_finite(mass_mg) and mass_mg > 0 and _finite(water_density) and water_density > 0
+            and _finite(ba_density) and ba_density > 0):
+        return None
+    c = bac_stock_ug_ml / 1000  # mg/mL
+    correction = 1 - c / ba_density + c / water_density
+    if not correction > 0:  # not "<= 0": a NaN stock must be refused too
+        return None
+    return (mass_mg / water_density) / correction
+
+
+def stock_volume_ml(
+    form: str,
+    weights: WeightInputs,
+    density: Optional[float],
+    *,
+    declared_volume_ml: Optional[float] = None,
+    ba_density: float = BENZYL_ALCOHOL_DENSITY,
+    bac_stock_ug_ml: float = BAC_STOCK_UG_ML,
+) -> tuple[Optional[float], Optional[str]]:
+    """
+    The stock volume (mL) for one prep form, and why not when it cannot be had.
+
+    Returns (volume_ml, problem); exactly one of the two is None. The forms differ
+    only in how the volume is obtained (calc.js stockPrep):
+
+        "powder"  weighed: (stock vial with diluent - stock vial empty) / density
+        "bac"     the same mass, density corrected for 0.9 % benzyl alcohol
+        "liquid"  the customer's declared volume, taken as declared. The stock vial
+                  is never weighed, so its weighings are not read at all
+
+    Problems, and the stock-leg problem is decided HERE and nowhere else:
+
+        "stock_diluent"       powder or bac: the stock vial leg is <= 0 or not finite
+                              (calc.js guards this with !preDissolved, so "liquid"
+                              never raises it: its stock leg is zero on every real row)
+        "no_density"          powder or bac: the diluent density is missing, not finite
+                              or <= 0
+        "no_declared_volume"  liquid: no declared volume, or one that is <= 0 or not
+                              finite
+
+    The weighing is checked before the density, so a bench reading is never hidden
+    behind a configuration gap. The volume is returned unrounded; the caller rounds.
+    An unknown form raises ValueError naming the accepted list.
+    """
+    if form not in PREP_FORMS:
+        raise ValueError(f"prep form must be one of {', '.join(PREP_FORMS)}")
+
+    if form == "liquid":
+        if _finite(declared_volume_ml) and declared_volume_ml > 0:
+            return declared_volume_ml, None
+        return None, "no_declared_volume"
+
+    mass_mg = weights.stock_vial_with_diluent - weights.stock_vial_empty
+    if not _finite(mass_mg) or mass_mg <= 0:
+        return None, "stock_diluent"
+    if not _finite(density) or density <= 0:
+        return None, "no_density"
+
+    if form == "bac":
+        volume = bac_volume_ml(mass_mg, density, ba_density, bac_stock_ug_ml)
+    else:
+        volume = mass_mg / density  # mg / (mg/mL) = mL
+    # bac_volume_ml refuses only what was checked above or an overridden benzyl alcohol
+    # density or stock that makes the correction meaningless; either way it is a
+    # density-side gap, not a bench reading.
+    return (None, "no_density") if volume is None else (volume, None)
+
+
 def calculate_intermediate(
     weights: IntermediateWeights,
     stock_conc_ug_ml: Optional[float],
@@ -154,8 +253,11 @@ def calculate_intermediate(
 
 def calculate_dilution_factor(
     weights: WeightInputs,
-    density: float,
+    density: Optional[float],
     intermediate: Optional[IntermediateWeights] = None,
+    *,
+    form: str = "powder",
+    declared_volume_ml: Optional[float] = None,
 ) -> dict:
     """
     Calculate dilution factor from 5 balance weights.
@@ -164,7 +266,8 @@ def calculate_dilution_factor(
         diluent_vol = (dil_vial_with_diluent - dil_vial_empty) / density * 1000 [µL]
         sample_vol = (dil_vial_full - dil_vial_with_diluent) / density * 1000 [µL]
         DF = (diluent_vol + sample_vol) / sample_vol
-        stock_vol = (stock_vial_diluent - stock_vial_empty) / 1000 [mL]
+        stock_vol = stock_volume_ml(form, ...) [mL]: weighed for "powder", density
+            corrected for "bac", the declared volume for "liquid"
 
     Returns dict with all intermediate values for audit trace, plus "problem":
     None when every weighing is usable, else which one is not. The checks are by
@@ -175,9 +278,32 @@ def calculate_dilution_factor(
         "diluent"        diluent added to the dilution vial is < 0
         "stock"          stock added to the dilution vial is <= 0
 
-    Zero added diluent is a legal neat injection; zero added stock is not. When
-    several apply, the first listed wins. Under any problem "dilution_factor" and
-    "stock_volume_ml" are None, so no quantity can be computed from the row.
+    Zero added diluent is a legal neat injection; zero added stock is not. A leg
+    that is not a finite number (NaN, infinity: calc.js num() reads those as null)
+    counts as that leg's problem, and a leg so large its difference overflows is the
+    same. The stock-leg code is decided by stock_volume_ml, which raises it for
+    "powder" and "bac" only (a "liquid" stock vial is never weighed), and which adds
+    "no_declared_volume" for a liquid row without a usable declared volume. A diluent
+    density that is None, not finite or <= 0 is "no_density" (reported by the stock
+    leg for powder and bac, and by the dilution vial for every form), so a nullable
+    calibration column is a reason and not a ZeroDivisionError. When several apply,
+    the first listed wins: the stock leg, then "diluent", then "stock", then
+    "no_density", then the intermediate's codes below.
+
+    EACH PROBLEM NULLS ONLY WHAT IT TOUCHES, and "problem" no longer says which
+    values are None:
+
+        stock leg           "stock_volume_ml" only
+        final dilution leg  "dilution_factor", so also "dilution_factor_total"
+        intermediate leg    "dilution_factor_total" alone
+
+    The intermediate leg leaves the final vial's own weighings, and so its factor
+    and the stock volume, intact: they are good numbers. "problem" is None exactly
+    when "stock_volume_ml" and "dilution_factor_total" are both set, which is what
+    calculate_quantity gates on: no quantity unless both are known. The audit values
+    (masses, volumes) stay under a problem so a tech can see which weighing is wrong,
+    except a number that cannot be made from a non-finite weighing, which is None
+    rather than NaN so the stored trace stays valid JSON.
 
     A two-step dilution declares an intermediate vial (calculate_intermediate), and
     "dilution_factor" stays the final step's factor. "dilution_factor_total" is the
@@ -202,41 +328,49 @@ def calculate_dilution_factor(
     The unweighed case never falls back to the bench sheet's planned target
     concentration (its concForFinal): that is display before the balance, and a
     quantity from a plan rather than a reading would be a made-up result. So
-    "dilution_factor_total" is None exactly when "problem" is set, given finite
-    stock and dilution vial weighings; this function does not check those five for
-    NaN or infinity, which belongs at the request boundary.
+    "dilution_factor_total" is None whenever the final or intermediate leg has a
+    problem or is unweighed. Weighings so large that a volume overflows are bounded
+    at the request boundary, not here.
 
     The stock concentration is not known here, so the stored "intermediate" dict
     has no "actual_conc_ug_ml" key. Its absence means "not computed here", not
     "unknown for this row".
-    """
-    # Diluent volume in the dilution vial (µL)
-    diluent_mass_mg = weights.dil_vial_with_diluent - weights.dil_vial_empty
-    diluent_vol_ul = (diluent_mass_mg / density) * 1000
 
-    # Sample volume added to the dilution vial (µL)
+    An unknown form raises ValueError (see stock_volume_ml).
+    """
+    density_ok = _finite(density) and density > 0
+
+    # Diluent and sample masses in the dilution vial (mg). Every prep form ends in a
+    # dilution vial, so its two problems are decided here, permanently.
+    diluent_mass_mg = weights.dil_vial_with_diluent - weights.dil_vial_empty
     sample_mass_mg = weights.dil_vial_with_diluent_and_sample - weights.dil_vial_with_diluent
-    sample_vol_ul = (sample_mass_mg / density) * 1000
+
+    # Volumes (µL), only from finite masses and a usable density.
+    diluent_vol_ul = (diluent_mass_mg / density) * 1000 if density_ok and _finite(diluent_mass_mg) else None
+    sample_vol_ul = (sample_mass_mg / density) * 1000 if density_ok and _finite(sample_mass_mg) else None
 
     # Dilution factor
-    total_vol_ul = diluent_vol_ul + sample_vol_ul
-    dilution_factor = total_vol_ul / sample_vol_ul if sample_vol_ul > 0 else 0
+    total_vol_ul = None
+    dilution_factor = None
+    if diluent_vol_ul is not None and sample_vol_ul is not None:
+        total_vol_ul = diluent_vol_ul + sample_vol_ul
+        dilution_factor = total_vol_ul / sample_vol_ul if sample_vol_ul > 0 else 0
 
-    # Dilution-leg problems. Every prep form ends in a dilution vial, so these two
-    # stay here.
     dilution_problem = None
-    if diluent_mass_mg < 0:
+    if not _finite(diluent_mass_mg) or diluent_mass_mg < 0:
         dilution_problem = "diluent"
-    elif sample_mass_mg <= 0:
+    elif not _finite(sample_mass_mg) or sample_mass_mg <= 0:
         dilution_problem = "stock"
+    elif not density_ok:
+        dilution_problem = "no_density"
 
-    # Stock volume (mL), from stock vial weights, using diluent density.
-    # The stock-leg problem is decided HERE and nowhere else: it is the one check
-    # that moves out when prep forms arrive (a liquid prep never weighs its stock
-    # vial, so its leg is always zero and must not be flagged).
+    # Stock volume (mL) for the prep form. The stock-leg problem is decided by
+    # stock_volume_ml and nowhere else: a liquid prep never weighs its stock vial, so
+    # its leg is always zero and must not be flagged.
     stock_mass_mg = weights.stock_vial_with_diluent - weights.stock_vial_empty
-    stock_volume_ml = stock_mass_mg / density  # Convert mg to mL using diluent density (mg/mL)
-    stock_problem = "stock_diluent" if stock_mass_mg <= 0 else None
+    stock_vol_ml, stock_problem = stock_volume_ml(
+        form, weights, density, declared_volume_ml=declared_volume_ml
+    )
 
     # The intermediate vial, when one is declared. Its stock concentration is not
     # known here (that needs the declared mass), and the factor does not use it.
@@ -257,24 +391,26 @@ def calculate_dilution_factor(
     problem = stock_problem or dilution_problem or intermediate_problem
 
     result = {
-        "diluent_mass_mg": round(diluent_mass_mg, 4),
-        "diluent_vol_ul": round(diluent_vol_ul, 4),
-        "sample_mass_mg": round(sample_mass_mg, 4),
-        "sample_vol_ul": round(sample_vol_ul, 4),
-        "total_vol_ul": round(total_vol_ul, 4),
-        "dilution_factor": None if problem else round(dilution_factor, 6),
-        "stock_mass_mg": round(stock_mass_mg, 4),
-        "stock_volume_ml": None if problem else round(stock_volume_ml, 6),
+        "diluent_mass_mg": _round_or_none(diluent_mass_mg if _finite(diluent_mass_mg) else None, 4),
+        "diluent_vol_ul": _round_or_none(diluent_vol_ul, 4),
+        "sample_mass_mg": _round_or_none(sample_mass_mg if _finite(sample_mass_mg) else None, 4),
+        "sample_vol_ul": _round_or_none(sample_vol_ul, 4),
+        "total_vol_ul": _round_or_none(total_vol_ul, 4),
+        "dilution_factor": None if dilution_problem else round(dilution_factor, 6),
+        "stock_mass_mg": _round_or_none(stock_mass_mg if _finite(stock_mass_mg) else None, 4),
+        "stock_volume_ml": None if stock_problem else round(stock_vol_ml, 6),
         "problem": problem,
     }
 
     # Total factor, stock vial to final vial. Each step is already rounded to 6
     # places above, so multiply the rounded steps and round the product: the same
     # order calculate_quantity's chain has always used. With no intermediate the
-    # total is the final step's factor, untouched.
+    # total is the final step's factor, untouched. An intermediate problem leaves the
+    # final factor in place and nulls the total alone.
     total = result["dilution_factor"]
-    if total is not None and intermediate_result is not None:
-        total = round(intermediate_result["dilution_factor"] * total, 6)
+    if intermediate_result is not None:
+        step = intermediate_result["dilution_factor"]
+        total = None if total is None or step is None else round(step * total, 6)
     result["dilution_factor_total"] = total
     result["intermediate"] = intermediate_result
     return result
@@ -360,7 +496,9 @@ def calculate_quantity(
 
     problem = dilution.get("problem")
     if problem:
-        # No dilution factor or stock volume, so no undiluted concentration or mass.
+        # The total dilution factor or the stock volume is not known (see
+        # calculate_dilution_factor for which problem nulls which), so there is no
+        # undiluted concentration or mass.
         return {
             "quantity_mg": None,
             "error": problem,
