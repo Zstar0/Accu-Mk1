@@ -29,7 +29,7 @@ interface PurityTrace {
 
 interface QuantityTrace {
   quantity_mg: number | null
-  // Set when a weighing problem stopped the mass (see WEIGHING_PROBLEM_TEXT).
+  // Set when a problem stopped the mass (see PROBLEM_COPY).
   error?: string
   individual_areas: number[]
   avg_main_peak_area: number
@@ -121,39 +121,45 @@ function isDilutionTrace(v: unknown): v is DilutionTrace {
 const NOT_DETERMINED = 'not determined'
 
 // What the engine's `problem` codes mean in the lab (calculate_dilution_factor and
-// calculate_quantity). Each sentence says what could not be worked out and what to
-// check, never what a weighing equals: every code also fires, more rarely, when the
-// arithmetic overflowed on weighings that were all positive and finite.
+// calculate_quantity), weighing codes, configuration codes and the quantity's own. The
+// label before each sentence names what is undetermined; the sentence says what to
+// check. A requirement, never a claim about what a weighing equals: every code also
+// fires, more rarely, when the arithmetic overflowed on weighings that were all
+// positive and finite.
+//
+// A vial is named by what was done to it ("before and after adding diluent"), not by a
+// field label: the wizard and the flyout label the same weighing differently ("Vial +
+// Cap", "Vial + cap + peptide", "Stock vial empty"), and this panel is reached from both.
 //
 // `dilution_incomplete` is deliberately NOT here. It is unreachable on any dilution the
 // engine builds; it exists so the quantity gate fails closed if an engine invariant is
 // ever broken. If it ever shows, the raw code is the right thing to print, so do not
 // add copy that makes it look like an ordinary weighing problem.
-const WEIGHING_PROBLEM_TEXT: Record<string, string> = {
+const PROBLEM_COPY: Record<string, string> = {
   stock_diluent:
-    'The stock vial weighings need checking: the empty vial and the vial with diluent must both be entered, and the vial with diluent must be heavier.',
+    "The stock vial's weighings before and after adding diluent need checking: both must be entered, and the one after must be heavier.",
   diluent:
-    'The dilution vial weighings need checking: the empty vial and the vial with diluent must both be entered, and the vial with diluent must not be lighter.',
+    "The dilution vial's weighings before and after adding diluent need checking: both must be entered, and the one after must not be lighter.",
   stock:
-    'The dilution vial weighings need checking: the vial with diluent and the vial with sample must both be entered, and the vial with sample must be heavier.',
+    "The dilution vial's weighings before and after adding the sample need checking: both must be entered, and the one after must be heavier.",
   intermediate_unweighed:
-    'The intermediate vial weighings need checking: the empty vial, the vial with diluent and the vial with sample must all be entered.',
+    "The intermediate vial's three weighings need checking: all must be entered.",
   intermediate_diluent:
-    'The intermediate vial weighings need checking: the vial with diluent must not be lighter than the empty vial.',
+    "The intermediate vial's weighings before and after adding diluent need checking: the one after must not be lighter.",
   intermediate_stock:
-    'The intermediate vial weighings need checking: the vial with sample must be heavier than the vial with diluent.',
+    "The intermediate vial's weighings before and after adding the sample need checking: the one after must be heavier.",
   // Configuration, not the balance: the fix is in the data.
   no_density:
     'The calibration curve has no usable diluent density. This is not a weighing problem: the density needs setting on the curve.',
   no_declared_volume:
-    'This liquid sample has no usable declared volume. This is not a weighing problem: record the volume the sample arrived in.',
+    'This liquid sample has no usable declared volume. This is not a weighing problem: the volume declared with the sample needs recording (it is taken as declared, not measured).',
   // Only ever the quantity panel's reason, never the dilution panel's.
   quantity_not_finite:
-    'The calculation produced a number that is not valid. This is not something to fix at the bench; it needs looking at.',
+    'A value in the calculation is too large to represent. Check the dilution vial weighings, the peak areas and the calibration curve; if those look right, this needs looking at.',
 }
 
-function weighingProblemText(code: string): string {
-  return WEIGHING_PROBLEM_TEXT[code] ?? code
+function problemCopy(code: string): string {
+  return PROBLEM_COPY[code] ?? code
 }
 
 function fixed(v: number | null | undefined, dp: number, unit = ''): string {
@@ -383,7 +389,7 @@ function QuantityChart({ trace }: { trace: QuantityTrace }) {
         </div>
         {trace.error && (
           <p className="mt-2 text-xs text-amber-400">
-            Mass {NOT_DETERMINED}. {weighingProblemText(trace.error)}
+            Mass {NOT_DETERMINED}. {problemCopy(trace.error)}
           </p>
         )}
       </CardContent>
@@ -545,7 +551,7 @@ function DilutionBreakdown({ trace }: { trace: DilutionTrace }) {
         </div>
         {trace.problem && (
           <p className="mt-3 text-xs text-amber-400">
-            {undeterminedLabel(trace)} {NOT_DETERMINED}. {weighingProblemText(trace.problem)}
+            {undeterminedLabel(trace)} {NOT_DETERMINED}. {problemCopy(trace.problem)}
           </p>
         )}
       </CardContent>

@@ -94,23 +94,23 @@ const FLAGGED_ROW_TRACE = {
 // (see the fallback test).
 const PROBLEM_WORDING = {
   stock_diluent:
-    'The stock vial weighings need checking: the empty vial and the vial with diluent must both be entered, and the vial with diluent must be heavier.',
+    "The stock vial's weighings before and after adding diluent need checking: both must be entered, and the one after must be heavier.",
   diluent:
-    'The dilution vial weighings need checking: the empty vial and the vial with diluent must both be entered, and the vial with diluent must not be lighter.',
+    "The dilution vial's weighings before and after adding diluent need checking: both must be entered, and the one after must not be lighter.",
   stock:
-    'The dilution vial weighings need checking: the vial with diluent and the vial with sample must both be entered, and the vial with sample must be heavier.',
+    "The dilution vial's weighings before and after adding the sample need checking: both must be entered, and the one after must be heavier.",
   intermediate_unweighed:
-    'The intermediate vial weighings need checking: the empty vial, the vial with diluent and the vial with sample must all be entered.',
+    "The intermediate vial's three weighings need checking: all must be entered.",
   intermediate_diluent:
-    'The intermediate vial weighings need checking: the vial with diluent must not be lighter than the empty vial.',
+    "The intermediate vial's weighings before and after adding diluent need checking: the one after must not be lighter.",
   intermediate_stock:
-    'The intermediate vial weighings need checking: the vial with sample must be heavier than the vial with diluent.',
+    "The intermediate vial's weighings before and after adding the sample need checking: the one after must be heavier.",
   no_density:
     'The calibration curve has no usable diluent density. This is not a weighing problem: the density needs setting on the curve.',
   no_declared_volume:
-    'This liquid sample has no usable declared volume. This is not a weighing problem: record the volume the sample arrived in.',
+    'This liquid sample has no usable declared volume. This is not a weighing problem: the volume declared with the sample needs recording (it is taken as declared, not measured).',
   quantity_not_finite:
-    'The calculation produced a number that is not valid. This is not something to fix at the bench; it needs looking at.',
+    'A value in the calculation is too large to represent. Check the dilution vial weighings, the peak areas and the calibration curve; if those look right, this needs looking at.',
 }
 
 // One row per code, captured from process_hplc_analysis (not hand-built): the dilution
@@ -449,17 +449,32 @@ describe('CalculationVisuals with a weighing problem', () => {
 
   // dilution_incomplete is unreachable on any dilution the engine builds and has no copy
   // on purpose: it is the quantity gate failing closed if an engine invariant is broken,
-  // and the raw code is the signal. Pinned so the omission reads as deliberate.
+  // and the raw code is the signal. calculate_quantity raises it only when
+  // dilution.problem is None, so it arrives as quantity.error and the quantity panel is
+  // the panel it can reach. PROBLEM_QUANTITY has exactly the keys calculate_quantity
+  // returns for it. Pinned so the omission reads as deliberate.
   it.each(['made_up_code', 'dilution_incomplete'])(
-    'falls back to the raw code for %s, which has no wording',
+    'prints the raw code %s in the quantity panel, which has no wording for it',
     code => {
-      const trace = {
-        dilution: { ...FLAGGED_ROW_TRACE.dilution, problem: code },
-      }
-      const { container } = render(<CalculationVisuals trace={trace} />)
-      expect(container.textContent).toContain(`not determined. ${code}`)
+      const trace = { quantity: { ...PROBLEM_QUANTITY, error: code } }
+      render(<CalculationVisuals trace={trace} />)
+      expect(
+        screen.getByText(`Mass not determined. ${code}`)
+      ).toBeInTheDocument()
     }
   )
+
+  it('prints a raw code in the dilution panel too when it has no wording', () => {
+    const trace = {
+      dilution: { ...FLAGGED_ROW_TRACE.dilution, problem: 'made_up_code' },
+    }
+    render(<CalculationVisuals trace={trace} />)
+    expect(
+      screen.getByText(
+        'Dilution factor and stock volume not determined. made_up_code'
+      )
+    ).toBeInTheDocument()
+  })
 
   it('shows the dilution factor and stock volume as not determined, with the reason', () => {
     expect(() =>
@@ -644,12 +659,27 @@ describe('CalculationVisuals with null masses', () => {
     expect(screen.getByText('6.61×')).toBeInTheDocument()
   })
 
-  it('says not determined for a powder stock mass that a non-finite weighing nulled', () => {
-    render(<CalculationVisuals trace={NON_FINITE_STOCK_ROW} />)
-    // The stock vial mass, the stock volume, the undiluted concentration and the mass.
-    expect(screen.getAllByText('not determined')).toHaveLength(4)
-    expect(screen.queryByText('not applicable')).not.toBeInTheDocument()
-  })
+  // A bac row weighs its stock vial like a powder row, so a stock mass nulled by a
+  // non-finite weighing is a measurement that went missing, never an inapplicable one. The
+  // bac capture is the powder one with only the form changed (checked against the engine).
+  it.each([
+    ['powder', NON_FINITE_STOCK_ROW],
+    [
+      'bac',
+      {
+        ...NON_FINITE_STOCK_ROW,
+        dilution: { ...NON_FINITE_STOCK_ROW.dilution, form: 'bac' },
+      },
+    ],
+  ])(
+    'says not determined for a %s stock mass that a non-finite weighing nulled',
+    (_form, trace) => {
+      render(<CalculationVisuals trace={trace} />)
+      // The stock vial mass, the stock volume, the undiluted concentration and the mass.
+      expect(screen.getAllByText('not determined')).toHaveLength(4)
+      expect(screen.queryByText('not applicable')).not.toBeInTheDocument()
+    }
+  )
 
   // The form is read from the trace, never guessed from which values are null. A powder
   // row whose stock mass is null under some code other than stock_diluent (a code that
