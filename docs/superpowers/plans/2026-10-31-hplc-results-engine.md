@@ -82,6 +82,13 @@ and the S9 curve-pick section. Read the spec alongside this plan.
   `intermediate_target_ug_ml 1500`, `intermediate_volume_ul 1500`,
   `two_step_threshold_mg 500`, `bac_stock_ug_ml 9000`, `diluent_density_mg_ml 997.1`,
   `benzyl_alcohol_density 1034.72`.
+- **Task 5 MUST land before Task 6. This is not a preference.** Task 3 adds
+  `dilution_factor_total` but Task 5 is what makes `calculate_quantity` read it, so between
+  them a complete two-step row computes a quantity that is too LOW by the intermediate factor,
+  roughly 6x. Task 6 is the task that first lets a caller supply an intermediate, so shipping
+  Task 6 ahead of Task 5 would put a silently wrong quantity on a certificate. That is the
+  exact failure mode that already put wrong quantities on four published COAs. The branch is
+  safe in the interim only because no route can set an intermediate until Task 6.
 - **No em dashes in any file this plan creates**, including comments and docstrings.
 - New files written on this machine get `sed -i 's/\r$//'` before `git add`: both the Bash
   heredoc and the Write tool emit CRLF here. Commit with `git commit -- <paths>`.
@@ -737,6 +744,14 @@ git commit -- backend/calculations/hplc_processor.py backend/tests/test_hplc_pro
     live in `calculation_trace.quantity.dilution_factor_steps`.
   - `HPLCAnalysisResponse` and `_analysis_to_response` declare `prep_form` and
     `dilution_factor_steps`. Anything not declared on the model is dropped silently.
+  - **The three intermediate problem codes get UI copy here** (found by Task 3).
+    `WEIGHING_PROBLEM_TEXT` in `src/components/hplc/CalculationVisuals.tsx:117` maps only
+    `stock_diluent`, `diluent` and `stock`; an unmapped code prints raw. Task 3 added
+    `intermediate_unweighed`, `intermediate_diluent` and `intermediate_stock`, and this is the
+    first task where a caller can set an intermediate, so it is the first task where a tech
+    could see a raw code. Add a sentence for each, in the same voice as the existing three,
+    and extend that file's `it.each` problem-code test to cover them. Until this lands no
+    route can produce those codes, which is why Task 3 correctly left the file alone.
 
 - [ ] **Step 1: Write the failing tests**
 
