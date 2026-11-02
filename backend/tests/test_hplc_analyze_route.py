@@ -570,3 +570,87 @@ def test_a_partial_intermediate_that_got_past_the_model_is_still_refused_by_the_
         )
     assert response.quantity_mg is None
     assert response.calculation_trace["dilution"]["problem"] == "intermediate_unweighed"
+
+
+# ---- review fixes: what is stored, null trace sections, the liquid + intermediate combination ----
+
+
+def test_a_liquid_row_stores_no_stock_weighings_even_when_the_caller_sent_zeros(api):
+    # The two shipped screens send 0 for a blank. NOT NULL was relaxed on these columns so
+    # a liquid row's stock weighings could be blank; storing the 0 would put them back as
+    # a real reading, and a recapture would read the zero stock leg as a backwards row.
+    r = _post(api, weights={**DILUTION, "stock_vial_empty": 0, "stock_vial_with_diluent": 0},
+              prep_form="liquid", declared_volume_ml=3.0)
+    assert r.status_code == 201, r.text
+    assert r.json()["quantity_mg"] == 3.3
+    row = _row(api, r.json()["id"])
+    assert row.stock_vial_empty is None and row.stock_vial_with_diluent is None
+    assert row.declared_volume_ml == 3.0
+
+
+@pytest.mark.parametrize("form", ["powder", "bac"])
+def test_a_weighed_row_does_not_store_a_declared_volume_it_ignores(api, form):
+    r = _post(api, prep_form=form, declared_volume_ml=3.0)
+    assert r.status_code == 201, r.text
+    assert r.json()["stock_volume_ml"] != 3.0  # the weighing decides, not the declared volume
+    row = _row(api, r.json()["id"])
+    assert row.declared_volume_ml is None
+    assert (row.stock_vial_empty, row.stock_vial_with_diluent) == (10000.0, 13000.0)
+
+
+def test_a_liquid_row_with_a_whole_intermediate_saves_both(api):
+    r = _post(api, weights={**DILUTION, **INTERMEDIATE}, prep_form="liquid", declared_volume_ml=3.0)
+    assert r.status_code == 201, r.text
+    body = r.json()
+    assert body["dilution_factor"] == 121.0 and body["quantity_mg"] == _quantity_mg(3.0, 121.0)
+    assert body["dilution_factor_steps"] == {"intermediate": 11.0, "final": 11.0}
+    row = _row(api, body["id"])
+    assert row.stock_vial_empty is None and row.int_vial_empty == 8000.0
+
+
+@pytest.mark.parametrize("given", [
+    ("int_vial_empty",),
+    ("int_vial_empty", "int_vial_with_diluent"),
+    ("int_vial_with_diluent", "int_vial_with_diluent_and_sample"),
+])
+def test_a_liquid_row_with_a_partial_intermediate_is_refused_naming_only_the_intermediate(given):
+    # The validator is form-independent, but combinations are where this plan keeps finding
+    # bugs: a liquid row must not have its absent stock weighings reported, nor its partial
+    # intermediate waved through because the stock vial is exempt.
+    weights = {**DILUTION, **{k: INTERMEDIATE[k] for k in given}}
+    errors = _errors(_body(weights=weights, prep_form="liquid", declared_volume_ml=3.0))
+    assert {e["loc"] for e in errors} == {("weights", name) for name in set(INTERMEDIATE) - set(given)}
+
+
+@pytest.mark.parametrize("trace", [
+    {"quantity": None, "identity": None},
+    {"quantity": None},
+    {"identity": None},
+    {"quantity": {"quantity_mg": None, "error": "stock_diluent"}},
+])
+def test_a_stored_trace_with_a_null_section_does_not_500_the_read_routes(api, trace):
+    with api.Session() as s:
+        row = HPLCAnalysis(sample_id_label="ODD", peptide_id=api.peptide_id, **FIVE_WEIGHTS, calculation_trace=trace)
+        s.add(row)
+        s.commit()
+        odd_id = row.id
+    got = api.client.get(f"/hplc/analyses/{odd_id}")
+    assert got.status_code == 200, got.text
+    assert got.json()["dilution_factor_steps"] is None
+
+
+# ---- the post-deploy column check ------------------------------------------------
+
+
+def test_the_column_check_passes_only_when_every_column_is_there_and_nullable():
+    from scripts.check_hplc_columns import EXPECTED, evaluate
+
+    everything = {name: ("double precision", "YES") for name in EXPECTED}
+    lines, bad = evaluate(everything)
+    assert bad == 0 and len(lines) == len(EXPECTED)
+    # A column the swallowed ALTER never added:
+    assert evaluate({k: v for k, v in everything.items() if k != "prep_form"})[1] == 1
+    # The relaxation that never applied (every liquid row would 500 at insert):
+    assert evaluate({**everything, "stock_vial_empty": ("double precision", "NO")})[1] == 1
+    # Nothing at all (wrong database, or the table is gone):
+    assert evaluate({})[1] == len(EXPECTED)

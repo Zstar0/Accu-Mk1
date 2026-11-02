@@ -6920,8 +6920,9 @@ class HPLCAnalysisResponse(BaseModel):
 
 def _analysis_to_response(analysis: "HPLCAnalysis", peptide_abbreviation: str) -> "HPLCAnalysisResponse":
     """Convert an HPLCAnalysis ORM object to an HPLCAnalysisResponse."""
-    identity_trace = (analysis.calculation_trace or {}).get("identity", {})
-    quantity_trace = (analysis.calculation_trace or {}).get("quantity", {})
+    # `or {}`, not .get(key, {}): a stored section can be null, and the default only covers a missing key
+    identity_trace = (analysis.calculation_trace or {}).get("identity") or {}
+    quantity_trace = (analysis.calculation_trace or {}).get("quantity") or {}
     return HPLCAnalysisResponse(
         id=analysis.id,
         sample_id_label=analysis.sample_id_label,
@@ -7079,17 +7080,23 @@ async def run_hplc_analysis(
     # Run analysis
     result = process_hplc_analysis(analysis_input)
 
+    # Store what the form uses and NULL for the rest. A liquid prep never weighs its stock
+    # vial, and the two shipped screens send 0 for a blank: stored, that 0 would read as a
+    # real (backwards) stock leg and defeat the NOT NULL relaxation made for this case. A
+    # declared volume only means something to a liquid row; powder and bac ignore it.
+    is_liquid = request.prep_form == "liquid"
+
     # Store in database
     analysis = HPLCAnalysis(
         sample_id_label=request.sample_id_label,
         peptide_id=peptide.id,
-        stock_vial_empty=request.weights.stock_vial_empty,
-        stock_vial_with_diluent=request.weights.stock_vial_with_diluent,
+        stock_vial_empty=None if is_liquid else request.weights.stock_vial_empty,
+        stock_vial_with_diluent=None if is_liquid else request.weights.stock_vial_with_diluent,
         dil_vial_empty=request.weights.dil_vial_empty,
         dil_vial_with_diluent=request.weights.dil_vial_with_diluent,
         dil_vial_with_diluent_and_sample=request.weights.dil_vial_with_diluent_and_sample,
         prep_form=request.prep_form,
-        declared_volume_ml=request.declared_volume_ml,
+        declared_volume_ml=request.declared_volume_ml if is_liquid else None,
         int_vial_empty=request.weights.int_vial_empty,
         int_vial_with_diluent=request.weights.int_vial_with_diluent,
         int_vial_with_diluent_and_sample=request.weights.int_vial_with_diluent_and_sample,
