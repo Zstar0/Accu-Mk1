@@ -33,7 +33,8 @@ interface QuantityTrace {
   error?: string
   individual_areas: number[]
   avg_main_peak_area: number
-  concentration_ug_ml: number
+  // Null when the concentration itself overflowed (error "quantity_not_finite").
+  concentration_ug_ml: number | null
   // Absent under a weighing problem: they need a dilution factor and a stock volume.
   undiluted_concentration_ug_ml?: number
   mass_ug?: number
@@ -116,13 +117,36 @@ function isDilutionTrace(v: unknown): v is DilutionTrace {
 
 const NOT_DETERMINED = 'not determined'
 
-// What the engine's `problem` codes mean in the lab (calculate_dilution_factor).
+// What the engine's `problem` codes mean in the lab (calculate_dilution_factor and
+// calculate_quantity). Each sentence says what could not be worked out and what to
+// check, never what a weighing equals: every code also fires, more rarely, when the
+// arithmetic overflowed on weighings that were all positive and finite.
+//
+// `dilution_incomplete` is deliberately NOT here. It is unreachable on any dilution the
+// engine builds; it exists so the quantity gate fails closed if an engine invariant is
+// ever broken. If it ever shows, the raw code is the right thing to print, so do not
+// add copy that makes it look like an ordinary weighing problem.
 const WEIGHING_PROBLEM_TEXT: Record<string, string> = {
   stock_diluent:
-    'The stock vial weighing is missing, or not heavier than the empty vial.',
-  diluent: 'The dilution vial with diluent weighs less than the empty vial.',
+    'The stock volume could not be worked out. Check the stock vial weighings: the empty vial and the vial with diluent must both be entered, and the vial with diluent must be heavier.',
+  diluent:
+    'The dilution factor could not be worked out. Check the dilution vial weighings: the empty vial and the vial with diluent must both be entered, and the vial with diluent must not be lighter.',
   stock:
-    'The dilution vial with sample weighs no more than the vial with diluent.',
+    'The dilution factor could not be worked out. Check the dilution vial weighings: the vial with diluent and the vial with sample must both be entered, and the vial with sample must be heavier.',
+  intermediate_unweighed:
+    'The total dilution factor could not be worked out. Check the intermediate vial weighings: the empty vial, the vial with diluent and the vial with sample must all be entered.',
+  intermediate_diluent:
+    'The total dilution factor could not be worked out. Check the intermediate vial weighings: the vial with diluent must not be lighter than the empty vial.',
+  intermediate_stock:
+    'The total dilution factor could not be worked out. Check the intermediate vial weighings: the vial with sample must be heavier than the vial with diluent.',
+  // Configuration, not the balance: the fix is in the data.
+  no_density:
+    'The volumes could not be worked out because the calibration curve has no usable diluent density. This is not a weighing problem: the density needs setting on the curve.',
+  no_declared_volume:
+    'The stock volume could not be worked out because this liquid sample has no usable declared volume. This is not a weighing problem: record the volume the sample arrived in.',
+  // Only ever the quantity panel's reason, never the dilution panel's.
+  quantity_not_finite:
+    'The mass calculation produced a number that is not valid, so no mass is reported. This is not something to fix at the bench; it needs looking at.',
 }
 
 function weighingProblemText(code: string): string {
@@ -131,6 +155,37 @@ function weighingProblemText(code: string): string {
 
 function fixed(v: number | null | undefined, dp: number, unit = ''): string {
   return v == null ? NOT_DETERMINED : `${v.toFixed(dp)}${unit}`
+}
+
+const NOT_APPLICABLE = 'not applicable'
+
+// A liquid prep never weighs its stock vial, so its stock mass does not exist; it is not
+// a weighing that went missing. The trace carries no form, so this rests on an engine
+// invariant (calculate_dilution_factor): a powder or bac stock mass is null only when the
+// stock leg is not a number, and stock_volume_ml reports exactly that as "stock_diluent",
+// ahead of every other code, while a liquid row can never report it. So a null stock mass
+// under any other code is a form with no stock weighing. Strict null on purpose: a stored
+// trace without the key stays "not determined". If the engine ever puts the form in the
+// trace, read it here instead.
+function stockMassText(trace: DilutionTrace): string {
+  if (trace.stock_mass_mg === null && trace.problem !== 'stock_diluent') {
+    return NOT_APPLICABLE
+  }
+  return fixed(trace.stock_mass_mg, 2, ' mg')
+}
+
+// What the dilution panel could not work out, named from the trace's own values rather
+// than from the problem code, so a code added later cannot get a wrong label. Each
+// problem nulls only what it touches (calculate_dilution_factor): a stock problem keeps
+// the dilution factor, a final dilution-leg problem keeps the stock volume, and an
+// intermediate problem nulls neither of the two printed values but the total factor,
+// which is not printed. So neither null under a problem means the total.
+function undeterminedLabel(trace: DilutionTrace): string {
+  const names: string[] = []
+  if (trace.dilution_factor == null) names.push('dilution factor')
+  if (trace.stock_volume_ml == null) names.push('stock volume')
+  const label = names.length > 0 ? names.join(' and ') : 'total dilution factor'
+  return label.charAt(0).toUpperCase() + label.slice(1)
 }
 
 // ── Chart colors (explicit for dark-mode visibility) ──────────
@@ -224,13 +279,14 @@ function QuantityChart({ trace }: { trace: QuantityTrace }) {
   const { calibration_slope: slope, calibration_intercept: intercept } = trace
 
   // Extend line from 0 to a bit past the sample
-  const maxConc = Math.max(sampleConc * 1.2, 200)
+  const maxConc = Math.max((sampleConc ?? 0) * 1.2, 200)
   const lineData = [
     { conc: 0, fit: intercept },
     { conc: maxConc, fit: slope * maxConc + intercept },
   ]
 
-  const samplePoint = [{ conc: sampleConc, area: sampleArea }]
+  const samplePoint =
+    sampleConc == null ? [] : [{ conc: sampleConc, area: sampleArea }]
 
   return (
     <Card>
@@ -313,7 +369,7 @@ function QuantityChart({ trace }: { trace: QuantityTrace }) {
           </div>
           <div className="flex justify-between">
             <span className="text-muted-foreground">Conc = (Area - {intercept.toFixed(2)}) / {slope.toFixed(4)}</span>
-            <span>{trace.concentration_ug_ml.toFixed(2)} µg/mL</span>
+            <span>{fixed(trace.concentration_ug_ml, 2, ' µg/mL')}</span>
           </div>
           <div className="flex justify-between">
             <span className="text-muted-foreground">Undiluted = Conc &times; DF ({fixed(trace.dilution_factor, 2, '\u00d7')})</span>
@@ -472,7 +528,7 @@ function DilutionBreakdown({ trace }: { trace: DilutionTrace }) {
             <div className="space-y-2 text-xs">
               <div className="flex justify-between">
                 <span className="text-slate-400">Diluent mass</span>
-                <span className="font-mono">{fixed(trace.stock_mass_mg, 2, ' mg')}</span>
+                <span className="font-mono">{stockMassText(trace)}</span>
               </div>
               <div className="flex items-baseline justify-between rounded-md bg-blue-500/10 border border-blue-500/20 px-2 py-1.5">
                 <span className="text-slate-400">Stock Volume</span>
@@ -488,7 +544,7 @@ function DilutionBreakdown({ trace }: { trace: DilutionTrace }) {
         </div>
         {trace.problem && (
           <p className="mt-3 text-xs text-amber-400">
-            Dilution factor and stock volume {NOT_DETERMINED}: {weighingProblemText(trace.problem)}
+            {undeterminedLabel(trace)} {NOT_DETERMINED}: {weighingProblemText(trace.problem)}
           </p>
         )}
       </CardContent>

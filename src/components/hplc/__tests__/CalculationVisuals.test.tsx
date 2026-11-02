@@ -87,21 +87,311 @@ const FLAGGED_ROW_TRACE = {
   },
 }
 
-// The wording a tech reads for each problem code, exactly. A typo in any entry
-// of WEIGHING_PROBLEM_TEXT, or a code that falls back to its raw name, fails here.
-const PROBLEM_WORDING: [string, string][] = [
-  [
-    'stock_diluent',
-    'The stock vial weighing is missing, or not heavier than the empty vial.',
-  ],
-  [
-    'diluent',
-    'The dilution vial with diluent weighs less than the empty vial.',
-  ],
-  [
-    'stock',
-    'The dilution vial with sample weighs no more than the vial with diluent.',
-  ],
+// The wording a tech reads for each problem code, exactly. Written out here on purpose,
+// not imported: the component's copy is what is under test, so a typo in any sentence
+// there fails its own case below instead of passing against itself. These are the nine
+// codes a tech can meet. `dilution_incomplete` is deliberately absent: it prints raw
+// (see the fallback test).
+const PROBLEM_WORDING = {
+  stock_diluent:
+    'The stock volume could not be worked out. Check the stock vial weighings: the empty vial and the vial with diluent must both be entered, and the vial with diluent must be heavier.',
+  diluent:
+    'The dilution factor could not be worked out. Check the dilution vial weighings: the empty vial and the vial with diluent must both be entered, and the vial with diluent must not be lighter.',
+  stock:
+    'The dilution factor could not be worked out. Check the dilution vial weighings: the vial with diluent and the vial with sample must both be entered, and the vial with sample must be heavier.',
+  intermediate_unweighed:
+    'The total dilution factor could not be worked out. Check the intermediate vial weighings: the empty vial, the vial with diluent and the vial with sample must all be entered.',
+  intermediate_diluent:
+    'The total dilution factor could not be worked out. Check the intermediate vial weighings: the vial with diluent must not be lighter than the empty vial.',
+  intermediate_stock:
+    'The total dilution factor could not be worked out. Check the intermediate vial weighings: the vial with sample must be heavier than the vial with diluent.',
+  no_density:
+    'The volumes could not be worked out because the calibration curve has no usable diluent density. This is not a weighing problem: the density needs setting on the curve.',
+  no_declared_volume:
+    'The stock volume could not be worked out because this liquid sample has no usable declared volume. This is not a weighing problem: record the volume the sample arrived in.',
+  quantity_not_finite:
+    'The mass calculation produced a number that is not valid, so no mass is reported. This is not something to fix at the bench; it needs looking at.',
+}
+
+// One row per code, captured from process_hplc_analysis (not hand-built): the dilution
+// and quantity sections it stores. Each problem nulls only what it touches, so the
+// dilution panel's label follows which of the dilution factor and the stock volume is
+// null: stock_diluent and no_declared_volume keep the factor, diluent and stock keep
+// the stock volume, the intermediate codes keep both and lose the total.
+const CAPTURED_ROWS = {
+  stock_diluent: {
+    dilution: {
+      diluent_mass_mg: 1234.66,
+      diluent_vol_ul: 1238.2509,
+      sample_mass_mg: 219.93,
+      sample_vol_ul: 220.5697,
+      total_vol_ul: 1458.8206,
+      dilution_factor: 6.613877,
+      stock_mass_mg: 0.0,
+      stock_volume_ml: null,
+      problem: 'stock_diluent',
+      dilution_factor_total: 6.613877,
+      intermediate: null,
+    },
+    quantity: {
+      quantity_mg: null,
+      error: 'stock_diluent',
+      individual_areas: [1125.3809],
+      avg_main_peak_area: 1125.3809,
+      concentration_ug_ml: 73.4453,
+      calibration_slope: 15.782452,
+      calibration_intercept: -33.766783,
+    },
+  },
+  diluent: {
+    dilution: {
+      diluent_mass_mg: -1234.66,
+      diluent_vol_ul: -1238.2509,
+      sample_mass_mg: 1454.59,
+      sample_vol_ul: 1458.8206,
+      total_vol_ul: 220.5697,
+      dilution_factor: null,
+      stock_mass_mg: 2959.75,
+      stock_volume_ml: 2.968358,
+      problem: 'diluent',
+      dilution_factor_total: null,
+      intermediate: null,
+    },
+    quantity: {
+      quantity_mg: null,
+      error: 'diluent',
+      individual_areas: [1125.3809],
+      avg_main_peak_area: 1125.3809,
+      concentration_ug_ml: 73.4453,
+      calibration_slope: 15.782452,
+      calibration_intercept: -33.766783,
+    },
+  },
+  stock: {
+    dilution: {
+      diluent_mass_mg: 1234.66,
+      diluent_vol_ul: 1238.2509,
+      sample_mass_mg: 0.0,
+      sample_vol_ul: 0.0,
+      total_vol_ul: 1238.2509,
+      dilution_factor: null,
+      stock_mass_mg: 2959.75,
+      stock_volume_ml: 2.968358,
+      problem: 'stock',
+      dilution_factor_total: null,
+      intermediate: null,
+    },
+    quantity: {
+      quantity_mg: null,
+      error: 'stock',
+      individual_areas: [1125.3809],
+      avg_main_peak_area: 1125.3809,
+      concentration_ug_ml: 73.4453,
+      calibration_slope: 15.782452,
+      calibration_intercept: -33.766783,
+    },
+  },
+  no_density: {
+    dilution: {
+      diluent_mass_mg: 1234.66,
+      diluent_vol_ul: null,
+      sample_mass_mg: 219.93,
+      sample_vol_ul: null,
+      total_vol_ul: null,
+      dilution_factor: null,
+      stock_mass_mg: 2959.75,
+      stock_volume_ml: null,
+      problem: 'no_density',
+      dilution_factor_total: null,
+      intermediate: null,
+    },
+    quantity: {
+      quantity_mg: null,
+      error: 'no_density',
+      individual_areas: [1125.3809],
+      avg_main_peak_area: 1125.3809,
+      concentration_ug_ml: 73.4453,
+      calibration_slope: 15.782452,
+      calibration_intercept: -33.766783,
+    },
+  },
+  no_declared_volume: {
+    dilution: {
+      diluent_mass_mg: 1234.66,
+      diluent_vol_ul: 1238.2509,
+      sample_mass_mg: 219.93,
+      sample_vol_ul: 220.5697,
+      total_vol_ul: 1458.8206,
+      dilution_factor: 6.613877,
+      stock_mass_mg: null,
+      stock_volume_ml: null,
+      problem: 'no_declared_volume',
+      dilution_factor_total: 6.613877,
+      intermediate: null,
+    },
+    quantity: {
+      quantity_mg: null,
+      error: 'no_declared_volume',
+      individual_areas: [1125.3809],
+      avg_main_peak_area: 1125.3809,
+      concentration_ug_ml: 73.4453,
+      calibration_slope: 15.782452,
+      calibration_intercept: -33.766783,
+    },
+  },
+  intermediate_unweighed: {
+    dilution: {
+      diluent_mass_mg: 1234.66,
+      diluent_vol_ul: 1238.2509,
+      sample_mass_mg: 219.93,
+      sample_vol_ul: 220.5697,
+      total_vol_ul: 1458.8206,
+      dilution_factor: 6.613877,
+      stock_mass_mg: 2959.75,
+      stock_volume_ml: 2.968358,
+      problem: 'intermediate_unweighed',
+      dilution_factor_total: null,
+      intermediate: {
+        diluent_vol_ul: null,
+        stock_vol_ul: null,
+        total_vol_ul: null,
+        dilution_factor: null,
+        problem: null,
+      },
+    },
+    quantity: {
+      quantity_mg: null,
+      error: 'intermediate_unweighed',
+      individual_areas: [1125.3809],
+      avg_main_peak_area: 1125.3809,
+      concentration_ug_ml: 73.4453,
+      calibration_slope: 15.782452,
+      calibration_intercept: -33.766783,
+    },
+  },
+  intermediate_diluent: {
+    dilution: {
+      diluent_mass_mg: 1234.66,
+      diluent_vol_ul: 1238.2509,
+      sample_mass_mg: 219.93,
+      sample_vol_ul: 220.5697,
+      total_vol_ul: 1458.8206,
+      dilution_factor: 6.613877,
+      stock_mass_mg: 2959.75,
+      stock_volume_ml: 2.968358,
+      problem: 'intermediate_diluent',
+      dilution_factor_total: null,
+      intermediate: {
+        diluent_vol_ul: -100.2908,
+        stock_vol_ul: 110.3199,
+        total_vol_ul: null,
+        dilution_factor: null,
+        problem: 'diluent',
+      },
+    },
+    quantity: {
+      quantity_mg: null,
+      error: 'intermediate_diluent',
+      individual_areas: [1125.3809],
+      avg_main_peak_area: 1125.3809,
+      concentration_ug_ml: 73.4453,
+      calibration_slope: 15.782452,
+      calibration_intercept: -33.766783,
+    },
+  },
+  intermediate_stock: {
+    dilution: {
+      diluent_mass_mg: 1234.66,
+      diluent_vol_ul: 1238.2509,
+      sample_mass_mg: 219.93,
+      sample_vol_ul: 220.5697,
+      total_vol_ul: 1458.8206,
+      dilution_factor: 6.613877,
+      stock_mass_mg: 2959.75,
+      stock_volume_ml: 2.968358,
+      problem: 'intermediate_stock',
+      dilution_factor_total: null,
+      intermediate: {
+        diluent_vol_ul: 100.2908,
+        stock_vol_ul: 0.0,
+        total_vol_ul: null,
+        dilution_factor: null,
+        problem: 'stock',
+      },
+    },
+    quantity: {
+      quantity_mg: null,
+      error: 'intermediate_stock',
+      individual_areas: [1125.3809],
+      avg_main_peak_area: 1125.3809,
+      concentration_ug_ml: 73.4453,
+      calibration_slope: 15.782452,
+      calibration_intercept: -33.766783,
+    },
+  },
+  quantity_not_finite: {
+    dilution: {
+      diluent_mass_mg: 1234.66,
+      diluent_vol_ul: 1238.2509,
+      sample_mass_mg: 219.93,
+      sample_vol_ul: 220.5697,
+      total_vol_ul: 1458.8206,
+      dilution_factor: 6.613877,
+      stock_mass_mg: 2959.75,
+      stock_volume_ml: 2.968358,
+      problem: null,
+      dilution_factor_total: 6.613877,
+      intermediate: null,
+    },
+    quantity: {
+      quantity_mg: null,
+      error: 'quantity_not_finite',
+      individual_areas: [1e300],
+      avg_main_peak_area: 1e300,
+      concentration_ug_ml: null,
+      calibration_slope: 1e-310,
+      calibration_intercept: 0.0,
+    },
+  },
+}
+
+const NON_FINITE_STOCK_ROW = {
+  dilution: {
+    diluent_mass_mg: 1234.66,
+    diluent_vol_ul: 1238.2509,
+    sample_mass_mg: 219.93,
+    sample_vol_ul: 220.5697,
+    total_vol_ul: 1458.8206,
+    dilution_factor: 6.613877,
+    stock_mass_mg: null,
+    stock_volume_ml: null,
+    problem: 'stock_diluent',
+    dilution_factor_total: 6.613877,
+    intermediate: null,
+  },
+  quantity: {
+    quantity_mg: null,
+    error: 'stock_diluent',
+    individual_areas: [1125.3809],
+    avg_main_peak_area: 1125.3809,
+    concentration_ug_ml: 73.4453,
+    calibration_slope: 15.782452,
+    calibration_intercept: -33.766783,
+  },
+}
+
+// What the dilution panel says it could not work out, per code. null: the code is only
+// ever the quantity panel's reason (dilution.problem is null on its row).
+const DILUTION_LABEL: [keyof typeof PROBLEM_WORDING, string | null][] = [
+  ['stock_diluent', 'Stock volume'],
+  ['diluent', 'Dilution factor'],
+  ['stock', 'Dilution factor'],
+  ['no_density', 'Dilution factor and stock volume'],
+  ['no_declared_volume', 'Stock volume'],
+  ['intermediate_unweighed', 'Total dilution factor'],
+  ['intermediate_diluent', 'Total dilution factor'],
+  ['intermediate_stock', 'Total dilution factor'],
+  ['quantity_not_finite', null],
 ]
 
 describe('CalculationVisuals with a weighing problem', () => {
@@ -119,30 +409,47 @@ describe('CalculationVisuals with a weighing problem', () => {
     expect(screen.getByText(/Retention Time Match/)).toBeInTheDocument()
     // One reason line per panel that cannot show a number.
     expect(
-      document.body.textContent?.split('stock vial weighing is missing')
+      document.body.textContent?.split(PROBLEM_WORDING.stock_diluent)
     ).toHaveLength(3)
   })
 
-  it.each(PROBLEM_WORDING)(
-    'explains %s in the dilution panel and the quantity panel',
-    (code, sentence) => {
-      const trace = {
-        ...FLAGGED_ROW_TRACE,
-        dilution: { ...FLAGGED_ROW_TRACE.dilution, problem: code },
-        quantity: { ...FLAGGED_ROW_TRACE.quantity, error: code },
+  // The whole visible message, not a fragment of it: the label before the colon and the
+  // sentence after it, matched in full, so a typo that changes or appends text fails.
+  it.each(DILUTION_LABEL)(
+    'says %s in full in every panel it can reach',
+    (code, label) => {
+      const sentence = PROBLEM_WORDING[code]
+      const { container } = render(
+        <CalculationVisuals trace={CAPTURED_ROWS[code]} />
+      )
+      expect(
+        screen.getByText(`Mass not determined: ${sentence}`)
+      ).toBeInTheDocument()
+      if (label) {
+        expect(
+          screen.getByText(`${label} not determined: ${sentence}`)
+        ).toBeInTheDocument()
+        expect(container.textContent?.split(sentence)).toHaveLength(3)
+      } else {
+        // quantity_not_finite is the quantity panel's reason only.
+        expect(container.textContent?.split(sentence)).toHaveLength(2)
       }
-      const { container } = render(<CalculationVisuals trace={trace} />)
-      expect(container.textContent?.split(sentence)).toHaveLength(3)
     }
   )
 
-  it('falls back to the raw code for a problem it has no wording for', () => {
-    const trace = {
-      dilution: { ...FLAGGED_ROW_TRACE.dilution, problem: 'made_up_code' },
+  // dilution_incomplete is unreachable on any dilution the engine builds and has no copy
+  // on purpose: it is the quantity gate failing closed if an engine invariant is broken,
+  // and the raw code is the signal. Pinned so the omission reads as deliberate.
+  it.each(['made_up_code', 'dilution_incomplete'])(
+    'falls back to the raw code for %s, which has no wording',
+    code => {
+      const trace = {
+        dilution: { ...FLAGGED_ROW_TRACE.dilution, problem: code },
+      }
+      const { container } = render(<CalculationVisuals trace={trace} />)
+      expect(container.textContent).toContain(`not determined: ${code}`)
     }
-    const { container } = render(<CalculationVisuals trace={trace} />)
-    expect(container.textContent).toContain('not determined: made_up_code')
-  })
+  )
 
   it('shows the dilution factor and stock volume as not determined, with the reason', () => {
     expect(() =>
@@ -150,7 +457,9 @@ describe('CalculationVisuals with a weighing problem', () => {
     ).not.toThrow()
     expect(screen.getAllByText('not determined')).toHaveLength(2)
     expect(
-      screen.getByText(/stock vial weighing is missing/)
+      screen.getByText(
+        `Dilution factor and stock volume not determined: ${PROBLEM_WORDING.stock_diluent}`
+      )
     ).toBeInTheDocument()
   })
 
@@ -162,7 +471,7 @@ describe('CalculationVisuals with a weighing problem', () => {
     // Undiluted concentration and mass: both need the dilution factor and stock volume.
     expect(screen.getAllByText('not determined')).toHaveLength(2)
     expect(
-      screen.getByText(/Mass not determined: .*stock vial weighing/)
+      screen.getByText(`Mass not determined: ${PROBLEM_WORDING.stock_diluent}`)
     ).toBeInTheDocument()
   })
 
@@ -225,9 +534,11 @@ describe('CalculationVisuals with no diluent density', () => {
     expect(screen.getByText('1234.66 mg')).toBeInTheDocument()
     expect(screen.getByText('219.93 mg')).toBeInTheDocument()
     expect(screen.getByText('2959.75 mg')).toBeInTheDocument()
-    // The raw code is pinned as it prints TODAY. It is not the wanted wording: Task 6
-    // supplies the copy for no_density, and this line should change with it.
-    expect(screen.getByText(/not determined: no_density/)).toBeInTheDocument()
+    expect(
+      screen.getByText(
+        `Dilution factor and stock volume not determined: ${PROBLEM_WORDING.no_density}`
+      )
+    ).toBeInTheDocument()
   })
 
   it('renders the whole trace of a no_density row without throwing', () => {
@@ -304,10 +615,37 @@ describe('CalculationVisuals with null masses', () => {
     expect(() =>
       render(<CalculationVisuals trace={{ dilution: LIQUID_DILUTION }} />)
     ).not.toThrow()
-    // Only the stock vial mass is undetermined; the declared volume is the stock volume.
-    expect(screen.getAllByText('not determined')).toHaveLength(1)
+    // Nothing is undetermined: the stock vial mass does not exist for a liquid prep, and
+    // the declared volume is the stock volume. A healthy row has no problem line at all.
+    expect(screen.queryByText('not determined')).not.toBeInTheDocument()
+    expect(screen.getByText('not applicable')).toBeInTheDocument()
+    expect(document.body.textContent).not.toContain('not determined:')
     expect(screen.getByText('3.0000 mL')).toBeInTheDocument()
     expect(screen.getByText('6.61×')).toBeInTheDocument()
+  })
+
+  it('says not applicable for a liquid row with a problem, and not determined for what the problem stopped', () => {
+    render(<CalculationVisuals trace={CAPTURED_ROWS.no_declared_volume} />)
+    // The stock vial mass never existed; the stock volume is what the problem stopped.
+    // The dilution factor is a number, and the undiluted concentration and mass are not.
+    expect(screen.getByText('not applicable')).toBeInTheDocument()
+    expect(screen.getAllByText('not determined')).toHaveLength(3)
+    expect(screen.getByText('6.61×')).toBeInTheDocument()
+  })
+
+  it('says not determined for a powder stock mass that a non-finite weighing nulled', () => {
+    render(<CalculationVisuals trace={NON_FINITE_STOCK_ROW} />)
+    // The stock vial mass, the stock volume, the undiluted concentration and the mass.
+    expect(screen.getAllByText('not determined')).toHaveLength(4)
+    expect(screen.queryByText('not applicable')).not.toBeInTheDocument()
+  })
+
+  it('does not throw when the concentration itself overflowed', () => {
+    // quantity_not_finite with concentration_ug_ml null: the Conc row cannot show a number.
+    expect(() =>
+      render(<CalculationVisuals trace={CAPTURED_ROWS.quantity_not_finite} />)
+    ).not.toThrow()
+    expect(screen.getAllByText('not determined').length).toBeGreaterThan(0)
   })
 
   it('captions the stock volume as mass over density, not over 1000', () => {
