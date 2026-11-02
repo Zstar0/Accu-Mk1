@@ -15,9 +15,13 @@ import json
 from dataclasses import replace
 from pathlib import Path
 
+import pytest
+
 from calculations.hplc_processor import (
+    IntermediateWeights,
     WeightInputs,
     calculate_dilution_factor,
+    calculate_intermediate,
     process_hplc_analysis,
 )
 from scripts.capture_hplc_golden import input_from_case as _input_from
@@ -159,3 +163,204 @@ def test_a_problem_keeps_the_quantity_trace_inputs_and_drops_only_the_weighing_v
     assert set(ok) - set(bad) == {
         "undiluted_concentration_ug_ml", "mass_ug", "stock_volume_ml", "dilution_factor",
     }
+
+
+# ---- Task 3: the intermediate step and the total dilution factor ----------------
+#
+# A two-step prep for a high-concentration sample: stock vial -> intermediate vial
+# -> dilution vial. The bench plan is a 9000 ug/mL stock taken to 1500 ug/mL in
+# 1500 uL, which is 250 uL of stock into 1250 uL of diluent. Weighed at the
+# balance's 0.1 mg: the vial 2950.0 mg, then +1246.4 mg of diluent, then +249.0 mg
+# of stock (a hair under plan, as a real pipetting is). Every leg is comfortably
+# positive so the mutation checks below are not vacuous.
+INT_WEIGHTS = IntermediateWeights(
+    int_vial_empty=2950.0,
+    int_vial_with_diluent=4196.4,
+    int_vial_with_diluent_and_sample=4445.4,
+)
+STOCK_CONC = 9000.0
+
+# What the bench sheet itself says for those weighings: calc.js dilutionActual run
+# on the same three weighings, a 9000 ug/mL stock and density 997.1, then rounded
+# to the engine's places. An oracle written by someone else, not this engine's output.
+INT_FROM_BENCH_SHEET = {
+    "diluent_vol_ul": 1250.0251,
+    "stock_vol_ul": 249.7242,
+    "total_vol_ul": 1499.7493,
+    "actual_conc_ug_ml": 1498.5957,
+    "dilution_factor": 6.005622,
+    "problem": None,
+}
+
+
+def _unrounded_factor(empty, with_diluent, with_all):
+    """total volume / stock volume, straight from three weighings, no rounding."""
+    diluent_ul = (with_diluent - empty) / DENSITY * 1000
+    stock_ul = (with_all - with_diluent) / DENSITY * 1000
+    return (diluent_ul + stock_ul) / stock_ul
+
+
+def test_no_intermediate_leaves_total_equal_to_the_single_factor():
+    d = calculate_dilution_factor(FORWARD_WEIGHTS, 997.1)
+    assert d["dilution_factor_total"] == d["dilution_factor"]
+    assert d["intermediate"] is None
+
+
+def test_total_is_the_product_of_the_two_legs():
+    d = calculate_dilution_factor(FORWARD_WEIGHTS, 997.1, intermediate=INT_WEIGHTS)
+    expected = round(d["intermediate"]["dilution_factor"] * d["dilution_factor"], 6)
+    assert d["dilution_factor_total"] == expected
+    assert d["problem"] is None
+
+
+def test_total_multiplies_the_rounded_legs_not_the_raw_ones():
+    # The rounding order is load-bearing: each leg is rounded to 6 places FIRST,
+    # then multiplied (the order calculate_quantity's chain has always used).
+    # Multiplying the raw legs lands on a different sixth decimal for these
+    # weighings, which is what makes this a test and not a coincidence.
+    w = FORWARD_WEIGHTS
+    final_raw = _unrounded_factor(w.dil_vial_empty, w.dil_vial_with_diluent, w.dil_vial_with_diluent_and_sample)
+    int_raw = _unrounded_factor(
+        INT_WEIGHTS.int_vial_empty,
+        INT_WEIGHTS.int_vial_with_diluent,
+        INT_WEIGHTS.int_vial_with_diluent_and_sample,
+    )
+    rounded_legs = round(round(int_raw, 6) * round(final_raw, 6), 6)
+    raw_legs = round(int_raw * final_raw, 6)
+    assert rounded_legs != raw_legs  # the fixture really does discriminate
+    d = calculate_dilution_factor(w, DENSITY, intermediate=INT_WEIGHTS)
+    assert d["dilution_factor_total"] == rounded_legs
+
+
+def test_the_intermediate_matches_the_bench_sheet():
+    assert calculate_intermediate(INT_WEIGHTS, STOCK_CONC, DENSITY) == INT_FROM_BENCH_SHEET
+
+
+def test_the_intermediate_factor_does_not_need_the_stock_concentration():
+    # The engine is never told the stock concentration (it needs the declared mass),
+    # so the factor must not depend on it; only the concentration display does.
+    i = calculate_intermediate(INT_WEIGHTS, None, DENSITY)
+    assert i["dilution_factor"] == INT_FROM_BENCH_SHEET["dilution_factor"]
+    assert i["actual_conc_ug_ml"] is None
+
+
+def test_intermediate_with_zero_added_stock_is_flagged():
+    iw = replace(INT_WEIGHTS, int_vial_with_diluent_and_sample=INT_WEIGHTS.int_vial_with_diluent)
+    i = calculate_intermediate(iw, 9000.0, 997.1)
+    assert i["problem"] == "stock"
+    assert i["dilution_factor"] is None
+    # Dennis keeps the two leg volumes so a tech can see them, and works nothing out.
+    assert i["diluent_vol_ul"] == INT_FROM_BENCH_SHEET["diluent_vol_ul"]
+    assert i["total_vol_ul"] is None and i["actual_conc_ug_ml"] is None
+
+
+def test_intermediate_with_negative_added_stock_is_flagged():
+    iw = replace(INT_WEIGHTS, int_vial_with_diluent_and_sample=INT_WEIGHTS.int_vial_with_diluent - 1)
+    assert calculate_intermediate(iw, STOCK_CONC, DENSITY)["problem"] == "stock"
+
+
+def test_intermediate_with_negative_added_diluent_is_flagged():
+    iw = replace(INT_WEIGHTS, int_vial_with_diluent=INT_WEIGHTS.int_vial_empty - 1)
+    i = calculate_intermediate(iw, STOCK_CONC, DENSITY)
+    assert i["problem"] == "diluent"
+    assert i["dilution_factor"] is None
+
+
+def test_intermediate_with_zero_added_diluent_is_legal():
+    # Same asymmetry as the final vial: zero diluent is a neat transfer (factor 1),
+    # zero stock is not a dilution at all.
+    iw = replace(
+        INT_WEIGHTS,
+        int_vial_with_diluent=INT_WEIGHTS.int_vial_empty,
+        int_vial_with_diluent_and_sample=INT_WEIGHTS.int_vial_empty + 249.0,
+    )
+    i = calculate_intermediate(iw, STOCK_CONC, DENSITY)
+    assert i["problem"] is None
+    assert i["dilution_factor"] == 1.0
+    assert i["actual_conc_ug_ml"] == STOCK_CONC
+
+
+@pytest.mark.parametrize(
+    "field",
+    ["int_vial_empty", "int_vial_with_diluent", "int_vial_with_diluent_and_sample"],
+)
+def test_declared_intermediate_with_missing_weighings_does_not_compute(field):
+    iw = replace(INT_WEIGHTS, **{field: None})
+    d = calculate_dilution_factor(FORWARD_WEIGHTS, 997.1, intermediate=iw)
+    assert d["dilution_factor_total"] is None
+    assert d["problem"] == "intermediate_unweighed"
+    # No fallback to a planned number: nothing the engine returns is a stand-in
+    # for the weighing that was not made.
+    assert d["intermediate"]["dilution_factor"] is None
+    assert d["intermediate"]["actual_conc_ug_ml"] is None
+    # A row with a problem has neither derived value, same as every other problem.
+    assert d["dilution_factor"] is None and d["stock_volume_ml"] is None
+
+
+def test_declared_intermediate_with_nothing_weighed_does_not_compute():
+    d = calculate_dilution_factor(
+        FORWARD_WEIGHTS, DENSITY, intermediate=IntermediateWeights(None, None, None)
+    )
+    assert d["dilution_factor_total"] is None
+    assert d["problem"] == "intermediate_unweighed"
+
+
+def test_a_bad_intermediate_leg_flags_the_row_and_names_the_intermediate():
+    # The bare "stock" and "diluent" codes already mean the final dilution vial, so
+    # a tech reading one must not be sent to the wrong vial.
+    zero_stock = replace(INT_WEIGHTS, int_vial_with_diluent_and_sample=INT_WEIGHTS.int_vial_with_diluent)
+    d = calculate_dilution_factor(FORWARD_WEIGHTS, DENSITY, intermediate=zero_stock)
+    assert d["problem"] == "intermediate_stock"
+    assert d["dilution_factor_total"] is None and d["dilution_factor"] is None
+
+    negative_diluent = replace(INT_WEIGHTS, int_vial_with_diluent=INT_WEIGHTS.int_vial_empty - 1)
+    d = calculate_dilution_factor(FORWARD_WEIGHTS, DENSITY, intermediate=negative_diluent)
+    assert d["problem"] == "intermediate_diluent"
+    assert d["dilution_factor_total"] is None
+
+
+def test_a_row_that_already_has_a_problem_has_no_total_and_keeps_its_code():
+    # The stock-leg code is reported first (pinned above), and an intermediate,
+    # complete or not, never displaces an existing problem.
+    bad_stock_leg = replace(FORWARD_WEIGHTS, stock_vial_with_diluent=FORWARD_WEIGHTS.stock_vial_empty)
+    bad_final_stock = replace(
+        FORWARD_WEIGHTS, dil_vial_with_diluent_and_sample=FORWARD_WEIGHTS.dil_vial_with_diluent
+    )
+    unweighed = replace(INT_WEIGHTS, int_vial_with_diluent_and_sample=None)
+    for weights, code in ((bad_stock_leg, "stock_diluent"), (bad_final_stock, "stock")):
+        for intermediate in (INT_WEIGHTS, unweighed):
+            d = calculate_dilution_factor(weights, DENSITY, intermediate=intermediate)
+            assert d["problem"] == code
+            assert d["dilution_factor_total"] is None
+            # the audit values stay, so a tech can see which weighing is wrong
+            assert d["intermediate"] is not None
+
+
+def test_a_complete_intermediate_leaves_the_final_leg_values_untouched():
+    plain = calculate_dilution_factor(FORWARD_WEIGHTS, DENSITY)
+    two_step = calculate_dilution_factor(FORWARD_WEIGHTS, DENSITY, intermediate=INT_WEIGHTS)
+    assert set(two_step) == set(plain)
+    assert {k: v for k, v in two_step.items() if k not in ("dilution_factor_total", "intermediate")} == {
+        k: v for k, v in plain.items() if k not in ("dilution_factor_total", "intermediate")
+    }
+
+
+def test_the_pipeline_carries_the_intermediate_into_the_trace():
+    inp = _input_from(FORWARD_CASE)
+    one_step = process_hplc_analysis(inp)
+    assert one_step["calculation_trace"]["dilution"]["intermediate"] is None
+    two_step = process_hplc_analysis(replace(inp, intermediate=INT_WEIGHTS))
+    trace = two_step["calculation_trace"]["dilution"]
+    assert trace["intermediate"]["dilution_factor"] == INT_FROM_BENCH_SHEET["dilution_factor"]
+    assert trace["dilution_factor_total"] is not None
+
+
+def test_a_declared_but_unweighed_intermediate_gives_no_quantity():
+    inp = _input_from(FORWARD_CASE)
+    result = process_hplc_analysis(
+        replace(inp, intermediate=IntermediateWeights(2950.0, None, None))
+    )
+    assert result["quantity_mg"] is None
+    assert result["calculation_trace"]["quantity"]["error"] == "intermediate_unweighed"
+    # Purity and concentration do not depend on the weighings.
+    assert result["purity_percent"] == FORWARD_CASE["expected"]["purity_percent"]
