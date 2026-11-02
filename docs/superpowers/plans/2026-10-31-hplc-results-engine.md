@@ -789,6 +789,15 @@ git commit -- backend/calculations/hplc_processor.py backend/tests/test_hplc_pro
     live in `calculation_trace.quantity.dilution_factor_steps`.
   - `HPLCAnalysisResponse` and `_analysis_to_response` declare `prep_form` and
     `dilution_factor_steps`. Anything not declared on the model is dropped silently.
+  - **The five stock and dilution weighings are required for a weighed form, and a blank one
+    is a 422** (Task 4's fix round). `powder` and `bac` both weigh a stock vial, so for those
+    forms a missing weighing is a request error and the tech deserves a message naming the
+    field, not a problem code buried in a calculation trace. `liquid` is the opposite: its
+    stock vial is never weighed, so its three stock fields must be allowed absent. Validate
+    per form. The engine guards the same condition independently and reports `stock_diluent`
+    rather than raising, which is defence in depth behind this check, not a substitute for it:
+    the engine is reachable from the worksheet path and from future callers, and
+    `WeightInputs` being annotated `float` is a hint rather than a runtime guarantee.
   - **A blank weighing must arrive as `None`, never `0`** (Task 3's review, Minor 3). The
     engine treats only `None` as unweighed, so a blank sent as `0.0` is reported as
     `intermediate_stock` or `intermediate_diluent` rather than `intermediate_unweighed`, and
