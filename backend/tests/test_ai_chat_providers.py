@@ -520,12 +520,13 @@ async def test_other_failures_are_reported_without_their_text(ai_chat_api, ai_ch
     assert "secret-looking" not in str(result)
 
 
-async def test_a_result_for_edited_settings_is_not_recorded(ai_chat_api, ai_chat_env, monkeypatch):
+@pytest.mark.parametrize("edit", [{"ssh_port": 2222}, {"enabled": False}])  # enabled is not in the snapshot
+async def test_a_result_for_edited_settings_is_not_recorded(ai_chat_api, ai_chat_env, monkeypatch, edit):
     start = sessions.spawn_command
 
     def edited_meanwhile(provider):  # an admin saves while the agent is being tested
         with ai_chat_env.Session() as s:
-            s.execute(update(AcpProvider).where(AcpProvider.id == 1).values(ssh_port=2222))
+            s.execute(update(AcpProvider).where(AcpProvider.id == 1).values(**edit))
             s.commit()
         return start(provider)
 
@@ -533,4 +534,5 @@ async def test_a_result_for_edited_settings_is_not_recorded(ai_chat_api, ai_chat
     result = await probe(ai_chat_api, 1)
     assert result["ok"] is True  # the caller still gets the answer
     row = stored(ai_chat_env, 1)
-    assert (row.ssh_port, row.last_test_at, row.last_test_ok) == (2222, None, None)
+    assert (row.last_test_at, row.last_test_ok) == (None, None)
+    assert all(getattr(row, k) == v for k, v in edit.items())

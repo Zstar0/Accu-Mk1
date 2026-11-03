@@ -304,12 +304,14 @@ async def generate_key(provider_id: int, db: Session = Depends(get_db), user=Dep
 
 @router.post("/{provider_id}/test", response_model=TestResult)
 async def test_connection(provider_id: int, db: Session = Depends(get_db), user=Depends(require_admin)):
-    snapshot = sessions.ProviderSnapshot.from_row(_load(db, provider_id))
+    row = _load(db, provider_id)
+    snapshot, edited_at = sessions.ProviderSnapshot.from_row(row), row.updated_at
     db.commit()  # ends the read transaction: its connection goes back to the pool, not held across the agent
     out = await _run_test(snapshot, user.id)
     fresh = db.get(AcpProvider, provider_id)
-    # A provider edited or deleted meanwhile is not the one that was tested: the result goes back, but is not recorded.
-    if fresh is not None and sessions.ProviderSnapshot.from_row(fresh) == snapshot:
+    # A provider edited or deleted meanwhile is not the one that was tested: the result goes back, but is not
+    # recorded. `updated_at` catches any admin write (the snapshot has no `enabled`), the snapshot what was tested.
+    if fresh is not None and fresh.updated_at == edited_at and sessions.ProviderSnapshot.from_row(fresh) == snapshot:
         db.execute(update(AcpProvider).where(AcpProvider.id == provider_id).values(
             last_test_at=_utcnow(), last_test_ok=out["ok"], last_test_error=out["error"],
             updated_at=AcpProvider.updated_at,  # "last edited by an admin" is not a test
