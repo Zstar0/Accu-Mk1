@@ -7,6 +7,9 @@ Flags:
                       Every request is appended to FILE.log, one line each: `new <id>`, `load <id>`,
                       `resume <id>`, `prompt <JSON list of the text blocks>`, `cancel`, and `eof` when stdin closes.
   --exit-on-prompt    exit with status 3 as soon as a prompt arrives
+  --exit-on-new       exit with status 3 as soon as session/new arrives
+  --no-init           never answer initialize
+  --linger SECONDS    stay up this long after stdin closes
   --tools-reply FILE  answer `/tools` with FILE's text instead of T7A
 
 Prompts, by their last text block:
@@ -16,6 +19,7 @@ Prompts, by their last text block:
   PERMIT_NOREJECT   the same without reject_once
   SLOW              replies `working`, waits for session/cancel, then stops with `cancelled`
   PLAN              sends an empty plan update, then echoes
+  STALE             sends a message chunk for another session id, then echoes
   anything else     `echo: <text>`, in two chunks
 
 Like Hermes (spec 7, G10): a prompt for a session id this agent does not know stops with `refusal` and no text,
@@ -25,6 +29,7 @@ import argparse
 import asyncio
 import json
 import os
+import time
 from pathlib import Path
 
 import acp
@@ -71,6 +76,8 @@ class FakeAgent(acp.Agent):
         await self.conn.session_update(session_id, acp.update_agent_message_text(text))
 
     async def initialize(self, protocol_version, client_capabilities=None, client_info=None, **kwargs):
+        if self.args.no_init:
+            await asyncio.Event().wait()
         resume = SessionResumeCapabilities() if self.args.resume else None
         caps = AgentCapabilities(load_session=not self.args.no_load,
                                  session_capabilities=SessionCapabilities(resume=resume))
@@ -78,6 +85,8 @@ class FakeAgent(acp.Agent):
                                   agent_info=Implementation(name="fake-acp-agent", version="1.0"))
 
     async def new_session(self, cwd, additional_directories=None, mcp_servers=None, **kwargs):
+        if self.args.exit_on_new:
+            os._exit(3)
         session_id = os.urandom(8).hex()
         self.known.add(session_id)
         if self.state:
@@ -122,6 +131,8 @@ class FakeAgent(acp.Agent):
         else:
             if last == "PLAN":
                 await self.conn.session_update(session_id, acp.update_plan([]))
+            elif last == "STALE":
+                await self.say("another-session", "stale")
             await self.say(session_id, "echo: ")
             await self.say(session_id, last)
         return PromptResponse(stop_reason="end_turn")
@@ -150,11 +161,15 @@ def main() -> None:
     parser.add_argument("--resume", action="store_true")
     parser.add_argument("--state")
     parser.add_argument("--exit-on-prompt", action="store_true")
+    parser.add_argument("--exit-on-new", action="store_true")
+    parser.add_argument("--no-init", action="store_true")
+    parser.add_argument("--linger", type=float, default=0.0)
     parser.add_argument("--tools-reply")
     agent = FakeAgent(parser.parse_args())
     # session/resume is on acp's unstable list: without this flag the agent answers method_not_found.
     asyncio.run(acp.run_agent(agent, use_unstable_protocol=True))
     agent.log("eof")
+    time.sleep(agent.args.linger)
 
 
 if __name__ == "__main__":

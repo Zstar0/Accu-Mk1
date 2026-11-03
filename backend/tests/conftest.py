@@ -130,9 +130,15 @@ async def ai_chat_env(ai_chat_db, monkeypatch):
 
     monkeypatch.setattr(sessions.LiveSession, "__init__", tracked)
     yield env
-    for live in created:
-        with anyio.fail_after(15):
-            await live.close()
+    timed_out = None
+    for live in created:  # every one of them, so one stuck session cannot strand the rest
+        try:
+            with anyio.fail_after(15):
+                await live.close()
+        except TimeoutError as exc:
+            timed_out = exc
+    if timed_out is not None:
+        raise timed_out
 
 
 def pytest_configure(config):

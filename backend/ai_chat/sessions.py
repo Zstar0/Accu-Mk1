@@ -42,6 +42,7 @@ from acp.schema import (
 from cryptography.fernet import InvalidToken
 from pydantic import BaseModel
 from sqlalchemy import func, select, update
+from sqlalchemy.exc import IntegrityError
 
 from ai_chat import context, hub, transport
 from ai_chat.models import AcpProvider, AiChat, AiChatMessage
@@ -54,6 +55,9 @@ _CLIENT_CAPS = ClientCapabilities(fs=FileSystemCapabilities(read_text_file=False
                                   terminal=False)
 _INIT_TIMEOUT_S = 30.0
 _GRACE_S = 5.0  # bounds every wait on a process or pipe that is going away
+# ponytail: a writer loses at most once to each other writer, so 5 attempts guarantee 5 simultaneous writers on one
+# chat. More usually land too, without the guarantee; raise this if a chat ever sees more.
+_SEQ_ATTEMPTS = 5
 
 _session_factory = SessionLocal  # module attribute so tests can point it at their own database
 
@@ -117,12 +121,23 @@ spawn_command: Callable[[ProviderSnapshot], list[str]] = ssh_command  # tests sw
 # ---- DB helpers (sync; call them through asyncio.to_thread) -----------------------------------
 
 def persist_message(chat_id: int, role: str, text: str, meta: dict | None) -> int:
-    """Append a transcript row; returns its seq (max + 1 in the chat)."""
-    with _session_factory() as db:
-        seq = (db.scalar(select(func.max(AiChatMessage.seq)).where(AiChatMessage.chat_id == chat_id)) or 0) + 1
-        db.add(AiChatMessage(chat_id=chat_id, seq=seq, role=role, text=text, meta=meta))
-        db.commit()
-        return seq
+    """Append a transcript row; returns its seq (max + 1 in the chat).
+
+    Writers race on the max: acp runs each incoming request in its own task, and routes write too. The loser hits
+    the unique (chat_id, seq), and retries with a fresh max.
+    """
+    attempt = 0
+    while True:
+        attempt += 1
+        try:
+            with _session_factory() as db:  # leaving it rolls a failed attempt back
+                seq = (db.scalar(select(func.max(AiChatMessage.seq)).where(AiChatMessage.chat_id == chat_id)) or 0) + 1
+                db.add(AiChatMessage(chat_id=chat_id, seq=seq, role=role, text=text, meta=meta))
+                db.commit()
+                return seq
+        except IntegrityError:
+            if attempt == _SEQ_ATTEMPTS:
+                raise
 
 
 def update_message_meta(chat_id: int, seq: int, patch: dict) -> None:
@@ -186,7 +201,11 @@ class Mk1Client(acp.Client):
 
     async def session_update(self, session_id, update, **kwargs) -> None:
         s = self._s
-        if s.replaying:  # restored history: Mk1's own transcript is what the panel shows
+        # Restored history: Mk1's own transcript is what the panel shows. No await ahead of this check: unlike
+        # prompt, load_session has no wait for in-flight updates.
+        if s.replaying:
+            return
+        if s.acp_session_id is not None and session_id != s.acp_session_id:  # a session this chat has left
             return
         if isinstance(update, AgentMessageChunk):
             if isinstance(update.content, TextContentBlock):
@@ -242,6 +261,7 @@ class LiveSession:
         self._ready: asyncio.Future | None = None
         self._stop = asyncio.Event()
         self._prompt_task: asyncio.Future | None = None
+        self._cancel_send: asyncio.Future | None = None  # held so nothing collects or interrupts the send
 
     # -- lifecycle ------------------------------------------------------------------------------
 
@@ -253,7 +273,11 @@ class LiveSession:
 
     async def cancel(self) -> None:
         """session/cancel for a running prompt; the agent then ends it with `cancelled`."""
-        if self._prompt_task is None or self.dead:
+        if self._prompt_task is not None:
+            await self._send_cancel()
+
+    async def _send_cancel(self) -> None:
+        if self.dead:
             return
         # Bounded: acp's sender never answers once its writer task died on a broken pipe.
         with contextlib.suppress(ConnectionError, TimeoutError):
@@ -265,6 +289,8 @@ class LiveSession:
         if self._owner is None:
             return
         await self.cancel()
+        if self._cancel_send is not None:  # a cancelled turn's session/cancel goes out before EOF too
+            await asyncio.wait({self._cancel_send})
         self._stop.set()
         await asyncio.wait({self._owner})
 
@@ -402,15 +428,25 @@ class LiveSession:
             if result.stop_reason == "refusal" and not result.text:
                 # Refusal guard (G10): the agent does not know this session. Open a new one seeded with the
                 # chat's recap, and retry once.
-                recap = await self._new_session(recap=True)
+                try:
+                    recap = await self._new_session(recap=True)
+                except AgentUnreachable:  # it died after refusing
+                    return TurnResult("agent_exited", result.text, result.tools)
                 result = await self._prompt([recap, *blocks] if recap else blocks)
             return result
         finally:
             self.last_active = time.monotonic()
 
     async def _new_session(self, recap: bool) -> str | None:
-        """session/new, stored on the chat. Returns the chat's recap block when `recap` (None if empty)."""
-        response = await self._conn.new_session(cwd=self.provider.session_cwd, mcp_servers=[])
+        """session/new, stored on the chat. Returns the chat's recap block when `recap` (None if empty). Raises
+        `AgentUnreachable` when the process died under the request."""
+        try:
+            response = await self._conn.new_session(cwd=self.provider.session_cwd, mcp_servers=[])
+        except Exception as exc:
+            if not await self._agent_gone(exc):
+                raise
+            self.dead = True
+            raise AgentUnreachable(list(self.stderr_tail)) from exc
         self.acp_session_id = response.session_id
         if self.chat_id is None:
             return None
@@ -428,7 +464,11 @@ class LiveSession:
             stop_reason = (await self._prompt_task).stop_reason
         except asyncio.CancelledError:
             if asyncio.current_task().cancelling():
-                raise  # the caller (Stop or close) cancelled the turn
+                # The caller cancelled the turn, which also dropped the request inside acp, so only session/cancel
+                # stops the agent's turn and its tool (G8). A repeat cancel ends this wait, never the held send.
+                self._cancel_send = asyncio.ensure_future(self._send_cancel())
+                await asyncio.wait({self._cancel_send})
+                raise
             stop_reason = "agent_exited"  # the owner cancelled the prompt: the process died
         except Exception as exc:
             if not await self._agent_gone(exc):
@@ -442,7 +482,10 @@ class LiveSession:
 
     async def _agent_gone(self, exc: Exception) -> bool:
         """Did the process go away under this request? acp reports a closed pipe as ConnectionError, which
-        can arrive before the exit status, so wait (bounded) for the process in that case."""
+        can arrive before the exit status, so wait (bounded) for the process in that case. While closing it counts
+        as gone at once: acp rejects requests before the transport's own wait starts, so this wait would end first."""
+        if self._stop.is_set():
+            return True
         if isinstance(exc, ConnectionError) and not self.dead and self.proc.returncode is None:
             with contextlib.suppress(TimeoutError):
                 await asyncio.wait_for(self.proc.wait(), _GRACE_S)

@@ -2,12 +2,16 @@
 import asyncio
 import json
 import sys
+import threading
 import time
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 import anyio
 import pytest
 from cryptography.fernet import Fernet
+from sqlalchemy import select
+from sqlalchemy.exc import IntegrityError
 
 from ai_chat import sessions, transport
 from ai_chat.models import AcpProvider, AiChat, AiChatMessage
@@ -177,6 +181,17 @@ async def test_thoughts_and_tool_calls_published(ai_chat_env):
 
 # ---- process lifecycle -----------------------------------------------------------------------
 
+async def test_updates_of_another_session_are_dropped(ai_chat_env):
+    s = ai_chat_env.session()
+    with anyio.fail_after(30):
+        await s.start()
+        await s.attach(None)
+        result = await s.run_turn("t1", ["STALE"])
+        await closed(s)
+    assert result.text == "echo: STALE"
+    assert [e["text"] for e in ai_chat_env.events()] == ["echo: ", "STALE"]
+
+
 async def test_agent_exit_mid_turn(ai_chat_env):
     ai_chat_env.flags = ["--exit-on-prompt"]
     s = ai_chat_env.session()
@@ -204,12 +219,50 @@ async def test_unreachable_carries_stderr_tail(ai_chat_env, monkeypatch):
     assert s.proc.returncode == 255 and s.dead
 
 
+async def test_start_with_a_raising_spawn_command(ai_chat_env, monkeypatch):
+    def refuse(provider):
+        raise sessions.AgentUnreachable(["provider key cannot be decrypted; generate a new key"])
+
+    monkeypatch.setattr(sessions, "spawn_command", refuse)
+    s = ai_chat_env.session()
+    with anyio.fail_after(4):
+        with pytest.raises(sessions.AgentUnreachable):
+            await s.start()
+        await s.close()
+    assert s.proc is None and s.dead
+
+
+async def test_start_with_a_missing_executable(ai_chat_env, monkeypatch, tmp_path):
+    monkeypatch.setattr(sessions, "spawn_command", lambda provider: [str(tmp_path / "no-such-agent")])
+    s = ai_chat_env.session()
+    with anyio.fail_after(4):
+        with pytest.raises(FileNotFoundError):
+            await s.start()
+        await s.close()
+    assert s.proc is None and s.dead
+
+
+async def test_close_racing_a_pending_initialize(ai_chat_env):
+    ai_chat_env.flags = ["--no-init"]
+    s = ai_chat_env.session()
+    with anyio.fail_after(10):
+        start = asyncio.create_task(s.start())
+        while s.proc is None:
+            await asyncio.sleep(0.02)
+        await closed(s)
+        with pytest.raises(ConnectionError):
+            await start
+    assert s.dead
+
+
 async def test_close_never_started_is_a_no_op(ai_chat_env):
     with anyio.fail_after(5):
         await ai_chat_env.session().close()
 
 
-async def test_caller_cancel_propagates_and_session_lives(ai_chat_env):
+async def test_caller_cancel_propagates_and_session_lives(ai_chat_env, tmp_path):
+    state = tmp_path / "state.json"
+    ai_chat_env.flags = ["--state", str(state)]
     s = ai_chat_env.session()
     with anyio.fail_after(30):
         await s.start()
@@ -221,9 +274,42 @@ async def test_caller_cancel_propagates_and_session_lives(ai_chat_env):
         with pytest.raises(asyncio.CancelledError):
             await turn
         assert not s.dead
+        # Before any second prompt: the agent is told, or its turn and tool keep running (G8).
+        with anyio.fail_after(5):
+            while "cancel" not in agent_log(state):
+                await asyncio.sleep(0.02)
         result = await s.run_turn("t2", ["still here"])
         await closed(s)
     assert result.text == "echo: still here"
+    log = agent_log(state)
+    assert log.index('prompt ["SLOW"]') < log.index("cancel") < log.index('prompt ["still here"]')
+
+
+async def test_repeat_cancel_and_close_cannot_lose_the_session_cancel(ai_chat_env, tmp_path, monkeypatch):
+    state = tmp_path / "state.json"
+    ai_chat_env.flags = ["--state", str(state)]
+    s = ai_chat_env.session()
+    with anyio.fail_after(30):
+        await s.start()
+        await s.attach(None)
+        send = s._conn.cancel
+
+        async def slow_send(**kwargs):  # holds the send open long enough for the repeat cancel and the close
+            await asyncio.sleep(0.3)
+            await send(**kwargs)
+
+        monkeypatch.setattr(s._conn, "cancel", slow_send)
+        turn = asyncio.create_task(s.run_turn("t1", ["SLOW"]))
+        while not ai_chat_env.events():
+            await asyncio.sleep(0.02)
+        turn.cancel()
+        await asyncio.sleep(0.05)  # now inside the wait on the send
+        turn.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await turn
+        await closed(s)
+    log = agent_log(state)
+    assert log.index("cancel") < log.index("eof")
 
 
 async def test_owner_cancelling_the_prompt_is_agent_exited(ai_chat_env):
@@ -258,6 +344,47 @@ async def test_close_sends_cancel_before_eof(ai_chat_env, tmp_path):
     assert result.stop_reason in ("cancelled", "agent_exited")
     log = agent_log(state)
     assert log.index("cancel") < log.index("eof")
+
+
+async def test_close_during_turn_is_not_a_raw_connection_error(ai_chat_env, monkeypatch):
+    # The agent outlives EOF. acp rejects the prompt before the transport starts its own wait on the process, so
+    # a wait in the turn would run out first and hand the caller the closed pipe.
+    monkeypatch.setattr(sessions, "_GRACE_S", 0.1)
+    monkeypatch.setitem(sessions._TRANSPORT, "shutdown_timeout", 0.3)
+    ai_chat_env.flags = ["--linger", "1"]
+    s = ai_chat_env.session()
+    with anyio.fail_after(30):
+        await s.start()
+        await s.attach(None)
+        turn = asyncio.create_task(s.run_turn("t1", ["SLOW"]))
+        while not ai_chat_env.events():
+            await asyncio.sleep(0.02)
+        await closed(s)
+        result = await turn
+    assert result.stop_reason in ("cancelled", "agent_exited")
+
+
+async def test_agent_dying_after_a_refusal_is_agent_exited(ai_chat_env):
+    ai_chat_env.flags = ["--exit-on-new"]
+    s = ai_chat_env.session()
+    with anyio.fail_after(30):
+        await s.start()
+        await s.attach("unknown-session")  # an unknown load looks like success (G10)
+        result = await s.run_turn("t1", ["hi"])
+        assert (result.stop_reason, s.dead) == ("agent_exited", True)
+        await closed(s)
+    assert s.proc.returncode == 3
+
+
+async def test_agent_dying_after_a_tools_refusal_is_unreachable(ai_chat_env):
+    ai_chat_env.flags = ["--exit-on-new"]
+    s = ai_chat_env.session(allowed_roles=("admin", "standard"))
+    with anyio.fail_after(30):
+        await s.start()
+        with pytest.raises(sessions.AgentUnreachable):
+            await s.attach("unknown-session")
+        await closed(s)
+    assert s.dead and s.proc.returncode == 3
 
 
 # ---- tool-list check (standard roles) --------------------------------------------------------
@@ -326,6 +453,29 @@ async def test_persist_message_numbers_seq_per_chat(ai_chat_env):
     with ai_chat_env.Session() as db:
         row = db.query(AiChatMessage).filter_by(chat_id=1, seq=1).one()
         assert (row.role, row.text, row.meta) == ("user", "a", {"k": 1})
+
+
+def test_persist_message_concurrent_writers_get_contiguous_seqs(ai_chat_db, monkeypatch):
+    monkeypatch.setattr(sessions, "_session_factory", ai_chat_db)
+    writers = 5  # at most `_SEQ_ATTEMPTS`: a writer loses at most once to each other writer, so all of them land
+    rounds = 5
+    barrier = threading.Barrier(writers, timeout=30)
+
+    def write(_):
+        barrier.wait()
+        return sessions.persist_message(1, "permission", "x", None)
+
+    with ThreadPoolExecutor(writers) as pool:
+        seqs = [seq for _ in range(rounds) for seq in list(pool.map(write, range(writers)))]
+    assert sorted(seqs) == list(range(1, rounds * writers + 1))
+    with ai_chat_db() as db:
+        assert sorted(db.scalars(select(AiChatMessage.seq).where(AiChatMessage.chat_id == 1))) == sorted(seqs)
+
+
+def test_persist_message_retries_are_bounded(ai_chat_db, monkeypatch):
+    monkeypatch.setattr(sessions, "_session_factory", ai_chat_db)
+    with pytest.raises(IntegrityError):
+        sessions.persist_message(1, None, "x", None)  # NOT NULL fails every attempt
 
 
 async def test_update_message_meta_merges(ai_chat_env):
