@@ -124,6 +124,7 @@ from boxes.service import box_label_code
 from packaging_photos.routes import router as packaging_photos_router
 from capture_tokens.routes import router as capture_tokens_router
 from flags.routes import router as flags_router
+from ui_settings.routes import router as ui_settings_router
 from slack_notify.routes import router as slack_prefs_router
 from slack_notify.interactions import router as slack_interactions_router
 from workflow.routes import router as workflow_router
@@ -404,6 +405,20 @@ def seed_default_settings(db: Session):
     db.commit()
 
 
+def _flag_attach_s3_prefix() -> str:
+    """flag-attachments/ NESTED UNDER the vial-photo prefix, like documents.
+    Prod's IAM key is scoped to the photo prefix, so the old top-level default
+    was AccessDenied on every upload (prod logs 2026-10-29).
+    MK1_FLAG_ATTACH_S3_PREFIX still overrides; set-but-empty means bucket root."""
+    explicit = os.environ.get("MK1_FLAG_ATTACH_S3_PREFIX")
+    if explicit is not None:
+        return explicit
+    photo = os.environ.get("MK1_PHOTO_S3_PREFIX", "sub-sample-photos/")
+    if photo and not photo.endswith("/"):
+        photo += "/"
+    return f"{photo}flag-attachments/"
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Initialize database on startup and seed defaults."""
@@ -426,8 +441,7 @@ async def lifespan(app: FastAPI):
 
         class _S3FlagAttachmentStorage:
             def __init__(self):
-                self._s3 = S3PhotoStorage(
-                    prefix=os.environ.get("MK1_FLAG_ATTACH_S3_PREFIX", "flag-attachments/"))
+                self._s3 = S3PhotoStorage(prefix=_flag_attach_s3_prefix())
 
             def save(self, flag_id, data, filename):
                 return self._s3.save_photo(flag_id, data, filename)
@@ -648,6 +662,7 @@ app.include_router(boxes_router)
 app.include_router(packaging_photos_router)
 app.include_router(capture_tokens_router)
 app.include_router(flags_router)
+app.include_router(ui_settings_router)
 app.include_router(slack_prefs_router)
 app.include_router(slack_interactions_router)
 app.include_router(workflow_router)

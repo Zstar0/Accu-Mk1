@@ -1,7 +1,8 @@
 /**
- * Per-tab persisted filter state for the flags flyout.
- * Stored under `flags:filter:<tab>` (same localStorage idiom as
- * `flags:viewMode`); personal tabs default to the composite All-Open status.
+ * Per-tab persisted filter state for the flags flyout (and the Tasks page).
+ * Stored under `<scope>:filter:<tab>`, scope defaulting to `flags` (same
+ * localStorage idiom as `flags:viewMode`); personal tabs default to the
+ * composite All-Open status in every scope.
  */
 import { useCallback, useState } from 'react'
 import {
@@ -9,7 +10,7 @@ import {
   type FlagFilterState,
 } from '@/components/flags/flag-filter'
 
-const KEY = (tab: string) => `flags:filter:${tab}`
+const KEY = (scope: string, tab: string) => `${scope}:filter:${tab}`
 const PERSONAL_TABS = new Set(['assigned', 'raised', 'watching'])
 
 export function defaultFlagFilter(tab: string): FlagFilterState {
@@ -19,9 +20,9 @@ export function defaultFlagFilter(tab: string): FlagFilterState {
   }
 }
 
-function load(tab: string): FlagFilterState {
+function load(scope: string, tab: string): FlagFilterState {
   try {
-    const raw = localStorage.getItem(KEY(tab))
+    const raw = localStorage.getItem(KEY(scope, tab))
     if (!raw) return defaultFlagFilter(tab)
     const parsed = JSON.parse(raw)
     // Merge over defaults so missing/new keys stay valid.
@@ -34,7 +35,8 @@ function load(tab: string): FlagFilterState {
 /** [filter, setFilter] for a tab; setFilter writes through to localStorage.
  *  Free-text is deliberately session-only (never persisted). */
 export function useFlagFilter(
-  tab: string
+  tab: string,
+  scope = 'flags'
 ): [FlagFilterState, (next: FlagFilterState) => void] {
   // React state is the source of truth; localStorage is a write-through
   // consulted only for tabs with no state yet (first render / tab switch).
@@ -43,19 +45,20 @@ export function useFlagFilter(
   // but never re-render — filters silently "apply on next reload".
   const [byTab, setByTab] = useState<Record<string, FlagFilterState>>({})
 
-  const filter = byTab[tab] ?? load(tab)
+  const key = KEY(scope, tab)
+  const filter = byTab[key] ?? load(scope, tab)
 
   const setFilter = useCallback(
     (next: FlagFilterState) => {
       const { text: _text, ...persisted } = next
       try {
-        localStorage.setItem(KEY(tab), JSON.stringify(persisted))
+        localStorage.setItem(key, JSON.stringify(persisted))
       } catch {
         /* quota/SSR — session-only */
       }
-      setByTab(s => ({ ...s, [tab]: next }))
+      setByTab(s => ({ ...s, [key]: next }))
     },
-    [tab]
+    [key]
   )
 
   return [filter, setFilter]

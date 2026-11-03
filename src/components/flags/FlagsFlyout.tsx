@@ -121,6 +121,7 @@ function GuideLink() {
 export function FlagsFlyout() {
   const open = useUIStore(state => state.flagsFlyoutOpen)
   const threadId = useUIStore(state => state.flagsThreadId)
+  const threadReturnTo = useUIStore(state => state.flagsThreadReturnTo)
   const entityFilter = useUIStore(state => state.flagsEntityFilter)
   const samplesFilter = useUIStore(state => state.flagsSamplesFilter)
   // Multi-flag affordances: "the page you're on" — the top of the registered
@@ -266,7 +267,10 @@ export function FlagsFlyout() {
       >
         <SheetTitle className="sr-only">Flags</SheetTitle>
         {threadId != null ? (
-          <FlagThread flagId={threadId} tabLabel={activeTabLabel} />
+          <FlagThread
+            flagId={threadId}
+            tabLabel={threadReturnTo === 'page' ? 'Tasks' : activeTabLabel}
+          />
         ) : (
           <>
             {/* Header */}

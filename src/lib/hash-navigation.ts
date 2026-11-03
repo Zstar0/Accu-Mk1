@@ -39,6 +39,7 @@ const VALID_SECTIONS = new Set<string>([
   'admin-clickup-users',
   'settings',
   'boards',
+  'tasks',
 ])
 
 interface ParsedNav {
@@ -145,6 +146,10 @@ export function applyNavToStore(nav: ParsedNav) {
   const nodeId = nav.nodeId
   if (nodeId != null) store.setPendingBoardNode(nodeId)
 
+  // The Tasks page marker is per open, not per page: landing anywhere else
+  // (e.g. browser Back) must not leave a thread that closes to Tasks.
+  if (section !== 'tasks') useUIStore.setState({ flagsThreadReturnTo: null })
+
   // Slack DM deep link (spec 2026-07-02): one-shot open of a flag thread.
   // buildHash never re-emits ?flag=, so the param clears on the next nav.
   const flagId = nav.flagId
@@ -158,7 +163,11 @@ export function applyNavToStore(nav: ParsedNav) {
       queryKey: flagKeys.detail(flagId),
       queryFn: () => getFlag(flagId),
     })
-    store.openFlagThread(flagId)
+    // From the Tasks page, back/close on the thread returns to the page.
+    // Always explicit, so a non-Tasks open never inherits the marker.
+    store.openFlagThread(flagId, {
+      returnTo: section === 'tasks' ? 'page' : null,
+    })
   }
 }
 

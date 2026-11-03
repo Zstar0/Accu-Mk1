@@ -47,7 +47,7 @@ class SlackNotifier:
             if not planned:
                 return "", "", []
             # Tap-through lands on the flagged entity's page with the flag
-            # thread open. resolve_context never raises; None → dashboard
+            # thread open. resolve_context never raises; None → Tasks page
             # fallback via link_hash_for.
             ctx = seams.resolve_context(db, flag.get("entity_type", ""),
                                         str(flag.get("entity_id", ""))) or {}

@@ -19,6 +19,8 @@ vi.mock('@/lib/flags-api', async orig => ({
   addFlagAttachment,
   fetchFlagAttachmentUrl: vi.fn().mockResolvedValue('blob:x'),
 }))
+const toastError = vi.hoisted(() => vi.fn())
+vi.mock('sonner', () => ({ toast: { error: toastError } }))
 const useFlag = vi.fn()
 vi.mock('@/hooks/use-flags', async orig => {
   const actual = (await orig()) as Record<string, unknown>
@@ -64,6 +66,7 @@ function detail(): FlagDetailResponse {
 describe('FlagComposer', () => {
   beforeEach(() => {
     addFlagAttachment.mockReset().mockResolvedValue({ id: 99 })
+    toastError.mockReset()
     useFlag.mockReturnValue({
       data: detail(),
       isLoading: false,
@@ -95,5 +98,38 @@ describe('FlagComposer', () => {
     fireEvent.paste(ta, { clipboardData: { files: [file], items: [] } })
     await waitFor(() => expect(addFlagAttachment).toHaveBeenCalledWith(7, file))
     await waitFor(() => expect(ta.value).toContain('{attachment:99}'))
+  })
+
+  it('a failed image upload shows an error toast and inserts no token', async () => {
+    addFlagAttachment.mockRejectedValue(
+      new Error('image is too large for the server (413)')
+    )
+    const { FlagThread } = await import('@/components/flags/FlagThread')
+    render(<FlagThread flagId={7} tabLabel="Assigned to me" />)
+    const ta = screen.getByPlaceholderText(
+      /Write a comment/
+    ) as HTMLTextAreaElement
+    const file = new File([new Uint8Array([1, 2, 3])], 'p.png', {
+      type: 'image/png',
+    })
+    fireEvent.paste(ta, { clipboardData: { files: [file], items: [] } })
+    await waitFor(() =>
+      expect(toastError).toHaveBeenCalledWith(
+        "Image didn't attach: image is too large for the server (413)"
+      )
+    )
+    expect(ta.value).not.toContain('{attachment:')
+  })
+
+  it('pasting plain text keeps the default paste and uploads nothing', async () => {
+    const { FlagThread } = await import('@/components/flags/FlagThread')
+    render(<FlagThread flagId={7} tabLabel="Assigned to me" />)
+    const ta = screen.getByPlaceholderText(/Write a comment/)
+    // fireEvent returns false when a handler called preventDefault().
+    const notPrevented = fireEvent.paste(ta, {
+      clipboardData: { files: [], items: [], getData: () => 'hello' },
+    })
+    expect(notPrevented).toBe(true)
+    expect(addFlagAttachment).not.toHaveBeenCalled()
   })
 })
