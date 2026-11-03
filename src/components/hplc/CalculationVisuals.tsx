@@ -153,9 +153,9 @@ const PROBLEM_COPY: Record<string, string> = {
     'The calibration curve has no usable diluent density. This is not a weighing problem: the density needs setting on the curve.',
   no_declared_volume:
     'This liquid sample has no usable declared volume. This is not a weighing problem: the volume declared with the sample needs recording (it is taken as declared, not measured).',
-  // Only ever the quantity panel's reason, never the dilution panel's.
+  // This code is only ever the quantity panel's reason, never the dilution panel's.
   quantity_not_finite:
-    'A value in the calculation is too large to represent. Check the dilution vial weighings, the peak areas and the calibration curve; if those look right, this needs looking at.',
+    'A value is too large for the calculation to handle. Check the dilution and intermediate vial weighings, the stock volume, the peak areas and the calibration curve; if those look right, raise it with the lab manager.',
 }
 
 function problemCopy(code: string): string {

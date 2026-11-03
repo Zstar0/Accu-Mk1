@@ -110,7 +110,7 @@ const PROBLEM_WORDING = {
   no_declared_volume:
     'This liquid sample has no usable declared volume. This is not a weighing problem: the volume declared with the sample needs recording (it is taken as declared, not measured).',
   quantity_not_finite:
-    'A value in the calculation is too large to represent. Check the dilution vial weighings, the peak areas and the calibration curve; if those look right, this needs looking at.',
+    'A value is too large for the calculation to handle. Check the dilution and intermediate vial weighings, the stock volume, the peak areas and the calibration curve; if those look right, raise it with the lab manager.',
 }
 
 // One row per code, captured from process_hplc_analysis (not hand-built): the dilution
@@ -175,7 +175,9 @@ const CAPTURED_ROWS = {
       diluent_vol_ul: 1238.2509,
       sample_mass_mg: 0.0,
       sample_vol_ul: 0.0,
-      total_vol_ul: 1238.2509,
+      // Null since the fix wave: a sample volume that is not positive gives no factor,
+      // so the total it would divide is not reported either. Re-captured, not hand-edited.
+      total_vol_ul: null,
       dilution_factor: null,
       stock_mass_mg: 2959.75,
       stock_volume_ml: 2.968358,
