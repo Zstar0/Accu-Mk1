@@ -708,7 +708,8 @@ class SessionManager:
         turn = self._turns.get(chat_id)
         if turn is None:
             return False
-        await self._stop_turn(turn)
+        # A wait, not an await: the caller going away must not leave the agent blocked on an open card.
+        await asyncio.wait({self._spawn(self._stop_turn(turn))})
         return True
 
     async def close_chat(self, chat_id: int) -> None:

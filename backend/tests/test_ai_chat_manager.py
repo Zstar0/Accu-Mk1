@@ -333,7 +333,29 @@ async def test_stop_a_slow_turn_ends_cancelled(ai_chat_env):
 
 
 async def test_stop_without_a_turn_is_false(ai_chat_env):
-    assert await sessions.MANAGER.cancel(1) is False
+    with anyio.fail_after(5):
+        assert await sessions.MANAGER.cancel(1) is False
+
+
+async def test_stop_survives_its_callers_cancellation(ai_chat_env, monkeypatch):
+    with anyio.fail_after(30):
+        session, _ = await send(ai_chat_env, "PERMIT")
+        await seen(ai_chat_env, "permission_requested")
+        send_cancel = session._conn.cancel
+
+        async def slow_send(**kwargs):
+            await asyncio.sleep(0.3)
+            await send_cancel(**kwargs)
+
+        monkeypatch.setattr(session._conn, "cancel", slow_send)
+        stop = asyncio.create_task(sessions.MANAGER.cancel(1))
+        await asyncio.sleep(0.05)  # inside the send, ahead of the sweep
+        stop.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await stop
+        # The agent is blocked on the card: left open, it would wait out permission_timeout_s.
+        await seen(ai_chat_env, "permission_resolved", decision="cancelled")
+        await seen(ai_chat_env, "turn_ended")
 
 
 async def test_stop_during_start_sends_no_prompt(ai_chat_env, tmp_path, monkeypatch):
@@ -478,9 +500,9 @@ async def test_agent_death_resolves_pending(ai_chat_env):
 async def test_turn_flags_blocks_and_row(ai_chat_env, tmp_path):
     state = tmp_path / "state.json"
     ai_chat_env.flags = ["--state", str(state), "--no-load"]  # the stored id cannot be restored: new session + recap
-    await seed_history()
     page = {"section": "lims", "subsection": "sample-details", "target_kind": "sample", "target_id": "P-1"}
     with anyio.fail_after(30):
+        await seed_history()
         session, t1 = await send(ai_chat_env, "now", stored="gone-session", page_context=page)
         started = await seen(ai_chat_env, "turn_started")
         ended = await seen(ai_chat_env, "turn_ended", turn_id=t1)
@@ -512,8 +534,8 @@ async def test_new_chat_turn_started_flags(ai_chat_env):
 async def test_refusal_recap_leaves_out_the_current_question(ai_chat_env, tmp_path):
     state = tmp_path / "state.json"
     ai_chat_env.flags = ["--state", str(state)]
-    await seed_history()
     with anyio.fail_after(30):
+        await seed_history()
         await send(ai_chat_env, "hi", stored="unknown-session")  # an unknown load looks like success (G10)
         ended = await seen(ai_chat_env, "turn_ended")
     assert ended["stop_reason"] == "end_turn"
@@ -523,11 +545,13 @@ async def test_refusal_recap_leaves_out_the_current_question(ai_chat_env, tmp_pa
 
 
 async def test_recap_messages_before_seq(ai_chat_env):
-    await seed_history()
-    seq = await asyncio.to_thread(sessions.persist_message, 1, "user", "current", None)
-    assert await asyncio.to_thread(sessions.recap_messages, 1, before_seq=seq) == [
-        ("user", "earlier question"), ("assistant", "earlier answer")]
-    assert (await asyncio.to_thread(sessions.recap_messages, 1))[-1] == ("user", "current")
+    with anyio.fail_after(15):
+        await seed_history()
+        seq = await asyncio.to_thread(sessions.persist_message, 1, "user", "current", None)
+        earlier = await asyncio.to_thread(sessions.recap_messages, 1, before_seq=seq)
+        everything = await asyncio.to_thread(sessions.recap_messages, 1)
+    assert earlier == [("user", "earlier question"), ("assistant", "earlier answer")]
+    assert everything[-1] == ("user", "current")
 
 
 async def test_start_turn_refuses_while_a_turn_runs(ai_chat_env):
