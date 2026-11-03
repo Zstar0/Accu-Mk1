@@ -224,37 +224,32 @@ def _log_permission(chat_id: int, source: str, decision: str) -> None:
     logger.info("ai_chat.permission chat=%s source=%s decision=%s", chat_id, source, decision)
 
 
-async def _resolve_cards(cards: list[approvals.PendingApproval], decision: str) -> None:
-    """Record `decision` on each card's row, then tell the browser. A failed or cancelled write still closes the
-    cards, and the worker thread finishes a cancelled write anyway."""
-    def write() -> None:
-        for p in cards:
-            update_message_meta(p.chat_id, p.row_seq, _decision_patch(decision, p.user_id))
+@dataclass
+class _Card:
+    """One approval, from `register` until `_settle`. The writes are futures of their own, so they finish even when
+    the coroutine awaiting them is cancelled."""
 
-    try:
-        await asyncio.to_thread(write)
-    finally:
-        for p in cards:
-            hub.HUB.publish(p.user_id, "permission_resolved", p.chat_id, p.turn_id, permission_id=p.permission_id,
-                            decision=decision)
-            _log_permission(p.chat_id, p.source, decision)
+    approval: approvals.PendingApproval
+    row: asyncio.Future  # the insert of the permission row; its result is the seq
+    shown: bool = False  # `permission_requested` has gone out
+    writing: asyncio.Future | None = None  # the latest write of a decision
 
 
 class Mk1Client(acp.Client):
     """Routes one session's updates to the hub, collects the reply text and tool chips of each prompt, and carries
     the agent's permission requests to the chat's owner.
 
-    `cards` holds what the user has been shown and no `permission_resolved` has closed yet. Whoever takes a card out
-    of it publishes the resolution, so that happens once: the waiting `request_permission` for allow, deny and
-    expired, or `close_cards` for Stop, close and turn end, including after acp cancelled the waiter.
+    `cards` holds every approval of this session that is not settled yet. `_settle` is the one place an approval
+    ends, whoever gets there first: the waiting `request_permission`, or `close_cards` for Stop, close and turn end,
+    including after acp cancelled the waiter.
     """
 
     def __init__(self, session: LiveSession) -> None:
         self._s = session
         self.text: list[str] = []
         self.tools: dict[str, dict] = {}
-        self.cards: dict[str, approvals.PendingApproval] = {}
-        self._sweeping = asyncio.Lock()
+        self.cards: dict[str, _Card] = {}
+        self._settling = asyncio.Lock()
 
     def reset(self) -> None:
         self.text, self.tools = [], {}
@@ -299,6 +294,8 @@ class Mk1Client(acp.Client):
         s = self._s
         if (s.chat_id is None or s.turn_id is None or s.consuming or s.replaying or s.stop_requested
                 or session_id != s.acp_session_id):
+            if s.chat_id is not None:
+                _log_permission(s.chat_id, "agent", "cancelled")
             return approvals.to_response("cancelled", None, None)
         try:
             return await self._ask_owner(tool_call, options)
@@ -311,48 +308,80 @@ class Mk1Client(acp.Client):
         allow_id, reject_id = approvals.pick_options(options)
         title, detail = tool_call.title or "", _permission_detail(tool_call)
         p = approvals.APPROVALS.register(s.chat_id, s.user_id, s.turn_id, "agent", title, detail, allow_id is not None)
+        card = self.cards[p.permission_id] = _Card(p, asyncio.ensure_future(asyncio.to_thread(
+            persist_message, p.chat_id, "permission", title, {"source": p.source, "title": title, "detail": detail,
+                                                              "permission_id": p.permission_id, "decision": None})))
         try:
-            p.row_seq = await asyncio.to_thread(persist_message, p.chat_id, "permission", title, {
-                "source": p.source, "title": title, "detail": detail, "permission_id": p.permission_id,
-                "decision": None})
-            if p.future.done():  # swept during the write: the row records it, but no card was ever shown
-                decision = p.future.result()
-                await asyncio.to_thread(update_message_meta, p.chat_id, p.row_seq,
-                                        _decision_patch(decision, p.user_id))
-                _log_permission(p.chat_id, p.source, decision)
-                return approvals.to_response(decision, allow_id, reject_id)
-            self.cards[p.permission_id] = p
-            hub.HUB.publish(p.user_id, "permission_requested", p.chat_id, p.turn_id, permission_id=p.permission_id,
-                            source=p.source, title=title, detail=detail, can_allow=p.can_allow,
-                            agent=s.provider.display_name)
-            _log_permission(p.chat_id, p.source, "requested")
-            try:
-                decision = await asyncio.wait_for(asyncio.shield(p.future), s.provider.permission_timeout_s)
-            except TimeoutError:
-                # No await before this, so a decision after the timeout gets ApprovalNotFound. A decision that
-                # landed just before it wins: `expire` leaves it alone, and this reads it from the future.
-                approvals.APPROVALS.expire(p.permission_id)
-                decision = p.future.result()
-            if self.cards.pop(p.permission_id, None) is not None:
-                await _resolve_cards([p], decision)
+            await asyncio.wait({card.row})
+            # With a failed insert there is no row to show. With a done future the sweep ran during the insert: no
+            # card is ever shown, and the row alone records it.
+            if card.row.exception() is None and not p.future.done():
+                p.row_seq = card.row.result()
+                card.shown = True
+                hub.HUB.publish(p.user_id, "permission_requested", p.chat_id, p.turn_id, permission_id=p.permission_id,
+                                source=p.source, title=title, detail=detail, can_allow=p.can_allow,
+                                agent=s.provider.display_name)
+                _log_permission(p.chat_id, p.source, "requested")
+                try:
+                    await asyncio.wait_for(asyncio.shield(p.future), s.provider.permission_timeout_s)
+                except TimeoutError:
+                    # No await before this, so a decision after the timeout gets ApprovalNotFound. A decision that
+                    # landed just before it wins: `expire` leaves it alone, and the future below holds it.
+                    approvals.APPROVALS.expire(p.permission_id)
+            decision = await self._settle(card, p.future.result() if p.future.done() else "cancelled")
             return approvals.to_response(decision, allow_id, reject_id)
         finally:
             approvals.APPROVALS.expire(p.permission_id)  # no pending entry outlives this call, cancelled or not
 
+    def _stopped(self) -> bool:
+        return self._s.stop_requested or self._s.dead
+
+    async def _settle(self, card: _Card, decision: str) -> str:
+        """The one place an approval ends. Row, event and what the agent gets are the same decision, and it is
+        `cancelled` once Stop or close has been asked for, or when in doubt. Returns that decision.
+
+        From the last check to the caller's answer reaching acp's send queue there is no await, so no Stop can get
+        between them. The lock makes the turn's own sweep wait, so `turn_ended` follows every row and event. A caller
+        cancelled during a write leaves the card here for the next sweep, which lets that write land first.
+        """
+        p = card.approval
+        async with self._settling:
+            if p.permission_id not in self.cards:  # the sweep got here first, and it records only `cancelled`
+                return "cancelled"
+            try:
+                if card.writing is not None:
+                    await asyncio.wait({card.writing})
+                decision = "cancelled" if self._stopped() else decision
+                await self._write_decision(card, decision)
+                if decision != "cancelled" and self._stopped():
+                    decision = "cancelled"
+                    await self._write_decision(card, decision)
+            except Exception as exc:  # the card must not claim what did not happen
+                logger.warning("ai_chat.permission_failed chat=%s error=%s", p.chat_id, type(exc).__name__)
+                decision = "cancelled"
+            del self.cards[p.permission_id]
+            if card.shown:
+                hub.HUB.publish(p.user_id, "permission_resolved", p.chat_id, p.turn_id,
+                                permission_id=p.permission_id, decision=decision)
+            _log_permission(p.chat_id, p.source, decision)
+            return decision
+
+    async def _write_decision(self, card: _Card, decision: str) -> None:
+        p = card.approval
+        seq = await asyncio.shield(card.row)
+        card.writing = asyncio.ensure_future(asyncio.to_thread(update_message_meta, p.chat_id, seq,
+                                                               _decision_patch(decision, p.user_id)))
+        await asyncio.shield(card.writing)
+
     async def close_cards(self) -> None:
-        """Stop, close and turn end: every pending approval of the chat ends as `cancelled`. Everything up to the
-        lock runs before any await, so a caller that has just cleared `turn_id` leaves no gap. The lock makes the
-        turn's own sweep wait for Stop's, so `turn_ended` always follows the rows and events of the sweep."""
-        if self._s.chat_id is None:
-            return
-        approvals.APPROVALS.cancel_chat(self._s.chat_id)
-        cards, self.cards = list(self.cards.values()), {}
-        async with self._sweeping:
-            if cards:
-                try:
-                    await _resolve_cards(cards, "cancelled")
-                except Exception as exc:  # the cards are closed; only the rows missed the decision
-                    logger.warning("ai_chat.permission_failed chat=%s error=%s", self._s.chat_id, type(exc).__name__)
+        """Stop, close and turn end: every open approval of this session ends as `cancelled`. Everything up to the
+        first await runs at once, so a caller that has just cleared `turn_id` leaves no gap. With no cards it does
+        nothing at all: `cancel_chat` goes by chat id, and a newer session of the same chat may have its own."""
+        cards = list(self.cards.values())
+        if cards:
+            approvals.APPROVALS.cancel_chat(self._s.chat_id)
+            for card in cards:
+                await self._settle(card, "cancelled")
 
 
 # ---- the live session -------------------------------------------------------------------------
@@ -406,8 +435,10 @@ class LiveSession:
         if self.dead:
             return
         # Bounded: acp's sender never answers once its writer task died on a broken pipe.
-        with contextlib.suppress(ConnectionError, TimeoutError):
+        try:
             await asyncio.wait_for(self._conn.cancel(session_id=self.acp_session_id), _GRACE_S)
+        except Exception as exc:  # what a closed handle raises differs between event loops
+            logger.debug("ai_chat.cancel_not_sent chat=%s error=%s", self.chat_id, type(exc).__name__)
 
     async def close(self) -> None:
         """Idempotent; safe on a session that failed to start. Cancel before EOF (spec 7), then let the owner
@@ -552,8 +583,6 @@ class LiveSession:
         """Prompt with `blocks` (one text block each, in order), streaming to the hub under `turn_id`."""
         self.turn_id = turn_id
         try:
-            if self.stop_requested:
-                return TurnResult("cancelled", "", [])
             result = await self._prompt(blocks)
             if result.stop_reason == "refusal" and not result.text:
                 # Refusal guard (G10): the agent does not know this session. Open a new one seeded with the
@@ -562,7 +591,8 @@ class LiveSession:
                     recap = await self._new_session(recap=True)
                 except AgentUnreachable:  # it died after refusing
                     return TurnResult("agent_exited", result.text, result.tools)
-                if self.stop_requested:
+                if self.stop_requested:  # the chat now holds the new session: the next prompt carries the recap
+                    self.pending_recap = recap
                     return TurnResult("cancelled", result.text, result.tools)
                 result = await self._prompt([recap, *blocks] if recap else blocks)
             return result
@@ -592,6 +622,8 @@ class LiveSession:
         self._client.reset()
         self._prompt_task = asyncio.ensure_future(self._conn.prompt(
             session_id=self.acp_session_id, prompt=[acp.text_block(b) for b in blocks]))
+        if self.pending_recap in blocks:  # it has gone out
+            self.pending_recap = None
         try:
             stop_reason = (await self._prompt_task).stop_reason
         except asyncio.CancelledError:
@@ -650,6 +682,10 @@ class _Turn:
 class SessionManager:
     """The live sessions, one per chat, and their turn tasks. `reserve` and `start_turn` are synchronous and must run
     back to back on the loop (a route's body): an await between them lets another chat's `reserve` evict the session.
+
+    A close returns when the sessions it took out of the registry are closed. A session another close took first is
+    that close's to finish, so a second concurrent close can return while the first still runs: a return does not
+    prove the process is gone.
     """
 
     def __init__(self) -> None:
@@ -726,7 +762,7 @@ class SessionManager:
             await asyncio.wait(self._tasks)
 
     def start_reaper(self) -> None:
-        if self._reaper is None:
+        if self._reaper is None or self._reaper.done():
             self._reaper = self._spawn(self._reap_forever())
 
     async def reap_once(self, now: float | None = None) -> None:
@@ -738,13 +774,21 @@ class SessionManager:
     async def _reap_forever(self) -> None:
         while True:
             await asyncio.sleep(REAPER_INTERVAL_S)
-            await self.reap_once()
+            try:
+                await self.reap_once()
+            except Exception as exc:  # one bad pass must not end the reaper
+                logger.warning("ai_chat.reaper_failed error=%s", type(exc).__name__)
 
     def _spawn(self, coro) -> asyncio.Task:
         task = asyncio.create_task(coro)
         self._tasks.add(task)
-        task.add_done_callback(self._tasks.discard)
+        task.add_done_callback(self._task_done)
         return task
+
+    def _task_done(self, task: asyncio.Task) -> None:
+        self._tasks.discard(task)
+        if not task.cancelled() and task.exception() is not None:  # the type only: the text can hold a row
+            logger.warning("ai_chat.background_task_failed error=%s", type(task.exception()).__name__)
 
     async def _close_where(self, doomed: Callable[[LiveSession], bool]) -> None:
         closes = [self._retire(s) for s in list(self._sessions.values()) if doomed(s)]
@@ -759,9 +803,14 @@ class SessionManager:
 
     async def _close_session(self, session: LiveSession) -> None:
         turn = self._turns.get(session.chat_id)
-        if turn is not None and turn.session is session:
-            await self._stop_turn(turn)
-        await session.close()
+        try:
+            if turn is not None and turn.session is session:
+                await self._stop_turn(turn)
+        finally:
+            try:
+                await session._client.close_cards()
+            finally:
+                await session.close()
 
     async def _stop_turn(self, turn: _Turn) -> None:
         """session/cancel, then resolve approvals (the agent may be waiting on one, so this comes before any wait),
@@ -807,15 +856,16 @@ class SessionManager:
     async def _converse(self, session: LiveSession, turn_id: str, text: str, page_context: dict | None,
                         stored_session_id: str | None) -> tuple[str, int | None]:
         """Start and attach as needed, prompt, store the reply. Returns `turn_ended`'s (stop_reason, message_seq)."""
-        if session._owner is None:
+        if session._owner is None and not session.stop_requested:
             await session.start()
-        if session.acp_session_id is None:
+        if session.acp_session_id is None and not session.stop_requested:
             await session.attach(stored_session_id)
+        if session.stop_requested:  # no await from here to `_prompt` taking the blocks, so no Stop can slip past this
+            return "cancelled", None
         cleaned = context.clean_context(page_context)
         blocks = [context.render_context_block(cleaned)] if cleaned is not None else []
         if session.pending_recap is not None:
-            blocks.append(session.pending_recap)
-            session.pending_recap = None
+            blocks.append(session.pending_recap)  # `_prompt` clears it once it has gone out
         result = await session.run_turn(turn_id, [*blocks, text])
         stop_reason = result.stop_reason
         if stop_reason == "agent_exited" and session.stop_requested:
