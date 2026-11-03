@@ -14,7 +14,7 @@ from fastapi.testclient import TestClient
 from main import app
 from auth import get_current_user
 from database import get_db, Base
-from models import AnalysisProfile, CatalogChangeLog, LimsSampleForm
+from models import AnalysisProfile, AnalysisProfileCoaVariant, CatalogChangeLog, LimsSampleForm
 
 
 @pytest.fixture
@@ -126,7 +126,8 @@ def test_patch_cannot_move_the_form(client, profile, nasal, db_session):
 
 
 def test_patch_404_unknown_variant(client):
-    assert client.patch("/analysis-profile-coa-variants/999", json={"active": False}).status_code == 404
+    r = client.patch("/analysis-profile-coa-variants/999", json={"active": False})
+    assert r.status_code == 404 and r.json()["detail"] == "version not found"
 
 
 @pytest.mark.parametrize("fields", [
@@ -138,6 +139,54 @@ def test_bad_text_400_on_create_and_patch(client, profile, nasal, fields):
     assert _post(client, profile, nasal, **fields).status_code == 400
     v = _post(client, profile, nasal).json()
     assert client.patch(f"/analysis-profile-coa-variants/{v['id']}", json=fields).status_code == 400
+
+
+@pytest.mark.parametrize("title", ["Metals {lod}", "Metals {lot}"])
+def test_macro_in_a_title_is_400_on_create_and_patch(client, profile, nasal, title):
+    # The builder prints a title as typed, so {lod} would reach the certificate raw.
+    detail = "COA text macros are not filled in section titles"
+    r = _post(client, profile, nasal, coa_section_title=title)
+    assert r.status_code == 400 and r.json()["detail"] == detail
+    v = _post(client, profile, nasal).json()
+    r = client.patch(f"/analysis-profile-coa-variants/{v['id']}", json={"coa_section_title": title})
+    assert r.status_code == 400 and r.json()["detail"] == detail
+
+
+@pytest.mark.parametrize("fields", [
+    {"coa_prep_text": "New"},
+    # A stale Save with every field on Same as default sends only nulls.
+    {"coa_section_title": None, "coa_basis_note": None, "coa_method_text": None,
+     "coa_prep_text": None, "coa_footnotes": None},
+    {"coa_footnotes": []},
+    {"coa_prep_text": "New", "active": False},
+])
+def test_text_on_a_stopped_version_is_409_and_changes_nothing(client, profile, nasal, db_session, fields):
+    v = _post(client, profile, nasal, coa_prep_text="Diluted").json()
+    client.patch(f"/analysis-profile-coa-variants/{v['id']}", json={"active": False})
+    r = client.patch(f"/analysis-profile-coa-variants/{v['id']}", json=fields)
+    assert r.status_code == 409
+    assert r.json()["detail"] == "this version is no longer in use; add the form again to change its text"
+    row = db_session.get(AnalysisProfileCoaVariant, v["id"])
+    db_session.refresh(row)
+    assert row.coa_prep_text == "Diluted" and row.active is False
+
+
+def test_a_repeat_stop_is_a_no_op_200(client, profile, nasal, db_session):
+    v = _post(client, profile, nasal).json()
+    client.patch(f"/analysis-profile-coa-variants/{v['id']}", json={"active": False})
+    logged = len(_log(db_session, "update"))
+    r = client.patch(f"/analysis-profile-coa-variants/{v['id']}", json={"active": False})
+    assert r.status_code == 200 and r.json()["active"] is False
+    assert len(_log(db_session, "update")) == logged
+
+
+def test_active_true_brings_a_stopped_version_back_with_new_text(client, profile, nasal):
+    v = _post(client, profile, nasal, coa_prep_text="Diluted").json()
+    client.patch(f"/analysis-profile-coa-variants/{v['id']}", json={"active": False})
+    r = client.patch(f"/analysis-profile-coa-variants/{v['id']}",
+                     json={"active": True, "coa_prep_text": "New"})
+    assert r.status_code == 200
+    assert r.json()["active"] is True and r.json()["coa_prep_text"] == "New"
 
 
 def test_good_macros_and_empty_footnotes_are_accepted(client, profile, nasal):

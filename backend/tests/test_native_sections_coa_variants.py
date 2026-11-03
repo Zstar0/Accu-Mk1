@@ -33,6 +33,13 @@ def _assert_default_text(sec):
     assert sec["footnotes"] == NOTES
 
 
+def _assert_one_guard_log(caplog, parent):
+    [message] = [r.getMessage() for r in caplog.records
+                 if "native_section_variant_limits_guard" in r.getMessage()]
+    assert f"sample={parent.sample_id}" in message
+    assert "profile=heavy_metals" in message
+
+
 def test_no_variant_keeps_key_order_and_text(db_session, monkeypatch):
     prof, svcs = _hm(db_session)
     parent = _nasal_parent(db_session, svcs, form_row_svcs=svcs)
@@ -78,6 +85,39 @@ def test_same_as_default_keeps_the_basis_note_hide(db_session, monkeypatch):
     assert sec["basis_note"] is None
     assert sec["prep_text"] == "Diluted"
     assert sec["footnotes"] == NOTES
+
+
+def _range_form_parent(db):
+    """Every member judged by a range row filed for the form, so the 1.55.0 hide
+    does not apply and the Default note would otherwise print."""
+    from decimal import Decimal
+    prof, svcs = _hm(db)
+    parent = _nasal_parent(db, svcs, form_row_svcs=[])
+    for svc in svcs:
+        db.add(AnalysisServiceSpec(analysis_service_id=svc.id, sample_form_id=parent.sample_form_id,
+                                   rule_kind="range", max_value=Decimal("100"), unit="ppm"))
+    db.flush()
+    return prof, parent
+
+
+def test_range_form_rows_leave_off_replaces_the_default_basis_note(db_session, monkeypatch):
+    prof, parent = _range_form_parent(db_session)
+    _variant(db_session, prof, parent.sample_form_id, coa_basis_note="")
+    assert _section(db_session, parent, monkeypatch)["basis_note"] is None
+
+
+def test_range_form_rows_custom_basis_note_prints(db_session, monkeypatch):
+    prof, parent = _range_form_parent(db_session)
+    _variant(db_session, prof, parent.sample_form_id, coa_basis_note="Nasal limits")
+    assert _section(db_session, parent, monkeypatch)["basis_note"] == "Nasal limits"
+
+
+def test_range_form_rows_same_as_default_prints_the_default_note(db_session, monkeypatch):
+    prof, parent = _range_form_parent(db_session)
+    _variant(db_session, prof, parent.sample_form_id, coa_prep_text="Diluted")
+    sec = _section(db_session, parent, monkeypatch)
+    assert sec["basis_note"] == "Limits scale with dose"    # no hide: not report only
+    assert sec["prep_text"] == "Diluted"
 
 
 def test_default_prints_for_another_form(db_session, monkeypatch):
@@ -159,8 +199,7 @@ def test_guard_a_row_on_general_limits_keeps_default_limit_text(db_session, monk
     assert sec["prep_text"] == "Diluted" and sec["method_text"] == "ICP"
     assert sec["basis_note"] == "Limits scale with dose"
     assert sec["footnotes"] == NOTES
-    assert sum("native_section_variant_limits_guard" in r.getMessage()
-               for r in caplog.records) == 1
+    _assert_one_guard_log(caplog, parent)
 
 
 def test_guard_a_peptide_tier_row_keeps_default_limit_text(db_session, monkeypatch, caplog):
@@ -175,7 +214,7 @@ def test_guard_a_peptide_tier_row_keeps_default_limit_text(db_session, monkeypat
     with caplog.at_level("WARNING", logger="coa.native_sections"):
         sec = _section(db_session, parent, monkeypatch)
     assert sec["basis_note"] == "Limits scale with dose" and sec["footnotes"] == NOTES
-    assert any("native_section_variant_limits_guard" in r.getMessage() for r in caplog.records)
+    _assert_one_guard_log(caplog, parent)
 
 
 def test_guard_stays_quiet_when_the_variant_overrides_no_limit_field(db_session, monkeypatch, caplog):

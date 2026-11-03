@@ -21785,6 +21785,12 @@ def _validate_coa_footnotes(value) -> None:
                 400, f"coa_footnotes[{i}] must be {{label, text}} with non-empty strings")
 
 
+def _holds_coa_macro(text: str) -> bool:
+    """A macro or a near miss, for text the builder prints as typed."""
+    from coa.text_macros import MACROS, unknown_macros
+    return bool(unknown_macros(text)) or any("{" + m + "}" in text for m in MACROS)
+
+
 def _validate_coa_text_macros(fields: dict) -> None:
     """Endo slice 4: COA text may carry only the macros coa.text_macros knows,
     so a typo never reaches a certificate (the COA build itself leaves an
@@ -21808,8 +21814,7 @@ def _validate_coa_text_macros(fields: dict) -> None:
     # Labels print as typed and are never filled, so a macro (or a near miss)
     # in one would reach the certificate literally.
     for label in labels:
-        if isinstance(label, str) and (
-                unknown_macros(label) or any("{" + m + "}" in label for m in MACROS)):
+        if isinstance(label, str) and _holds_coa_macro(label):
             raise HTTPException(400, "COA text macros are not filled in footnote labels")
 
 
@@ -21826,6 +21831,8 @@ def _validate_coa_variant_fields(fields: dict) -> None:
     title = fields.get("coa_section_title")
     if title is not None and not title.strip():
         raise HTTPException(400, "coa_section_title cannot be blank; send null for same as default")
+    if title is not None and _holds_coa_macro(title):
+        raise HTTPException(400, "COA text macros are not filled in section titles")
     for name in ("coa_basis_note", "coa_method_text", "coa_prep_text"):
         value = fields.get(name)
         if value and not value.strip():
@@ -22162,12 +22169,17 @@ def patch_profile_coa_variant(variant_id: int, req: ProfileCoaVariantPatch,
     from models import AnalysisProfileCoaVariant
     v = db.get(AnalysisProfileCoaVariant, variant_id)
     if v is None:
-        raise HTTPException(404, "variant not found")
+        raise HTTPException(404, "version not found")
     # Omitted = unchanged, explicit null = back to same as default. active is
     # NOT NULL, so its null must 422 by name, not die at flush as a false 409.
     fields = req.model_dump(exclude_unset=True)
     if "active" in fields and fields["active"] is None:
         raise HTTPException(422, "active cannot be null")
+    # A stale card's Save: the text would store, but COAs print the Default.
+    if (not v.active and fields.get("active") is not True
+            and any(name.startswith("coa_") for name in fields)):
+        raise HTTPException(
+            409, "this version is no longer in use; add the form again to change its text")
     _validate_coa_variant_fields(fields)
     user_id = getattr(current_user, "id", None)
     changed = apply_and_log(db, v, fields, entity_type="profile_coa_variant",
