@@ -323,6 +323,9 @@ describe('ProfileCoaVariantsSection', () => {
     await openCard('Nasal Spray')
     await pick('Method', 'Leave off')
     await user.click(screen.getByRole('button', { name: 'Cancel' }))
+    expect(
+      within(card('Nasal Spray')).getByRole('button', { name: 'Edit' })
+    ).toBeVisible()
     expect(within(card('Nasal Spray')).queryByText('Unsaved')).toBeNull()
     expect(
       within(card('Nasal Spray')).getByText(
