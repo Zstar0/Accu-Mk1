@@ -246,23 +246,27 @@ export function ProfileCoaVariantsSection({
               )}
             </div>
             {open && (
-              <CoaVariantEditor
-                draft={draft}
-                onChange={next => setDrafts(d => ({ ...d, [key]: next }))}
-                defaults={profile}
-                savedMemberIds={savedMemberIds}
-                membersLoading={membersLoading}
-                services={services}
-                dirty={dirty}
-                saving={saving}
-                onSave={() => save(card)}
-                onCancel={() => {
-                  dropDraft(key)
-                  setOpenKey(null)
-                }}
-                onStop={saved ? () => stop(card, saved.id) : undefined}
-                onAddRule={addRule}
-              />
+              // Text typed during a save is never sent and goes when the draft
+              // does, so the whole editor locks until the write and refetch end.
+              <fieldset disabled={saving} className="contents">
+                <CoaVariantEditor
+                  draft={draft}
+                  onChange={next => setDrafts(d => ({ ...d, [key]: next }))}
+                  defaults={profile}
+                  savedMemberIds={savedMemberIds}
+                  membersLoading={membersLoading}
+                  services={services}
+                  dirty={dirty}
+                  saving={saving}
+                  onSave={() => save(card)}
+                  onCancel={() => {
+                    dropDraft(key)
+                    setOpenKey(null)
+                  }}
+                  onStop={saved ? () => stop(card, saved.id) : undefined}
+                  onAddRule={addRule}
+                />
+              </fieldset>
             )}
           </div>
         )

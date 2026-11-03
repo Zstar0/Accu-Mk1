@@ -270,6 +270,29 @@ describe('ProfileCoaVariantsSection', () => {
     ).toBeVisible()
   })
 
+  it('locks the open card while a save runs, so nothing typed is lost', async () => {
+    let finishSave: (row: ProfileCoaVariant) => void = () => undefined
+    vi.mocked(patchProfileCoaVariant).mockReturnValue(
+      new Promise(resolve => {
+        finishSave = resolve
+      })
+    )
+    renderSection()
+    await openCard('Nasal Spray')
+    await pick('Method', 'Leave off')
+    await user.click(
+      screen.getByRole('button', { name: 'Save Nasal Spray text' })
+    )
+    expect(screen.getByRole('textbox', { name: 'Sample prep' })).toBeDisabled()
+    expect(screen.getByRole('radio', { name: 'Method: Custom' })).toBeDisabled()
+    finishSave(NASAL_VERSION)
+    await waitFor(() =>
+      expect(
+        within(card('Nasal Spray')).getByRole('button', { name: 'Edit' })
+      ).toBeVisible()
+    )
+  })
+
   it('a save finishing does not close a card opened while it ran', async () => {
     let finishSave: (row: ProfileCoaVariant) => void = () => undefined
     vi.mocked(patchProfileCoaVariant).mockReturnValue(
