@@ -90,6 +90,9 @@ WIRED_FUNCTIONS = [
     "create_consumable",
     "update_consumable",
     "put_method_consumables",
+    # COA text variants (spec 2026-10-30): per-form certificate text on a profile.
+    "create_profile_coa_variant",
+    "patch_profile_coa_variant",
 ]
 
 LOG_CALL_NAMES = {"apply_and_log", "log_create", "log_delete", "log_members"}

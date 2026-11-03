@@ -635,7 +635,7 @@ class AnalysisProfileCoaVariant(Base):
     coa_method_text: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     coa_prep_text: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     coa_footnotes: Mapped[Optional[list]] = mapped_column(
-        JSONB().with_variant(JSON(), "sqlite"), nullable=True
+        JSONB(none_as_null=True).with_variant(JSON(none_as_null=True), "sqlite"), nullable=True
     )
     active: Mapped[bool] = mapped_column(
         Boolean, nullable=False, default=True, server_default=text("true")

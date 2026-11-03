@@ -22148,7 +22148,7 @@ def create_profile_coa_variant(profile_id: int, req: ProfileCoaVariantCreate,
         db.flush()
     except IntegrityError:
         db.rollback()
-        raise HTTPException(409, "an active variant already exists for this form; deactivate it first")
+        raise HTTPException(409, "an active version already exists for this form; stop using it first")
     log_create(db, v, COA_VARIANT_LOG_FIELDS, entity_type="profile_coa_variant",
                entity_pk=v.id, user_id=user_id)
     db.commit(); db.refresh(v)
@@ -22179,7 +22179,7 @@ def patch_profile_coa_variant(variant_id: int, req: ProfileCoaVariantPatch,
     except IntegrityError:
         # active False -> True into a slot another active row has since taken.
         db.rollback()
-        raise HTTPException(409, "an active variant already exists for this form; deactivate it first")
+        raise HTTPException(409, "an active version already exists for this form; stop using it first")
     db.commit(); db.refresh(v)
     return _coa_variant_response(db, v)
 

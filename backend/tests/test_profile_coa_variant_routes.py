@@ -98,7 +98,7 @@ def test_second_active_variant_409_until_the_first_is_switched_off(client, profi
     first = _post(client, profile, nasal).json()
     r = _post(client, profile, nasal)
     assert r.status_code == 409
-    assert r.json()["detail"] == "an active variant already exists for this form; deactivate it first"
+    assert r.json()["detail"] == "an active version already exists for this form; stop using it first"
     client.patch(f"/analysis-profile-coa-variants/{first['id']}", json={"active": False})
     assert _post(client, profile, nasal).status_code == 201
 

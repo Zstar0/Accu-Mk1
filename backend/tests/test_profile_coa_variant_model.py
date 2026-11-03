@@ -1,4 +1,5 @@
 import pytest
+from sqlalchemy import text
 from sqlalchemy.exc import IntegrityError
 
 from models import AnalysisProfile, AnalysisProfileCoaVariant, LimsSampleForm
@@ -39,3 +40,23 @@ def test_the_three_states_survive_a_round_trip(db_session):
     assert v.coa_method_text is None
     assert v.coa_prep_text == "Diluted"
     assert v.coa_footnotes == []
+
+
+def test_same_as_default_footnotes_are_sql_null(db_session):
+    prof, form = _prof_and_form(db_session)
+    pen = LimsSampleForm(name="Pen", route="injectable")
+    db_session.add(pen); db_session.flush()
+    same_as_default = AnalysisProfileCoaVariant(analysis_profile_id=prof.id, sample_form_id=form.id,
+                                                coa_footnotes=None)
+    leave_off = AnalysisProfileCoaVariant(analysis_profile_id=prof.id, sample_form_id=pen.id,
+                                          coa_footnotes=[])
+    db_session.add_all([same_as_default, leave_off]); db_session.flush()
+
+    def is_sql_null(v):
+        return bool(db_session.execute(
+            text("SELECT coa_footnotes IS NULL FROM analysis_profile_coa_variants WHERE id = :id"),
+            {"id": v.id},
+        ).scalar())
+
+    assert is_sql_null(same_as_default) is True
+    assert is_sql_null(leave_off) is False
