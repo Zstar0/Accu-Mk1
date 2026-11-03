@@ -134,7 +134,7 @@ These routes mirror the spec routes (main.py:4773-4870).
 - `POST /analysis-profiles/{profile_id}/coa-variants` takes `{sample_form_id, coa_section_title?, coa_basis_note?, coa_method_text?, coa_prep_text?, coa_footnotes?}`. Responses:
   - 404: unknown profile.
   - 400: unknown or missing form.
-  - 409 when an active variant already exists for that form: "an active variant already exists for this form; deactivate it first". This is the `create_service_spec` pattern (main.py:4816-4820).
+  - 409 when an active variant already exists for that form: "an active version already exists for this form; stop using it first". It says "version" because this message reaches the screen in a toast (changed during the build, 2026-11-02). This is the `create_service_spec` pattern (main.py:4816-4820).
 - `PATCH /analysis-profile-coa-variants/{variant_id}` edits the `coa_*` fields and `active`.
   - It uses `exclude_unset`: an omitted field is unchanged, and an explicit null means "back to same as default".
   - Profile and form cannot change. To move a variant to another form, switch it off and add a new one.
