@@ -1,4 +1,4 @@
-"""Tool approvals for ACP chats: the option mapping and the registry of pending requests (spec 7).
+"""Tool approvals for ACP chats: the option mapping and the registry of pending requests (spec 8).
 
 The agent offers its own permission options; the user only ever sees Allow once and Deny. `pick_options`
 finds the two option ids that mean that, and `to_response` turns the user's decision back into the ACP reply.
@@ -65,7 +65,7 @@ class PendingApproval:
     title: str
     detail: str = field(repr=False)
     can_allow: bool
-    row_seq: int | None  # the ai_chat_messages row the turn persisted for this request, set by the turn
+    row_seq: int | None
     future: asyncio.Future[str]  # resolves to allow, deny, expired or cancelled
 
 
