@@ -84,8 +84,11 @@ export function ProfileCoaVariantsSection({
       const key = `v${saved.id}`
       return { key, saved, draft: drafts[key] ?? draftFromVariant(saved) }
     }),
+    // A new form, or a version stopped elsewhere: its draft stays until Cancel.
     ...Object.entries(drafts)
-      .filter(([, draft]) => draft.variantId === null)
+      .filter(
+        ([, draft]) => !variants.data?.some(v => v.id === draft.variantId)
+      )
       .map(([key, draft]) => ({ key, saved: null, draft })),
   ]
 
@@ -117,12 +120,12 @@ export function ProfileCoaVariantsSection({
   const write = async (
     key: string,
     call: () => Promise<unknown>,
-    savedMessage?: string
+    doneMessage: string
   ) => {
     setSaving(true)
     try {
       await call()
-      if (savedMessage) toast.success(savedMessage)
+      toast.success(doneMessage)
       // Refetch before dropping the draft, so the card never flashes the old row.
       await queryClient.invalidateQueries({
         queryKey: profileCoaVariantKeys.forProfile(profile.id),
@@ -134,6 +137,10 @@ export function ProfileCoaVariantsSection({
       toast.error(
         err instanceof Error ? err.message : 'Could not save the COA text'
       )
+      // After a 409 the list is what changed, so show what is there now.
+      await queryClient.invalidateQueries({
+        queryKey: profileCoaVariantKeys.forProfile(profile.id),
+      })
     } finally {
       setSaving(false)
     }
@@ -159,7 +166,11 @@ export function ProfileCoaVariantsSection({
     const { formName } = draft
     const question = `Stop using the ${formName} version? ${formName} COAs go back to the Default text. Published COAs stay as they are until they are regenerated.`
     if (!window.confirm(question)) return
-    void write(key, () => patchProfileCoaVariant(variantId, { active: false }))
+    void write(
+      key,
+      () => patchProfileCoaVariant(variantId, { active: false }),
+      `${formName} COAs now print the Default text`
+    )
   }
 
   const addRule = (serviceId: number) => {

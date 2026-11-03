@@ -21,6 +21,7 @@ import {
   type ProfileCoaVariant,
 } from '@/lib/api-profile-coa-variants'
 import { listSampleForms, type SampleForm } from '@/lib/api-sample-forms'
+import { queryClient } from '@/lib/query-client'
 import {
   ProfileCoaVariantsSection,
   type ProfileCoaVariantsSectionProps,
@@ -90,12 +91,12 @@ const PROFILE = {
 let user: UserEvent
 
 function renderSection(
-  overrides: Partial<ProfileCoaVariantsSectionProps> = {}
-) {
-  const client = new QueryClient({
+  overrides: Partial<ProfileCoaVariantsSectionProps> = {},
+  client = new QueryClient({
     defaultOptions: { queries: { retry: false } },
   })
-  render(
+) {
+  return render(
     <QueryClientProvider client={client}>
       <ProfileCoaVariantsSection
         profile={PROFILE}
@@ -206,6 +207,27 @@ describe('ProfileCoaVariantsSection', () => {
       )
     ).toBeVisible()
     expect(screen.getByRole('button', { name: 'Add form' })).toBeDisabled()
+  })
+
+  it('asks for the versions again when the panel reopens', async () => {
+    // The app's own defaults: their 5-minute staleTime is what hid a colleague's edit.
+    const client = new QueryClient({
+      defaultOptions: {
+        queries: { ...queryClient.getDefaultOptions().queries, retry: false },
+      },
+    })
+    const first = renderSection({}, client)
+    await screen.findByTestId(cardTestId('Nasal Spray'))
+    first.unmount()
+    vi.mocked(listProfileCoaVariants).mockResolvedValue([
+      { ...NASAL_VERSION, coa_method_text: '' },
+    ])
+    renderSection({}, client)
+    expect(
+      await screen.findByText(
+        'Overrides: basis note left off, method left off, prep custom'
+      )
+    ).toBeVisible()
   })
 
   it('keeps a version whose form was deactivated', async () => {
@@ -377,10 +399,69 @@ describe('ProfileCoaVariantsSection', () => {
     expect(toast.error).toHaveBeenCalledWith(
       'unknown COA text macro {lot}; supported: {lod}'
     )
+    await waitFor(() => expect(listProfileCoaVariants).toHaveBeenCalledTimes(2))
     expect(
       within(row('Method')).getByText('Not printed on Nasal Spray COAs')
     ).toBeVisible()
     expect(within(card('Nasal Spray')).getByText('Unsaved')).toBeVisible()
+  })
+
+  it('a save refused because the version was stopped elsewhere keeps the card, the edits and the tag', async () => {
+    const refused =
+      'this version is no longer in use; add the form again to change its text'
+    vi.mocked(patchProfileCoaVariant).mockRejectedValueOnce(new Error(refused))
+    renderSection()
+    await openCard('Nasal Spray')
+    await pick('Method', 'Leave off')
+    // The refetch comes back without the row, which is what the 409 means.
+    vi.mocked(listProfileCoaVariants).mockResolvedValue([])
+    await user.click(
+      screen.getByRole('button', { name: 'Save Nasal Spray text' })
+    )
+    expect(toast.error).toHaveBeenCalledWith(refused)
+    await waitFor(() =>
+      expect(screen.getByRole('button', { name: 'Cancel' })).toBeEnabled()
+    )
+    expect(listProfileCoaVariants).toHaveBeenCalledTimes(2)
+    expect(
+      within(row('Method')).getByText('Not printed on Nasal Spray COAs')
+    ).toBeVisible()
+    expect(within(card('Nasal Spray')).getByText('Unsaved')).toBeVisible()
+    expect(
+      screen.queryByRole('button', { name: 'Stop using this version' })
+    ).toBeNull()
+
+    // Cancel clears the way to add the form again, as the message says.
+    await user.click(screen.getByRole('button', { name: 'Cancel' }))
+    expect(screen.queryByTestId(cardTestId('Nasal Spray'))).toBeNull()
+    await openPicker()
+    expect(
+      await screen.findByRole('option', { name: /Nasal Spray/ })
+    ).toBeVisible()
+  })
+
+  it('a 409 on a new card shows the version made elsewhere and keeps the new card', async () => {
+    vi.mocked(listProfileCoaVariants).mockResolvedValue([])
+    vi.mocked(createProfileCoaVariant).mockRejectedValueOnce(
+      new Error(
+        'an active version already exists for this form; stop using it first'
+      )
+    )
+    renderSection()
+    await pickForm('Nasal Spray')
+    await pick('Method', 'Leave off')
+    vi.mocked(listProfileCoaVariants).mockResolvedValue([NASAL_VERSION])
+    await user.click(
+      screen.getByRole('button', { name: 'Save Nasal Spray text' })
+    )
+    expect(
+      await screen.findByText('Overrides: basis note left off, prep custom')
+    ).toBeVisible()
+    expect(screen.getAllByTestId(cardTestId('Nasal Spray'))).toHaveLength(2)
+    expect(
+      within(row('Method')).getByText('Not printed on Nasal Spray COAs')
+    ).toBeVisible()
+    expect(screen.getByText('Unsaved')).toBeVisible()
   })
 
   it('Stop using asks first, then PATCHes active false', async () => {
@@ -395,10 +476,17 @@ describe('ProfileCoaVariantsSection', () => {
     )
     expect(patchProfileCoaVariant).not.toHaveBeenCalled()
     confirmReturns(true)
+    vi.mocked(listProfileCoaVariants).mockResolvedValue([])
     await user.click(
       screen.getByRole('button', { name: 'Stop using this version' })
     )
     expect(patchProfileCoaVariant).toHaveBeenCalledWith(11, { active: false })
+    expect(toast.success).toHaveBeenCalledWith(
+      'Nasal Spray COAs now print the Default text'
+    )
+    await waitFor(() =>
+      expect(screen.queryByTestId(cardTestId('Nasal Spray'))).toBeNull()
+    )
   })
 
   it('Add the rule asks first when there are unsaved edits', async () => {

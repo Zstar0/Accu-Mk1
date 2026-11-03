@@ -279,6 +279,31 @@ describe('guard line', () => {
       'Held: the Default prints on a COA that includes Arsenic or Lead'
     )
   })
+  it('is report only when every form row is informational, whatever another form files', () => {
+    const s = memberRuleStatus(
+      4,
+      [
+        member('Arsenic', [
+          rule({}),
+          rule({ sample_form_id: 9, rule_kind: 'range' }),
+        ]),
+        member('Lead', [rule({})]),
+      ],
+      false
+    )
+    expect(s).toMatchObject({ kind: 'ok', allReportOnly: true })
+  })
+  it('is not report only when a member has one range form row', () => {
+    const s = memberRuleStatus(
+      4,
+      [
+        member('Arsenic', [rule({}), rule({ rule_kind: 'range' })]),
+        member('Lead', [rule({})]),
+      ],
+      false
+    )
+    expect(s).toMatchObject({ kind: 'ok', allReportOnly: false })
+  })
   it('adds the peptide sentence to either line, only when a member has a peptide rule', () => {
     const s = memberRuleStatus(
       4,
@@ -362,5 +387,12 @@ describe('buildPreview', () => {
     expect(p.prep.text).toBe('[LOD {lod}.]')
     expect(p.macroNote).toBe(true)
     expect(buildPreview(NASAL, DEFAULTS, ok).macroNote).toBe(false)
+  })
+  it('does not note a macro in a custom title, which is never filled', () => {
+    let d = setChoice(NASAL, 'coa_section_title', 'custom', DEFAULTS)
+    d = { ...d, texts: { ...d.texts, coa_section_title: 'Metals {lod}' } }
+    const p = buildPreview(d, DEFAULTS, ok)
+    expect(p.title.text).toBe('Metals {lod}')
+    expect(p.macroNote).toBe(false)
   })
 })

@@ -1,3 +1,4 @@
+import type { ReactNode } from 'react'
 import { useQueries } from '@tanstack/react-query'
 import { AlertTriangle, CheckCircle2 } from 'lucide-react'
 import { Badge } from '@/components/ui/badge'
@@ -78,10 +79,17 @@ function SourceTag({ tag, formName }: { tag: string; formName: string }) {
   )
 }
 
-function FootnoteLines({ rows }: { rows: Footnote[] }) {
+function FootnoteLines({
+  rows,
+  lastTag,
+}: {
+  rows: Footnote[]
+  lastTag?: ReactNode
+}) {
   return rows.map((row, index) => (
     <p key={index}>
       <span className="font-medium">{row.label}</span> {row.text}
+      {index === rows.length - 1 && lastTag && <> {lastTag}</>}
     </p>
   ))
 }
@@ -248,6 +256,8 @@ export function CoaVariantEditor({
     queries: savedMemberIds.map(id => ({
       queryKey: ['analysis-services', id, 'specs'],
       queryFn: () => listServiceSpecs(id),
+      // The guard line must not stay green on a rule removed since the last look.
+      staleTime: 0,
     })),
   })
   const status = memberRuleStatus(
@@ -264,6 +274,9 @@ export function CoaVariantEditor({
   const errors = draftErrors(draft)
   const held = heldNote(status)
   const preview = buildPreview(draft, defaults, status)
+  const footnotesTag = (
+    <SourceTag tag={preview.footnotes.tag} formName={formName} />
+  )
   const limitsOverridden =
     draft.choices.coa_basis_note !== 'default' ||
     draft.choices.coa_footnotes !== 'default'
@@ -400,14 +413,21 @@ export function CoaVariantEditor({
             prefix="Sample prep:"
           />
         </div>
-        <div className="space-y-1 rounded-md border px-2.5 py-1.5 text-xs">
-          {preview.footnotes.items.length > 0 ? (
-            <FootnoteLines rows={preview.footnotes.items} />
-          ) : (
-            <p className="italic text-muted-foreground">no footnotes</p>
-          )}
-          <SourceTag tag={preview.footnotes.tag} formName={formName} />
-        </div>
+        {preview.footnotes.items.length > 0 ? (
+          <div
+            data-testid="coa-variant-preview-footnotes"
+            className="space-y-1 rounded-md border px-2.5 py-1.5 text-xs"
+          >
+            <FootnoteLines
+              rows={preview.footnotes.items}
+              lastTag={footnotesTag}
+            />
+          </div>
+        ) : (
+          <p className="text-xs text-muted-foreground">
+            no footnotes {footnotesTag}
+          </p>
+        )}
         {preview.macroNote && (
           <p className="text-xs text-muted-foreground">
             {"{lod} fills in from each sample's results"}

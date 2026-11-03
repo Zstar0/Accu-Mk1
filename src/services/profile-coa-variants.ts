@@ -11,5 +11,7 @@ export function useProfileCoaVariants(profileId: number | null) {
     queryKey: profileCoaVariantKeys.forProfile(profileId),
     queryFn: () => listProfileCoaVariants(profileId as number),
     enabled: profileId !== null,
+    // Save sends all five fields, so a stale row could revert a colleague's edit.
+    staleTime: 0,
   })
 }

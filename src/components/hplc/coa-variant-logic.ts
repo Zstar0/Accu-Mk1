@@ -396,8 +396,8 @@ export function buildPreview(
     'no method line'
   )
   const prep = piece(wire.coa_prep_text, defaults.coa_prep_text, 'no prep line')
+  // Not the title: it prints as typed, and the backend refuses a macro in one.
   const shown = [
-    title.text,
     basis.text,
     method.text,
     prep.text,

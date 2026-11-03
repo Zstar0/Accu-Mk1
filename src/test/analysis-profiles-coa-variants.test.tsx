@@ -299,6 +299,32 @@ describe('AnalysisProfilesPage: COA text versions', () => {
     expect(within(row('Method')).getByText('New method')).toBeVisible()
   })
 
+  it('a Save Changes finishing late does not flip the panel to another profile', async () => {
+    vi.mocked(getAnalysisProfiles).mockResolvedValue([
+      PROFILE,
+      { ...PROFILE, id: 2, key: 'other-panel', name: 'Other Panel' },
+    ])
+    let finishSave: (saved: AnalysisProfile) => void = () => undefined
+    vi.mocked(updateAnalysisProfile).mockReturnValue(
+      new Promise(resolve => {
+        finishSave = resolve
+      })
+    )
+    await openProfile()
+    await user.click(screen.getByRole('button', { name: 'Save Changes' }))
+    await user.click(closeButton())
+    await user.click(screen.getByText('Other Panel'))
+    await waitFor(() =>
+      expect(screen.getByRole('button', { name: /Save Members/ })).toBeEnabled()
+    )
+    await dirtyTheCard()
+    // The save's closePanel prompt, cancelled, so the panel stays to be read.
+    confirmReturns(false)
+    finishSave(PROFILE)
+    await waitFor(() => expect(window.confirm).toHaveBeenCalled())
+    expect(screen.getByText('Edit: Other Panel')).toBeVisible()
+  })
+
   it('an unsaved Members edit does not change the guard line; Save Members does', async () => {
     // Saved member: Arsenic, which has a rule. Lead has none.
     await openProfile()

@@ -4,6 +4,7 @@ import { render, screen, waitFor, within } from '@testing-library/react'
 import userEvent, { type UserEvent } from '@testing-library/user-event'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { listServiceSpecs, type AnalysisServiceSpecRecord } from '@/lib/api'
+import { queryClient } from '@/lib/query-client'
 import {
   CoaVariantEditor,
   type CoaVariantEditorProps,
@@ -237,6 +238,34 @@ describe('CoaVariantEditor', () => {
     expect(screen.queryByRole('button', { name: 'Add the rule' })).toBeNull()
   })
 
+  it('asks for the rules again when reopened, so a stale cache cannot keep it green', async () => {
+    // The app's own defaults: their 5-minute staleTime is what kept it green.
+    const client = new QueryClient({
+      defaultOptions: {
+        queries: { ...queryClient.getDefaultOptions().queries, retry: false },
+      },
+    })
+    const mount = () =>
+      render(
+        <QueryClientProvider client={client}>
+          <Harness />
+        </QueryClientProvider>
+      )
+    specsFor({ 1: [formRule], 2: [formRule] })
+    const first = mount()
+    await pick('Basis note', 'Leave off')
+    expect(await screen.findByText(/^All 2 services have/)).toBeVisible()
+    first.unmount()
+
+    specsFor({ 1: [], 2: [formRule] })
+    mount()
+    await pick('Basis note', 'Leave off')
+    expect(
+      await screen.findByText(/^Arsenic has no Nasal Spray rule/)
+    ).toBeVisible()
+    expect(listServiceSpecs).toHaveBeenCalledTimes(4)
+  })
+
   it('is never green when a call fails', async () => {
     specsFor({ 1: [formRule], 2: new Error('boom') })
     renderEditor()
@@ -280,6 +309,37 @@ describe('CoaVariantEditor', () => {
     expect(
       preview.getByText("{lod} fills in from each sample's results")
     ).toBeVisible()
+  })
+
+  it('previews no footnotes as a plain line with its tag inline and no box', async () => {
+    renderEditor()
+    await pick('Footnotes', 'Leave off')
+    const line = within(screen.getByTestId('coa-variant-preview')).getByText(
+      'no footnotes'
+    )
+    expect(within(line).getByText('Nasal Spray')).toBeVisible()
+    expect(line).not.toHaveClass('italic')
+    expect(screen.queryByTestId('coa-variant-preview-footnotes')).toBeNull()
+  })
+
+  it('previews footnotes in a box with the tag inline after the last note', () => {
+    renderEditor({
+      defaults: {
+        ...DEFAULTS,
+        coa_footnotes: [
+          { label: 'Basis:', text: 'First note.' },
+          { label: 'Assumed MDD:', text: 'Last note.' },
+        ],
+      },
+    })
+    const box = within(screen.getByTestId('coa-variant-preview-footnotes'))
+    expect(
+      within(box.getByText('First note.')).queryByText('Default')
+    ).toBeNull()
+    expect(
+      within(box.getByText('Last note.')).getByText('Default')
+    ).toBeVisible()
+    expect(box.getAllByText('Default')).toHaveLength(1)
   })
 
   it('shows the macro hint', () => {

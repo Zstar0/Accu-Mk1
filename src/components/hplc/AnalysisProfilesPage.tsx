@@ -164,7 +164,9 @@ export default function AnalysisProfilesPage() {
   const [savingMembers, setSavingMembers] = useState(false)
   const [memberSearch, setMemberSearch] = useState('')
 
-  const { data: coaVariants = [] } = useProfileCoaVariants(editingProfile?.id ?? null)
+  const { data: coaVariants = [] } = useProfileCoaVariants(
+    editingProfile?.id ?? null
+  )
   // A ref so handleSave's closure reads the latest value when it calls closePanel.
   const variantEditsDirty = useRef(false)
   const handleVariantsDirty = useCallback((dirty: boolean) => {
@@ -318,7 +320,8 @@ export default function AnalysisProfilesPage() {
   }
 
   const closePanel = () => {
-    if (variantEditsDirty.current && !window.confirm(UNSAVED_VERSION_PROMPT)) return
+    if (variantEditsDirty.current && !window.confirm(UNSAVED_VERSION_PROMPT))
+      return
     resetPanel()
   }
 
@@ -394,7 +397,7 @@ export default function AnalysisProfilesPage() {
         })
         // Cancelling closePanel's unsaved-edits prompt must not leave the
         // version cards showing the old Default.
-        setEditingProfile(saved)
+        setEditingProfile(cur => (cur?.id === saved.id ? saved : cur))
         toast.success(`"${form.name.trim()}" updated`)
       } else {
         await createAnalysisProfile({
@@ -707,7 +710,12 @@ export default function AnalysisProfilesPage() {
                   {editingProfile ? `Edit: ${editingProfile.name}` : 'New Analysis Profile'}
                 </span>
               </div>
-              <Button variant="ghost" size="icon" aria-label="Close panel" onClick={closePanel}>
+              <Button
+                variant="ghost"
+                size="icon"
+                aria-label="Close panel"
+                onClick={closePanel}
+              >
                 <X className="h-4 w-4" />
               </Button>
             </div>
