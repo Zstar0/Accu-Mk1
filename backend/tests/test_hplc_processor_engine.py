@@ -23,6 +23,8 @@ from calculations.hplc_processor import (
     BENZYL_ALCOHOL_DENSITY,
     DILUENT_DENSITY_MG_ML,
     PREP_FORMS,
+    QUANTITY_MG_PLACES,
+    SUBMITTED_MG_PLACES,
     CalibrationParams,
     IntermediateWeights,
     WeightInputs,
@@ -1460,12 +1462,13 @@ def _expected_quantity(areas, calibration, d):
     mass_ug = conc * total * volume
     if not all(math.isfinite(v) for v in (conc, conc * total, mass_ug)):
         return "quantity_not_finite", "overflow", None
-    # The published mass is rounded to 4 places, so a positive concentration can still
-    # work out to a mass that rounds away. There is no number to report then, and 0.0 mg
-    # with no problem is the false zero the fix wave exists to kill. The places are
-    # written out rather than imported: this oracle must say what the engine owes, not
-    # read it back from the engine.
-    if round(mass_ug / 1000, 4) == 0 and conc > 0:
+    # A positive concentration can still work out to a mass that rounds away, and then
+    # there is no number to report: 0 mg with no problem is the false zero the fix wave
+    # exists to kill. THREE places, the precision prep_bridge submits onto the vial with
+    # (`f"{v:.3f}"`), not the four the engine publishes: a mass of 0.0001 mg is a number
+    # in the trace and the string "0" on the vial. Written out rather than imported,
+    # because this oracle must say what the engine owes, not read it back from the engine.
+    if round(mass_ug / 1000, 3) == 0 and conc > 0:
         return "quantity_below_precision", "below_precision", None
     return None, "one_step" if d["intermediate"] is None else "two_step", mass_ug
 
@@ -1637,8 +1640,12 @@ SMALL_SURVIVING_STOCK_LEG = replace(
     [
         {"form": "liquid", "declared_volume_ml": 5e-6},
         {"weights": SMALL_SURVIVING_STOCK_LEG},
+        # 1.8e-5 mL of stock gives 9.8e-5 mg, which PUBLISHES as 0.0001 mg: a number at the
+        # engine's four places, and the string "0" once prep_bridge formats it to three and
+        # strips the zeros. The guard has to be at the consumer's precision to catch it.
+        {"form": "liquid", "declared_volume_ml": 1.8e-5},
     ],
-    ids=["liquid_declared_volume", "powder_stock_leg"],
+    ids=["liquid_declared_volume", "powder_stock_leg", "publishes_as_a_number_submits_as_zero"],
 )
 def test_a_quantity_that_rounds_to_zero_is_not_a_result(overrides):
     # The same false zero one layer down: the INPUTS are guarded above, but the mass is
@@ -1658,6 +1665,23 @@ def test_a_quantity_that_rounds_to_zero_is_not_a_result(overrides):
     assert result["concentration_ug_ml"] == FORWARD_CASE["expected"]["concentration_ug_ml"]
     assert result["calculation_trace"]["quantity"]["concentration_ug_ml"] > 0
     json.dumps(result, allow_nan=False)
+
+
+def test_the_precision_guard_is_the_one_the_submitted_value_uses():
+    # The mass has THREE precisions: the engine publishes 4 places, prep_bridge submits 3
+    # (and strips trailing zeros), and both bench screens show 2. The guard must sit at the
+    # VALUE-CARRYING consumer's, because a number the vial receives as "0" is the false
+    # zero whatever the engine stored. Imported, not mirrored by hand, so the two cannot
+    # drift apart; the import is local because prep_bridge pulls in the ORM.
+    from lims_analyses.prep_bridge import _fmt_num
+
+    smallest_allowed = 10 ** -SUBMITTED_MG_PLACES
+    assert _fmt_num(smallest_allowed) != "0"
+    assert _fmt_num(smallest_allowed / 10) == "0"
+    # And the engine's own publishing precision is finer, so it is NOT a safe guard: this is
+    # the value the previous guard let through.
+    assert QUANTITY_MG_PLACES > SUBMITTED_MG_PLACES
+    assert _fmt_num(10 ** -QUANTITY_MG_PLACES) == "0"
 
 
 def test_a_negative_quantity_that_rounds_to_zero_is_still_a_result():

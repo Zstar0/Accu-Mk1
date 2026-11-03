@@ -96,9 +96,16 @@ def _leg_mg(heavier: Optional[float], lighter: Optional[float]) -> Optional[floa
 STOCK_VOLUME_PLACES = 6
 
 
-# The places calculate_quantity publishes a mass in. Read by the rounding and by the
-# guard that refuses a mass which rounds away, for the same reason as above.
+# The places calculate_quantity publishes a mass in.
 QUANTITY_MG_PLACES = 4
+
+# The places the mass survives in the consumer that CARRIES it: lims_analyses.prep_bridge
+# submits it onto the vial with `f"{v:.3f}"` and then strips trailing zeros, so three. The
+# guard below refuses a mass that rounds away at THIS precision, not at the engine's finer
+# one: a mass of 0.0001 mg publishes as a number and reaches the vial as the string "0",
+# and refusing what the consumer cannot carry is the whole point of the guard. Mirrors
+# prep_bridge._fmt_num; a test imports that function and pins the two together.
+SUBMITTED_MG_PLACES = 3
 
 
 def _volume_survives_rounding(volume: Optional[float]) -> bool:
@@ -594,10 +601,11 @@ def calculate_quantity(
         "quantity_not_finite"            the concentration, the undiluted concentration
                                          or the mass overflowed
         "quantity_below_precision"       the concentration is above zero but the mass
-                                         rounds to 0.0 mg at the places it is published
-                                         in, so there is no number to report. NOT a
-                                         weighing code: the weighings may be sound and
-                                         the volumes just very small
+                                         rounds away at SUBMITTED_MG_PLACES, the precision
+                                         the consumer that carries it uses, so there is no
+                                         number to report. NOT a weighing code: the
+                                         weighings may be sound and the volumes just very
+                                         small
 
     What does not depend on the weighings is still returned (areas, calibration, and
     the concentration, which is (avg_area - intercept) / slope; None if that overflowed),
@@ -651,11 +659,12 @@ def calculate_quantity(
         mass_ug = undiluted_conc * stock_vol
         if not all(_finite(v) for v in (concentration, undiluted_conc, mass_ug)):
             error = "quantity_not_finite"
-        elif round(mass_ug / 1000, QUANTITY_MG_PLACES) == 0 and concentration > 0:
+        elif round(mass_ug / 1000, SUBMITTED_MG_PLACES) == 0 and concentration > 0:
             # The gate above guards the INPUTS, and both can be tiny and still survive
             # their own rounding (1e-6 mL is enough), so the mass they multiply out to can
-            # still round away. A published 0.0 mg is the same false zero by a third route,
-            # and prep_bridge renders it onto the vial as "0". Not a leg's code: the
+            # still round away. At SUBMITTED_MG_PLACES, not the engine's own four: a mass of
+            # 0.0001 mg is a number here and the string "0" on the vial, which is the same
+            # false zero one consumer further on. Not a leg's code: the
             # weighings may be perfectly good and the quantity still too small to print.
             # Only for a POSITIVE concentration; a negative one is a real reading whose
             # small negative mass is a result, as the fixture's own negative row is.
