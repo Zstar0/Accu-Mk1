@@ -90,6 +90,18 @@ def _leg_mg(heavier: Optional[float], lighter: Optional[float]) -> Optional[floa
     return None if heavier is None or lighter is None else heavier - lighter
 
 
+# The places calculate_dilution_factor stores a stock volume in. The guard below and
+# that rounding read this one name on purpose: they must agree, or a volume that rounds
+# to a finite 0.0 is stored, and a zero stock volume makes a confident 0.00 mg.
+STOCK_VOLUME_PLACES = 6
+
+
+def _volume_survives_rounding(volume: Optional[float]) -> bool:
+    """A stock volume the stored row can carry: a number, and still above zero once
+    rounded to the places it is stored in. 5e-7 mL or less is not a volume."""
+    return _finite(volume) and round(volume, STOCK_VOLUME_PLACES) > 0
+
+
 # The prep forms the engine understands. The endo bench accepts the same three
 # (worksheets_endo.ENDO_FORMS); a test pins that set(ENDO_FORMS) <= set(PREP_FORMS)
 # instead of importing the tuple, because worksheets_endo imports models and this
@@ -155,24 +167,25 @@ def stock_volume_ml(
 
         "stock_diluent"       powder or bac: the stock vial leg is <= 0, missing (a
                               None weighing) or not finite, or its volume overflows
-                              (a density near zero)
+                              (a density near zero) or rounds away to 0.0
                               (calc.js guards this with !preDissolved, so "liquid"
                               never raises it: its stock leg is zero on every real row)
         "no_density"          powder or bac: the diluent density is missing, not finite
                               or <= 0
-        "no_declared_volume"  liquid: no declared volume, or one that is <= 0 or not
-                              finite
+        "no_declared_volume"  liquid: no declared volume, or one that is <= 0, not
+                              finite, or rounds away to 0.0
 
     Within this function the weighing is checked before the density, so a stock vial
     reading is never hidden behind a configuration gap. The volume is returned
-    unrounded; the caller rounds.
+    unrounded; the caller rounds. A volume that will not survive that rounding is
+    refused here rather than returned, so a finite 0.0 never reaches a quantity.
     An unknown form raises ValueError naming the accepted list.
     """
     if form not in PREP_FORMS:
         raise ValueError(f"prep form must be one of {', '.join(PREP_FORMS)}")
 
     if form == "liquid":
-        if _finite(declared_volume_ml) and declared_volume_ml > 0:
+        if _volume_survives_rounding(declared_volume_ml):
             return declared_volume_ml, None
         return None, "no_declared_volume"
 
@@ -191,9 +204,10 @@ def stock_volume_ml(
             return None, "no_density"
     else:
         volume = mass_mg / density  # mg / (mg/mL) = mL
-    if not _finite(volume):
-        # A usable density that is so small the volume overflows. Not a volume, and
-        # the stock leg's own code is the honest one for it.
+    if not _volume_survives_rounding(volume):
+        # A usable density that is so small the volume overflows, or a leg above the
+        # check above (0.0004 mg is 4e-7 mL) whose volume rounds away to 0.0. Neither
+        # is a volume, and the stock leg's own code is the honest one for both.
         return None, "stock_diluent"
     return volume, None
 
@@ -304,9 +318,11 @@ def calculate_dilution_factor(
     ROLE (which weighing is which), never by time order, and they are asymmetric
     on purpose (the thresholds are calc.js's stockPrep and dilutionActual):
 
-        "stock_diluent"  stock vial leg (with diluent - empty) is <= 0
+        "stock_diluent"  stock vial leg (with diluent - empty) is <= 0, or its volume
+                         rounds away to 0.0 (see stock_volume_ml)
         "diluent"        diluent added to the dilution vial is < 0
-        "stock"          stock added to the dilution vial is <= 0
+        "stock"          stock added to the dilution vial is <= 0, or its VOLUME is not
+                         positive, which a mass above zero reaches by underflow
 
     Zero added diluent is a legal neat injection; zero added stock is not. A leg
     with a missing weighing (None, which is how a blank one arrives) or one that is
@@ -408,8 +424,15 @@ def calculate_dilution_factor(
     dilution_factor = None
     if diluent_vol_ul is not None and sample_vol_ul is not None:
         total_vol_ul = diluent_vol_ul + sample_vol_ul
-        dilution_factor = total_vol_ul / sample_vol_ul if sample_vol_ul > 0 else 0
-    if not _finite(total_vol_ul) or not _finite(dilution_factor):  # an overflowed total, either sign
+        # None, not 0: a sample volume that is not positive gives no factor at all. A
+        # zero factor read as a number all the way to the quantity, which came out as a
+        # confident 0.00 mg. Reached by UNDERFLOW too, with a mass above the check below
+        # (5e-324 mg is 0.0 uL), which is why the volume is what decides here, as it does
+        # in calculate_intermediate.
+        dilution_factor = total_vol_ul / sample_vol_ul if sample_vol_ul > 0 else None
+    # An overflowed total or factor, either sign, and now also a sample volume that gave
+    # no factor: a total there would be a volume nothing can be worked out from.
+    if not _finite(total_vol_ul) or not _finite(dilution_factor):
         total_vol_ul = dilution_factor = None
 
     dilution_problem = None
@@ -480,7 +503,7 @@ def calculate_dilution_factor(
         "total_vol_ul": _round_or_none(total_vol_ul, 4),
         "dilution_factor": final_factor,
         "stock_mass_mg": _round_or_none(stock_mass_mg if _finite(stock_mass_mg) else None, 4),
-        "stock_volume_ml": None if stock_problem else round(stock_vol_ml, 6),
+        "stock_volume_ml": None if stock_problem else round(stock_vol_ml, STOCK_VOLUME_PLACES),
         "problem": problem,
         "form": form,
     }
@@ -551,7 +574,9 @@ def calculate_quantity(
     The gate stands on the total and the stock volume, never on "dilution_factor": an
     intermediate-only problem leaves a good final-step factor in place, and a quantity
     from one step of a two-step prep is low by the intermediate factor. So no quantity
-    is computed unless "problem" is None AND both values are finite numbers.
+    is computed unless "problem" is None AND both values are finite numbers ABOVE ZERO:
+    zero is finite, and the mass a zero gives is exactly 0.0 mg with no problem to show
+    the tech why.
 
     Returns quantity result with calculation trace. A problem, or an overflow in the
     arithmetic, gives no quantity, never a number computed from a bad weighing:
@@ -559,8 +584,8 @@ def calculate_quantity(
 
         the dilution's "problem" code    (see calculate_dilution_factor)
         "dilution_incomplete"            problem is None but the total or the stock
-                                         volume is not a finite number (a dict that
-                                         calculate_dilution_factor did not build)
+                                         volume is not a finite number above zero (a
+                                         dict calculate_dilution_factor did not build)
         "quantity_not_finite"            the concentration, the undiluted concentration
                                          or the mass overflowed
 
@@ -599,7 +624,12 @@ def calculate_quantity(
     total = dilution.get("dilution_factor_total")
     stock_vol = dilution.get("stock_volume_ml")
     error = dilution.get("problem")
-    if not error and not (_finite(total) and _finite(stock_vol)):
+    # Above zero, not merely finite: zero is finite, and a zero on either side makes the
+    # mass exactly 0.0 mg with no problem to show for it. The two legs refuse a zero of
+    # their own now, so this is the belt: a path added later fails closed here too.
+    # `_finite` as well as `> 0`, because a comparison is false for NaN by a rule nobody
+    # should have to remember.
+    if not error and not (_finite(total) and total > 0 and _finite(stock_vol) and stock_vol > 0):
         error = "dilution_incomplete"
 
     undiluted_conc = mass_ug = None

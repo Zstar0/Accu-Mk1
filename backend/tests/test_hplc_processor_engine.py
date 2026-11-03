@@ -1052,8 +1052,9 @@ def test_a_huge_but_finite_total_is_not_mistaken_for_an_overflow():
 
 def test_a_negative_total_volume_that_overflows_is_none_not_minus_infinity():
     # Found by the sweep below. Both volumes are finite and negative (a backwards
-    # weighing), their sum is -inf, and the dilution factor is 0 because the sample
-    # volume is not positive, so a check on the factor alone missed the total volume.
+    # weighing) and their sum is -inf. The sample volume is not positive, so the factor
+    # was 0 (it is None since the fix wave), and a check on the factor alone missed the
+    # total volume. The total is checked in its own right, which is what this pins.
     w = replace(
         FORWARD_WEIGHTS,
         dil_vial_empty=1e308, dil_vial_with_diluent=-5e-324, dil_vial_with_diluent_and_sample=-1e308,
@@ -1558,3 +1559,63 @@ def test_the_same_promises_hold_on_a_grid_of_every_area_slope_and_intercept():
     # so the floors sit close to the measured 771 one-step and 287 two-step quantities,
     # 1462 overflow refusals and 1680 incomplete, out of 7,680 calls.
     _assert_floors(kinds, one_step=750, two_step=280, overflow=1400, incomplete=1600)
+
+
+# ---- Fix wave: a volume that rounds away is not a volume ----------------------
+#
+# Three routes still reached a quantity of exactly 0.0 mg with problem None, every one
+# of them inside the request layer's own validation bounds: a declared volume that
+# passes Field(gt=0) and rounds away at the six places the row stores, a stock leg
+# above stock_volume_ml's `mass_mg <= 0` check whose volume rounds away the same way,
+# and a sample volume that underflows to 0.0 while its mass is above zero (the mirror
+# of calculate_intermediate, which checks the VOLUME and is immune). Zero is finite, so
+# the quantity gate passed it: 0.00 mg printed with no problem line, and prep_bridge
+# submits it onto the vial as "0", which is the path to a certificate.
+#
+# Each row must report the code of the LEG that produced it, not "dilution_incomplete":
+# CalculationVisuals.tsx deliberately carries no copy for that code, so a tech would
+# read a raw code instead of the sentence the leg already has.
+
+# A stock leg of 0.0004 mg: 4.01e-7 mL, which rounds to 0.0 at six places.
+TINY_STOCK_LEG = replace(
+    FORWARD_WEIGHTS, stock_vial_with_diluent=FORWARD_WEIGHTS.stock_vial_empty + 0.0004
+)
+# A sample leg of 5e-324 mg, whose volume underflows to 0.0. Built off a 0.0 base
+# because FORWARD_WEIGHTS.dil_vial_with_diluent + 5e-324 is a float no-op, which would
+# make the leg exactly 0.0 and test the already-covered `sample_mass_mg <= 0` branch.
+UNDERFLOW_SAMPLE_LEG = replace(
+    FORWARD_WEIGHTS,
+    dil_vial_empty=-(FORWARD_WEIGHTS.dil_vial_with_diluent - FORWARD_WEIGHTS.dil_vial_empty),
+    dil_vial_with_diluent=0.0,
+    dil_vial_with_diluent_and_sample=5e-324,
+)
+
+
+@pytest.mark.parametrize(
+    "overrides, code",
+    [
+        ({"form": "liquid", "declared_volume_ml": 4e-7}, "no_declared_volume"),
+        ({"weights": TINY_STOCK_LEG}, "stock_diluent"),
+        ({"weights": TINY_STOCK_LEG, "form": "bac"}, "stock_diluent"),
+        ({"weights": UNDERFLOW_SAMPLE_LEG}, "stock"),
+    ],
+    ids=["liquid_declared_volume", "powder_stock_leg", "bac_stock_leg", "final_vial_underflow"],
+)
+def test_a_stock_volume_that_rounds_to_zero_is_not_a_quantity(overrides, code):
+    result = process_hplc_analysis(replace(_FORWARD_INPUT, **overrides))
+    assert result["quantity_mg"] is None
+    assert result["calculation_trace"]["dilution"]["problem"] == code
+    assert result["calculation_trace"]["quantity"]["error"] == code
+    # Nothing that does not depend on the weighings moves.
+    assert result["purity_percent"] == FORWARD_CASE["expected"]["purity_percent"]
+    assert result["concentration_ug_ml"] == FORWARD_CASE["expected"]["concentration_ug_ml"]
+    json.dumps(result, allow_nan=False)
+
+
+@pytest.mark.parametrize("key", ["dilution_factor_total", "stock_volume_ml"])
+def test_the_quantity_gate_refuses_a_zero_total_or_stock_volume(key):
+    # The belt behind the three fixes above. Nothing calculate_dilution_factor builds can
+    # hand the gate a zero any more, so this is a hand-built dict, as _holed's own cases
+    # are: a future path that produces one must fail closed instead of printing 0.00 mg.
+    q = calculate_quantity(INJECTIONS, CAL, _holed(key, 0.0))
+    assert q["quantity_mg"] is None and q["error"] == "dilution_incomplete"
