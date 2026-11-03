@@ -362,6 +362,34 @@ async def test_stop_survives_its_callers_cancellation(ai_chat_env, monkeypatch):
         await seen(ai_chat_env, "turn_ended")
 
 
+# The quick prompt ends `end_turn`: the fake's echo never looks at session/cancel. What Stop owes it is the order.
+@pytest.mark.parametrize(("text", "stop_reason", "reply"), [("SLOW", "cancelled", "working"),
+                                                            ("quick", "end_turn", "echo: quick")])
+async def test_stop_ready_ahead_of_the_prompts_first_step_goes_out_after_it(ai_chat_env, tmp_path, monkeypatch, text,
+                                                                            stop_reason, reply):
+    # session/cancel ahead of session/prompt cancels nothing, and the agent then runs the whole prompt.
+    state = tmp_path / "state.json"
+    ai_chat_env.flags = ["--state", str(state)]
+    stops = []
+    real_prompt = sessions.LiveSession._prompt
+
+    async def stop_then_prompt(self, blocks):
+        # Ready now, so it runs right ahead of the task `_prompt` is about to schedule.
+        stops.append(asyncio.create_task(sessions.MANAGER._stop_turn(sessions.MANAGER._turns[1])))
+        return await real_prompt(self, blocks)
+
+    monkeypatch.setattr(sessions.LiveSession, "_prompt", stop_then_prompt)
+    with anyio.fail_after(30):
+        session, _ = await send(ai_chat_env, text)
+        ended = await seen(ai_chat_env, "turn_ended")
+        await stops[0]
+        kept = sessions.MANAGER.get(1) is session  # a hard cancel would have retired it
+        await sessions.MANAGER.close_chat(1)
+        await session.proc.wait()  # `eof` is in the log, so the log is complete
+    assert [line for line in agent_log(state) if not line.startswith("new ")] == [f'prompt ["{text}"]', "cancel", "eof"]
+    assert kept and ended["stop_reason"] == stop_reason and rows(ai_chat_env, "assistant")[0].text == reply
+
+
 async def test_stop_during_start_sends_no_prompt(ai_chat_env, tmp_path, monkeypatch):
     monkeypatch.setattr(sessions, "_GRACE_S", 20)  # a slow host's spawn must not turn this into a hard cancel
     state = tmp_path / "state.json"
@@ -576,46 +604,94 @@ async def test_sweep_ahead_of_the_waiter_is_what_the_agent_gets(ai_chat_env):
 
 
 async def test_turn_ended_follows_the_waiters_resolution(ai_chat_env, monkeypatch):
-    real = sessions.update_message_meta
+    # The agent ends the turn while the waiter writes the row, whatever the host's speed: the fake's 0.3 s runs out
+    # under `_prompt`, the turn waits for the decision, and the write waits for the turn to be over.
+    reached, release = threading.Event(), threading.Event()
+    decided = asyncio.Event()
+    real_write, real_prompt = sessions.update_message_meta, sessions.LiveSession._prompt
 
-    def slow(chat_id, seq, patch):
-        time.sleep(1.0)
-        real(chat_id, seq, patch)
+    def held(chat_id, seq, patch):
+        reached.set()
+        release.wait(10)
+        real_write(chat_id, seq, patch)
 
-    monkeypatch.setattr(sessions, "update_message_meta", slow)
+    async def prompt_then_decision(self, blocks):
+        result = await real_prompt(self, blocks)
+        await decided.wait()
+        return result
+
+    monkeypatch.setattr(sessions, "update_message_meta", held)
+    monkeypatch.setattr(sessions.LiveSession, "_prompt", prompt_then_decision)
     with anyio.fail_after(30):
-        await send(ai_chat_env, "ABANDON")  # the agent ends the turn while the waiter writes the row
+        session, _ = await send(ai_chat_env, "ABANDON")
         card = await seen(ai_chat_env, "permission_requested")
         approvals.APPROVALS.decide(card["permission_id"], 1, "allow")
+        while not reached.is_set():
+            await asyncio.sleep(0.01)
+        decided.set()
+        while session.turn_id is not None:
+            await asyncio.sleep(0.01)
+        release.set()
         ended = await seen(ai_chat_env, "turn_ended")
         row = rows(ai_chat_env, "permission")[0].meta  # what a refetch at turn_ended reads
     resolved = of_type(ai_chat_env, "permission_resolved")
-    assert [e["decision"] for e in resolved] == [row["decision"]]
+    assert [e["decision"] for e in resolved] == ["allow"] and row["decision"] == "allow"
     assert resolved[0]["seq"] < ended["seq"]
 
 
 async def test_allow_written_while_stop_goes_out_flips_to_cancelled(ai_chat_env, tmp_path, monkeypatch):
+    # The order, whatever the host's speed: the allow write starts, session/cancel reaches the agent, the write ends.
     state = tmp_path / "state.json"
     ai_chat_env.flags = ["--state", str(state)]
     written = []
+    reached, release = threading.Event(), threading.Event()
     real = sessions.update_message_meta
 
-    def slow(chat_id, seq, patch):
-        time.sleep(0.5)
+    def held_once(chat_id, seq, patch):
+        if not reached.is_set():
+            reached.set()
+            release.wait(10)
         real(chat_id, seq, patch)
         written.append(patch["decision"])
 
-    monkeypatch.setattr(sessions, "update_message_meta", slow)
+    monkeypatch.setattr(sessions, "update_message_meta", held_once)
     with anyio.fail_after(30):
         await send(ai_chat_env, "PERMIT")
         card = await seen(ai_chat_env, "permission_requested")
         approvals.APPROVALS.decide(card["permission_id"], 1, "allow")
-        await asyncio.sleep(0.1)
-        assert await sessions.MANAGER.cancel(1) is True
+        while not reached.is_set():
+            await asyncio.sleep(0.01)
+        stop = asyncio.create_task(sessions.MANAGER.cancel(1))
+        while "cancel" not in agent_log(state):
+            await asyncio.sleep(0.01)
+        release.set()
+        assert await stop is True
     assert decisions(ai_chat_env) == ("cancelled", ["cancelled"], "cancelled")
     assert written == ["allow", "cancelled"]
     assert rows(ai_chat_env, "permission")[0].meta["decided_by"] is None
-    assert "cancel" in agent_log(state)
+
+
+async def test_allow_in_the_step_before_stops_send_is_cancelled(ai_chat_env, monkeypatch):
+    # The yield in `LiveSession.cancel`: Stop is flagged and session/cancel has not gone out. Allow still loses.
+    sends = []
+    with anyio.fail_after(30):
+        session, _ = await send(ai_chat_env, "PERMIT")
+        card = await seen(ai_chat_env, "permission_requested")
+        real_send = session._conn.cancel
+
+        async def spy_send(**kwargs):
+            sends.append(kwargs)
+            await real_send(**kwargs)
+
+        monkeypatch.setattr(session._conn, "cancel", spy_send)
+        stop = asyncio.create_task(sessions.MANAGER.cancel(1))
+        while not session.stop_requested:  # one step at a time: this runs ahead of whatever the flag's setter yields to
+            await asyncio.sleep(0)
+        assert sends == []
+        approvals.APPROVALS.decide(card["permission_id"], 1, "allow")
+        await stop
+    assert len(sends) == 1
+    assert decisions(ai_chat_env) == ("cancelled", ["cancelled"], "cancelled")
 
 
 async def test_failed_decision_write_publishes_cancelled(ai_chat_env, monkeypatch, caplog):

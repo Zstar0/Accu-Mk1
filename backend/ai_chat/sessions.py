@@ -427,8 +427,11 @@ class LiveSession:
     async def cancel(self) -> None:
         """session/cancel for a running prompt; the agent then ends it with `cancelled`. A turn that has not sent
         its prompt yet (still starting, or between refusal and retry) never sends it."""
-        self.stop_requested = True
+        self.stop_requested = True  # ahead of the yield: whatever runs during it already sees Stop
         if self._prompt_task is not None:
+            # A prompt scheduled in this loop step has not reached acp's send queue yet. Its first step goes ahead of
+            # this one, or the agent gets session/cancel first, cancels nothing, and then runs the whole prompt.
+            await asyncio.sleep(0)
             await self._send_cancel()
 
     async def _send_cancel(self) -> None:
