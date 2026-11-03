@@ -17,7 +17,10 @@ Prompts, by their last text block:
   PERMIT            a thought, a tool call, then a permission request offering allow_once, reject_once and
                     allow_always; replies `allowed`, `denied` or `cancelled` (the outcome it got)
   PERMIT_NOREJECT   the same without reject_once
+  PERMIT_NOALLOW    the same without allow_once
+  ABANDON           sends the same permission request, and ends the turn 0.3 s later without waiting for the answer
   SLOW              replies `working`, waits for session/cancel, then stops with `cancelled`
+  STUCK             replies `working` and never stops, session/cancel or not
   PLAN              sends an empty plan update, then echoes
   STALE             sends a message chunk for another session id, then echoes
   anything else     `echo: <text>`, in two chunks
@@ -121,13 +124,20 @@ class FakeAgent(acp.Agent):
         last = texts[-1] if texts else ""
         if last == "/tools":
             await self.say(session_id, self.tools_reply)
-        elif last in ("PERMIT", "PERMIT_NOREJECT"):
-            await self.permit(session_id, with_reject=last == "PERMIT")
+        elif last in ("PERMIT", "PERMIT_NOREJECT", "PERMIT_NOALLOW"):
+            await self.permit(session_id, with_allow=last != "PERMIT_NOALLOW", with_reject=last != "PERMIT_NOREJECT")
+        elif last == "ABANDON":
+            self.abandoned = asyncio.create_task(self.ask(session_id, with_allow=True, with_reject=True))
+            await asyncio.sleep(0.3)
+            await self.say(session_id, "gave up")
         elif last == "SLOW":
             self.waiting[session_id] = event = asyncio.Event()
             await self.say(session_id, "working")
             await event.wait()
             return PromptResponse(stop_reason="cancelled")
+        elif last == "STUCK":
+            await self.say(session_id, "working")
+            await asyncio.Event().wait()
         else:
             if last == "PLAN":
                 await self.conn.session_update(session_id, acp.update_plan([]))
@@ -137,17 +147,22 @@ class FakeAgent(acp.Agent):
             await self.say(session_id, last)
         return PromptResponse(stop_reason="end_turn")
 
-    async def permit(self, session_id: str, with_reject: bool) -> None:
-        await self.conn.session_update(session_id, acp.update_agent_thought_text("checking"))
-        await self.conn.session_update(session_id, acp.start_tool_call(
-            "call-1", "Run a command", kind="execute", status="pending"))
-        options = [PermissionOption(option_id="allow-once", name="Allow once", kind="allow_once")]
+    async def ask(self, session_id: str, with_allow: bool, with_reject: bool):
+        options = []
+        if with_allow:
+            options.append(PermissionOption(option_id="allow-once", name="Allow once", kind="allow_once"))
         if with_reject:
             options.append(PermissionOption(option_id="reject-once", name="Reject", kind="reject_once"))
         options.append(PermissionOption(option_id="allow-always", name="Always allow", kind="allow_always"))
-        response = await self.conn.request_permission(
+        return await self.conn.request_permission(
             session_id=session_id, options=options,
             tool_call=ToolCallUpdate(tool_call_id="call-1", title="Run a command", raw_input={"command": "ls"}))
+
+    async def permit(self, session_id: str, with_allow: bool, with_reject: bool) -> None:
+        await self.conn.session_update(session_id, acp.update_agent_thought_text("checking"))
+        await self.conn.session_update(session_id, acp.start_tool_call(
+            "call-1", "Run a command", kind="execute", status="pending"))
+        response = await self.ask(session_id, with_allow, with_reject)
         outcome = response.outcome
         reply = REPLIES.get(outcome.option_id, outcome.option_id) if outcome.outcome == "selected" else "cancelled"
         await self.conn.session_update(session_id, acp.update_tool_call(

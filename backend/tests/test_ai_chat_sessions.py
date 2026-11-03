@@ -161,16 +161,18 @@ async def test_unknown_update_kind_ignored(ai_chat_env):
 
 
 async def test_thoughts_and_tool_calls_published(ai_chat_env):
-    s = ai_chat_env.session()
+    s = ai_chat_env.session(permission_timeout_s=1)
     with anyio.fail_after(30):
         await s.start()
         await s.attach(None)
         result = await s.run_turn("t1", ["PERMIT"])
         await closed(s)
-    # Until Task 7 wires approvals, every permission request is answered with the `cancelled` outcome.
+    # Nobody decides, so the request times out and the agent gets `cancelled` (test_ai_chat_manager.py covers cards).
     assert (result.stop_reason, result.text) == ("end_turn", "cancelled")
     assert result.tools == [{"id": "call-1", "title": "Run a command", "kind": "execute", "status": "failed"}]
-    assert [{k: v for k, v in e.items() if k not in ("seq", "chat_id")} for e in ai_chat_env.events()] == [
+    cards = ("permission_requested", "permission_resolved")
+    assert [{k: v for k, v in e.items() if k not in ("seq", "chat_id")}
+            for e in ai_chat_env.events() if e["type"] not in cards] == [
         {"type": "thought_chunk", "turn_id": "t1", "text": "checking"},
         {"type": "tool_call", "turn_id": "t1", "id": "call-1", "title": "Run a command", "kind": "execute",
          "status": "pending"},

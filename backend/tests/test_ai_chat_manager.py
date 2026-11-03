@@ -1,0 +1,836 @@
+"""ai_chat.sessions.SessionManager: approvals inside turns, Stop, close, caps and the reaper (spec 7, 8)."""
+import asyncio
+import json
+import logging
+import sys
+import threading
+import time
+from datetime import datetime
+from pathlib import Path
+
+import anyio
+import pytest
+from acp.schema import ContentToolCallContent, PermissionOption, TextContentBlock, ToolCallUpdate
+from sqlalchemy import select
+
+from ai_chat import approvals, sessions
+from ai_chat.models import AiChat, AiChatMessage
+from integration_keys import store
+
+pytestmark = pytest.mark.anyio
+
+OPTION_IDS = ("allow-once", "reject-once", "allow-always")
+
+
+@pytest.fixture
+def anyio_backend():
+    return "asyncio"  # acp runs on asyncio only
+
+
+def add_chats(env, *ids: int) -> None:
+    with env.Session() as db:
+        db.add_all(AiChat(id=i, user_id=1, provider_id=1) for i in ids)
+        db.commit()
+
+
+async def send(env, text: str, chat_id: int = 1, stored: str | None = None, page_context: dict | None = None, **over):
+    """What Task 9's route does: reserve, store the user row, start the turn. `over` overrides provider fields."""
+    session = sessions.MANAGER.reserve(chat_id, 1, env.provider(**over))
+    user_seq = await asyncio.to_thread(sessions.persist_message, chat_id, "user", text, None)
+    return session, sessions.MANAGER.start_turn(session, text, page_context, stored, user_seq)
+
+
+async def seen(env, type: str, **fields) -> dict:
+    """The first published event of `type` with these field values, waiting for it."""
+    with anyio.fail_after(15):
+        while True:
+            for event in env.events():
+                if event["type"] == type and all(event.get(k) == v for k, v in fields.items()):
+                    return event
+            await asyncio.sleep(0.02)
+
+
+def of_type(env, type: str) -> list[dict]:
+    return [event for event in env.events() if event["type"] == type]
+
+
+def rows(env, role: str, chat_id: int = 1) -> list[AiChatMessage]:
+    with env.Session() as db:
+        return list(db.scalars(select(AiChatMessage).where(AiChatMessage.chat_id == chat_id, AiChatMessage.role == role)
+                               .order_by(AiChatMessage.seq)))
+
+
+def agent_log(state: Path) -> list[str]:
+    return Path(f"{state}.log").read_text(encoding="utf-8").splitlines()
+
+
+def prompts(state: Path) -> list[list[str]]:
+    return [json.loads(line[len("prompt "):]) for line in agent_log(state) if line.startswith("prompt ")]
+
+
+async def seed_history() -> None:
+    await asyncio.to_thread(sessions.persist_message, 1, "user", "earlier question", None)
+    await asyncio.to_thread(sessions.persist_message, 1, "assistant", "earlier answer", None)
+
+
+# ---- approvals in a turn ---------------------------------------------------------------------
+
+async def test_permission_allow_runs(ai_chat_env):
+    with anyio.fail_after(30):
+        _, turn_id = await send(ai_chat_env, "PERMIT")
+        card = await seen(ai_chat_env, "permission_requested")
+        approvals.APPROVALS.decide(card["permission_id"], 1, "allow")
+        ended = await seen(ai_chat_env, "turn_ended")
+    assert card["turn_id"] == turn_id and card["chat_id"] == 1
+    assert (card["source"], card["title"], card["detail"], card["can_allow"], card["agent"]) == (
+        "agent", "Run a command", '{"command":"ls"}', True, "Jarvis")
+    resolved = of_type(ai_chat_env, "permission_resolved")
+    assert [(e["permission_id"], e["decision"], e["turn_id"]) for e in resolved] == [
+        (card["permission_id"], "allow", turn_id)]
+    row = rows(ai_chat_env, "permission")[0]
+    assert row.text == "Run a command"
+    assert row.meta["source"] == "agent" and row.meta["title"] == "Run a command"
+    assert row.meta["detail"] == '{"command":"ls"}' and row.meta["permission_id"] == card["permission_id"]
+    assert row.meta["decision"] == "allow" and row.meta["decided_by"] == 1
+    datetime.fromisoformat(row.meta["decided_at"])
+    assistant = rows(ai_chat_env, "assistant")[0]
+    assert assistant.text == "allowed" and assistant.meta["stop_reason"] == "end_turn"
+    assert assistant.meta["tools"] == [{"id": "call-1", "title": "Run a command", "kind": "execute",
+                                        "status": "completed"}]
+    assert (ended["stop_reason"], ended["message_seq"], ended["turn_id"]) == ("end_turn", assistant.seq, turn_id)
+
+
+async def test_permission_deny_maps_reject_once(ai_chat_env):
+    with anyio.fail_after(30):
+        await send(ai_chat_env, "PERMIT")
+        card = await seen(ai_chat_env, "permission_requested")
+        approvals.APPROVALS.decide(card["permission_id"], 1, "deny")
+        await seen(ai_chat_env, "turn_ended")
+    assert rows(ai_chat_env, "assistant")[0].text == "denied"
+    meta = rows(ai_chat_env, "permission")[0].meta
+    assert meta["decision"] == "deny" and meta["decided_by"] == 1
+
+
+async def test_noreject_deny_is_cancelled_outcome(ai_chat_env):
+    with anyio.fail_after(30):
+        await send(ai_chat_env, "PERMIT_NOREJECT")
+        card = await seen(ai_chat_env, "permission_requested")
+        approvals.APPROVALS.decide(card["permission_id"], 1, "deny")
+        await seen(ai_chat_env, "turn_ended")
+    assert rows(ai_chat_env, "assistant")[0].text == "cancelled"  # what the agent's outcome was
+    assert rows(ai_chat_env, "permission")[0].meta["decision"] == "deny"
+
+
+async def test_allow_always_option_never_offered(ai_chat_env):
+    with anyio.fail_after(30):
+        await send(ai_chat_env, "PERMIT")
+        card = await seen(ai_chat_env, "permission_requested")
+        approvals.APPROVALS.decide(card["permission_id"], 1, "allow")
+        await seen(ai_chat_env, "turn_ended")
+    assert card["can_allow"] is True
+    assert set(card) == {"seq", "type", "chat_id", "turn_id", "permission_id", "source", "title", "detail",
+                         "can_allow", "agent"}
+    blob = json.dumps(card) + json.dumps(rows(ai_chat_env, "permission")[0].meta)
+    assert not [option for option in OPTION_IDS if option in blob]
+    assert rows(ai_chat_env, "assistant")[0].text == "allowed"  # allow_once, not allow_always
+
+
+async def test_no_allow_once_means_no_allow(ai_chat_env):
+    with anyio.fail_after(30):
+        await send(ai_chat_env, "PERMIT_NOALLOW")  # offers reject_once and allow_always
+        card = await seen(ai_chat_env, "permission_requested")
+        assert card["can_allow"] is False
+        with pytest.raises(approvals.AllowNotOffered):
+            approvals.APPROVALS.decide(card["permission_id"], 1, "allow")
+        approvals.APPROVALS.decide(card["permission_id"], 1, "deny")  # still pending: Deny stays available
+        await seen(ai_chat_env, "turn_ended")
+    assert rows(ai_chat_env, "assistant")[0].text == "denied"
+
+
+async def test_permission_timeout_expires(ai_chat_env):
+    with anyio.fail_after(30):
+        await send(ai_chat_env, "PERMIT", permission_timeout_s=1)
+        card = await seen(ai_chat_env, "permission_requested")
+        await seen(ai_chat_env, "permission_resolved", decision="expired")
+        with pytest.raises(approvals.ApprovalNotFound):
+            approvals.APPROVALS.decide(card["permission_id"], 1, "allow")
+        await seen(ai_chat_env, "turn_ended")
+    meta = rows(ai_chat_env, "permission")[0].meta
+    assert meta["decision"] == "expired" and meta["decided_by"] is None and meta["decided_at"]
+    assert rows(ai_chat_env, "assistant")[0].text == "cancelled"
+    assert len(of_type(ai_chat_env, "permission_resolved")) == 1
+
+
+async def test_decision_during_the_expiry_write_is_not_found(ai_chat_env, monkeypatch):
+    reached, release = threading.Event(), threading.Event()
+    real = sessions.update_message_meta
+
+    def held(chat_id, seq, patch):
+        reached.set()
+        release.wait(10)
+        real(chat_id, seq, patch)
+
+    monkeypatch.setattr(sessions, "update_message_meta", held)
+    with anyio.fail_after(30):
+        await send(ai_chat_env, "PERMIT", permission_timeout_s=1)
+        card = await seen(ai_chat_env, "permission_requested")
+        while not reached.is_set():
+            await asyncio.sleep(0.01)
+        try:
+            with pytest.raises(approvals.ApprovalNotFound):  # already expired, though nothing has said so yet
+                approvals.APPROVALS.decide(card["permission_id"], 1, "allow")
+        finally:
+            release.set()
+        await seen(ai_chat_env, "turn_ended")
+    assert rows(ai_chat_env, "permission")[0].meta["decision"] == "expired"
+
+
+async def test_cancelled_waiter_leaves_no_pending_and_the_sweep_closes_its_card(ai_chat_env):
+    # What acp does to the handler when the connection closes. The turn's sweep runs after that, and finds the card.
+    s = ai_chat_env.session()
+    s.acp_session_id, s.turn_id = "sid", "t1"
+    options = [PermissionOption(option_id="allow-once", name="Allow once", kind="allow_once")]
+    tool_call = ToolCallUpdate(tool_call_id="c", title="x")
+    waiter = asyncio.create_task(s._client.request_permission("sid", tool_call, options))
+    with anyio.fail_after(15):
+        card = await seen(ai_chat_env, "permission_requested")
+        waiter.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await waiter
+    assert approvals.APPROVALS.pending_for_chat(1) == []
+    assert of_type(ai_chat_env, "permission_resolved") == []
+    with anyio.fail_after(15):
+        await s._client.close_cards()
+    assert [(e["permission_id"], e["decision"]) for e in of_type(ai_chat_env, "permission_resolved")] == [
+        (card["permission_id"], "cancelled")]
+    assert rows(ai_chat_env, "permission")[0].meta["decision"] == "cancelled"
+
+
+async def test_failed_row_write_leaves_no_pending(ai_chat_env, monkeypatch):
+    def refuse(chat_id, role, text, meta):
+        raise RuntimeError("no database")
+
+    monkeypatch.setattr(sessions, "persist_message", refuse)
+    s = ai_chat_env.session()
+    s.acp_session_id, s.turn_id = "sid", "t1"  # no turn task here, so no sweep would clean up behind it
+    with anyio.fail_after(5):
+        response = await s._client.request_permission("sid", ToolCallUpdate(tool_call_id="c", title="x"), [])
+    assert response.outcome.outcome == "cancelled"
+    assert approvals.APPROVALS.pending_for_chat(1) == []
+
+
+def test_permission_detail_prefers_the_first_text_block():
+    def call(**fields):
+        return ToolCallUpdate(tool_call_id="c", **fields)
+
+    def text(value):
+        return ContentToolCallContent(type="content", content=TextContentBlock(type="text", text=value))
+
+    assert sessions._permission_detail(call(content=[text("run ls"), text("other")], raw_input={"a": 1})) == "run ls"
+    assert sessions._permission_detail(call(raw_input={"a": 1, "b": [2]})) == '{"a":1,"b":[2]}'
+    assert sessions._permission_detail(call()) == ""
+    assert len(sessions._permission_detail(call(raw_input="x" * 5000))) == 2000
+    assert len(sessions._permission_detail(call(content=[text("y" * 5000)]))) == 2000
+
+
+@pytest.mark.parametrize("change", [{"chat_id": None}, {"turn_id": None}, {"consuming": True}, {"replaying": True},
+                                    {"stop_requested": True}, {"acp_session_id": "another"}])
+async def test_no_card_when_nobody_can_answer(ai_chat_env, change):
+    s = ai_chat_env.session()
+    s.acp_session_id, s.turn_id = "sid", "t1"
+    for name, value in change.items():
+        setattr(s, name, value)
+    options = [PermissionOption(option_id="allow-once", name="Allow once", kind="allow_once")]
+    with anyio.fail_after(5):
+        response = await s._client.request_permission("sid", ToolCallUpdate(tool_call_id="c", title="x"), options)
+    assert response.outcome.outcome == "cancelled"
+    assert ai_chat_env.events() == []
+    assert approvals.APPROVALS.pending_for_chat(1) == [] and rows(ai_chat_env, "permission") == []
+
+
+async def test_failed_row_write_answers_cancelled_without_the_text(ai_chat_env, monkeypatch, caplog):
+    real = sessions.persist_message
+
+    def refuse_permission_rows(chat_id, role, text, meta):
+        if role == "permission":
+            raise RuntimeError("detail that must stay private")
+        return real(chat_id, role, text, meta)
+
+    monkeypatch.setattr(sessions, "persist_message", refuse_permission_rows)
+    with anyio.fail_after(30):
+        await send(ai_chat_env, "PERMIT")
+        await seen(ai_chat_env, "turn_ended")
+    assert rows(ai_chat_env, "assistant")[0].text == "cancelled"  # fail closed
+    assert of_type(ai_chat_env, "permission_requested") == []
+    assert approvals.APPROVALS.pending_for_chat(1) == []
+    assert "RuntimeError" in caplog.text and "must stay private" not in caplog.text
+
+
+async def test_permission_log_lines_carry_no_content(ai_chat_env, caplog):
+    caplog.set_level(logging.INFO, logger="ai_chat.sessions")
+    with anyio.fail_after(30):
+        await send(ai_chat_env, "PERMIT")
+        card = await seen(ai_chat_env, "permission_requested")
+        approvals.APPROVALS.decide(card["permission_id"], 1, "deny")
+        await seen(ai_chat_env, "turn_ended")
+    assert [r.getMessage() for r in caplog.records if r.getMessage().startswith("ai_chat.permission ")] == [
+        "ai_chat.permission chat=1 source=agent decision=requested",
+        "ai_chat.permission chat=1 source=agent decision=deny"]
+    assert "Run a command" not in caplog.text and '"command"' not in caplog.text
+
+
+# ---- Stop and pending approvals ----------------------------------------------------------------
+
+async def test_stop_cancels_turn_and_pending(ai_chat_env, tmp_path):
+    state = tmp_path / "state.json"
+    ai_chat_env.flags = ["--state", str(state)]
+    with anyio.fail_after(30):
+        await send(ai_chat_env, "PERMIT")
+        card = await seen(ai_chat_env, "permission_requested")
+        assert await sessions.MANAGER.cancel(1) is True
+        # Stop waits for the turn, so it is over here. The fake's PERMIT ends normally once its request is answered.
+        assert sessions.MANAGER.running_turn(1) is None
+        assert of_type(ai_chat_env, "turn_ended")[0]["stop_reason"] == "end_turn"
+        with pytest.raises(approvals.ApprovalNotFound):
+            approvals.APPROVALS.decide(card["permission_id"], 1, "allow")
+        assert await sessions.MANAGER.cancel(1) is False
+    assert [e["decision"] for e in of_type(ai_chat_env, "permission_resolved")] == ["cancelled"]
+    meta = rows(ai_chat_env, "permission")[0].meta
+    assert meta["decision"] == "cancelled" and meta["decided_by"] is None
+    assert rows(ai_chat_env, "assistant")[0].text == "cancelled"
+    assert "cancel" in agent_log(state)
+    assert approvals.APPROVALS.pending_for_chat(1) == []
+    assert sessions.MANAGER.get(1) is not None  # the session stays for the next prompt
+
+
+async def test_turn_ended_follows_a_slow_resolution(ai_chat_env, monkeypatch):
+    # Stop's row write outlasts the agent ending the turn; a refetch at turn_ended must still see the decision.
+    real = sessions.update_message_meta
+
+    def slow_write(chat_id, seq, patch):
+        time.sleep(0.5)
+        real(chat_id, seq, patch)
+
+    monkeypatch.setattr(sessions, "update_message_meta", slow_write)
+    with anyio.fail_after(30):
+        await send(ai_chat_env, "PERMIT")
+        await seen(ai_chat_env, "permission_requested")
+        assert await sessions.MANAGER.cancel(1) is True
+        ended = await seen(ai_chat_env, "turn_ended")
+    assert of_type(ai_chat_env, "permission_resolved")[0]["seq"] < ended["seq"]
+
+
+async def test_stop_a_slow_turn_ends_cancelled(ai_chat_env):
+    with anyio.fail_after(30):
+        session, _ = await send(ai_chat_env, "SLOW")
+        await seen(ai_chat_env, "message_chunk", text="working")
+        assert await sessions.MANAGER.cancel(1) is True
+    ended = of_type(ai_chat_env, "turn_ended")[0]
+    assert ended["stop_reason"] == "cancelled" and ended["message_seq"] == rows(ai_chat_env, "assistant")[0].seq
+    assert rows(ai_chat_env, "assistant")[0].meta == {"tools": [], "stop_reason": "cancelled"}
+    assert of_type(ai_chat_env, "error") == []
+    assert sessions.MANAGER.get(1) is session and session.proc.returncode is None
+
+
+async def test_stop_without_a_turn_is_false(ai_chat_env):
+    assert await sessions.MANAGER.cancel(1) is False
+
+
+async def test_stop_during_start_sends_no_prompt(ai_chat_env, tmp_path, monkeypatch):
+    state = tmp_path / "state.json"
+    ai_chat_env.flags = ["--state", str(state)]
+    gate = asyncio.Event()
+    real_start = sessions.LiveSession.start
+
+    async def gated_start(self):
+        await gate.wait()
+        await real_start(self)
+
+    monkeypatch.setattr(sessions.LiveSession, "start", gated_start)
+    with anyio.fail_after(30):
+        session, _ = await send(ai_chat_env, "hi")
+        await seen(ai_chat_env, "turn_started", starting=True)
+        stop = asyncio.create_task(sessions.MANAGER.cancel(1))
+        while not session.stop_requested:
+            await asyncio.sleep(0.01)
+        gate.set()
+        assert await stop is True
+        ended = await seen(ai_chat_env, "turn_ended")
+    assert (ended["stop_reason"], ended["message_seq"]) == ("cancelled", None)
+    assert prompts(state) == [] and rows(ai_chat_env, "assistant") == []
+    assert of_type(ai_chat_env, "error") == []
+
+
+async def test_failure_after_stop_is_cancelled_not_an_error(ai_chat_env, tmp_path, monkeypatch):
+    tools = tmp_path / "tools.txt"
+    tools.write_text("Available tools (1):\n  terminal: Run a shell command", encoding="utf-8")
+    ai_chat_env.flags = ["--tools-reply", str(tools)]
+    gate = asyncio.Event()
+    real_start = sessions.LiveSession.start
+
+    async def gated_start(self):
+        await gate.wait()
+        await real_start(self)
+
+    monkeypatch.setattr(sessions.LiveSession, "start", gated_start)
+    with anyio.fail_after(30):
+        session, _ = await send(ai_chat_env, "hi", allowed_roles=("standard",))
+        stop = asyncio.create_task(sessions.MANAGER.cancel(1))
+        while not session.stop_requested:
+            await asyncio.sleep(0.01)
+        gate.set()
+        await stop
+        ended = await seen(ai_chat_env, "turn_ended")
+        await session.proc.wait()  # a failed turn's process still goes
+    assert ended["stop_reason"] == "cancelled" and of_type(ai_chat_env, "error") == []
+    assert sessions.MANAGER.get(1) is None
+
+
+async def test_stop_after_the_sweep_refuses_a_new_request(ai_chat_env):
+    # An agent that had not read the cancel yet can still ask: no second card (spec 8).
+    with anyio.fail_after(30):
+        session, _ = await send(ai_chat_env, "SLOW")
+        await seen(ai_chat_env, "message_chunk", text="working")
+        session.stop_requested = True
+        response = await session._client.request_permission(
+            session.acp_session_id, ToolCallUpdate(tool_call_id="c", title="x"), [])
+    assert response.outcome.outcome == "cancelled"
+    assert of_type(ai_chat_env, "permission_requested") == []
+
+
+async def test_stop_falls_back_to_a_hard_cancel(ai_chat_env, monkeypatch):
+    monkeypatch.setattr(sessions, "_GRACE_S", 0.2)
+    with anyio.fail_after(30):
+        session, _ = await send(ai_chat_env, "STUCK")  # ignores session/cancel
+        await seen(ai_chat_env, "message_chunk", text="working")
+        assert await sessions.MANAGER.cancel(1) is True
+        ended = await seen(ai_chat_env, "turn_ended")
+        assert sessions.MANAGER.running_turn(1) is None
+        assert sessions.MANAGER.get(1) is None  # a discarded reply could land in the next turn, so the session goes
+        await session.proc.wait()
+    assert (ended["stop_reason"], ended["message_seq"]) == ("cancelled", None)
+    assert of_type(ai_chat_env, "error") == []
+
+
+async def test_turn_end_resolves_pending(ai_chat_env):
+    with anyio.fail_after(30):
+        session, _ = await send(ai_chat_env, "ABANDON")  # asks, and ends the turn without waiting for the answer
+        card = await seen(ai_chat_env, "permission_requested")
+        ended = await seen(ai_chat_env, "turn_ended")
+        assert sessions.MANAGER.running_turn(1) is None  # a client that sees turn_ended can send the next prompt
+        assert session.turn_id is None  # a request arriving now is refused, never registered
+        with pytest.raises(approvals.ApprovalNotFound):
+            approvals.APPROVALS.decide(card["permission_id"], 1, "allow")
+    resolved = of_type(ai_chat_env, "permission_resolved")
+    assert [e["decision"] for e in resolved] == ["cancelled"]
+    assert resolved[0]["turn_id"] == card["turn_id"]
+    assert resolved[0]["seq"] < ended["seq"]  # so the refetch at turn_ended sees the row's decision
+    assert rows(ai_chat_env, "permission")[0].meta["decision"] == "cancelled"
+    assert approvals.APPROVALS.pending_for_chat(1) == []
+
+
+async def test_swept_during_the_row_write_shows_no_card(ai_chat_env, monkeypatch):
+    reached, release = threading.Event(), threading.Event()
+    real = sessions.persist_message
+
+    def held(chat_id, role, text, meta):
+        if role == "permission":
+            reached.set()
+            release.wait(10)
+        return real(chat_id, role, text, meta)
+
+    monkeypatch.setattr(sessions, "persist_message", held)
+    with anyio.fail_after(30):
+        session, _ = await send(ai_chat_env, "PERMIT")
+        while not reached.is_set():
+            await asyncio.sleep(0.01)
+        assert len(approvals.APPROVALS.pending_for_chat(1)) == 1
+        await session._client.close_cards()
+        release.set()
+        await seen(ai_chat_env, "turn_ended")
+    assert of_type(ai_chat_env, "permission_requested") == []
+    assert of_type(ai_chat_env, "permission_resolved") == []
+    assert rows(ai_chat_env, "permission")[0].meta["decision"] == "cancelled"
+    assert rows(ai_chat_env, "assistant")[0].text == "cancelled"
+
+
+async def test_agent_death_resolves_pending(ai_chat_env):
+    with anyio.fail_after(30):
+        session, _ = await send(ai_chat_env, "PERMIT")
+        card = await seen(ai_chat_env, "permission_requested")
+        session.proc.kill()
+        ended = await seen(ai_chat_env, "turn_ended")
+        error = await seen(ai_chat_env, "error")
+        assert sessions.MANAGER.get(1) is None
+        await session.proc.wait()
+    assert (error["code"], error["message"]) == ("agent_exited", "Jarvis stopped unexpectedly.")
+    assert ended["stop_reason"] == "error"
+    resolved = of_type(ai_chat_env, "permission_resolved")
+    assert [(e["permission_id"], e["decision"]) for e in resolved] == [(card["permission_id"], "cancelled")]
+    assert rows(ai_chat_env, "permission")[0].meta["decision"] == "cancelled"
+    assert approvals.APPROVALS.pending_for_chat(1) == []
+    assistant = rows(ai_chat_env, "assistant")[0]  # the partial row: a tool ran, no text
+    assert ended["message_seq"] == assistant.seq and assistant.meta["stop_reason"] == "agent_exited"
+
+
+# ---- the turn task: events, rows, errors ---------------------------------------------------------
+
+async def test_turn_flags_blocks_and_row(ai_chat_env, tmp_path):
+    state = tmp_path / "state.json"
+    ai_chat_env.flags = ["--state", str(state), "--no-load"]  # the stored id cannot be restored: new session + recap
+    await seed_history()
+    page = {"section": "lims", "subsection": "sample-details", "target_kind": "sample", "target_id": "P-1"}
+    with anyio.fail_after(30):
+        session, t1 = await send(ai_chat_env, "now", stored="gone-session", page_context=page)
+        started = await seen(ai_chat_env, "turn_started")
+        ended = await seen(ai_chat_env, "turn_ended", turn_id=t1)
+        _, t2 = await send(ai_chat_env, "next", page_context={"section": "nope", "subsection": "x"})
+        again = await seen(ai_chat_env, "turn_started", turn_id=t2)
+        await seen(ai_chat_env, "turn_ended", turn_id=t2)
+    assert (started["starting"], started["resuming"], started["turn_id"]) == (True, True, t1)
+    assert (again["starting"], again["resuming"]) == (False, False)
+    first, second = prompts(state)
+    assert first[0].startswith("<mk1_page_context>") and "sample P-1" in first[0]
+    assert first[1].startswith("<mk1_earlier_conversation>") and "user: earlier question" in first[1]
+    assert "user: now" not in first[1] and first[2:] == ["now"]  # the recap holds only earlier messages
+    assert second == ["next"]  # recap sent once; a bad context dropped
+    assert session.pending_recap is None
+    assistant = rows(ai_chat_env, "assistant")
+    assert [r.text for r in assistant[-2:]] == ["echo: now", "echo: next"]
+    assert assistant[-2].meta == {"tools": [], "stop_reason": "end_turn"}
+    assert (ended["stop_reason"], ended["message_seq"]) == ("end_turn", assistant[-2].seq)
+
+
+async def test_new_chat_turn_started_flags(ai_chat_env):
+    with anyio.fail_after(30):
+        await send(ai_chat_env, "hi")
+        started = await seen(ai_chat_env, "turn_started")
+        await seen(ai_chat_env, "turn_ended")
+    assert (started["starting"], started["resuming"]) == (True, False)
+
+
+async def test_refusal_recap_leaves_out_the_current_question(ai_chat_env, tmp_path):
+    state = tmp_path / "state.json"
+    ai_chat_env.flags = ["--state", str(state)]
+    await seed_history()
+    with anyio.fail_after(30):
+        await send(ai_chat_env, "hi", stored="unknown-session")  # an unknown load looks like success (G10)
+        ended = await seen(ai_chat_env, "turn_ended")
+    assert ended["stop_reason"] == "end_turn"
+    refused, retried = prompts(state)
+    assert refused == ["hi"]
+    assert "user: earlier question" in retried[0] and "user: hi" not in retried[0] and retried[1:] == ["hi"]
+
+
+async def test_recap_messages_before_seq(ai_chat_env):
+    await seed_history()
+    seq = await asyncio.to_thread(sessions.persist_message, 1, "user", "current", None)
+    assert await asyncio.to_thread(sessions.recap_messages, 1, before_seq=seq) == [
+        ("user", "earlier question"), ("assistant", "earlier answer")]
+    assert (await asyncio.to_thread(sessions.recap_messages, 1))[-1] == ("user", "current")
+
+
+async def test_start_turn_refuses_while_a_turn_runs(ai_chat_env):
+    with anyio.fail_after(30):
+        session, turn_id = await send(ai_chat_env, "SLOW")
+        assert sessions.MANAGER.running_turn(1) == turn_id
+        with pytest.raises(sessions.TurnRunning):
+            sessions.MANAGER.start_turn(session, "again", None, None, 99)
+        await seen(ai_chat_env, "message_chunk", text="working")
+        await sessions.MANAGER.cancel(1)
+        assert sessions.MANAGER.running_turn(1) is None
+        _, second = await send(ai_chat_env, "after")
+        await seen(ai_chat_env, "turn_ended", turn_id=second)
+    assert rows(ai_chat_env, "assistant")[-1].text == "echo: after"
+
+
+async def test_agent_exit_is_mapped_and_the_next_prompt_respawns(ai_chat_env):
+    ai_chat_env.flags = ["--exit-on-prompt"]
+    with anyio.fail_after(30):
+        session, t1 = await send(ai_chat_env, "hi")
+        ended = await seen(ai_chat_env, "turn_ended", turn_id=t1)
+        assert sessions.MANAGER.get(1) is None and sessions.MANAGER.live_count(1) == 0
+        await session.proc.wait()
+        ai_chat_env.flags = []
+        replacement, t2 = await send(ai_chat_env, "hello", stored=session.acp_session_id)
+        restarted = await seen(ai_chat_env, "turn_started", turn_id=t2)
+        await seen(ai_chat_env, "turn_ended", turn_id=t2)
+    assert (ended["stop_reason"], ended["message_seq"]) == ("error", None)
+    assert [(e["code"], e["message"]) for e in of_type(ai_chat_env, "error")] == [
+        ("agent_exited", "Jarvis stopped unexpectedly.")]
+    assert replacement is not session and restarted["starting"] is True and restarted["resuming"] is True
+    assert rows(ai_chat_env, "assistant")[-1].text == "echo: hello"
+
+
+async def test_unreachable_is_mapped_without_stderr(ai_chat_env, monkeypatch):
+    script = "import sys; sys.stderr.write('Permission denied (publickey).\\n'); sys.exit(255)"
+    monkeypatch.setattr(sessions, "spawn_command", lambda provider: [sys.executable, "-c", script])
+    with anyio.fail_after(30):
+        session, _ = await send(ai_chat_env, "hi")
+        ended = await seen(ai_chat_env, "turn_ended")
+        assert sessions.MANAGER.get(1) is None
+        await session.proc.wait()
+    assert [(e["code"], e["message"]) for e in of_type(ai_chat_env, "error")] == [
+        ("agent_unreachable", "Jarvis is unreachable.")]
+    assert (ended["stop_reason"], ended["message_seq"]) == ("error", None)
+    assert "publickey" not in json.dumps(ai_chat_env.events())
+
+
+@pytest.mark.parametrize("failure", [store.KeysNotConfigured(), ValueError("private host_key text")])
+async def test_spawn_config_errors_are_mapped(ai_chat_env, monkeypatch, caplog, failure):
+    def refuse(provider):
+        raise failure
+
+    monkeypatch.setattr(sessions, "spawn_command", refuse)
+    with anyio.fail_after(30):
+        await send(ai_chat_env, "hi")
+        ended = await seen(ai_chat_env, "turn_ended")
+    assert [(e["code"], e["message"]) for e in of_type(ai_chat_env, "error")] == [
+        ("agent_unreachable", "Jarvis is not configured correctly. Ask an admin to run Test connection.")]
+    assert ended["stop_reason"] == "error" and sessions.MANAGER.get(1) is None
+    assert type(failure).__name__ in caplog.text and "private" not in caplog.text
+
+
+async def test_tools_check_failure_closes_and_the_next_prompt_checks_again(ai_chat_env, tmp_path):
+    tools = tmp_path / "tools.txt"
+    tools.write_text("Available tools (1):\n  terminal: Run a shell command", encoding="utf-8")
+    ai_chat_env.flags = ["--tools-reply", str(tools)]
+    standard = {"allowed_roles": ("standard",)}
+    with anyio.fail_after(30):
+        first, t1 = await send(ai_chat_env, "hi", **standard)
+        ended = await seen(ai_chat_env, "turn_ended", turn_id=t1)
+        assert sessions.MANAGER.get(1) is None
+        await first.proc.wait()
+        _, t2 = await send(ai_chat_env, "hi again", **standard)
+        await seen(ai_chat_env, "turn_ended", turn_id=t2)
+    errors = of_type(ai_chat_env, "error")
+    assert [e["code"] for e in errors] == ["tools_check_failed"] * 2 and "terminal" in errors[0]["message"]
+    assert (ended["stop_reason"], ended["message_seq"]) == ("error", None)
+    assert rows(ai_chat_env, "assistant") == []
+
+
+@pytest.mark.parametrize("failure", [RuntimeError("private prompt text"), ValueError("private prompt text")])
+async def test_other_exception_is_agent_error_without_its_text(ai_chat_env, monkeypatch, caplog, failure):
+    async def explode(self, turn_id, blocks):
+        raise failure
+
+    monkeypatch.setattr(sessions.LiveSession, "run_turn", explode)
+    with anyio.fail_after(30):
+        session, _ = await send(ai_chat_env, "hi")
+        ended = await seen(ai_chat_env, "turn_ended")
+        await session.proc.wait()  # no process outlives a failed turn
+    assert [(e["code"], e["message"]) for e in of_type(ai_chat_env, "error")] == [
+        ("agent_error", "Something went wrong talking to Jarvis.")]
+    assert ended["stop_reason"] == "error" and sessions.MANAGER.get(1) is None
+    assert type(failure).__name__ in caplog.text and "private prompt text" not in caplog.text
+
+
+async def test_chunks_after_the_turn_are_dropped(ai_chat_env):
+    s = ai_chat_env.session()
+    s.turn_id = None
+    s._client._publish("message_chunk", text="straggler")
+    assert ai_chat_env.events() == []
+
+
+# ---- close ---------------------------------------------------------------------------------------
+
+async def test_close_sends_cancel_before_eof(ai_chat_env, tmp_path):
+    state = tmp_path / "state.json"
+    ai_chat_env.flags = ["--state", str(state)]
+    with anyio.fail_after(30):
+        session, _ = await send(ai_chat_env, "SLOW")
+        await seen(ai_chat_env, "message_chunk", text="working")
+        await sessions.MANAGER.close_chat(1)
+        assert sessions.MANAGER.get(1) is None and sessions.MANAGER.running_turn(1) is None
+        ended = await seen(ai_chat_env, "turn_ended")
+    assert session.proc.returncode is not None
+    log = agent_log(state)
+    assert log.index("cancel") < log.index("eof")
+    assert ended["stop_reason"] == "cancelled" and of_type(ai_chat_env, "error") == []
+
+
+async def test_close_resolves_pending(ai_chat_env):
+    with anyio.fail_after(30):
+        session, _ = await send(ai_chat_env, "PERMIT")
+        await seen(ai_chat_env, "permission_requested")
+        await sessions.MANAGER.close_chat(1)
+    assert [e["decision"] for e in of_type(ai_chat_env, "permission_resolved")] == ["cancelled"]
+    assert rows(ai_chat_env, "permission")[0].meta["decision"] == "cancelled"
+    assert len(of_type(ai_chat_env, "turn_ended")) == 1 and of_type(ai_chat_env, "error") == []
+    assert approvals.APPROVALS.pending_for_chat(1) == [] and session.proc.returncode is not None
+
+
+async def test_close_of_a_chat_without_a_session_is_a_no_op(ai_chat_env):
+    with anyio.fail_after(5):
+        await sessions.MANAGER.close_chat(1)
+
+
+async def test_agent_exit_while_closing_is_cancelled(ai_chat_env):
+    with anyio.fail_after(30):
+        session, _ = await send(ai_chat_env, "SLOW")
+        await seen(ai_chat_env, "message_chunk", text="working")
+        session.closing = session.stop_requested = True  # what a close marks before it gets to the agent
+        session.proc.kill()
+        ended = await seen(ai_chat_env, "turn_ended")
+    assert ended["stop_reason"] == "cancelled" and of_type(ai_chat_env, "error") == []
+    assistant = rows(ai_chat_env, "assistant")[0]  # the partial reply is kept
+    assert assistant.text == "working" and ended["message_seq"] == assistant.seq
+
+
+async def test_close_while_starting_ends_cancelled(ai_chat_env, monkeypatch):
+    monkeypatch.setattr(sessions, "_GRACE_S", 0.2)
+    ai_chat_env.flags = ["--no-init"]
+    with anyio.fail_after(30):
+        session, _ = await send(ai_chat_env, "hi")
+        while session.proc is None:
+            await asyncio.sleep(0.02)
+        await sessions.MANAGER.close_chat(1)
+        ended = await seen(ai_chat_env, "turn_ended")
+        await session.proc.wait()
+    assert (ended["stop_reason"], ended["message_seq"]) == ("cancelled", None)
+    assert of_type(ai_chat_env, "error") == [] and sessions.MANAGER.running_turn(1) is None
+
+
+async def test_close_survives_its_own_cancellation(ai_chat_env, monkeypatch):
+    s = ai_chat_env.session()
+    with anyio.fail_after(30):
+        await s.start()
+        await s.attach(None)
+        send_cancel = s._conn.cancel
+
+        async def slow_send(**kwargs):
+            await asyncio.sleep(0.5)
+            await send_cancel(**kwargs)
+
+        monkeypatch.setattr(s._conn, "cancel", slow_send)
+        turn = asyncio.create_task(s.run_turn("t1", ["SLOW"]))
+        await seen(ai_chat_env, "message_chunk", text="working")
+        closing = asyncio.create_task(s.close())
+        await asyncio.sleep(0.05)  # inside the send
+        closing.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await closing
+        await s.proc.wait()  # stop was set anyway
+        await turn
+
+
+async def test_close_provider_closes_only_that_provider(ai_chat_env):
+    add_chats(ai_chat_env, 2)
+    with anyio.fail_after(30):
+        first, t1 = await send(ai_chat_env, "SLOW")
+        await seen(ai_chat_env, "message_chunk", text="working")
+        other = sessions.MANAGER.reserve(2, 1, ai_chat_env.provider(id=2))
+        await sessions.MANAGER.close_provider(1)
+        ended = await seen(ai_chat_env, "turn_ended", turn_id=t1)
+    assert first.proc.returncode is not None and ended["stop_reason"] == "cancelled"
+    assert sessions.MANAGER.get(1) is None and sessions.MANAGER.get(2) is other
+
+
+async def test_close_all_closes_everything(ai_chat_env):
+    add_chats(ai_chat_env, 2)
+    with anyio.fail_after(30):
+        first, _ = await send(ai_chat_env, "SLOW")
+        await seen(ai_chat_env, "message_chunk", text="working")
+        second, t2 = await send(ai_chat_env, "hi", chat_id=2)
+        await seen(ai_chat_env, "turn_ended", turn_id=t2)
+        await sessions.MANAGER.close_all()
+    assert first.proc.returncode is not None and second.proc.returncode is not None
+    assert sessions.MANAGER.live_count(1) == 0 and sessions.MANAGER.running_turn(1) is None
+
+
+# ---- caps ----------------------------------------------------------------------------------------
+
+async def test_cap_evicts_idle_lru(ai_chat_env):
+    add_chats(ai_chat_env, 2, 3)
+    cap = {"max_sessions": 2}
+    with anyio.fail_after(30):
+        first, t1 = await send(ai_chat_env, "one", **cap)
+        await seen(ai_chat_env, "turn_ended", turn_id=t1)
+        second, t2 = await send(ai_chat_env, "two", chat_id=2, **cap)
+        await seen(ai_chat_env, "turn_ended", turn_id=t2)
+        assert sessions.MANAGER.reserve(1, 1, ai_chat_env.provider(**cap)) is first  # the existing one; now freshest
+        assert sessions.MANAGER.live_count(1) == 2
+        second.last_active = first.last_active - 1
+        third = sessions.MANAGER.reserve(3, 1, ai_chat_env.provider(**cap))
+        # Excluded at once, closing or not.
+        assert sessions.MANAGER.get(2) is None and second.closing and sessions.MANAGER.live_count(1) == 2
+        assert sessions.MANAGER.get(1) is first and sessions.MANAGER.get(3) is third
+        await second.proc.wait()
+    assert first.proc.returncode is None
+
+
+async def test_cap_busy_when_none_idle(ai_chat_env):
+    add_chats(ai_chat_env, 2)
+    with anyio.fail_after(30):
+        session, turn_id = await send(ai_chat_env, "SLOW", max_sessions=1)
+        await seen(ai_chat_env, "message_chunk", text="working")
+        with pytest.raises(sessions.ProviderBusy):
+            sessions.MANAGER.reserve(2, 1, ai_chat_env.provider(max_sessions=1))
+    assert sessions.MANAGER.get(2) is None and sessions.MANAGER.live_count(1) == 1
+    assert sessions.MANAGER.get(1) is session and sessions.MANAGER.running_turn(1) == turn_id
+
+
+async def test_start_turn_refuses_a_session_evicted_since_reserve(ai_chat_env):
+    add_chats(ai_chat_env, 2)
+    first = sessions.MANAGER.reserve(1, 1, ai_chat_env.provider(max_sessions=1))
+    sessions.MANAGER.reserve(2, 1, ai_chat_env.provider(max_sessions=1))
+    with pytest.raises(sessions.ProviderBusy):
+        sessions.MANAGER.start_turn(first, "hi", None, None, 1)
+    assert sessions.MANAGER.running_turn(1) is None
+
+
+async def test_reserve_replaces_a_dead_session(ai_chat_env):
+    with anyio.fail_after(30):
+        session, _ = await send(ai_chat_env, "hi")
+        await seen(ai_chat_env, "turn_ended")
+        session.proc.kill()
+        while not session.dead:
+            await asyncio.sleep(0.02)
+        user_seq = await asyncio.to_thread(sessions.persist_message, 1, "user", "again", None)
+        replacement = sessions.MANAGER.reserve(1, 1, ai_chat_env.provider())
+        assert replacement is not session and sessions.MANAGER.live_count(1) == 1
+        # In the same tick: the old session's close must not take the new session's turn for its own.
+        turn_id = sessions.MANAGER.start_turn(replacement, "again", None, None, user_seq)
+        ended = await seen(ai_chat_env, "turn_ended", turn_id=turn_id)
+    assert ended["stop_reason"] == "end_turn" and rows(ai_chat_env, "assistant")[-1].text == "echo: again"
+
+
+# ---- reaper --------------------------------------------------------------------------------------
+
+async def test_reaper_closes_idle(ai_chat_env):
+    with anyio.fail_after(30):
+        session, _ = await send(ai_chat_env, "hi", idle_minutes=1)
+        await seen(ai_chat_env, "turn_ended")
+        await sessions.MANAGER.reap_once(now=time.monotonic() + 30)
+        assert sessions.MANAGER.get(1) is session  # not idle long enough
+        session.last_active -= 1000
+        assert sessions.MANAGER.reserve(1, 1, ai_chat_env.provider(idle_minutes=1)) is session
+        await sessions.MANAGER.reap_once()
+        assert sessions.MANAGER.get(1) is session  # a prompt is on its way
+        await sessions.MANAGER.reap_once(now=time.monotonic() + 61)
+        assert sessions.MANAGER.get(1) is None and sessions.MANAGER.live_count(1) == 0
+    assert session.proc.returncode is not None
+
+
+async def test_reaper_spares_a_running_turn(ai_chat_env):
+    with anyio.fail_after(30):
+        session, turn_id = await send(ai_chat_env, "SLOW", idle_minutes=1)
+        await seen(ai_chat_env, "message_chunk", text="working")
+        await sessions.MANAGER.reap_once(now=time.monotonic() + 10_000)
+    assert sessions.MANAGER.get(1) is session and sessions.MANAGER.running_turn(1) == turn_id
+    assert session.proc.returncode is None
+
+
+async def test_reaper_task_runs_until_close_all(ai_chat_env, monkeypatch):
+    monkeypatch.setattr(sessions, "REAPER_INTERVAL_S", 0.02)
+    with anyio.fail_after(30):
+        session, _ = await send(ai_chat_env, "hi", idle_minutes=0)
+        await seen(ai_chat_env, "turn_ended")
+        sessions.MANAGER.start_reaper()
+        sessions.MANAGER.start_reaper()  # one reaper, however often it is asked
+        while sessions.MANAGER.get(1) is not None:
+            await asyncio.sleep(0.02)
+        await session.proc.wait()
+        reaper = sessions.MANAGER._reaper
+        await sessions.MANAGER.close_all()
+    assert reaper.done()

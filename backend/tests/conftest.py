@@ -119,6 +119,7 @@ async def ai_chat_env(ai_chat_db, monkeypatch):
     monkeypatch.setattr(sessions, "_session_factory", ai_chat_db)
     monkeypatch.setattr(hub, "HUB", hub.EventHub())
     monkeypatch.setattr(approvals, "APPROVALS", approvals.ApprovalRegistry())
+    monkeypatch.setattr(sessions, "MANAGER", sessions.SessionManager())
     env = AiChatEnv(ai_chat_db, hub.HUB.subscribe(1, None))
     monkeypatch.setattr(sessions, "spawn_command", lambda provider: [sys.executable, FAKE_ACP_AGENT, *env.flags])
     created = []
@@ -131,6 +132,11 @@ async def ai_chat_env(ai_chat_db, monkeypatch):
     monkeypatch.setattr(sessions.LiveSession, "__init__", tracked)
     yield env
     timed_out = None
+    try:
+        with anyio.fail_after(30):
+            await sessions.MANAGER.close_all()  # turn tasks, background closes and the reaper
+    except TimeoutError as exc:
+        timed_out = exc
     for live in created:  # every one of them, so one stuck session cannot strand the rest
         try:
             with anyio.fail_after(15):

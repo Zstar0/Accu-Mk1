@@ -10,20 +10,29 @@ other caller (routes, the reaper) sets flags, sends notifications or awaits futu
 process exiting on its own, in which case it marks the session `dead` and cancels the running prompt so
 `run_turn` reports `agent_exited`. Leaving the context manager closes stdin, waits 5 s, then terminates.
 
-Nothing here logs message text, stderr, key material or exception messages; log lines carry ids and exception
-type names only. No DB session is held across an await on the agent: DB helpers are sync and run in
+`SessionManager` owns the live sessions and one background task per turn. It keeps every provider under its
+session cap, closes idle sessions, and ends each turn exactly one way: `turn_ended` is the last thing a turn
+publishes, after every approval the turn left open has been resolved, so a browser that refetches at `turn_ended`
+sees the final rows and may prompt again at once. Stop and close always tell the agent first (`session/cancel`),
+then resolve approvals, then wait for the turn; hard-cancelling the turn task is only the bounded fallback.
+
+Nothing here logs message text, stderr, key material, tool arguments or exception messages; log lines carry ids and
+exception type names only. No DB session is held across an await on the agent: DB helpers are sync and run in
 `asyncio.to_thread`.
 """
 from __future__ import annotations
 
 import asyncio
 import contextlib
+import json
 import logging
 import os
+import secrets
 import time
 from collections import deque
 from collections.abc import Callable
 from dataclasses import dataclass, field, fields
+from datetime import datetime, timezone
 
 import acp
 from acp.schema import (
@@ -31,22 +40,24 @@ from acp.schema import (
     AgentMessageChunk,
     AgentThoughtChunk,
     ClientCapabilities,
-    DeniedOutcome,
+    ContentToolCallContent,
     FileSystemCapabilities,
     Implementation,
     RequestPermissionResponse,
     TextContentBlock,
     ToolCallProgress,
     ToolCallStart,
+    ToolCallUpdate,
 )
 from cryptography.fernet import InvalidToken
 from pydantic import BaseModel
 from sqlalchemy import func, select, update
 from sqlalchemy.exc import IntegrityError
 
-from ai_chat import context, hub, transport
+from ai_chat import approvals, context, hub, transport
 from ai_chat.models import AcpProvider, AiChat, AiChatMessage
 from database import SessionLocal
+from integration_keys import store
 
 logger = logging.getLogger(__name__)
 
@@ -55,6 +66,8 @@ _CLIENT_CAPS = ClientCapabilities(fs=FileSystemCapabilities(read_text_file=False
                                   terminal=False)
 _INIT_TIMEOUT_S = 30.0
 _GRACE_S = 5.0  # bounds every wait on a process or pipe that is going away
+_DETAIL_MAX = 2000  # characters of tool detail on an approval card
+REAPER_INTERVAL_S = 60
 # ponytail: a writer loses at most once to each other writer, so 5 attempts guarantee 5 simultaneous writers on one
 # chat. More usually land too, without the guarantee; raise this if a chat ever sees more.
 _SEQ_ATTEMPTS = 5
@@ -72,6 +85,10 @@ class AgentUnreachable(Exception):
 
 class ProviderBusy(Exception):
     """At `max_sessions` with no idle session to evict (HTTP 429)."""
+
+
+class TurnRunning(Exception):
+    """A prompt while the chat's previous turn task has not finished (HTTP 409)."""
 
 
 class ToolsCheckFailed(Exception):
@@ -155,12 +172,15 @@ def set_chat_session(chat_id: int, acp_session_id: str) -> None:
         db.commit()
 
 
-def recap_messages(chat_id: int, limit: int = 20) -> list[tuple[str, str]]:
-    """The chat's last `limit` user and assistant messages as `(role, text)`, oldest first."""
+def recap_messages(chat_id: int, limit: int = 20, before_seq: int | None = None) -> list[tuple[str, str]]:
+    """The chat's last `limit` user and assistant messages as `(role, text)`, oldest first. `before_seq` leaves out
+    that row and later ones: the turn's own question is already in its prompt."""
+    query = select(AiChatMessage.role, AiChatMessage.text).where(AiChatMessage.chat_id == chat_id,
+                                                                 AiChatMessage.role.in_(("user", "assistant")))
+    if before_seq is not None:
+        query = query.where(AiChatMessage.seq < before_seq)
     with _session_factory() as db:
-        rows = db.execute(select(AiChatMessage.role, AiChatMessage.text)
-                          .where(AiChatMessage.chat_id == chat_id, AiChatMessage.role.in_(("user", "assistant")))
-                          .order_by(AiChatMessage.seq.desc()).limit(limit)).all()
+        rows = db.execute(query.order_by(AiChatMessage.seq.desc()).limit(limit)).all()
     return [(role, text) for role, text in reversed(rows)]
 
 
@@ -185,19 +205,63 @@ class TurnResult:
     tools: list[dict]
 
 
+def _permission_detail(tool_call: ToolCallUpdate) -> str:
+    """What the card shows under the title: the first text content block, else the raw input as compact JSON."""
+    for item in tool_call.content or ():
+        if isinstance(item, ContentToolCallContent) and isinstance(item.content, TextContentBlock):
+            return item.content.text[:_DETAIL_MAX]
+    if tool_call.raw_input is None:
+        return ""
+    return json.dumps(tool_call.raw_input, separators=(",", ":"), ensure_ascii=False, default=str)[:_DETAIL_MAX]
+
+
+def _decision_patch(decision: str, user_id: int) -> dict:
+    return {"decision": decision, "decided_by": user_id if decision in ("allow", "deny") else None,
+            "decided_at": datetime.now(timezone.utc).isoformat()}
+
+
+def _log_permission(chat_id: int, source: str, decision: str) -> None:
+    logger.info("ai_chat.permission chat=%s source=%s decision=%s", chat_id, source, decision)
+
+
+async def _resolve_cards(cards: list[approvals.PendingApproval], decision: str) -> None:
+    """Record `decision` on each card's row, then tell the browser. A failed or cancelled write still closes the
+    cards, and the worker thread finishes a cancelled write anyway."""
+    def write() -> None:
+        for p in cards:
+            update_message_meta(p.chat_id, p.row_seq, _decision_patch(decision, p.user_id))
+
+    try:
+        await asyncio.to_thread(write)
+    finally:
+        for p in cards:
+            hub.HUB.publish(p.user_id, "permission_resolved", p.chat_id, p.turn_id, permission_id=p.permission_id,
+                            decision=decision)
+            _log_permission(p.chat_id, p.source, decision)
+
+
 class Mk1Client(acp.Client):
-    """Routes one session's updates to the hub, and collects the reply text and tool chips of each prompt."""
+    """Routes one session's updates to the hub, collects the reply text and tool chips of each prompt, and carries
+    the agent's permission requests to the chat's owner.
+
+    `cards` holds what the user has been shown and no `permission_resolved` has closed yet. Whoever takes a card out
+    of it publishes the resolution, so that happens once: the waiting `request_permission` for allow, deny and
+    expired, or `close_cards` for Stop, close and turn end, including after acp cancelled the waiter.
+    """
 
     def __init__(self, session: LiveSession) -> None:
         self._s = session
         self.text: list[str] = []
         self.tools: dict[str, dict] = {}
+        self.cards: dict[str, approvals.PendingApproval] = {}
+        self._sweeping = asyncio.Lock()
 
     def reset(self) -> None:
         self.text, self.tools = [], {}
 
     def _publish(self, type: str, **fields) -> None:
-        hub.HUB.publish(self._s.user_id, type, self._s.chat_id, self._s.turn_id, **fields)
+        if self._s.turn_id is not None:  # a straggler after the turn ended has no turn to belong to
+            hub.HUB.publish(self._s.user_id, type, self._s.chat_id, self._s.turn_id, **fields)
 
     async def session_update(self, session_id, update, **kwargs) -> None:
         s = self._s
@@ -230,8 +294,65 @@ class Mk1Client(acp.Client):
         # Every other update kind (plans, commands, modes, usage) is ignored.
 
     async def request_permission(self, session_id, tool_call, options, **kwargs) -> RequestPermissionResponse:
-        """Task 7 wires approvals. Until then every request is answered `cancelled`, which the agent takes as a deny."""
-        return RequestPermissionResponse(outcome=DeniedOutcome(outcome="cancelled"))
+        """Ask the chat's owner (spec 8). `cancelled`, which the agent takes as a deny, when nobody can answer: a
+        throwaway session, the `/tools` probe, a restore, a session the chat has left, no turn, or after Stop."""
+        s = self._s
+        if (s.chat_id is None or s.turn_id is None or s.consuming or s.replaying or s.stop_requested
+                or session_id != s.acp_session_id):
+            return approvals.to_response("cancelled", None, None)
+        try:
+            return await self._ask_owner(tool_call, options)
+        except Exception as exc:  # fail closed. acp would log the exception's text, and a DB error's text has the row.
+            logger.warning("ai_chat.permission_failed chat=%s error=%s", s.chat_id, type(exc).__name__)
+            return approvals.to_response("cancelled", None, None)
+
+    async def _ask_owner(self, tool_call, options) -> RequestPermissionResponse:
+        s = self._s
+        allow_id, reject_id = approvals.pick_options(options)
+        title, detail = tool_call.title or "", _permission_detail(tool_call)
+        p = approvals.APPROVALS.register(s.chat_id, s.user_id, s.turn_id, "agent", title, detail, allow_id is not None)
+        try:
+            p.row_seq = await asyncio.to_thread(persist_message, p.chat_id, "permission", title, {
+                "source": p.source, "title": title, "detail": detail, "permission_id": p.permission_id,
+                "decision": None})
+            if p.future.done():  # swept during the write: the row records it, but no card was ever shown
+                decision = p.future.result()
+                await asyncio.to_thread(update_message_meta, p.chat_id, p.row_seq,
+                                        _decision_patch(decision, p.user_id))
+                _log_permission(p.chat_id, p.source, decision)
+                return approvals.to_response(decision, allow_id, reject_id)
+            self.cards[p.permission_id] = p
+            hub.HUB.publish(p.user_id, "permission_requested", p.chat_id, p.turn_id, permission_id=p.permission_id,
+                            source=p.source, title=title, detail=detail, can_allow=p.can_allow,
+                            agent=s.provider.display_name)
+            _log_permission(p.chat_id, p.source, "requested")
+            try:
+                decision = await asyncio.wait_for(asyncio.shield(p.future), s.provider.permission_timeout_s)
+            except TimeoutError:
+                # No await before this, so a decision after the timeout gets ApprovalNotFound. A decision that
+                # landed just before it wins: `expire` leaves it alone, and this reads it from the future.
+                approvals.APPROVALS.expire(p.permission_id)
+                decision = p.future.result()
+            if self.cards.pop(p.permission_id, None) is not None:
+                await _resolve_cards([p], decision)
+            return approvals.to_response(decision, allow_id, reject_id)
+        finally:
+            approvals.APPROVALS.expire(p.permission_id)  # no pending entry outlives this call, cancelled or not
+
+    async def close_cards(self) -> None:
+        """Stop, close and turn end: every pending approval of the chat ends as `cancelled`. Everything up to the
+        lock runs before any await, so a caller that has just cleared `turn_id` leaves no gap. The lock makes the
+        turn's own sweep wait for Stop's, so `turn_ended` always follows the rows and events of the sweep."""
+        if self._s.chat_id is None:
+            return
+        approvals.APPROVALS.cancel_chat(self._s.chat_id)
+        cards, self.cards = list(self.cards.values()), {}
+        async with self._sweeping:
+            if cards:
+                try:
+                    await _resolve_cards(cards, "cancelled")
+                except Exception as exc:  # the cards are closed; only the rows missed the decision
+                    logger.warning("ai_chat.permission_failed chat=%s error=%s", self._s.chat_id, type(exc).__name__)
 
 
 # ---- the live session -------------------------------------------------------------------------
@@ -252,6 +373,9 @@ class LiveSession:
         self.replaying = False
         self.consuming = False
         self.pending_recap: str | None = None  # set when the agent lost the chat; the next turn sends it first
+        self.before_seq: int | None = None  # the running turn's user row: recaps stop short of it
+        self.stop_requested = False  # Stop or close asked for this turn to end; no further prompt goes out
+        self.closing = False  # the manager has let go of this session
         self.stderr_tail: deque[str] = deque(maxlen=50)
         self.dead = False
         self.proc: asyncio.subprocess.Process | None = None
@@ -272,7 +396,9 @@ class LiveSession:
         await self._ready
 
     async def cancel(self) -> None:
-        """session/cancel for a running prompt; the agent then ends it with `cancelled`."""
+        """session/cancel for a running prompt; the agent then ends it with `cancelled`. A turn that has not sent
+        its prompt yet (still starting, or between refusal and retry) never sends it."""
+        self.stop_requested = True
         if self._prompt_task is not None:
             await self._send_cancel()
 
@@ -285,13 +411,15 @@ class LiveSession:
 
     async def close(self) -> None:
         """Idempotent; safe on a session that failed to start. Cancel before EOF (spec 7), then let the owner
-        leave the context manager."""
+        leave the context manager. A caller cancelled during this still stops the process."""
         if self._owner is None:
             return
-        await self.cancel()
-        if self._cancel_send is not None:  # a cancelled turn's session/cancel goes out before EOF too
-            await asyncio.wait({self._cancel_send})
-        self._stop.set()
+        try:
+            await self.cancel()
+            if self._cancel_send is not None:  # a cancelled turn's session/cancel goes out before EOF too
+                await asyncio.wait({self._cancel_send})
+        finally:
+            self._stop.set()
         await asyncio.wait({self._owner})
 
     async def _own(self) -> None:
@@ -424,6 +552,8 @@ class LiveSession:
         """Prompt with `blocks` (one text block each, in order), streaming to the hub under `turn_id`."""
         self.turn_id = turn_id
         try:
+            if self.stop_requested:
+                return TurnResult("cancelled", "", [])
             result = await self._prompt(blocks)
             if result.stop_reason == "refusal" and not result.text:
                 # Refusal guard (G10): the agent does not know this session. Open a new one seeded with the
@@ -432,6 +562,8 @@ class LiveSession:
                     recap = await self._new_session(recap=True)
                 except AgentUnreachable:  # it died after refusing
                     return TurnResult("agent_exited", result.text, result.tools)
+                if self.stop_requested:
+                    return TurnResult("cancelled", result.text, result.tools)
                 result = await self._prompt([recap, *blocks] if recap else blocks)
             return result
         finally:
@@ -453,7 +585,7 @@ class LiveSession:
         await asyncio.to_thread(set_chat_session, self.chat_id, response.session_id)
         if not recap:
             return None
-        return context.render_recap(await asyncio.to_thread(recap_messages, self.chat_id))
+        return context.render_recap(await asyncio.to_thread(recap_messages, self.chat_id, before_seq=self.before_seq))
 
     async def _prompt(self, blocks: list[str]) -> TurnResult:
         """One session/prompt. `agent_exited` when the process died under it; a caller's cancel propagates."""
@@ -490,3 +622,213 @@ class LiveSession:
             with contextlib.suppress(TimeoutError):
                 await asyncio.wait_for(self.proc.wait(), _GRACE_S)
         return self.dead or self.proc.returncode is not None
+
+
+# ---- the manager ------------------------------------------------------------------------------
+
+def _failure_event(session: LiveSession, exc: Exception) -> tuple[str, str]:
+    """The `error` event's (code, message) for a failed turn. Fixed texts: stderr is shown only in a failed Test
+    connection (spec 7), and an exception's own text never reaches a browser or a log."""
+    agent = session.provider.display_name
+    if isinstance(exc, AgentUnreachable):
+        return "agent_unreachable", f"{agent} is unreachable."
+    if isinstance(exc, ToolsCheckFailed):
+        return "tools_check_failed", exc.reason
+    logger.warning("ai_chat.turn_failed chat=%s error=%s", session.chat_id, type(exc).__name__)
+    if session.proc is None and isinstance(exc, (store.KeysNotConfigured, ValueError)):  # raised by `spawn_command`
+        return "agent_unreachable", f"{agent} is not configured correctly. Ask an admin to run Test connection."
+    return "agent_error", f"Something went wrong talking to {agent}."
+
+
+@dataclass
+class _Turn:
+    id: str
+    session: LiveSession
+    task: asyncio.Task
+
+
+class SessionManager:
+    """The live sessions, one per chat, and their turn tasks. `reserve` and `start_turn` are synchronous and must run
+    back to back on the loop (a route's body): an await between them lets another chat's `reserve` evict the session.
+    """
+
+    def __init__(self) -> None:
+        self._sessions: dict[int, LiveSession] = {}  # a closing session is out of here, so `get` and the cap skip it
+        self._turns: dict[int, _Turn] = {}  # by chat id: a turn stays here until its cleanup has run
+        self._tasks: set[asyncio.Task] = set()  # turns, background closes and the reaper, held against the GC
+        self._reaper: asyncio.Task | None = None
+
+    def get(self, chat_id: int) -> LiveSession | None:
+        return self._sessions.get(chat_id)
+
+    def running_turn(self, chat_id: int) -> str | None:
+        turn = self._turns.get(chat_id)
+        return turn.id if turn is not None else None
+
+    def live_count(self, provider_id: int) -> int:
+        return sum(s.provider.id == provider_id for s in self._sessions.values())
+
+    def reserve(self, chat_id: int, user_id: int, provider: ProviderSnapshot) -> LiveSession:
+        """The chat's session, or a new unstarted one. At the cap the least recently active idle session of the
+        provider is closed to make room; with none idle, `ProviderBusy`."""
+        session = self._sessions.get(chat_id)
+        if session is not None and not session.dead:
+            session.last_active = time.monotonic()  # the reaper and the cap leave it alone until the turn starts
+            return session
+        if session is not None:
+            self._retire(session)
+        others = [s for s in self._sessions.values() if s.provider.id == provider.id]
+        if len(others) >= provider.max_sessions:
+            idle = [s for s in others if s.chat_id not in self._turns]
+            if not idle:
+                raise ProviderBusy(provider.slug)
+            self._retire(min(idle, key=lambda s: s.last_active))
+        session = self._sessions[chat_id] = LiveSession(chat_id, user_id, provider)
+        return session
+
+    def start_turn(self, session: LiveSession, text: str, page_context: dict | None, stored_session_id: str | None,
+                   user_seq: int) -> str:
+        """Creates the turn task and returns the turn id. `user_seq` is the turn's user row, which the route has
+        stored already. Raises `TurnRunning` while the chat's previous turn task has not finished, since its cleanup
+        would clear this turn's state, and `ProviderBusy` for a session closed since `reserve`, since nothing would
+        ever close the process this turn would start."""
+        chat_id = session.chat_id
+        if chat_id in self._turns:
+            raise TurnRunning(chat_id)
+        if session.closing:
+            raise ProviderBusy(session.provider.slug)
+        turn_id = secrets.token_hex(8)
+        session.turn_id, session.before_seq, session.stop_requested = turn_id, user_seq, False
+        task = self._spawn(self._run_turn(session, turn_id, text, page_context, stored_session_id))
+        self._turns[chat_id] = _Turn(turn_id, session, task)
+        return turn_id
+
+    async def cancel(self, chat_id: int) -> bool:
+        """Stop. False when no turn runs. Otherwise returns once the turn is over."""
+        turn = self._turns.get(chat_id)
+        if turn is None:
+            return False
+        await self._stop_turn(turn)
+        return True
+
+    async def close_chat(self, chat_id: int) -> None:
+        await self._close_where(lambda s: s.chat_id == chat_id)
+
+    async def close_provider(self, provider_id: int) -> None:
+        await self._close_where(lambda s: s.provider.id == provider_id)
+
+    async def close_all(self) -> None:
+        if self._reaper is not None:
+            self._reaper.cancel()
+        await self._close_where(lambda s: True)
+        while self._tasks:  # evictions and turn cleanups still running; a cleanup can start one more close
+            await asyncio.wait(self._tasks)
+
+    def start_reaper(self) -> None:
+        if self._reaper is None:
+            self._reaper = self._spawn(self._reap_forever())
+
+    async def reap_once(self, now: float | None = None) -> None:
+        """Close the sessions idle past their provider's `idle_minutes` with no turn running."""
+        now = time.monotonic() if now is None else now
+        await self._close_where(lambda s: (s.chat_id not in self._turns
+                                           and now - s.last_active > s.provider.idle_minutes * 60))
+
+    async def _reap_forever(self) -> None:
+        while True:
+            await asyncio.sleep(REAPER_INTERVAL_S)
+            await self.reap_once()
+
+    def _spawn(self, coro) -> asyncio.Task:
+        task = asyncio.create_task(coro)
+        self._tasks.add(task)
+        task.add_done_callback(self._tasks.discard)
+        return task
+
+    async def _close_where(self, doomed: Callable[[LiveSession], bool]) -> None:
+        closes = [self._retire(s) for s in list(self._sessions.values()) if doomed(s)]
+        if closes:  # a wait, not an await: the caller going away must not cancel the closes
+            await asyncio.wait(closes)
+
+    def _retire(self, session: LiveSession) -> asyncio.Task:
+        """Out of the registry now, with no await, so no prompt can slip in; closed by a held background task."""
+        del self._sessions[session.chat_id]
+        session.closing = session.stop_requested = True
+        return self._spawn(self._close_session(session))
+
+    async def _close_session(self, session: LiveSession) -> None:
+        turn = self._turns.get(session.chat_id)
+        if turn is not None and turn.session is session:
+            await self._stop_turn(turn)
+        await session.close()
+
+    async def _stop_turn(self, turn: _Turn) -> None:
+        """session/cancel, then resolve approvals (the agent may be waiting on one, so this comes before any wait),
+        then wait for the agent to end the turn. Hard-cancelling is the bounded fallback: it discards the agent's
+        reply, so the turn's cleanup also closes the session, or late chunks could land in the next turn."""
+        await turn.session.cancel()
+        await turn.session._client.close_cards()
+        await asyncio.wait({turn.task}, timeout=_GRACE_S)
+        if not turn.task.done():
+            logger.warning("ai_chat.turn_hard_cancelled chat=%s", turn.session.chat_id)
+            turn.task.cancel()
+            await asyncio.wait({turn.task}, timeout=_GRACE_S)
+
+    async def _run_turn(self, session: LiveSession, turn_id: str, text: str, page_context: dict | None,
+                        stored_session_id: str | None) -> None:
+        """One turn start to end. `turn_ended` goes out exactly once and last, on every path."""
+        chat_id, user_id = session.chat_id, session.user_id
+        stop_reason, message_seq, finished = "cancelled", None, False  # what a hard cancel leaves
+        try:
+            hub.HUB.publish(user_id, "turn_started", chat_id, turn_id, starting=session._owner is None,
+                            resuming=session.acp_session_id is None and stored_session_id is not None)
+            stop_reason, message_seq = await self._converse(session, turn_id, text, page_context, stored_session_id)
+            finished = True
+        except Exception as exc:
+            if session.stop_requested:  # Stop or close ended it, and that is no error
+                logger.info("ai_chat.turn_stopped chat=%s error=%s", chat_id, type(exc).__name__)
+            else:
+                stop_reason = "error"
+                code, message = _failure_event(session, exc)
+                hub.HUB.publish(user_id, "error", chat_id, turn_id, code=code, message=message)
+        finally:
+            session.turn_id = None  # no await before the sweep's first step, so nothing can register after it
+            try:
+                await session._client.close_cards()
+            finally:
+                del self._turns[chat_id]
+                session.last_active = time.monotonic()
+                if (session.dead or not finished) and not session.closing:  # no process outlives a failed turn
+                    self._retire(session)
+                hub.HUB.publish(user_id, "turn_ended", chat_id, turn_id, stop_reason=stop_reason,
+                                message_seq=message_seq)
+
+    async def _converse(self, session: LiveSession, turn_id: str, text: str, page_context: dict | None,
+                        stored_session_id: str | None) -> tuple[str, int | None]:
+        """Start and attach as needed, prompt, store the reply. Returns `turn_ended`'s (stop_reason, message_seq)."""
+        if session._owner is None:
+            await session.start()
+        if session.acp_session_id is None:
+            await session.attach(stored_session_id)
+        cleaned = context.clean_context(page_context)
+        blocks = [context.render_context_block(cleaned)] if cleaned is not None else []
+        if session.pending_recap is not None:
+            blocks.append(session.pending_recap)
+            session.pending_recap = None
+        result = await session.run_turn(turn_id, [*blocks, text])
+        stop_reason = result.stop_reason
+        if stop_reason == "agent_exited" and session.stop_requested:
+            stop_reason = "cancelled"  # a close closed the connection under the prompt, ahead of the agent's answer
+        message_seq = None
+        if result.text or result.tools:
+            message_seq = await asyncio.to_thread(persist_message, session.chat_id, "assistant", result.text,
+                                                  {"tools": result.tools, "stop_reason": stop_reason})
+        if stop_reason != "agent_exited":
+            return stop_reason, message_seq
+        hub.HUB.publish(session.user_id, "error", session.chat_id, turn_id, code="agent_exited",
+                        message=f"{session.provider.display_name} stopped unexpectedly.")
+        return "error", message_seq
+
+
+# ponytail: single uvicorn worker; sticky routing or a broker if workers > 1
+MANAGER = SessionManager()
