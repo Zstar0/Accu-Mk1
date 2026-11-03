@@ -1090,8 +1090,9 @@ def test_migrations_add_hplc_prep_then_its_check_then_fill_only_null_values():
     i_create = _index_of(sqls, "CREATE TABLE IF NOT EXISTS lims_sample_forms")
     i_col = _index_of(sqls, "ALTER TABLE lims_sample_forms ADD COLUMN IF NOT EXISTS hplc_prep")
     i_check = _index_of(sqls, "ck_lims_sample_forms_hplc_prep")
+    i_seed = _index_of(sqls, "INSERT INTO lims_sample_forms")
     i_fill = _index_of(sqls, "UPDATE lims_sample_forms SET hplc_prep")
-    assert i_create < i_col < i_check < i_fill
+    assert i_create < i_col < i_check < i_seed < i_fill
     assert "WHERE hplc_prep IS NULL" in sqls[i_fill]
     assert "'lyophilized powder'" in sqls[i_fill].lower()
     assert "'reconstituted solution'" in sqls[i_fill].lower()
@@ -1128,6 +1129,15 @@ database by hand is never overwritten on a later boot:
 Only the two names appear in the `CASE`; the other four are simply not listed, which leaves
 them NULL without a statement that has to be undone when capsule is ruled.
 
+**The UPDATE must come after the INSERT, and the ordering assertion pins that.** The seed fires
+only into an empty table and its own column list does not mention `hplc_prep`, so on a FRESH
+database the six rows are inserted with a NULL prep kind and only the backfill fills them. An
+UPDATE placed before the seed would therefore leave every new database, devbox stack and golden
+rebuild with no prep kind until its second boot, while an existing database (where the seed
+no-ops) looked correct. Do not add `hplc_prep` to the seed's `VALUES` to dodge this: the icon
+test asserts that tuple verbatim (`'Lyophilized Powder','injectable',true,true,10,'powder_vial'`),
+so widening it only stales a passing test for no gain.
+
 - [ ] **Step 4: Run the forms suite and the spec suites it shares a resolver with**
 
 Run: `MK1_DB_HOST=127.0.0.1 pytest backend/tests/test_sample_forms.py backend/tests/test_sample_forms_schema.py -v`
@@ -1141,8 +1151,15 @@ Three facts, one script, piped the same way as Task 1: `hplc_prep` is in
 ORDER BY sort_order` returns `powder` for Lyophilized Powder, `liquid` for Reconstituted
 Solution and NULL for the other four.
 
+These three facts go into the **tracked** check Task 6a shipped,
+`backend/scripts/check_hplc_columns.py`, not a loose script outside the repo: the same reason
+applies, which is that `_run_migrations` logs a failed statement rather than raising, so a
+deployer without the check in hand cannot tell whether the migration landed. Extend its pure
+`evaluate()` and its test, and keep its `sys.exit(1 if bad else 0)` so a release script can gate
+on one invocation covering both tables.
+
 ```bash
-ssh root@100.120.92.93 'docker exec -w /app -i accu-mk1-backend python' < C:/tmp/check_form_prep.py
+ssh root@100.120.92.93 'docker exec -w /app -i accu-mk1-backend python' < backend/scripts/check_hplc_columns.py
 ```
 
 Prod rows may have been renamed in Settings since the 1.55.0 seed. If a built-in name no
