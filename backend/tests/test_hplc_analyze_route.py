@@ -826,7 +826,8 @@ def test_a_hand_picked_curve_from_another_instrument_is_refused_naming_all_three
     assert r.json()["detail"] == (
         f"Calibration curve {on_b} belongs to instrument 'HPLC-B' (id {b}), but this run is on "
         f"instrument 'HPLC-A' (id {a}). A curve is specific to the instrument that produced it. "
-        "Pick a curve filed under the run's instrument."
+        "Pick a curve filed under the run's instrument. If this instrument has no curve for this "
+        "peptide, add or star one first."
     )
     assert _row_count(api) == 0
 
@@ -872,7 +873,8 @@ def test_a_hand_picked_curve_with_no_instrument_is_refused_when_the_run_has_one(
     assert r.status_code == 400, r.text
     assert r.json()["detail"] == (
         f"Calibration curve {seeded} has no instrument, so it cannot be shown to belong to this "
-        f"run's instrument 'HPLC-A' (id {a}). Pick a curve filed under the run's instrument."
+        f"run's instrument 'HPLC-A' (id {a}). Pick a curve filed under the run's instrument. "
+        f"If this instrument has no curve for this peptide, add or star one first."
     )
     assert _row_count(api) == 0
 
@@ -883,7 +885,7 @@ def test_the_refusal_names_a_run_instrument_that_has_no_row(api):
     on_b = _curve(api, b)
     r = _post(api, calibration_curve_id=on_b, instrument_id=999)
     assert r.status_code == 400, r.text
-    assert "instrument 'HPLC-B' (id %d)" % b in r.json()["detail"]
+    assert f"instrument 'HPLC-B' (id {b})" in r.json()["detail"]
     assert "instrument id 999" in r.json()["detail"]
 
 

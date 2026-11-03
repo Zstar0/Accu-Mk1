@@ -6988,23 +6988,26 @@ async def run_hplc_analysis(
         ).scalar_one_or_none()
         if not cal:
             raise HTTPException(404, f"Calibration curve {request.calibration_curve_id} not found for peptide '{peptide.abbreviation}'")
-        # A curve is specific to the instrument that produced it; another instrument's curve
-        # scales the quantity by the ratio of the slopes and nothing errors. Refuse, never
-        # substitute. A curve with no instrument cannot be shown to match, so it fails closed.
-        # Only when the request names an instrument (the ad-hoc screen sends none), so a caller
-        # that omits it is still unchecked: a known, ledgered follow-up. `is not None`, not
-        # truthiness, so an id of 0 is refused rather than read as "no instrument".
+        # A curve is specific to the instrument that produced it: refuse, never substitute.
+        # The gate fires only when the request names an instrument, and `is not None`, not
+        # truthiness, so an id of 0 is refused rather than read as "no instrument". A curve
+        # with no instrument of its own cannot be shown to match, so it fails closed.
         if request.instrument_id is not None and cal.instrument_id != request.instrument_id:
             run_inst = _instrument_label(db, request.instrument_id)
+            # Both messages carry the escape the automatic branch gives: the prep that meets
+            # this gate is one the flyout defaulted to another instrument's curve for, which
+            # happens exactly when this instrument has none to pick.
             if cal.instrument_id is None:
                 raise HTTPException(400, (
                     f"Calibration curve {cal.id} has no instrument, so it cannot be shown to belong to "
-                    f"this run's instrument {run_inst}. Pick a curve filed under the run's instrument."
+                    f"this run's instrument {run_inst}. Pick a curve filed under the run's instrument. "
+                    f"If this instrument has no curve for this peptide, add or star one first."
                 ))
             raise HTTPException(400, (
                 f"Calibration curve {cal.id} belongs to instrument {_instrument_label(db, cal.instrument_id)}, "
                 f"but this run is on instrument {run_inst}. A curve is specific to the instrument that "
-                f"produced it. Pick a curve filed under the run's instrument."
+                f"produced it. Pick a curve filed under the run's instrument. If this instrument has no "
+                f"curve for this peptide, add or star one first."
             ))
     else:
         # Look up active curve matching the request's instrument
@@ -7013,13 +7016,15 @@ async def run_hplc_analysis(
             .where(CalibrationCurve.peptide_id == peptide.id)
             .where(CalibrationCurve.is_active == True)
         )
-        if request.instrument_id:
+        # `is not None`, the same predicate as the gate above: an id of 0 is a named
+        # instrument that matches nothing, never "no instrument given".
+        if request.instrument_id is not None:
             cal_query = cal_query.where(CalibrationCurve.instrument_id == request.instrument_id)
         cal = db.execute(
             cal_query.order_by(desc(CalibrationCurve.created_at)).limit(1)
         ).scalar_one_or_none()
         if not cal:
-            if request.instrument_id:
+            if request.instrument_id is not None:
                 inst = db.execute(select(Instrument).where(Instrument.id == request.instrument_id)).scalar_one_or_none()
                 inst_name = inst.name if inst else f"ID {request.instrument_id}"
                 raise HTTPException(400, f"No active calibration curve for peptide '{peptide.abbreviation}' on instrument '{inst_name}'. Star a curve for this instrument first.")
