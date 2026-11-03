@@ -294,7 +294,7 @@ Added while planning, 2026-11-02:
 Added during the build, 2026-11-03:
 
 - A macro in a version's section title returns 400. The builder prints titles as typed, so it would reach the certificate raw.
-- A PATCH of text onto a stopped version returns 409, "this version is no longer in use; add the form again to change its text". Without it, a stale card's Save reported success while the Default kept printing.
+- A PATCH of text onto a stopped version returns 409, "this version is no longer in use; save again to add it back". Without it, a stale card's Save reported success while the Default kept printing. The first Save is refused so nothing comes back by accident; the next Save on that card adds the version back.
 - The rules and versions queries always refetch when an editor or panel opens, so the guard line and the cards do not show an answer up to 5 minutes old.
 - A card whose version left the list keeps its typed text until Cancel, and a closed card with a blank Custom says "A Custom field is still blank".
 - The card locks its inputs while a save runs, so text typed mid-save cannot be lost.
