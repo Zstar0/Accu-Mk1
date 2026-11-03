@@ -154,8 +154,9 @@ const PROBLEM_COPY: Record<string, string> = {
   no_declared_volume:
     'This liquid sample has no usable declared volume. This is not a weighing problem: the volume declared with the sample needs recording (it is taken as declared, not measured).',
   // These two codes are only ever the quantity panel's reason, never the dilution panel's.
-  // A quantity can be refused on sound weighings: the mass is published to four places, so
-  // very small volumes work out to a mass with no number left in it.
+  // A quantity can be refused on sound weighings: very small volumes work out to a mass with
+  // no number left in it at the precision the result is carried onward in, which is coarser
+  // than the four places the engine publishes.
   quantity_below_precision:
     'The quantity works out too small to report, so it is not a result. Check the declared volume or the stock vial weighings, and the dilution vial weighings: a volume much smaller than the prep intended gives a quantity like this.',
   quantity_not_finite:
