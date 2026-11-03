@@ -135,6 +135,8 @@ def test_migrations_add_hplc_prep_then_its_check_then_fill_only_null_values():
     i_seed = _index_of(sqls, "INSERT INTO lims_sample_forms")
     i_fill = _index_of(sqls, "UPDATE lims_sample_forms SET hplc_prep")
     assert i_create < i_col < i_check < i_seed < i_fill
+    # The SQLite tests cover only the model's copy of the CHECK; this is the one prod gets.
+    assert "hplc_prep IN ('powder','liquid')" in sqls[i_check]
     assert "WHERE hplc_prep IS NULL" in sqls[i_fill]
     assert "'lyophilized powder'" in sqls[i_fill].lower()
     assert "'reconstituted solution'" in sqls[i_fill].lower()

@@ -14,9 +14,11 @@ capture_hplc_golden.py beside it.
 Prints one line per column, constraint and form. Exits 1 if any column is missing or has
 the wrong nullability, the CHECK is missing, or a built-in form has the wrong prep kind,
 0 otherwise, so a release script can gate on it. A built-in form renamed in Settings
-since the 1.55.0 seed is printed as "not found" and does not fail the gate: its prep kind
-is NULL and the fix is one UPDATE by id, not a code change. Prod (stdin form, per the
-data-fix runbook):
+since the 1.55.0 seed does not fail the gate (a rename is a data condition, not a failed
+migration): its prep kind is NULL and the fix is one UPDATE by id, not a code change. It
+prints a NOTICE line with the UPDATE, every form row prints its id, and the closing line
+reads "ALL PRESENT (N built-in form(s) not found by name, see NOTICE)" rather than a bare
+"ALL PRESENT". Prod (stdin form, per the data-fix runbook):
     ssh root@100.120.92.93 'docker exec -w /app -i accu-mk1-backend python' \\
         < backend/scripts/check_hplc_columns.py
 Local (from backend/, against the dev database):
@@ -81,19 +83,25 @@ def evaluate(found, expected=EXPECTED):
 
 
 def evaluate_sample_forms(found, constraints, rows):
-    """(report lines, number of problems) for lims_sample_forms. `found` is evaluate()'s
-    {column: (data_type, is_nullable)}, `constraints` the constraint names on the table, and
-    `rows` its (name, route, hplc_prep) tuples, or None when the column is missing so no
-    value can be read. Pure, like evaluate()."""
+    """(report lines, number of problems, built-in names not found) for lims_sample_forms.
+    `found` is evaluate()'s {column: (data_type, is_nullable)}, `constraints` the constraint
+    names on the table, and `rows` its (id, name, route, hplc_prep) tuples, or None when the
+    column is missing so no value can be read. Pure, like evaluate().
+
+    A built-in name that matches no row (renamed in Settings) is not a problem: a rename is a
+    data condition, not a failed migration, and a gate that stays red after the documented fix
+    is one a release script learns to route around. It is loud instead: a NOTICE line naming
+    the UPDATE, the renamed form's own row printing its id, and the caller's closing line
+    counting the names in the third value."""
     lines, bad = evaluate(found, FORMS_EXPECTED)
     has_check = FORMS_CHECK in constraints
     bad += not has_check
     lines.append(f"{FORMS_CHECK:36} {'constraint':20} {'ok' if has_check else 'MISSING'}")
     if rows is None:
         lines.append("lims_sample_forms values not checked: the hplc_prep column is missing")
-        return lines, bad
+        return lines, bad, []
     seen = set()
-    for name, route, prep in rows:
+    for form_id, name, route, prep in rows:
         key = name.strip(" ").lower()  # the migration's lower(btrim(name))
         if key not in FORMS_PREP:
             status = "not a built-in name, not judged"
@@ -102,11 +110,17 @@ def evaluate_sample_forms(found, constraints, rows):
             want = FORMS_PREP[key]
             status = "ok" if prep == want else f"WRONG, want {want or 'NULL'}"
             bad += prep != want
-        lines.append(f"{name:36} {route:20} {prep or 'NULL':8} {status}")
-    for key in FORMS_PREP:
-        if key not in seen:
-            lines.append(f"{key:36} not found by name (renamed in Settings? one UPDATE by id fixes it)")
-    return lines, bad
+        lines.append(f"{name:36} {route:20} {prep or 'NULL':8} {'id=' + str(form_id):9} {status}")
+    not_found = [key for key in FORMS_PREP if key not in seen]
+    for key in not_found:
+        want = FORMS_PREP[key]
+        fix = (
+            f"UPDATE lims_sample_forms SET hplc_prep = '{want}' WHERE id = <the id of its renamed row>"
+            if want
+            else "if renamed, its hplc_prep should stay NULL"
+        )
+        lines.append(f"{'NOTICE ' + key:36} {'-':20} {'-':8} {'-':9} not found by name: {fix}")
+    return lines, bad, not_found
 
 
 def _columns(db, table, names):
@@ -142,15 +156,28 @@ def main():
         }
         # Selecting a column that was never added would abort the whole transaction.
         rows = (
-            [tuple(r) for r in db.execute(text("SELECT name, route, hplc_prep FROM lims_sample_forms ORDER BY sort_order, id"))]
+            [
+                tuple(r)
+                for r in db.execute(
+                    text("SELECT id, name, route, hplc_prep FROM lims_sample_forms ORDER BY sort_order, id")
+                )
+            ]
             if "hplc_prep" in forms_found
             else None
         )
     lines, bad = evaluate(found)
-    forms_lines, forms_bad = evaluate_sample_forms(forms_found, constraints, rows)
+    forms_lines, forms_bad, not_found = evaluate_sample_forms(forms_found, constraints, rows)
     print("\n".join(lines + forms_lines))
     bad += forms_bad
-    print("ALL PRESENT" if not bad else f"{bad} PROBLEM(S): do not ship a liquid prep or read hplc_prep until fixed")
+    if bad:
+        closing = f"{bad} PROBLEM(S): do not ship a liquid prep or read hplc_prep until fixed"
+    elif not_found:
+        # Still exit 0, but never a bare "ALL PRESENT" under a NOTICE: a deployer who reads
+        # only the last line must learn that a built-in form may hold a NULL prep kind.
+        closing = f"ALL PRESENT ({len(not_found)} built-in form(s) not found by name, see NOTICE)"
+    else:
+        closing = "ALL PRESENT"
+    print(closing)
     sys.exit(1 if bad else 0)
 
 

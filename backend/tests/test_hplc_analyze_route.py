@@ -656,39 +656,129 @@ def test_the_column_check_passes_only_when_every_column_is_there_and_nullable():
     assert evaluate({})[1] == len(EXPECTED)
 
 
+# lims_sample_forms rows as the check reads them: (id, name, route, hplc_prep).
+_FORMS_COLUMN = {"hplc_prep": ("character varying", "YES")}
+_FORMS_ROWS = [
+    (1, "Lyophilized Powder", "injectable", "powder"),
+    (2, "Reconstituted Solution", "injectable", "liquid"),
+    (3, "Pen", "injectable", None),
+    (4, "Nasal Spray", "nasal_inhaled", None),
+    (5, "Capsule", "oral", None),
+    (6, "Tablet", "oral", None),
+]
+
+
 def test_the_sample_forms_check_wants_the_column_the_constraint_and_the_two_backfilled_values():
     from scripts.check_hplc_columns import FORMS_CHECK, evaluate_sample_forms
 
-    column = {"hplc_prep": ("character varying", "YES")}
-    rows = [
-        ("Lyophilized Powder", "injectable", "powder"),
-        ("Reconstituted Solution", "injectable", "liquid"),
-        ("Pen", "injectable", None),
-        ("Nasal Spray", "nasal_inhaled", None),
-        ("Capsule", "oral", None),
-        ("Tablet", "oral", None),
-    ]
-    assert evaluate_sample_forms(column, {FORMS_CHECK}, rows)[1] == 0
+    def run(column=_FORMS_COLUMN, constraints=(FORMS_CHECK,), rows=_FORMS_ROWS):
+        return evaluate_sample_forms(column, set(constraints), rows)
+
+    assert run()[1] == 0
     # The ALTER the migration swallowed (values cannot be read, and are not guessed at):
-    lines, bad = evaluate_sample_forms({}, {FORMS_CHECK}, None)
+    lines, bad, _ = run({}, rows=None)
     assert bad == 1 and any("not checked" in line for line in lines)
     # NULL must stay legal:
-    assert evaluate_sample_forms({"hplc_prep": ("character varying", "NO")}, {FORMS_CHECK}, rows)[1] == 1
+    assert run({"hplc_prep": ("character varying", "NO")})[1] == 1
     # The DO block that never added the CHECK:
-    assert evaluate_sample_forms(column, set(), rows)[1] == 1
+    assert run(constraints=())[1] == 1
     # The backfill that never ran (both fills missing):
-    unfilled = [(name, route, None) for name, route, _ in rows]
-    assert evaluate_sample_forms(column, {FORMS_CHECK}, unfilled)[1] == 2
-    # A built-in that should be NULL but is not:
-    wrong = [(n, r, "powder" if n == "Pen" else p) for n, r, p in rows]
-    assert evaluate_sample_forms(column, {FORMS_CHECK}, wrong)[1] == 1
+    assert run(rows=[(i, n, r, None) for i, n, r, _ in _FORMS_ROWS])[1] == 2
+    # Every one of the six built-ins is judged: each holding a value other than its own fails,
+    # so none of the names (least of all the four that must stay NULL) can drop out of the
+    # expectations unnoticed.
+    for at, (_, name, _, prep) in enumerate(_FORMS_ROWS):
+        other = "liquid" if prep == "powder" else "powder"
+        mutated = [(*row[:3], other) if i == at else row for i, row in enumerate(_FORMS_ROWS)]
+        assert run(rows=mutated)[1] == 1, name
     # Names match as the migration matches them (lower(btrim(name))):
-    padded = [(f"  {n.upper()} ", r, p) for n, r, p in rows]
-    assert evaluate_sample_forms(column, {FORMS_CHECK}, padded)[1] == 0
-    # A built-in renamed in Settings is reported, never guessed at, and does not fail the gate:
-    renamed = [("Powder Vial", r, p) if n == "Lyophilized Powder" else (n, r, p) for n, r, p in rows]
-    lines, bad = evaluate_sample_forms(column, {FORMS_CHECK}, renamed)
-    assert bad == 0 and any("lyophilized powder" in line and "not found" in line for line in lines)
+    assert run(rows=[(i, f"  {n.upper()} ", r, p) for i, n, r, p in _FORMS_ROWS])[1] == 0
+    # A built-in renamed in Settings does not fail the gate, but it is loud and actionable:
+    renamed = [(41, "Powder Vial", "injectable", None)] + _FORMS_ROWS[1:]
+    lines, bad, not_found = run(rows=renamed)
+    assert bad == 0 and not_found == ["lyophilized powder"]
+    notices = [line for line in lines if line.startswith("NOTICE")]
+    assert len(notices) == 1 and "hplc_prep = 'powder'" in notices[0]
+    # ... and the renamed form's own row prints the id the UPDATE needs:
+    assert any(line.startswith("Powder Vial") and "id=41" in line for line in lines)
+
+
+class _FakeSession:
+    """Canned stand-in for database.SessionLocal(): answers the four queries main() makes."""
+
+    def __init__(self, tables, constraints, rows):
+        self.tables, self.constraints, self.rows = tables, constraints, rows
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc):
+        return False
+
+    def execute(self, clause, params=None):
+        sql = str(clause)
+        if sql.startswith("SET TRANSACTION READ ONLY"):
+            return []
+        if "information_schema.columns" in sql:
+            table = self.tables[params["table"]]
+            return [(name, *table[name]) for name in params["names"] if name in table]
+        if "pg_constraint" in sql:
+            return [(name,) for name in self.constraints]
+        if "FROM lims_sample_forms" in sql:
+            if "hplc_prep" not in self.tables["lims_sample_forms"]:
+                raise RuntimeError("column hplc_prep does not exist")  # Postgres would abort the transaction
+            return list(self.rows)
+        raise AssertionError(f"main() ran a query the fake does not know: {sql}")
+
+
+def _run_check_main(monkeypatch, capsys, *, stock_nullable="YES", forms_column=True,
+                    constraints=("ck_lims_sample_forms_hplc_prep",), rows=_FORMS_ROWS):
+    """(exit code, output lines) of check_hplc_columns.main() over canned query results."""
+    from scripts import check_hplc_columns as check
+
+    tables = {
+        "hplc_analyses": {
+            **{name: ("double precision", "YES") for name in check.EXPECTED},
+            "stock_vial_empty": ("double precision", stock_nullable),
+        },
+        "lims_sample_forms": _FORMS_COLUMN if forms_column else {},
+    }
+    session = _FakeSession(tables, constraints, rows)
+    monkeypatch.setattr(database, "SessionLocal", lambda: session)
+    with pytest.raises(SystemExit) as exit_info:
+        check.main()
+    return exit_info.value.code, capsys.readouterr().out.strip().splitlines()
+
+
+def test_the_column_check_script_exits_zero_only_when_both_tables_are_right(monkeypatch, capsys):
+    code, lines = _run_check_main(monkeypatch, capsys)
+    assert code == 0 and lines[-1] == "ALL PRESENT"
+
+
+@pytest.mark.parametrize(
+    "broken",
+    [
+        {"stock_nullable": "NO"},  # hplc_analyses: the DROP NOT NULL that never applied
+        {"forms_column": False},  # lims_sample_forms: the ADD COLUMN that never applied
+        {"constraints": ()},  # lims_sample_forms: the CHECK that never landed
+        {"rows": [(1, "Lyophilized Powder", "injectable", None)] + _FORMS_ROWS[1:]},  # backfill missed a row
+    ],
+    ids=["hplc_analyses", "no_column", "no_check", "backfill"],
+)
+def test_the_column_check_script_exits_one_for_a_failure_on_either_table(monkeypatch, capsys, broken):
+    # The three lims_sample_forms cases are what pin main() adding that table's problems to
+    # the exit code: dropping them leaves evaluate_sample_forms correct and the gate green.
+    code, lines = _run_check_main(monkeypatch, capsys, **broken)
+    assert code == 1 and "PROBLEM(S)" in lines[-1] and "ALL PRESENT" not in lines[-1]
+
+
+def test_a_renamed_built_in_exits_zero_but_the_last_line_says_so(monkeypatch, capsys):
+    renamed = [(41, "Powder Vial", "injectable", None)] + _FORMS_ROWS[1:]
+    code, lines = _run_check_main(monkeypatch, capsys, rows=renamed)
+    assert code == 0
+    assert lines[-1] == "ALL PRESENT (1 built-in form(s) not found by name, see NOTICE)"
+    assert any(line.startswith("NOTICE") and "lyophilized powder" in line for line in lines)
+    assert any(line.startswith("Powder Vial") and "id=41" in line for line in lines)
 
 
 # ---- a hand-picked curve must be from the run's instrument --------------------------
