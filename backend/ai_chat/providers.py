@@ -19,7 +19,7 @@ from typing import Any
 from fastapi import APIRouter, Depends, HTTPException, Response
 from pydantic import BaseModel, ConfigDict
 from sqlalchemy import select, update
-from sqlalchemy.exc import IntegrityError
+from sqlalchemy.exc import IntegrityError, SQLAlchemyError
 from sqlalchemy.orm import Session
 
 from ai_chat import context, sessions, transport
@@ -38,8 +38,9 @@ _DEFAULTS = {"enabled": False, "ssh_port": 22, "allowed_roles": ["admin"], "inje
              "max_sessions": 4, "idle_minutes": 15, "permission_timeout_s": 240, "agent_approval_timeout_s": 300}
 _REQUIRED = ("slug", "display_name", "ssh_host", "ssh_user", "host_key", "launcher_path", "authorized_from",
              "session_cwd")
-# Changing any of these makes the last test prove nothing about the new settings.
-_RETEST = ("host_key", "ssh_host", "ssh_port", "ssh_user", "allowed_roles")
+# Changing any of these makes the last test prove nothing about the new settings (`session_cwd`: the test ran
+# session/new with the old one).
+_RETEST = ("host_key", "ssh_host", "ssh_port", "ssh_user", "session_cwd", "allowed_roles")
 _STEPS = ("connect", "initialize", "new_session", "tools")
 
 
@@ -178,10 +179,11 @@ _CHECKS = {
 _EDITABLE = tuple(f for f in ProviderIn.model_fields if f != "slug")
 
 
-def _clean(body: ProviderIn) -> dict[str, Any]:
-    """The fields the body sets, checked. null counts as absent, so nothing can be cleared through here."""
+def _clean(body: ProviderIn, ignore: tuple[str, ...] = ()) -> dict[str, Any]:
+    """The fields the body sets, checked, except `ignore`d ones (not even looked at). null counts as absent, so
+    nothing can be cleared through here."""
     out: dict[str, Any] = {}
-    for field, value in body.model_dump(exclude_unset=True).items():
+    for field, value in body.model_dump(exclude_unset=True, exclude=set(ignore)).items():
         if value is None:
             continue
         check = _CHECKS.get(field)
@@ -226,7 +228,14 @@ def _out(row: AcpProvider) -> ProviderOut:
 async def _saved(db: Session, row: AcpProvider) -> ProviderOut:
     """Commit, close the provider's live sessions (they restore on the next prompt), read the row back."""
     provider_id = row.id
-    db.commit()  # first, so a session respawning during the close sees the new row, and no connection stays held
+    try:
+        db.commit()  # first, so a session respawning during the close sees the new row, and no connection stays held
+    except SQLAlchemyError as exc:
+        # Its text holds the statement's parameters: for a key, the ciphertext. uvicorn would log it, so neither it
+        # nor its cause leaves this function.
+        db.rollback()
+        logger.warning("ai_chat.provider_save_failed provider=%s error=%s", provider_id, type(exc).__name__)
+        raise HTTPException(status_code=500) from None
     await sessions.MANAGER.close_provider(provider_id)
     return _out(_load(db, provider_id))
 
@@ -264,8 +273,7 @@ async def update_provider(provider_id: int, body: ProviderIn, db: Session = Depe
                           user=Depends(require_admin)):
     _need_keys()
     row = _load(db, provider_id)
-    patch = _clean(body)
-    patch.pop("slug", None)  # immutable
+    patch = _clean(body, ignore=("slug",))  # immutable, and ignored whatever it holds
     current = {f: getattr(row, f) for f in _EDITABLE}
     current["allowed_roles"] = sorted(set(row.allowed_roles or []))
     values = {**current, **patch}
@@ -282,9 +290,15 @@ async def delete_provider(provider_id: int, db: Session = Depends(get_db), _u=De
     row = _load(db, provider_id)
     if db.scalar(select(AiChat.id).where(AiChat.provider_id == provider_id).limit(1)) is not None:
         raise _fail(409, "provider_in_use")  # archived chats count: they keep the approval record
+    slug = row.slug
     db.delete(row)
-    db.commit()
+    try:
+        db.commit()
+    except IntegrityError:  # a chat was created after the check above: the foreign key refuses
+        db.rollback()
+        raise _fail(409, "provider_in_use") from None
     await sessions.MANAGER.close_provider(provider_id)
+    transport.KEYFILES.drop(slug)  # after the close: the plaintext key does not outlive the provider
     return Response(status_code=204)
 
 
@@ -298,16 +312,20 @@ async def generate_key(provider_id: int, db: Session = Depends(get_db), user=Dep
     row.key_created_at, row.last_test_ok, row.updated_by_user_id = _utcnow(), None, user.id
     if "standard" in (row.allowed_roles or []):
         row.enabled = False  # the old key's test no longer holds: disable, install the new key, test, enable
-    # transport.KEYFILES has no per-slug drop: the new key overwrites the old key's file at the next spawn.
-    return await _saved(db, row)
+    out = await _saved(db, row)
+    transport.KEYFILES.drop(out.slug)  # after the close: the old plaintext key goes now, the next spawn writes the new
+    return out
 
 
 @router.post("/{provider_id}/test", response_model=TestResult)
 async def test_connection(provider_id: int, db: Session = Depends(get_db), user=Depends(require_admin)):
     row = _load(db, provider_id)
     snapshot, edited_at = sessions.ProviderSnapshot.from_row(row), row.updated_at
+    # `user` is on this same session (get_current_user shares get_db), and the commit expires it: reading `user.id`
+    # afterwards would open a transaction that stays open for the whole agent run.
+    user_id = user.id
     db.commit()  # ends the read transaction: its connection goes back to the pool, not held across the agent
-    out = await _run_test(snapshot, user.id)
+    out = await _run_test(snapshot, user_id)
     fresh = db.get(AcpProvider, provider_id)
     # A provider edited or deleted meanwhile is not the one that was tested: the result goes back, but is not
     # recorded. `updated_at` catches any admin write (the snapshot has no `enabled`), the snapshot what was tested.
@@ -350,12 +368,13 @@ async def _run_test(snapshot: sessions.ProviderSnapshot, user_id: int) -> dict[s
     out: dict[str, Any] = {"ok": False, "error": None, "stderr_tail": None, "timings_ms": dict.fromkeys(_STEPS),
                            "agent_info": None, "capabilities": None, "tools": []}
     session = sessions.LiveSession(None, user_id, snapshot)
+    carried: list[str] = []  # why the agent never started, when no process was there to write stderr
     try:
         await asyncio.wait_for(_probe(session, out), TEST_TIMEOUT_S)
     except TimeoutError:
         out["error"] = "Test connection timed out."
-    except sessions.AgentUnreachable:
-        out["error"] = "Could not connect."
+    except sessions.AgentUnreachable as exc:
+        out["error"], carried = "Could not connect.", exc.stderr_tail
     except store.KeysNotConfigured:
         raise _fail(503, "keys_not_configured") from None
     except Exception as exc:
@@ -369,5 +388,5 @@ async def _run_test(snapshot: sessions.ProviderSnapshot, user_id: int) -> dict[s
         # session/cancel before EOF and reaps the process.
         await asyncio.wait({sessions.MANAGER._spawn(session.close())})
     if not out["ok"]:  # read after the close, when the drain has reached EOF. Admins only: it can name hosts and paths.
-        out["stderr_tail"] = [line[:_STDERR_LINE_MAX] for line in session.stderr_tail]
+        out["stderr_tail"] = [line[:_STDERR_LINE_MAX] for line in session.stderr_tail or carried]
     return out

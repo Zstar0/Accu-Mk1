@@ -343,6 +343,57 @@ def test_cleanup_that_succeeds_logs_nothing(kf, caplog):
     assert caplog.records == []
 
 
+def test_drop_removes_one_providers_files_and_paths_writes_them_again(kf):
+    pem, _ = generate_keypair()
+    a = kf.paths("jarvis", pem, ED_KEY)
+    b = kf.paths("nova", pem, ED_KEY)
+    kf.drop("jarvis")
+    assert not Path(a[0]).exists() and not Path(a[1]).exists()
+    assert Path(b[0]).read_bytes() == pem and Path(b[1]).exists()  # another provider's files stay
+    assert kf.paths("jarvis", pem, ED_KEY) == a and Path(a[0]).read_bytes() == pem
+
+
+def test_drop_removes_a_key_file_left_half_written(kf):
+    pem, _ = generate_keypair()
+    keyfile, _ = kf.paths("jarvis", pem, ED_KEY)
+    Path(keyfile + ".tmp").write_bytes(pem)  # what a crash between the write and the rename leaves
+    kf.drop("jarvis")
+    assert not Path(keyfile + ".tmp").exists()
+
+
+def test_drop_is_safe_whenever_it_is_called(kf, tmp_path):
+    kf.drop("jarvis")  # before the directory exists
+    assert list(tmp_path.iterdir()) == []
+    pem, _ = generate_keypair()
+    keyfile, _ = kf.paths("jarvis", pem, ED_KEY)
+    kf.drop("jarvis")
+    kf.drop("jarvis")  # files already gone
+    outside = Path(keyfile).parent.parent / "evil.key"
+    outside.write_bytes(b"x")
+    for slug in ("../evil", "a/b", "a b", "x\n", "", None, 5):  # a slug that fails validation names nothing
+        kf.drop(slug)
+    assert outside.read_bytes() == b"x"
+
+
+def test_drop_that_cannot_unlink_warns_without_contents_and_does_not_raise(kf, monkeypatch, caplog):
+    pem, _ = generate_keypair()
+    keyfile, _ = kf.paths("jarvis", pem, ED_KEY)
+    real_unlink = os.unlink
+
+    def refuse(path, *a, **k):
+        if str(path).endswith(".key"):
+            raise PermissionError(f"no, {pem!r}")  # an error that would carry the key if it were logged
+        return real_unlink(path, *a, **k)
+
+    monkeypatch.setattr(transport.os, "unlink", refuse)
+    with caplog.at_level("WARNING", logger="ai_chat.transport"):
+        kf.drop("jarvis")
+    assert [r.levelname for r in caplog.records] == ["WARNING"]
+    msg = caplog.records[0].getMessage()
+    assert "jarvis.key" in msg and "OPENSSH" not in msg and "no," not in msg
+    assert Path(keyfile).read_bytes() == pem  # the failure is reported, not hidden
+
+
 def test_paths_refuses_hostile_slug_and_host_key_and_writes_nothing(kf, tmp_path):
     pem, _ = generate_keypair()
     for slug in ("../evil", "a/b", "a b", "x\n"):

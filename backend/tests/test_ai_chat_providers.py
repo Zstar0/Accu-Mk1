@@ -1,10 +1,12 @@
 """ai_chat.providers: the /admin/acp-providers routes and Test connection (spec 5, 6, 11)."""
 import asyncio
+import os
 import sys
 
 import anyio
 import pytest
-from sqlalchemy import update
+from cryptography.fernet import Fernet
+from sqlalchemy import delete, event, text, update
 
 from ai_chat import providers, sessions, transport
 from ai_chat.models import AcpProvider, AiChat
@@ -267,7 +269,7 @@ async def test_the_test_must_come_from_the_current_settings(ai_chat_api, ai_chat
     assert (resp.status_code, resp.json()["enabled"], resp.json()["last_test_ok"]) == (200, True, None)
     new_host_key = transport.generate_keypair()[1]
     for field, value in (("ssh_host", "192.0.2.31"), ("ssh_user", "other"), ("host_key", new_host_key),
-                         ("allowed_roles", ["admin", "standard"])):
+                         ("session_cwd", "/srv/elsewhere"), ("allowed_roles", ["admin", "standard"])):
         assert (await probe(ai_chat_api, pid))["ok"] is True
         assert stored(ai_chat_env, pid).last_test_ok is True
         resp = await put(ai_chat_api, pid, enabled=False, **{field: value})
@@ -307,6 +309,9 @@ async def test_put_is_partial_and_ignores_slug(ai_chat_api, ai_chat_env):
     assert (resp.status_code, resp.json()["detail"]) == (422, {"code": "invalid_input", "field": "ssh_host"})
     assert stored(ai_chat_env, made["id"]).display_name == "Nova 2"
     assert (await put(ai_chat_api, made["id"])).status_code == 200
+    # The slug is ignored whatever it holds, so an invalid one is no reason to refuse the rest.
+    resp = await put(ai_chat_api, made["id"], slug="NOT VALID", display_name="Nova 3")
+    assert (resp.status_code, resp.json()["slug"], resp.json()["display_name"]) == (200, "nova", "Nova 3")
 
 
 async def test_delete_in_use_conflicts(ai_chat_api, ai_chat_env):
@@ -452,7 +457,7 @@ async def test_failed_tool_check_returns_the_error_and_the_stderr_list(ai_chat_a
     tools_reply(ai_chat_env, tmp_path, "Available tools (0):")
     result = await probe(ai_chat_api, 1)
     assert (result["ok"], result["error"], result["tools"]) == (False, "no tools listed", [])
-    assert isinstance(result["stderr_tail"], list)  # present on every failure (the fake agent's own noise is in it)
+    assert result["stderr_tail"] == []  # present on every failure; this agent wrote nothing to stderr
     tools_reply(ai_chat_env, tmp_path, "not the format we know")
     result = await probe(ai_chat_api, 1)
     assert (result["ok"], result["error"]) == (False, "tool list not readable")
@@ -536,3 +541,108 @@ async def test_a_result_for_edited_settings_is_not_recorded(ai_chat_api, ai_chat
     row = stored(ai_chat_env, 1)
     assert (row.last_test_at, row.last_test_ok) == (None, None)
     assert all(getattr(row, k) == v for k, v in edit.items())
+
+
+@pytest.mark.parametrize("case", ["no key", "rotated secret"])
+async def test_a_key_that_cannot_be_used_is_explained(ai_chat_api, monkeypatch, case):
+    monkeypatch.setattr(sessions, "spawn_command", sessions.ssh_command)  # the real command, which decrypts the key
+    made = await create(ai_chat_api) if case == "no key" else await keyed(ai_chat_api)
+    if case == "rotated secret":
+        monkeypatch.setenv("INTEGRATION_KEYS_SECRET", Fernet.generate_key().decode())
+    result = await probe(ai_chat_api, made["id"])
+    # The agent never started, so the reason travels with the exception: the session's own stderr is empty.
+    assert (result["ok"], result["error"]) == (False, "Could not connect.")
+    assert result["stderr_tail"] == ["provider key cannot be decrypted; generate a new key"]
+
+
+async def test_a_provider_deleted_during_the_test_still_gets_its_answer(ai_chat_api, ai_chat_env, monkeypatch):
+    pid = (await keyed(ai_chat_api))["id"]
+    start = sessions.spawn_command
+
+    def deleted_meanwhile(provider):
+        with ai_chat_env.Session() as s:
+            s.execute(delete(AcpProvider).where(AcpProvider.id == pid))
+            s.commit()
+        return start(provider)
+
+    monkeypatch.setattr(sessions, "spawn_command", deleted_meanwhile)
+    result = await probe(ai_chat_api, pid)
+    assert result["ok"] is True  # the caller still gets the answer
+    assert stored(ai_chat_env, pid) is None  # and nothing was written back
+
+
+# ---- failures on write ----------------------------------------------------------------------------
+
+async def test_a_failed_key_save_leaks_no_ciphertext(ai_chat_api, ai_chat_env, monkeypatch, caplog):
+    tokens, encrypt = [], transport.encrypt_private
+    monkeypatch.setattr(transport, "encrypt_private", lambda pem: tokens.append(encrypt(pem)) or tokens[-1])
+    with ai_chat_env.Session() as s:  # the commit fails, and SQLAlchemy puts the statement's parameters in its text
+        s.execute(text("CREATE TRIGGER boom BEFORE UPDATE ON acp_providers BEGIN SELECT RAISE(ABORT, 'boom'); END"))
+        s.commit()
+    before = stored(ai_chat_env, 1)
+    caplog.set_level("DEBUG")
+    resp = await call(ai_chat_api, "POST", f"{URL}/1/key")
+    assert resp.status_code == 500
+    assert len(tokens) == 1
+    seen = resp.text + caplog.text
+    assert tokens[0][10:50] not in seen and tokens[0][-50:-10] not in seen and "PRIVATE KEY" not in seen
+    assert "IntegrityError" in caplog.text  # the type is logged, nothing else
+    after = stored(ai_chat_env, 1)
+    assert (after.public_key, after.private_key_ciphertext) == (before.public_key, before.private_key_ciphertext)
+
+
+async def test_a_chat_created_during_delete_is_provider_in_use(ai_chat_api, ai_chat_env):
+    pid = (await create(ai_chat_api))["id"]
+    engine = ai_chat_env.Session.kw["bind"]
+    # SQLite enforces foreign keys only when asked, as Postgres does always.
+    event.listen(engine, "checkout", lambda dbapi, record, proxy: dbapi.execute("PRAGMA foreign_keys=ON"))
+    arrived = []
+
+    def chat_arrives(session):  # after the in-use check, before the DELETE reaches the database
+        if not arrived:
+            arrived.append(True)
+            with ai_chat_env.Session() as other:
+                other.add(AiChat(user_id=1, provider_id=pid))
+                other.commit()
+
+    event.listen(ai_chat_env.Session, "before_commit", chat_arrives)
+    resp = await call(ai_chat_api, "DELETE", f"{URL}/{pid}")
+    assert (resp.status_code, resp.json()["detail"]) == (409, {"code": "provider_in_use"})
+    assert stored(ai_chat_env, pid) is not None
+
+
+# ---- plaintext key files ------------------------------------------------------------------------
+
+@pytest.fixture
+def key_dir(tmp_path, monkeypatch):
+    """The app's KEYFILES replaced by one rooted in tmp_path, removed afterwards."""
+    (tmp_path / "keys").mkdir()
+    files = transport.KeyFiles(str(tmp_path / "keys"))
+    monkeypatch.setattr(transport, "KEYFILES", files)
+    yield files
+    files.cleanup()
+
+
+def leave_files(env, files, provider_id: int) -> tuple[str, str]:
+    """This provider's key and known_hosts files, as a spawn would have left them."""
+    row = stored(env, provider_id)
+    paths = files.paths(row.slug, transport.decrypt_private(row.private_key_ciphertext), row.host_key)
+    assert all(os.path.exists(p) for p in paths)
+    return paths
+
+
+async def test_delete_removes_the_plaintext_key_files(ai_chat_api, ai_chat_env, key_dir):
+    pid = (await keyed(ai_chat_api))["id"]
+    other = (await keyed(ai_chat_api, slug="other"))["id"]
+    keyfile, known_hosts = leave_files(ai_chat_env, key_dir, pid)
+    other_key, other_hosts = leave_files(ai_chat_env, key_dir, other)
+    assert (await call(ai_chat_api, "DELETE", f"{URL}/{pid}")).status_code == 204
+    assert not os.path.exists(keyfile) and not os.path.exists(known_hosts)
+    assert os.path.exists(other_key) and os.path.exists(other_hosts)  # only this provider's
+
+
+async def test_key_generation_removes_the_old_plaintext_key_files(ai_chat_api, ai_chat_env, key_dir):
+    pid = (await keyed(ai_chat_api))["id"]
+    keyfile, known_hosts = leave_files(ai_chat_env, key_dir, pid)
+    assert (await call(ai_chat_api, "POST", f"{URL}/{pid}/key")).status_code == 200
+    assert not os.path.exists(keyfile) and not os.path.exists(known_hosts)

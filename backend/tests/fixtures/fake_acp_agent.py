@@ -33,6 +33,7 @@ import asyncio
 import json
 import os
 import time
+import warnings
 from pathlib import Path
 
 import acp
@@ -49,6 +50,11 @@ from acp.schema import (
     SessionResumeCapabilities,
     ToolCallUpdate,
 )
+
+# acp 0.12.1 under the pinned pydantic: serializing a session update (`conn.session_update`) warns, once per update,
+# that it cannot read the union's discriminator and fell back to left-to-right matching. The bytes sent are right.
+# That is this process's stderr, which a failed Test connection returns, so tests that compare it must not see it.
+warnings.filterwarnings("ignore", message="Pydantic serializer warnings", category=UserWarning)
 
 # Verbatim copy of T7A in test_ai_chat_context.py (the phase0 2026-11-03 `/tools` reply).
 T7A = ("Available tools (3):\n  mcp__mk1__create_flag: Raise a flag on a sample. The user must approve it in Mk1 first, which can ta...\n"

@@ -209,6 +209,25 @@ class KeyFiles:
             _write(known_hosts, f"{slug} {host_key}\n".encode())
         return keyfile, known_hosts
 
+    def drop(self, slug: str) -> None:
+        """Delete one provider's files (its row was deleted, or its key replaced), so the plaintext key does not
+        outlive its use. Never raises: a slug that fails validation names nothing, a missing file is fine, and a file
+        that cannot be removed is reported (path only). A spawn that races this just writes the files again, and
+        `cleanup()` is the backstop for those."""
+        if not isinstance(slug, str) or _SLUG.fullmatch(slug) is None:
+            return
+        with self._lock:
+            if self._dir is None:
+                return
+            for name in (f"{slug}.key", f"{slug}.key.tmp", f"{slug}.known_hosts"):
+                path = os.path.join(self._dir, name)
+                try:
+                    os.unlink(path)
+                except FileNotFoundError:
+                    pass
+                except OSError:
+                    logger.warning("ai_chat.keyfile_drop_failed file=%s", path)  # a path only, never contents
+
     def cleanup(self) -> None:
         with self._lock:
             d, self._dir = self._dir, None

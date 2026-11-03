@@ -159,7 +159,7 @@ async def ai_chat_api(ai_chat_env):
     from datetime import datetime
 
     import httpx
-    from fastapi import Header
+    from fastapi import Depends, Header
 
     import main
     import models
@@ -182,11 +182,10 @@ async def ai_chat_api(ai_chat_env):
         finally:
             db.close()
 
-    def _user(x_test_user: int = Header(1)):
-        with Session() as s:
-            user = s.get(models.User, x_test_user)
-            s.expunge(user)
-        return user
+    def _user(x_test_user: int = Header(1), db=Depends(get_db)):
+        # Loaded on the request's own session, like the real get_current_user: a test that holds the user's row
+        # across an await therefore sees the connection it keeps checked out.
+        return db.get(models.User, x_test_user)
 
     main.app.dependency_overrides[get_db] = _db
     main.app.dependency_overrides[get_current_user] = _user
