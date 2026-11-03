@@ -30,8 +30,9 @@ VALID_SECTIONS = frozenset({
     "tasks",
 })
 TARGET_KINDS = frozenset({"sample", "order", "customer", "document", "worksheet"})
-ID_RE = re.compile(r"^[A-Za-z0-9._-]{1,64}$")  # always used with fullmatch, so "$" cannot admit a trailing newline
-SUBSECTION_RE = re.compile(r"^[a-z0-9-]{1,48}$")
+# Both patterns are unanchored on purpose: they are only used with fullmatch, which cannot be fooled by a trailing newline.
+ID_RE = re.compile(r"[A-Za-z0-9._-]{1,64}")
+SUBSECTION_RE = re.compile(r"[a-z0-9-]{1,48}")
 
 
 def _valid_id(value: object) -> bool:
@@ -71,27 +72,31 @@ def render_context_block(ctx: dict) -> str:
     )
 
 
-_RECAP_CLOSE = re.compile(r"</(?=mk1_earlier_conversation)", re.IGNORECASE)
+_RECAP_ROLES = frozenset({"user", "assistant"})
 
 
 def render_recap(messages: list[tuple[str, str]], max_chars: int = 4000) -> str | None:
     """The `<mk1_earlier_conversation>` block for `messages` (oldest first, `(role, text)`), or None if empty.
+
+    Only `user` and `assistant` messages are used; rows with any other role (permission rows and the like)
+    are skipped before the budget is applied, and None is returned when none are left.
 
     Keeps whole messages from the newest backwards while the message lines fit in `max_chars` (lines joined
     by newlines; the block's own header and footer are not counted). It stops at the first message that
     does not fit, so the history is always a contiguous tail. If even the newest alone is too long, it is
     kept, cut to `max_chars` and ended with `...`.
 
-    Stored text is data and cannot forge structure. A `</mk1_earlier_conversation` in it is rewritten as
-    `&lt;/mk1_earlier_conversation`, and every line break in it (including `\\r`, `\\x85`, `\\u2028`) becomes a
-    newline plus two spaces, so only the `user:` / `assistant:` lines Mk1 writes start at column 0.
+    Stored text is data and cannot forge structure. Every `<` in it is written as `&lt;`, so no tag, ours or
+    anyone's, can open or close in it, and every line break in it (including `\\r`, `\\x85`, `\\u2028`)
+    becomes a newline plus two spaces, so only the `user:` / `assistant:` lines Mk1 writes start at column 0.
     """
+    messages = [(role, text) for role, text in messages if role in _RECAP_ROLES]
     if not messages:
         return None
     kept: list[str] = []
     used = 0
     for role, text in reversed(messages):
-        text = "\n  ".join(_RECAP_CLOSE.sub("&lt;/", text).splitlines())
+        text = "\n  ".join(text.replace("<", "&lt;").splitlines())
         line = f"{role}: {text}"
         cost = len(line) + (1 if kept else 0)
         if used + cost > max_chars:
@@ -108,32 +113,50 @@ def render_recap(messages: list[tuple[str, str]], max_chars: int = 4000) -> str 
     )
 
 
-_TOOLS_HEADER = re.compile(r"^Available tools \((\d+)\):")
-_TOOL_LINE = re.compile(r"^  (\S+?):")
-_MK1_TOOL_PREFIX = "mcp__mk1__"
-_STANDARD_EXTRA_TOOLS = frozenset({"todo_list"})
+_TOOLS_HEADER = re.compile(r"Available tools \(([0-9]{1,4})\):")  # used with fullmatch: ASCII digits only, bounded
+_TOOL_LINE = re.compile(r"^  ([A-Za-z0-9_.-]{1,128}):(?: |$)")
+_HIDDEN_NOTE = re.compile(r"\b([0-9]{1,4})\s+additional tools?\b", re.IGNORECASE)
+_STANDARD_TOOLS = frozenset({"todo_list"})
 
 
 def parse_tools_reply(text: str) -> list[str] | None:
-    """Tool names from the agent's `/tools` reply, or None when it is not the format we know.
+    """Tool names from the agent's `/tools` reply, or None when it is not exactly the format we know.
 
-    The first line (after stripping) must be `Available tools (N):`. Names come from the `  name: ...`
-    lines below it, and other lines (for example the tool-search note) are ignored. Returns None when
-    the header is missing or the number of names is not N, so a half-read list never passes the check.
+    This feeds a security check, so it fails closed. The first line (stripped) must be `Available tools (N):`
+    with N one to four ASCII digits. Every other non-blank line must be a tool line (`  name: description`,
+    name from `A-Za-z0-9_.-`) or a hidden-tools note (`... N additional tools ...`, which Hermes prints when
+    tool search hides names). A note adds the entry `<N hidden tools>`, which no allowlist contains, so a
+    standard provider cannot pass with hidden tools while an admin-only one still can. Any other line makes
+    the whole reply unreadable (None), as does a count N that differs from the number of tool lines
+    (notes are not counted).
     """
     lines = text.strip().splitlines()
-    header = _TOOLS_HEADER.match(lines[0]) if lines else None
+    header = _TOOLS_HEADER.fullmatch(lines[0].strip()) if lines else None
     if header is None:
         return None
-    names = [m.group(1) for m in map(_TOOL_LINE.match, lines[1:]) if m]
-    return names if len(names) == int(header.group(1)) else None
+    names: list[str] = []
+    tool_lines = 0
+    for line in lines[1:]:
+        if not line.strip():
+            continue
+        if tool := _TOOL_LINE.match(line):
+            names.append(tool.group(1))
+            tool_lines += 1
+        elif note := _HIDDEN_NOTE.search(line):
+            names.append(f"<{int(note.group(1))} hidden tools>")
+        else:
+            return None
+    return names if tool_lines == int(header.group(1)) else None
 
 
-def check_tools(names: list[str] | None, allowed_roles: list[str]) -> str | None:
+def check_tools(names: list[str] | None, allowed_roles: list[str],
+                mk1_tools: frozenset[str] = frozenset()) -> str | None:
     """None when the tool list is acceptable for a provider with these allowed roles, else a one-line reason.
 
     An empty or unreadable list always fails. When `standard` is among the roles, every tool must be
-    `todo_list` or start with `mcp__mk1__`; the reason names the first offender only.
+    `todo_list` or exactly one of `mk1_tools` (no prefix matching: a name that merely starts like a Mk1
+    tool is not one). Callers that inject no Mk1 tools pass nothing, so such a provider passes only with
+    `todo_list`. The reason names the first offender only.
     """
     if names is None:
         return "tool list not readable"
@@ -141,6 +164,6 @@ def check_tools(names: list[str] | None, allowed_roles: list[str]) -> str | None
         return "no tools listed"
     if "standard" in allowed_roles:
         for name in names:
-            if name not in _STANDARD_EXTRA_TOOLS and not name.startswith(_MK1_TOOL_PREFIX):
+            if name not in _STANDARD_TOOLS and name not in mk1_tools:
                 return f"tool not allowed for standard users: {name[:64]}"
     return None
