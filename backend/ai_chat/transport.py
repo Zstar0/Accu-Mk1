@@ -12,6 +12,7 @@ import base64
 import binascii
 import hashlib
 import ipaddress
+import logging
 import os
 import re
 import shutil
@@ -23,15 +24,19 @@ from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 
 from integration_keys import store
 
+logger = logging.getLogger(__name__)
 _SLUG = re.compile(r"[a-z0-9-]{2,32}")
 _USER = re.compile(r"[a-z_][a-z0-9_-]{0,31}")
 _LABEL = re.compile(r"[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?")  # RFC 1123 label, never starts with "-"
 _HOST_KEY = re.compile(r"(?:ssh-ed25519|ecdsa-sha2-nistp(?:256|384|521)|ssh-rsa) [A-Za-z0-9+/]+={0,3}")
 _PUBLIC_KEY = re.compile(r"ssh-ed25519 [A-Za-z0-9+/]+={0,3}")  # the only key type Mk1 generates
 _PATH = re.compile(r"/[A-Za-z0-9._/-]{0,255}")
-# A file path that rides inside an ssh `-o Option=<path>` string: ssh splits that on whitespace, honours
-# quotes and expands `%` tokens, so none of those may appear.
-_ARG_PATH = re.compile(r"[^\s\x00-\x1f\x7f\"'%]{1,4096}")
+# A file path that rides inside an ssh `-o Option=<path>` string. ssh splits that string on whitespace,
+# honours quotes, and expands `%` tokens and `${VAR}` environment references in file options, so this
+# rejects whitespace, control characters, quotes, `%` and `$`. It does not try to block anything else
+# (a backslash is allowed for Windows dev paths, where ssh is never spawned); callers pass absolute
+# paths they built themselves.
+_ARG_PATH = re.compile(r"[^\s\x00-\x1f\x7f\"'%$]{1,4096}")
 
 
 def _match(rx: re.Pattern[str], value: object, field: str) -> str:
@@ -75,7 +80,20 @@ def validate_host(s: object) -> str:
 
 
 def validate_host_key(s: object) -> str:
-    return _match(_HOST_KEY, s, "host_key")
+    """`<keytype> <base64>` whose blob decodes and opens with its own key type, as ssh itself requires.
+
+    The decode check is what lets `fingerprint` run on any stored host key without raising.
+    """
+    _match(_HOST_KEY, s, "host_key")
+    keytype, b64 = s.split(" ")
+    try:
+        blob = base64.b64decode(b64, validate=True)
+    except binascii.Error:
+        raise ValueError("host_key") from None
+    n = len(keytype)  # the blob starts with a uint32 length, then the type string
+    if blob[:4] != n.to_bytes(4, "big") or blob[4:4 + n] != keytype.encode():
+        raise ValueError("host_key")
+    return s
 
 
 def validate_from_ip(s: object) -> str:
@@ -195,7 +213,9 @@ class KeyFiles:
         with self._lock:
             d, self._dir = self._dir, None
             if d is not None:
-                shutil.rmtree(d, ignore_errors=True)
+                shutil.rmtree(d, ignore_errors=True)  # keeps going past one failure, so check afterwards
+                if os.path.exists(d):
+                    logger.warning("ai_chat.keyfiles_cleanup_incomplete dir=%s", d)  # a path only, never contents
 
 
 KEYFILES = KeyFiles()

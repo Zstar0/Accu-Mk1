@@ -28,6 +28,21 @@ from integration_keys import store
 
 ED_KEY = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIMR/YW4CFNOosryx/jlJSanzDGJ/mMQWbPpsN/qO2t8l"
 ED_KEY_FPR = "SHA256:uaiifYCziLaZiVJFa7gWeH1DphLhPkUioVT1Em0berk"  # ssh-keygen -lf of the key above
+# Real public keys of every accepted type (throwaway pairs, private halves deleted) with the fingerprint
+# `ssh-keygen -lf` printed for each. A host key `validate_host_key` accepts must fingerprint to exactly this.
+GOOD_HOST_KEYS = {
+    ED_KEY: ED_KEY_FPR,
+    "ecdsa-sha2-nistp256 AAAAE2VjZHNhLXNoYTItbmlzdHAyNTYAAAAIbmlzdHAyNTYAAABBBFdT0TNNtrWwyEsM2Tmbg1oQ4lZZxVJJmwxyDd62aAZigLpeozchB8WrTWjlEcGphcTuiUOBzYk+nZr1/E7iHzU=":
+        "SHA256:4hv1KtnkTYno7ZGvWw3C8xuGdLWiWSnNGZ/xgAw4z8w",
+    "ecdsa-sha2-nistp384 AAAAE2VjZHNhLXNoYTItbmlzdHAzODQAAAAIbmlzdHAzODQAAABhBG/zfRPXZN3f0IcPJsq/j/OfTc693sSwlcEE8465F8bfztqXX9mh/FyvGs4aaULU7qdyKEvqVby2HJCYu9P2gPnR5TOWWXqA7Apo+vW6jqj8Oe58pFp7pWbm8VUEyOO03A==":
+        "SHA256:MTe/CZozW1akrSR8VyNyTLFzj0MM86SYKqzK6r7ZJvA",
+    "ecdsa-sha2-nistp521 AAAAE2VjZHNhLXNoYTItbmlzdHA1MjEAAAAIbmlzdHA1MjEAAACFBAAyftGW2C1ZVVATB1DuY4BMj4CN5ULVmTzz+IIi9u0zNRDB4pueV2u/zR5ilebyBZ+KMxi4v89I6SUz3hkIBkXcKwHq/MwcekXR2i1bMt3FSCkNYjosO02iGUyNGzRH/Wnsznfhxv2hx+oGnd3/nCU0QTI+3iulQsUJpX0RkPLAk46/Vg==":
+        "SHA256:gd6E13xqxJfwIMYJ74yOQE9MMvTnlNijmK6B5nmMF+I",
+    "ssh-rsa AAAAB3NzaC1yc2EAAAADAQABAAABAQDXd3eYy5OvrKSz/dPOuZhPc4S7fxWQmd5OFlTLymy623Q2gVkglc6PnLnCK4K22xlK6+ozXqfyEZ7otBRF4UsRk13iTMFUfF3GAlf/qQ6dPki6HHGqTqtBDEpvTxNQcTw97ffYa9RV1OW5DDLuWo5D59hHCj8yMgLqzKXW9vZ44qKYzz5V0AX6AqpByw20Rnzgd0d46Yvt0oyFvlV0FsDTSIQ/rin2o+GpDbJj3e84dYYQC3RC2Z0c1BHfQ7R5SVLCUAqr0mphISmy8S+2vLID5P/+FIQ9MYiI/2RtwdE6ruAR7ALQQNweNm7BeIFwBPNHnCsQJx9i0VXDoVHc0Ep9":
+        "SHA256:Q6Ovy+YbkUgw+/fpjTXbMkz/Sjuct3MsAozbO/HxaXE",
+}
+ED_BLOB = ED_KEY.split(" ")[1]
+RSA_BLOB = next(k for k in GOOD_HOST_KEYS if k.startswith("ssh-rsa ")).split(" ")[1]
 JARVIS = dict(host="100.68.141.122", port=22, user="hermes-tars", slug="jarvis", keyfile="/k", known_hosts="/h")
 
 
@@ -82,16 +97,25 @@ def test_good_slug_accepted(slug):
 
 @pytest.mark.parametrize("key", [
     "", "ssh-ed25519", "ssh-ed25519 ", ED_KEY + "\n", ED_KEY + "\nssh-rsa AAAA", ED_KEY + " comment",
-    "ssh-dss AAAA", "ssh-ed25519  AAAA", "@cert-authority ssh-ed25519 AAAA", "ssh-ed25519 AA=AA", "ssh-ed25519 A====", None])
+    "ssh-dss AAAA", "ssh-ed25519  AAAA", "@cert-authority ssh-ed25519 AAAA", "ssh-ed25519 AA=AA", "ssh-ed25519 A====", None,
+    # Shape-valid but not a real key: bad base64, then a decodable blob that does not open with the declared type.
+    "ssh-ed25519 AAAAA", "ecdsa-sha2-nistp521 AAAA==", "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIOTHER",
+    "ssh-ed25519 AAAA", "ssh-rsa " + ED_BLOB, "ecdsa-sha2-nistp256 " + ED_BLOB,
+    "ssh-ed25519 " + RSA_BLOB])
 def test_bad_host_key_rejected(key):
-    with pytest.raises(ValueError, match="host_key"):
+    with pytest.raises(ValueError, match="^host_key$"):
         validate_host_key(key)
 
 
-@pytest.mark.parametrize("key", [ED_KEY, "ecdsa-sha2-nistp256 AAAAE2VjZHNh", "ecdsa-sha2-nistp521 AAAA==",
-                                 "ssh-rsa AAAAB3NzaC1yc2E="])
+@pytest.mark.parametrize("key", list(GOOD_HOST_KEYS))
 def test_good_host_key_accepted(key):
     assert validate_host_key(key) == key
+
+
+@pytest.mark.parametrize("key,fpr", list(GOOD_HOST_KEYS.items()))
+def test_every_accepted_host_key_fingerprints_cleanly(key, fpr):
+    # The admin list endpoint fingerprints every stored host key: validation must never admit one that raises.
+    assert fingerprint(validate_host_key(key)) == fpr
 
 
 @pytest.mark.parametrize("ip", ["", "host", "100.120.92.93\n", "100.120.92.0/24", "1.2.3", "fe80::1%eth0", " 1.2.3.4", None])
@@ -148,7 +172,8 @@ def test_argv_is_exactly_the_spec_section_6_argv():
     ("slug", "a b", "slug"), ("slug", "x\n", "slug"),
     ("keyfile", "", "keyfile"), ("keyfile", "/k -o ProxyCommand=x", "keyfile"), ("keyfile", "/k\n", "keyfile"),
     ("known_hosts", "", "known_hosts"), ("known_hosts", "/h /etc/passwd", "known_hosts"),
-    ("known_hosts", "/h%d", "known_hosts"), ("known_hosts", '/h"x', "known_hosts"), ("known_hosts", None, "known_hosts")])
+    ("known_hosts", "/h%d", "known_hosts"), ("known_hosts", '/h"x', "known_hosts"), ("known_hosts", None, "known_hosts"),
+    ("known_hosts", "/${HOME}/h", "known_hosts"), ("keyfile", "$HOME/k", "keyfile"), ("keyfile", "/k'x", "keyfile")])
 def test_argv_rejects_hostile_field(field, bad, name):
     with pytest.raises(ValueError, match=f"^{name}$"):
         build_ssh_argv(**{**JARVIS, field: bad})
@@ -175,7 +200,7 @@ def test_fingerprint_matches_ssh_keygen_vector():
 
 @pytest.mark.parametrize("line", ["", "ssh-ed25519", "ssh-ed25519 !!!!", "ssh-ed25519 AAA", None])
 def test_fingerprint_rejects_garbage(line):
-    with pytest.raises(ValueError):
+    with pytest.raises(ValueError, match="^public_line$"):
         fingerprint(line)
 
 
@@ -273,7 +298,8 @@ def test_rewrites_only_when_content_changed(kf, monkeypatch):
     assert kf.paths("jarvis", other_pem, ED_KEY) == first
     assert writes == ["jarvis.key"] and Path(first[0]).read_bytes() == other_pem
     writes.clear()
-    new_host_key = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIOTHER"
+    new_host_key = generate_keypair()[1]  # a different, real ed25519 public key
+    assert new_host_key != ED_KEY and validate_host_key(new_host_key) == new_host_key
     assert kf.paths("jarvis", other_pem, new_host_key) == first
     assert writes == ["jarvis.known_hosts"] and Path(first[1]).read_text() == f"jarvis {new_host_key}\n"
 
@@ -293,6 +319,28 @@ def test_cleanup_removes_the_directory_and_paths_recreates_it(kf):
     kf.cleanup()  # idempotent
     again, _ = kf.paths("jarvis", pem, ED_KEY)
     assert Path(again).read_bytes() == pem
+
+
+def test_cleanup_that_leaves_the_directory_behind_warns_once_without_contents(kf, monkeypatch, caplog):
+    pem, _ = generate_keypair()
+    keyfile, _ = kf.paths("jarvis", pem, ED_KEY)
+    leftover = Path(keyfile).parent
+    real_rmtree = transport.shutil.rmtree
+    monkeypatch.setattr(transport.shutil, "rmtree", lambda *a, **k: None)  # removal fails: the directory stays
+    with caplog.at_level("WARNING", logger="ai_chat.transport"):
+        kf.cleanup()
+    assert [r.levelname for r in caplog.records] == ["WARNING"]
+    msg = caplog.records[0].getMessage()
+    assert str(leftover) in msg and "OPENSSH" not in msg and ED_BLOB not in msg
+    real_rmtree(leftover)
+
+
+def test_cleanup_that_succeeds_logs_nothing(kf, caplog):
+    pem, _ = generate_keypair()
+    kf.paths("jarvis", pem, ED_KEY)
+    with caplog.at_level("WARNING", logger="ai_chat.transport"):
+        kf.cleanup()
+    assert caplog.records == []
 
 
 def test_paths_refuses_hostile_slug_and_host_key_and_writes_nothing(kf, tmp_path):
