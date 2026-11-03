@@ -158,7 +158,7 @@ const PROBLEM_COPY: Record<string, string> = {
   // no number left in it at the precision the result is carried onward in, which is coarser
   // than the four places the engine publishes.
   quantity_below_precision:
-    'The quantity works out too small to report, so it is not a result. Check the declared volume or the stock vial weighings, and the dilution vial weighings: a volume much smaller than the prep intended gives a quantity like this.',
+    "The quantity works out too small to report, so it is not a result. Check the peak areas and the calibration curve, and the declared volume and the stock vial weighings: a peak area barely above the curve's intercept, or a volume much smaller than the prep intended, gives a quantity like this.",
   quantity_not_finite:
     'A value is too large for the calculation to handle. Check the dilution and intermediate vial weighings, the stock volume, the peak areas and the calibration curve; if those look right, raise it with the lab manager.',
 }

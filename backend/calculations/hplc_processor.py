@@ -456,7 +456,7 @@ def calculate_dilution_factor(
         dilution_problem = "no_density"
     elif diluent_vol_ul is None:  # past the checks above, only an overflow gets here
         dilution_problem = "diluent"
-    elif dilution_factor is None:  # the sample volume, the total or the factor overflowed
+    elif dilution_factor is None:  # overflowed, or the sample volume underflowed to nothing
         dilution_problem = "stock"
 
     # Stock volume (mL) for the prep form. The stock-leg problem is decided by

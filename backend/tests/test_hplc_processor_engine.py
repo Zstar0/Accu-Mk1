@@ -1628,8 +1628,8 @@ def test_a_stock_volume_that_rounds_to_zero_is_not_a_quantity(overrides, code):
 
 # A stock leg of 0.005 mg: 5.0145e-6 mL, which SURVIVES the six-place rounding as 5e-06,
 # so the guards above do not fire. On this row (concentration 822.9454 ug/mL, total factor
-# 6.613877) the mass it makes is 2.72e-5 mg, which rounds to 0.0 at the four places the
-# quantity is published in.
+# 6.613877) the mass it makes is 2.72e-5 mg, which rounds to 0.0 at SUBMITTED_MG_PLACES,
+# the precision the result is carried onward in.
 SMALL_SURVIVING_STOCK_LEG = replace(
     FORWARD_WEIGHTS, stock_vial_with_diluent=FORWARD_WEIGHTS.stock_vial_empty + 0.005
 )
@@ -1648,9 +1648,11 @@ SMALL_SURVIVING_STOCK_LEG = replace(
     ids=["liquid_declared_volume", "powder_stock_leg", "publishes_as_a_number_submits_as_zero"],
 )
 def test_a_quantity_that_rounds_to_zero_is_not_a_result(overrides):
-    # The same false zero one layer down: the INPUTS are guarded above, but the mass is
-    # published as round(mass_mg, 4), so a volume and a total that each survive their own
-    # rounding can still multiply out below 0.00005 mg and publish as 0.0 with no problem.
+    # The same false zero one layer down: the INPUTS are guarded above, so a volume and a
+    # total that each survive their own rounding can still multiply out to a mass with no
+    # number left in it at SUBMITTED_MG_PLACES and publish as 0.0 with no problem. The guard
+    # is at that precision rather than the engine's own four, which is why the third row
+    # below publishes 0.0001 mg, above four places' own threshold, and is still refused.
     result = process_hplc_analysis(replace(_FORWARD_INPUT, **overrides))
     dilution = result["calculation_trace"]["dilution"]
     # The premise: nothing the dilution computed is a problem, and both values the mass is

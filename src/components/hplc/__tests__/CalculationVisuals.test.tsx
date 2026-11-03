@@ -112,7 +112,7 @@ const PROBLEM_WORDING = {
   quantity_not_finite:
     'A value is too large for the calculation to handle. Check the dilution and intermediate vial weighings, the stock volume, the peak areas and the calibration curve; if those look right, raise it with the lab manager.',
   quantity_below_precision:
-    'The quantity works out too small to report, so it is not a result. Check the declared volume or the stock vial weighings, and the dilution vial weighings: a volume much smaller than the prep intended gives a quantity like this.',
+    "The quantity works out too small to report, so it is not a result. Check the peak areas and the calibration curve, and the declared volume and the stock vial weighings: a peak area barely above the curve's intercept, or a volume much smaller than the prep intended, gives a quantity like this.",
 }
 
 // One row per code, captured from process_hplc_analysis (not hand-built): the dilution
@@ -342,8 +342,9 @@ const CAPTURED_ROWS = {
     },
   },
   // A sound powder row whose stock leg is 0.05 mg: the stock volume survives its own
-  // rounding as 5e-05 mL, and the mass it makes (2.43e-5 mg) rounds away at the four
-  // places the quantity is published in. No weighing here is wrong.
+  // rounding as 5e-05 mL, and the mass it makes (2.43e-5 mg) rounds away at the precision
+  // the result is carried onward in, which is coarser than the four places the engine
+  // publishes. No weighing here is wrong, which is why this code is not a leg's.
   quantity_below_precision: {
     dilution: {
       diluent_mass_mg: 1234.66,
