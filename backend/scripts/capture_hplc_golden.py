@@ -191,7 +191,9 @@ def input_from_case(case):
         peptide=PeptideParams(reference_rt=None, rt_tolerance=0.5, diluent_density=case["diluent_density"]),
         # Absent keys are the defaults, which is every case captured before the form existed.
         intermediate=None if intermediate is None else IntermediateWeights(**intermediate),
-        form=case.get("prep_form", DEFAULT_PREP_FORM),
+        # `or`, not a default: a case carrying "prep_form": None must read as the default
+        # too, because stock_volume_ml raises ValueError on None. build_case does the same.
+        form=case.get("prep_form") or DEFAULT_PREP_FORM,
         declared_volume_ml=case.get("declared_volume_ml"),
     )
 
