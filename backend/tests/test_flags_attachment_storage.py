@@ -30,6 +30,21 @@ def test_filesystem_refuses_traversal(tmp_path):
         s.fetch("../escape")
 
 
+def test_s3_prefix_nests_under_the_photo_prefix(monkeypatch):
+    """Prod's IAM key is scoped to the photo prefix: a top-level
+    flag-attachments/ was AccessDenied there, so the default lives inside it."""
+    from main import _flag_attach_s3_prefix
+    monkeypatch.delenv("MK1_FLAG_ATTACH_S3_PREFIX", raising=False)
+    monkeypatch.delenv("MK1_PHOTO_S3_PREFIX", raising=False)
+    assert _flag_attach_s3_prefix() == "sub-sample-photos/flag-attachments/"
+    monkeypatch.setenv("MK1_PHOTO_S3_PREFIX", "stack-photos")  # no trailing slash
+    assert _flag_attach_s3_prefix() == "stack-photos/flag-attachments/"
+    monkeypatch.setenv("MK1_FLAG_ATTACH_S3_PREFIX", "elsewhere/")
+    assert _flag_attach_s3_prefix() == "elsewhere/"
+    monkeypatch.setenv("MK1_FLAG_ATTACH_S3_PREFIX", "")  # set-but-empty = bucket root, as before
+    assert _flag_attach_s3_prefix() == ""
+
+
 def test_singleton_override_for_tests():
     from flags import seams
     mem = seams.InMemoryAttachmentStorage()

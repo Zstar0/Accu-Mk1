@@ -27,6 +27,7 @@ import { ClipboardList } from 'lucide-react'
 import { useWorksheetDrawer } from '@/hooks/use-worksheet-drawer'
 import { useUIStore } from '@/store/ui-store'
 import { FlagsHeaderButton } from '@/components/flags/FlagsHeaderButton'
+import { TasksHeaderButton } from '@/components/tasks/TasksHeaderButton'
 import { QuickNav } from './QuickNav'
 import { FlagsFlyout } from '@/components/flags/FlagsFlyout'
 import { useFlagStreamGlue } from '@/components/flags/use-flag-stream-glue'
@@ -177,6 +178,7 @@ export function MainWindow() {
               <QuickNav />
               <div className="ml-auto flex items-center gap-2">
                 <WorksheetHeaderButton />
+                <TasksHeaderButton />
                 <FlagsHeaderButton />
               </div>
             </header>

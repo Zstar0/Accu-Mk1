@@ -405,6 +405,20 @@ def seed_default_settings(db: Session):
     db.commit()
 
 
+def _flag_attach_s3_prefix() -> str:
+    """flag-attachments/ NESTED UNDER the vial-photo prefix, like documents.
+    Prod's IAM key is scoped to the photo prefix, so the old top-level default
+    was AccessDenied on every upload (prod logs 2026-10-29).
+    MK1_FLAG_ATTACH_S3_PREFIX still overrides; set-but-empty means bucket root."""
+    explicit = os.environ.get("MK1_FLAG_ATTACH_S3_PREFIX")
+    if explicit is not None:
+        return explicit
+    photo = os.environ.get("MK1_PHOTO_S3_PREFIX", "sub-sample-photos/")
+    if photo and not photo.endswith("/"):
+        photo += "/"
+    return f"{photo}flag-attachments/"
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Initialize database on startup and seed defaults."""
@@ -427,8 +441,7 @@ async def lifespan(app: FastAPI):
 
         class _S3FlagAttachmentStorage:
             def __init__(self):
-                self._s3 = S3PhotoStorage(
-                    prefix=os.environ.get("MK1_FLAG_ATTACH_S3_PREFIX", "flag-attachments/"))
+                self._s3 = S3PhotoStorage(prefix=_flag_attach_s3_prefix())
 
             def save(self, flag_id, data, filename):
                 return self._s3.save_photo(flag_id, data, filename)
