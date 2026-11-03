@@ -406,38 +406,118 @@ describe('ProfileCoaVariantsSection', () => {
     expect(within(card('Nasal Spray')).getByText('Unsaved')).toBeVisible()
   })
 
-  it('a save refused because the version was stopped elsewhere keeps the card, the edits and the tag', async () => {
-    const refused =
-      'this version is no longer in use; add the form again to change its text'
-    vi.mocked(patchProfileCoaVariant).mockRejectedValueOnce(new Error(refused))
-    renderSection()
-    await openCard('Nasal Spray')
-    await pick('Method', 'Leave off')
-    // The refetch comes back without the row, which is what the 409 means.
-    vi.mocked(listProfileCoaVariants).mockResolvedValue([])
-    await user.click(
-      screen.getByRole('button', { name: 'Save Nasal Spray text' })
-    )
-    expect(toast.error).toHaveBeenCalledWith(refused)
-    await waitFor(() =>
-      expect(screen.getByRole('button', { name: 'Cancel' })).toBeEnabled()
-    )
-    expect(listProfileCoaVariants).toHaveBeenCalledTimes(2)
-    expect(
-      within(row('Method')).getByText('Not printed on Nasal Spray COAs')
-    ).toBeVisible()
-    expect(within(card('Nasal Spray')).getByText('Unsaved')).toBeVisible()
-    expect(
-      screen.queryByRole('button', { name: 'Stop using this version' })
-    ).toBeNull()
+  describe('a save refused', () => {
+    const STOPPED_ELSEWHERE =
+      'this version is no longer in use; save again to add it back'
 
-    // Cancel clears the way to add the form again, as the message says.
-    await user.click(screen.getByRole('button', { name: 'Cancel' }))
-    expect(screen.queryByTestId(cardTestId('Nasal Spray'))).toBeNull()
-    await openPicker()
-    expect(
-      await screen.findByRole('option', { name: /Nasal Spray/ })
-    ).toBeVisible()
+    const saveNasal = async () => {
+      await user.click(
+        screen.getByRole('button', { name: 'Save Nasal Spray text' })
+      )
+      await waitFor(() =>
+        expect(screen.getByRole('button', { name: 'Cancel' })).toBeEnabled()
+      )
+    }
+
+    /** Edits the card, then the PATCH is refused and the list holds `listed`. */
+    async function refuseSave(message: string, listed: ProfileCoaVariant[]) {
+      vi.mocked(patchProfileCoaVariant).mockRejectedValueOnce(
+        new Error(message)
+      )
+      renderSection()
+      await openCard('Nasal Spray')
+      await pick('Method', 'Leave off')
+      vi.mocked(listProfileCoaVariants).mockResolvedValue(listed)
+      await saveNasal()
+    }
+
+    it('because the version was stopped elsewhere keeps the card, the edits and the tag', async () => {
+      await refuseSave(STOPPED_ELSEWHERE, [])
+      expect(toast.error).toHaveBeenCalledWith(STOPPED_ELSEWHERE)
+      expect(listProfileCoaVariants).toHaveBeenCalledTimes(2)
+      // Someone stopped it on purpose, so the refusal itself re-creates nothing.
+      expect(createProfileCoaVariant).not.toHaveBeenCalled()
+      expect(
+        within(row('Method')).getByText('Not printed on Nasal Spray COAs')
+      ).toBeVisible()
+      expect(within(card('Nasal Spray')).getByText('Unsaved')).toBeVisible()
+      expect(
+        screen.queryByRole('button', { name: 'Stop using this version' })
+      ).toBeNull()
+
+      // Cancel drops the draft and frees the form in the picker.
+      await user.click(screen.getByRole('button', { name: 'Cancel' }))
+      expect(screen.queryByTestId(cardTestId('Nasal Spray'))).toBeNull()
+      await openPicker()
+      expect(
+        await screen.findByRole('option', { name: /Nasal Spray/ })
+      ).toBeVisible()
+    })
+
+    it('because the version was stopped elsewhere adds it back on the next Save, and the card closes', async () => {
+      await refuseSave(STOPPED_ELSEWHERE, [])
+      vi.mocked(listProfileCoaVariants).mockResolvedValue([
+        { ...NASAL_VERSION, id: 12, coa_method_text: '' },
+      ])
+      await user.click(
+        screen.getByRole('button', { name: 'Save Nasal Spray text' })
+      )
+      expect(createProfileCoaVariant).toHaveBeenCalledWith(1, {
+        sample_form_id: 4,
+        coa_section_title: null,
+        coa_basis_note: '',
+        coa_method_text: '',
+        coa_prep_text: 'Diluted',
+        coa_footnotes: null,
+      })
+      expect(patchProfileCoaVariant).toHaveBeenCalledTimes(1)
+      await waitFor(() =>
+        expect(
+          within(card('Nasal Spray')).getByRole('button', { name: 'Edit' })
+        ).toBeVisible()
+      )
+      expect(within(card('Nasal Spray')).queryByText('Unsaved')).toBeNull()
+    })
+
+    it('with its row still in the list still PATCHes on the next Save', async () => {
+      await refuseSave('unknown COA text macro {lot}; supported: {lod}', [
+        NASAL_VERSION,
+      ])
+      await user.click(
+        screen.getByRole('button', { name: 'Save Nasal Spray text' })
+      )
+      expect(patchProfileCoaVariant).toHaveBeenCalledTimes(2)
+      expect(createProfileCoaVariant).not.toHaveBeenCalled()
+    })
+
+    it('whose refetch also fails still PATCHes on the next Save', async () => {
+      vi.mocked(patchProfileCoaVariant).mockRejectedValueOnce(new Error('down'))
+      renderSection()
+      await openCard('Nasal Spray')
+      await pick('Method', 'Leave off')
+      vi.mocked(listProfileCoaVariants).mockRejectedValue(new Error('down'))
+      await saveNasal()
+      await user.click(
+        screen.getByRole('button', { name: 'Save Nasal Spray text' })
+      )
+      expect(patchProfileCoaVariant).toHaveBeenCalledTimes(2)
+      expect(createProfileCoaVariant).not.toHaveBeenCalled()
+    })
+
+    it('never doubles the card if its row comes back to the list', async () => {
+      await refuseSave(STOPPED_ELSEWHERE, [])
+      vi.mocked(createProfileCoaVariant).mockRejectedValueOnce(
+        new Error(
+          'an active version already exists for this form; stop using it first'
+        )
+      )
+      vi.mocked(listProfileCoaVariants).mockResolvedValue([NASAL_VERSION])
+      await saveNasal()
+      expect(listProfileCoaVariants).toHaveBeenCalledTimes(3)
+      await waitFor(() =>
+        expect(screen.getAllByTestId(cardTestId('Nasal Spray'))).toHaveLength(1)
+      )
+    })
   })
 
   it('a 409 on a new card shows the version made elsewhere and keeps the new card', async () => {

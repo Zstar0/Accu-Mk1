@@ -84,11 +84,10 @@ export function ProfileCoaVariantsSection({
       const key = `v${saved.id}`
       return { key, saved, draft: drafts[key] ?? draftFromVariant(saved) }
     }),
-    // A new form, or a version stopped elsewhere: its draft stays until Cancel.
+    // A new form, or a version stopped elsewhere: its draft stays until Save or
+    // Cancel. By key, because a stopped version's draft loses its variantId.
     ...Object.entries(drafts)
-      .filter(
-        ([, draft]) => !variants.data?.some(v => v.id === draft.variantId)
-      )
+      .filter(([key]) => !variants.data?.some(v => `v${v.id}` === key))
       .map(([key, draft]) => ({ key, saved: null, draft })),
   ]
 
@@ -138,8 +137,17 @@ export function ProfileCoaVariantsSection({
         err instanceof Error ? err.message : 'Could not save the COA text'
       )
       // After a 409 the list is what changed, so show what is there now.
-      await queryClient.invalidateQueries({
-        queryKey: profileCoaVariantKeys.forProfile(profile.id),
+      const queryKey = profileCoaVariantKeys.forProfile(profile.id)
+      await queryClient.invalidateQueries({ queryKey })
+      // A row gone from the list was stopped on purpose, so this refused Save
+      // re-creates nothing. The admin's next Save POSTs the draft to add it back.
+      const fresh = queryClient.getQueryData<ProfileCoaVariant[]>(queryKey)
+      setDrafts(d => {
+        const draft = d[key]
+        if (!draft || !fresh || fresh.some(v => v.id === draft.variantId)) {
+          return d
+        }
+        return { ...d, [key]: { ...draft, variantId: null } }
       })
     } finally {
       setSaving(false)

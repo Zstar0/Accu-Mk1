@@ -165,7 +165,7 @@ def test_text_on_a_stopped_version_is_409_and_changes_nothing(client, profile, n
     client.patch(f"/analysis-profile-coa-variants/{v['id']}", json={"active": False})
     r = client.patch(f"/analysis-profile-coa-variants/{v['id']}", json=fields)
     assert r.status_code == 409
-    assert r.json()["detail"] == "this version is no longer in use; add the form again to change its text"
+    assert r.json()["detail"] == "this version is no longer in use; save again to add it back"
     row = db_session.get(AnalysisProfileCoaVariant, v["id"])
     db_session.refresh(row)
     assert row.coa_prep_text == "Diluted" and row.active is False

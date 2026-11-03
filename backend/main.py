@@ -22178,8 +22178,7 @@ def patch_profile_coa_variant(variant_id: int, req: ProfileCoaVariantPatch,
     # A stale card's Save: the text would store, but COAs print the Default.
     if (not v.active and fields.get("active") is not True
             and any(name.startswith("coa_") for name in fields)):
-        raise HTTPException(
-            409, "this version is no longer in use; add the form again to change its text")
+        raise HTTPException(409, "this version is no longer in use; save again to add it back")
     _validate_coa_variant_fields(fields)
     user_id = getattr(current_user, "id", None)
     changed = apply_and_log(db, v, fields, entity_type="profile_coa_variant",
