@@ -1,6 +1,6 @@
 # AI chat panel and ACP Providers - design
 
-Date: 2026-11-02. Status: evaluated, local ACP spike passed, awaiting Handler review. Base: origin/master v1.56.1 (`befeb1c3`).
+Date: 2026-11-02. Status: evaluated, local ACP spike passed. Handler rulings recorded and Phase 0 gates run 2026-11-03 (sections 4 and 15). Phase 1 build and every bot-host change still need their own go-ahead. Base: origin/master v1.56.1 (`befeb1c3`).
 
 ## 1. Intent
 
@@ -9,7 +9,7 @@ Put an AI chat on every Mk1 page. A chat button sits bottom-right; it slides out
 - **Who:** Mk1 admins first (Jarvis), then every lab user (a dedicated Mk1 agent).
 - **Success:**
   - A user asks a question from any page; the answer streams into the panel, and the agent knows which page and record the user is looking at.
-  - Anything risky the agent wants to do shows up in the panel as an approval card, and nothing runs until the user clicks Allow once. This holds fully for the dedicated Mk1 agent (Phase 2). In Phase 1 it holds only as far as Jarvis's own approval settings allow: Hermes' default `approvals.mode` is `smart`, which can decide without asking (gate G1).
+  - Anything risky the agent wants to do shows up in the panel as an approval card, and nothing runs until the user clicks Allow once. This holds fully for the dedicated Mk1 agent (Phase 2). In Phase 1 it holds only for what Jarvis itself gates: its home uses `approvals.mode: manual` (G1), so dangerous commands and file edits ask, but its labmanager MCP write tools are not gated and run without a card.
   - Stop works mid-answer, and a chat picks up where it left off after the agent process or Mk1 restarts.
   - Hermes updates do not break the panel silently: Mk1 checks what the agent supports on every connect.
 
@@ -66,12 +66,14 @@ Rules the spike forced:
 - `hermes acp` takes no toolset flag. The only way to restrict an ACP agent's tools is a separate HERMES_HOME with its own config.
 - `memory` (persistent notes and user profile) and `session_search` (searches past conversations) are per home. In a home shared by several Mk1 users they leak between users.
 - Hermes advertises `session/list` and `session/resume`. Any ACP client attached to the same home (BB and OpenMausBot already attach to `hermes-tars`) can list and resume Mk1 users' sessions.
-- MCP tool calls time out after 300 s (`_DEFAULT_TOOL_TIMEOUT`). A session-injected MCP server carries only a URL and headers, so that timeout changes only through the home's `timeouts.mcp.tool_call`. Permission requests time out after `approvals.timeout` (default 300 s), after which Hermes denies on its own. The default `approvals.mode` is `smart`.
-- **Resume is not safe to trust blindly.**
-  - `session/resume` with an id Hermes does not know quietly creates a new session.
-  - Its response carries no session id, so the client keeps the stale one, and every later `session/prompt` on that id returns `stop_reason: refusal` with no text.
-  - `session/load` with an unknown id returns null instead, which is a clear failure.
+- MCP tool calls time out after 300 s (`_DEFAULT_TOOL_TIMEOUT`). A session-injected MCP server carries only a URL and headers, so that timeout changes only through the home's `timeouts.mcp.tool_call`. Permission requests time out after `approvals.timeout` (default 300 s), after which Hermes denies on its own. The default `approvals.mode` is `smart`; Jarvis's home sets `manual` (G1).
+- **Neither restore call reports an unknown session id to the client** (re-checked 2026-11-03, gate G10).
+  - `session/resume` with an id Hermes does not know quietly creates a new session. Its response carries no session id, so the client keeps the stale one.
+  - `session/load` with an unknown id returns a JSON-RPC null, but `agent-client-protocol` 0.12.1 coerces a null result into an empty `LoadSessionResponse`, which looks exactly like a successful load.
+  - In both cases the next `session/prompt` on that id returns `stop_reason: refusal` with no text, at once and with no model call. That refusal is the only reliable signal.
 - A prompt whose text is a slash command (for example `/tools`) is answered by the adapter without a model call. `/tools` lists the session's tools.
+- **Tool search hides tool names by default.** With `tools.tool_search.enabled` at its default, Hermes defers tools behind three bridge tools (`tool_search`, `tool_describe`, `tool_call`), and `/tools` lists only those three plus a count ("Search 3 additional tools that are loaded on demand"). With `enabled: "off"` (quoted: bare `off` is YAML false), `/tools` lists the real names, for example `mcp__mk1__whoami`, `mcp__mk1__create_flag`, `todo_list` (G5).
+- **Jarvis's adapter matches the local one.** Jarvis runs 0.21.7+179 (`0e16173`). Its `acp_adapter/` differs from the local 0.21.5 copy only in typing syntax, `UTC` aliases and dropped `noqa` comments (diffed 2026-11-03), and both use the same 300 s MCP tool timeout. The local spike and gate results apply to Jarvis's ACP behaviour.
 
 ### Mk1 facts (origin/master v1.56.1)
 
@@ -148,6 +150,23 @@ One ACP agent process per active chat. ACP is JSON-RPC over the SSH session's st
 | G9 | Resident memory per `hermes acp` session on the bot host | Sets the default session cap |
 | G10 | `session/load` of an unknown id returns null on 0.21.7; a `resume` of an unknown id is caught by the refusal guard (section 7); whether a slash-command prompt (`/tools`) is added to the session's history | Spike case T10 |
 
+#### Phase 0 results, 2026-11-03
+
+Remote gates were read-only over the known admin paths; nothing on Jarvis or prod changed. Local gates ran in WSL against Hermes 0.21.5, whose ACP adapter matches Jarvis's (section 2). Harness: `bash ~/acp-spike/src/phase0.sh` (log `~/acp-spike/phase0-run.log`, results `results-phase0.json`). The injected bearer was found in no Hermes file.
+
+| Gate | Result | Evidence |
+|---|---|---|
+| G1 | Pass | Jarvis: Hermes 0.21.7+179 (`0e16173`); `approvals: {mode: manual, timeout: 600}`; no `platform_toolsets.acp`, so ACP gets the coding toolset; `tools.tool_search` at its default; plugins `disk-cleanup`, `hindsight`; one MCP server, `labmanager`, with no gate plugin; `timeouts` unset (MCP tool calls 300 s). Read with a remote filter that printed only these keys |
+| G2 | Pass | From inside `accu-mk1-backend`, TCP to `100.68.141.122:22` connected in 0.01 s (OpenSSH 9.6p1 banner). Jarvis's sshd logged the source as `100.120.92.93`, prod's tailnet address |
+| G3 | Pass | From Jarvis, `http://100.120.92.93:8012/health` returned 200 in 4 ms. From outside the tailnet, `165.227.241.81:8012` timed out (filtered) |
+| G4 | Pass | Every local gate ran in a venv on Mk1's pins: Python 3.12.3, pydantic 2.9.0 (core 2.23.2), fastapi 0.115.0, starlette 0.38.6, uvicorn 0.32.0, httpx 0.28.1, `agent-client-protocol` 0.12.1 |
+| G5 | Pass, with a config fix | With the section 10 config plus `tools.tool_search.enabled: "off"`, `/tools` listed exactly `mcp__mk1__create_flag`, `mcp__mk1__whoami`, `todo_list`. A request to run `ls -la /etc` produced no tool call and no permission request ("I have no tool available to run shell commands"). Without the fix, `/tools` listed only the three tool-search bridge tools |
+| G6 | Pass | Hermes' MCP client against a hand-rolled FastAPI endpoint returning `application/json`: `GET` (405), `initialize`, `notifications/initialized` (202), `tools/list`, and a `tools/call` whose result the agent reported verbatim. The bearer matched on every call |
+| G7 | Pass, with a design change | A `create_flag` call held 240.2 s by the stand-in: Hermes waited, the tool ran, and the turn ended normally after 246.5 s. But after `session/cancel` mid-hold, the turn stopped at once (`cancelled`, tool `failed`) while the MCP HTTP request stayed open: no disconnect 42 s later. The stand-in saw a disconnect only when the agent process exited. So Mk1 must expire its own pending approvals when the turn ends (section 8) |
+| G8 | Partial: orphans are bounded, not permanent | Simulated a dropped `ssh -T` by SIGKILLing the client so the agent's pipes close (WSL has no sshd). Idle: the agent exited within 1 s. Mid-tool: the agent and its `sleep` child kept running until the tool finished, then the agent exited within about 15 s; with `sleep 120` all three were still alive 30 s later. Jarvis has no `hermes acp` processes now and none orphaned. A real sshd check is part of Phase 1 bring-up |
+| G9 | Pass | One `hermes acp` process (the stripped home has no stdio MCP children): 116 MB RSS after `initialize`, 280 MB after four turns. Jarvis: 4 vCPU, 16 GB RAM, about 10.8 GB available. Jarvis's home also starts a stdio `labmanager-mcp` per session, not measured |
+| G10 | Pass, with a design change | Unknown-id `session/load` returns an empty `LoadSessionResponse` (the library turns null into one), and unknown-id `session/resume` silently creates a session; a prompt after either returns `refusal`, empty, in 0.0 s. `/tools` does not enter history: a later `session/load` replayed the session's four real user messages, tool calls and replies, and no `/tools` |
+
 ### Phase 1: Jarvis, admin-only
 
 The panel, the ACP Providers pane, the ACP client, approval forwarding, cancel, resume and page context.
@@ -155,8 +174,9 @@ The panel, the ACP Providers pane, the ACP client, approval forwarding, cancel, 
 - The Jarvis provider points at the existing Jarvis launcher. Its allowed roles are `admin` only. It does not get Mk1 tools: Jarvis keeps its own labmanager tools and login.
 - **Why admin-only, stated plainly.** In Jarvis's home a Mk1 chat inherits:
   - Jarvis's full coding toolset, terminal included.
-  - Its labmanager write tools, which act as the bot account, not the user, and are not approval-gated (`coa_publish` included).
-  - Its approvals mode (unknown until G1).
+  - Its labmanager write tools, which act as the bot account, not the user, and are not approval-gated (`coa_publish` included). G1 found no gate plugin in that home.
+  - Its approvals setting: `manual` with a 600 s timeout (G1), which is the safe mode.
+  - Its plugins `hindsight` and `disk-cleanup`. With `hindsight` on, admin chats likely feed Jarvis's long-term memory like its Slack chats do (not verified).
   - Visibility to every other ACP client of that home.
 
   That is today's trust level for Jarvis in Slack and BB, and it is not acceptable for every lab user.
@@ -186,7 +206,7 @@ These are app tables like `flags`, so no `lims_` prefix. The models live in `bac
 | `private_key_ciphertext`, `public_key`, `key_created_at` | Ed25519 generated by Mk1; private half Fernet-encrypted, never returned by any API |
 | `allowed_roles` | JSON list, default `["admin"]`; `agent` is never accepted |
 | `inject_mk1_tools` | Phase 2; default false |
-| `max_sessions` (default 4), `idle_minutes` (default 15), `permission_timeout_s` (default 240), `agent_approval_timeout_s` (default 300, entered from G1) | `permission_timeout_s` must be below `agent_approval_timeout_s` |
+| `max_sessions` (default 4), `idle_minutes` (default 15), `permission_timeout_s` (default 240), `agent_approval_timeout_s` (default 300, Hermes' default; Jarvis's home uses 600, per G1) | `permission_timeout_s` must be below `agent_approval_timeout_s` |
 | `last_test_at`, `last_test_ok`, `last_test_error`, `last_agent_info` (JSON), `last_capabilities` (JSON) | Written by Test connection and by every real connect |
 | `created_by_user_id`, `created_at`, `updated_by_user_id`, `updated_at` | |
 
@@ -205,6 +225,7 @@ Chats are archived, never deleted, so approval decisions stay on record.
   ```
 
   The pane renders this line for the admin to install. The launcher path is a display-only field used to render it.
+- **Mk1's egress IP is `100.120.92.93`** (G2, 2026-11-03). The prod backend container's connection to Jarvis arrived from the droplet's own tailnet address, because container traffic leaves through the host's `tailscale0`. So the prod line uses `from="100.120.92.93"`. A devbox or stack provider needs its own host's tailnet IP.
 - **Argv is built from validated fields, never through a shell:**
 
   ```
@@ -235,17 +256,19 @@ Chats are archived, never deleted, so approval decisions stay on record.
 - **Capability detection on every initialize:**
   - Record `agent_info` and capabilities on the provider row.
   - Restore an existing chat in this order:
-    1. `session/load` if `loadSession` is true. A null result means the agent no longer has the session: go to step 3.
-    2. else `session/resume` if `sessionCapabilities.resume` is advertised. Resume cannot report an unknown id (section 2), so the refusal guard below catches that case.
-    3. else, or on failure, `session/new`, seeded with a recap of the chat's last messages from Mk1's table, marked as earlier conversation. Store the new session id on the chat.
-  - **Refusal guard:** a turn that ends with `stop_reason: refusal` and no text means the agent does not know the session. Mk1 marks the session stale, runs step 3, and retries the prompt once.
+    1. `session/load` if `loadSession` is true.
+    2. else `session/resume` if `sessionCapabilities.resume` is advertised.
+    3. else, or if either call raises, `session/new`, seeded with a recap of the chat's last messages from Mk1's table, marked as earlier conversation. Store the new session id on the chat.
+
+    Neither step 1 nor step 2 can tell Mk1 that the agent has lost the session: with `agent-client-protocol` 0.12.1, an unknown-id load comes back as an empty `LoadSessionResponse`, the same as a good one (G10). A successful-looking restore proves nothing until the first prompt.
+  - **Refusal guard:** a turn that ends with `stop_reason: refusal` and no text means the agent does not know the session (G10: immediate, no model call, after both an unknown load and an unknown resume). Mk1 marks the session stale, runs step 3, and retries the prompt once. This guard is the real unknown-session check, so its test is a release gate.
   - While a load or resume call runs, `replaying` is true and every `session/update` is dropped. Mk1's own transcript is what the panel shows.
 - **Caps:**
   - Each provider allows at most `max_sessions` live sessions.
   - At the cap, the least recently active idle session of that provider is closed to make room.
   - If none is idle, the prompt gets HTTP 429 "Jarvis is busy, try again in a minute".
 - **Reaper:** every 60 s it closes sessions idle longer than `idle_minutes` with no turn running. The next prompt restores the session (about 2-3 s warm).
-- **Shutdown:** the app lifespan closes every session (stdin EOF, then terminate the `ssh` process after 5 s). G8 proves this ends the remote agent.
+- **Shutdown and every session close:** send `session/cancel` for a running turn first, then close stdin, then terminate the `ssh` process after 5 s. The cancel matters: G8 showed that a closed pipe ends an idle agent within a second, but an agent mid-tool keeps running until that tool returns, and its child processes with it. Cancel interrupts the tool (spike T4). If Mk1 dies uncleanly or the network drops, the remote agent and its tool live until the tool finishes: at most the 300 s MCP timeout in Phase 2, and as long as the command runs in Jarvis's home in Phase 1.
 - **DB access:** no DB session is held across a turn. The turn task opens a short session per transcript write (the user message, the finished assistant message, each permission row).
 - `ponytail:` the registries are in-process dicts, which is coherent only with one uvicorn worker. If Mk1 ever runs more workers, sessions need sticky routing or an external broker.
 
@@ -266,7 +289,7 @@ Chats are archived, never deleted, so approval decisions stay on record.
 | `GET /ai-chat/stream` | any user with an allowed provider | One SSE stream per user, covering all of that user's chats |
 | `GET/POST/PUT/DELETE /admin/acp-providers[/{id}]`, `POST /admin/acp-providers/{id}/test`, `POST /admin/acp-providers/{id}/key` | admin | Settings pane |
 
-- **Ownership:** every chat route checks `chat.user_id == current_user.id`, and also that the provider still allows the user's role. Admins get no read of other users' chats (open decision 3).
+- **Ownership:** every chat route checks `chat.user_id == current_user.id`, and also that the provider still allows the user's role. Admins get no read of other users' chats (decision 3, accepted 2026-11-03).
 - **Stream (one per user):**
   - The frontend mounts it at app level, like `useFlagStreamGlue` in `MainWindow.tsx`. Approvals and turn ends therefore reach the user while the panel is closed.
   - It authenticates and then releases its DB session before streaming. It sends a heartbeat comment every 15 s, which keeps both 120 s nginx hops open.
@@ -314,9 +337,12 @@ Rules for both:
   - An unknown or expired id gets 404.
   - The pending entry is removed once resolved, so a decision cannot be replayed.
 - **Timeout:**
-  - Mk1 answers deny (`cancelled`) after `permission_timeout_s` (default 240 s). It must stay below the agent's real `approvals.timeout` (read in G1; the spike home used 120 s) and the 300 s MCP tool timeout, so Mk1, not Hermes, decides what happened. The pane refuses a value at or above the agent's `approvals.timeout` once known. Hermes' timeout is not visible over ACP, so the admin enters it from G1.
+  - Mk1 answers deny (`cancelled`) after `permission_timeout_s` (default 240 s). It must stay below the agent's real `approvals.timeout` (Jarvis: 600 s per G1; the spike home used 120 s) and the 300 s MCP tool timeout, so Mk1, not Hermes, decides what happened. The pane refuses a value at or above the agent's `approvals.timeout` once known. Hermes' timeout is not visible over ACP, so the admin enters it from G1.
   - Cancel and session close resolve every pending approval as cancelled.
-  - **A Mk1-raised approval dies with its MCP request.** While waiting, the MCP handler watches `request.is_disconnected()`. If Hermes drops the call (cancel, its own timeout, a network cut), the pending approval is resolved as cancelled and the tool never runs, even if the user clicks Allow afterwards. A late Allow gets 404.
+  - **A Mk1-raised approval lives only as long as the turn that raised it.** G7 showed that `session/cancel` ends Hermes' turn at once but leaves the MCP HTTP request open, so the request alone cannot tell Mk1 the turn is over.
+    - Each MCP token maps to its chat, so the handler knows which turn is running. When that turn ends for any reason (the prompt call returns, Stop, session close), Mk1 resolves the chat's pending Mk1-raised approvals as cancelled. The waiting handler then returns "cancelled" and the tool never runs.
+    - The handler also watches `request.is_disconnected()` as a backstop: G7 saw the disconnect when the agent process exited.
+    - Either way, a later Allow gets 404.
 - **On record:** every request and decision is persisted as a `permission` message row (title, detail, decision, who, when). The log line `ai_chat.permission chat=<id> source=<..> decision=<..>` carries no content.
 - **Visible when the panel is closed:**
   - The chat button shows an amber dot while any of the user's chats waits on an approval.
@@ -395,11 +421,11 @@ COA generate and publish are left out on purpose. Publish takes no body and publ
 ### Phase 1 (Jarvis)
 
 - Add one line to `hermes-tars`'s `authorized_keys`, as rendered by the pane:
-  - `from=` pinned to Mk1's egress IP (G2);
+  - `from="100.120.92.93"` (G2);
   - `restrict`;
-  - `command=` the existing Jarvis ACP launcher.
-- No config change in Jarvis's home.
-- If G1 shows `approvals.mode: smart`, the Handler decides whether that is acceptable for admin chats or Jarvis's home moves to `manual`. That move also changes BB, OpenMausBot and the Slack bots.
+  - `command="/opt/accumark/hermes/bb-acp/20261030/bin/hermes-jarvis"`, the existing Jarvis ACP launcher.
+- Today that file holds one line, OpenMausBot's bridge key, with the same `restrict` and `command=` but no `from=` (G1). The Mk1 line is added beside it; nothing else changes.
+- No config change in Jarvis's home. G1 found `approvals.mode: manual`, so the old question of moving Jarvis off `smart` does not arise.
 
 ### Phase 2 (Mk1 agent)
 
@@ -409,12 +435,13 @@ COA generate and publish are left out on purpose. Publish takes no body and publ
 - **Home config (an allowlist, not a denylist):**
 
   ```yaml
-  model: {...}                 # credentials: open decision 2
+  model: {...}                 # its own API key (decision 2)
   approvals: {mode: manual, timeout: 300}
   timeouts: {mcp: {tool_call: 300}}   # explicit: Mk1 holds write tools up to 240 s for approval
   platform_toolsets:
     acp: [todo]                # Mk1 tools arrive per session via MCP injection
   mcp_servers: {}              # none from config
+  tools: {tool_search: {enabled: "off"}}   # real tool names in /tools (section 2); quoted, bare off is YAML false
   agent:
     disabled_toolsets: [terminal, file, code_execution, delegation, memory, session_search, browser, web, skills, cronjob, connections]
   plugins: {enabled: []}
@@ -474,9 +501,11 @@ COA generate and publish are left out on purpose. Publish takes no body and publ
   - Shows the timings, the capabilities and the tool list.
   - **The tool check enforces "detect, never assume", and fails closed both ways:**
     - A provider whose allowed roles include `standard` cannot be enabled while `/tools` lists any terminal, file, code-execution, delegation, browser, memory or session-search tool.
+    - It also cannot be enabled while `/tools` lists `tool_search` or `tool_call`. Those bridge tools hide the real names (section 2), so the check would pass by not seeing them. The fix is `tools.tool_search.enabled: "off"` in that home (section 10, G5).
+    - An admin-only provider such as Jarvis keeps tool search on. Its check only requires a non-empty list.
     - The check also needs a positive control. The parsed list must not be empty, and for an `inject_mk1_tools` provider, Mk1's own injected tools must appear in it. Otherwise the check fails, so a change in Hermes' `/tools` output format cannot pass a provider by matching nothing.
     - The same check runs on every real connect for such a provider. On a failure the chat refuses to start, so a Hermes update or a plugin that adds tools back fails closed.
-    - The `/tools` reply is consumed by Mk1. It is never shown or persisted: its updates are dropped like a replay. If G10 shows that slash commands enter the session's history, the check runs on a separate throwaway `session/new` in the same process instead of the chat's own session.
+    - The `/tools` reply is consumed by Mk1. It is never shown or persisted: its updates are dropped like a replay. G10 showed that slash commands do not enter the session's history, so the check runs on the chat's own session.
   - On failure it shows the stderr tail, for example a host key mismatch or "Permission denied (publickey)".
 - **Disabling a provider** closes its live sessions.
 
@@ -492,7 +521,7 @@ COA generate and publish are left out on purpose. Publish takes no body and publ
 1. **Mk1 compromise, then the SSH key (Phase 1).**
    - The attacker gets an ACP session in Jarvis's home and can approve its own permission requests. That amounts to a shell as `hermes-tars`, which holds the Slack, Mattermost, model and labmanager credentials.
    - Mitigations: the `from=` pin, the forced command and an admin-only provider.
-   - The residual risk is real. Phase 2's `hermes-mk1` home has no terminal, file or code tools and holds only its model key. Open decision 1 is whether Phase 1 runs at all.
+   - The residual risk is real. Phase 2's `hermes-mk1` home has no terminal, file or code tools and holds only its model key. Decision 1 (accepted 2026-11-03) runs Phase 1 anyway, with the `from=` pin.
 2. **Prompt injection through Mk1 data the agent reads.**
    - Reads return only what the user can already see.
    - Every write needs the user's click on a card rendered from the exact arguments.
@@ -508,8 +537,9 @@ COA generate and publish are left out on purpose. Publish takes no body and publ
 **Privacy:**
 
 - Prompts and page context are logged by Hermes at INFO and kept in its session DB on the bot host.
+- Hermes' terminal tool writes the agent's whole process environment into `cache/scratch/hermes-snap-*.sh` in its home (mode 0600). Phase 0 found its own test token there, because the harness had exported it into the agent's env. Mk1 never puts a secret in the agent's environment: the MCP token travels only in the session's `HttpMcpServer` headers, and sshd passes no client env.
 - Mk1 keeps transcripts in `ai_chat_messages`.
-- Retention on both sides is open decision 3.
+- Retention on both sides is still open (decision 3; proposed defaults in section 15).
 
 **Rollback:**
 
@@ -519,7 +549,7 @@ COA generate and publish are left out on purpose. Publish takes no body and publ
 
 ## 13. Capacity
 
-- One `hermes acp` process per live chat, capped per provider (default 4 until G9 measures memory).
+- One `hermes acp` process per live chat, capped per provider (default 4). G9: about 280 MB RSS per session after a few turns, on a host with about 10.8 GB free, so 4 per provider is conservative. In Jarvis's home each session also starts its own `labmanager-mcp`.
 - About 15-16k input tokens per model call, mostly cached. Tool turns take 15-27 s.
 - In Phase 1, Mk1 chats share Jarvis's model login and rate limits with the Slack and Mattermost bots.
 
@@ -533,10 +563,11 @@ COA generate and publish are left out on purpose. Publish takes no body and publ
   - MCP JSON-RPC: `initialize`, `tools/list`, `tools/call`, bad and expired token, role revoked mid-chat (including during an approval wait).
   - Tool arguments: `../` and encoded-dot ids are rejected, and each tool's request resolves to its own route template.
   - A dropped MCP request during an approval wait: the tool does not run and a late Allow gets 404.
+  - A turn that ends while a Mk1-raised approval is pending (prompt returns, Stop, session close) with the MCP request still open: the approval resolves as cancelled and the tool does not run (G7).
   - Stream resume: replay after `Last-Event-ID`, and `resync` once the id has left the buffer.
   - Tools run as the user: a standard user calling an admin-only route gets the route's 403.
   - The fake agent for these tests is a tiny ACP agent script built with the same library, spawned in place of `ssh`. No model calls.
-- **Against real Hermes:** the spike harness gains T7 (stripped profile), T8 (approval held inside an MCP call), T9 (no orphans on SSH close), T10 (unknown-session load and resume, slash commands and history) and a Mk1-style MCP stand-in. It is re-run after every Hermes update on the bot host.
+- **Against real Hermes:** `~/acp-spike/src/phase0.sh` (built 2026-11-03) covers T7 (stripped profile), T8 (approval held inside an MCP call, and cancel mid-hold), the G8 orphan cases, T10 (unknown-session load and resume, slash commands and history) and the Mk1-style MCP stand-in, all on Mk1's pins. `run.sh` still covers T1 to T6. Both are re-run after every Hermes update on the bot host.
 - **Frontend:** vitest for the stream reader and panel state reducer; a browser check of every state in section 11 against a dev provider (WSL Hermes over SSH with the spike's isolated home).
 - **Release:**
   - `npm run check:all`.
@@ -549,19 +580,18 @@ COA generate and publish are left out on purpose. Publish takes no body and publ
 
     The host nginx needs nothing: the 15 s heartbeat keeps its 120 s `location /` open, and the container's `X-Accel-Buffering: no` turns off its buffering. The MCP endpoint bypasses nginx (section 9).
 
-## 15. Open decisions for the Handler
+## 15. Decisions
 
-1. **Phase 1 at all?**
+The Handler accepted the recommendations below on 2026-11-03 ("go with your suggestions"). Items with no recommendation stay open, with a proposal. Accepting decision 1 does not authorize any bot-host change: each step in section 10 still needs its own sign-off.
+
+1. **Phase 1 at all? Accepted: Phase 1 as written, with the `from=` pin** (`from="100.120.92.93"`, G2).
    - Jarvis admin-only gives "Jarvis to start" quickly, but accepts the Mk1-to-`hermes-tars` shell path described in section 12.
-   - The alternative is to start with the dedicated Mk1 agent and add Jarvis later as an admin-only second provider.
-   - Recommended: Phase 1 as written, with the `from=` pin.
-2. **Model credentials for the Mk1 agent home.**
-   - Its own API key is recommended: it separates rate limits and avoids two homes refreshing one Codex login, which rotates the refresh token under the other (the local login already shows a past `refresh_token_reused` error).
-   - The alternative is sharing Jarvis's login.
-3. **Retention:**
-   - how long the bot host keeps Mk1 chat logs and sessions;
-   - how long Mk1 keeps transcripts;
-   - whether admins can read other users' chats (recommended: no).
-4. **One Mk1 agent or a picker.** The model supports both; the picker shows only when a user is allowed more than one provider.
-5. **Jarvis approvals mode** if G1 shows `smart`: accept it for admin chats, or move Jarvis's home to `manual`, which also affects BB, OpenMausBot and Slack.
-6. **Which Mk1 write tools ship first.** Recommended: `create_flag` and `comment_on_flag` only, both reversible. COA tools come later.
+   - The rejected alternative was to start with the dedicated Mk1 agent and add Jarvis later as an admin-only second provider.
+2. **Model credentials for the Mk1 agent home. Accepted: its own API key.** It separates rate limits and avoids two homes refreshing one Codex login, which rotates the refresh token under the other (the local login already shows a past `refresh_token_reused` error).
+3. **Retention.**
+   - Admins cannot read other users' chats. **Accepted.**
+   - How long Mk1 keeps transcripts. **Open.** Proposed: no automatic expiry in Phase 1; chats are archived, never deleted (section 5), so approval decisions stay on record.
+   - How long the bot host keeps Mk1 chat logs and sessions. **Open.** Proposed: Phase 1 changes nothing, so Jarvis keeps admin chats the way it keeps Slack chats today. Phase 2 sets a 90-day prune of `hermes-mk1` sessions and logs at bring-up.
+4. **One Mk1 agent or a picker. Accepted: the data model supports both.** The picker shows only when a user is allowed more than one provider.
+5. **Jarvis approvals mode. Resolved by G1:** Jarvis's home already uses `approvals.mode: manual` (timeout 600 s). Nothing changes there, and BB, OpenMausBot and Slack are unaffected.
+6. **Which Mk1 write tools ship first. Accepted: `create_flag` and `comment_on_flag` only,** both reversible. COA tools come later.
