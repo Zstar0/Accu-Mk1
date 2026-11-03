@@ -226,6 +226,7 @@ Chats are archived, never deleted, so approval decisions stay on record.
 
   The pane renders this line for the admin to install. The launcher path is a display-only field used to render it.
 - **Mk1's egress IP is `100.120.92.93`** (G2, 2026-11-03). The prod backend container's connection to Jarvis arrived from the droplet's own tailnet address, because container traffic leaves through the host's `tailscale0`. So the prod line uses `from="100.120.92.93"`. A devbox or stack provider needs its own host's tailnet IP.
+- **The provider's `ssh_host` is Jarvis's tailnet IP, `100.68.141.122`,** not its public address (the source would differ and the `from=` pin would refuse it) and not its MagicDNS name (G2 used the IP; name resolution from inside the container is unverified).
 - **Argv is built from validated fields, never through a shell:**
 
   ```
@@ -341,6 +342,7 @@ Rules for both:
   - Cancel and session close resolve every pending approval as cancelled.
   - **A Mk1-raised approval lives only as long as the turn that raised it.** G7 showed that `session/cancel` ends Hermes' turn at once but leaves the MCP HTTP request open, so the request alone cannot tell Mk1 the turn is over.
     - Each MCP token maps to its chat, so the handler knows which turn is running. When that turn ends for any reason (the prompt call returns, Stop, session close), Mk1 resolves the chat's pending Mk1-raised approvals as cancelled. The waiting handler then returns "cancelled" and the tool never runs.
+    - Each pending approval records the turn id that was running when it registered. A write call that arrives while no turn is running is refused as cancelled, never registered. This covers a `tools/call` that reaches Mk1 after Stop has already swept the chat. The decision endpoint re-checks that the recorded turn is still the running one.
     - The handler also watches `request.is_disconnected()` as a backstop: G7 saw the disconnect when the agent process exited.
     - Either way, a later Allow gets 404.
 - **On record:** every request and decision is persisted as a `permission` message row (title, detail, decision, who, when). The log line `ai_chat.permission chat=<id> source=<..> decision=<..>` carries no content.
@@ -563,7 +565,7 @@ COA generate and publish are left out on purpose. Publish takes no body and publ
   - MCP JSON-RPC: `initialize`, `tools/list`, `tools/call`, bad and expired token, role revoked mid-chat (including during an approval wait).
   - Tool arguments: `../` and encoded-dot ids are rejected, and each tool's request resolves to its own route template.
   - A dropped MCP request during an approval wait: the tool does not run and a late Allow gets 404.
-  - A turn that ends while a Mk1-raised approval is pending (prompt returns, Stop, session close) with the MCP request still open: the approval resolves as cancelled and the tool does not run (G7).
+  - A turn that ends while a Mk1-raised approval is pending (prompt returns, Stop, session close) with the MCP request still open: the approval resolves as cancelled and the tool does not run (G7). Also a write call that arrives after the turn ended: refused as cancelled, no card.
   - Stream resume: replay after `Last-Event-ID`, and `resync` once the id has left the buffer.
   - Tools run as the user: a standard user calling an admin-only route gets the route's 403.
   - The fake agent for these tests is a tiny ACP agent script built with the same library, spawned in place of `ssh`. No model calls.
