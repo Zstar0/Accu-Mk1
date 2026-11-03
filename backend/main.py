@@ -3201,6 +3201,39 @@ class AnalysisProfileResponse(BaseModel):
         from_attributes = True
 
 
+class ProfileCoaVariantFields(BaseModel):
+    # NULL = same as the profile's default, '' (or [] for footnotes) = leave
+    # off, a value = custom. The title has no leave off: blank is a 400.
+    coa_section_title: Optional[str] = Field(None, max_length=200)
+    coa_basis_note: Optional[str] = Field(None, max_length=200)
+    coa_method_text: Optional[str] = None
+    coa_prep_text: Optional[str] = None
+    coa_footnotes: Optional[Any] = None
+
+
+class ProfileCoaVariantCreate(ProfileCoaVariantFields):
+    # Optional so a missing form is the route's 400, not pydantic's 422.
+    sample_form_id: Optional[int] = None
+
+
+class ProfileCoaVariantPatch(ProfileCoaVariantFields):
+    active: Optional[bool] = None
+
+
+class ProfileCoaVariantResponse(BaseModel):
+    id: int
+    analysis_profile_id: int
+    sample_form_id: int
+    sample_form_name: Optional[str] = None
+    coa_section_title: Optional[str] = None
+    coa_basis_note: Optional[str] = None
+    coa_method_text: Optional[str] = None
+    coa_prep_text: Optional[str] = None
+    coa_footnotes: Optional[Any] = None
+    active: bool
+    updated_at: Optional[datetime] = None
+
+
 class AnalysisProfileMembersRequest(BaseModel):
     analysis_service_ids: list[int]
 
@@ -21780,6 +21813,39 @@ def _validate_coa_text_macros(fields: dict) -> None:
             raise HTTPException(400, "COA text macros are not filled in footnote labels")
 
 
+# Same bookkeeping exclusions as PROFILE_LOG_FIELDS.
+COA_VARIANT_LOG_FIELDS = (
+    "analysis_profile_id", "sample_form_id", "coa_section_title", "coa_basis_note",
+    "coa_method_text", "coa_prep_text", "coa_footnotes", "active",
+)
+
+
+def _validate_coa_variant_fields(fields: dict) -> None:
+    """The profile's validators, plus the states only a variant has: '' means
+    leave off, so whitespace is a typo here rather than a blank."""
+    title = fields.get("coa_section_title")
+    if title is not None and not title.strip():
+        raise HTTPException(400, "coa_section_title cannot be blank; send null for same as default")
+    for name in ("coa_basis_note", "coa_method_text", "coa_prep_text"):
+        value = fields.get(name)
+        if value and not value.strip():
+            raise HTTPException(400, f"{name} is only whitespace; send '' to leave it off")
+    if "coa_footnotes" in fields:
+        _validate_coa_footnotes(fields["coa_footnotes"])
+    _validate_coa_text_macros(fields)
+
+
+def _coa_variant_response(db, v) -> ProfileCoaVariantResponse:
+    form = db.get(LimsSampleForm, v.sample_form_id)
+    return ProfileCoaVariantResponse(
+        id=v.id, analysis_profile_id=v.analysis_profile_id,
+        sample_form_id=v.sample_form_id, sample_form_name=form.name if form else None,
+        coa_section_title=v.coa_section_title, coa_basis_note=v.coa_basis_note,
+        coa_method_text=v.coa_method_text, coa_prep_text=v.coa_prep_text,
+        coa_footnotes=v.coa_footnotes, active=v.active, updated_at=v.updated_at,
+    )
+
+
 @app.get("/analysis-profiles", response_model=list[AnalysisProfileResponse])
 async def get_analysis_profiles(db: Session = Depends(get_db), _current_user=Depends(get_current_user)):
     from models import AnalysisProfile
@@ -22002,7 +22068,7 @@ async def update_analysis_profile(
 async def delete_analysis_profile(
     profile_id: int, db: Session = Depends(get_db), current_user=Depends(get_current_user)
 ):
-    from models import AnalysisProfile, VialProfileAssignment
+    from models import AnalysisProfile, AnalysisProfileCoaVariant, VialProfileAssignment
     p = db.get(AnalysisProfile, profile_id)
     if p is None:
         raise HTTPException(404, "analysis profile not found")
@@ -22025,12 +22091,97 @@ async def delete_analysis_profile(
             f"profile '{p.key}' has vial custody history (current or superseded) "
             "and cannot be deleted — deactivate it instead (active=false)",
         )
+    # The FK's CASCADE removes these rows in the database with no log of its
+    # own, so log each one here, active or not.
+    variants = db.execute(
+        select(AnalysisProfileCoaVariant)
+        .where(AnalysisProfileCoaVariant.analysis_profile_id == profile_id)
+    ).scalars().all()
+    for v in variants:
+        log_delete(
+            db, v, COA_VARIANT_LOG_FIELDS,
+            entity_type="profile_coa_variant", entity_pk=v.id,
+            user_id=getattr(current_user, "id", None),
+        )
     log_delete(
         db, p, PROFILE_LOG_FIELDS,
         entity_type="profile", entity_pk=p.id, user_id=getattr(current_user, "id", None),
     )
     db.delete(p)
     db.commit()
+
+
+@app.get("/analysis-profiles/{profile_id}/coa-variants",
+         response_model=list[ProfileCoaVariantResponse])
+def list_profile_coa_variants(profile_id: int, db: Session = Depends(get_db),
+                              _current_user=Depends(get_current_user)):
+    from models import AnalysisProfile, AnalysisProfileCoaVariant
+    if db.get(AnalysisProfile, profile_id) is None:
+        raise HTTPException(404, "analysis profile not found")
+    rows = db.execute(
+        select(AnalysisProfileCoaVariant)
+        .join(LimsSampleForm, LimsSampleForm.id == AnalysisProfileCoaVariant.sample_form_id)
+        .where(AnalysisProfileCoaVariant.analysis_profile_id == profile_id,
+               AnalysisProfileCoaVariant.active.is_(True))
+        .order_by(LimsSampleForm.sort_order, AnalysisProfileCoaVariant.id)
+    ).scalars().all()
+    return [_coa_variant_response(db, v) for v in rows]
+
+
+@app.post("/analysis-profiles/{profile_id}/coa-variants",
+          response_model=ProfileCoaVariantResponse, status_code=201)
+def create_profile_coa_variant(profile_id: int, req: ProfileCoaVariantCreate,
+                               db: Session = Depends(get_db),
+                               current_user=Depends(get_current_user)):
+    from models import AnalysisProfile, AnalysisProfileCoaVariant
+    if db.get(AnalysisProfile, profile_id) is None:
+        raise HTTPException(404, "analysis profile not found")
+    if req.sample_form_id is None or db.get(LimsSampleForm, req.sample_form_id) is None:
+        raise HTTPException(400, "sample_form_id is missing or unknown")
+    fields = req.model_dump(exclude={"sample_form_id"})
+    _validate_coa_variant_fields(fields)
+    user_id = getattr(current_user, "id", None)
+    v = AnalysisProfileCoaVariant(analysis_profile_id=profile_id, sample_form_id=req.sample_form_id,
+                                  updated_by_id=user_id, **fields)
+    db.add(v)
+    try:
+        db.flush()
+    except IntegrityError:
+        db.rollback()
+        raise HTTPException(409, "an active variant already exists for this form; deactivate it first")
+    log_create(db, v, COA_VARIANT_LOG_FIELDS, entity_type="profile_coa_variant",
+               entity_pk=v.id, user_id=user_id)
+    db.commit(); db.refresh(v)
+    return _coa_variant_response(db, v)
+
+
+@app.patch("/analysis-profile-coa-variants/{variant_id}", response_model=ProfileCoaVariantResponse)
+def patch_profile_coa_variant(variant_id: int, req: ProfileCoaVariantPatch,
+                              db: Session = Depends(get_db),
+                              current_user=Depends(get_current_user)):
+    from models import AnalysisProfileCoaVariant
+    v = db.get(AnalysisProfileCoaVariant, variant_id)
+    if v is None:
+        raise HTTPException(404, "variant not found")
+    # Omitted = unchanged, explicit null = back to same as default. active is
+    # NOT NULL, so its null must 422 by name, not die at flush as a false 409.
+    fields = req.model_dump(exclude_unset=True)
+    if "active" in fields and fields["active"] is None:
+        raise HTTPException(422, "active cannot be null")
+    _validate_coa_variant_fields(fields)
+    user_id = getattr(current_user, "id", None)
+    changed = apply_and_log(db, v, fields, entity_type="profile_coa_variant",
+                            entity_pk=v.id, user_id=user_id)
+    if changed:
+        v.updated_by_id = user_id
+    try:
+        db.flush()
+    except IntegrityError:
+        # active False -> True into a slot another active row has since taken.
+        db.rollback()
+        raise HTTPException(409, "an active variant already exists for this form; deactivate it first")
+    db.commit(); db.refresh(v)
+    return _coa_variant_response(db, v)
 
 
 @app.get("/analysis-profiles/{profile_id}/members", response_model=list[int])
