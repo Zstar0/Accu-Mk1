@@ -1675,11 +1675,15 @@ def test_the_precision_guard_is_the_one_the_submitted_value_uses():
     # drift apart; the import is local because prep_bridge pulls in the ORM.
     from lims_analyses.prep_bridge import _fmt_num
 
-    smallest_allowed = 10 ** -SUBMITTED_MG_PLACES
-    assert _fmt_num(smallest_allowed) != "0"
-    assert _fmt_num(smallest_allowed / 10) == "0"
-    # And the engine's own publishing precision is finer, so it is NOT a safe guard: this is
-    # the value the previous guard let through.
+    # The smallest mass the guard lets through, and the bridge formats the STORED value, so
+    # both roundings apply: the guard's at SUBMITTED_MG_PLACES and the trace's at
+    # QUANTITY_MG_PLACES. Half of the last place is the boundary, not a whole place.
+    smallest_allowed = 0.5 * 10 ** -SUBMITTED_MG_PLACES  # 0.0005 mg
+    assert round(smallest_allowed, SUBMITTED_MG_PLACES) != 0  # the guard allows it
+    assert _fmt_num(round(smallest_allowed, QUANTITY_MG_PLACES)) != "0"
+    assert _fmt_num(round(smallest_allowed / 10, QUANTITY_MG_PLACES)) == "0"
+    # And the engine's own publishing precision is finer, so it is NOT a safe guard: 0.0001 mg
+    # is a number in the trace and "0" on the vial, which is what the first guard let through.
     assert QUANTITY_MG_PLACES > SUBMITTED_MG_PLACES
     assert _fmt_num(10 ** -QUANTITY_MG_PLACES) == "0"
 
