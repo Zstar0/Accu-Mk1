@@ -147,6 +147,60 @@ async def ai_chat_env(ai_chat_db, monkeypatch):
         raise timed_out
 
 
+@pytest.fixture
+async def ai_chat_api(ai_chat_env):
+    """The app's AI chat admin API over `ai_chat_env`, as an `httpx.AsyncClient` (base URL `http://t`).
+
+    Users: admin 1, standard 2, admin 3. A request acts as the user named by its `X-Test-User` header (default 1).
+    `get_db` and `get_current_user` are overridden; the app's lifespan does not run. Not `TestClient`: without
+    `with` it runs each request on its own short-lived loop, which kills the background turn task and strands
+    loop-bound futures. Tests that set fake-agent flags take `ai_chat_env` too: it is the same instance.
+    """
+    from datetime import datetime
+
+    import httpx
+    from fastapi import Header
+
+    import main
+    import models
+    from ai_chat import sessions
+    from auth import get_current_user
+    from database import get_db
+
+    Session = ai_chat_env.Session
+    with Session() as s:  # created_at is set so the User column default (`datetime.utcnow`, deprecated) never fires
+        s.add(models.User(id=2, email="standard@example.com", hashed_password="x", role="standard",
+                          created_at=datetime(2026, 1, 1)))
+        s.add(models.User(id=3, email="admin2@example.com", hashed_password="x", role="admin",
+                          created_at=datetime(2026, 1, 1)))
+        s.commit()
+
+    def _db():
+        db = Session()
+        try:
+            yield db
+        finally:
+            db.close()
+
+    def _user(x_test_user: int = Header(1)):
+        with Session() as s:
+            user = s.get(models.User, x_test_user)
+            s.expunge(user)
+        return user
+
+    main.app.dependency_overrides[get_db] = _db
+    main.app.dependency_overrides[get_current_user] = _user
+    client = httpx.AsyncClient(transport=httpx.ASGITransport(app=main.app), base_url="http://t")
+    yield client
+    import anyio
+
+    await client.aclose()
+    main.app.dependency_overrides.pop(get_db, None)
+    main.app.dependency_overrides.pop(get_current_user, None)
+    with anyio.fail_after(30):
+        await sessions.MANAGER.close_all()
+
+
 def pytest_configure(config):
     config.addinivalue_line(
         "markers",
