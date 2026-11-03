@@ -7,6 +7,15 @@ per-form stock volume, close the manual calibration-curve pick, and make one act
 per peptide and instrument an enforced invariant, with no change to any quantity Mk1
 reports today.
 
+> **As shipped, 2026-11-03: the last of those is NOT done.** Task 9, the partial unique index,
+> is PARKED, so **nothing enforces one active curve per peptide and instrument.** Its own first
+> step is a production gate that currently fails (peptide 38 on instrument 2 holds two active
+> curves whose slopes differ by a factor of 2.66), and which curve stays active is the lab's
+> decision. Do not read this goal as a description of what shipped: the duplicate-curve hazard is
+> open, and two production samples have already run against one of those two disagreeing curves
+> on an instrument neither belongs to. Task 7's gate refuses a hand-picked curve from the wrong
+> instrument, which is a different and narrower guarantee.
+
 **Architecture:** The engine is five pure functions plus one orchestrator, with one route
 (`POST /hplc/analyze`) and one storage model (`HPLCAnalysis`). Dennis's `calc.js` is the
 arithmetic authority: his `stockPrep`, `intermediateStep`, `dilutionActual` and
@@ -23,8 +32,15 @@ one. The engine therefore ships inert, which is what makes the sign-off defensib
 only observable changes are the curve-pick error and the rows that already carry impossible
 weighings.
 
-**Tech Stack:** Python 3.11 / FastAPI / SQLAlchemy 2.x (`backend/`), pytest. No frontend
-work in this plan.
+**Tech Stack:** Python 3.11 / FastAPI / SQLAlchemy 2.x (`backend/`), pytest.
+
+> **As shipped, 2026-11-03: "No frontend work in this plan" was WRONG and is corrected here.**
+> The branch changed 167 lines of frontend code and added 721 lines of frontend tests, because
+> four crashes in `src/components/hplc/CalculationVisuals.tsx` each needed a null the backend had
+> only just begun producing, and because every new problem code needed a sentence a technician
+> can act on. This is not a tidiness correction: it is the line that tells a reader whether this
+> repo's frontend DOCKER build release gate applies to the branch. **It does.** The image's
+> TypeScript pass has no `backend/` present, so a local `tsc` pass is supporting evidence only.
 
 **Branch:** the implementation branch comes off **`origin/master`**, not off the docs branch
 this plan was written on:
