@@ -36,6 +36,10 @@ Things the spec implies but does not list as tests. Each has a test in the task 
 4. **Bad writes that would otherwise 500 on Postgres or print a blank line.** Reactivating into an occupied slot is 409, `active: null` is 422, text over the column length is 422, whitespace-only text is 400. (Task 4)
 5. **A form deactivated after its variant was made.** The variant keeps printing and its card stays in the editor, but the form does not appear in the picker. (Tasks 3 and 8)
 
+## Before Task 1
+
+The spec's Rollout step 1 is a gate before building: Josh confirms that the default prep he set at 19:09:59 on 10-30 is the wording he wants for powder. The draft reply to him is unsent. If it is wrong, correct the default first (a normal logged profile edit). Start Task 1 once he has answered, or once the Handler waives the wait.
+
 ---
 
 ### Task 1: Branch, stack and test runner
@@ -1043,7 +1047,7 @@ it('Stop using appears only for existing versions', () => {
 })
 ```
 
-`row(label)` finds the element with `data-testid="coa-variant-row-<field>"` by its label. `pick(label, choice)` clicks the radio named `<label>: <choice>`. `formRule` is a `rule({})` from Task 5.
+These helpers are local to the test file, and Tasks 8 and 9 define their own copies: `renderEditor(overrides)` renders the harness, `specsFor(map)` makes `listServiceSpecs` resolve or reject per service id, `row(label)` finds the element with `data-testid="coa-variant-row-<field>"` by its label, `pick(label, choice)` clicks the radio named `<label>: <choice>`. `formRule` is a `rule({})` from Task 5.
 
 - [ ] **Step 2: Run them to see them fail**
 
@@ -1053,7 +1057,7 @@ Expected: FAIL, module not found.
 - [ ] **Step 3: Implement `CoaVariantEditor`**
 
 Order from the top: guard line, macro hint (`COA_MACRO_HINT`, `data-testid="coa-variant-macro-hint"`), five field rows, preview, buttons. All copy comes from the logic module or the spec's Profile editor section.
-- Rules: `useQueries` over `savedMemberIds` with key `['analysis-services', id, 'specs']` and `queryFn: () => listServiceSpecs(id)`. That key is the one `ServiceSpecsSection` invalidates. This component only mounts while a card is open, which gives the spec's "only while an editor is open". Build `MemberRules[]` with names from `services`, falling back to `Service <id>`, then call `memberRuleStatus`.
+- Rules: `useQueries` over `savedMemberIds` with key `['analysis-services', id, 'specs']` and `queryFn: () => listServiceSpecs(id)`. That key is the one `ServiceSpecsSection` invalidates, and its other readers (`ServiceEndoJudgedPanel`, `EndoResultsBox`, `AnalysisServiceLink`) cache the same raw array, so the entries agree. This component only mounts while a card is open, which gives the spec's "only while an editor is open". Build `MemberRules[]` with names from `services`, falling back to `Service <id>`, then call `memberRuleStatus`.
 - Guard line `data-testid="coa-variant-guard"`: shows when `coa_basis_note` or `coa_footnotes` is not `default`. Amber for `held`, green for `ok`, muted for `loading` and `unknown`. One "Add the rule" button per missing service. With several missing, its text is `Add the rule: <name>`. The test above uses one.
 - Field row: `ToggleGroup type="single"`, `variant="outline"`, `size="sm"`, `onValueChange={v => { if (v) onChange(setChoice(draft, field, v as FieldChoice, defaults)) }}`. Each `ToggleGroupItem` has `aria-label="<label>: <choice>"`, with choices "Same as default", "Custom" and "Leave off" (`canLeaveOff` only).
 - Under the control: Same as default shows the Default's text grayed with a "Default" `Badge` (the title uses `coa_section_title || name`). Custom shows `Input maxLength={200}` for title and basis note, `Textarea` for method and prep, `FootnoteListEditor` for footnotes, then the `draftErrors` message. Leave off shows `Not printed on <form> COAs`. `heldNote(status)` shows under an overridden limit field.
@@ -1181,6 +1185,8 @@ it('reports dirty to the page', async () => {
 })
 ```
 
+Helpers, local to the file: `card(name)` maps the name to its form id and finds `data-testid="coa-variant-card-<formId>"`. `openCard(name)` clicks Edit in that card. `openPicker()` clicks Add form and opens the Select. `pickForm(name)` does that and picks the option. `formsAre(list)` sets what `listSampleForms` resolves. `confirmReturns(bool)` sets the `window.confirm` spy. `renderSection(overrides)` renders with profile id 1, saved member 1 and service Arsenic, inside a `QueryClientProvider` with `retry: false`.
+
 - [ ] **Step 2: Run them to see them fail**
 
 Run: `npx vitest run src/components/hplc/__tests__/ProfileCoaVariantsSection.test.tsx`
@@ -1272,7 +1278,7 @@ it('an unsaved Members edit does not change the guard line; Save Members does', 
 })
 ```
 
-`dirtyTheCard()` opens the Nasal Spray card and picks Sample prep: Leave off. Method stays on Same as default, so the Save Changes test can read the inherited Default in that row. `closeButton()` is the button named "Close panel".
+`dirtyTheCard()` opens the Nasal Spray card and picks Sample prep: Leave off. Method stays on Same as default, so the Save Changes test can read the inherited Default in that row. `closeButton()` is the button named "Close panel". `openProfile()` and `openCreate()` open the panel from the list, as in `analysis-profiles-coa-display.test.tsx`. `addMember(name)` adds a service through the Members search without saving.
 
 - [ ] **Step 2: Run them to see them fail**
 
@@ -1282,12 +1288,12 @@ Expected: FAIL, heading not found.
 - [ ] **Step 3: Implement in `AnalysisProfilesPage.tsx`**
 
 - Rename today's `closePanel` to `resetPanel` (body unchanged, plus `setSavedMemberIds([])` and `variantEditsDirty.current = false`). Add `const closePanel = () => { if (variantEditsDirty.current && !window.confirm(UNSAVED_VERSION_PROMPT)) return; resetPanel() }`. `const variantEditsDirty = useRef(false)` is a ref so `handleSave`'s closure reads the latest value.
-- `handleDelete` (line 410) calls `resetPanel`, because the profile is gone. Lines 396, 698 and 712 keep `closePanel`. The header X at 712 has no accessible name today: give it `aria-label="Close panel"`.
+- `handleDelete` (line 410) calls `resetPanel`, because the profile is gone. `handleSave`, the overlay's `onClick` and the header X keep `closePanel`. The header X has no accessible name today: give it `aria-label="Close panel"`. Task 6 moved the lines after 486, so the anchors below are by content.
 - `handleSave`, edit branch: `const saved = await updateAnalysisProfile(...)`, then `setEditingProfile(saved)` before `refreshProfiles()` and `closePanel()`.
 - `const [savedMemberIds, setSavedMemberIds] = useState<number[]>([])`. Set it from `memberIds` in `openEdit`, and from `deduped` in `handleSaveMembers` after the PUT succeeds. Do not derive it from `selectedOrder`.
 - `const { data: coaVariants = [] } = useProfileCoaVariants(editingProfile?.id ?? null)`.
-- COA display block (1111): add a heading `Default text` (`<h4 className="text-sm font-semibold">`) above the macro hint, then one `<p className="text-xs text-muted-foreground">` per non-null `overrideLine(v)`. Render the hint from `COA_MACRO_HINT`.
-- After the Save Changes block (1367-1373), before Members (1376):
+- COA display block (the `<div>` holding `data-testid="coa-macro-hint"`): add a heading `Default text` (`<h4 className="text-sm font-semibold">`) above the macro hint, then one `<p className="text-xs text-muted-foreground">` per non-null `overrideLine(v)`. Render the hint from `COA_MACRO_HINT`.
+- After the `{/* Save profile button */}` block, before the `{/* Membership editor` comment:
   ```tsx
   {editingProfile && (
     <ProfileCoaVariantsSection
@@ -1364,7 +1370,7 @@ Forward the stack's frontend to the laptop (`ssh -N -L <port>:localhost:<port> f
 
 - [ ] **Step 8: Write the evidence, hold the push**
 
-Write `C:\tmp\coavar-verified.md` with the stack name, the SHA, the test results and the screenshot and certificate evidence, in the shape `.github/workflows/pr-evidence.yml` requires. Report to the Handler. Do not push. On their word: push, open the PR against `master` with that block, and bind it. Destroy the stack only after the PR merges (`./bin/accumark-stack destroy coavar --yes`).
+Write `C:\tmp\coavar-verified.md` with the stack name, the SHA, the test results and the screenshot and certificate evidence, in the shape `.github/workflows/pr-evidence.yml` requires. Report to the Handler. Do not push. On their word: merge `origin/master` in again (CI requires it on an open PR, and master will have moved), rerun the targeted tests, push, open the PR against `master` with that block, and bind it. Destroy the stack only after the PR merges (`./bin/accumark-stack destroy coavar --yes`).
 
 ---
 
@@ -1372,8 +1378,7 @@ Write `C:\tmp\coavar-verified.md` with the stack name, the SHA, the test results
 
 From the spec's Rollout. Deploy with the `accumark-deploy` skill after lab hours; it owns the version bump.
 
-1. Josh confirms the default prep wording from 10-30 19:09:59, before the build ships. If it is wrong, correct the default first (a normal logged profile edit).
-2. Ship Mk1 only. No COA Builder, IS or WP release.
-3. Josh adds the Heavy Metals / Nasal Spray version: his prep wording, basis note Leave off, footnotes Leave off, method Same as default or Custom. No seed data.
-4. Build one nasal and one powder sample's sections read-only on prod, in a transaction that is rolled back. Confirm each prints what it should before anyone regenerates a nasal COA.
-5. The four 10-30 nasal COAs (PB-1084, PB-1083, PB-1082, P-5401) are correct as published, and may be regenerated only after step 4.
+1. Ship Mk1 only. No COA Builder, IS or WP release.
+2. Josh adds the Heavy Metals / Nasal Spray version: his prep wording, basis note Leave off, footnotes Leave off, method Same as default or Custom. No seed data.
+3. Build one nasal and one powder sample's sections read-only on prod, in a transaction that is rolled back. Confirm each prints what it should before anyone regenerates a nasal COA.
+4. The four 10-30 nasal COAs (PB-1084, PB-1083, PB-1082, P-5401) are correct as published, and may be regenerated only after step 3.
