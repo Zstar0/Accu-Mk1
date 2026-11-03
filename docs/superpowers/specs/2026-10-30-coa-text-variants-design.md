@@ -1,7 +1,7 @@
 # COA Text Variants per Sample Form: Design
 
 **Date:** 2026-10-30
-**Status:** Draft, awaiting Handler approval
+**Status:** Approved by the Handler 2026-11-02. Plan: [2026-11-02-coa-text-variants.md](../plans/2026-11-02-coa-text-variants.md)
 **Repos:** Accu-Mk1 only (no COA Builder, Integration Service or WordPress change)
 
 ## Why
@@ -72,7 +72,7 @@ When a sample of that form gets a COA, the variant applies. A sample of any othe
 
 ### Data
 
-New table `analysis_profile_coa_variants`, with its model in backend/models.py next to `AnalysisProfile`. Create it the way the Sample Forms release created `lims_sample_forms`: idempotent `CREATE TABLE IF NOT EXISTS` / `CREATE UNIQUE INDEX IF NOT EXISTS` statements in backend/database.py (the pattern at 2230-2285).
+New table `analysis_profile_coa_variants`, with its model in backend/models.py next to `AnalysisProfile`. `create_all` builds the table and its declared indexes on the next boot, which is how Mk1 makes a new table. (Changed while planning, 2026-11-02. This doc first called for raw `CREATE TABLE` statements like `lims_sample_forms`, but those exist because later `ALTER`s needed that table before `create_all` runs. Nothing depends on this one, and `_run_migrations` runs first, so raw DDL would only duplicate the model and log a skipped migration on a fresh database.)
 
 | Column | Type | Meaning |
 |---|---|---|
@@ -281,6 +281,15 @@ Frontend:
 - The guard line shows only while Basis note or Footnotes is overridden. The peptide sentence shows only when a member has an active peptide rule.
 - The preview is built in the browser and is not a real render. Macros print as typed.
 - Closing the panel with unsaved version edits asks first. This is new behavior: the panel has no such check for its other sections, and Save Changes closes it.
+
+Added while planning, 2026-11-02:
+
+- The table comes from `create_all`, with no raw DDL (see Data).
+- The guard log line fires only when a basis note or footnotes override was actually held back.
+- The routes also refuse whitespace-only text (400) and a title or basis note over 200 characters (422), and the inputs cap at 200. Neither would otherwise be caught before Postgres or the certificate.
+- While the rules are loading or could not be confirmed, the preview shows the choice as set. The guard line carries the warning.
+- A successful Save closes the card.
+- The panel's close button gets an accessible name, "Close panel".
 
 ## Open for the Handler
 
