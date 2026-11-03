@@ -25,6 +25,7 @@ import {
   Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
 } from '@/components/ui/select'
 import { COA_ARCHETYPE_OPTIONS } from './coa-archetype-options'
+import { FootnoteListEditor } from './FootnoteListEditor'
 import {
   Table,
   TableBody,
@@ -451,38 +452,6 @@ export default function AnalysisProfilesPage() {
     } finally {
       setSavingMembers(false)
     }
-  }
-
-  // ── COA footnotes (Task 6) ── part of the main form state (not a
-  // separate save action like Members/Ride Hosts above) — these ride along
-  // in handleSave's payload, same as coa_section_title.
-
-  const addFootnote = () => {
-    setForm(f => ({ ...f, coa_footnotes: [...f.coa_footnotes, { label: '', text: '' }] }))
-  }
-
-  const removeFootnote = (index: number) => {
-    setForm(f => ({ ...f, coa_footnotes: f.coa_footnotes.filter((_, i) => i !== index) }))
-  }
-
-  const updateFootnote = (index: number, patch: Partial<{ label: string; text: string }>) => {
-    setForm(f => ({
-      ...f,
-      coa_footnotes: f.coa_footnotes.map((row, i) => (i === index ? { ...row, ...patch } : row)),
-    }))
-  }
-
-  const moveFootnote = (index: number, direction: -1 | 1) => {
-    setForm(f => {
-      const target = index + direction
-      const indexRow = f.coa_footnotes[index]
-      const targetRow = f.coa_footnotes[target]
-      if (!indexRow || !targetRow) return f
-      const next = [...f.coa_footnotes]
-      next[index] = targetRow
-      next[target] = indexRow
-      return { ...f, coa_footnotes: next }
-    })
   }
 
   // ── Ride hosts (spec 4) ──
@@ -1225,8 +1194,12 @@ export default function AnalysisProfilesPage() {
                     />
                   </div>
 
-                  <div className="space-y-1.5">
-                    <div className="flex items-center justify-between">
+                  <FootnoteListEditor
+                    value={form.coa_footnotes}
+                    onChange={next =>
+                      setForm(f => ({ ...f, coa_footnotes: next }))
+                    }
+                    header={
                       <div className="flex items-center gap-1.5">
                         <label className="text-sm font-medium">Footnotes</label>
                         <TooltipProvider delayDuration={200}>
@@ -1247,72 +1220,8 @@ export default function AnalysisProfilesPage() {
                           </Tooltip>
                         </TooltipProvider>
                       </div>
-                      <Button type="button" size="sm" variant="outline" onClick={addFootnote}>
-                        <Plus className="mr-1 h-3.5 w-3.5" />
-                        Add Footnote
-                      </Button>
-                    </div>
-
-                    {form.coa_footnotes.length === 0 ? (
-                      <p className="py-2 text-xs text-muted-foreground">No footnotes.</p>
-                    ) : (
-                      <div className="space-y-2">
-                        {form.coa_footnotes.map((footnote, index) => (
-                          <div key={index} className="flex gap-2 rounded-md border p-2">
-                            <div className="flex-1 space-y-1.5">
-                              <Input
-                                aria-label={`Footnote ${index + 1} label`}
-                                placeholder="Label"
-                                value={footnote.label}
-                                onChange={e => updateFootnote(index, { label: e.target.value })}
-                              />
-                              <Textarea
-                                aria-label={`Footnote ${index + 1} text`}
-                                className="min-h-[52px] text-xs"
-                                placeholder="Footnote text"
-                                value={footnote.text}
-                                onChange={e => updateFootnote(index, { text: e.target.value })}
-                              />
-                            </div>
-                            <div className="flex flex-col gap-0.5 shrink-0">
-                              <Button
-                                type="button"
-                                variant="ghost"
-                                size="icon"
-                                className="h-6 w-6"
-                                disabled={index === 0}
-                                aria-label={`Move footnote ${index + 1} up`}
-                                onClick={() => moveFootnote(index, -1)}
-                              >
-                                <ChevronUp className="h-3.5 w-3.5" />
-                              </Button>
-                              <Button
-                                type="button"
-                                variant="ghost"
-                                size="icon"
-                                className="h-6 w-6"
-                                disabled={index === form.coa_footnotes.length - 1}
-                                aria-label={`Move footnote ${index + 1} down`}
-                                onClick={() => moveFootnote(index, 1)}
-                              >
-                                <ChevronDown className="h-3.5 w-3.5" />
-                              </Button>
-                              <Button
-                                type="button"
-                                variant="ghost"
-                                size="icon"
-                                className="h-6 w-6 text-destructive hover:text-destructive"
-                                aria-label={`Remove footnote ${index + 1}`}
-                                onClick={() => removeFootnote(index)}
-                              >
-                                <X className="h-3.5 w-3.5" />
-                              </Button>
-                            </div>
-                          </div>
-                        ))}
-                      </div>
-                    )}
-                  </div>
+                    }
+                  />
                 </div>
 
                 {/* SLA tier (Task 11) — edit only. Beats the member services'
