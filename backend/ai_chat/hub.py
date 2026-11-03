@@ -1,4 +1,4 @@
-"""ai_chat.hub: per-user event buffer with replay, live fan-out to SSE subscribers, and the SSE frame (spec 6).
+"""ai_chat.hub: per-user event buffer with replay, live fan-out to SSE subscribers, and the SSE frame (spec 8).
 
 Every chat event for a user goes through `EventHub.publish`, which stamps it with a per-user `seq`, keeps
 it in a bounded buffer, and puts it on each subscriber's queue. A browser that reconnects sends its last

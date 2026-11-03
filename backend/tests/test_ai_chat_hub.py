@@ -1,4 +1,4 @@
-"""ai_chat.hub: per-user event buffer with replay and resync, live fan-out and the SSE frame (spec 6)."""
+"""ai_chat.hub: per-user event buffer with replay and resync, live fan-out and the SSE frame (spec 8)."""
 import json
 import time
 
