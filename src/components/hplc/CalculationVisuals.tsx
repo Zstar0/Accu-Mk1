@@ -153,7 +153,11 @@ const PROBLEM_COPY: Record<string, string> = {
     'The calibration curve has no usable diluent density. This is not a weighing problem: the density needs setting on the curve.',
   no_declared_volume:
     'This liquid sample has no usable declared volume. This is not a weighing problem: the volume declared with the sample needs recording (it is taken as declared, not measured).',
-  // This code is only ever the quantity panel's reason, never the dilution panel's.
+  // These two codes are only ever the quantity panel's reason, never the dilution panel's.
+  // A quantity can be refused on sound weighings: the mass is published to four places, so
+  // very small volumes work out to a mass with no number left in it.
+  quantity_below_precision:
+    'The quantity works out too small to report, so it is not a result. Check the declared volume or the stock vial weighings, and the dilution vial weighings: a volume much smaller than the prep intended gives a quantity like this.',
   quantity_not_finite:
     'A value is too large for the calculation to handle. Check the dilution and intermediate vial weighings, the stock volume, the peak areas and the calibration curve; if those look right, raise it with the lab manager.',
 }

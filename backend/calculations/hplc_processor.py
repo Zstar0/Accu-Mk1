@@ -96,6 +96,11 @@ def _leg_mg(heavier: Optional[float], lighter: Optional[float]) -> Optional[floa
 STOCK_VOLUME_PLACES = 6
 
 
+# The places calculate_quantity publishes a mass in. Read by the rounding and by the
+# guard that refuses a mass which rounds away, for the same reason as above.
+QUANTITY_MG_PLACES = 4
+
+
 def _volume_survives_rounding(volume: Optional[float]) -> bool:
     """A stock volume the stored row can carry: a number, and still above zero once
     rounded to the places it is stored in. 5e-7 mL or less is not a volume."""
@@ -588,6 +593,11 @@ def calculate_quantity(
                                          dict calculate_dilution_factor did not build)
         "quantity_not_finite"            the concentration, the undiluted concentration
                                          or the mass overflowed
+        "quantity_below_precision"       the concentration is above zero but the mass
+                                         rounds to 0.0 mg at the places it is published
+                                         in, so there is no number to report. NOT a
+                                         weighing code: the weighings may be sound and
+                                         the volumes just very small
 
     What does not depend on the weighings is still returned (areas, calibration, and
     the concentration, which is (avg_area - intercept) / slope; None if that overflowed),
@@ -641,10 +651,19 @@ def calculate_quantity(
         mass_ug = undiluted_conc * stock_vol
         if not all(_finite(v) for v in (concentration, undiluted_conc, mass_ug)):
             error = "quantity_not_finite"
+        elif round(mass_ug / 1000, QUANTITY_MG_PLACES) == 0 and concentration > 0:
+            # The gate above guards the INPUTS, and both can be tiny and still survive
+            # their own rounding (1e-6 mL is enough), so the mass they multiply out to can
+            # still round away. A published 0.0 mg is the same false zero by a third route,
+            # and prep_bridge renders it onto the vial as "0". Not a leg's code: the
+            # weighings may be perfectly good and the quantity still too small to print.
+            # Only for a POSITIVE concentration; a negative one is a real reading whose
+            # small negative mass is a result, as the fixture's own negative row is.
+            error = "quantity_below_precision"
 
     if error:
-        # No total or no stock volume, or an overflow: there is no mass. The measured
-        # concentration is kept when it is a number.
+        # No total or no stock volume, an overflow, or a mass that rounds away: there is
+        # no mass to report. The measured concentration is kept when it is a number.
         return {
             "quantity_mg": None,
             "error": error,
@@ -659,7 +678,7 @@ def calculate_quantity(
     intermediate = dilution.get("intermediate")
 
     return {
-        "quantity_mg": round(mass_mg, 4),
+        "quantity_mg": round(mass_mg, QUANTITY_MG_PLACES),
         "individual_areas": [round(a, 4) for a in areas],
         "avg_main_peak_area": round(avg_area, 4),
         "concentration_ug_ml": round(concentration, 4),

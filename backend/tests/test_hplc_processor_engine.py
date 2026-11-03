@@ -1443,8 +1443,8 @@ def _is_number(value):
 def _expected_quantity(areas, calibration, d):
     """(the error the function must give or None, the kind of outcome, the mass in ug a quantity must have).
 
-    Kinds: "boundary" (the 2-key refusal), "problem", "incomplete" and "overflow" (the 7-key
-    refusals), "one_step" and "two_step" (a quantity).
+    Kinds: "boundary" (the 2-key refusal), "problem", "incomplete", "overflow" and
+    "below_precision" (the 7-key refusals), "one_step" and "two_step" (a quantity).
     """
     if calibration.slope == 0:
         return "Calibration slope is zero", "boundary", None
@@ -1460,6 +1460,13 @@ def _expected_quantity(areas, calibration, d):
     mass_ug = conc * total * volume
     if not all(math.isfinite(v) for v in (conc, conc * total, mass_ug)):
         return "quantity_not_finite", "overflow", None
+    # The published mass is rounded to 4 places, so a positive concentration can still
+    # work out to a mass that rounds away. There is no number to report then, and 0.0 mg
+    # with no problem is the false zero the fix wave exists to kill. The places are
+    # written out rather than imported: this oracle must say what the engine owes, not
+    # read it back from the engine.
+    if round(mass_ug / 1000, 4) == 0 and conc > 0:
+        return "quantity_below_precision", "below_precision", None
     return None, "one_step" if d["intermediate"] is None else "two_step", mass_ug
 
 
@@ -1556,9 +1563,13 @@ def test_the_same_promises_hold_on_a_grid_of_every_area_slope_and_intercept():
             kinds[kind] += 1
     assert failures == []
     # The guarantee: every dilution shape meets every extreme, on every run. Deterministic,
-    # so the floors sit close to the measured 771 one-step and 287 two-step quantities,
-    # 1462 overflow refusals and 1680 incomplete, out of 7,680 calls.
-    _assert_floors(kinds, one_step=750, two_step=280, overflow=1400, incomplete=1600)
+    # so the floors sit close to the measured 743 one-step and 280 two-step quantities,
+    # 1462 overflow refusals, 1680 incomplete and 35 below precision, out of 7,680 calls.
+    # The first two were 771 and 287 until the fix wave: 35 draws whose mass rounded away
+    # used to be counted as quantities, and every one of them was a published 0.0 mg.
+    _assert_floors(
+        kinds, one_step=740, two_step=275, overflow=1400, incomplete=1600, below_precision=30
+    )
 
 
 # ---- Fix wave: a volume that rounds away is not a volume ----------------------
@@ -1610,6 +1621,54 @@ def test_a_stock_volume_that_rounds_to_zero_is_not_a_quantity(overrides, code):
     assert result["purity_percent"] == FORWARD_CASE["expected"]["purity_percent"]
     assert result["concentration_ug_ml"] == FORWARD_CASE["expected"]["concentration_ug_ml"]
     json.dumps(result, allow_nan=False)
+
+
+# A stock leg of 0.005 mg: 5.0145e-6 mL, which SURVIVES the six-place rounding as 5e-06,
+# so the guards above do not fire. On this row (concentration 822.9454 ug/mL, total factor
+# 6.613877) the mass it makes is 2.72e-5 mg, which rounds to 0.0 at the four places the
+# quantity is published in.
+SMALL_SURVIVING_STOCK_LEG = replace(
+    FORWARD_WEIGHTS, stock_vial_with_diluent=FORWARD_WEIGHTS.stock_vial_empty + 0.005
+)
+
+
+@pytest.mark.parametrize(
+    "overrides",
+    [
+        {"form": "liquid", "declared_volume_ml": 5e-6},
+        {"weights": SMALL_SURVIVING_STOCK_LEG},
+    ],
+    ids=["liquid_declared_volume", "powder_stock_leg"],
+)
+def test_a_quantity_that_rounds_to_zero_is_not_a_result(overrides):
+    # The same false zero one layer down: the INPUTS are guarded above, but the mass is
+    # published as round(mass_mg, 4), so a volume and a total that each survive their own
+    # rounding can still multiply out below 0.00005 mg and publish as 0.0 with no problem.
+    result = process_hplc_analysis(replace(_FORWARD_INPUT, **overrides))
+    dilution = result["calculation_trace"]["dilution"]
+    # The premise: nothing the dilution computed is a problem, and both values the mass is
+    # built from are above zero. So this is not reachable by any guard on the inputs.
+    assert dilution["problem"] is None
+    assert dilution["stock_volume_ml"] > 0 and dilution["dilution_factor_total"] > 0
+    assert result["quantity_mg"] is None
+    # The code, not just the refusal: the weighings may be perfectly good, so no leg's
+    # code would be honest here, and a code with no copy prints raw at the bench.
+    assert result["calculation_trace"]["quantity"]["error"] == "quantity_below_precision"
+    # The concentration is a real measurement and is kept, as under every other refusal.
+    assert result["concentration_ug_ml"] == FORWARD_CASE["expected"]["concentration_ug_ml"]
+    assert result["calculation_trace"]["quantity"]["concentration_ug_ml"] > 0
+    json.dumps(result, allow_nan=False)
+
+
+def test_a_negative_quantity_that_rounds_to_zero_is_still_a_result():
+    # The guard above asks for a POSITIVE concentration. A negative one (an area below the
+    # curve's intercept) is a different story: the fixture holds a negative quantity, so a
+    # small negative number is a reported result and must not be turned into a problem.
+    # Concentration -0.002 ug/mL, so the mass is -3.93e-5 mg: it rounds to zero, and the
+    # guard must leave it alone.
+    q = calculate_quantity(_one_injection(0.0), CalibrationParams(1.0, 0.002), _OK_DILUTION)
+    assert q["concentration_ug_ml"] < 0
+    assert q["quantity_mg"] == 0.0 and "error" not in q
 
 
 @pytest.mark.parametrize("key", ["dilution_factor_total", "stock_volume_ml"])

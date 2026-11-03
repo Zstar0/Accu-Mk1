@@ -89,7 +89,7 @@ const FLAGGED_ROW_TRACE = {
 
 // The wording a tech reads for each problem code, exactly. Written out here on purpose,
 // not imported: the component's copy is what is under test, so a typo in any sentence
-// there fails its own case below instead of passing against itself. These are the nine
+// there fails its own case below instead of passing against itself. These are the ten
 // codes a tech can meet. `dilution_incomplete` is deliberately absent: it prints raw
 // (see the fallback test).
 const PROBLEM_WORDING = {
@@ -111,6 +111,8 @@ const PROBLEM_WORDING = {
     'This liquid sample has no usable declared volume. This is not a weighing problem: the volume declared with the sample needs recording (it is taken as declared, not measured).',
   quantity_not_finite:
     'A value is too large for the calculation to handle. Check the dilution and intermediate vial weighings, the stock volume, the peak areas and the calibration curve; if those look right, raise it with the lab manager.',
+  quantity_below_precision:
+    'The quantity works out too small to report, so it is not a result. Check the declared volume or the stock vial weighings, and the dilution vial weighings: a volume much smaller than the prep intended gives a quantity like this.',
 }
 
 // One row per code, captured from process_hplc_analysis (not hand-built): the dilution
@@ -339,6 +341,34 @@ const CAPTURED_ROWS = {
       calibration_intercept: -33.766783,
     },
   },
+  // A sound powder row whose stock leg is 0.05 mg: the stock volume survives its own
+  // rounding as 5e-05 mL, and the mass it makes (2.43e-5 mg) rounds away at the four
+  // places the quantity is published in. No weighing here is wrong.
+  quantity_below_precision: {
+    dilution: {
+      diluent_mass_mg: 1234.66,
+      diluent_vol_ul: 1238.2509,
+      sample_mass_mg: 219.93,
+      sample_vol_ul: 220.5697,
+      total_vol_ul: 1458.8206,
+      dilution_factor: 6.613877,
+      stock_mass_mg: 0.05,
+      stock_volume_ml: 5e-5,
+      problem: null,
+      form: 'powder',
+      dilution_factor_total: 6.613877,
+      intermediate: null,
+    },
+    quantity: {
+      quantity_mg: null,
+      error: 'quantity_below_precision',
+      individual_areas: [1125.3809],
+      avg_main_peak_area: 1125.3809,
+      concentration_ug_ml: 73.4453,
+      calibration_slope: 15.782452,
+      calibration_intercept: -33.766783,
+    },
+  },
   quantity_not_finite: {
     dilution: {
       diluent_mass_mg: 1234.66,
@@ -404,6 +434,7 @@ const DILUTION_LABEL: [keyof typeof PROBLEM_WORDING, string | null][] = [
   ['intermediate_diluent', 'Total dilution factor'],
   ['intermediate_stock', 'Total dilution factor'],
   ['quantity_not_finite', null],
+  ['quantity_below_precision', null],
 ]
 
 describe('CalculationVisuals with a weighing problem', () => {
