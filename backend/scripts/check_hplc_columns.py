@@ -1,15 +1,21 @@
 """Post-deploy check for the HPLC results engine schema (plan
 docs/superpowers/plans/2026-10-31-hplc-results-engine.md, Task 6): do the new
-hplc_analyses columns exist, and are the two stock-vial weighings nullable?
+hplc_analyses columns exist, and are the two stock-vial weighings nullable? Task 8 adds
+lims_sample_forms: does hplc_prep exist, is its CHECK there, and did the backfill fill the
+two built-in forms that have a prep kind?
 
 _run_migrations runs each ALTER on its own and LOGS a failure instead of raising, so a
 column can silently fail to exist in production, and a DROP NOT NULL that failed leaves
-every liquid row to 500 at insert. This reads information_schema only, in a read-only
-transaction, and takes no arguments and no credentials: it uses the container's own
-engine (database.SessionLocal), like capture_hplc_golden.py beside it.
+every liquid row to 500 at insert. This reads information_schema and pg_constraint and
+the lims_sample_forms rows only, in a read-only transaction, and takes no arguments and no
+credentials: it uses the container's own engine (database.SessionLocal), like
+capture_hplc_golden.py beside it.
 
-Prints one line per column. Exits 1 if any column is missing or has the wrong
-nullability, 0 otherwise, so a release script can gate on it. Prod (stdin form, per the
+Prints one line per column, constraint and form. Exits 1 if any column is missing or has
+the wrong nullability, the CHECK is missing, or a built-in form has the wrong prep kind,
+0 otherwise, so a release script can gate on it. A built-in form renamed in Settings
+since the 1.55.0 seed is printed as "not found" and does not fail the gate: its prep kind
+is NULL and the fix is one UPDATE by id, not a code change. Prod (stdin form, per the
 data-fix runbook):
     ssh root@100.120.92.93 'docker exec -w /app -i accu-mk1-backend python' \\
         < backend/scripts/check_hplc_columns.py
@@ -41,11 +47,27 @@ EXPECTED = {
 }
 
 
-def evaluate(found):
+# lims_sample_forms (Task 8): the new column stays nullable (NULL = no HPLC prep maths), its
+# CHECK is added by a DO block that only logs on failure, and the backfill matches the six
+# built-in names as lower(btrim(name)). Only the first two have a prep kind; the other four
+# stay NULL until capsule is ruled. A form the Handler added or renamed is not judged.
+FORMS_EXPECTED = {"hplc_prep": "YES"}
+FORMS_CHECK = "ck_lims_sample_forms_hplc_prep"
+FORMS_PREP = {
+    "lyophilized powder": "powder",
+    "reconstituted solution": "liquid",
+    "pen": None,
+    "nasal spray": None,
+    "capsule": None,
+    "tablet": None,
+}
+
+
+def evaluate(found, expected=EXPECTED):
     """(report lines, number of problems) for `found`, a {column: (data_type, is_nullable)}.
     Pure, so the pass and fail paths can be checked without a database."""
     lines, bad = [], 0
-    for name, want in EXPECTED.items():
+    for name, want in expected.items():
         got = found.get(name)
         if got is None:
             status = "MISSING"
@@ -58,6 +80,50 @@ def evaluate(found):
     return lines, bad
 
 
+def evaluate_sample_forms(found, constraints, rows):
+    """(report lines, number of problems) for lims_sample_forms. `found` is evaluate()'s
+    {column: (data_type, is_nullable)}, `constraints` the constraint names on the table, and
+    `rows` its (name, route, hplc_prep) tuples, or None when the column is missing so no
+    value can be read. Pure, like evaluate()."""
+    lines, bad = evaluate(found, FORMS_EXPECTED)
+    has_check = FORMS_CHECK in constraints
+    bad += not has_check
+    lines.append(f"{FORMS_CHECK:36} {'constraint':20} {'ok' if has_check else 'MISSING'}")
+    if rows is None:
+        lines.append("lims_sample_forms values not checked: the hplc_prep column is missing")
+        return lines, bad
+    seen = set()
+    for name, route, prep in rows:
+        key = name.strip(" ").lower()  # the migration's lower(btrim(name))
+        if key not in FORMS_PREP:
+            status = "not a built-in name, not judged"
+        else:
+            seen.add(key)
+            want = FORMS_PREP[key]
+            status = "ok" if prep == want else f"WRONG, want {want or 'NULL'}"
+            bad += prep != want
+        lines.append(f"{name:36} {route:20} {prep or 'NULL':8} {status}")
+    for key in FORMS_PREP:
+        if key not in seen:
+            lines.append(f"{key:36} not found by name (renamed in Settings? one UPDATE by id fixes it)")
+    return lines, bad
+
+
+def _columns(db, table, names):
+    from sqlalchemy import text
+
+    return {
+        name: (data_type, nullable)
+        for name, data_type, nullable in db.execute(
+            text(
+                "SELECT column_name, data_type, is_nullable FROM information_schema.columns "
+                "WHERE table_name = :table AND column_name = ANY(:names)"
+            ),
+            {"table": table, "names": list(names)},
+        )
+    }
+
+
 def main():
     from sqlalchemy import text
 
@@ -65,19 +131,26 @@ def main():
 
     with SessionLocal() as db:
         db.execute(text("SET TRANSACTION READ ONLY"))
-        found = {
-            name: (data_type, nullable)
-            for name, data_type, nullable in db.execute(
-                text(
-                    "SELECT column_name, data_type, is_nullable FROM information_schema.columns "
-                    "WHERE table_name = 'hplc_analyses' AND column_name = ANY(:names)"
-                ),
-                {"names": list(EXPECTED)},
+        found = _columns(db, "hplc_analyses", EXPECTED)
+        forms_found = _columns(db, "lims_sample_forms", FORMS_EXPECTED)
+        # to_regclass is NULL for a missing table, where a bare ::regclass cast would raise.
+        constraints = {
+            row[0]
+            for row in db.execute(
+                text("SELECT conname FROM pg_constraint WHERE conrelid = to_regclass('lims_sample_forms')")
             )
         }
+        # Selecting a column that was never added would abort the whole transaction.
+        rows = (
+            [tuple(r) for r in db.execute(text("SELECT name, route, hplc_prep FROM lims_sample_forms ORDER BY sort_order, id"))]
+            if "hplc_prep" in forms_found
+            else None
+        )
     lines, bad = evaluate(found)
-    print("\n".join(lines))
-    print("ALL PRESENT" if not bad else f"{bad} PROBLEM(S): do not ship a liquid prep until fixed")
+    forms_lines, forms_bad = evaluate_sample_forms(forms_found, constraints, rows)
+    print("\n".join(lines + forms_lines))
+    bad += forms_bad
+    print("ALL PRESENT" if not bad else f"{bad} PROBLEM(S): do not ship a liquid prep or read hplc_prep until fixed")
     sys.exit(1 if bad else 0)
 
 

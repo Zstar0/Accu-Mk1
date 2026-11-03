@@ -2109,6 +2109,9 @@ class LimsSampleForm(Base):
               postgresql_where=text("is_default"), sqlite_where=text("is_default")),
         CheckConstraint("route IN ('injectable','nasal_inhaled','oral')",
                         name="ck_lims_sample_forms_route"),
+        # NULL passes (SQL CHECK semantics): NULL means "no HPLC prep maths".
+        CheckConstraint("hplc_prep IN ('powder','liquid')",
+                        name="ck_lims_sample_forms_hplc_prep"),
     )
 
     id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
@@ -2120,6 +2123,12 @@ class LimsSampleForm(Base):
     # A key into the frontend icon set (sample_forms.routes.FormIcon); NULL
     # draws the generic icon. No CHECK, so a new icon is a code-only change.
     icon: Mapped[Optional[str]] = mapped_column(String(30), nullable=True)
+    # Which HPLC prep maths a sample in this form uses: 'powder' or 'liquid'.
+    # NULL = this form has no HPLC prep maths. 'bac' is absent on purpose (it is
+    # identity-derived, worksheets_endo_promote._sample_is_bac, and never gets a
+    # form row); 'capsule' waits on the Handler's capsule-quantity ruling. Nothing
+    # reads this yet: the engine still takes the prep kind from the request.
+    hplc_prep: Mapped[Optional[str]] = mapped_column(String(10), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
     updated_at: Mapped[datetime] = mapped_column(
         DateTime, default=datetime.utcnow, onupdate=datetime.utcnow

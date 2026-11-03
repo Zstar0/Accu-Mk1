@@ -2258,6 +2258,23 @@ def _run_migrations():
         "ON lims_sample_forms (is_default) WHERE is_default",
         # The form's picker icon (a frontend key; NULL draws the generic one).
         "ALTER TABLE lims_sample_forms ADD COLUMN IF NOT EXISTS icon VARCHAR(30)",
+        # Which HPLC prep maths a sample in this form uses (NULL = none). Nothing
+        # reads it yet. The CHECK is added only if absent (union-preserve idiom,
+        # ck_lims_sub_sample_events_one_host precedent) and never inline in the
+        # CREATE TABLE above: the table already exists on prod, so only this
+        # reaches it. NULL passes a CHECK.
+        "ALTER TABLE lims_sample_forms ADD COLUMN IF NOT EXISTS hplc_prep VARCHAR(10)",
+        """DO $$ BEGIN
+            IF NOT EXISTS (
+                SELECT 1 FROM pg_constraint
+                WHERE conname = 'ck_lims_sample_forms_hplc_prep'
+                  AND conrelid = 'lims_sample_forms'::regclass
+            ) THEN
+                ALTER TABLE lims_sample_forms
+                    ADD CONSTRAINT ck_lims_sample_forms_hplc_prep
+                        CHECK (hplc_prep IN ('powder','liquid'));
+            END IF;
+        END $$""",
         """
         INSERT INTO lims_sample_forms (name, route, is_default, active, sort_order, icon, created_at, updated_at)
         SELECT v.name, v.route, v.is_default, v.active, v.sort_order, v.icon, now(), now()
@@ -2282,6 +2299,20 @@ def _run_migrations():
             WHEN 'tablet' THEN 'tablet' END
         WHERE icon IS NULL AND lower(btrim(name)) IN
             ('lyophilized powder','reconstituted solution','pen','nasal spray','capsule','tablet')
+        """,
+        # The HPLC prep kind for the two built-in forms that have one. This MUST
+        # stay after the seed above: the seed only fires into an empty table and
+        # does not name hplc_prep, so on a fresh database these two rows are
+        # inserted NULL and only this UPDATE fills them. Pen, Nasal Spray,
+        # Capsule and Tablet are deliberately not listed, which leaves them NULL
+        # without a statement to undo when capsule is ruled. Guarded by
+        # IS NULL so a value set by hand is never overwritten on a later boot.
+        """
+        UPDATE lims_sample_forms SET hplc_prep = CASE lower(btrim(name))
+            WHEN 'lyophilized powder' THEN 'powder'
+            WHEN 'reconstituted solution' THEN 'liquid' END
+        WHERE hplc_prep IS NULL AND lower(btrim(name)) IN
+            ('lyophilized powder','reconstituted solution')
         """,
         "ALTER TABLE lims_samples ADD COLUMN IF NOT EXISTS sample_form_id "
         "INTEGER REFERENCES lims_sample_forms(id)",

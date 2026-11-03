@@ -110,3 +110,38 @@ def test_migrations_add_icon_before_the_seed_and_fill_only_null_icons():
     assert i_create < i_icon < i_seed < i_fill
     assert "'Lyophilized Powder','injectable',true,true,10,'powder_vial'" in sqls[i_seed]
     assert "WHERE icon IS NULL" in sqls[i_fill]
+
+
+# --- hplc_prep: which HPLC prep maths a sample in this form uses (Task 8). Nothing
+# reads it yet; the engine takes the prep kind from the request. ---
+
+
+def test_hplc_prep_check_rejects_a_value_outside_the_pair(db_session):
+    db_session.add(LimsSampleForm(name="Gel", route="oral", hplc_prep="bac"))
+    with pytest.raises(IntegrityError):
+        db_session.flush()
+
+
+def test_hplc_prep_may_be_null(db_session):
+    db_session.add(LimsSampleForm(name="Gel", route="oral", hplc_prep=None))
+    db_session.flush()   # no raise
+
+
+def test_migrations_add_hplc_prep_then_its_check_then_fill_only_null_values():
+    sqls = _captured()
+    i_create = _index_of(sqls, "CREATE TABLE IF NOT EXISTS lims_sample_forms")
+    i_col = _index_of(sqls, "ALTER TABLE lims_sample_forms ADD COLUMN IF NOT EXISTS hplc_prep")
+    i_check = _index_of(sqls, "ck_lims_sample_forms_hplc_prep")
+    i_seed = _index_of(sqls, "INSERT INTO lims_sample_forms")
+    i_fill = _index_of(sqls, "UPDATE lims_sample_forms SET hplc_prep")
+    assert i_create < i_col < i_check < i_seed < i_fill
+    assert "WHERE hplc_prep IS NULL" in sqls[i_fill]
+    assert "'lyophilized powder'" in sqls[i_fill].lower()
+    assert "'reconstituted solution'" in sqls[i_fill].lower()
+
+
+def test_the_backfill_leaves_the_other_four_built_in_forms_alone():
+    sqls = _captured()
+    fill = _index_of(sqls, "UPDATE lims_sample_forms SET hplc_prep")
+    for name in ("'pen'", "'nasal spray'", "'capsule'", "'tablet'"):
+        assert name not in sqls[fill].lower()   # the quoted literal, not a bare word

@@ -656,6 +656,41 @@ def test_the_column_check_passes_only_when_every_column_is_there_and_nullable():
     assert evaluate({})[1] == len(EXPECTED)
 
 
+def test_the_sample_forms_check_wants_the_column_the_constraint_and_the_two_backfilled_values():
+    from scripts.check_hplc_columns import FORMS_CHECK, evaluate_sample_forms
+
+    column = {"hplc_prep": ("character varying", "YES")}
+    rows = [
+        ("Lyophilized Powder", "injectable", "powder"),
+        ("Reconstituted Solution", "injectable", "liquid"),
+        ("Pen", "injectable", None),
+        ("Nasal Spray", "nasal_inhaled", None),
+        ("Capsule", "oral", None),
+        ("Tablet", "oral", None),
+    ]
+    assert evaluate_sample_forms(column, {FORMS_CHECK}, rows)[1] == 0
+    # The ALTER the migration swallowed (values cannot be read, and are not guessed at):
+    lines, bad = evaluate_sample_forms({}, {FORMS_CHECK}, None)
+    assert bad == 1 and any("not checked" in line for line in lines)
+    # NULL must stay legal:
+    assert evaluate_sample_forms({"hplc_prep": ("character varying", "NO")}, {FORMS_CHECK}, rows)[1] == 1
+    # The DO block that never added the CHECK:
+    assert evaluate_sample_forms(column, set(), rows)[1] == 1
+    # The backfill that never ran (both fills missing):
+    unfilled = [(name, route, None) for name, route, _ in rows]
+    assert evaluate_sample_forms(column, {FORMS_CHECK}, unfilled)[1] == 2
+    # A built-in that should be NULL but is not:
+    wrong = [(n, r, "powder" if n == "Pen" else p) for n, r, p in rows]
+    assert evaluate_sample_forms(column, {FORMS_CHECK}, wrong)[1] == 1
+    # Names match as the migration matches them (lower(btrim(name))):
+    padded = [(f"  {n.upper()} ", r, p) for n, r, p in rows]
+    assert evaluate_sample_forms(column, {FORMS_CHECK}, padded)[1] == 0
+    # A built-in renamed in Settings is reported, never guessed at, and does not fail the gate:
+    renamed = [("Powder Vial", r, p) if n == "Lyophilized Powder" else (n, r, p) for n, r, p in rows]
+    lines, bad = evaluate_sample_forms(column, {FORMS_CHECK}, renamed)
+    assert bad == 0 and any("lyophilized powder" in line and "not found" in line for line in lines)
+
+
 # ---- a hand-picked curve must be from the run's instrument --------------------------
 #
 # A curve maps area to concentration for the instrument that produced it. Another
