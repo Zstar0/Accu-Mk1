@@ -2,11 +2,13 @@
 import asyncio
 import os
 import sys
+from datetime import datetime
 
 import anyio
 import pytest
 from cryptography.fernet import Fernet
 from sqlalchemy import delete, event, select, text, update
+from sqlalchemy.orm import Session, sessionmaker
 
 from ai_chat import providers, sessions, transport
 from ai_chat.models import AcpProvider, AiChat
@@ -559,6 +561,28 @@ async def test_a_result_for_edited_settings_is_not_recorded(ai_chat_api, ai_chat
     row = stored(ai_chat_env, 1)
     assert (row.last_test_at, row.last_test_ok) == (None, None)
     assert all(getattr(row, k) == v for k, v in edit.items())
+
+
+async def test_a_save_between_the_read_and_the_write_keeps_the_result_out(ai_chat_env, monkeypatch):
+    with ai_chat_env.Session() as s:
+        row = s.get(AcpProvider, 1)
+        snapshot, edited_at = sessions.ProviderSnapshot.from_row(row), row.updated_at
+
+    class AdminSavesFirst(Session):
+        def execute(self, statement, *args, **kwargs):
+            if getattr(statement, "is_update", False):
+                self.rollback()  # lets the other writer in on SQLite; Postgres read committed needs no such help
+                with ai_chat_env.Session() as admin:  # what `update_provider` writes when a `_RETEST` field changes
+                    admin.execute(update(AcpProvider).where(AcpProvider.id == 1).values(
+                        ssh_host="new.host", last_test_ok=None, updated_at=datetime(2030, 1, 1)))
+                    admin.commit()
+            return super().execute(statement, *args, **kwargs)
+
+    monkeypatch.setattr(sessions, "_session_factory", sessionmaker(bind=ai_chat_env.Session.kw["bind"],
+                                                                   class_=AdminSavesFirst))
+    await asyncio.to_thread(providers._record_test, snapshot, edited_at, True, None)
+    row = stored(ai_chat_env, 1)
+    assert (row.ssh_host, row.last_test_ok, row.last_test_at) == ("new.host", None, None)
 
 
 @pytest.mark.parametrize("case", ["no key", "rotated secret"])

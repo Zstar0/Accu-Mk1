@@ -339,12 +339,13 @@ def _record_test(snapshot: sessions.ProviderSnapshot, edited_at: datetime, ok: b
     """On a worker with its own session: it reads the row as it is now, and the route's session is left alone, so no
     pool checkout happens on the loop thread. A provider edited or deleted meanwhile is not the one that was tested:
     the result goes back, but is not recorded. `updated_at` catches any admin write (the snapshot has no `enabled`),
-    the snapshot what was tested."""
+    the snapshot what was tested. The UPDATE checks `updated_at` again: a save can land between this read and it."""
     with sessions._session_factory() as db:
         fresh = db.get(AcpProvider, snapshot.id)
         if (fresh is not None and fresh.updated_at == edited_at
                 and sessions.ProviderSnapshot.from_row(fresh) == snapshot):
-            db.execute(update(AcpProvider).where(AcpProvider.id == snapshot.id).values(
+            db.execute(update(AcpProvider).where(AcpProvider.id == snapshot.id,
+                                                 AcpProvider.updated_at == edited_at).values(
                 last_test_at=_utcnow(), last_test_ok=ok, last_test_error=error,
                 updated_at=AcpProvider.updated_at,  # "last edited by an admin" is not a test
             ).execution_options(synchronize_session=False))
