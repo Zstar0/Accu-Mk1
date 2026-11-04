@@ -24,21 +24,27 @@ export type PageContextSource = Pick<
   | 'worksheetPageId'
 >
 
-/** `{section, subsection}` plus the first target that is set, in this order. */
+/**
+ * `{section, subsection}` plus the target of the page the user is on, if it
+ * has one. Most target ids in the UI store are sticky (`sampleDetailsTargetId`
+ * outlives the sample page), so each is read only on its own subsection, the
+ * same pairing `buildHash` in `src/lib/hash-navigation.ts` uses; a stale id
+ * would otherwise label Reports as "sample P-1234".
+ */
 export function currentPageContext(ui: PageContextSource): PageContext {
   const section = ui.activeSection
   const subsection = ui.activeSubSection
   const targets = [
-    ['sample', ui.sampleDetailsTargetId],
-    ['order', ui.orderExplorerTargetOrderId],
-    ['customer', ui.customerDetailTargetId],
-    ['document', ui.documentViewerTargetId],
-    ['worksheet', ui.worksheetPageId],
+    ['sample', 'sample-details', ui.sampleDetailsTargetId],
+    ['order', 'order-explorer', ui.orderExplorerTargetOrderId],
+    ['customer', 'customer-detail', ui.customerDetailTargetId],
+    ['document', 'documents', ui.documentViewerTargetId],
+    ['worksheet', 'worksheet', ui.worksheetPageId],
   ] as const
-  for (const [kind, id] of targets) {
+  for (const [kind, page, id] of targets) {
     // `!== null`, not truthiness: 0 is an id. The backend only accepts a
     // string `target_id`, so the numeric ids are converted here.
-    if (id !== null) {
+    if (subsection === page && id !== null) {
       return { section, subsection, target_kind: kind, target_id: String(id) }
     }
   }

@@ -32,7 +32,9 @@ VALID_SECTIONS = frozenset({
 TARGET_KINDS = frozenset({"sample", "order", "customer", "document", "worksheet"})
 # Both patterns are unanchored on purpose: they are only used with fullmatch, which cannot be fooled by a trailing newline.
 ID_RE = re.compile(r"[A-Za-z0-9._-]{1,64}")
-SUBSECTION_RE = re.compile(r"[a-z0-9-]{1,48}")
+# Uppercase is allowed: the Settings subsections are camelCase (`dataPipeline`, `businessHours`). Letters, digits and hyphens
+# cannot close or open a tag in the context block.
+SUBSECTION_RE = re.compile(r"[A-Za-z0-9-]{1,48}")
 
 
 def _valid_id(value: object) -> bool:

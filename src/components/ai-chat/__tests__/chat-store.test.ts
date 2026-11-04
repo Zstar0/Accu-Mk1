@@ -806,44 +806,104 @@ describe('currentPageContext', () => {
     ])
   })
 
-  it('sends numeric ids as strings, and 0 is a target', () => {
-    expect(currentPageContext(ui({ customerDetailTargetId: 0 }))).toMatchObject(
-      { target_kind: 'customer', target_id: '0' }
-    )
+  // Each target is sent on the subsection `buildHash` pairs it with.
+  it.each([
+    [
+      'sample',
+      'senaite',
+      'sample-details',
+      { sampleDetailsTargetId: 'P-0091' },
+      'P-0091',
+    ],
+    [
+      'order',
+      'accumark-tools',
+      'order-explorer',
+      { orderExplorerTargetOrderId: '5521' },
+      '5521',
+    ],
+    [
+      'customer',
+      'accumark-tools',
+      'customer-detail',
+      { customerDetailTargetId: 42 },
+      '42',
+    ],
+    ['document', 'reports', 'documents', { documentViewerTargetId: 12 }, '12'],
+    ['worksheet', 'hplc-analysis', 'worksheet', { worksheetPageId: 7 }, '7'],
+  ] as const)(
+    'sends the %s target on its own page, ids as strings',
+    (kind, activeSection, activeSubSection, target, id) => {
+      expect(
+        currentPageContext(ui({ activeSection, activeSubSection, ...target }))
+      ).toEqual({
+        section: activeSection,
+        subsection: activeSubSection,
+        target_kind: kind,
+        target_id: id,
+      })
+    }
+  )
+
+  it('0 is an id, not "no target"', () => {
     expect(
-      currentPageContext(ui({ documentViewerTargetId: 12 }))
-    ).toMatchObject({ target_kind: 'document', target_id: '12' })
-    expect(currentPageContext(ui({ worksheetPageId: 7 }))).toMatchObject({
-      target_kind: 'worksheet',
-      target_id: '7',
-    })
-    expect(
-      currentPageContext(ui({ orderExplorerTargetOrderId: '5521' }))
-    ).toMatchObject({ target_kind: 'order', target_id: '5521' })
+      currentPageContext(
+        ui({
+          activeSection: 'accumark-tools',
+          activeSubSection: 'customer-detail',
+          customerDetailTargetId: 0,
+        })
+      )
+    ).toMatchObject({ target_kind: 'customer', target_id: '0' })
   })
 
-  it('takes the first target in the documented order', () => {
+  it('sends no target for a sticky id left over from another page', () => {
+    // `sampleDetailsTargetId` outlives the sample page; Reports is not it.
+    const stale = currentPageContext(
+      ui({
+        activeSection: 'reports',
+        activeSubSection: 'dashboard',
+        sampleDetailsTargetId: 'P-1234',
+      })
+    )
+    expect(stale).toEqual({ section: 'reports', subsection: 'dashboard' })
+    expect(Object.keys(stale)).toEqual(['section', 'subsection'])
+
+    // Same for every other target: set, but the user is elsewhere.
     expect(
       currentPageContext(
         ui({
           sampleDetailsTargetId: 'P-1',
           orderExplorerTargetOrderId: '9',
           customerDetailTargetId: 3,
-        })
-      )
-    ).toMatchObject({ target_kind: 'sample', target_id: 'P-1' })
-    expect(
-      currentPageContext(
-        ui({
-          orderExplorerTargetOrderId: '9',
-          customerDetailTargetId: 3,
           documentViewerTargetId: 4,
           worksheetPageId: 5,
         })
       )
-    ).toMatchObject({ target_kind: 'order', target_id: '9' })
+    ).toEqual({ section: 'dashboard', subsection: 'orders' })
+  })
+
+  it('sends only the target of the page the user is on', () => {
+    const all = {
+      sampleDetailsTargetId: 'P-1',
+      orderExplorerTargetOrderId: '9',
+      customerDetailTargetId: 3,
+      documentViewerTargetId: 4,
+      worksheetPageId: 5,
+    }
     expect(
-      currentPageContext(ui({ documentViewerTargetId: 4, worksheetPageId: 5 }))
+      currentPageContext(
+        ui({ ...all, activeSection: 'reports', activeSubSection: 'documents' })
+      )
     ).toMatchObject({ target_kind: 'document', target_id: '4' })
+    expect(
+      currentPageContext(
+        ui({
+          ...all,
+          activeSection: 'accumark-tools',
+          activeSubSection: 'order-explorer',
+        })
+      )
+    ).toMatchObject({ target_kind: 'order', target_id: '9' })
   })
 })

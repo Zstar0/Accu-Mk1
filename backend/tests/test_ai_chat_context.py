@@ -60,9 +60,21 @@ def test_unknown_section_drops_context():
     assert clean_context({"section": "evil", "subsection": "x"}) is None
 
 
-@pytest.mark.parametrize("sub", ["Sample-Details", "a_b", "a/b", "x" * 49, "", "a b", "sample-details\n", 5, None])
+@pytest.mark.parametrize("sub", ["a_b", "a/b", "x" * 49, "", "a b", "sample-details\n", "a<b>", "dataPipeline\n", "é", 5, None])
 def test_bad_subsection_drops_context(sub):
     assert clean_context({**GOOD, "subsection": sub}) is None
+
+
+@pytest.mark.parametrize("sub", ["dataPipeline", "businessHours", "checkIn", "Sample-Details", "x" * 48])
+def test_camel_case_subsection_is_accepted(sub):
+    # The Settings subsections are camelCase; a lowercase-only pattern dropped the whole context on those pages.
+    out = clean_context({"section": "settings", "subsection": sub})
+    assert out == {"section": "settings", "subsection": sub, "target_kind": None, "target_id": None}
+
+
+def test_context_block_for_a_camel_case_subsection():
+    block = render_context_block(clean_context({"section": "settings", "subsection": "dataPipeline"}))
+    assert "The user is viewing: DataPipeline." in block
 
 
 @pytest.mark.parametrize("raw", [None, "senaite", [], 3, ["senaite", "x"]])
