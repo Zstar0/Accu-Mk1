@@ -21,7 +21,8 @@ from typing import Any
 from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, ConfigDict
-from sqlalchemy import select
+from sqlalchemy import func, select
+from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
 
 from ai_chat import approvals, context, hub, sessions
@@ -119,9 +120,19 @@ def _who(user) -> tuple[int, str]:
     return user.id, user.role
 
 
+def _storable(text: str) -> bool:
+    """False for a NUL (Postgres refuses it) and for a lone surrogate (JSON can carry one; it has no UTF-8). The
+    write would fail either way, and for a prompt that is after the chat's session was reserved."""
+    try:
+        text.encode("utf-8")
+    except UnicodeEncodeError:
+        return False
+    return "\x00" not in text
+
+
 def _stripped(raw: str | None, field: str, limit: int) -> str:
     text = raw.strip() if raw is not None else ""
-    if not 1 <= len(text) <= limit:
+    if not 1 <= len(text) <= limit or not _storable(text):
         raise _fail(422, "invalid_input", field)
     return text
 
@@ -222,10 +233,17 @@ async def list_messages(chat_id: int, after_seq: int = 0, db: Session = Depends(
 async def prompt(chat_id: int, body: PromptIn, db: Session = Depends(get_db), user=Depends(get_current_user)):
     """Stores the user's message and starts the turn. There is no `await` anywhere in this body, on purpose: from
     the `running_turn` check to `start_turn` nothing else may run on the loop. With a gap, two prompts both pass
-    the check and start two turns, and another chat's `reserve` can evict the session this one reserved."""
+    the check and start two turns, and another chat's `reserve` can evict the session this one reserved.
+
+    The user row goes in on this route's own session, and one commit writes it with the title and `updated_at`.
+    That session already holds the connection the auth dependency opened: a second one, taken on the loop thread,
+    waits out the pool timeout when the pool is full, and every stream and route waits with it. No seq race: no turn
+    runs for this chat here (checked above), and nothing awaits."""
     user_id, role = _who(user)
     text = _stripped(body.text, "text", _TEXT_MAX)
     chat, provider = _access(db, chat_id, user_id, role)
+    if chat.archived:  # first, so an archive that is still closing the chat's turn is a 404 and not a 409
+        raise _fail(404, "chat_not_found")
     if not provider.enabled:
         raise _fail(404, "provider_not_found")
     if sessions.MANAGER.running_turn(chat_id) is not None:
@@ -236,12 +254,21 @@ async def prompt(chat_id: int, body: PromptIn, db: Session = Depends(get_db), us
     except sessions.ProviderBusy:
         raise _fail(429, "provider_busy") from None
     page_context = context.clean_context(body.page_context)
-    # A short blocking write, called directly rather than through `to_thread`: any await here would be that gap.
-    user_seq = sessions.persist_message(chat_id, "user", text, {"page_context": page_context})
-    if not chat.title:
-        chat.title = text[:_TITLE_MAX]
-    chat.updated_at = _utcnow()  # explicit: `onupdate` does not fire when the title was already set
-    db.commit()
+    try:
+        user_seq = (db.scalar(select(func.max(AiChatMessage.seq)).where(AiChatMessage.chat_id == chat_id)) or 0) + 1
+        db.add(AiChatMessage(chat_id=chat_id, seq=user_seq, role="user", text=text,
+                             meta={"page_context": page_context}))
+        if not chat.title:
+            chat.title = text[:_TITLE_MAX]
+        chat.updated_at = _utcnow()  # explicit: `onupdate` does not fire when the title was already set
+        db.commit()
+    except SQLAlchemyError as exc:
+        # Its text holds the statement's parameters, the prompt among them, and uvicorn would log it: neither it nor
+        # its cause leaves this function. The chat keeps an idle reserved session with no process, which the
+        # reaper removes.
+        db.rollback()
+        logger.warning("ai_chat.prompt_write_failed chat=%s error=%s", chat_id, type(exc).__name__)
+        raise HTTPException(status_code=500) from None
     try:
         turn_id = sessions.MANAGER.start_turn(session, text, page_context, stored_session_id, user_seq)
     except sessions.TurnRunning:

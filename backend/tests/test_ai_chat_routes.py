@@ -2,12 +2,13 @@
 import ast
 import asyncio
 import logging
+import time
 from pathlib import Path
 
 import anyio
 import pytest
 from fastapi import HTTPException
-from sqlalchemy import select, update
+from sqlalchemy import create_engine, select, text, update
 
 import main
 import models
@@ -27,6 +28,10 @@ CTX = {"section": "lims", "subsection": "sample-detail", "target_kind": "sample"
        "extra": "dropped"}
 CLEAN_CTX = {"section": "lims", "subsection": "sample-detail", "target_kind": "sample", "target_id": "P-1234"}
 TOOLS_STANDARD_OK = "Available tools (1):\n  todo_list: Track a task list for multi-step work"
+JSON = {"content-type": "application/json"}
+# Text no database stores: a NUL (Postgres refuses it) and a lone surrogate (it has no UTF-8). Raw bytes, because
+# httpx would fail to encode the surrogate itself.
+UNSTORABLE = [b"a\\u0000b", b"a\\ud800b"]
 
 
 @pytest.fixture
@@ -95,6 +100,12 @@ def rows(env, chat_id: int = 1, role: str | None = None) -> list[AiChatMessage]:
         if role is not None:
             query = query.where(AiChatMessage.role == role)
         return list(db.scalars(query))
+
+
+def set_chat(env, **values) -> None:
+    with env.Session() as db:
+        db.execute(update(AiChat).where(AiChat.id == 1).values(**values))
+        db.commit()
 
 
 def set_provider(env, **values) -> None:
@@ -368,6 +379,86 @@ async def test_prompt_text_limit_is_8000(ai_chat_api, ai_chat_env):
     assert ended["stop_reason"] == "end_turn" and len(rows(ai_chat_env, 1, "user")[0].text) == 8000
 
 
+async def test_prompt_takes_no_second_pooled_connection(ai_chat_api, ai_chat_env):
+    # The route's own session already holds the connection the auth dependency opened. A second one, taken on the
+    # loop thread, waits out pool_timeout when the pool is full, and every stream and route waits with it.
+    pooled = ai_chat_env.Session.kw["bind"]
+    one = create_engine(pooled.url, connect_args={"check_same_thread": False}, pool_size=1, max_overflow=0,
+                        pool_timeout=2)
+    ai_chat_env.Session.kw["bind"] = one
+    try:
+        started = time.monotonic()
+        turn_id = await start(ai_chat_api, "hello")
+        assert time.monotonic() - started < 1.5  # not the 2 s pool timeout, which is an error too
+        assert (await seen(ai_chat_env, "turn_ended", turn_id=turn_id))["stop_reason"] == "end_turn"
+        assert [m.text for m in rows(ai_chat_env, 1, "user")] == ["hello"]
+    finally:
+        ai_chat_env.Session.kw["bind"] = pooled
+        one.dispose()
+
+
+@pytest.mark.parametrize("raw", UNSTORABLE)
+async def test_prompt_text_a_database_cannot_store_is_422(ai_chat_api, ai_chat_env, raw):
+    resp = await call(ai_chat_api, "POST", f"{URL}/chats/1/prompt", content=b'{"text": "' + raw + b'"}', headers=JSON)
+    assert (resp.status_code, resp.json()) == (422, {"detail": {"code": "invalid_input", "field": "text"}})
+    assert rows(ai_chat_env) == [] and sessions.MANAGER.get(1) is None  # refused before anything was reserved
+
+
+async def test_a_failed_write_leaks_no_prompt_and_leaves_no_turn(ai_chat_api, ai_chat_env, caplog):
+    secret = "MY-PRIVATE-PROMPT"
+    with ai_chat_env.Session() as s:  # the insert fails, and SQLAlchemy puts the statement's parameters in its text
+        s.execute(text("CREATE TRIGGER no_user_rows BEFORE INSERT ON ai_chat_messages WHEN NEW.role = 'user' "
+                       "BEGIN SELECT RAISE(ABORT, 'boom'); END"))
+        s.commit()
+    db = ai_chat_env.Session()
+    try:
+        caplog.set_level("DEBUG")
+        with pytest.raises(HTTPException) as failed:
+            await routes.prompt(1, routes.PromptIn(text=secret), db, db.get(models.User, 1))
+        assert not db.in_transaction()  # rolled back: the failed commit left no transaction and no held connection
+    finally:
+        db.close()
+    exc = failed.value
+    assert (exc.status_code, exc.detail) == (500, "Internal Server Error")
+    assert exc.__cause__ is None and exc.__suppress_context__  # raised `from None`
+    assert secret not in repr(exc.detail) and secret not in caplog.text
+    assert "ai_chat.prompt_write_failed" in caplog.text and "IntegrityError" in caplog.text  # the type, nothing else
+    with ai_chat_env.Session() as s:
+        assert s.get(AiChat, 1).title == ""  # rolled back with the row
+    assert rows(ai_chat_env) == [] and sessions.MANAGER.running_turn(1) is None
+    # What it leaves is an idle reserved session with no process: one reaper pass removes it.
+    assert sessions.MANAGER.get(1) is not None and sessions.MANAGER.get(1)._owner is None
+    await sessions.MANAGER.reap_once(now=time.monotonic() + 15 * 60 + 5)
+    assert sessions.MANAGER.get(1) is None
+    with ai_chat_env.Session() as s:
+        s.execute(text("DROP TRIGGER no_user_rows"))
+        s.commit()
+    _, ended = await ask(ai_chat_api, ai_chat_env, "after")  # and the chat still works
+    assert ended["stop_reason"] == "end_turn"
+
+
+async def test_prompt_on_an_archived_chat_is_404(ai_chat_api, ai_chat_env):
+    assert (await call(ai_chat_api, "PATCH", f"{URL}/chats/1", json={"archived": True})).status_code == 200
+    resp = await send(ai_chat_api, "hello")
+    assert (resp.status_code, detail(resp)) == (404, {"code": "chat_not_found"})
+    assert rows(ai_chat_env) == [] and sessions.MANAGER.get(1) is None  # no row, no session, no card nobody sees
+    assert (await call(ai_chat_api, "GET", f"{URL}/chats/1/messages")).status_code == 200  # the transcript stays
+    assert (await call(ai_chat_api, "PATCH", f"{URL}/chats/1", json={"archived": False})).status_code == 200
+    await ask(ai_chat_api, ai_chat_env, "hello")  # unarchived, it takes prompts again
+
+
+async def test_the_archived_check_comes_before_the_running_turn_check(ai_chat_api, ai_chat_env):
+    turn_id = await start(ai_chat_api, "SLOW")
+    await seen(ai_chat_env, "message_chunk", turn_id=turn_id)
+    set_chat(ai_chat_env, archived=True)  # the PATCH has committed and is closing the session
+    resp = await send(ai_chat_api, "again")
+    assert (resp.status_code, detail(resp)) == (404, {"code": "chat_not_found"})  # not 409
+    assert [m.text for m in rows(ai_chat_env, 1, "user")] == ["SLOW"]
+    set_chat(ai_chat_env, archived=False)
+    assert (await call(ai_chat_api, "POST", f"{URL}/chats/1/cancel")).json() == {"cancelled": True}
+    await seen(ai_chat_env, "turn_ended", turn_id=turn_id)
+
+
 async def test_prompt_restores_the_stored_session_after_the_session_closed(ai_chat_api, ai_chat_env, tmp_path):
     state = tmp_path / "agent.json"
     ai_chat_env.flags = ["--state", str(state)]
@@ -437,6 +528,29 @@ async def test_patch_title_and_archive(ai_chat_api, ai_chat_env):
 async def test_patch_title_validation_422(ai_chat_api, title):
     resp = await call(ai_chat_api, "PATCH", f"{URL}/chats/1", json={"title": title})
     assert (resp.status_code, resp.json()) == (422, {"detail": {"code": "invalid_input", "field": "title"}})
+
+
+@pytest.mark.parametrize("raw", UNSTORABLE)
+async def test_patch_title_a_database_cannot_store_is_422(ai_chat_api, ai_chat_env, raw):
+    resp = await call(ai_chat_api, "PATCH", f"{URL}/chats/1", content=b'{"title": "' + raw + b'"}', headers=JSON)
+    assert (resp.status_code, resp.json()) == (422, {"detail": {"code": "invalid_input", "field": "title"}})
+    with ai_chat_env.Session() as db:
+        assert db.get(AiChat, 1).title == ""
+
+
+async def test_archiving_during_a_card_resolves_it_cancelled_and_returns_promptly(ai_chat_api, ai_chat_env):
+    turn_id, card = await permit(ai_chat_api, ai_chat_env)
+    pid = card["permission_id"]
+    with anyio.fail_after(15):  # the approval would wait 240 s
+        archived = await call(ai_chat_api, "PATCH", f"{URL}/chats/1", json={"archived": True})
+    assert (archived.status_code, archived.json()["archived"]) == (200, True)
+    assert (await seen(ai_chat_env, "permission_resolved", permission_id=pid))["decision"] == "cancelled"
+    await seen(ai_chat_env, "turn_ended", turn_id=turn_id)
+    late = await decide(ai_chat_api, 1, pid, "allow")
+    assert (late.status_code, detail(late)) == (404, {"code": "permission_not_found"})
+    assert sessions.MANAGER.get(1) is None and approvals.APPROVALS.pending_for_chat(1) == []
+    assert rows(ai_chat_env, 1, "permission")[0].meta["decision"] == "cancelled"
+    assert await chat_ids(ai_chat_api) == []
 
 
 # ---- approvals ----------------------------------------------------------------------------------
