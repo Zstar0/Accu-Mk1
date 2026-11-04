@@ -143,6 +143,33 @@ async def test_allow_always_option_never_offered(ai_chat_env):
     assert rows(ai_chat_env, "assistant")[0].text == "allowed"  # allow_once, not allow_always
 
 
+async def test_unknown_option_kind_never_reaches_the_client(ai_chat_env, tmp_path, caplog, monkeypatch):
+    # acp refuses the whole request before `Mk1Client` is called. Mk1 cannot see it, so it stays fail-closed: no card,
+    # no row, the agent goes on as denied. acp answers it with invalid_params and logs nothing, so no log line either.
+    state = tmp_path / "state.json"
+    ai_chat_env.flags = ["--state", str(state), "--unknown-option"]
+    asked = []
+    real = sessions.Mk1Client.request_permission
+
+    async def spy(self, *args, **kwargs):
+        asked.append(args)
+        return await real(self, *args, **kwargs)
+
+    monkeypatch.setattr(sessions.Mk1Client, "request_permission", spy)
+    with anyio.fail_after(30):
+        await send(ai_chat_env, "hi")
+        ended = await seen(ai_chat_env, "turn_ended")
+    assert asked == []
+    assert "permission refused" in agent_log(state)
+    assert ended["stop_reason"] == "end_turn"
+    assert rows(ai_chat_env, "assistant")[0].text == "echo: hi"
+    assert rows(ai_chat_env, "permission") == []
+    assert of_type(ai_chat_env, "permission_requested") == []
+    assert approvals.APPROVALS.pending_for_chat(1) == []
+    assert "SECRET-AGENT-TEXT" not in caplog.text
+    assert [record for record in caplog.records if record.name == "root"] == []
+
+
 async def test_no_allow_once_means_no_allow(ai_chat_env):
     with anyio.fail_after(30):
         await send(ai_chat_env, "PERMIT_NOALLOW")  # offers reject_once and allow_always

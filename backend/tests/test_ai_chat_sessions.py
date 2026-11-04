@@ -1,6 +1,7 @@
 """ai_chat.sessions: one agent process and ACP connection per chat, restore order, turns, refusal guard (spec 7)."""
 import asyncio
 import json
+import logging
 import sys
 import threading
 import time
@@ -149,7 +150,25 @@ async def test_refusal_guard_new_session_and_one_retry(ai_chat_env, tmp_path):
     assert [e["text"] for e in ai_chat_env.events()] == ["echo: ", "hi"]
 
 
-async def test_unknown_update_kind_ignored(ai_chat_env):
+async def test_unknown_update_kind_ignored(ai_chat_env, caplog):
+    # A kind no ACP version has, as a newer Hermes could send: acp refuses it before Mk1 sees it, and logs that.
+    ai_chat_env.flags = ["--unknown-update"]
+    s = ai_chat_env.session()
+    with anyio.fail_after(30):
+        await s.start()
+        await s.attach(None)
+        result = await s.run_turn("t1", ["hi"])
+        await closed(s)
+    assert (result.stop_reason, result.text) == ("end_turn", "echo: hi")
+    assert {e["type"] for e in ai_chat_env.events()} == {"message_chunk"}
+    assert "SECRET-AGENT-TEXT" not in caplog.text
+    [line] = [record for record in caplog.records if record.name == "root"]
+    assert line.getMessage() == "ai_chat.acp_unhandled where=notification error=ValidationError"
+    assert (line.exc_info, line.exc_text, line.stack_info) == (None, None, None)
+    assert "\n" not in caplog.handler.format(line)  # the one operator signal that a Hermes bump changed the wire
+
+
+async def test_known_update_kind_nothing_shows_is_ignored(ai_chat_env, caplog):
     s = ai_chat_env.session()
     with anyio.fail_after(30):
         await s.start()
@@ -158,6 +177,30 @@ async def test_unknown_update_kind_ignored(ai_chat_env):
         await closed(s)
     assert (result.stop_reason, result.text) == ("end_turn", "echo: PLAN")
     assert {e["type"] for e in ai_chat_env.events()} == {"message_chunk"}
+    assert [record for record in caplog.records if record.name == "root"] == []
+
+
+def acp_record(pathname: str, func: str, name: str = "root") -> logging.LogRecord:
+    try:
+        raise ValueError("the agent's text")
+    except ValueError:
+        exc_info = sys.exc_info()
+    return logging.LogRecord(name, logging.ERROR, pathname, 1, "Unhandled error while handling request method=%s",
+                             ("session/update",), exc_info, func)
+
+
+def test_acp_log_filter_reduces_only_the_acp_records():
+    log_filter = sessions._ACP_LOG_FILTER
+    assert logging.getLogger().filters.count(log_filter) == 1
+    reduced = acp_record("/venv/site-packages/acp/connection.py", "_execute_request")
+    assert log_filter.filter(reduced) is True
+    assert reduced.getMessage() == "ai_chat.acp_unhandled where=request error=ValueError"
+    assert (reduced.exc_info, reduced.exc_text, reduced.stack_info) == (None, None, None)
+    for other in (acp_record("/app/other/connection.py", "_execute_request"),
+                  acp_record("/venv/site-packages/acp/connection.py", "_on_task_error")):
+        args = other.args
+        assert log_filter.filter(other) is True
+        assert (other.args, other.exc_info is not None) == (args, True)  # untouched
 
 
 async def test_thoughts_and_tool_calls_published(ai_chat_env):

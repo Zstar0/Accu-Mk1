@@ -64,6 +64,28 @@ from integration_keys import store
 logger = logging.getLogger(__name__)
 
 
+class _AcpLogFilter(logging.Filter):
+    """acp logs a handler's exception through the root logger, whole. When a newer agent sends an update kind acp does
+    not know, that exception is pydantic's, and its text quotes the agent's (spec 8: no content in logs). This cuts
+    exactly those records to one line, which stays: it is the only sign that an agent update changed the wire."""
+
+    _WHERE = {"_run_notification": "notification", "_execute_request": "request"}  # connection.py's two such calls
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        if (record.funcName in self._WHERE
+                and os.path.basename(record.pathname) == "connection.py"
+                and os.path.basename(os.path.dirname(record.pathname)) == "acp"):
+            error = record.exc_info[0] if record.exc_info else None
+            # Not the record's own `method`: it came off the wire.
+            record.msg = "ai_chat.acp_unhandled where=%s error=%s"
+            record.args = (self._WHERE[record.funcName], error.__name__ if error else "unknown")
+            record.exc_info = record.exc_text = record.stack_info = None
+        return True
+
+
+_ACP_LOG_FILTER = _AcpLogFilter()
+logging.getLogger().addFilter(_ACP_LOG_FILTER)  # on the logger: acp calls `logging.exception`, handlers come after
+
 _TRANSPORT = {"limit": 16 * 1024 * 1024, "stderr": asyncio.subprocess.PIPE, "shutdown_timeout": 5.0}
 _CLIENT_CAPS = ClientCapabilities(fs=FileSystemCapabilities(read_text_file=False, write_text_file=False),
                                   terminal=False)
