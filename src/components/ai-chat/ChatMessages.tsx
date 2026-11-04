@@ -129,6 +129,10 @@ const DECISION_LABEL: Record<string, string> = {
 function PermissionRow({ message }: { message: AiMessage }) {
   const decision = str(message.meta?.decision)
   const title = str(message.meta?.title) ?? message.text
+  const permissionId = str(message.meta?.permission_id)
+  const waiting = useAiChatStore(
+    s => permissionId !== null && Object.hasOwn(s.approvals, permissionId)
+  )
   return (
     <div className="flex items-start gap-2 rounded-md border border-dashed px-2.5 py-1.5 text-xs text-muted-foreground">
       <ShieldCheck className="mt-0.5 size-3.5 shrink-0" aria-hidden="true" />
@@ -136,7 +140,7 @@ function PermissionRow({ message }: { message: AiMessage }) {
         <p className="break-words">{title}</p>
         <p className="font-medium">
           {(decision !== null ? DECISION_LABEL[decision] : undefined) ??
-            'No decision recorded'}
+            (waiting ? 'Waiting for your decision.' : 'No decision recorded')}
         </p>
       </div>
     </div>

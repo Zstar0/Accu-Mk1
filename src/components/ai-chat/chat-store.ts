@@ -41,7 +41,11 @@ export interface LiveTurn {
   phase: LivePhase
 }
 
-export type ApprovalCard = PendingApproval & { chatId: number }
+export type ApprovalCard = PendingApproval & {
+  chatId: number
+  /** From the event. A card found through the chat list has none. */
+  agent?: string
+}
 
 export interface ChatData {
   chats: AiChat[]
@@ -161,10 +165,11 @@ export function applyEvent(
 ): ChatData {
   switch (e.type) {
     case 'turn_started': {
-      const phase = e.starting
-        ? 'starting'
-        : e.resuming
-          ? 'resuming'
+      // A restore sets both flags: it spawns a process to attach the session to.
+      const phase = e.resuming
+        ? 'resuming'
+        : e.starting
+          ? 'starting'
           : 'running'
       return withLive(data, e.chat_id, freshTurn(e.turn_id, phase))
     }
@@ -232,6 +237,7 @@ export function applyEvent(
         can_allow: e.can_allow,
         hidden: e.hidden,
         chatId: e.chat_id,
+        agent: e.agent,
       }
       return {
         ...withLive(data, e.chat_id, { ...turn, phase: 'waiting' }),
@@ -315,6 +321,13 @@ function noticeFor(
     return {
       kind: e.code === 'agent_unreachable' ? 'unreachable' : 'error',
       message: e.message,
+      chatId: e.chat_id,
+    }
+  }
+  if (e.type === 'permission_resolved' && e.decision === 'expired') {
+    return {
+      kind: 'busy',
+      message: 'That approval request expired.',
       chatId: e.chat_id,
     }
   }

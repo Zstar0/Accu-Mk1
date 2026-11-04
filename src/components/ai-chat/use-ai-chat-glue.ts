@@ -74,7 +74,9 @@ export function useAiProviders(): AiProvider[] {
 
 /**
  * The provider the panel talks to: the active chat's, else the one picked,
- * else the first. Null while there is none.
+ * else the first. Null while there is none. A chat whose provider is not in the
+ * list (disabled, or the role was taken away) gets the first provider's id, for
+ * New chat and the menu, but no other agent's name.
  */
 export function useActiveProvider(): AiProvider | null {
   const providers = useAiProviders()
@@ -85,7 +87,12 @@ export function useActiveProvider(): AiProvider | null {
       : (s.chats.find(c => c.id === s.activeChatId)?.provider_id ?? null)
   )
   const wanted = chatProviderId ?? providerId
-  return providers.find(p => p.id === wanted) ?? providers[0] ?? null
+  const found = providers.find(p => p.id === wanted)
+  if (found !== undefined) return found
+  const first = providers[0] ?? null
+  return first !== null && chatProviderId !== null
+    ? { ...first, display_name: 'The agent' }
+    : first
 }
 
 // ---- a backend restart mid-turn ---------------------------------------------
@@ -330,7 +337,7 @@ export function useAiChatGlue(): {
 
   // A toast for every card that is not in view, however the card arrived (an
   // event, the chat list after a reload, a resync). It lasts until its card is
-  // gone or in view. The agent is named from the card's chat.
+  // gone or in view. The agent is the event's name, else from the card's chat.
   const approvals = useAiChatStore(s => s.approvals)
   const open = useAiChatStore(s => s.open)
   const activeChatId = useAiChatStore(s => s.activeChatId)
@@ -350,7 +357,9 @@ export function useAiChatGlue(): {
       if (toastIds.has(card.permission_id) || inView(card)) continue
       const providerId = chats.find(c => c.id === card.chatId)?.provider_id
       const agent =
-        providers.find(p => p.id === providerId)?.display_name ?? 'The agent'
+        card.agent ??
+        providers.find(p => p.id === providerId)?.display_name ??
+        'The agent'
       raiseApprovalToast(card, agent)
     }
   }, [approvals, open, activeChatId, chats, providers])

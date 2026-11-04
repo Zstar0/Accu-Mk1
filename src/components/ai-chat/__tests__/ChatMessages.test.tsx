@@ -173,6 +173,64 @@ describe('ChatMessages', () => {
       expect(screen.queryByRole('button', { name: 'Allow once' })).toBeNull()
       expect(screen.queryByRole('button', { name: 'Deny' })).toBeNull()
     })
+
+    describe('with a live card for it', () => {
+      const undecided = row(1, 'permission', 'Run ls', {
+        permission_id: 'p1',
+        decision: null,
+      })
+      const card = (permission_id: string) =>
+        act(() =>
+          useAiChatStore.setState({
+            approvals: {
+              [permission_id]: {
+                permission_id,
+                source: 'agent',
+                title: 'The card',
+                detail: '',
+                can_allow: true,
+                hidden: false,
+                chatId: 1,
+              },
+            },
+          })
+        )
+
+      it('says it is waiting, and only the card has buttons', () => {
+        fill([undecided])
+        card('p1')
+        render(<ChatMessages chatId={1} />)
+        expect(
+          screen.getByText('Waiting for your decision.')
+        ).toBeInTheDocument()
+        expect(screen.queryByText('No decision recorded')).toBeNull()
+        expect(screen.getAllByRole('button', { name: 'Deny' })).toHaveLength(1)
+      })
+
+      it('goes back when the card goes', () => {
+        fill([undecided])
+        card('p1')
+        render(<ChatMessages chatId={1} />)
+        act(() => useAiChatStore.setState({ approvals: {} }))
+        expect(screen.getByText('No decision recorded')).toBeInTheDocument()
+      })
+
+      it("is not fooled by another row's card", () => {
+        fill([undecided])
+        card('p2')
+        render(<ChatMessages chatId={1} />)
+        expect(screen.getByText('No decision recorded')).toBeInTheDocument()
+      })
+
+      it('a decision on the row wins', () => {
+        fill([
+          { ...undecided, meta: { permission_id: 'p1', decision: 'deny' } },
+        ])
+        card('p1')
+        render(<ChatMessages chatId={1} />)
+        expect(screen.getByText('Denied')).toBeInTheDocument()
+      })
+    })
   })
 
   describe('how a stored reply ended', () => {

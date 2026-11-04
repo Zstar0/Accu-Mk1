@@ -143,7 +143,8 @@ describe('applyEvent', () => {
     [true, false, 'starting'],
     [false, true, 'resuming'],
     [false, false, 'running'],
-    [true, true, 'starting'],
+    // A restore spawns a process and attaches a session: both flags are set.
+    [true, true, 'resuming'],
   ])(
     'turn_started starting=%s resuming=%s is %s',
     (starting, resuming, phase) => {
@@ -164,8 +165,10 @@ describe('applyEvent', () => {
   it('waiting phase while a card is open, running again after it resolves', () => {
     let d = run(emptyData(), started(), permission('p1'))
     expect(d.live[1]?.phase).toBe('waiting')
-    // Exactly the PendingApproval fields and the chat: no seq, type or agent.
-    expect(d.approvals).toEqual({ p1: { ...pending('p1'), chatId: 1 } })
+    // Exactly the PendingApproval fields, the chat and the agent: no seq or type.
+    expect(d.approvals).toEqual({
+      p1: { ...pending('p1'), chatId: 1, agent: 'Nova' },
+    })
 
     d = run(d, resolved('p1'))
     expect(d.approvals).toEqual({})
@@ -709,6 +712,30 @@ describe('useAiChatStore', () => {
       }
     )
 
+    it('says so when an approval request expires', () => {
+      store().apply(permission('p1'))
+      store().apply(
+        ev('permission_resolved', { permission_id: 'p1', decision: 'expired' })
+      )
+      expect(store().notice).toEqual({
+        kind: 'busy',
+        message: 'That approval request expired.',
+        chatId: 1,
+      })
+      expect(store().approvals).toEqual({})
+    })
+
+    it.each(['allow', 'deny', 'cancelled'] as const)(
+      'says nothing when an approval is resolved as %s',
+      decision => {
+        store().apply(permission('p1'))
+        store().apply(
+          ev('permission_resolved', { permission_id: 'p1', decision })
+        )
+        expect(store().notice).toBeNull()
+      }
+    )
+
     it('raises it when the error notice on show is for another chat', () => {
       store().apply(
         ev('error', { code: 'agent_error', message: 'x', chat_id: 2 })
@@ -733,6 +760,7 @@ describe('useAiChatStore', () => {
           ...pending('p'),
           permission_id: 'from-event',
           chatId: 1,
+          agent: 'Nova',
         },
         'from-row': { ...pending('p'), permission_id: 'from-row', chatId: 1 },
         'other-chat': {

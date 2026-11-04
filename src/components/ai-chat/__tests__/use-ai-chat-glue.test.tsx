@@ -1,6 +1,12 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { useEffect } from 'react'
-import { act, render, screen, waitFor } from '@testing-library/react'
+import {
+  act,
+  render,
+  renderHook,
+  screen,
+  waitFor,
+} from '@testing-library/react'
 import {
   focusManager,
   QueryClient,
@@ -28,6 +34,7 @@ import {
   loadMessages,
   providersKey,
   refreshChats,
+  useActiveProvider,
   useAiChatGlue,
 } from '../use-ai-chat-glue'
 
@@ -262,6 +269,48 @@ describe('visibility', () => {
   })
 })
 
+describe('useActiveProvider', () => {
+  const JARVIS = { id: 2, slug: 'jarvis', display_name: 'Jarvis' }
+
+  async function active(select: () => void) {
+    mocks.listProviders.mockResolvedValue([NOVA, JARVIS])
+    const qc = new QueryClient({
+      defaultOptions: { queries: { retry: false } },
+    })
+    const { result } = renderHook(useActiveProvider, {
+      wrapper: ({ children }) => (
+        <QueryClientProvider client={qc}>{children}</QueryClientProvider>
+      ),
+    })
+    await waitFor(() => expect(result.current).not.toBeNull())
+    act(select)
+    return result.current
+  }
+
+  it("is the active chat's provider", async () => {
+    const agent = await active(() => {
+      store().setChats([chatRow(1, { provider_id: 2 })])
+      store().selectChat(1)
+    })
+    expect(agent?.display_name).toBe('Jarvis')
+  })
+
+  it("does not show another agent's name for a chat on a disabled provider", async () => {
+    const agent = await active(() => {
+      store().setChats([chatRow(1, { provider_id: 9 })])
+      store().selectChat(1)
+    })
+    expect(agent?.display_name).toBe('The agent')
+  })
+
+  it('still falls back to the first with no chat selected', async () => {
+    expect((await active(() => undefined))?.display_name).toBe('Nova')
+    // An unknown pick is not a chat's agent: it names the one a send would use.
+    const agent = await active(() => store().setProviderId(9))
+    expect(agent?.display_name).toBe('Nova')
+  })
+})
+
 describe('the chat list', () => {
   it('is fetched on connect, not on mount', async () => {
     mocks.listChats.mockResolvedValue([chatRow(3)])
@@ -294,9 +343,11 @@ describe('the chat list', () => {
   })
 
   it('a turn that ends with no row is named after its own agent', async () => {
+    const rows = [chatRow(1), chatRow(2, { provider_id: 9 })]
+    mocks.listChats.mockResolvedValue(rows)
     setup()
     await waitFor(() => expect(lastStream().enabled).toBe(true))
-    act(() => store().setChats([chatRow(1), chatRow(2, { provider_id: 9 })]))
+    act(() => store().setChats(rows))
 
     deliver(endedEvent(1))
     expect(store().notice).toEqual({
@@ -308,6 +359,12 @@ describe('the chat list', () => {
     // Its provider is not in this user's list: no other agent's name.
     deliver(endedEvent(2))
     expect(store().notice?.message).toBe('The agent ended without a reply.')
+
+    // The turn ends also refetched the list; let that land inside the test.
+    await act(async () => {
+      await new Promise(r => setTimeout(r, 0))
+    })
+    await waitFor(() => expect(mocks.listChats).toHaveBeenCalled())
   })
 
   it('a failed fetch changes nothing and throws nowhere', async () => {
@@ -418,13 +475,28 @@ describe('approval toasts', () => {
       )
     })
 
-    it('says "The agent" when the chat is not known yet', async () => {
+    it('names the agent the event names, even when the chat is not known yet', async () => {
       setup()
       await waitFor(() => expect(lastStream().enabled).toBe(true))
-      deliver(permissionEvent('p1', 99))
+      deliver({ ...permissionEvent('p1', 99), agent: 'Bishop' } as AiChatEvent)
       expect(showToast).toHaveBeenCalledWith(
-        'The agent is waiting for your approval',
+        'Bishop is waiting for your approval',
         expect.objectContaining({ id: sonnerId('p1') })
+      )
+    })
+
+    it('says "The agent" for a card from the list whose provider is gone', async () => {
+      mocks.listChats.mockResolvedValue([
+        chatRow(7, { provider_id: 9, pending_approvals: [pending('p1')] }),
+      ])
+      setup()
+      await waitFor(() => expect(lastStream().enabled).toBe(true))
+      connect()
+      await waitFor(() =>
+        expect(showToast).toHaveBeenCalledWith(
+          'The agent is waiting for your approval',
+          expect.objectContaining({ id: sonnerId('p1') })
+        )
       )
     })
 
