@@ -192,11 +192,14 @@ def acp_record(pathname: str, func: str, name: str = "root") -> logging.LogRecor
 def test_acp_log_filter_reduces_only_the_acp_records():
     log_filter = sessions._ACP_LOG_FILTER
     assert logging.getLogger().filters.count(log_filter) == 1
-    reduced = acp_record("/venv/site-packages/acp/connection.py", "_execute_request")
+    reduced = acp_record("/venv/site-packages/acp/connection.py", "_run_notification")
     assert log_filter.filter(reduced) is True
-    assert reduced.getMessage() == "ai_chat.acp_unhandled where=request error=ValueError"
+    assert reduced.getMessage() == "ai_chat.acp_unhandled where=notification error=ValueError"
     assert (reduced.exc_info, reduced.exc_text, reduced.stack_info) == (None, None, None)
-    for other in (acp_record("/app/other/connection.py", "_execute_request"),
+    # `_execute_request` too stays whole: an unknown kind never reaches its log call (acp answers `ValidationError`
+    # first), so what lands there is a bug in Mk1's own request handler, and that needs its traceback.
+    for other in (acp_record("/app/other/connection.py", "_run_notification"),
+                  acp_record("/venv/site-packages/acp/connection.py", "_execute_request"),
                   acp_record("/venv/site-packages/acp/connection.py", "_on_task_error")):
         args = other.args
         assert log_filter.filter(other) is True

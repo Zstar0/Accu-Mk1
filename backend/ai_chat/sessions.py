@@ -69,16 +69,14 @@ class _AcpLogFilter(logging.Filter):
     not know, that exception is pydantic's, and its text quotes the agent's (spec 8: no content in logs). This cuts
     exactly those records to one line, which stays: it is the only sign that an agent update changed the wire."""
 
-    _WHERE = {"_run_notification": "notification", "_execute_request": "request"}  # connection.py's two such calls
-
     def filter(self, record: logging.LogRecord) -> bool:
-        if (record.funcName in self._WHERE
+        if (record.funcName == "_run_notification"
                 and os.path.basename(record.pathname) == "connection.py"
                 and os.path.basename(os.path.dirname(record.pathname)) == "acp"):
             error = record.exc_info[0] if record.exc_info else None
             # Not the record's own `method`: it came off the wire.
-            record.msg = "ai_chat.acp_unhandled where=%s error=%s"
-            record.args = (self._WHERE[record.funcName], error.__name__ if error else "unknown")
+            record.msg = "ai_chat.acp_unhandled where=notification error=%s"
+            record.args = (error.__name__ if error else "unknown",)
             record.exc_info = record.exc_text = record.stack_info = None
         return True
 
