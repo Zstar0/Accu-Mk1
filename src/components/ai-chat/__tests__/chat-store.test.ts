@@ -712,6 +712,19 @@ describe('useAiChatStore', () => {
       }
     )
 
+    it('keeps an approval it could not read through the rest of the turn, without the new chat advice', () => {
+      const message = 'Nova asked for an approval, so it was refused.'
+      store().apply(started())
+      const live = store().live
+      store().apply(ev('error', { code: 'approval_unreadable', message }))
+      const notice = { kind: 'refused', message, chatId: 1 }
+      expect(store().notice).toEqual(notice)
+      expect(store().live).toEqual(live) // the turn goes on
+      // The agent often says nothing after a refusal, and this is why.
+      store().apply(ended(null, 'end_turn'), 'Nova')
+      expect(store().notice).toEqual(notice)
+    })
+
     it('says so when an approval request expires', () => {
       store().apply(permission('p1'))
       store().apply(

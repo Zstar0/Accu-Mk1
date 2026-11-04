@@ -14,6 +14,7 @@ Flags:
   --unknown-update    ahead of each reply, a session/update of a kind no ACP version has (what a newer Hermes could send)
   --unknown-option    ahead of each reply, a permission request with an option kind no ACP version has; refused, the
                       agent goes on as if denied. Both are raw frames: the typed helpers would validate them here.
+  --deep-frame        ahead of each reply, a raw session/update nested deeper than `copy.deepcopy` can reach
 
 Prompts, by their last text block:
   /tools            the tool list
@@ -148,6 +149,8 @@ class FakeAgent(acp.Agent):
         if session_id not in self.known:
             return PromptResponse(stop_reason="refusal")
         last = texts[-1] if texts else ""
+        if self.args.deep_frame:
+            await self.conn._conn.send_notification("session/update", json.loads("[" * 600 + "]" * 600))
         if self.args.unknown_update:
             await self.conn._conn.send_notification("session/update", {
                 "sessionId": session_id, "update": {"sessionUpdate": "future_kind", "text": UNKNOWN_KIND_TEXT}})
@@ -238,6 +241,7 @@ def main() -> None:
     parser.add_argument("--tools-reply")
     parser.add_argument("--unknown-update", action="store_true")
     parser.add_argument("--unknown-option", action="store_true")
+    parser.add_argument("--deep-frame", action="store_true")
     agent = FakeAgent(parser.parse_args())
     # session/resume is on acp's unstable list: without this flag the agent answers method_not_found.
     asyncio.run(acp.run_agent(agent, use_unstable_protocol=True))

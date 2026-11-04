@@ -13,6 +13,7 @@ import { create } from 'zustand'
 import { devtools } from 'zustand/middleware'
 import type {
   AiChat,
+  AiChatErrorCode,
   AiChatEvent,
   AiMessage,
   PendingApproval,
@@ -58,7 +59,7 @@ export interface ChatData {
 }
 
 export interface ChatNotice {
-  kind: 'busy' | 'unreachable' | 'error' | 'cancelled'
+  kind: 'busy' | 'unreachable' | 'error' | 'cancelled' | 'refused'
   message: string
   /** Show only on this chat; none means any chat. */
   chatId?: number
@@ -311,6 +312,13 @@ export function applyEvent(
   }
 }
 
+/** Any other code is `error`, whose banner appends "Try a new chat." */
+const NOTICE_KIND: Partial<Record<AiChatErrorCode, ChatNotice['kind']>> = {
+  agent_unreachable: 'unreachable',
+  // A new chat would be refused the same way.
+  approval_unreadable: 'refused',
+}
+
 /** The notice an event also raises; `applyEvent` stays about chat data. */
 function noticeFor(
   e: AiChatEvent,
@@ -319,7 +327,7 @@ function noticeFor(
 ): ChatNotice | null {
   if (e.type === 'error') {
     return {
-      kind: e.code === 'agent_unreachable' ? 'unreachable' : 'error',
+      kind: NOTICE_KIND[e.code] ?? 'error',
       message: e.message,
       chatId: e.chat_id,
     }
@@ -340,7 +348,9 @@ function noticeFor(
   // or its Retry.
   const explained =
     current?.chatId === e.chat_id &&
-    (current.kind === 'error' || current.kind === 'unreachable')
+    (current.kind === 'error' ||
+      current.kind === 'unreachable' ||
+      current.kind === 'refused')
   return explained
     ? null
     : {

@@ -92,6 +92,7 @@ export type AiChatErrorCode =
   | 'agent_exited'
   | 'tools_check_failed'
   | 'agent_error'
+  | 'approval_unreadable'
 
 /** One SSE `data` payload, discriminated on `type`. */
 export type AiChatEvent =

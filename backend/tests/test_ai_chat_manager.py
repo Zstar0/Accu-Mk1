@@ -10,6 +10,7 @@ from pathlib import Path
 
 import anyio
 import pytest
+from acp.connection import StreamDirection, StreamEvent
 from acp.schema import (
     ContentToolCallContent,
     FileEditToolCallContent,
@@ -27,6 +28,8 @@ from integration_keys import store
 pytestmark = pytest.mark.anyio
 
 OPTION_IDS = ("allow-once", "reject-once", "allow-always")
+REFUSED_LINE = "ai_chat.approval_refused chat=1 code=-32602"
+TOLD = "Jarvis asked for an approval this version of Mk1 cannot read, so it was refused."
 
 
 @pytest.fixture
@@ -144,8 +147,8 @@ async def test_allow_always_option_never_offered(ai_chat_env):
 
 
 async def test_unknown_option_kind_never_reaches_the_client(ai_chat_env, tmp_path, caplog, monkeypatch):
-    # acp refuses the whole request before `Mk1Client` is called. Mk1 cannot see it, so it stays fail-closed: no card,
-    # no row, the agent goes on as denied. acp answers it with invalid_params and logs nothing, so no log line either.
+    # acp refuses the whole request before `Mk1Client` is called, so it stays fail-closed: no card, no row, the agent
+    # goes on as denied. acp logs nothing for it, so the observer is the only sign a Hermes update changed the wire.
     state = tmp_path / "state.json"
     ai_chat_env.flags = ["--state", str(state), "--unknown-option"]
     asked = []
@@ -166,8 +169,95 @@ async def test_unknown_option_kind_never_reaches_the_client(ai_chat_env, tmp_pat
     assert rows(ai_chat_env, "permission") == []
     assert of_type(ai_chat_env, "permission_requested") == []
     assert approvals.APPROVALS.pending_for_chat(1) == []
+    assert [record.getMessage() for record in caplog.records] == [REFUSED_LINE]
     assert "SECRET-AGENT-TEXT" not in caplog.text
-    assert [record for record in caplog.records if record.name == "root"] == []
+    [told] = of_type(ai_chat_env, "error")
+    assert (told["code"], told["message"], told["turn_id"]) == ("approval_unreadable", TOLD, ended["turn_id"])
+    assert told["seq"] < ended["seq"]
+    assert "SECRET-AGENT-TEXT" not in json.dumps(ai_chat_env.events())
+
+
+@pytest.mark.parametrize("decision", ["allow", "deny"])
+async def test_an_approval_mk1_can_read_leaves_no_refusal(ai_chat_env, caplog, decision):
+    with anyio.fail_after(30):
+        await send(ai_chat_env, "PERMIT")
+        card = await seen(ai_chat_env, "permission_requested")
+        approvals.APPROVALS.decide(card["permission_id"], 1, decision)
+        await seen(ai_chat_env, "turn_ended")
+    assert caplog.records == []
+    assert of_type(ai_chat_env, "error") == []
+
+
+async def test_a_failing_observer_leaves_the_connection_alone(ai_chat_env, tmp_path, caplog, monkeypatch):
+    ai_chat_env.flags = ["--state", str(tmp_path / "state.json"), "--unknown-option"]
+    real = sessions.Mk1Client._publish
+
+    def publish(self, type, **fields):
+        if type == "error":
+            raise RuntimeError("private text")
+        real(self, type, **fields)
+
+    monkeypatch.setattr(sessions.Mk1Client, "_publish", publish)
+    with anyio.fail_after(30):
+        await send(ai_chat_env, "hi")
+        ended = await seen(ai_chat_env, "turn_ended")
+    assert ended["stop_reason"] == "end_turn"
+    assert rows(ai_chat_env, "assistant")[0].text == "echo: hi"
+    assert [record.getMessage() for record in caplog.records] == [
+        REFUSED_LINE, "ai_chat.observer_failed chat=1 error=RuntimeError"]
+
+
+async def test_a_frame_too_deep_to_copy_ends_the_turn_and_does_not_hang(ai_chat_env, tmp_path, caplog):
+    # With any observer, acp deep-copies each frame ahead of it and outside its own `try`, so this one failure closes
+    # the connection and `_watch_frame` never runs. It stays fail-closed, and the next message starts a new process.
+    ai_chat_env.flags = ["--state", str(tmp_path / "state.json"), "--deep-frame"]
+    with anyio.fail_after(30):
+        session, _ = await send(ai_chat_env, "hi")
+        ended = await seen(ai_chat_env, "turn_ended")
+    assert ended["stop_reason"] == "error"
+    assert [event["code"] for event in of_type(ai_chat_env, "error")] == ["agent_error"]
+    assert session.closing and sessions.MANAGER._sessions.get(1) is not session
+    assert "Receive loop failed" in caplog.text
+
+
+def watch(session, direction: StreamDirection, **message) -> None:
+    session._watch_frame(StreamEvent(direction, message))
+
+
+async def test_the_observer_counts_only_the_answer_to_a_permission_request(ai_chat_env, caplog):
+    session = ai_chat_env.session()
+    session.turn_id = "t"
+    error = {"code": -32601, "message": "Method not found"}
+    watch(session, StreamDirection.INCOMING, id=7, method="fs/read_text_file", params={})
+    watch(session, StreamDirection.OUTGOING, id=7, error=error)  # an agent request that is no approval
+    # Each side numbers its own requests, so Mk1's next one can carry this very id.
+    watch(session, StreamDirection.INCOMING, id=0, method="session/request_permission", params={})
+    watch(session, StreamDirection.OUTGOING, id=0, method="session/prompt", params={})
+    watch(session, StreamDirection.INCOMING, id=0, error=error)  # the agent's answer to it
+    watch(session, StreamDirection.OUTGOING, id=0, result={"outcome": {"outcome": "cancelled"}})
+    watch(session, StreamDirection.OUTGOING, id=0, error=error)  # that id was answered, and is forgotten
+    assert caplog.records == []
+    assert ai_chat_env.events() == []
+
+
+@pytest.mark.parametrize("state", [{"turn_id": None}, {"turn_id": "t", "stop_requested": True}])
+async def test_a_refusal_nobody_is_waiting_on_is_logged_and_not_shown(ai_chat_env, caplog, state):
+    session = ai_chat_env.session()
+    vars(session).update(state)
+    watch(session, StreamDirection.INCOMING, id=0, method="session/request_permission", params={})
+    watch(session, StreamDirection.OUTGOING, id=0, error={"code": -32602, "message": "Invalid params"})
+    assert [record.getMessage() for record in caplog.records] == [REFUSED_LINE]
+    assert ai_chat_env.events() == []
+
+
+async def test_a_frame_the_observer_cannot_read_is_logged_by_type_only(ai_chat_env, caplog):
+    session = ai_chat_env.session()
+    watch(session, StreamDirection.INCOMING, id=["not", "hashable"], method="session/request_permission", params={})
+    watch(session, StreamDirection.INCOMING, method="session/request_permission", params={})  # a notification: no id
+    watch(session, StreamDirection.INCOMING, id=0, method="session/request_permission", params={})
+    watch(session, StreamDirection.OUTGOING, id=0, error="private text")
+    assert [record.getMessage() for record in caplog.records] == [
+        "ai_chat.observer_failed chat=1 error=TypeError", "ai_chat.observer_failed chat=1 error=AttributeError"]
 
 
 async def test_no_allow_once_means_no_allow(ai_chat_env):

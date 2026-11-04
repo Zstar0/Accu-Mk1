@@ -36,6 +36,7 @@ from dataclasses import dataclass, field, fields
 from datetime import datetime, timezone
 
 import acp
+from acp.connection import StreamDirection, StreamEvent
 from acp.schema import (
     AgentCapabilities,
     AgentMessageChunk,
@@ -471,6 +472,7 @@ class LiveSession:
         self._stop = asyncio.Event()
         self._prompt_task: asyncio.Future | None = None
         self._cancel_send: asyncio.Future | None = None  # held so nothing collects or interrupts the send
+        self._permission_ids: set = set()  # the agent's approval requests acp has not answered yet
 
     # -- lifecycle ------------------------------------------------------------------------------
 
@@ -519,6 +521,9 @@ class LiveSession:
             async with acp.spawn_agent_process(self._client, *spawn_command(self.provider), cwd=None,
                                                transport_kwargs=_TRANSPORT) as (conn, proc):
                 self._conn, self.proc = conn, proc
+                # ponytail: acp deep-copies every frame for an observer, so one nested about 500 levels closes the
+                # connection (fail-closed, test_a_frame_too_deep_to_copy_ends_the_turn_and_does_not_hang).
+                conn._conn.add_observer(self._watch_frame)  # private, but agent-client-protocol is pinned at 0.12.1
                 drain = asyncio.create_task(self._drain(proc.stderr))
                 try:
                     await self._serve(conn, proc, drain)
@@ -586,6 +591,26 @@ class LiveSession:
             if not line:
                 return
             self.stderr_tail.append(line.decode(errors="replace").strip())
+
+    def _watch_frame(self, event: StreamEvent) -> None:
+        """Sees what `Mk1Client` cannot: acp refuses a `session/request_permission` it cannot parse and logs nothing, so
+        a Hermes update adding an option kind would make every approval deny itself with no trace. Reads, and answers
+        nothing. It catches its own failures: acp would log them whole, and these frames hold the agent's text."""
+        try:
+            frame = event.message
+            if event.direction is StreamDirection.INCOMING:
+                if frame.get("method") == "session/request_permission" and "id" in frame:
+                    self._permission_ids.add(frame["id"])
+            elif "method" not in frame and frame.get("id") in self._permission_ids:  # Mk1's own requests have a method
+                self._permission_ids.remove(frame["id"])
+                if "error" in frame:  # only acp's parser can get here: `request_permission` answers every failure
+                    logger.warning("ai_chat.approval_refused chat=%s code=%s", self.chat_id, frame["error"].get("code"))
+                    if not self.stop_requested:  # Stop ended it, and that is no error
+                        self._client._publish("error", code="approval_unreadable", message=(
+                            f"{self.provider.display_name} asked for an approval this version of Mk1 cannot read, "
+                            "so it was refused."))
+        except Exception as exc:
+            logger.warning("ai_chat.observer_failed chat=%s error=%s", self.chat_id, type(exc).__name__)
 
     # -- sessions and turns -----------------------------------------------------------------------
 

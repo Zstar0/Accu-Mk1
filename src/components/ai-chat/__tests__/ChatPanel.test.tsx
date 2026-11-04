@@ -508,6 +508,26 @@ describe('ChatPanel', () => {
       ).toBeInTheDocument()
     })
 
+    it('An approval it could not read: the message, no advice and no Retry', async () => {
+      await mount()
+      await screen.findByRole('button', { name: 'Open AI chat' })
+      select()
+      act(() => store().setMessages(1, [message(1, 'user', 'earlier')]))
+      const told =
+        'Nova asked for an approval this version of Mk1 cannot read, so it was refused.'
+      apply({
+        seq: 1,
+        type: 'error',
+        chat_id: 1,
+        turn_id: 't',
+        code: 'approval_unreadable',
+        message: told,
+      })
+      expect(screen.getByRole('alert')).toHaveTextContent(told)
+      expect(screen.getByText(told)).toBeInTheDocument()
+      expect(screen.queryByRole('button', { name: 'Retry' })).toBeNull()
+    })
+
     it('Error: the message plus "Try a new chat."', async () => {
       await mount()
       await screen.findByRole('button', { name: 'Open AI chat' })
