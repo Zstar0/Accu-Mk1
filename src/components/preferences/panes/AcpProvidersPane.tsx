@@ -301,7 +301,14 @@ function EnabledSwitch({
         </span>
       </TooltipTrigger>
       {blocked && (
-        <TooltipContent className="max-w-xs">{blocker}</TooltipContent>
+        <TooltipContent className="max-w-xs p-0">
+          <div className="flex flex-col gap-1.5 p-3 font-mono text-xs">
+            <div className="border-b border-primary-foreground/20 pb-1.5 font-semibold">
+              Cannot enable yet
+            </div>
+            <div>{blocker}</div>
+          </div>
+        </TooltipContent>
       )}
     </Tooltip>
   )
