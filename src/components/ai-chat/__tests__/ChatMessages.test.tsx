@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { act, render, screen, within } from '@testing-library/react'
 import type { AiMessage } from '@/lib/ai-chat-api'
 import { useAiChatStore } from '../chat-store'
@@ -464,6 +464,62 @@ describe('ChatMessages', () => {
       })
       chunk('more')
       expect(top()).toBe(100)
+    })
+
+    describe('when the scroller changes size', () => {
+      // A notice or a taller composer shrinks the scroller and fires no scroll
+      // event: the observer's callback is the only thing that sees it.
+      let resize: () => void = vi.fn()
+      const disconnect = vi.fn()
+      beforeEach(() => {
+        disconnect.mockClear()
+        vi.stubGlobal(
+          'ResizeObserver',
+          class {
+            constructor(callback: ResizeObserverCallback) {
+              resize = () => callback([], this as unknown as ResizeObserver)
+            }
+            observe = vi.fn()
+            unobserve = vi.fn()
+            disconnect = disconnect
+          }
+        )
+      })
+      afterEach(() => {
+        vi.unstubAllGlobals()
+      })
+
+      it('keeps the end in view when the reader was at the bottom', () => {
+        fill([row(1, 'user', 'hi')])
+        render(<ChatMessages chatId={1} />)
+        const scroller = screen.getByTestId('chat-scroll')
+        const top = geometry(scroller, 590)
+        act(() => {
+          scroller.dispatchEvent(new Event('scroll'))
+        })
+        act(() => resize())
+        expect(top()).toBe(1000)
+      })
+
+      it('leaves a reader who scrolled up where they are', () => {
+        fill([row(1, 'user', 'hi')])
+        render(<ChatMessages chatId={1} />)
+        const scroller = screen.getByTestId('chat-scroll')
+        const top = geometry(scroller, 100)
+        act(() => {
+          scroller.dispatchEvent(new Event('scroll'))
+        })
+        act(() => resize())
+        expect(top()).toBe(100)
+      })
+
+      it('stops observing on unmount', () => {
+        fill([row(1, 'user', 'hi')])
+        const { unmount } = render(<ChatMessages chatId={1} />)
+        expect(disconnect).not.toHaveBeenCalled()
+        unmount()
+        expect(disconnect).toHaveBeenCalledTimes(1)
+      })
     })
   })
 })

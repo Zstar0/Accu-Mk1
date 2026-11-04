@@ -8,7 +8,13 @@
  * thoughts and approval text render as plain text.
  */
 
-import { useDeferredValue, useLayoutEffect, useMemo, useRef } from 'react'
+import {
+  useDeferredValue,
+  useEffect,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+} from 'react'
 import { Check, Loader2, ShieldCheck, Wrench, X } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import {
@@ -214,6 +220,19 @@ export function ChatMessages({ chatId }: { chatId: number }) {
     const el = scroller.current
     if (el && following.current) el.scrollTop = el.scrollHeight
   }, [chatId, rows, live, cards])
+
+  // A notice under the list, or a composer that grows, shrinks the scroller
+  // without adding a row and without a scroll event: `following` still holds
+  // what the reader last did, so a reader at the end keeps it in view.
+  useEffect(() => {
+    const el = scroller.current
+    if (!el) return
+    const observer = new ResizeObserver(() => {
+      if (following.current) el.scrollTop = el.scrollHeight
+    })
+    observer.observe(el)
+    return () => observer.disconnect()
+  }, [])
 
   return (
     <div
