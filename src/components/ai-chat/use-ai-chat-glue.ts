@@ -148,17 +148,24 @@ function retryFailedLoads() {
 // ---- approval toasts -------------------------------------------------------
 
 /**
- * Sonner ids (= permission ids) of the cards that have a toast. An id stays
+ * The sonner id of the live toast of each card, by permission id. A card stays
  * here after the reader swipes its toast away, so the toast does not come back
  * while the card stays; it leaves when its card goes or comes into view, so a
  * card that returns (a resync, a switch back) is toasted again.
+ *
+ * Every raise gets its own sonner id. Sonner ignores a `toast()` that reuses
+ * the id of a toast it is still removing (about 200 ms after `dismiss`), and a
+ * card that comes back right after a resync does exactly that. There is still
+ * one live toast per permission id.
  */
-const toasted = new Set<string>()
+const toastIds = new Map<string, string>()
+let raised = 0 // never reset: a reused id could meet a toast still leaving
 
 function raiseApprovalToast(card: ApprovalCard, agent: string) {
-  toasted.add(card.permission_id)
+  const id = `${card.permission_id}#${++raised}`
+  toastIds.set(card.permission_id, id)
   toast(`${agent} is waiting for your approval`, {
-    id: card.permission_id,
+    id,
     duration: Infinity,
     action: {
       label: 'Open',
@@ -195,8 +202,8 @@ function teardown(qc: QueryClient) {
   void qc.cancelQueries(filters)
   qc.removeQueries(filters)
   useAiChatStore.getState().reset()
-  for (const id of toasted) toast.dismiss(id)
-  toasted.clear()
+  for (const id of toastIds.values()) toast.dismiss(id)
+  toastIds.clear()
   failedLoads.clear()
 }
 
@@ -259,15 +266,17 @@ export function useAiChatGlue(): {
   const chats = useAiChatStore(s => s.chats)
   useEffect(() => {
     const inView = (card: ApprovalCard) => open && activeChatId === card.chatId
-    for (const id of [...toasted]) {
-      const card = Object.hasOwn(approvals, id) ? approvals[id] : undefined
+    for (const [permissionId, sonnerId] of [...toastIds]) {
+      const card = Object.hasOwn(approvals, permissionId)
+        ? approvals[permissionId]
+        : undefined
       if (card === undefined || inView(card)) {
-        toast.dismiss(id)
-        toasted.delete(id)
+        toast.dismiss(sonnerId)
+        toastIds.delete(permissionId)
       }
     }
     for (const card of Object.values(approvals)) {
-      if (toasted.has(card.permission_id) || inView(card)) continue
+      if (toastIds.has(card.permission_id) || inView(card)) continue
       const providerId = chats.find(c => c.id === card.chatId)?.provider_id
       const agent =
         providers.find(p => p.id === providerId)?.display_name ?? 'The agent'

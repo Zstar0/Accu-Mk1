@@ -52,6 +52,14 @@ const mocks = {
 
 const NOVA = { id: 1, slug: 'nova', display_name: 'Nova' }
 const store = () => useAiChatStore.getState()
+/**
+ * Each raise has its own sonner id (`p1#3`): sonner ignores a toast that reuses
+ * the id of one it is still removing. See approval-toast-sonner.test.tsx.
+ */
+const sonnerId = (permissionId: string) =>
+  expect.stringMatching(new RegExp(String.raw`^${permissionId}#\d+$`))
+const idOfCall = (n: number) =>
+  (showToast.mock.calls[n]?.[1] as unknown as { id: string }).id
 
 const user = (id: number): AuthUser => ({
   id,
@@ -253,12 +261,14 @@ describe('approval toasts', () => {
     expect(showToast).toHaveBeenCalledTimes(1)
     expect(showToast).toHaveBeenCalledWith(
       'Nova is waiting for your approval',
-      expect.objectContaining({ id: 'p1', duration: Infinity })
+      expect.objectContaining({ id: sonnerId('p1'), duration: Infinity })
     )
     expect(dismissToast).not.toHaveBeenCalled()
 
     deliver(resolvedEvent('p1'))
-    await waitFor(() => expect(dismissToast).toHaveBeenCalledWith('p1'))
+    await waitFor(() =>
+      expect(dismissToast).toHaveBeenCalledWith(sonnerId('p1'))
+    )
   })
 
   it('its action opens the panel on that chat', async () => {
@@ -272,7 +282,9 @@ describe('approval toasts', () => {
     act(() => options.action.onClick())
     expect(store()).toMatchObject({ open: true, activeChatId: 4 })
     // The card is in view now, so the toast goes.
-    await waitFor(() => expect(dismissToast).toHaveBeenCalledWith('p1'))
+    await waitFor(() =>
+      expect(dismissToast).toHaveBeenCalledWith(sonnerId('p1'))
+    )
   })
 
   it('raises none when the panel is open on that chat', async () => {
@@ -304,7 +316,9 @@ describe('approval toasts', () => {
     await waitFor(() => expect(lastStream().enabled).toBe(true))
     deliver(permissionEvent('p1'))
     act(() => store().dismissApproval('p1'))
-    await waitFor(() => expect(dismissToast).toHaveBeenCalledWith('p1'))
+    await waitFor(() =>
+      expect(dismissToast).toHaveBeenCalledWith(sonnerId('p1'))
+    )
   })
 
   it('is dismissed on resync, which drops every card', async () => {
@@ -312,7 +326,9 @@ describe('approval toasts', () => {
     await waitFor(() => expect(lastStream().enabled).toBe(true))
     deliver(permissionEvent('p1'))
     deliver(resyncEvent())
-    await waitFor(() => expect(dismissToast).toHaveBeenCalledWith('p1'))
+    await waitFor(() =>
+      expect(dismissToast).toHaveBeenCalledWith(sonnerId('p1'))
+    )
   })
 
   describe('for a card that did not arrive as a live event', () => {
@@ -329,7 +345,7 @@ describe('approval toasts', () => {
       expect(showToast).toHaveBeenCalledTimes(1)
       expect(showToast).toHaveBeenCalledWith(
         'Nova is waiting for your approval',
-        expect.objectContaining({ id: 'p1', duration: Infinity })
+        expect.objectContaining({ id: sonnerId('p1'), duration: Infinity })
       )
     })
 
@@ -339,7 +355,7 @@ describe('approval toasts', () => {
       deliver(permissionEvent('p1', 99))
       expect(showToast).toHaveBeenCalledWith(
         'The agent is waiting for your approval',
-        expect.objectContaining({ id: 'p1' })
+        expect.objectContaining({ id: sonnerId('p1') })
       )
     })
 
@@ -354,7 +370,9 @@ describe('approval toasts', () => {
       act(() => store().setChats([chatRow(1), chatRow(2)]))
       deliver(permissionEvent('p2', 2))
       expect(
-        showToast.mock.calls.map(c => (c[1] as { id: string }).id)
+        showToast.mock.calls.map(c =>
+          (c[1] as unknown as { id: string }).id.replace(/#\d+$/, '')
+        )
       ).toEqual(['p1', 'p2'])
     })
 
@@ -369,11 +387,19 @@ describe('approval toasts', () => {
         chatRow(7, { pending_approvals: [pending('p1')] }),
       ])
       deliver(resyncEvent())
-      await waitFor(() => expect(dismissToast).toHaveBeenCalledWith('p1'))
+      await waitFor(() =>
+        expect(dismissToast).toHaveBeenCalledWith(sonnerId('p1'))
+      )
       await waitFor(() =>
         expect(Object.keys(store().approvals)).toEqual(['p1'])
       )
       await waitFor(() => expect(showToast).toHaveBeenCalledTimes(2))
+
+      // The dismissed toast and the new one have different sonner ids, so
+      // sonner cannot take the new one for the dying one.
+      expect(dismissToast).toHaveBeenCalledWith(idOfCall(0))
+      expect(idOfCall(1)).not.toBe(idOfCall(0))
+      expect(idOfCall(1)).toMatch(/^p1#\d+$/)
     })
 
     it('raises one when the reader switches away from a card that was in view', async () => {
@@ -391,7 +417,7 @@ describe('approval toasts', () => {
       expect(showToast).toHaveBeenCalledTimes(1)
       expect(showToast).toHaveBeenCalledWith(
         'Nova is waiting for your approval',
-        expect.objectContaining({ id: 'p1' })
+        expect.objectContaining({ id: sonnerId('p1') })
       )
     })
 
@@ -615,7 +641,7 @@ describe('one user to the next', () => {
 
     expect(store()).toEqual(useAiChatStore.getInitialState())
     nothingLeft(qc)
-    expect(dismissToast).toHaveBeenCalledWith('p1')
+    expect(dismissToast).toHaveBeenCalledWith(sonnerId('p1'))
   })
 
   it('a direct switch to another user: stream closes, store and queries are wiped, no toast survives', async () => {
@@ -626,7 +652,7 @@ describe('one user to the next', () => {
     act(() => useAuthStore.setState({ user: user(2), token: 't2' }))
 
     expect(store()).toEqual(useAiChatStore.getInitialState())
-    expect(dismissToast).toHaveBeenCalledWith('p1')
+    expect(dismissToast).toHaveBeenCalledWith(sonnerId('p1'))
     // The stream was off for user 2's first render, so it cannot carry on
     // under user 1's connection and token...
     expect(stream.mock.calls[0]?.[0]).toBe(false)
@@ -676,7 +702,7 @@ describe('the provider list empties while signed in', () => {
 
   it('dismisses the approval toast and wipes the store, so nothing is left behind', async () => {
     await goDark()
-    expect(dismissToast).toHaveBeenCalledWith('p1')
+    expect(dismissToast).toHaveBeenCalledWith(sonnerId('p1'))
     expect(store()).toEqual(useAiChatStore.getInitialState())
   })
 
