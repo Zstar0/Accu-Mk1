@@ -6,7 +6,8 @@ than as pydantic validators, so a 422 names the column and never echoes the inpu
 
 PUT is a partial update: the body's fields go onto the row's current values and the merged result is checked as a
 whole. No DB connection is held across an await on an agent: each route commits first, then closes sessions or runs
-the test, then reads the row again.
+the test. None takes a connection on the loop thread after that: it answers from the row as written, and a test result
+is recorded on a worker.
 """
 from __future__ import annotations
 
@@ -14,6 +15,7 @@ import asyncio
 import contextlib
 import logging
 import time
+from datetime import datetime
 from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Response
@@ -226,8 +228,10 @@ def _out(row: AcpProvider) -> ProviderOut:
 
 
 async def _saved(db: Session, row: AcpProvider) -> ProviderOut:
-    """Commit, close the provider's live sessions (they restore on the next prompt), read the row back."""
+    """Commit, close the provider's live sessions (they restore on the next prompt), answer from the row as written:
+    reading it back would be a pool checkout on the loop thread."""
     provider_id = row.id
+    db.expire_on_commit = False
     try:
         db.commit()  # first, so a session respawning during the close sees the new row, and no connection stays held
     except SQLAlchemyError as exc:
@@ -237,7 +241,7 @@ async def _saved(db: Session, row: AcpProvider) -> ProviderOut:
         logger.warning("ai_chat.provider_save_failed provider=%s error=%s", provider_id, type(exc).__name__)
         raise HTTPException(status_code=500) from None
     await sessions.MANAGER.close_provider(provider_id)
-    return _out(_load(db, provider_id))
+    return _out(row)
 
 
 # ---- routes -------------------------------------------------------------------------------------
@@ -260,6 +264,7 @@ async def create_provider(body: ProviderIn, db: Session = Depends(get_db), user=
     _check_merged(values, has_key=False, tested=None)  # a new provider has no key: `enabled: true` is not_ready
     row = AcpProvider(**values, created_by_user_id=user.id, updated_by_user_id=user.id)
     db.add(row)
+    db.expire_on_commit = False  # or `_out` reloads the row, a pool checkout on the loop thread
     try:
         db.commit()
     except IntegrityError:  # the unique slug
@@ -326,16 +331,24 @@ async def test_connection(provider_id: int, db: Session = Depends(get_db), user=
     user_id = user.id
     db.commit()  # ends the read transaction: its connection goes back to the pool, not held across the agent
     out = await _run_test(snapshot, user_id)
-    fresh = db.get(AcpProvider, provider_id)
-    # A provider edited or deleted meanwhile is not the one that was tested: the result goes back, but is not
-    # recorded. `updated_at` catches any admin write (the snapshot has no `enabled`), the snapshot what was tested.
-    if fresh is not None and fresh.updated_at == edited_at and sessions.ProviderSnapshot.from_row(fresh) == snapshot:
-        db.execute(update(AcpProvider).where(AcpProvider.id == provider_id).values(
-            last_test_at=_utcnow(), last_test_ok=out["ok"], last_test_error=out["error"],
-            updated_at=AcpProvider.updated_at,  # "last edited by an admin" is not a test
-        ).execution_options(synchronize_session=False))
-        db.commit()
+    await asyncio.to_thread(_record_test, snapshot, edited_at, out["ok"], out["error"])
     return out
+
+
+def _record_test(snapshot: sessions.ProviderSnapshot, edited_at: datetime, ok: bool, error: str | None) -> None:
+    """On a worker with its own session: it reads the row as it is now, and the route's session is left alone, so no
+    pool checkout happens on the loop thread. A provider edited or deleted meanwhile is not the one that was tested:
+    the result goes back, but is not recorded. `updated_at` catches any admin write (the snapshot has no `enabled`),
+    the snapshot what was tested."""
+    with sessions._session_factory() as db:
+        fresh = db.get(AcpProvider, snapshot.id)
+        if (fresh is not None and fresh.updated_at == edited_at
+                and sessions.ProviderSnapshot.from_row(fresh) == snapshot):
+            db.execute(update(AcpProvider).where(AcpProvider.id == snapshot.id).values(
+                last_test_at=_utcnow(), last_test_ok=ok, last_test_error=error,
+                updated_at=AcpProvider.updated_at,  # "last edited by an admin" is not a test
+            ).execution_options(synchronize_session=False))
+            db.commit()
 
 
 # ---- Test connection ----------------------------------------------------------------------------

@@ -816,6 +816,21 @@ def test_lifespan_starts_the_reaper_and_closes_the_sessions_at_shutdown():
     assert called["cleanup"] and all(line > at_yield for line in called["cleanup"])
 
 
+@pytest.mark.parametrize(("method", "path", "payload", "expected"), [
+    ("POST", "/chats", {"provider_id": 1}, {"title": ""}),
+    ("PATCH", "/chats/1", {"title": "Renamed"}, {"title": "Renamed"}),
+    ("PATCH", "/chats/1", {"archived": True}, {"archived": True}),
+], ids=["create", "rename", "archive"])
+async def test_no_pool_checkout_on_the_loop_after_a_commit(ai_chat_api, loop_checkouts, method, path, payload, expected):
+    with anyio.fail_after(30):
+        resp = await ai_chat_api.request(method, f"{URL}{path}", json=payload)
+    assert resp.status_code in (200, 201), resp.text
+    assert loop_checkouts == []
+    # Nothing was reloaded, and the answer is still whole.
+    out = resp.json()
+    assert set(out) == CHAT_KEYS and expected.items() <= out.items() and out["created_at"] and out["updated_at"]
+
+
 def test_the_router_is_mounted():
     paths = {route.path for route in main.app.routes}
     assert {"/ai-chat/stream", "/ai-chat/chats", "/ai-chat/chats/{chat_id}/prompt"} <= paths

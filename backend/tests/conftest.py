@@ -200,6 +200,27 @@ async def ai_chat_api(ai_chat_env):
         await sessions.MANAGER.close_all()
 
 
+@pytest.fixture
+async def loop_checkouts(ai_chat_api, ai_chat_env):
+    """A list that gets one entry per pool checkout on the event loop thread. A route's first checkout is on a worker
+    (the sync auth dependency) and its session holds that connection until the commit, so any entry here is a reload
+    after a commit: with the pool full, that blocks the whole loop for the pool timeout."""
+    import threading
+
+    from sqlalchemy import event
+
+    engine = ai_chat_env.Session.kw["bind"]
+    loop_thread, seen = threading.get_ident(), []
+
+    def on_checkout(dbapi, record, proxy):
+        if threading.get_ident() == loop_thread:
+            seen.append(record)
+
+    event.listen(engine, "checkout", on_checkout)
+    yield seen
+    event.remove(engine, "checkout", on_checkout)
+
+
 def pytest_configure(config):
     config.addinivalue_line(
         "markers",

@@ -194,6 +194,7 @@ async def create_chat(body: ChatIn, db: Session = Depends(get_db), user=Depends(
         raise _fail(404, "provider_not_found")
     chat = AiChat(user_id=user_id, provider_id=provider.id)
     db.add(chat)
+    db.expire_on_commit = False  # or `_chat_out` reloads the row, a pool checkout on the loop thread
     db.commit()
     return _chat_out(chat)
 
@@ -207,6 +208,7 @@ async def update_chat(chat_id: int, body: ChatPatch, db: Session = Depends(get_d
         chat.title = title
     if body.archived is not None:
         chat.archived = body.archived
+    db.expire_on_commit = False  # or `_chat_out` reloads the row, a pool checkout on the loop thread
     db.commit()
     if body.archived:
         await sessions.MANAGER.close_chat(chat_id)  # nothing of the caller's is read between the commit and here

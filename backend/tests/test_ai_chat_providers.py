@@ -6,7 +6,7 @@ import sys
 import anyio
 import pytest
 from cryptography.fernet import Fernet
-from sqlalchemy import delete, event, text, update
+from sqlalchemy import delete, event, select, text, update
 
 from ai_chat import providers, sessions, transport
 from ai_chat.models import AcpProvider, AiChat
@@ -364,6 +364,24 @@ async def test_every_write_commits_before_it_closes_sessions(ai_chat_api, ai_cha
     await call(ai_chat_api, "DELETE", f"{URL}/{made['id']}")
     assert seen == [(made["id"], ("Renamed", None)), (made["id"], ("Renamed", public)), (made["id"], None)]
     assert held == [0, 0, 0]
+
+
+@pytest.mark.parametrize(("method", "path", "payload", "status"), [
+    ("POST", "", body(), 201),
+    ("PUT", "/1", {"display_name": "Renamed"}, 200),
+    ("POST", "/1/key", None, 200),
+    ("POST", "/1/test", None, 200),
+], ids=["create", "update", "key", "test"])
+async def test_no_pool_checkout_on_the_loop_after_a_commit(ai_chat_api, ai_chat_env, loop_checkouts, method, path,
+                                                           payload, status):
+    resp = await call(ai_chat_api, method, f"{URL}{path}", json=payload)
+    assert resp.status_code == status, resp.text
+    assert loop_checkouts == []
+    if path != "/1/test":  # nothing was reloaded: the answer is what a fresh read gives, unset columns included
+        out = resp.json()
+        with ai_chat_env.Session() as s:
+            rows = {r.id: providers._out(r) for r in s.scalars(select(AcpProvider))}
+        assert out == rows[out["id"]].model_dump()
 
 
 async def test_update_closes_live_sessions(ai_chat_api, ai_chat_env):
