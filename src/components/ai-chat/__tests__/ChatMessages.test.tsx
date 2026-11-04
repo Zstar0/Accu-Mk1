@@ -175,6 +175,80 @@ describe('ChatMessages', () => {
     })
   })
 
+  describe('how a stored reply ended', () => {
+    const LINES = [
+      ['max_tokens', 'This reply was cut off at the length limit.'],
+      [
+        'max_turn_requests',
+        'The agent stopped at its step limit, so this reply may be incomplete.',
+      ],
+      ['refusal', 'The agent declined to continue.'],
+      ['agent_exited', 'This reply may be incomplete.'],
+      ['something_new', 'This reply may be incomplete.'],
+      // A name an object has anyway must not find what the object has.
+      ['constructor', 'This reply may be incomplete.'],
+    ]
+    const ANY_LINE = /cut off|step limit|declined to continue|may be incomplete/
+
+    it.each(LINES)('%s shows a line under the reply', (stop_reason, line) => {
+      fill([row(1, 'assistant', 'partial', { stop_reason })])
+      const { container } = render(<ChatMessages chatId={1} />)
+      const note = screen.getByText(line as string)
+      expect(note.tagName).toBe('P')
+      expect(container.querySelector('strong, a, b, script, img')).toBeNull()
+      // Under the reply, not in it.
+      expect(note.previousElementSibling?.textContent).toContain('partial')
+    })
+
+    it.each(['end_turn', 'cancelled'])('%s shows no line', stop_reason => {
+      fill([row(1, 'assistant', 'done', { stop_reason })])
+      const { container } = render(<ChatMessages chatId={1} />)
+      expect(container.textContent).not.toMatch(ANY_LINE)
+    })
+
+    it('a row with no stop reason shows no line', () => {
+      fill([row(1, 'assistant', 'old', null), row(2, 'assistant', 'odd', {})])
+      const { container } = render(<ChatMessages chatId={1} />)
+      expect(container.textContent).not.toMatch(ANY_LINE)
+    })
+
+    it('a row with only tool chips still shows it', () => {
+      fill([row(1, 'assistant', '', { stop_reason: 'max_turn_requests' })])
+      render(<ChatMessages chatId={1} />)
+      expect(
+        screen.getByText(
+          'The agent stopped at its step limit, so this reply may be incomplete.'
+        )
+      ).toBeInTheDocument()
+    })
+
+    it('the row standing in for the reply until the refetch lands shows it too', () => {
+      fill([row(1, 'user', 'hi')])
+      act(() => {
+        const s = useAiChatStore.getState()
+        s.apply({
+          seq: 1,
+          type: 'message_chunk',
+          chat_id: 1,
+          turn_id: 't1',
+          text: 'cut sho',
+        })
+        s.apply({
+          seq: 2,
+          type: 'turn_ended',
+          chat_id: 1,
+          turn_id: 't1',
+          stop_reason: 'max_tokens',
+          message_seq: 2,
+        })
+      })
+      render(<ChatMessages chatId={1} />)
+      expect(
+        screen.getByText('This reply was cut off at the length limit.')
+      ).toBeInTheDocument()
+    })
+  })
+
   describe('the live turn', () => {
     const start = () =>
       act(() => {

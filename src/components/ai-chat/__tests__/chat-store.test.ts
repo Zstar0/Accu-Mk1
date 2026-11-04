@@ -610,11 +610,56 @@ describe('useAiChatStore', () => {
       expect(store().needsRefetch).toEqual([1])
     })
 
-    it('leaves the notice alone for any other turn_ended', () => {
-      store().setNotice({ kind: 'busy', message: 'b' })
-      store().apply(started())
+    it.each(['end_turn', 'max_tokens', 'something_new'])(
+      'leaves the notice alone for a %s turn_ended that left a row',
+      reason => {
+        store().setNotice({ kind: 'busy', message: 'b' })
+        store().apply(started())
+        store().apply(ended(2, reason))
+        expect(store().notice).toEqual({ kind: 'busy', message: 'b' })
+      }
+    )
+
+    it.each(['end_turn', 'refusal', 'max_tokens', 'max_turn_requests'])(
+      'says so when a %s turn ends with no row, without the new chat advice',
+      reason => {
+        store().apply(started())
+        store().apply(ended(null, reason), 'Nova')
+        expect(store().notice).toEqual({
+          // Not `error`: the banner would append "Try a new chat."
+          kind: 'busy',
+          message: 'Nova ended without a reply.',
+          chatId: 1,
+        })
+      }
+    )
+
+    it('names no agent it was not told', () => {
       store().apply(ended(null, 'end_turn'))
-      expect(store().notice).toEqual({ kind: 'busy', message: 'b' })
+      expect(store().notice?.message).toBe('The agent ended without a reply.')
+    })
+
+    it.each([
+      ['agent_exited', 'error', 'Nova stopped unexpectedly.'],
+      ['agent_unreachable', 'unreachable', 'Could not reach Nova.'],
+    ] as const)(
+      'keeps what the %s error said when its turn ends with no row',
+      (code, kind, message) => {
+        store().apply(ev('error', { code, message }))
+        store().apply(ended(null, 'error'), 'Nova')
+        expect(store().notice).toEqual({ kind, message, chatId: 1 })
+      }
+    )
+
+    it('raises it when the error notice on show is for another chat', () => {
+      store().apply(
+        ev('error', { code: 'agent_error', message: 'x', chat_id: 2 })
+      )
+      store().apply(ended(null, 'end_turn'), 'Nova')
+      expect(store().notice).toMatchObject({
+        message: 'Nova ended without a reply.',
+        chatId: 1,
+      })
     })
   })
 

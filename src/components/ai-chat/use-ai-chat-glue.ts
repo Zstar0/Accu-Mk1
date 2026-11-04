@@ -183,8 +183,21 @@ function raiseApprovalToast(card: ApprovalCard, agent: string) {
   })
 }
 
+/** A chat's agent, or "The agent" when its provider is not in the user's list. */
+function agentOf(qc: QueryClient, chatId: number): string {
+  const providerId = useAiChatStore
+    .getState()
+    .chats.find(c => c.id === chatId)?.provider_id
+  return (
+    qc
+      .getQueryData<AiProvider[]>(providersKey(currentUserId()))
+      ?.find(p => p.id === providerId)?.display_name ?? 'The agent'
+  )
+}
+
 function handleEvent(qc: QueryClient, e: AiChatEvent) {
-  useAiChatStore.getState().apply(e)
+  const agent = e.type === 'turn_ended' ? agentOf(qc, e.chat_id) : undefined
+  useAiChatStore.getState().apply(e, agent)
   // The stream treats a throw as a dropped connection and skips this event.
   try {
     if (e.type === 'turn_ended' || e.type === 'resync') void refreshChats(qc)

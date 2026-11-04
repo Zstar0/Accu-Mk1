@@ -306,7 +306,11 @@ export function applyEvent(
 }
 
 /** The notice an event also raises; `applyEvent` stays about chat data. */
-function noticeFor(e: AiChatEvent): ChatNotice | null {
+function noticeFor(
+  e: AiChatEvent,
+  agent: string,
+  current: ChatNotice | null
+): ChatNotice | null {
   if (e.type === 'error') {
     return {
       kind: e.code === 'agent_unreachable' ? 'unreachable' : 'error',
@@ -314,10 +318,24 @@ function noticeFor(e: AiChatEvent): ChatNotice | null {
       chatId: e.chat_id,
     }
   }
-  if (e.type === 'turn_ended' && e.stop_reason === 'cancelled') {
+  if (e.type !== 'turn_ended') return null
+  if (e.stop_reason === 'cancelled') {
     return { kind: 'cancelled', message: 'Stopped.', chatId: e.chat_id }
   }
-  return null
+  if (typeof e.message_seq === 'number') return null
+  // The `error` event ahead of this one has already said why, with its advice
+  // or its Retry.
+  const explained =
+    current?.chatId === e.chat_id &&
+    (current.kind === 'error' || current.kind === 'unreachable')
+  return explained
+    ? null
+    : {
+        // `busy`: an `error` notice would append "Try a new chat."
+        kind: 'busy',
+        message: `${agent} ended without a reply.`,
+        chatId: e.chat_id,
+      }
 }
 
 /**
@@ -393,8 +411,11 @@ interface AiChatState extends AiChatFields {
    * decided), as `permission_resolved` would.
    */
   dismissApproval: (permissionId: string) => void
-  /** Reduce one SSE event, and raise its notice if it has one. */
-  apply: (e: AiChatEvent) => void
+  /**
+   * Reduce one SSE event, and raise its notice if it has one. `agent` names the
+   * chat's agent in that notice: the store does not hold the provider list.
+   */
+  apply: (e: AiChatEvent, agent?: string) => void
   /** Merge by `seq`, the server's row winning; never loses a newer row. */
   setMessages: (chatId: number, rows: AiMessage[]) => void
   /** Also clears the active chat when it is no longer in `rows`. */
@@ -446,12 +467,12 @@ export const useAiChatStore = create<AiChatState>()(
           'dismissApproval'
         ),
 
-      apply: e =>
+      apply: (e, agent = 'The agent') =>
         set(
           state => {
             const data = chatDataOf(state)
             const next = applyEvent(data, e)
-            const notice = noticeFor(e)
+            const notice = noticeFor(e, agent, state.notice)
             // Nothing to write: keep the state object, so nothing re-renders.
             if (next === data && notice === null) return state
             return notice === null ? next : { ...next, notice }

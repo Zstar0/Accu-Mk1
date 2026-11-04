@@ -293,6 +293,23 @@ describe('the chat list', () => {
     await waitFor(() => expect(mocks.listChats).toHaveBeenCalledTimes(1))
   })
 
+  it('a turn that ends with no row is named after its own agent', async () => {
+    setup()
+    await waitFor(() => expect(lastStream().enabled).toBe(true))
+    act(() => store().setChats([chatRow(1), chatRow(2, { provider_id: 9 })]))
+
+    deliver(endedEvent(1))
+    expect(store().notice).toEqual({
+      kind: 'busy',
+      message: 'Nova ended without a reply.',
+      chatId: 1,
+    })
+
+    // Its provider is not in this user's list: no other agent's name.
+    deliver(endedEvent(2))
+    expect(store().notice?.message).toBe('The agent ended without a reply.')
+  })
+
   it('a failed fetch changes nothing and throws nowhere', async () => {
     mocks.listChats.mockRejectedValue(new Error('down'))
     setup()

@@ -143,6 +143,25 @@ function PermissionRow({ message }: { message: AiMessage }) {
   )
 }
 
+const STOP_NOTE: Record<string, string> = {
+  max_tokens: 'This reply was cut off at the length limit.',
+  max_turn_requests:
+    'The agent stopped at its step limit, so this reply may be incomplete.',
+  refusal: 'The agent declined to continue.',
+}
+
+/** What to say under a stored reply about how it ended, if anything. */
+function stopNote(meta: AiMessage['meta']): string | null {
+  const reason = str(meta?.stop_reason)
+  if (reason === null || reason === 'end_turn' || reason === 'cancelled') {
+    return null
+  }
+  // `hasOwn`: the reason comes off the wire, and could be `constructor`.
+  return Object.hasOwn(STOP_NOTE, reason)
+    ? (STOP_NOTE[reason] ?? null)
+    : 'This reply may be incomplete.'
+}
+
 function MessageRow({ message }: { message: AiMessage }) {
   if (message.role === 'user') {
     return (
@@ -154,10 +173,12 @@ function MessageRow({ message }: { message: AiMessage }) {
     )
   }
   if (message.role === 'permission') return <PermissionRow message={message} />
+  const note = stopNote(message.meta)
   return (
     <div className="flex flex-col gap-2">
       <ToolChips tools={toolsOf(message.meta)} />
       {message.text !== '' && <AssistantText text={message.text} />}
+      {note !== null && <p className="text-xs text-muted-foreground">{note}</p>}
     </div>
   )
 }
