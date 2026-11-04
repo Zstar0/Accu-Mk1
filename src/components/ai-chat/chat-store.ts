@@ -230,6 +230,7 @@ export function applyEvent(
         title: e.title,
         detail: e.detail,
         can_allow: e.can_allow,
+        hidden: e.hidden,
         chatId: e.chat_id,
       }
       return {

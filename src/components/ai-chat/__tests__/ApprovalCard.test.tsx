@@ -14,6 +14,7 @@ vi.mock('@/lib/ai-chat-api', async importOriginal => ({
 }))
 
 const decide = vi.mocked(decidePermission)
+const TOO_LONG = 'Too long to review here, so it can only be denied.'
 
 const card = (over: Partial<Card> = {}): Card => ({
   permission_id: 'p1',
@@ -21,6 +22,7 @@ const card = (over: Partial<Card> = {}): Card => ({
   title: 'Run ls',
   detail: 'ls -la /srv',
   can_allow: true,
+  hidden: false,
   chatId: 7,
   ...over,
 })
@@ -56,6 +58,39 @@ describe('ApprovalCard', () => {
     render(<ApprovalCard card={card({ can_allow: false })} />)
     expect(buttons().allow).toBeNull()
     expect(buttons().deny).toBeEnabled()
+    // The agent offered no allow_once: nothing is hidden, so no reason to give.
+    expect(screen.queryByText(TOO_LONG)).toBeNull()
+  })
+
+  it('says why Allow once is missing when part of the request cannot be shown', () => {
+    render(
+      <ApprovalCard
+        card={card({
+          can_allow: false,
+          hidden: true,
+          detail: 'x\n\n5000 more characters not shown.',
+        })}
+      />
+    )
+    expect(buttons().allow).toBeNull()
+    expect(buttons().deny).toBeEnabled()
+    expect(screen.getByText(TOO_LONG)).toBeInTheDocument()
+  })
+
+  it('scrolls a long title and detail, and keeps the buttons outside them', () => {
+    const long = 'rm -rf /srv '.repeat(1000)
+    render(<ApprovalCard card={card({ title: `t ${long}`, detail: long })} />)
+    for (const text of [`t ${long}`, long]) {
+      const box = screen.getByText(
+        (_, el) => el?.textContent === text && el.children.length === 0
+      )
+      expect(box.className).toMatch(/\bmax-h-\d+\b/)
+      expect(box.className).toMatch(/\boverflow-y-auto\b/)
+      expect(box.className).toMatch(/\bwhitespace-pre-wrap\b/)
+      expect(box).toHaveAttribute('tabindex', '0')
+      expect(box.contains(buttons().allow)).toBe(false)
+      expect(box.contains(buttons().deny)).toBe(false)
+    }
   })
 
   it('offers Allow once and Deny when can_allow is true', () => {

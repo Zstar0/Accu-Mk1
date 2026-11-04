@@ -95,6 +95,7 @@ describe('approval toasts with the real sonner', () => {
       title: 'Run ls',
       detail: 'ls',
       can_allow: true,
+      hidden: false,
     }
     render(
       <QueryClientProvider
@@ -119,6 +120,7 @@ describe('approval toasts with the real sonner', () => {
       title: 'Run ls',
       detail: 'ls',
       can_allow: true,
+      hidden: false,
       agent: 'Nova',
     })
     expect(await screen.findByText(TEXT)).toBeInTheDocument()

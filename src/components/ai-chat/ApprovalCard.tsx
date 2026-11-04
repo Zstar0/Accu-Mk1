@@ -65,11 +65,25 @@ export function ApprovalCard({ card }: { card: ApprovalCardData }) {
         <ShieldQuestion className="size-3.5" aria-hidden="true" />
         Approval needed
       </div>
-      <p className="mt-1.5 break-words font-medium">{card.title}</p>
+      {/* Both scroll in place, so a long command cannot push the buttons away. */}
+      <p
+        tabIndex={0}
+        className="mt-1.5 max-h-24 overflow-y-auto whitespace-pre-wrap break-words font-medium"
+      >
+        {card.title}
+      </p>
       {card.detail !== '' && (
-        <pre className="mt-1.5 max-h-40 overflow-auto whitespace-pre-wrap break-words rounded bg-muted p-2 font-mono text-xs">
+        <pre
+          tabIndex={0}
+          className="mt-1.5 max-h-40 overflow-y-auto whitespace-pre-wrap break-words rounded bg-muted p-2 font-mono text-xs"
+        >
           {card.detail}
         </pre>
+      )}
+      {card.hidden && (
+        <p className="mt-1.5 text-xs text-muted-foreground">
+          Too long to review here, so it can only be denied.
+        </p>
       )}
       <div className="mt-2 flex flex-wrap items-center gap-2">
         {card.can_allow && (

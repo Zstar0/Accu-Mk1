@@ -55,7 +55,7 @@ const chunk = (
 ) => ev('message_chunk', { text, ...rest })
 const permission = (
   permission_id: string,
-  rest: { chat_id?: number; can_allow?: boolean } = {}
+  rest: { chat_id?: number; can_allow?: boolean; hidden?: boolean } = {}
 ) =>
   ev('permission_requested', {
     permission_id,
@@ -63,6 +63,7 @@ const permission = (
     title: 'Run ls',
     detail: 'ls -la',
     can_allow: true,
+    hidden: false,
     agent: 'Nova',
     ...rest,
   })
@@ -106,6 +107,7 @@ const pending = (permission_id: string) => ({
   title: 'Run ls',
   detail: 'ls -la',
   can_allow: true,
+  hidden: false,
 })
 
 function deepFreeze<T>(o: T): T {
@@ -168,6 +170,15 @@ describe('applyEvent', () => {
     d = run(d, resolved('p1'))
     expect(d.approvals).toEqual({})
     expect(d.live[1]?.phase).toBe('running')
+  })
+
+  it('a card keeps whether it could show everything', () => {
+    const d = run(
+      emptyData(),
+      started(),
+      permission('p1', { can_allow: false, hidden: true })
+    )
+    expect(d.approvals.p1).toMatchObject({ can_allow: false, hidden: true })
   })
 
   it('a second card keeps the phase waiting after the first resolves', () => {

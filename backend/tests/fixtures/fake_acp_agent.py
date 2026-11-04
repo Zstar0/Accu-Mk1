@@ -11,6 +11,9 @@ Flags:
   --no-init           never answer initialize
   --linger SECONDS    stay up this long after stdin closes
   --tools-reply FILE  answer `/tools` with FILE's text instead of T7A
+  --unknown-update    ahead of each reply, a session/update of a kind no ACP version has (what a newer Hermes could send)
+  --unknown-option    ahead of each reply, a permission request with an option kind no ACP version has; refused, the
+                      agent goes on as if denied. Both are raw frames: the typed helpers would validate them here.
 
 Prompts, by their last text block:
   /tools            the tool list
@@ -18,6 +21,13 @@ Prompts, by their last text block:
                     allow_always; replies `allowed`, `denied` or `cancelled` (the outcome it got)
   PERMIT_NOREJECT   the same without reject_once
   PERMIT_NOALLOW    the same without allow_once
+  PERMIT_DIFF       PERMIT, the tool call holding a diff block (and a raw input, as Hermes's does)
+  PERMIT_BLOCKS     PERMIT, the tool call holding a text block, then a diff block
+  PERMIT_TERMINAL   PERMIT, the tool call holding a text block, then a terminal block
+  PERMIT_WRITE <n>  PERMIT, the tool call holding a diff block with n characters of new text
+  PERMIT_LONG_TITLE PERMIT, the tool call with a 25000 character title
+  PERMIT_BAD_TEXT   PERMIT as a raw frame, with a NUL and a lone surrogate in the title and the raw input
+  BAD_TEXT          replies with a NUL and a lone surrogate, as a raw frame
   ABANDON           sends the same permission request, and ends the turn 0.3 s later without waiting for the answer
   SLOW              replies `working`, waits for session/cancel, then stops with `cancelled`
   STUCK             replies `working` and never stops, session/cancel or not
@@ -62,6 +72,16 @@ T7A = ("Available tools (3):\n  mcp__mk1__create_flag: Raise a flag on a sample.
        "  todo_list: Track a task list for multi-step work (3+ steps). Use for complex tasks with ...")
 
 REPLIES = {"allow-once": "allowed", "reject-once": "denied"}
+DIFF_BLOCK = acp.tool_diff_content("/srv/app/run.sh", "new body", old_text="old body")
+WHY_BLOCK = acp.tool_content(acp.text_block("why"))
+TOOL_CALL_FIELDS = {
+    "PERMIT_DIFF": {"content": [DIFF_BLOCK], "raw_input": {"path": "/srv/app/run.sh", "content": "new body"}},
+    "PERMIT_BLOCKS": {"content": [WHY_BLOCK, DIFF_BLOCK]},
+    "PERMIT_TERMINAL": {"content": [WHY_BLOCK, acp.tool_terminal_ref("term-1")]},
+    "PERMIT_LONG_TITLE": {"title": "t" * 25000},
+}
+BAD_TEXT = "a\x00b\ud800c"  # no database stores it: a NUL (Postgres refuses it) and a lone surrogate (no UTF-8)
+UNKNOWN_KIND_TEXT = "SECRET-AGENT-TEXT"  # must never reach Mk1's logs
 
 
 class FakeAgent(acp.Agent):
@@ -128,10 +148,34 @@ class FakeAgent(acp.Agent):
         if session_id not in self.known:
             return PromptResponse(stop_reason="refusal")
         last = texts[-1] if texts else ""
+        if self.args.unknown_update:
+            await self.conn._conn.send_notification("session/update", {
+                "sessionId": session_id, "update": {"sessionUpdate": "future_kind", "text": UNKNOWN_KIND_TEXT}})
+        if self.args.unknown_option:
+            try:
+                await self.raw_permission(session_id, UNKNOWN_KIND_TEXT, {"command": UNKNOWN_KIND_TEXT},
+                                          {"optionId": "allow-forever", "name": "Allow forever",
+                                           "kind": "allow_forever"})
+            except acp.RequestError:
+                self.log("permission refused")
         if last == "/tools":
             await self.say(session_id, self.tools_reply)
         elif last in ("PERMIT", "PERMIT_NOREJECT", "PERMIT_NOALLOW"):
             await self.permit(session_id, with_allow=last != "PERMIT_NOALLOW", with_reject=last != "PERMIT_NOREJECT")
+        elif last in TOOL_CALL_FIELDS:
+            await self.permit(session_id, True, True, TOOL_CALL_FIELDS[last])
+        elif last.startswith("PERMIT_WRITE "):
+            new_text = "x" * int(last.split()[1])
+            await self.permit(session_id, True, True, {"content": [acp.tool_diff_content("/srv/big", new_text)]})
+        elif last == "PERMIT_BAD_TEXT":
+            response = await self.raw_permission(session_id, BAD_TEXT, {"command": BAD_TEXT},
+                                                 {"optionId": "allow-once", "name": "Allow once", "kind": "allow_once"},
+                                                 {"optionId": "reject-once", "name": "Reject", "kind": "reject_once"})
+            await self.say(session_id, REPLIES.get(response["outcome"].get("optionId"), "cancelled"))
+        elif last == "BAD_TEXT":
+            await self.conn._conn.send_notification("session/update", {
+                "sessionId": session_id,
+                "update": {"sessionUpdate": "agent_message_chunk", "content": {"type": "text", "text": BAD_TEXT}}})
         elif last == "ABANDON":
             self.abandoned = asyncio.create_task(self.ask(session_id, with_allow=True, with_reject=True))
             await asyncio.sleep(0.3)
@@ -153,7 +197,12 @@ class FakeAgent(acp.Agent):
             await self.say(session_id, last)
         return PromptResponse(stop_reason="end_turn")
 
-    async def ask(self, session_id: str, with_allow: bool, with_reject: bool):
+    async def raw_permission(self, session_id: str, title: str, raw_input: dict, *options: dict) -> dict:
+        return await self.conn._conn.send_request("session/request_permission", {
+            "sessionId": session_id, "options": list(options),
+            "toolCall": {"toolCallId": "call-1", "title": title, "rawInput": raw_input}})
+
+    async def ask(self, session_id: str, with_allow: bool, with_reject: bool, fields: dict | None = None):
         options = []
         if with_allow:
             options.append(PermissionOption(option_id="allow-once", name="Allow once", kind="allow_once"))
@@ -162,13 +211,14 @@ class FakeAgent(acp.Agent):
         options.append(PermissionOption(option_id="allow-always", name="Always allow", kind="allow_always"))
         return await self.conn.request_permission(
             session_id=session_id, options=options,
-            tool_call=ToolCallUpdate(tool_call_id="call-1", title="Run a command", raw_input={"command": "ls"}))
+            tool_call=ToolCallUpdate(tool_call_id="call-1", **{
+                "title": "Run a command", **(fields if fields is not None else {"raw_input": {"command": "ls"}})}))
 
-    async def permit(self, session_id: str, with_allow: bool, with_reject: bool) -> None:
+    async def permit(self, session_id: str, with_allow: bool, with_reject: bool, fields: dict | None = None) -> None:
         await self.conn.session_update(session_id, acp.update_agent_thought_text("checking"))
         await self.conn.session_update(session_id, acp.start_tool_call(
             "call-1", "Run a command", kind="execute", status="pending"))
-        response = await self.ask(session_id, with_allow, with_reject)
+        response = await self.ask(session_id, with_allow, with_reject, fields)
         outcome = response.outcome
         reply = REPLIES.get(outcome.option_id, outcome.option_id) if outcome.outcome == "selected" else "cancelled"
         await self.conn.session_update(session_id, acp.update_tool_call(
@@ -186,6 +236,8 @@ def main() -> None:
     parser.add_argument("--no-init", action="store_true")
     parser.add_argument("--linger", type=float, default=0.0)
     parser.add_argument("--tools-reply")
+    parser.add_argument("--unknown-update", action="store_true")
+    parser.add_argument("--unknown-option", action="store_true")
     agent = FakeAgent(parser.parse_args())
     # session/resume is on acp's unstable list: without this flag the agent answers method_not_found.
     asyncio.run(acp.run_agent(agent, use_unstable_protocol=True))

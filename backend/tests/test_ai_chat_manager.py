@@ -10,7 +10,14 @@ from pathlib import Path
 
 import anyio
 import pytest
-from acp.schema import ContentToolCallContent, PermissionOption, TextContentBlock, ToolCallUpdate
+from acp.schema import (
+    ContentToolCallContent,
+    FileEditToolCallContent,
+    PermissionOption,
+    TerminalToolCallContent,
+    TextContentBlock,
+    ToolCallUpdate,
+)
 from sqlalchemy import select
 
 from ai_chat import approvals, sessions
@@ -130,7 +137,7 @@ async def test_allow_always_option_never_offered(ai_chat_env):
         await seen(ai_chat_env, "turn_ended")
     assert card["can_allow"] is True
     assert set(card) == {"seq", "type", "chat_id", "turn_id", "permission_id", "source", "title", "detail",
-                         "can_allow", "agent"}
+                         "can_allow", "hidden", "agent"}
     blob = json.dumps(card) + json.dumps(rows(ai_chat_env, "permission")[0].meta)
     assert not [option for option in OPTION_IDS if option in blob]
     assert rows(ai_chat_env, "assistant")[0].text == "allowed"  # allow_once, not allow_always
@@ -220,18 +227,108 @@ async def test_failed_row_write_leaves_no_pending(ai_chat_env, monkeypatch):
     assert approvals.APPROVALS.pending_for_chat(1) == []
 
 
-def test_permission_detail_prefers_the_first_text_block():
+def test_permission_detail_shows_every_block_and_says_what_it_hides():
     def call(**fields):
         return ToolCallUpdate(tool_call_id="c", **fields)
 
     def text(value):
         return ContentToolCallContent(type="content", content=TextContentBlock(type="text", text=value))
 
-    assert sessions._permission_detail(call(content=[text("run ls"), text("other")], raw_input={"a": 1})) == "run ls"
-    assert sessions._permission_detail(call(raw_input={"a": 1, "b": [2]})) == '{"a":1,"b":[2]}'
-    assert sessions._permission_detail(call()) == ""
-    assert len(sessions._permission_detail(call(raw_input="x" * 5000))) == 2000
-    assert len(sessions._permission_detail(call(content=[text("y" * 5000)]))) == 2000
+    detail = sessions._permission_detail
+    diff = FileEditToolCallContent(type="diff", path="/a", new_text="new", old_text="old")
+    terminal = TerminalToolCallContent(type="terminal", terminal_id="t")
+    assert detail(call(content=[text("run ls"), text("other")], raw_input={"a": 1})) == ("run ls\n\nother", False)
+    assert detail(call(content=[diff, text("why")])) == ("/a\nnew\n\nwhy", False)
+    assert detail(call(raw_input={"a": 1, "b": [2]})) == ('{"a":1,"b":[2]}', False)
+    assert detail(call(content=[], raw_input={"a": 1})) == ('{"a":1}', False)
+    assert detail(call()) == ("", False)
+    assert detail(call(content=[terminal])) == ("1 item not shown.", True)
+    assert detail(call(content=[text("why"), terminal, terminal])) == ("why\n\n2 items not shown.", True)
+    assert detail(call(raw_input="x" * 18000)) == (json.dumps("x" * 18000), False)
+    assert detail(call(content=[text("y" * 20000)])) == ("y" * 20000, False)
+    assert detail(call(content=[text("y" * 20001)])) == ("y" * 20000 + "\n\n1 more character not shown.", True)
+    assert detail(call(content=[text("y" * 25000), terminal])) == (
+        "y" * 20000 + "\n\n5000 more characters not shown.\n\n1 item not shown.", True)
+    assert detail(call(raw_input="x" * 25000))[1] is True
+
+
+async def test_card_shows_a_diff_block_not_the_raw_input(ai_chat_env):
+    with anyio.fail_after(30):
+        await send(ai_chat_env, "PERMIT_DIFF")
+        card = await seen(ai_chat_env, "permission_requested")
+        approvals.APPROVALS.decide(card["permission_id"], 1, "allow")
+        await seen(ai_chat_env, "turn_ended")
+    assert card["detail"] == "/srv/app/run.sh\nnew body"
+    assert (card["can_allow"], card["hidden"]) == (True, False)
+    assert rows(ai_chat_env, "permission")[0].meta["detail"] == card["detail"]
+    assert rows(ai_chat_env, "assistant")[0].text == "allowed"
+
+
+async def test_card_shows_the_block_after_a_text_block(ai_chat_env):
+    with anyio.fail_after(30):
+        await send(ai_chat_env, "PERMIT_BLOCKS")
+        card = await seen(ai_chat_env, "permission_requested")
+        approvals.APPROVALS.decide(card["permission_id"], 1, "deny")
+        await seen(ai_chat_env, "turn_ended")
+    assert card["detail"] == "why\n\n/srv/app/run.sh\nnew body"
+    assert card["can_allow"] is True
+
+
+async def test_a_block_it_cannot_render_removes_allow(ai_chat_env):
+    with anyio.fail_after(30):
+        await send(ai_chat_env, "PERMIT_TERMINAL")
+        card = await seen(ai_chat_env, "permission_requested")
+        assert card["detail"] == "why\n\n1 item not shown."
+        assert (card["can_allow"], card["hidden"]) == (False, True)
+        with pytest.raises(approvals.AllowNotOffered):
+            approvals.APPROVALS.decide(card["permission_id"], 1, "allow")
+        approvals.APPROVALS.decide(card["permission_id"], 1, "deny")
+        await seen(ai_chat_env, "turn_ended")
+    assert rows(ai_chat_env, "assistant")[0].text == "denied"
+
+
+async def test_a_long_title_is_cut_marked_and_removes_allow(ai_chat_env):
+    with anyio.fail_after(30):
+        await send(ai_chat_env, "PERMIT_LONG_TITLE")
+        card = await seen(ai_chat_env, "permission_requested")
+        with pytest.raises(approvals.AllowNotOffered):
+            approvals.APPROVALS.decide(card["permission_id"], 1, "allow")
+        approvals.APPROVALS.decide(card["permission_id"], 1, "deny")
+        await seen(ai_chat_env, "turn_ended")
+    assert card["title"] == "t" * 20000 + "\n\n5000 more characters not shown."
+    assert (card["can_allow"], card["hidden"]) == (False, True)
+    assert rows(ai_chat_env, "permission")[0].text == card["title"]
+
+
+async def test_no_allow_once_is_not_hidden_content(ai_chat_env):
+    with anyio.fail_after(30):
+        await send(ai_chat_env, "PERMIT_NOALLOW")
+        card = await seen(ai_chat_env, "permission_requested")
+        approvals.APPROVALS.decide(card["permission_id"], 1, "deny")
+        await seen(ai_chat_env, "turn_ended")
+    assert (card["can_allow"], card["hidden"]) == (False, False)
+
+
+async def test_a_nul_or_surrogate_in_a_title_still_asks_the_user(ai_chat_env):
+    with anyio.fail_after(30):
+        await send(ai_chat_env, "PERMIT_BAD_TEXT")
+        card = await seen(ai_chat_env, "permission_requested")
+        approvals.APPROVALS.decide(card["permission_id"], 1, "allow")
+        await seen(ai_chat_env, "turn_ended")
+    assert card["title"] == "a\ufffdb\ufffdc"
+    assert card["detail"] == '{"command":"a\\u0000b\ufffdc"}'  # json.dumps has already escaped the NUL
+    row = rows(ai_chat_env, "permission")[0]
+    assert (row.text, row.meta["title"], row.meta["detail"]) == (card["title"], card["title"], card["detail"])
+    assert rows(ai_chat_env, "assistant")[0].text == "allowed"  # the user's answer, not a silent cancelled
+
+
+async def test_a_nul_or_surrogate_in_agent_text_does_not_lose_the_reply(ai_chat_env):
+    with anyio.fail_after(30):
+        await send(ai_chat_env, "BAD_TEXT")
+        ended = await seen(ai_chat_env, "turn_ended")
+    row = rows(ai_chat_env, "assistant")[0]
+    assert row.text == "a\ufffdb\ufffdc"
+    assert (ended["stop_reason"], ended["message_seq"]) == ("end_turn", row.seq)
 
 
 @pytest.mark.parametrize("change", [{"chat_id": None}, {"turn_id": None}, {"consuming": True}, {"replaying": True},

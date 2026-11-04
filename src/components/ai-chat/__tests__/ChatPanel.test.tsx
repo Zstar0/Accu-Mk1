@@ -145,6 +145,7 @@ describe('ChatButton', () => {
         title: 'Run ls',
         detail: '',
         can_allow: true,
+        hidden: false,
         agent: 'Nova',
       })
     })
@@ -403,6 +404,7 @@ describe('ChatPanel', () => {
         title: 'Run ls',
         detail: 'ls',
         can_allow: true,
+        hidden: false,
         agent: 'Nova',
       })
       expect(status()).toHaveTextContent('Nova is waiting for your approval')
@@ -430,6 +432,7 @@ describe('ChatPanel', () => {
         title: 'Run ls',
         detail: 'ls',
         can_allow: true,
+        hidden: false,
         agent: 'Nova',
       })
       expect(
@@ -531,6 +534,7 @@ describe('a waiting approval can be reached', () => {
     title: 'Run rm',
     detail: 'rm -rf /tmp/x',
     can_allow: true,
+    hidden: false,
   }
   /** Chat 8 is the most recent; the card waits on chat 7. */
   const seed = () =>

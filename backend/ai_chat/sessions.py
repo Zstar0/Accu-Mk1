@@ -27,6 +27,7 @@ import contextlib
 import json
 import logging
 import os
+import re
 import secrets
 import time
 from collections import deque
@@ -41,6 +42,7 @@ from acp.schema import (
     AgentThoughtChunk,
     ClientCapabilities,
     ContentToolCallContent,
+    FileEditToolCallContent,
     FileSystemCapabilities,
     Implementation,
     RequestPermissionResponse,
@@ -61,12 +63,14 @@ from integration_keys import store
 
 logger = logging.getLogger(__name__)
 
+
 _TRANSPORT = {"limit": 16 * 1024 * 1024, "stderr": asyncio.subprocess.PIPE, "shutdown_timeout": 5.0}
 _CLIENT_CAPS = ClientCapabilities(fs=FileSystemCapabilities(read_text_file=False, write_text_file=False),
                                   terminal=False)
 _INIT_TIMEOUT_S = 30.0
 _GRACE_S = 5.0  # bounds every wait on a process or pipe that is going away
-_DETAIL_MAX = 2000  # characters of tool detail on an approval card
+_DETAIL_MAX = 20000  # characters of a title or of tool detail on an approval card; a card cut to this has no Allow
+_UNSTORABLE = re.compile("[\x00\ud800-\udfff]")
 REAPER_INTERVAL_S = 60
 # ponytail: a writer loses at most once to each other writer, so 5 attempts guarantee 5 simultaneous writers on one
 # chat. More usually land too, without the guarantee; raise this if a chat ever sees more.
@@ -196,6 +200,13 @@ def _dump(model: BaseModel | None) -> dict:
     return model.model_dump(mode="json", by_alias=True, exclude_none=True) if model is not None else {}
 
 
+def storable_text(text: str) -> str:
+    """`text` with U+FFFD in place of what no database stores: a NUL (Postgres refuses it) and a lone surrogate (JSON
+    can carry one; it has no UTF-8). Agent text goes through this, so one such character costs neither the reply nor
+    the approval."""
+    return _UNSTORABLE.sub("\ufffd", text)
+
+
 # ---- the ACP client side ----------------------------------------------------------------------
 
 @dataclass
@@ -205,14 +216,36 @@ class TurnResult:
     tools: list[dict]
 
 
-def _permission_detail(tool_call: ToolCallUpdate) -> str:
-    """What the card shows under the title: the first text content block, else the raw input as compact JSON."""
-    for item in tool_call.content or ():
+def _not_shown(count: int, what: str) -> str:
+    return f"{count} {what}{'' if count == 1 else 's'} not shown."
+
+
+def _capped(text: str) -> tuple[str, bool]:
+    """`text`, ending in a line that says how much was cut if it is over `_DETAIL_MAX`, and whether it was."""
+    over = len(text) - _DETAIL_MAX
+    return (text, False) if over <= 0 else (f"{text[:_DETAIL_MAX]}\n\n{_not_shown(over, 'more character')}", True)
+
+
+def _permission_detail(tool_call: ToolCallUpdate) -> tuple[str, bool]:
+    """What the card shows under the title, and whether part of what Allow would approve is not in it. Every content
+    block: text as its text, a diff as the path then the new text. Raw input as compact JSON only with no block."""
+    blocks = tool_call.content or ()
+    shown, unknown = [], 0
+    for item in blocks:
         if isinstance(item, ContentToolCallContent) and isinstance(item.content, TextContentBlock):
-            return item.content.text[:_DETAIL_MAX]
-    if tool_call.raw_input is None:
-        return ""
-    return json.dumps(tool_call.raw_input, separators=(",", ":"), ensure_ascii=False, default=str)[:_DETAIL_MAX]
+            shown.append(item.content.text)
+        elif isinstance(item, FileEditToolCallContent):
+            shown.append(f"{item.path}\n{item.new_text}")
+        else:
+            unknown += 1
+    if blocks or tool_call.raw_input is None:
+        text = "\n\n".join(shown)
+    else:
+        text = json.dumps(tool_call.raw_input, separators=(",", ":"), ensure_ascii=False, default=str)
+    detail, cut = _capped(storable_text(text))
+    if unknown:
+        detail = "\n\n".join(filter(None, (detail, _not_shown(unknown, "item"))))
+    return detail, cut or unknown > 0
 
 
 def _decision_patch(decision: str, user_id: int) -> dict:
@@ -306,8 +339,11 @@ class Mk1Client(acp.Client):
     async def _ask_owner(self, tool_call, options) -> RequestPermissionResponse:
         s = self._s
         allow_id, reject_id = approvals.pick_options(options)
-        title, detail = tool_call.title or "", _permission_detail(tool_call)
-        p = approvals.APPROVALS.register(s.chat_id, s.user_id, s.turn_id, "agent", title, detail, allow_id is not None)
+        title, title_cut = _capped(storable_text(tool_call.title or ""))
+        detail, detail_hidden = _permission_detail(tool_call)
+        hidden = title_cut or detail_hidden  # nobody can approve what the card cannot show them
+        p = approvals.APPROVALS.register(s.chat_id, s.user_id, s.turn_id, "agent", title, detail,
+                                         allow_id is not None and not hidden, hidden=hidden)
         card = self.cards[p.permission_id] = _Card(p, asyncio.ensure_future(asyncio.to_thread(
             persist_message, p.chat_id, "permission", title, {"source": p.source, "title": title, "detail": detail,
                                                               "permission_id": p.permission_id, "decision": None})))
@@ -319,7 +355,7 @@ class Mk1Client(acp.Client):
                 p.row_seq = card.row.result()
                 card.shown = True
                 hub.HUB.publish(p.user_id, "permission_requested", p.chat_id, p.turn_id, permission_id=p.permission_id,
-                                source=p.source, title=title, detail=detail, can_allow=p.can_allow,
+                                source=p.source, title=title, detail=detail, can_allow=p.can_allow, hidden=p.hidden,
                                 agent=s.provider.display_name)
                 _log_permission(p.chat_id, p.source, "requested")
                 try:
@@ -875,7 +911,8 @@ class SessionManager:
             stop_reason = "cancelled"  # a close closed the connection under the prompt, ahead of the agent's answer
         message_seq = None
         if result.text or result.tools:
-            message_seq = await asyncio.to_thread(persist_message, session.chat_id, "assistant", result.text,
+            message_seq = await asyncio.to_thread(persist_message, session.chat_id, "assistant",
+                                                  storable_text(result.text),
                                                   {"tools": result.tools, "stop_reason": stop_reason})
         if stop_reason != "agent_exited":
             return stop_reason, message_seq

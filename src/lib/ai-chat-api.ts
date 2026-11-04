@@ -27,6 +27,8 @@ export interface PendingApproval {
   title: string
   detail: string
   can_allow: boolean
+  /** The card could not show all of it, which is why `can_allow` is false. */
+  hidden: boolean
 }
 
 /** `ChatOut`. */

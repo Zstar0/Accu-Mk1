@@ -245,6 +245,7 @@ describe('ChatMessages', () => {
           title: 'Run rm',
           detail: 'rm -rf /tmp/x',
           can_allow: true,
+          hidden: false,
           agent: 'Nova',
         })
       })
@@ -266,6 +267,7 @@ describe('ChatMessages', () => {
               title: 'Other chat card',
               detail: '',
               can_allow: true,
+              hidden: false,
               chatId: 2,
             },
           },

@@ -22,7 +22,7 @@ AS_STANDARD = {"X-Test-User": "2"}
 AS_OTHER_ADMIN = {"X-Test-User": "3"}
 CHAT_KEYS = {"id", "provider_id", "title", "archived", "created_at", "updated_at", "running_turn_id",
              "pending_approvals"}
-PENDING_KEYS = {"permission_id", "source", "title", "detail", "can_allow"}
+PENDING_KEYS = {"permission_id", "source", "title", "detail", "can_allow", "hidden"}
 MESSAGE_KEYS = {"id", "seq", "role", "text", "meta", "created_at"}
 CTX = {"section": "lims", "subsection": "sample-detail", "target_kind": "sample", "target_id": "P-1234",
        "extra": "dropped"}
@@ -197,7 +197,7 @@ async def test_chats_out_keys_survive(ai_chat_api, ai_chat_env):
     [pending] = chat["pending_approvals"]
     assert set(pending) == PENDING_KEYS
     assert pending == {"permission_id": card["permission_id"], "source": "agent", "title": "Run a command",
-                       "detail": '{"command":"ls"}', "can_allow": True}
+                       "detail": '{"command":"ls"}', "can_allow": True, "hidden": False}
     assert (await decide(ai_chat_api, 1, card["permission_id"], "allow")).status_code == 200
     await seen(ai_chat_env, "turn_ended", turn_id=turn_id)
     [chat] = (await call(ai_chat_api, "GET", f"{URL}/chats")).json()
@@ -580,6 +580,32 @@ async def test_deny_and_allow_not_offered(ai_chat_api, ai_chat_env):
     denied = await decide(ai_chat_api, 1, pid, "deny")
     assert (denied.status_code, denied.json()) == (200, {"decision": "deny"})
     await seen(ai_chat_env, "turn_ended", turn_id=turn_id)
+
+
+async def test_a_write_too_long_to_show_cannot_be_allowed(ai_chat_api, ai_chat_env):
+    turn_id, card = await permit(ai_chat_api, ai_chat_env, "PERMIT_WRITE 25000")
+    pid = card["permission_id"]
+    shown = "/srv/big\n" + "x" * 25000
+    assert card["detail"] == f"{shown[:20000]}\n\n{len(shown) - 20000} more characters not shown."
+    assert (card["can_allow"], card["hidden"]) == (False, True)
+    refused = await decide(ai_chat_api, 1, pid, "allow")
+    assert (refused.status_code, detail(refused)) == (409, {"code": "allow_not_offered"})
+    [pending] = (await call(ai_chat_api, "GET", f"{URL}/chats")).json()[0]["pending_approvals"]
+    assert (pending["can_allow"], pending["hidden"], pending["detail"]) == (False, True, card["detail"])
+    assert (await decide(ai_chat_api, 1, pid, "deny")).status_code == 200
+    await seen(ai_chat_env, "turn_ended", turn_id=turn_id)
+    assert [m.text for m in rows(ai_chat_env, 1, "assistant")] == ["denied"]
+
+
+async def test_a_write_under_the_cap_shows_in_full_and_can_be_allowed(ai_chat_api, ai_chat_env):
+    turn_id, card = await permit(ai_chat_api, ai_chat_env, "PERMIT_WRITE 3000")
+    assert card["detail"] == "/srv/big\n" + "x" * 3000
+    assert (card["can_allow"], card["hidden"]) == (True, False)
+    [pending] = (await call(ai_chat_api, "GET", f"{URL}/chats")).json()[0]["pending_approvals"]
+    assert (pending["can_allow"], pending["hidden"], pending["detail"]) == (True, False, card["detail"])
+    assert (await decide(ai_chat_api, 1, card["permission_id"], "allow")).status_code == 200
+    await seen(ai_chat_env, "turn_ended", turn_id=turn_id)
+    assert [m.text for m in rows(ai_chat_env, 1, "assistant")] == ["allowed"]
 
 
 async def test_decision_validation_422(ai_chat_api, ai_chat_env):

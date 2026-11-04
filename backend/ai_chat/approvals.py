@@ -67,6 +67,7 @@ class PendingApproval:
     can_allow: bool
     row_seq: int | None
     future: asyncio.Future[str]  # resolves to allow, deny, expired or cancelled
+    hidden: bool = False  # the card could not show all of it, which is why `can_allow` is false
 
 
 def _resolve(p: PendingApproval, outcome: str) -> None:
@@ -80,10 +81,10 @@ class ApprovalRegistry:
         self._decided: OrderedDict[str, int] = OrderedDict()  # permission id -> deciding user, oldest first
 
     def register(self, chat_id: int, user_id: int, turn_id: str, source: str, title: str, detail: str,
-                 can_allow: bool) -> PendingApproval:
+                 can_allow: bool, hidden: bool = False) -> PendingApproval:
         """Must run inside the event loop: the future belongs to it."""
         p = PendingApproval(secrets.token_urlsafe(12), chat_id, user_id, turn_id, source, title, detail,
-                            can_allow, None, asyncio.get_running_loop().create_future())
+                            can_allow, None, asyncio.get_running_loop().create_future(), hidden)
         self._pending[p.permission_id] = p
         return p
 

@@ -88,6 +88,7 @@ const pending = (permission_id: string) => ({
   title: 'Run ls',
   detail: 'ls',
   can_allow: true,
+  hidden: false,
 })
 
 const message = (seq: number, text = `m${seq}`): AiMessage => ({
@@ -110,6 +111,7 @@ const permissionEvent = (id: string, chat_id = 1): AiChatEvent => ({
   title: 'Run ls',
   detail: 'ls',
   can_allow: true,
+  hidden: false,
   agent: 'Nova',
 })
 const resolvedEvent = (id: string, chat_id = 1): AiChatEvent => ({

@@ -51,6 +51,7 @@ class PendingOut(BaseModel):
     title: str
     detail: str
     can_allow: bool
+    hidden: bool
 
 
 class ChatOut(BaseModel):
@@ -123,11 +124,7 @@ def _who(user) -> tuple[int, str]:
 def _storable(text: str) -> bool:
     """False for a NUL (Postgres refuses it) and for a lone surrogate (JSON can carry one; it has no UTF-8). The
     write would fail either way, and for a prompt that is after the chat's session was reserved."""
-    try:
-        text.encode("utf-8")
-    except UnicodeEncodeError:
-        return False
-    return "\x00" not in text
+    return sessions.storable_text(text) == text
 
 
 def _stripped(raw: str | None, field: str, limit: int) -> str:
