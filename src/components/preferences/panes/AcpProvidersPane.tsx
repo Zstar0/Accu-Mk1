@@ -19,6 +19,7 @@ import {
 import { cn } from '@/lib/utils'
 import { useAuthStore } from '@/store/auth-store'
 import { CrmError } from '@/lib/api-crm'
+import { PROVIDERS_KEY } from '@/components/ai-chat/use-ai-chat-glue'
 import {
   createAcpProvider,
   deleteAcpProvider,
@@ -89,7 +90,11 @@ function lastTestText(p: AcpProvider): string {
     .join(' ')
 }
 
-const upsert = (qc: QueryClient, row: AcpProvider) =>
+/** The chat button reads its own list: a write here must reach it without a reload. */
+const refreshChatButton = (qc: QueryClient) =>
+  void qc.invalidateQueries({ queryKey: PROVIDERS_KEY })
+
+const upsert = (qc: QueryClient, row: AcpProvider) => {
   qc.setQueryData<AcpProviderList>(QK, old =>
     old
       ? {
@@ -100,6 +105,8 @@ const upsert = (qc: QueryClient, row: AcpProvider) =>
         }
       : old
   )
+  refreshChatButton(qc)
+}
 
 // ---- form ---------------------------------------------------------------
 
@@ -638,6 +645,7 @@ function ProviderCard({
               providers: old.providers.filter(x => x.id !== p.id),
             }
         )
+        refreshChatButton(qc)
       }
     )
   }

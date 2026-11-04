@@ -35,9 +35,11 @@ import { useAiChatStore, type ApprovalCard } from './chat-store'
 
 export const AI_CHAT_KEY = ['ai-chat'] as const
 export const CHATS_KEY = ['ai-chat', 'chats'] as const
+/** Every user's provider list: what the admin pane marks stale. */
+export const PROVIDERS_KEY = ['ai-chat', 'providers'] as const
 /** Keyed on the user, so one user's list is never another's. */
 export const providersKey = (userId: number | null) =>
-  ['ai-chat', 'providers', userId] as const
+  [...PROVIDERS_KEY, userId] as const
 
 const NO_PROVIDERS: AiProvider[] = []
 
@@ -52,6 +54,9 @@ function useProvidersQuery() {
     queryKey: providersKey(userId),
     queryFn: listProviders,
     enabled: userId != null,
+    // Not `true`: the app's default stale time would make that a no-op for five
+    // minutes after every fetch.
+    refetchOnWindowFocus: 'always',
   })
 }
 

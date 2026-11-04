@@ -1,7 +1,11 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { useEffect } from 'react'
 import { act, render, screen, waitFor } from '@testing-library/react'
-import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
+import {
+  focusManager,
+  QueryClient,
+  QueryClientProvider,
+} from '@tanstack/react-query'
 import { toast } from 'sonner'
 import userEvent from '@testing-library/user-event'
 import { CrmError } from '@/lib/api-crm'
@@ -15,6 +19,7 @@ import {
   type AiMessage,
 } from '@/lib/ai-chat-api'
 import { useAiChatStream } from '@/lib/ai-chat-stream'
+import { queryClient } from '@/lib/query-client'
 import { useAuthStore, type AuthUser } from '@/store/auth-store'
 import { useAiChatStore } from '../chat-store'
 import { ChatPanel } from '../ChatPanel'
@@ -201,6 +206,51 @@ describe('visibility', () => {
       expect(screen.getByTestId('visible')).toHaveTextContent('true')
     )
     expect(lastStream().enabled).toBe(true)
+  })
+
+  it('shows the button without a reload when the admin pane marks the list stale', async () => {
+    mocks.listProviders.mockResolvedValue([])
+    const { qc } = setup()
+    await waitFor(() => expect(mocks.listProviders).toHaveBeenCalled())
+    expect(screen.getByTestId('visible')).toHaveTextContent('false')
+
+    mocks.listProviders.mockResolvedValue([NOVA])
+    await act(async () => {
+      // What the pane sends: no user id in it, so it reaches every user's list.
+      await qc.invalidateQueries({ queryKey: ['ai-chat', 'providers'] })
+    })
+    await waitFor(() =>
+      expect(screen.getByTestId('visible')).toHaveTextContent('true')
+    )
+  })
+
+  it('picks up a change on returning to the tab, under the app defaults', async () => {
+    // The real defaults, since they are the trap: no refetch on focus, and data
+    // counts as fresh for five minutes.
+    const qc = new QueryClient({
+      defaultOptions: queryClient.getDefaultOptions(),
+    })
+    mocks.listProviders.mockResolvedValue([])
+    render(
+      <QueryClientProvider client={qc}>
+        <Harness />
+      </QueryClientProvider>
+    )
+    await waitFor(() => expect(mocks.listProviders).toHaveBeenCalledTimes(1))
+    await waitFor(() => expect(qc.isFetching()).toBe(0))
+
+    mocks.listProviders.mockResolvedValue([NOVA])
+    try {
+      act(() => {
+        focusManager.setFocused(false)
+        focusManager.setFocused(true)
+      })
+      await waitFor(() =>
+        expect(screen.getByTestId('visible')).toHaveTextContent('true')
+      )
+    } finally {
+      focusManager.setFocused(undefined)
+    }
   })
 
   it('stays dark with nobody signed in', async () => {

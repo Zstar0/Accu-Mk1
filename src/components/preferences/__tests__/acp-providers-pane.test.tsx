@@ -119,10 +119,13 @@ function list(providers: AcpProvider[], configured = true): AcpProviderList {
   return { configured, providers }
 }
 
+/** The client of the latest `setup`. */
+let qc: QueryClient
+
 function setup(providers: AcpProvider[], configured = true) {
   vi.mocked(api.listAcpProviders).mockResolvedValue(list(providers, configured))
   const user = userEvent.setup()
-  const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } })
+  qc = new QueryClient({ defaultOptions: { queries: { retry: false } } })
   render(
     <QueryClientProvider client={qc}>
       <AcpProvidersPane />
@@ -153,6 +156,45 @@ const fill = async (
 }
 
 describe('AcpProvidersPane', () => {
+  describe("the chat button's provider list", () => {
+    const BUTTON_KEY = ['ai-chat', 'providers', 7]
+    const stale = () => qc.getQueryState(BUTTON_KEY)?.isInvalidated
+    const ready = (providers: AcpProvider[]) => {
+      const user = setup(providers)
+      qc.setQueryData(BUTTON_KEY, [])
+      expect(stale()).toBe(false)
+      return user
+    }
+
+    it('goes stale when a provider is saved', async () => {
+      vi.mocked(api.updateAcpProvider).mockResolvedValue(keyed)
+      const user = ready([keyed])
+      await edit(user)
+      await user.click(screen.getByRole('button', { name: 'Save' }))
+      await waitFor(() => expect(stale()).toBe(true))
+    })
+
+    it('goes stale when a key is generated', async () => {
+      vi.mocked(api.generateAcpKey).mockResolvedValue(keyed)
+      vi.spyOn(window, 'confirm').mockReturnValue(true)
+      const user = ready([bare])
+      await user.click(
+        await screen.findByRole('button', { name: 'Generate key for Jarvis' })
+      )
+      await waitFor(() => expect(stale()).toBe(true))
+    })
+
+    it('goes stale when a provider is deleted', async () => {
+      vi.mocked(api.deleteAcpProvider).mockResolvedValue()
+      vi.spyOn(window, 'confirm').mockReturnValue(true)
+      const user = ready([bare])
+      await user.click(
+        await screen.findByRole('button', { name: 'Delete Jarvis' })
+      )
+      await waitFor(() => expect(stale()).toBe(true))
+    })
+  })
+
   beforeEach(() => {
     vi.clearAllMocks()
     auth.role = 'admin'
