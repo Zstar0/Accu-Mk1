@@ -39,7 +39,10 @@ Prompts, by their last text block:
   PERMIT_EDIT_REPLACE     PERMIT, Hermes's replace mode: the whole file on both sides, the two strings as raw input
   PERMIT_EMPTY_TEXT PERMIT, the tool call holding an empty text block and a raw input
   PERMIT_BAD_TEXT   PERMIT as a raw frame, with a NUL and a lone surrogate in the title and the raw input
+  PERMIT_OWN_ID     PERMIT as Hermes does it: the request names its own tool id, `perm-1`, never started, and its
+                    status update (no title) goes to that id before the real tool's
   BAD_TEXT          replies with a NUL and a lone surrogate, as a raw frame
+  LATE_TITLED       an update for a tool id never started, carrying a title, then `done`
   ABANDON           sends the same permission request, and ends the turn 0.3 s later without waiting for the answer
   SLOW              replies `working`, waits for session/cancel, then stops with `cancelled`
   STUCK             replies `working` and never stops, session/cancel or not
@@ -216,6 +219,8 @@ class FakeAgent(acp.Agent):
             await self.permit(session_id, with_allow=last != "PERMIT_NOALLOW", with_reject=last != "PERMIT_NOREJECT")
         elif last in TOOL_CALL_FIELDS:
             await self.permit(session_id, True, True, TOOL_CALL_FIELDS[last])
+        elif last == "PERMIT_OWN_ID":
+            await self.permit(session_id, True, True, own_id="perm-1")
         elif last.startswith("PERMIT_WRITE "):
             new_text = "x" * int(last.split()[1])
             await self.permit(session_id, True, True, {"content": [acp.tool_diff_content("/srv/big", new_text)]})
@@ -228,6 +233,10 @@ class FakeAgent(acp.Agent):
             await self.conn._conn.send_notification("session/update", {
                 "sessionId": session_id,
                 "update": {"sessionUpdate": "agent_message_chunk", "content": {"type": "text", "text": BAD_TEXT}}})
+        elif last == "LATE_TITLED":
+            await self.conn.session_update(session_id, acp.update_tool_call(
+                "late-1", title="Late tool", kind="read", status="in_progress"))
+            await self.say(session_id, "done")
         elif last == "ABANDON":
             self.abandoned = asyncio.create_task(self.ask(session_id, with_allow=True, with_reject=True))
             await asyncio.sleep(0.3)
@@ -254,7 +263,8 @@ class FakeAgent(acp.Agent):
             "sessionId": session_id, "options": list(options),
             "toolCall": {"toolCallId": "call-1", "title": title, "rawInput": raw_input}})
 
-    async def ask(self, session_id: str, with_allow: bool, with_reject: bool, fields: dict | None = None):
+    async def ask(self, session_id: str, with_allow: bool, with_reject: bool, fields: dict | None = None,
+                  tool_call_id: str = "call-1"):
         options = []
         if with_allow:
             options.append(PermissionOption(option_id="allow-once", name="Allow once", kind="allow_once"))
@@ -263,18 +273,21 @@ class FakeAgent(acp.Agent):
         options.append(PermissionOption(option_id="allow-always", name="Always allow", kind="allow_always"))
         return await self.conn.request_permission(
             session_id=session_id, options=options,
-            tool_call=ToolCallUpdate(tool_call_id="call-1", **{
+            tool_call=ToolCallUpdate(tool_call_id=tool_call_id, **{
                 "title": "Run a command", **(fields if fields is not None else {"raw_input": {"command": "ls"}})}))
 
-    async def permit(self, session_id: str, with_allow: bool, with_reject: bool, fields: dict | None = None) -> None:
+    async def permit(self, session_id: str, with_allow: bool, with_reject: bool, fields: dict | None = None,
+                     own_id: str | None = None) -> None:
         await self.conn.session_update(session_id, acp.update_agent_thought_text("checking"))
         await self.conn.session_update(session_id, acp.start_tool_call(
             "call-1", "Run a command", kind="execute", status="pending"))
-        response = await self.ask(session_id, with_allow, with_reject, fields)
+        response = await self.ask(session_id, with_allow, with_reject, fields, own_id or "call-1")
         outcome = response.outcome
         reply = REPLIES.get(outcome.option_id, outcome.option_id) if outcome.outcome == "selected" else "cancelled"
-        await self.conn.session_update(session_id, acp.update_tool_call(
-            "call-1", status="completed" if reply == "allowed" else "failed"))
+        status = "completed" if reply == "allowed" else "failed"
+        if own_id:  # Hermes's permissions.py: the status goes to the request's own tool id, which has no chip
+            await self.conn.session_update(session_id, acp.update_tool_call(own_id, status=status))
+        await self.conn.session_update(session_id, acp.update_tool_call("call-1", status=status))
         await self.say(session_id, reply)
 
 

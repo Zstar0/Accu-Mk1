@@ -389,8 +389,12 @@ class Mk1Client(acp.Client):
                 "id": update.tool_call_id, "title": update.title, "kind": update.kind, "status": update.status}
             self._publish("tool_call", **chip)
         elif isinstance(update, ToolCallProgress):
-            chip = self.tools.setdefault(update.tool_call_id,
-                                         {"id": update.tool_call_id, "title": None, "kind": None, "status": None})
+            chip = self.tools.get(update.tool_call_id)
+            if chip is None:
+                if update.title is None:  # Hermes's status for an approval, on the request's own tool id: no chip
+                    return
+                chip = self.tools[update.tool_call_id] = {"id": update.tool_call_id, "title": None, "kind": None,
+                                                          "status": None}
             chip.update({k: v for k, v in (("title", update.title), ("kind", update.kind),
                                            ("status", update.status)) if v is not None})
             self._publish("tool_call_update", id=update.tool_call_id, status=update.status, title=update.title)

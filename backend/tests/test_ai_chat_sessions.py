@@ -274,6 +274,31 @@ async def test_thoughts_and_tool_calls_published(ai_chat_env):
     ]
 
 
+async def test_a_permissions_own_status_update_leaves_no_chip(ai_chat_env):
+    # Hermes answers an approval with a status update on the request's own tool id, which never had a tool_call.
+    s = ai_chat_env.session(permission_timeout_s=1)
+    with anyio.fail_after(30):
+        await s.start()
+        await s.attach(None)
+        result = await s.run_turn("t1", ["PERMIT_OWN_ID"])
+        await closed(s)
+    assert result.tools == [{"id": "call-1", "title": "Run a command", "kind": "execute", "status": "failed"}]
+    updates = [e for e in ai_chat_env.events() if e["type"] == "tool_call_update"]
+    assert [e["id"] for e in updates] == ["call-1"]
+
+
+async def test_an_update_with_a_title_for_an_unknown_tool_still_makes_a_chip(ai_chat_env):
+    s = ai_chat_env.session()
+    with anyio.fail_after(30):
+        await s.start()
+        await s.attach(None)
+        result = await s.run_turn("t1", ["LATE_TITLED"])
+        await closed(s)
+    assert result.tools == [{"id": "late-1", "title": "Late tool", "kind": "read", "status": "in_progress"}]
+    [update] = [e for e in ai_chat_env.events() if e["type"] == "tool_call_update"]
+    assert (update["id"], update["title"], update["status"]) == ("late-1", "Late tool", "in_progress")
+
+
 # ---- process lifecycle -----------------------------------------------------------------------
 
 async def test_updates_of_another_session_are_dropped(ai_chat_env):
