@@ -134,8 +134,9 @@ export function ChatComposer() {
         prompt,
         currentPageContext(useUIStore.getState())
       )
-      setPrompts(p => new Map(p).set(chatId, prompt))
-      void loadMessages(chatId)
+      const sentTo = chatId // `chatId` is reassigned above; a closure would see number | null
+      setPrompts(p => new Map(p).set(sentTo, prompt))
+      void loadMessages(sentTo)
     } catch (e) {
       // Keep whatever was typed since; otherwise put the message back.
       if (fromBox) setText(now => (now === '' ? raw : now))
