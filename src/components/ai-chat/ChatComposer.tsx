@@ -36,12 +36,6 @@ const GONE = `This chat is not available any more. ${TRY_NEW}`
 const withAdvice = (message: string) =>
   message.endsWith(TRY_NEW) ? message : `${message} ${TRY_NEW}`
 
-/** The last thing the user said in a chat, from the stored rows. */
-function lastUserText(chatId: number): string | undefined {
-  const rows = useAiChatStore.getState().messages[chatId] ?? []
-  return rows.filter(m => m.role === 'user').at(-1)?.text
-}
-
 export function ChatComposer() {
   const qc = useQueryClient()
   const agent = useActiveProvider()
@@ -50,11 +44,22 @@ export function ChatComposer() {
     s => s.activeChatId !== null && s.live[s.activeChatId] !== undefined
   )
   const notice = useAiChatStore(s => s.notice)
+  // The last thing the user said in this chat, from the stored rows. Read
+  // through a selector so Retry appears when the transcript loads after the
+  // error did (a reload mid-turn).
+  const storedPrompt = useAiChatStore(s =>
+    s.activeChatId === null
+      ? undefined
+      : s.messages[s.activeChatId]?.filter(m => m.role === 'user').at(-1)?.text
+  )
 
   const [text, setText] = useState('')
   const [sending, setSending] = useState(false)
-  // What each chat was last asked, for Retry. Component state, not the store.
-  const [prompts] = useState(() => new Map<number, string>())
+  // What each chat was last asked in this session, for Retry. Component
+  // state, not the store. Replaced, never mutated, so a change re-renders.
+  const [prompts, setPrompts] = useState<ReadonlyMap<number, string>>(
+    () => new Map()
+  )
   const guard = useRef(false)
 
   const agentName = agent?.display_name ?? 'The agent'
@@ -129,7 +134,7 @@ export function ChatComposer() {
         prompt,
         currentPageContext(useUIStore.getState())
       )
-      prompts.set(chatId, prompt)
+      setPrompts(p => new Map(p).set(chatId, prompt))
       void loadMessages(chatId)
     } catch (e) {
       // Keep whatever was typed since; otherwise put the message back.
@@ -158,7 +163,7 @@ export function ChatComposer() {
 
   function retry() {
     if (activeChatId === null) return
-    const prompt = prompts.get(activeChatId) ?? lastUserText(activeChatId)
+    const prompt = prompts.get(activeChatId) ?? storedPrompt
     if (prompt !== undefined) void submit(prompt, false)
   }
 
@@ -175,8 +180,7 @@ export function ChatComposer() {
         chatId={activeChatId}
         onRetry={
           activeChatId !== null &&
-          (prompts.has(activeChatId) ||
-            lastUserText(activeChatId) !== undefined)
+          (prompts.has(activeChatId) || storedPrompt !== undefined)
             ? retry
             : undefined
         }

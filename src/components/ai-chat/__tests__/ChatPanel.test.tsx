@@ -483,6 +483,10 @@ describe('ChatPanel', () => {
         message: 'Nova could not be reached.',
       })
       expect(screen.getByText('Nova could not be reached.')).toBeInTheDocument()
+      // Retry needs a prompt to re-send: the last stored user row is one.
+      expect(screen.queryByRole('button', { name: 'Retry' })).toBeNull()
+      act(() => store().setMessages(1, [message(1, 'user', 'earlier')]))
+      expect(screen.getByRole('button', { name: 'Retry' })).toBeInTheDocument()
     })
 
     it('Busy', async () => {

@@ -301,6 +301,69 @@ describe('ChatComposer notices and Retry', () => {
     expect(store().notice).toBeNull()
   })
 
+  describe('Retry after a reload (nothing sent in this session)', () => {
+    const stored = {
+      id: 1,
+      seq: 1,
+      role: 'user',
+      text: 'earlier question',
+      meta: null,
+      created_at: '2026-11-03T00:00:00Z',
+    }
+    const unreachable = () =>
+      act(() =>
+        store().apply({
+          seq: 1,
+          type: 'error',
+          chat_id: 5,
+          turn_id: 't',
+          code: 'agent_unreachable',
+          message: 'Nova could not be reached.',
+        })
+      )
+    const open = () =>
+      act(() => {
+        store().setChats([chatRow(5)])
+        store().selectChat(5)
+      })
+
+    it('re-sends the last stored user row when the transcript was loaded first', async () => {
+      open()
+      act(() => store().setMessages(5, [stored]))
+      await mount()
+      unreachable()
+      await userEvent.click(
+        await screen.findByRole('button', { name: 'Retry' })
+      )
+      await waitFor(() =>
+        expect(mocks.sendPrompt).toHaveBeenCalledWith(
+          5,
+          'earlier question',
+          expect.anything()
+        )
+      )
+    })
+
+    it('offers Retry once the transcript loads after the error arrived', async () => {
+      open()
+      await mount()
+      unreachable()
+      expect(screen.queryByRole('button', { name: 'Retry' })).toBeNull()
+
+      act(() => store().setMessages(5, [stored]))
+      await userEvent.click(
+        await screen.findByRole('button', { name: 'Retry' })
+      )
+      await waitFor(() =>
+        expect(mocks.sendPrompt).toHaveBeenCalledWith(
+          5,
+          'earlier question',
+          expect.anything()
+        )
+      )
+    })
+  })
+
   it('Retry leaves a draft being typed alone, and a failed Retry does not paste the old prompt into the box', async () => {
     const { box } = await mount()
     await userEvent.type(box, 'ping{Enter}')
