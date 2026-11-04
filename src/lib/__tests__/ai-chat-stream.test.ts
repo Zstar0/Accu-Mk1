@@ -58,15 +58,22 @@ describe('useAiChatStream', () => {
   /** A response whose body the test feeds by hand. */
   function openStream() {
     let ctl!: ReadableStreamDefaultController<Uint8Array>
+    let cancelled = false
     const body = new ReadableStream<Uint8Array>({
       start(c) {
         ctl = c
       },
+      cancel() {
+        cancelled = true
+      },
     })
     return {
       response: { ok: true, status: 200, body } as unknown as Response,
-      push: (text: string) => ctl.enqueue(enc.encode(text)),
+      push: (data: string | Uint8Array) =>
+        ctl.enqueue(typeof data === 'string' ? enc.encode(data) : data),
       end: () => ctl.close(),
+      /** True once the client has cancelled the body's reader. */
+      wasCancelled: () => cancelled,
     }
   }
   const failure = (status: number) =>
@@ -244,5 +251,133 @@ describe('useAiChatStream', () => {
     s.push(frame(chunk(1)))
     await settle()
     expect(seen).toEqual(['b']) // the latest closure
+  })
+
+  it.each(['onEvent', 'onConnected'] as const)(
+    'cancels the old body and still reconnects when %s throws',
+    async which => {
+      const first = openStream()
+      const second = openStream()
+      fetchMock
+        .mockResolvedValueOnce(first.response)
+        .mockResolvedValueOnce(second.response)
+      const boom = vi.fn(() => {
+        throw new Error('callback bug')
+      })
+      const onEvent = which === 'onEvent' ? boom : vi.fn()
+      const onConnected = which === 'onConnected' ? boom : undefined
+      renderHook(() => useAiChatStream(true, onEvent, onConnected))
+      await settle()
+
+      first.push(': connected\n\n' + frame(chunk(10)))
+      await settle()
+      expect(boom).toHaveBeenCalledTimes(1)
+      // Without the cancel the old stream stays open beside the new one.
+      expect(first.wasCancelled()).toBe(true)
+
+      await settle(250)
+      expect(fetchMock).toHaveBeenCalledTimes(2)
+    }
+  )
+
+  it('backs off a server that connects and drops every time', async () => {
+    const onConnected = vi.fn()
+    fetchMock.mockImplementation(async () => {
+      const s = openStream()
+      s.push(': connected\n\n')
+      s.end()
+      return s.response
+    })
+    renderHook(() => useAiChatStream(true, vi.fn(), onConnected))
+    await settle()
+    expect(fetchMock).toHaveBeenCalledTimes(1)
+
+    await settle(249)
+    expect(fetchMock).toHaveBeenCalledTimes(1)
+    await settle(1)
+    expect(fetchMock).toHaveBeenCalledTimes(2)
+
+    await settle(499)
+    expect(fetchMock).toHaveBeenCalledTimes(2)
+    await settle(1)
+    expect(fetchMock).toHaveBeenCalledTimes(3)
+    expect(onConnected).toHaveBeenCalledTimes(3) // still once per connection
+  })
+
+  it.each([
+    [10_000, 250],
+    [9_999, 1_000],
+  ])(
+    'after a connection that lived %i ms, retries after %i ms',
+    async (livedMs, retryMs) => {
+      const good = openStream()
+      fetchMock
+        .mockResolvedValueOnce(failure(502)) // retry in 250 ms
+        .mockResolvedValueOnce(failure(502)) // retry in 500 ms
+        .mockResolvedValueOnce(good.response)
+        .mockResolvedValue(failure(502))
+      renderHook(() => useAiChatStream(true, vi.fn()))
+      await settle(750)
+      expect(fetchMock).toHaveBeenCalledTimes(3)
+
+      good.push(': connected\n\n')
+      await settle(livedMs)
+      good.end()
+      await settle()
+      // Two failures put the backoff at 1 s; a stable connection resets it.
+      await settle(retryMs - 1)
+      expect(fetchMock).toHaveBeenCalledTimes(3)
+      await settle(1)
+      expect(fetchMock).toHaveBeenCalledTimes(4)
+    }
+  )
+
+  it('leaves no timer and makes no fetch after cleanup with a reconnect pending', async () => {
+    fetchMock.mockResolvedValue(failure(502))
+    const { unmount } = renderHook(() => useAiChatStream(true, vi.fn()))
+    await settle()
+    expect(fetchMock).toHaveBeenCalledTimes(1)
+    expect(vi.getTimerCount()).toBe(1)
+
+    unmount()
+    expect(vi.getTimerCount()).toBe(0)
+    await settle(120_000)
+    expect(fetchMock).toHaveBeenCalledTimes(1)
+  })
+
+  it('stops for good on a 401 that answers a reconnect', async () => {
+    const first = openStream()
+    fetchMock
+      .mockResolvedValueOnce(first.response)
+      .mockResolvedValue(failure(401))
+    renderHook(() => useAiChatStream(true, vi.fn()))
+    await settle()
+
+    first.push(frame(chunk(1)))
+    await settle()
+    first.end()
+    await settle(120_000)
+
+    expect(fetchMock).toHaveBeenCalledTimes(2)
+    expect(headersOf(1)['Last-Event-ID']).toBe('1')
+  })
+
+  it('delivers a frame split across chunks once, multibyte text intact', async () => {
+    const s = openStream()
+    fetchMock.mockResolvedValueOnce(s.response)
+    const onEvent = vi.fn()
+    renderHook(() => useAiChatStream(true, onEvent))
+    await settle()
+
+    const bytes = enc.encode(frame(chunk(7, 'café')))
+    const cut = bytes.indexOf(0xc3) + 1 // between the two bytes of the e-acute
+    s.push(bytes.slice(0, cut))
+    await settle()
+    expect(onEvent).not.toHaveBeenCalled()
+
+    s.push(bytes.slice(cut))
+    await settle()
+    expect(onEvent).toHaveBeenCalledTimes(1)
+    expect(onEvent).toHaveBeenCalledWith(chunk(7, 'café'))
   })
 })

@@ -70,9 +70,17 @@ export interface PageContext {
 interface EventBase {
   /** Per user, strictly increasing; also the SSE `id:`. */
   seq: number
-  /** Null only for `resync`. */
-  chat_id: number | null
-  turn_id: string | null
+}
+
+/**
+ * Every event but `resync` belongs to a turn of a chat. The backend publishes
+ * each of them with an int `chat_id` and a `turn_id` string (`sessions.py`:
+ * a chat session is always reserved with an int chat id, and `_publish` sends
+ * nothing without a turn).
+ */
+interface TurnEventBase extends EventBase {
+  chat_id: number
+  turn_id: string
 }
 
 export type PermissionDecision = 'allow' | 'deny' | 'cancelled' | 'expired'
@@ -85,48 +93,48 @@ export type AiChatErrorCode =
 
 /** One SSE `data` payload, discriminated on `type`. */
 export type AiChatEvent =
-  | (EventBase & {
+  | (TurnEventBase & {
       type: 'turn_started'
       /** A new agent process is spawning. */
       starting: boolean
       /** A stored session id is being attached. */
       resuming: boolean
     })
-  | (EventBase & { type: 'message_chunk'; text: string })
-  | (EventBase & { type: 'thought_chunk'; text: string })
-  | (EventBase & {
+  | (TurnEventBase & { type: 'message_chunk'; text: string })
+  | (TurnEventBase & { type: 'thought_chunk'; text: string })
+  | (TurnEventBase & {
       type: 'tool_call'
       id: string
       title: string
       kind: string | null
       status: string | null
     })
-  | (EventBase & {
+  | (TurnEventBase & {
       type: 'tool_call_update'
       id: string
       status: string | null
       /** Null when unchanged. */
       title: string | null
     })
-  | (EventBase &
+  | (TurnEventBase &
       PendingApproval & {
         type: 'permission_requested'
         /** Provider display name. */
         agent: string
       })
-  | (EventBase & {
+  | (TurnEventBase & {
       type: 'permission_resolved'
       permission_id: string
       decision: PermissionDecision
     })
-  | (EventBase & {
+  | (TurnEventBase & {
       type: 'turn_ended'
       /** The ACP stop reason, or `error`. */
       stop_reason: string
       message_seq: number | null
     })
-  | (EventBase & { type: 'error'; code: AiChatErrorCode; message: string })
-  | (EventBase & { type: 'resync' })
+  | (TurnEventBase & { type: 'error'; code: AiChatErrorCode; message: string })
+  | (EventBase & { type: 'resync'; chat_id: null; turn_id: null })
 
 // ---- admin routes (providers.py) -----------------------------------------
 

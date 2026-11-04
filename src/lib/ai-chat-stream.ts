@@ -8,7 +8,8 @@
  *   - Resume is server side. `Last-Event-ID` is the last accepted `seq`; the hub
  *     replays what it still holds, or answers `resync` when it cannot.
  *   - A 401 or 403 ends the loop: retrying cannot fix a bad token or a role the
- *     user lost. Any other failure backs off from 250 ms to 30 s.
+ *     user lost. Any other failure backs off from 250 ms to 30 s, and the
+ *     backoff starts over only after a connection that lasted 10 s.
  *
  * Frames, tokens and payloads are never logged. Writes go through REST.
  */
@@ -31,6 +32,8 @@ export function acceptEvent(lastSeq: number | null, e: AiChatEvent): boolean {
 
 const BACKOFF_BASE_MS = 250
 const BACKOFF_CAP_MS = 30_000
+// A connection must last this long before the backoff starts over.
+const STABLE_MS = 10_000
 
 /**
  * Subscribe while `enabled`; `false` aborts the connection. Mount once at app
@@ -65,9 +68,18 @@ export function useAiChatStream(
     let attempt = 0
     let stopped = false
     let reconnectTimer: ReturnType<typeof setTimeout> | null = null
+    // When the current connection's first bytes arrived; null before that.
+    let connectedAt: number | null = null
 
     const scheduleReconnect = () => {
       if (stopped) return
+      // Only a connection that lasted resets the backoff. One that connects and
+      // drops at once would otherwise retry every 250 ms, forever, and every
+      // `onConnected` of it costs the caller a request.
+      if (connectedAt !== null && Date.now() - connectedAt >= STABLE_MS) {
+        attempt = 0
+      }
+      connectedAt = null
       const delay = Math.min(BACKOFF_BASE_MS * 2 ** attempt, BACKOFF_CAP_MS)
       attempt += 1
       reconnectTimer = setTimeout(connect, delay)
@@ -98,22 +110,28 @@ export function useAiChatStream(
         let buffer = ''
         let connected = false
 
-        while (true) {
-          const { done, value } = await reader.read()
-          if (done || stopped) break
-          if (!connected) {
-            connected = true
-            attempt = 0 // bytes arrived: reset backoff
-            onConnectedRef.current?.()
+        try {
+          while (true) {
+            const { done, value } = await reader.read()
+            if (done || stopped) break
+            if (!connected) {
+              connected = true
+              connectedAt = Date.now()
+              onConnectedRef.current?.()
+            }
+            buffer += decoder.decode(value, { stream: true })
+            const { events, rest } = parseFrames<AiChatEvent>(buffer)
+            buffer = rest
+            for (const e of events) {
+              if (!acceptEvent(lastSeq, e)) continue
+              lastSeq = e.seq
+              onEventRef.current(e)
+            }
           }
-          buffer += decoder.decode(value, { stream: true })
-          const { events, rest } = parseFrames<AiChatEvent>(buffer)
-          buffer = rest
-          for (const e of events) {
-            if (!acceptEvent(lastSeq, e)) continue
-            lastSeq = e.seq
-            onEventRef.current(e)
-          }
+        } finally {
+          // Every way out of the loop, a throwing callback included, would leave
+          // this body open beside the next connection.
+          void reader.cancel().catch(() => undefined)
         }
         // Clean end-of-stream: reconnect (the server may cycle connections).
         scheduleReconnect()
