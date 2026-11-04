@@ -383,9 +383,9 @@ def test_permission_detail_shows_every_block_and_says_what_it_hides():
     assert detail(call(raw_input="x" * 25000))[1] is True
 
 
-def diff_detail(old: str | None, new: str) -> tuple[str, bool]:
+def diff_detail(old: str | None, new: str, raw_input=None) -> tuple[str, bool]:
     block = FileEditToolCallContent(type="diff", path="/a", new_text=new, old_text=old)
-    return sessions._permission_detail(ToolCallUpdate(tool_call_id="c", content=[block]))
+    return sessions._permission_detail(ToolCallUpdate(tool_call_id="c", content=[block], raw_input=raw_input))
 
 
 @pytest.mark.parametrize(("old", "new", "shown", "hidden"), [
@@ -405,15 +405,102 @@ def test_a_diff_block_shows_the_change(old, new, shown, hidden):
 
 
 def test_the_diff_ceiling_counts_old_and_new():
-    detail, hidden = diff_detail("x\n" * 50000, "x\n" * 49999 + "y\n")  # 200000: diffed
-    assert detail.endswith("\n x\n-x\n+y") and hidden is False
-    assert diff_detail("x\n" * 50000, "x\n" * 49999 + "yy\n") == ("/a\n200001 more characters not shown.", True)
+    line = "x" * 9 + "\n"
+    detail, hidden = diff_detail(line * 10000, line * 9999 + "yyyyyyyyy\n")  # 200000, at the line bound too: diffed
+    assert detail.endswith("\n xxxxxxxxx\n-xxxxxxxxx\n+yyyyyyyyy") and hidden is False
+    assert diff_detail(line * 10000, line * 9999 + "yyyyyyyyyy\n") == ("/a\n200001 more characters not shown.", True)
+
+
+@pytest.mark.parametrize(("old", "new", "total"), [
+    ("x\n" * 10001, "x\n" * 10000, 40002),  # a short diff, so nothing else here would take Allow away
+    ("x\n" * 10000, "x\n" * 10001, 40002),
+    ("x\x0b" * 10001, "x\x0b" * 10000, 40002),  # any line break `splitlines` splits on counts
+    ("x\n" * 10001, "x\n" * 10001, 40004),  # identical is under the bound's rule, as it is the ceiling's
+], ids=["old side", "new side", "vertical tabs", "identical"])  # a test id this long breaks pytest on Windows
+def test_over_the_line_bound_on_either_side_is_not_diffed(old, new, total):
+    assert diff_detail(old, new) == (f"/a\n{total} more characters not shown.", True)
 
 
 def test_a_diff_too_long_for_the_card_is_cut_and_says_so():
-    detail, hidden = diff_detail("y\n" * 10001, "")
-    assert detail.startswith("/a\n@@ -1,10001 +0,0 @@\n-y\n")
+    detail, hidden = diff_detail("y\n" * 10000, "")
+    assert detail.startswith("/a\n@@ -1,10000 +0,0 @@\n-y\n")
     assert detail.endswith("more characters not shown.") and hidden is True
+
+
+def v4a(patch, **arguments) -> dict:
+    return {"tool": "patch", "arguments": {"mode": "patch", "patch": patch, **arguments}}
+
+
+def test_a_v4a_patch_is_shown_as_it_is_whatever_the_size_of_the_file():
+    assert diff_detail("old\n", "new\n", v4a("new\n")) == ("/a\nnew\n", False)
+    assert diff_detail("x" * 200001, "new\n", v4a("new\n")) == ("/a\nnew\n", False)  # over the ceiling
+    assert diff_detail("x\n" * 10001, "new\n", v4a("new\n")) == ("/a\nnew\n", False)  # over the line bound
+    assert diff_detail("new\n", "new\n", v4a("new\n")) == ("/a\nnew\n", False)  # applied all the same: no "No change."
+
+
+def test_a_v4a_patch_too_long_for_the_card_is_cut_and_says_so():
+    assert diff_detail("old\n", "p" * 20001, v4a("p" * 20001)) == (
+        f"/a\n{'p' * 19997}\n\n4 more characters not shown.", True)
+
+
+@pytest.mark.parametrize("raw_input", [
+    None, "new\n", ["new\n"], {}, {"tool": "patch"}, {"tool": "patch", "arguments": "mode=patch"},
+    {"tool": "patch", "arguments": ["mode", "patch"]},
+    {"tool": "patch", "arguments": {"patch": "new\n"}},  # no mode: to Hermes that is replace, and the whole new file
+    {"tool": "patch", "arguments": {"mode": "replace", "patch": "new\n"}},
+    {"tool": "write_file", "arguments": {"mode": "patch", "patch": "new\n"}},
+    {"arguments": {"mode": "patch", "patch": "new\n"}},
+    v4a("new"), v4a(None), v4a(["new\n"]), v4a({"new\n": 1}),
+])
+def test_anything_but_the_patch_itself_is_diffed(raw_input):
+    assert diff_detail("old\n", "new\n", raw_input) == ("/a\n@@ -1 +1 @@\n-old\n+new", False)
+
+
+@pytest.mark.parametrize("prompt", ["PERMIT_EDIT_PATCH", "PERMIT_EDIT_PATCH_BIG"])
+async def test_a_one_line_v4a_patch_shows_the_patch_and_can_be_allowed(ai_chat_env, prompt):
+    with anyio.fail_after(30):
+        await send(ai_chat_env, prompt)
+        card = await seen(ai_chat_env, "permission_requested")
+        assert card["detail"] == ("/srv/app.conf\n*** Begin Patch\n*** Update File: /srv/app.conf\n@@\n"
+                                  " one\n-two\n+TWO\n three\n*** End Patch")
+        assert (card["can_allow"], card["hidden"]) == (True, False)
+        approvals.APPROVALS.decide(card["permission_id"], 1, "allow")
+        await seen(ai_chat_env, "turn_ended")
+    assert rows(ai_chat_env, "assistant")[0].text == "allowed"
+
+
+async def test_a_v4a_patch_that_is_not_the_new_text_is_diffed(ai_chat_env):
+    with anyio.fail_after(30):
+        await send(ai_chat_env, "PERMIT_EDIT_PATCH_OTHER")
+        card = await seen(ai_chat_env, "permission_requested")
+        approvals.APPROVALS.decide(card["permission_id"], 1, "deny")
+        await seen(ai_chat_env, "turn_ended")
+    assert card["detail"] == (
+        "/srv/app.conf\n@@ -1,3 +1,8 @@\n-one\n-two\n-three\n+*** Begin Patch\n+*** Update File: /srv/app.conf\n+@@\n"
+        "+ one\n+-two\n++TWO\n+ three\n+*** End Patch")
+
+
+async def test_replace_mode_stays_a_real_diff(ai_chat_env):
+    with anyio.fail_after(30):
+        await send(ai_chat_env, "PERMIT_EDIT_REPLACE")
+        card = await seen(ai_chat_env, "permission_requested")
+        approvals.APPROVALS.decide(card["permission_id"], 1, "allow")
+        await seen(ai_chat_env, "turn_ended")
+    assert card["detail"] == "/srv/app.conf\n@@ -1,3 +1,3 @@\n one\n-two\n+TWO\n three"
+    assert (card["can_allow"], card["hidden"]) == (True, False)
+
+
+async def test_an_edit_just_over_the_line_bound_cannot_be_allowed(ai_chat_env):
+    with anyio.fail_after(30):
+        await send(ai_chat_env, "PERMIT_EDIT_LINES")
+        card = await seen(ai_chat_env, "permission_requested")
+        assert card["detail"] == "/srv/lines.conf\n40004 more characters not shown."
+        assert (card["can_allow"], card["hidden"]) == (False, True)
+        with pytest.raises(approvals.AllowNotOffered):
+            approvals.APPROVALS.decide(card["permission_id"], 1, "allow")
+        approvals.APPROVALS.decide(card["permission_id"], 1, "deny")  # still pending: Deny stays available
+        await seen(ai_chat_env, "turn_ended")
+    assert rows(ai_chat_env, "assistant")[0].text == "denied"
 
 
 @pytest.mark.parametrize("blank", ["", " \n\t"])

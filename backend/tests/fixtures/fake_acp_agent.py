@@ -31,6 +31,11 @@ Prompts, by their last text block:
   PERMIT_EDIT_EMPTY the same, emptying the file
   PERMIT_EDIT_BIG   the same, one line changed in a 21000 character file
   PERMIT_EDIT_HUGE  the same, with old and new text over Mk1's 200000 character diff ceiling
+  PERMIT_EDIT_LINES the same, one line changed, with old and new text just over Mk1's 10000 line diff bound
+  PERMIT_EDIT_PATCH PERMIT, a V4A patch as Hermes builds it: the file as old text and the patch as new text
+  PERMIT_EDIT_PATCH_BIG   the same, on a 21000 character file
+  PERMIT_EDIT_PATCH_OTHER the same shape, but the raw input's patch is not the new text
+  PERMIT_EDIT_REPLACE     PERMIT, Hermes's replace mode: the whole file on both sides, the two strings as raw input
   PERMIT_EMPTY_TEXT PERMIT, the tool call holding an empty text block and a raw input
   PERMIT_BAD_TEXT   PERMIT as a raw frame, with a NUL and a lone surrogate in the title and the raw input
   BAD_TEXT          replies with a NUL and a lone surrogate, as a raw frame
@@ -82,15 +87,26 @@ DIFF_BLOCK = acp.tool_diff_content("/srv/app/run.sh", "new body", old_text="old 
 WHY_BLOCK = acp.tool_content(acp.text_block("why"))
 
 
-def whole_file_edit(path: str, old_text: str, new_text: str) -> dict:
-    """What Hermes's `build_acp_edit_tool_call` sends: the whole file on both sides, and the arguments as raw input."""
+def hermes_edit(path: str, old_text: str, new_text: str, tool: str, /, **arguments) -> dict:
+    """What Hermes's `build_acp_edit_tool_call` sends: one diff block, and the tool and its arguments as raw input."""
     return {"title": f"Approve edit: {path}", "kind": "edit",
             "content": [acp.tool_diff_content(path=path, old_text=old_text, new_text=new_text)],
-            "raw_input": {"tool": "write_file", "arguments": {"path": path, "content": new_text}}}
+            "raw_input": {"tool": tool, "arguments": arguments}}
+
+
+def whole_file_edit(path: str, old_text: str, new_text: str) -> dict:
+    """`write_file`: the whole file on both sides."""
+    return hermes_edit(path, old_text, new_text, "write_file", path=path, content=new_text)
+
+
+def v4a_edit(path: str, old_text: str, new_text: str, patch: str) -> dict:
+    """`patch` in mode "patch" on one file (`_proposal_for_patch_v4a`): the file, then the patch as the new text."""
+    return hermes_edit(path, old_text, new_text, "patch", mode="patch", patch=patch)
 
 
 SMALL_FILE = "one\ntwo\nthree\n"
 BIG_FILE = "".join(f"line {i:04d}\n" for i in range(2100))  # 21000 characters
+V4A_PATCH = "*** Begin Patch\n*** Update File: /srv/app.conf\n@@\n one\n-two\n+TWO\n three\n*** End Patch"
 TOOL_CALL_FIELDS = {
     "PERMIT_DIFF": {"content": [DIFF_BLOCK], "raw_input": {"path": "/srv/app/run.sh", "content": "new body"}},
     "PERMIT_BLOCKS": {"content": [WHY_BLOCK, DIFF_BLOCK]},
@@ -100,6 +116,13 @@ TOOL_CALL_FIELDS = {
     "PERMIT_EDIT_EMPTY": whole_file_edit("/srv/app.conf", SMALL_FILE, ""),
     "PERMIT_EDIT_BIG": whole_file_edit("/srv/big.conf", BIG_FILE, BIG_FILE.replace("line 1000", "line 1000 edited")),
     "PERMIT_EDIT_HUGE": whole_file_edit("/srv/huge.conf", "x" * 100001, "x" * 100002),
+    "PERMIT_EDIT_LINES": whole_file_edit("/srv/lines.conf", "x\n" * 10001, "x\n" * 10000 + "y\n"),
+    "PERMIT_EDIT_PATCH": v4a_edit("/srv/app.conf", SMALL_FILE, V4A_PATCH, V4A_PATCH),
+    "PERMIT_EDIT_PATCH_BIG": v4a_edit("/srv/app.conf", BIG_FILE, V4A_PATCH, V4A_PATCH),
+    "PERMIT_EDIT_PATCH_OTHER": v4a_edit("/srv/app.conf", SMALL_FILE, V4A_PATCH, "*** Begin Patch\n*** End Patch"),
+    "PERMIT_EDIT_REPLACE": hermes_edit(
+        "/srv/app.conf", SMALL_FILE, SMALL_FILE.replace("two", "TWO"), "patch",
+        mode="replace", path="/srv/app.conf", old_string="two", new_string="TWO"),
     "PERMIT_EMPTY_TEXT": {"content": [acp.tool_content(acp.text_block(""))], "raw_input": {"command": "rm -rf /srv"}},
 }
 BAD_TEXT = "a\x00b\ud800c"  # no database stores it: a NUL (Postgres refuses it) and a lone surrogate (no UTF-8)
