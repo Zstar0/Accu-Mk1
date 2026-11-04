@@ -3,9 +3,9 @@
  * approval cards of the chat.
  *
  * Everything the agent wrote is untrusted. Assistant text goes through
- * `renderCommentHtml(text, [])`, the only thing that reaches
- * `dangerouslySetInnerHTML`; user text, tool titles, thoughts and approval
- * text render as plain text.
+ * `renderAgentHtml(text)` (sanitized markdown, links shown as text), the only
+ * thing that reaches `dangerouslySetInnerHTML`; user text, tool titles,
+ * thoughts and approval text render as plain text.
  */
 
 import { useLayoutEffect, useMemo, useRef } from 'react'
@@ -17,7 +17,7 @@ import {
   TooltipTrigger,
 } from '@/components/ui/tooltip'
 import type { AiMessage } from '@/lib/ai-chat-api'
-import { renderCommentHtml } from '@/components/flags/comment-markdown'
+import { renderAgentHtml } from './agent-html'
 import { ApprovalCard } from './ApprovalCard'
 import { useAiChatStore, type ToolChip } from './chat-store'
 
@@ -48,12 +48,12 @@ function toolsOf(meta: AiMessage['meta']): ToolChip[] {
 
 /** Sanitized markdown; re-rendered only when the text changes. */
 function AssistantText({ text }: { text: string }) {
-  const html = useMemo(() => renderCommentHtml(text, []), [text])
+  const html = useMemo(() => renderAgentHtml(text), [text])
   return (
     <div
       className={cn(
         'break-words [overflow-wrap:anywhere] text-sm leading-relaxed',
-        '[&_p]:m-0 [&_p+p]:mt-2 [&_a]:text-primary [&_a]:underline',
+        '[&_p]:m-0 [&_p+p]:mt-2',
         '[&_code]:rounded [&_code]:bg-muted [&_code]:px-1',
         '[&_pre]:my-2 [&_pre]:max-w-full [&_pre]:overflow-x-auto [&_pre]:rounded [&_pre]:bg-muted [&_pre]:p-2',
         '[&_pre_code]:bg-transparent [&_pre_code]:p-0',
@@ -63,7 +63,8 @@ function AssistantText({ text }: { text: string }) {
         // attachment token would only leave a broken box.
         '[&_img]:hidden'
       )}
-      // Safe: `html` is DOMPurify-sanitized in renderCommentHtml.
+      // Safe: `renderAgentHtml` sanitizes with renderCommentHtml, then makes every
+      // link plain text.
       dangerouslySetInnerHTML={{ __html: html }}
     />
   )

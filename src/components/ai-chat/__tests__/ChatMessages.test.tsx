@@ -52,9 +52,40 @@ describe('ChatMessages', () => {
     expect(container.querySelector('strong')?.textContent).toBe('ls')
     expect(container.querySelectorAll('li')).toHaveLength(2)
     expect(container.querySelector('code')?.textContent).toBe('code')
-    const link = container.querySelector('a')
-    expect(link).toHaveAttribute('href', 'https://example.com')
-    expect(link).toHaveAttribute('rel', 'noopener noreferrer')
+  })
+
+  it('shows a link as text with its full destination, never as a clickable anchor', () => {
+    fill([
+      row(
+        1,
+        'assistant',
+        '[Open the report](https://evil.example/?d=secret) or https://example.com/x'
+      ),
+    ])
+    const { container } = render(<ChatMessages chatId={1} />)
+    expect(container.querySelector('a')).toBeNull()
+    expect(container.textContent).toContain(
+      'Open the report (https://evil.example/?d=secret)'
+    )
+    // A bare URL appears once.
+    expect(container.textContent?.match(/example\.com\/x/g)).toHaveLength(1)
+  })
+
+  it('does the same for the text of a turn that is still streaming', () => {
+    act(() => {
+      useAiChatStore.getState().apply({
+        seq: 1,
+        type: 'message_chunk',
+        chat_id: 1,
+        turn_id: 't1',
+        text: 'See [here](https://evil.example/?d=secret)',
+      })
+    })
+    const { container } = render(<ChatMessages chatId={1} />)
+    expect(container.querySelector('a')).toBeNull()
+    expect(container.textContent).toContain(
+      'here (https://evil.example/?d=secret)'
+    )
   })
 
   it('lets nothing active through from assistant text', () => {
