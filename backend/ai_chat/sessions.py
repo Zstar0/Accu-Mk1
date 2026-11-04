@@ -246,7 +246,7 @@ def storable_text(text: str) -> str:
     return _UNSTORABLE.sub("\ufffd", text)
 
 
-def storable_json(value):
+def storable_json(value: Any) -> Any:
     """`value` with `storable_text` applied to every string in it, keys too. A lone surrogate stores fine in a json
     column and then fails every read: a response encodes to UTF-8. `ensure_ascii=False` keeps it a raw character in
     the dump, so `storable_text` can swap it. A NUL dumps as the escape `\\u0000` and comes back a NUL: the json column
