@@ -611,6 +611,200 @@ describe('refetching messages', () => {
   })
 })
 
+describe('a backend restart mid-turn', () => {
+  const INTERRUPTED = 'The reply was interrupted. Send your message again.'
+  const startedEvent = (chat_id = 1): AiChatEvent => ({
+    seq: ++seq,
+    type: 'turn_started',
+    chat_id,
+    turn_id: 't1',
+    starting: false,
+    resuming: false,
+  })
+  const prompt = (s: number): AiMessage => ({ ...message(s), role: 'user' })
+  const reply = (s: number): AiMessage => ({ ...message(s), role: 'assistant' })
+  const pause = () =>
+    act(async () => {
+      await new Promise(r => setTimeout(r, 30))
+    })
+
+  /** A chat with a turn running, then the resync. The list is what comes back. */
+  async function restart(list: AiChat[] | Error, chatId = 1) {
+    if (list instanceof Error) mocks.listChats.mockRejectedValue(list)
+    else mocks.listChats.mockResolvedValue(list)
+    const view = setup()
+    await waitFor(() => expect(lastStream().enabled).toBe(true))
+    act(() => store().setChats([chatRow(chatId)]))
+    deliver(startedEvent(chatId))
+    deliver(resyncEvent())
+    expect(store().live).toEqual({})
+    return view
+  }
+
+  it('says the reply was interrupted when the prompt is the last row', async () => {
+    mocks.getMessages.mockResolvedValue([prompt(1)])
+    await restart([chatRow(1)])
+    await waitFor(() =>
+      expect(store().notice).toEqual({
+        kind: 'busy',
+        message: INTERRUPTED,
+        chatId: 1,
+      })
+    )
+    expect(mocks.getMessages).toHaveBeenCalledWith(1)
+  })
+
+  it('reads past an approval row: a restart can land while a card is up', async () => {
+    mocks.getMessages.mockResolvedValue([
+      prompt(1),
+      { ...message(2), role: 'permission' },
+    ])
+    await restart([chatRow(1)])
+    await waitFor(() => expect(store().notice?.message).toBe(INTERRUPTED))
+  })
+
+  it('says nothing when the turn really finished during the gap', async () => {
+    mocks.getMessages.mockResolvedValue([prompt(1), reply(2)])
+    await restart([chatRow(1)])
+    await waitFor(() => expect(mocks.getMessages).toHaveBeenCalled())
+    await pause()
+    expect(store().notice).toBeNull()
+  })
+
+  it('says nothing on an overflow resync with the turn still running', async () => {
+    mocks.getMessages.mockResolvedValue([prompt(1)])
+    await restart([chatRow(1, { running_turn_id: 't1' })])
+    await waitFor(() => expect(store().live[1]).toBeDefined())
+    await pause()
+    expect(mocks.getMessages).not.toHaveBeenCalled()
+    expect(store().notice).toBeNull()
+
+    // ...and that chat is settled: a later list does not bring it back.
+    mocks.listChats.mockResolvedValue([chatRow(1)])
+    connect()
+    await pause()
+    expect(mocks.getMessages).not.toHaveBeenCalled()
+  })
+
+  it('says nothing about a chat that was not running, or is no longer listed', async () => {
+    mocks.getMessages.mockResolvedValue([prompt(1)])
+    await restart([chatRow(5)])
+    await waitFor(() => expect(store().chats.map(c => c.id)).toEqual([5]))
+    await pause()
+    expect(mocks.getMessages).not.toHaveBeenCalled()
+    expect(store().notice).toBeNull()
+  })
+
+  it('keeps the chat for the next connect when the list fetch fails', async () => {
+    mocks.getMessages.mockResolvedValue([prompt(1)])
+    await restart(new Error('down'))
+    await waitFor(() => expect(mocks.listChats).toHaveBeenCalled())
+    await pause()
+    expect(store().notice).toBeNull()
+
+    mocks.listChats.mockResolvedValue([chatRow(1)])
+    connect()
+    await waitFor(() => expect(store().notice?.message).toBe(INTERRUPTED))
+  })
+
+  it('keeps the chat for the next connect when its messages cannot be read', async () => {
+    mocks.getMessages.mockRejectedValue(new Error('down'))
+    await restart([chatRow(1)])
+    await waitFor(() => expect(mocks.getMessages).toHaveBeenCalled())
+    await pause()
+    expect(store().notice).toBeNull()
+
+    mocks.getMessages.mockResolvedValue([prompt(1)])
+    connect()
+    await waitFor(() => expect(store().notice?.message).toBe(INTERRUPTED))
+  })
+
+  it('says nothing once the next turn has started in that chat', async () => {
+    let finish: (rows: AiMessage[]) => void = () => undefined
+    mocks.getMessages.mockReturnValue(
+      new Promise(resolve => {
+        finish = resolve
+      })
+    )
+    await restart([chatRow(1)])
+    await waitFor(() => expect(mocks.getMessages).toHaveBeenCalled())
+    deliver(startedEvent(1))
+    await act(async () => {
+      finish([prompt(1)])
+      await Promise.resolve()
+    })
+    expect(store().notice).toBeNull()
+  })
+
+  it('a background chat does not take the notice from the chat in view', async () => {
+    mocks.getMessages.mockResolvedValue([prompt(1)])
+    mocks.listChats.mockResolvedValue([chatRow(1), chatRow(2)])
+    setup()
+    await waitFor(() => expect(lastStream().enabled).toBe(true))
+    act(() => {
+      store().setChats([chatRow(1), chatRow(2)])
+      store().selectChat(2)
+      store().setNotice({ kind: 'busy', message: 'In view', chatId: 2 })
+    })
+    deliver(startedEvent(1))
+    deliver(resyncEvent())
+    await waitFor(() => expect(mocks.getMessages).toHaveBeenCalledWith(1))
+    await pause()
+    expect(store().notice?.message).toBe('In view')
+  })
+
+  it('a background chat keeps its notice until the reader gets there', async () => {
+    mocks.getMessages.mockResolvedValue([prompt(1)])
+    mocks.listChats.mockResolvedValue([chatRow(1), chatRow(2)])
+    setup()
+    await waitFor(() => expect(lastStream().enabled).toBe(true))
+    act(() => {
+      store().setChats([chatRow(1), chatRow(2)])
+      store().selectChat(2)
+    })
+    deliver(startedEvent(1))
+    deliver(resyncEvent())
+    await waitFor(() => expect(store().notice?.chatId).toBe(1))
+
+    act(() => store().selectChat(1))
+    expect(store().notice?.message).toBe(INTERRUPTED)
+  })
+
+  describe('and the user changes', () => {
+    it('drops an answer that arrives after the change', async () => {
+      let finish: (rows: AiMessage[]) => void = () => undefined
+      mocks.getMessages.mockReturnValue(
+        new Promise(resolve => {
+          finish = resolve
+        })
+      )
+      await restart([chatRow(1)])
+      await waitFor(() => expect(mocks.getMessages).toHaveBeenCalled())
+
+      act(() => useAuthStore.setState({ user: user(2), token: 't2' }))
+      await act(async () => {
+        finish([prompt(1)])
+        await Promise.resolve()
+      })
+      expect(store().notice).toBeNull()
+    })
+
+    it('does not carry the chat over', async () => {
+      await restart(new Error('down'))
+      await waitFor(() => expect(mocks.listChats).toHaveBeenCalled())
+
+      act(() => useAuthStore.setState({ user: user(2), token: 't2' }))
+      await waitFor(() => expect(lastStream().enabled).toBe(true))
+      mocks.listChats.mockResolvedValue([chatRow(1)])
+      connect()
+      await waitFor(() => expect(store().chats).toHaveLength(1))
+      await pause()
+      expect(mocks.getMessages).not.toHaveBeenCalled()
+      expect(store().notice).toBeNull()
+    })
+  })
+})
+
 describe('late writes', () => {
   it('loadMessages drops a result that arrives after the user changed', async () => {
     let finish: (rows: AiMessage[]) => void = () => undefined

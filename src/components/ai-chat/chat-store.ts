@@ -339,6 +339,22 @@ function noticeFor(
 }
 
 /**
+ * There is one notice slot and the last one wins, except that a notice for a
+ * chat in the background does not take it from the one the reader is looking at.
+ */
+function takeSlot(
+  state: { notice: ChatNotice | null; activeChatId: number | null },
+  incoming: ChatNotice
+): ChatNotice {
+  const { notice, activeChatId } = state
+  const onShow =
+    notice !== null && (notice.chatId ?? activeChatId) === activeChatId
+  const background =
+    incoming.chatId !== undefined && incoming.chatId !== activeChatId
+  return onShow && background ? notice : incoming
+}
+
+/**
  * Fold a fresh chat list in. Cards and live turns are only ever added here: a
  * list fetched before an event can land after it, and must not undo it.
  */
@@ -403,7 +419,10 @@ const initialFields = (): AiChatFields => ({
 
 interface AiChatState extends AiChatFields {
   setOpen: (open: boolean) => void
-  /** Also clears the notice, so one cannot sit on the wrong chat. */
+  /**
+   * Also clears the notice, so one cannot sit on the wrong chat. One meant for
+   * this chat stays: it is how a background chat's notice reaches the reader.
+   */
   selectChat: (chatId: number | null) => void
   setProviderId: (providerId: number | null) => void
   /**
@@ -421,6 +440,8 @@ interface AiChatState extends AiChatFields {
   /** Also clears the active chat when it is no longer in `rows`. */
   setChats: (rows: AiChat[]) => void
   setNotice: (notice: ChatNotice | null) => void
+  /** A notice nobody just asked for: see `takeSlot`. */
+  raiseNotice: (notice: ChatNotice) => void
   /** Stop answered "nothing runs": drop the chat's live turn. */
   clearLive: (chatId: number) => void
   /** The glue calls this after it refetched those chats. */
@@ -447,7 +468,14 @@ export const useAiChatStore = create<AiChatState>()(
       setOpen: open => set({ open }, undefined, 'setOpen'),
 
       selectChat: chatId =>
-        set({ activeChatId: chatId, notice: null }, undefined, 'selectChat'),
+        set(
+          state => ({
+            activeChatId: chatId,
+            notice: state.notice?.chatId === chatId ? state.notice : null,
+          }),
+          undefined,
+          'selectChat'
+        ),
 
       setProviderId: providerId =>
         set({ providerId }, undefined, 'setProviderId'),
@@ -475,7 +503,9 @@ export const useAiChatStore = create<AiChatState>()(
             const notice = noticeFor(e, agent, state.notice)
             // Nothing to write: keep the state object, so nothing re-renders.
             if (next === data && notice === null) return state
-            return notice === null ? next : { ...next, notice }
+            return notice === null
+              ? next
+              : { ...next, notice: takeSlot(state, notice) }
           },
           undefined,
           `apply:${e.type}`
@@ -508,6 +538,13 @@ export const useAiChatStore = create<AiChatState>()(
         ),
 
       setNotice: notice => set({ notice }, undefined, 'setNotice'),
+
+      raiseNotice: notice =>
+        set(
+          state => ({ notice: takeSlot(state, notice) }),
+          undefined,
+          'raiseNotice'
+        ),
 
       clearLive: chatId =>
         set(

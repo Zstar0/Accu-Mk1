@@ -26,7 +26,9 @@ import {
   getMessages,
   listChats,
   listProviders,
+  type AiChat,
   type AiChatEvent,
+  type AiMessage,
   type AiProvider,
 } from '@/lib/ai-chat-api'
 import { useAiChatStream } from '@/lib/ai-chat-stream'
@@ -86,6 +88,49 @@ export function useActiveProvider(): AiProvider | null {
   return providers.find(p => p.id === wanted) ?? providers[0] ?? null
 }
 
+// ---- a backend restart mid-turn ---------------------------------------------
+
+/**
+ * Chats whose live turn a resync wiped, until a list that landed says what
+ * became of them. A restart is the one path with no `turn_ended`, so a partial
+ * reply and a card vanish with no other explanation.
+ */
+const interrupted = new Set<number>()
+
+/** A chat still running needs no words. Any other: its rows tell which it was. */
+function explainInterrupted(rows: AiChat[]) {
+  for (const chatId of [...interrupted]) {
+    const row = rows.find(r => r.id === chatId)
+    if (row === undefined || row.running_turn_id !== null) {
+      interrupted.delete(chatId)
+    } else {
+      void explainChat(chatId)
+    }
+  }
+}
+
+async function explainChat(chatId: number): Promise<void> {
+  const userId = currentUserId()
+  let rows: AiMessage[]
+  try {
+    rows = await getMessages(chatId)
+  } catch {
+    return // it stays in the set: the next list that lands asks again
+  }
+  // False when the wipe got here first, or another list's check did.
+  if (currentUserId() !== userId || !interrupted.delete(chatId)) return
+  const store = useAiChatStore.getState()
+  // An approval row answers nothing: a restart can land while a card is up.
+  const last = rows.filter(m => m.role !== 'permission').at(-1)
+  if (last?.role === 'user' && store.live[chatId] === undefined) {
+    store.raiseNotice({
+      kind: 'busy',
+      message: 'The reply was interrupted. Send your message again.',
+      chatId,
+    })
+  }
+}
+
 // ---- fetching --------------------------------------------------------------
 
 /**
@@ -104,7 +149,9 @@ export async function refreshChats(qc: QueryClient): Promise<void> {
       queryFn: listChats,
       staleTime: 0,
     })
-    if (currentUserId() === userId) useAiChatStore.getState().setChats(rows)
+    if (currentUserId() !== userId) return
+    useAiChatStore.getState().setChats(rows)
+    explainInterrupted(rows)
   } catch {
     // The next connect, resync or turn end asks again; a failed list changes nothing.
   }
@@ -196,8 +243,13 @@ function agentOf(qc: QueryClient, chatId: number): string {
 }
 
 function handleEvent(qc: QueryClient, e: AiChatEvent) {
+  const store = useAiChatStore.getState()
+  if (e.type === 'resync') {
+    // Before the reducer wipes them.
+    for (const id of Object.keys(store.live)) interrupted.add(Number(id))
+  }
   const agent = e.type === 'turn_ended' ? agentOf(qc, e.chat_id) : undefined
-  useAiChatStore.getState().apply(e, agent)
+  store.apply(e, agent)
   // The stream treats a throw as a dropped connection and skips this event.
   try {
     if (e.type === 'turn_ended' || e.type === 'resync') void refreshChats(qc)
@@ -223,6 +275,7 @@ function teardown(qc: QueryClient) {
   for (const id of toastIds.values()) toast.dismiss(id)
   toastIds.clear()
   failedLoads.clear()
+  interrupted.clear()
 }
 
 // ---- the hook --------------------------------------------------------------

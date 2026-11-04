@@ -532,6 +532,64 @@ describe('useAiChatStore', () => {
     expect(store().notice).toBeNull()
   })
 
+  it('selectChat keeps a notice meant for the chat it selects', () => {
+    store().selectChat(1)
+    store().setNotice({ kind: 'busy', message: 'for 2', chatId: 2 })
+    store().selectChat(2)
+    expect(store().notice?.message).toBe('for 2')
+    store().selectChat(1)
+    expect(store().notice).toBeNull()
+  })
+
+  describe('the one notice slot', () => {
+    const inView = { kind: 'busy', message: 'in view', chatId: 2 } as const
+    const elsewhere = { kind: 'busy', message: 'elsewhere', chatId: 1 } as const
+
+    it("raiseNotice keeps the active chat's notice over a background chat's", () => {
+      store().selectChat(2)
+      store().setNotice(inView)
+      store().raiseNotice(elsewhere)
+      expect(store().notice).toEqual(inView)
+    })
+
+    it('an event does too, whatever it raises', () => {
+      store().selectChat(2)
+      store().setNotice(inView)
+      store().apply(ev('error', { code: 'agent_error', message: 'x' }))
+      store().apply(ended(null, 'cancelled'))
+      store().apply(ended(null, 'end_turn'))
+      expect(store().notice).toEqual(inView)
+    })
+
+    it("the active chat's own notice always takes the slot", () => {
+      store().selectChat(1)
+      store().setNotice({ ...inView, chatId: 1 })
+      store().raiseNotice(elsewhere)
+      expect(store().notice).toEqual(elsewhere)
+    })
+
+    it('among background chats, the last one wins', () => {
+      store().selectChat(9)
+      store().raiseNotice(inView)
+      store().raiseNotice(elsewhere)
+      expect(store().notice).toEqual(elsewhere)
+    })
+
+    it('a background notice replaces one the reader cannot see', () => {
+      store().selectChat(9)
+      store().setNotice(inView)
+      store().apply(ended(null, 'cancelled'))
+      expect(store().notice?.chatId).toBe(1)
+    })
+
+    it('a notice with no chat is on show wherever the reader is', () => {
+      store().selectChat(2)
+      store().setNotice({ kind: 'busy', message: 'anywhere' })
+      store().raiseNotice(elsewhere)
+      expect(store().notice?.message).toBe('anywhere')
+    })
+  })
+
   describe('dismissApproval', () => {
     it('removes a stale card and nothing else', () => {
       store().apply(started())
