@@ -684,6 +684,71 @@ describe('useAiChatStore', () => {
     expect(store().needsRefetch).toEqual([2])
   })
 
+  describe('reset', () => {
+    const isData = (v: unknown) => typeof v !== 'function'
+
+    it('restores every field to the starting state', () => {
+      const initial = useAiChatStore.getInitialState()
+      // Fill every field with something other than its starting value.
+      store().apply(
+        ev('turn_ended', {
+          chat_id: 2,
+          turn_id: 't2',
+          stop_reason: 'end_turn',
+          message_seq: null,
+        })
+      )
+      store().setChats([chatRow(1)])
+      store().setMessages(1, [message(1)])
+      store().apply(started())
+      store().apply(permission('p1'))
+      store().setOpen(true)
+      store().selectChat(1)
+      useAiChatStore.setState({ providerId: 3 })
+      store().setNotice({ kind: 'error', message: 'x', chatId: 1 })
+
+      // The fill above must cover every data field, including ones added later.
+      const filled = store()
+      for (const key of Object.keys(initial) as (keyof typeof initial)[]) {
+        if (isData(initial[key])) {
+          expect(filled[key], `${key} was not filled`).not.toEqual(initial[key])
+        }
+      }
+
+      store().reset()
+      expect(store()).toEqual(initial)
+      expect(store()).toMatchObject({
+        chats: [],
+        messages: {},
+        live: {},
+        approvals: {},
+        needsRefetch: [],
+        open: false,
+        activeChatId: null,
+        providerId: null,
+        notice: null,
+      })
+    })
+
+    it('a setChats after reset does not bring back an old card or turn', () => {
+      store().apply(started())
+      store().apply(permission('old'))
+      store().reset()
+      store().setChats([chatRow(1), chatRow(2, { running_turn_id: 'r2' })])
+      expect(store().approvals).toEqual({})
+      expect(Object.keys(store().live)).toEqual(['2'])
+      expect(store().live[2]).toMatchObject({ turnId: 'r2', phase: 'running' })
+    })
+
+    it('the store keeps working after a reset', () => {
+      store().apply(started())
+      store().reset()
+      store().apply(started())
+      store().apply(chunk('again'))
+      expect(store().live[1]).toMatchObject({ text: 'again' })
+    })
+  })
+
   it('hasPendingApproval and isRunning read the data', () => {
     expect(hasPendingApproval(store())).toBe(false)
     expect(isRunning(store())).toBe(false)

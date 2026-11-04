@@ -341,12 +341,32 @@ export const isRunning = (data: ChatData): boolean =>
 
 // ---- store -----------------------------------------------------------------
 
-interface AiChatState extends ChatData {
+/** Everything the store holds except its actions. */
+interface AiChatFields extends ChatData {
   open: boolean
   activeChatId: number | null
   providerId: number | null
   notice: ChatNotice | null
+}
 
+/**
+ * The starting state, written once: the store is created from it and `reset`
+ * returns to it. Typed, so a field added to `AiChatFields` fails to compile
+ * until it is listed here. Fresh containers on every call.
+ */
+const initialFields = (): AiChatFields => ({
+  chats: [],
+  messages: {},
+  live: {},
+  approvals: {},
+  needsRefetch: [],
+  open: false,
+  activeChatId: null,
+  providerId: null,
+  notice: null,
+})
+
+interface AiChatState extends AiChatFields {
   setOpen: (open: boolean) => void
   selectChat: (chatId: number | null) => void
   /** Reduce one SSE event, and raise its notice if it has one. */
@@ -359,6 +379,8 @@ interface AiChatState extends ChatData {
   clearLive: (chatId: number) => void
   /** The glue calls this after it refetched those chats. */
   clearRefetch: (chatIds: number[]) => void
+  /** Back to the starting state, e.g. on logout: nothing of one user's chats may reach the next. */
+  reset: () => void
 }
 
 const chatDataOf = (s: ChatData): ChatData => ({
@@ -372,15 +394,9 @@ const chatDataOf = (s: ChatData): ChatData => ({
 export const useAiChatStore = create<AiChatState>()(
   devtools(
     set => ({
-      chats: [],
-      messages: {},
-      live: {},
-      approvals: {},
-      needsRefetch: [],
-      open: false,
-      activeChatId: null,
-      providerId: null,
-      notice: null,
+      ...initialFields(),
+
+      reset: () => set(initialFields(), undefined, 'reset'),
 
       setOpen: open => set({ open }, undefined, 'setOpen'),
 
