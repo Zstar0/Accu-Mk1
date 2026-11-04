@@ -87,15 +87,18 @@ class ApprovalRegistry:
         self._pending[p.permission_id] = p
         return p
 
-    def decide(self, permission_id: str, user_id: int, decision: Literal["allow", "deny"]) -> PendingApproval:
+    def decide(self, permission_id: str, user_id: int, decision: Literal["allow", "deny"],
+               chat_id: int | None = None) -> PendingApproval:
+        """With `chat_id`, only a permission of that chat can be decided: one pending in another of the user's chats
+        is not found through this one's URL."""
         p = self._pending.get(permission_id)
         if p is None:
             # A tombstone is only visible to the user who made the decision.
             if self._decided.get(permission_id) == user_id:
                 raise ApprovalConflict(permission_id)
             raise ApprovalNotFound(permission_id)
-        if p.user_id != user_id:
-            raise ApprovalNotFound(permission_id)  # untouched: the owner can still decide
+        if p.user_id != user_id or (chat_id is not None and p.chat_id != chat_id):
+            raise ApprovalNotFound(permission_id)  # untouched: the owner can still decide, in the right chat
         if decision == "allow" and not p.can_allow:
             raise AllowNotOffered(permission_id)  # stays pending: Deny is still available
         del self._pending[permission_id]

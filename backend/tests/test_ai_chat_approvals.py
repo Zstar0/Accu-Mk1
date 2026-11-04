@@ -111,6 +111,24 @@ async def test_other_user_gets_not_found():
     assert p.future.result() == "allow"
 
 
+async def test_decide_bound_to_a_chat_ignores_a_permission_of_another_chat():
+    reg = ApprovalRegistry()
+    p = make(reg, chat_id=1)
+    with pytest.raises(ApprovalNotFound):  # its owner, but through another chat's URL
+        reg.decide(p.permission_id, 1, "allow", chat_id=2)
+    # Not resolved, not removed, and not marked decided: its own chat can still decide.
+    assert not p.future.done()
+    assert reg.pending_for_chat(1) == [p]
+    reg.decide(p.permission_id, 1, "allow", chat_id=1)
+    assert p.future.result() == "allow"
+
+
+async def test_decide_without_a_chat_binds_to_none():
+    reg = ApprovalRegistry()
+    p = make(reg, chat_id=7)
+    assert reg.decide(p.permission_id, 1, "deny") is p  # the keyword is optional: existing callers are unchanged
+
+
 async def test_other_user_gets_not_found_after_decision_too():
     reg = ApprovalRegistry()
     p = make(reg, user_id=1)
