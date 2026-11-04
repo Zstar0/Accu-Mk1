@@ -457,6 +457,75 @@ def test_anything_but_the_patch_itself_is_diffed(raw_input):
     assert diff_detail("old\n", "new\n", raw_input) == ("/a\n@@ -1 +1 @@\n-old\n+new", False)
 
 
+def blocks_detail(*pairs, raw_input=None) -> tuple[list[str], bool]:
+    """The card's blocks, for diff blocks of these `(old, new)` at paths /0, /1 and so on."""
+    content = [FileEditToolCallContent(type="diff", path=f"/{i}", old_text=old, new_text=new)
+               for i, (old, new) in enumerate(pairs)]
+    detail, hidden = sessions._permission_detail(ToolCallUpdate(tool_call_id="c", content=content, raw_input=raw_input))
+    return detail.split("\n\n"), hidden
+
+
+def one_line_edit(lines: int, width: int = 2) -> tuple[str, str]:
+    """`lines` lines of `width` characters each, the last one changed. A short diff: only a limit can hide it."""
+    line = "x" * (width - 1) + "\n"
+    return line * lines, line * (lines - 1) + "y" * (width - 1) + "\n"
+
+
+def test_the_character_budget_is_shared_by_the_blocks_of_a_request():
+    block = one_line_edit(500, width=100)  # 100000 characters
+    shown, hidden = blocks_detail(block, block)  # all of the budget and no more: diffed
+    assert [text.split("\n")[1] for text in shown] == ["@@ -497,4 +497,4 @@"] * 2 and hidden is False
+    shown, hidden = blocks_detail(block, block, ("a\n", "b\n"), ("c\n", "d\n"))
+    assert [text.split("\n")[1] for text in shown[:2]] == ["@@ -497,4 +497,4 @@"] * 2
+    assert shown[2:] == ["/2\n4 more characters not shown.", "/3\n4 more characters not shown."] and hidden is True
+
+
+def test_the_line_budget_is_shared_by_the_blocks_of_a_request():
+    block = one_line_edit(5000)
+    shown, hidden = blocks_detail(block, block)  # all of the budget and no more: diffed
+    assert [text.split("\n")[1] for text in shown] == ["@@ -4997,4 +4997,4 @@"] * 2 and hidden is False
+    block = one_line_edit(6000)  # 24000 characters: well inside the character budget, both together
+    shown, hidden = blocks_detail(block, block, ("a\n", "b\n"))
+    assert shown[0].split("\n")[1] == "@@ -5997,4 +5997,4 @@"
+    assert shown[1:] == ["/1\n24000 more characters not shown.", "/2\n4 more characters not shown."] and hidden is True
+
+
+@pytest.mark.parametrize(("spender", "total"), [(("x" * 200001, ""), 200001), (("x\n" * 10001, "x\n" * 10000), 40002)],
+                         ids=["characters", "lines"])
+def test_a_spent_budget_stays_spent(spender, total):
+    shown, hidden = blocks_detail(spender, ("a\n", "b\n"))
+    assert shown == [f"/0\n{total} more characters not shown.", "/1\n4 more characters not shown."] and hidden is True
+
+
+def test_an_identical_block_is_charged_like_any_other():
+    same = ("x" * 99 + "\n") * 1000  # both sides: all of the character budget
+    shown, hidden = blocks_detail((same, same), ("a\n", "b\n"))
+    assert shown == ["/0\nNo change.", "/1\n4 more characters not shown."] and hidden is True
+
+
+def test_a_block_with_no_diff_to_run_costs_no_budget():
+    all_of_it = one_line_edit(1000, width=100)  # 200000 characters
+    shown, hidden = blocks_detail((None, "n" * 19000), ("x" * 300000, "p"), all_of_it, raw_input=v4a("p"))
+    assert shown[:2] == ["/0\n" + "n" * 19000, "/1\np"]
+    assert shown[2].split("\n")[1] == "@@ -997,4 +997,4 @@" and hidden is False
+
+
+async def test_blocks_that_fit_alone_but_not_together_cannot_be_allowed(ai_chat_env):
+    with anyio.fail_after(30):
+        await send(ai_chat_env, "PERMIT_EDIT_BLOCKS")
+        card = await seen(ai_chat_env, "permission_requested")
+        assert (card["can_allow"], card["hidden"]) == (False, True)
+        with pytest.raises(approvals.AllowNotOffered):
+            approvals.APPROVALS.decide(card["permission_id"], 1, "allow")
+        approvals.APPROVALS.decide(card["permission_id"], 1, "deny")  # still pending: Deny stays available
+        await seen(ai_chat_env, "turn_ended")
+    shown = card["detail"].split("\n\n")
+    assert [text.split("\n")[0] for text in shown] == [f"/srv/{name}.conf" for name in "abcdef"]  # every block
+    assert all("\n-line 1000\n+line 1000 edited\n" in text for text in shown[:4])
+    assert shown[4:] == ["/srv/e.conf\n42007 more characters not shown.", "/srv/f.conf\n4 more characters not shown."]
+    assert rows(ai_chat_env, "assistant")[0].text == "denied"
+
+
 @pytest.mark.parametrize("prompt", ["PERMIT_EDIT_PATCH", "PERMIT_EDIT_PATCH_BIG"])
 async def test_a_one_line_v4a_patch_shows_the_patch_and_can_be_allowed(ai_chat_env, prompt):
     with anyio.fail_after(30):

@@ -32,6 +32,7 @@ Prompts, by their last text block:
   PERMIT_EDIT_BIG   the same, one line changed in a 21000 character file
   PERMIT_EDIT_HUGE  the same, with old and new text over Mk1's 200000 character diff ceiling
   PERMIT_EDIT_LINES the same, one line changed, with old and new text just over Mk1's 10000 line diff bound
+  PERMIT_EDIT_BLOCKS      PERMIT, not as Hermes builds it: six diff blocks that each fit Mk1's limits but not together
   PERMIT_EDIT_PATCH PERMIT, a V4A patch as Hermes builds it: the file as old text and the patch as new text
   PERMIT_EDIT_PATCH_BIG   the same, on a 21000 character file
   PERMIT_EDIT_PATCH_OTHER the same shape, but the raw input's patch is not the new text
@@ -117,6 +118,10 @@ TOOL_CALL_FIELDS = {
     "PERMIT_EDIT_BIG": whole_file_edit("/srv/big.conf", BIG_FILE, BIG_FILE.replace("line 1000", "line 1000 edited")),
     "PERMIT_EDIT_HUGE": whole_file_edit("/srv/huge.conf", "x" * 100001, "x" * 100002),
     "PERMIT_EDIT_LINES": whole_file_edit("/srv/lines.conf", "x\n" * 10001, "x\n" * 10000 + "y\n"),
+    "PERMIT_EDIT_BLOCKS": {"content": [
+        *(acp.tool_diff_content(path=f"/srv/{name}.conf", old_text=BIG_FILE,
+                                new_text=BIG_FILE.replace("line 1000", "line 1000 edited")) for name in "abcde"),
+        acp.tool_diff_content(path="/srv/f.conf", old_text="a\n", new_text="b\n")]},
     "PERMIT_EDIT_PATCH": v4a_edit("/srv/app.conf", SMALL_FILE, V4A_PATCH, V4A_PATCH),
     "PERMIT_EDIT_PATCH_BIG": v4a_edit("/srv/app.conf", BIG_FILE, V4A_PATCH, V4A_PATCH),
     "PERMIT_EDIT_PATCH_OTHER": v4a_edit("/srv/app.conf", SMALL_FILE, V4A_PATCH, "*** Begin Patch\n*** End Patch"),

@@ -99,10 +99,11 @@ _CLIENT_CAPS = ClientCapabilities(fs=FileSystemCapabilities(read_text_file=False
 _INIT_TIMEOUT_S = 30.0
 _GRACE_S = 5.0  # bounds every wait on a process or pipe that is going away
 _DETAIL_MAX = 20000  # characters of a title or of tool detail on an approval card; a card cut to this has no Allow
-# ponytail: difflib is not linear and runs on the loop thread, so no diff over 200000 characters or 10000 lines. Inside
-# both, the worst input found holds the loop about 2.3 s. A worker thread, with a Stop re-check after it, if that bites.
+# ponytail: difflib is not linear and runs on the loop thread, so one approval request diffs at most 200000 characters
+# and 10000 lines, across all its blocks. Inside both, the worst input found holds the loop about 3.4 s per request. A
+# worker thread, with a Stop re-check after it, if that bites.
 _DIFF_MAX = 200000  # old and new together
-_DIFF_MAX_LINES = 10000  # on either side
+_DIFF_MAX_LINES = 10000  # the longer side of each block
 _UNSTORABLE = re.compile("[\x00\ud800-\udfff]")
 REAPER_INTERVAL_S = 60
 # ponytail: a writer loses at most once to each other writer, so 5 attempts guarantee 5 simultaneous writers on one
@@ -268,19 +269,29 @@ def _is_v4a_patch(item: FileEditToolCallContent, raw_input: Any) -> bool:
             and arguments.get("patch") == item.new_text)
 
 
-def _diff_text(item: FileEditToolCallContent, raw_input: Any) -> tuple[str, bool]:
+@dataclass
+class _DiffBudget:
+    """What one approval request has left to diff. Below zero it stays spent: a frame can hold many blocks."""
+
+    chars: int = _DIFF_MAX
+    lines: int = _DIFF_MAX_LINES
+
+
+def _diff_text(item: FileEditToolCallContent, raw_input: Any, budget: _DiffBudget) -> tuple[str, bool]:
     """A diff block as the card shows it, and whether part of it is left out. Hermes sends the whole file on both
     sides, so the new text alone would hide what a write removes. No old text means a new file, all of it new."""
     if item.old_text is None or _is_v4a_patch(item, raw_input):
-        return f"{item.path}\n{item.new_text}", False
+        return f"{item.path}\n{item.new_text}", False  # no diff to run, so it costs no budget
     total = len(item.old_text) + len(item.new_text)
     too_big = f"{item.path}\n{_not_shown(total, 'more character')}", True
-    if total > _DIFF_MAX:  # first: this one keeps a huge text from being split at all
+    budget.chars -= total
+    if budget.chars < 0 or budget.lines < 0:  # first: this keeps text past the budget from being split at all
         return too_big
     # `keepends`: a change to a line ending alone is a change, and must not diff to nothing.
     old = storable_text(item.old_text).splitlines(keepends=True)
     new = storable_text(item.new_text).splitlines(keepends=True)
-    if max(len(old), len(new)) > _DIFF_MAX_LINES:
+    budget.lines -= max(len(old), len(new))
+    if budget.lines < 0:
         return too_big
     if item.old_text == item.new_text:
         return f"{item.path}\nNo change.", False
@@ -293,12 +304,12 @@ def _diff_text(item: FileEditToolCallContent, raw_input: Any) -> tuple[str, bool
 def _permission_detail(tool_call: ToolCallUpdate) -> tuple[str, bool]:
     """What the card shows under the title, and whether part of what Allow would approve is not in it. Every content
     block: text as its text, a diff as `_diff_text`. Raw input as compact JSON only when the blocks show nothing."""
-    shown, unknown, left_out = [], 0, False
+    shown, unknown, left_out, budget = [], 0, False, _DiffBudget()
     for item in tool_call.content or ():
         if isinstance(item, ContentToolCallContent) and isinstance(item.content, TextContentBlock):
             shown.append(item.content.text)
         elif isinstance(item, FileEditToolCallContent):
-            text, cut = _diff_text(item, tool_call.raw_input)
+            text, cut = _diff_text(item, tool_call.raw_input, budget)
             shown.append(text)
             left_out = left_out or cut
         else:
