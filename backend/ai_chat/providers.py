@@ -403,4 +403,4 @@ async def _run_test(snapshot: sessions.ProviderSnapshot, user_id: int) -> dict[s
         await asyncio.wait({sessions.MANAGER._spawn(session.close())})
     if not out["ok"]:  # read after the close, when the drain has reached EOF. Admins only: it can name hosts and paths.
         out["stderr_tail"] = [line[:_STDERR_LINE_MAX] for line in session.stderr_tail or carried]
-    return out
+    return sessions.storable_json(out)  # `error` can name the agent's tool, and is stored and answered as JSON

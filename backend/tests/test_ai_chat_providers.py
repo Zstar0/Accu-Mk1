@@ -484,6 +484,27 @@ async def test_failed_tool_check_returns_the_error_and_the_stderr_list(ai_chat_a
     assert result["timings_ms"]["tools"] is not None  # the steps that ran are timed
 
 
+async def test_a_surrogate_in_what_the_agent_reported_leaves_the_provider_list_readable(ai_chat_api):
+    await asyncio.to_thread(sessions.record_connect, 1, {"name": "a\ud800b", "version": "1"}, {"loadSession": True})
+    resp = await call(ai_chat_api, "GET", URL)
+    assert resp.status_code == 200
+    [row] = [p for p in resp.json()["providers"] if p["id"] == 1]
+    assert row["last_agent_info"] == {"name": "a�b", "version": "1"}
+
+
+async def test_a_surrogate_in_a_test_result_is_swapped_before_it_is_returned_or_recorded(
+        ai_chat_api, ai_chat_env, monkeypatch):
+    async def names_an_agent_tool(session, out):
+        out["error"] = "tool not allowed for standard users: rm \udc80"
+        out["tools"] = ["rm \udc80"]
+
+    monkeypatch.setattr(providers, "_probe", names_an_agent_tool)
+    result = await probe(ai_chat_api, 1)
+    assert (result["ok"], result["error"], result["tools"]) == (
+        False, "tool not allowed for standard users: rm �", ["rm �"])
+    assert stored(ai_chat_env, 1).last_test_error == "tool not allowed for standard users: rm �"
+
+
 async def test_test_connection_timeout(ai_chat_api, ai_chat_env, monkeypatch):
     monkeypatch.setattr(providers, "TEST_TIMEOUT_S", 0.5)
     ai_chat_env.flags = ["--no-init"]  # never answers initialize

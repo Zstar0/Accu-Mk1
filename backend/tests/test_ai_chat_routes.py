@@ -507,6 +507,16 @@ async def test_messages_meta_survives(ai_chat_api, ai_chat_env):
                                            "status": "completed"}]
 
 
+async def test_a_surrogate_in_a_tool_title_does_not_make_the_transcript_unreadable(ai_chat_api, ai_chat_env):
+    # What Python gives for a file name that is not UTF-8: JSON carries it, UTF-8 does not, and the response is UTF-8.
+    await ask(ai_chat_api, ai_chat_env, "BAD_TOOL_TITLE")
+    resp = await call(ai_chat_api, "GET", f"{URL}/chats/1/messages")
+    assert resp.status_code == 200
+    assistant = resp.json()[-1]
+    assert assistant["meta"]["tools"][0]["title"] == "rm �"
+    assert rows(ai_chat_env, 1, "assistant")[0].meta["tools"][0]["title"] == "rm �"
+
+
 # ---- title and archive --------------------------------------------------------------------------
 
 async def test_patch_title_and_archive(ai_chat_api, ai_chat_env):

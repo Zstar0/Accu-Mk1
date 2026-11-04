@@ -42,6 +42,7 @@ Prompts, by their last text block:
   PERMIT_OWN_ID     PERMIT as Hermes does it: the request names its own tool id, `perm-1`, never started, and its
                     status update (no title) goes to that id before the real tool's
   BAD_TEXT          replies with a NUL and a lone surrogate, as a raw frame
+  BAD_TOOL_TITLE    a tool call whose title holds a lone surrogate, as a raw frame, then `done`
   LATE_TITLED       an update for a tool id never started, carrying a title, then `done`
   ABANDON           sends the same permission request, and ends the turn 0.3 s later without waiting for the answer
   SLOW              replies `working`, waits for session/cancel, then stops with `cancelled`
@@ -233,6 +234,12 @@ class FakeAgent(acp.Agent):
             await self.conn._conn.send_notification("session/update", {
                 "sessionId": session_id,
                 "update": {"sessionUpdate": "agent_message_chunk", "content": {"type": "text", "text": BAD_TEXT}}})
+        elif last == "BAD_TOOL_TITLE":
+            await self.conn._conn.send_notification("session/update", {
+                "sessionId": session_id,
+                "update": {"sessionUpdate": "tool_call", "toolCallId": "call-1", "title": "rm \udc80",
+                           "kind": "execute", "status": "completed"}})
+            await self.say(session_id, "done")
         elif last == "LATE_TITLED":
             await self.conn.session_update(session_id, acp.update_tool_call(
                 "late-1", title="Late tool", kind="read", status="in_progress"))

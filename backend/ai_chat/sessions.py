@@ -180,7 +180,11 @@ def persist_message(chat_id: int, role: str, text: str, meta: dict | None) -> in
 
     Writers race on the max: acp runs each incoming request in its own task, and routes write too. The loser hits
     the unique (chat_id, seq), and retries with a fresh max.
+
+    `meta` goes through `storable_json`, here for every caller: what an agent sends reaches it in a tool chip's title.
     """
+    if meta is not None:
+        meta = storable_json(meta)
     attempt = 0
     while True:
         attempt += 1
@@ -226,7 +230,8 @@ def record_connect(provider_id: int, agent_info: dict, capabilities: dict) -> No
     """What the agent reported at initialize. `updated_at` is kept: it means "last edited by an admin"."""
     with _session_factory() as db:
         db.execute(update(AcpProvider).where(AcpProvider.id == provider_id).values(
-            last_agent_info=agent_info, last_capabilities=capabilities, updated_at=AcpProvider.updated_at))
+            last_agent_info=storable_json(agent_info), last_capabilities=storable_json(capabilities),
+            updated_at=AcpProvider.updated_at))
         db.commit()
 
 
@@ -239,6 +244,14 @@ def storable_text(text: str) -> str:
     can carry one; it has no UTF-8). Agent text goes through this, so one such character costs neither the reply nor
     the approval."""
     return _UNSTORABLE.sub("\ufffd", text)
+
+
+def storable_json(value):
+    """`value` with `storable_text` applied to every string in it, keys too. A lone surrogate stores fine in a json
+    column and then fails every read: a response encodes to UTF-8. `ensure_ascii=False` keeps it a raw character in
+    the dump, so `storable_text` can swap it. A NUL dumps as the escape `\\u0000` and comes back a NUL: the json column
+    holds that and so does a response, so it stays."""
+    return json.loads(storable_text(json.dumps(value, ensure_ascii=False)))
 
 
 # ---- the ACP client side ----------------------------------------------------------------------

@@ -598,6 +598,30 @@ def test_persist_message_retries_are_bounded(ai_chat_db, monkeypatch):
         sessions.persist_message(1, None, "x", None)  # NOT NULL fails every attempt
 
 
+async def test_persist_message_swaps_a_surrogate_nested_in_meta(ai_chat_env):
+    # SQLite's JSON column escapes a surrogate and keeps it, so the row read back is what the column was handed.
+    meta = {"tools": [{"id": "c1", "title": "rm \udc80", "status": None}], "stop_reason": "end_turn", "n": 3}
+    await asyncio.to_thread(sessions.persist_message, 1, "assistant", "x", meta)
+    with ai_chat_env.Session() as db:
+        stored = db.query(AiChatMessage).filter_by(chat_id=1, seq=1).one().meta
+    assert stored == {"tools": [{"id": "c1", "title": "rm �", "status": None}], "stop_reason": "end_turn", "n": 3}
+    json.dumps(stored, ensure_ascii=False).encode("utf-8")  # what a JSON response does with it
+
+
+async def test_persist_message_leaves_a_nul_in_meta_alone(ai_chat_env):
+    # A NUL dumps as the escape `\u0000`: the json column holds that, and so does a response.
+    await asyncio.to_thread(sessions.persist_message, 1, "assistant", "x", {"detail": "a\x00b"})
+    with ai_chat_env.Session() as db:
+        assert db.query(AiChatMessage).filter_by(chat_id=1, seq=1).one().meta == {"detail": "a\x00b"}
+
+
+async def test_record_connect_swaps_a_surrogate(ai_chat_env):
+    await asyncio.to_thread(sessions.record_connect, 1, {"name": "a\ud800b"}, {"nested": {"k": ["\udc80"]}})
+    with ai_chat_env.Session() as db:
+        p = db.get(AcpProvider, 1)
+        assert (p.last_agent_info, p.last_capabilities) == ({"name": "a�b"}, {"nested": {"k": ["�"]}})
+
+
 async def test_update_message_meta_merges(ai_chat_env):
     seq = await asyncio.to_thread(sessions.persist_message, 1, "permission", "Run", {"decision": None, "a": 1})
     await asyncio.to_thread(sessions.update_message_meta, 1, seq, {"decision": "allow"})
