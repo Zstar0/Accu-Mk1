@@ -14,7 +14,8 @@ vi.mock('@/lib/ai-chat-api', async importOriginal => ({
 }))
 
 const decide = vi.mocked(decidePermission)
-const TOO_LONG = 'Too long to review here, so it can only be denied.'
+const CANNOT_SHOW =
+  'Not all of this can be shown here, so it can only be denied.'
 
 const card = (over: Partial<Card> = {}): Card => ({
   permission_id: 'p1',
@@ -59,7 +60,7 @@ describe('ApprovalCard', () => {
     expect(buttons().allow).toBeNull()
     expect(buttons().deny).toBeEnabled()
     // The agent offered no allow_once: nothing is hidden, so no reason to give.
-    expect(screen.queryByText(TOO_LONG)).toBeNull()
+    expect(screen.queryByText(CANNOT_SHOW)).toBeNull()
   })
 
   it('says why Allow once is missing when part of the request cannot be shown', () => {
@@ -74,7 +75,7 @@ describe('ApprovalCard', () => {
     )
     expect(buttons().allow).toBeNull()
     expect(buttons().deny).toBeEnabled()
-    expect(screen.getByText(TOO_LONG)).toBeInTheDocument()
+    expect(screen.getByText(CANNOT_SHOW)).toBeInTheDocument()
   })
 
   it('scrolls a long title and detail, and keeps the buttons outside them', () => {

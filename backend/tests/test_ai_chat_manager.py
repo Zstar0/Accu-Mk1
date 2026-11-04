@@ -355,7 +355,7 @@ def test_permission_detail_shows_every_block_and_says_what_it_hides():
     diff = FileEditToolCallContent(type="diff", path="/a", new_text="new", old_text="old")
     terminal = TerminalToolCallContent(type="terminal", terminal_id="t")
     assert detail(call(content=[text("run ls"), text("other")], raw_input={"a": 1})) == ("run ls\n\nother", False)
-    assert detail(call(content=[diff, text("why")])) == ("/a\nnew\n\nwhy", False)
+    assert detail(call(content=[diff, text("why")])) == ("/a\n@@ -1 +1 @@\n-old\n+new\n\nwhy", False)
     assert detail(call(raw_input={"a": 1, "b": [2]})) == ('{"a":1,"b":[2]}', False)
     assert detail(call(content=[], raw_input={"a": 1})) == ('{"a":1}', False)
     assert detail(call()) == ("", False)
@@ -369,13 +369,60 @@ def test_permission_detail_shows_every_block_and_says_what_it_hides():
     assert detail(call(raw_input="x" * 25000))[1] is True
 
 
+def diff_detail(old: str | None, new: str) -> tuple[str, bool]:
+    block = FileEditToolCallContent(type="diff", path="/a", new_text=new, old_text=old)
+    return sessions._permission_detail(ToolCallUpdate(tool_call_id="c", content=[block]))
+
+
+@pytest.mark.parametrize(("old", "new", "shown", "hidden"), [
+    (None, "body", "body", False),  # a new file: all of it is new
+    (None, "", "", False),
+    ("same\n", "same\n", "No change.", False),
+    ("", "", "No change.", False),
+    ("", "a\nb\n", "@@ -0,0 +1,2 @@\n+a\n+b", False),
+    # A change to a line ending alone is a change: `splitlines()` without `keepends` would diff these to nothing.
+    ("a\n", "a", "@@ -1 +1 @@\n-a\n+a", False),
+    ("a\r\n", "a\n", "@@ -1 +1 @@\n-a\n+a", False),
+    ("a\x00b\n", "a\x00c\n", "@@ -1 +1 @@\n-a�b\n+a�c", False),  # sanitized for the card
+    ("a\x00", "a�", "1 item not shown.", True),  # the same once sanitized, and still not "No change."
+])
+def test_a_diff_block_shows_the_change(old, new, shown, hidden):
+    assert diff_detail(old, new) == (f"/a\n{shown}", hidden)
+
+
+def test_the_diff_ceiling_counts_old_and_new():
+    detail, hidden = diff_detail("x\n" * 50000, "x\n" * 49999 + "y\n")  # 200000: diffed
+    assert detail.endswith("\n x\n-x\n+y") and hidden is False
+    assert diff_detail("x\n" * 50000, "x\n" * 49999 + "yy\n") == ("/a\n200001 more characters not shown.", True)
+
+
+def test_a_diff_too_long_for_the_card_is_cut_and_says_so():
+    detail, hidden = diff_detail("y\n" * 10001, "")
+    assert detail.startswith("/a\n@@ -1,10001 +0,0 @@\n-y\n")
+    assert detail.endswith("more characters not shown.") and hidden is True
+
+
+@pytest.mark.parametrize("blank", ["", " \n\t"])
+def test_blocks_with_nothing_to_read_fall_back_to_the_raw_input(blank):
+    def call(**fields):
+        return ToolCallUpdate(tool_call_id="c", **fields)
+
+    empty = ContentToolCallContent(type="content", content=TextContentBlock(type="text", text=blank))
+    terminal = TerminalToolCallContent(type="terminal", terminal_id="t")
+    detail = sessions._permission_detail
+    assert detail(call(content=[empty], raw_input={"a": 1})) == ('{"a":1}', False)
+    assert detail(call(content=[empty, empty], raw_input={"a": 1})) == ('{"a":1}', False)
+    assert detail(call(content=[empty])) == (blank, False)  # nothing to fall back on: as a title-only request
+    assert detail(call(content=[empty, terminal], raw_input={"a": 1})) == ('{"a":1}\n\n1 item not shown.', True)
+
+
 async def test_card_shows_a_diff_block_not_the_raw_input(ai_chat_env):
     with anyio.fail_after(30):
         await send(ai_chat_env, "PERMIT_DIFF")
         card = await seen(ai_chat_env, "permission_requested")
         approvals.APPROVALS.decide(card["permission_id"], 1, "allow")
         await seen(ai_chat_env, "turn_ended")
-    assert card["detail"] == "/srv/app/run.sh\nnew body"
+    assert card["detail"] == "/srv/app/run.sh\n@@ -1 +1 @@\n-old body\n+new body"
     assert (card["can_allow"], card["hidden"]) == (True, False)
     assert rows(ai_chat_env, "permission")[0].meta["detail"] == card["detail"]
     assert rows(ai_chat_env, "assistant")[0].text == "allowed"
@@ -387,7 +434,7 @@ async def test_card_shows_the_block_after_a_text_block(ai_chat_env):
         card = await seen(ai_chat_env, "permission_requested")
         approvals.APPROVALS.decide(card["permission_id"], 1, "deny")
         await seen(ai_chat_env, "turn_ended")
-    assert card["detail"] == "why\n\n/srv/app/run.sh\nnew body"
+    assert card["detail"] == "why\n\n/srv/app/run.sh\n@@ -1 +1 @@\n-old body\n+new body"
     assert card["can_allow"] is True
 
 

@@ -27,6 +27,11 @@ Prompts, by their last text block:
   PERMIT_TERMINAL   PERMIT, the tool call holding a text block, then a terminal block
   PERMIT_WRITE <n>  PERMIT, the tool call holding a diff block with n characters of new text
   PERMIT_LONG_TITLE PERMIT, the tool call with a 25000 character title
+  PERMIT_EDIT_LINE  PERMIT, a whole-file diff block as Hermes builds it: one line changed in a small file
+  PERMIT_EDIT_EMPTY the same, emptying the file
+  PERMIT_EDIT_BIG   the same, one line changed in a 21000 character file
+  PERMIT_EDIT_HUGE  the same, with old and new text over Mk1's 200000 character diff ceiling
+  PERMIT_EMPTY_TEXT PERMIT, the tool call holding an empty text block and a raw input
   PERMIT_BAD_TEXT   PERMIT as a raw frame, with a NUL and a lone surrogate in the title and the raw input
   BAD_TEXT          replies with a NUL and a lone surrogate, as a raw frame
   ABANDON           sends the same permission request, and ends the turn 0.3 s later without waiting for the answer
@@ -75,11 +80,27 @@ T7A = ("Available tools (3):\n  mcp__mk1__create_flag: Raise a flag on a sample.
 REPLIES = {"allow-once": "allowed", "reject-once": "denied"}
 DIFF_BLOCK = acp.tool_diff_content("/srv/app/run.sh", "new body", old_text="old body")
 WHY_BLOCK = acp.tool_content(acp.text_block("why"))
+
+
+def whole_file_edit(path: str, old_text: str, new_text: str) -> dict:
+    """What Hermes's `build_acp_edit_tool_call` sends: the whole file on both sides, and the arguments as raw input."""
+    return {"title": f"Approve edit: {path}", "kind": "edit",
+            "content": [acp.tool_diff_content(path=path, old_text=old_text, new_text=new_text)],
+            "raw_input": {"tool": "write_file", "arguments": {"path": path, "content": new_text}}}
+
+
+SMALL_FILE = "one\ntwo\nthree\n"
+BIG_FILE = "".join(f"line {i:04d}\n" for i in range(2100))  # 21000 characters
 TOOL_CALL_FIELDS = {
     "PERMIT_DIFF": {"content": [DIFF_BLOCK], "raw_input": {"path": "/srv/app/run.sh", "content": "new body"}},
     "PERMIT_BLOCKS": {"content": [WHY_BLOCK, DIFF_BLOCK]},
     "PERMIT_TERMINAL": {"content": [WHY_BLOCK, acp.tool_terminal_ref("term-1")]},
     "PERMIT_LONG_TITLE": {"title": "t" * 25000},
+    "PERMIT_EDIT_LINE": whole_file_edit("/srv/app.conf", SMALL_FILE, SMALL_FILE.replace("two", "TWO")),
+    "PERMIT_EDIT_EMPTY": whole_file_edit("/srv/app.conf", SMALL_FILE, ""),
+    "PERMIT_EDIT_BIG": whole_file_edit("/srv/big.conf", BIG_FILE, BIG_FILE.replace("line 1000", "line 1000 edited")),
+    "PERMIT_EDIT_HUGE": whole_file_edit("/srv/huge.conf", "x" * 100001, "x" * 100002),
+    "PERMIT_EMPTY_TEXT": {"content": [acp.tool_content(acp.text_block(""))], "raw_input": {"command": "rm -rf /srv"}},
 }
 BAD_TEXT = "a\x00b\ud800c"  # no database stores it: a NUL (Postgres refuses it) and a lone surrogate (no UTF-8)
 UNKNOWN_KIND_TEXT = "SECRET-AGENT-TEXT"  # must never reach Mk1's logs

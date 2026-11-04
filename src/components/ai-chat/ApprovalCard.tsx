@@ -82,7 +82,7 @@ export function ApprovalCard({ card }: { card: ApprovalCardData }) {
       )}
       {card.hidden && (
         <p className="mt-1.5 text-xs text-muted-foreground">
-          Too long to review here, so it can only be denied.
+          Not all of this can be shown here, so it can only be denied.
         </p>
       )}
       <div className="mt-2 flex flex-wrap items-center gap-2">

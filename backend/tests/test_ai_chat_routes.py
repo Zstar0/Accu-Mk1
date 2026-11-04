@@ -608,6 +608,51 @@ async def test_a_write_under_the_cap_shows_in_full_and_can_be_allowed(ai_chat_ap
     assert [m.text for m in rows(ai_chat_env, 1, "assistant")] == ["allowed"]
 
 
+async def allowed_detail(api, env, prompt: str) -> str:
+    """Ask, check the card can be allowed, allow it through the route, and return what the card showed."""
+    turn_id, card = await permit(api, env, prompt)
+    assert (card["can_allow"], card["hidden"]) == (True, False)
+    assert (await decide(api, 1, card["permission_id"], "allow")).status_code == 200
+    await seen(env, "turn_ended", turn_id=turn_id)
+    assert [m.text for m in rows(env, 1, "assistant")] == ["allowed"]
+    return card["detail"]
+
+
+async def test_a_whole_file_edit_shows_the_line_it_changes(ai_chat_api, ai_chat_env):
+    assert await allowed_detail(ai_chat_api, ai_chat_env, "PERMIT_EDIT_LINE") == (
+        "/srv/app.conf\n@@ -1,3 +1,3 @@\n one\n-two\n+TWO\n three")
+
+
+async def test_emptying_a_file_shows_every_line_as_removed(ai_chat_api, ai_chat_env):
+    assert await allowed_detail(ai_chat_api, ai_chat_env, "PERMIT_EDIT_EMPTY") == (
+        "/srv/app.conf\n@@ -1,3 +0,0 @@\n-one\n-two\n-three")
+
+
+async def test_a_one_line_edit_in_a_big_file_is_a_short_diff_that_can_be_allowed(ai_chat_api, ai_chat_env):
+    detail = await allowed_detail(ai_chat_api, ai_chat_env, "PERMIT_EDIT_BIG")
+    assert detail.splitlines() == [
+        "/srv/big.conf", "@@ -998,7 +998,7 @@", " line 0997", " line 0998", " line 0999", "-line 1000",
+        "+line 1000 edited", " line 1001", " line 1002", " line 1003"]
+
+
+async def test_an_edit_over_the_diff_ceiling_cannot_be_allowed(ai_chat_api, ai_chat_env):
+    turn_id, card = await permit(ai_chat_api, ai_chat_env, "PERMIT_EDIT_HUGE")
+    pid = card["permission_id"]
+    assert card["detail"] == "/srv/huge.conf\n200003 more characters not shown."
+    assert (card["can_allow"], card["hidden"]) == (False, True)
+    refused = await decide(ai_chat_api, 1, pid, "allow")
+    assert (refused.status_code, detail(refused)) == (409, {"code": "allow_not_offered"})
+    [pending] = (await call(ai_chat_api, "GET", f"{URL}/chats")).json()[0]["pending_approvals"]
+    assert (pending["can_allow"], pending["hidden"], pending["detail"]) == (False, True, card["detail"])
+    assert (await decide(ai_chat_api, 1, pid, "deny")).status_code == 200
+    await seen(ai_chat_env, "turn_ended", turn_id=turn_id)
+    assert [m.text for m in rows(ai_chat_env, 1, "assistant")] == ["denied"]
+
+
+async def test_an_empty_text_block_falls_back_to_the_raw_input(ai_chat_api, ai_chat_env):
+    assert await allowed_detail(ai_chat_api, ai_chat_env, "PERMIT_EMPTY_TEXT") == '{"command":"rm -rf /srv"}'
+
+
 async def test_decision_validation_422(ai_chat_api, ai_chat_env):
     turn_id, card = await permit(ai_chat_api, ai_chat_env)
     pid = card["permission_id"]
