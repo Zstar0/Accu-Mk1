@@ -240,7 +240,21 @@ async def test_the_observer_counts_only_the_answer_to_a_permission_request(ai_ch
     assert ai_chat_env.events() == []
 
 
-@pytest.mark.parametrize("state", [{"turn_id": None}, {"turn_id": "t", "stop_requested": True}])
+async def test_a_refusal_during_the_tools_probe_is_logged_and_not_shown(ai_chat_env, tmp_path, caplog):
+    tools = tmp_path / "tools.txt"
+    tools.write_text("Available tools (1):\n  todo_list: Track tasks", encoding="utf-8")
+    # `--unknown-option` goes ahead of every reply, and a provider standard users may use is probed with `/tools`.
+    ai_chat_env.flags = ["--state", str(tmp_path / "state.json"), "--unknown-option", "--tools-reply", str(tools)]
+    with anyio.fail_after(30):
+        await send(ai_chat_env, "hi", allowed_roles=("admin", "standard"))
+        ended = await seen(ai_chat_env, "turn_ended")
+    assert ended["stop_reason"] == "end_turn"
+    assert [record.getMessage() for record in caplog.records] == [REFUSED_LINE, REFUSED_LINE]
+    assert [event["code"] for event in of_type(ai_chat_env, "error")] == ["approval_unreadable"]  # the reply's only
+
+
+@pytest.mark.parametrize("state", [{"turn_id": None}, {"turn_id": "t", "stop_requested": True},
+                                   {"turn_id": "t", "consuming": True}, {"turn_id": "t", "replaying": True}])
 async def test_a_refusal_nobody_is_waiting_on_is_logged_and_not_shown(ai_chat_env, caplog, state):
     session = ai_chat_env.session()
     vars(session).update(state)

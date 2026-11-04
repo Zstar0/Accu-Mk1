@@ -69,17 +69,23 @@ logger = logging.getLogger(__name__)
 class _AcpLogFilter(logging.Filter):
     """acp logs a handler's exception through the root logger, whole. When a newer agent sends an update kind acp does
     not know, that exception is pydantic's, and its text quotes the agent's (spec 8: no content in logs). This cuts
-    exactly those records to one line, which stays: it is the only sign that an agent update changed the wire."""
+    exactly those records to one line, which stays: it is the only sign that an agent update changed the wire. A request
+    record keeps its traceback, a bug in Mk1's own handler, unless its `method` is no string: then the record's argument
+    is whatever the agent sent, which acp's routes cannot hash."""
 
     def filter(self, record: logging.LogRecord) -> bool:
-        if (record.funcName == "_run_notification"
-                and os.path.basename(record.pathname) == "connection.py"
+        if (os.path.basename(record.pathname) == "connection.py"
                 and os.path.basename(os.path.dirname(record.pathname)) == "acp"):
-            error = record.exc_info[0] if record.exc_info else None
-            # Not the record's own `method`: it came off the wire.
-            record.msg = "ai_chat.acp_unhandled where=notification error=%s"
-            record.args = (error.__name__ if error else "unknown",)
-            record.exc_info = record.exc_text = record.stack_info = None
+            # LogRecord unwraps a lone non-empty dict argument, so `args` is then the method itself.
+            method = record.args[0] if isinstance(record.args, tuple) and record.args else record.args
+            where = {"_run_notification": "notification",
+                     "_execute_request": None if isinstance(method, str) else "request"}.get(record.funcName)
+            if where is not None:
+                error = record.exc_info[0] if record.exc_info else None
+                # Not the record's own `method`: it came off the wire.
+                record.msg = "ai_chat.acp_unhandled where=%s error=%s"
+                record.args = (where, error.__name__ if error else "unknown")
+                record.exc_info = record.exc_text = record.stack_info = None
         return True
 
 
@@ -625,7 +631,8 @@ class LiveSession:
                 self._permission_ids.remove(frame["id"])
                 if "error" in frame:  # only acp's parser can get here: `request_permission` answers every failure
                     logger.warning("ai_chat.approval_refused chat=%s code=%s", self.chat_id, frame["error"].get("code"))
-                    if not self.stop_requested:  # Stop ended it, and that is no error
+                    # After Stop that is no error, and the probe and a restore publish nothing, with `turn_id` set.
+                    if not (self.stop_requested or self.consuming or self.replaying):
                         self._client._publish("error", code="approval_unreadable", message=(
                             f"{self.provider.display_name} asked for an approval this version of Mk1 cannot read, "
                             "so it was refused."))

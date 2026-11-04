@@ -10,6 +10,8 @@ from pathlib import Path
 
 import anyio
 import pytest
+from acp.client.router import build_client_router
+from acp.connection import Connection
 from cryptography.fernet import Fernet
 from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
@@ -196,14 +198,59 @@ def test_acp_log_filter_reduces_only_the_acp_records():
     assert log_filter.filter(reduced) is True
     assert reduced.getMessage() == "ai_chat.acp_unhandled where=notification error=ValueError"
     assert (reduced.exc_info, reduced.exc_text, reduced.stack_info) == (None, None, None)
-    # `_execute_request` too stays whole: an unknown kind never reaches its log call (acp answers `ValidationError`
-    # first), so what lands there is a bug in Mk1's own request handler, and that needs its traceback.
+    # `_execute_request` with a string method too stays whole: an unknown kind never reaches its log call (acp answers
+    # `ValidationError` first), so what lands there is a bug in Mk1's own request handler, which needs its traceback.
     for other in (acp_record("/app/other/connection.py", "_run_notification"),
                   acp_record("/venv/site-packages/acp/connection.py", "_execute_request"),
                   acp_record("/venv/site-packages/acp/connection.py", "_on_task_error")):
         args = other.args
         assert log_filter.filter(other) is True
         assert (other.args, other.exc_info is not None) == (args, True)  # untouched
+
+
+class FramesFromTheAgent:
+    """acp's transport, holding the frames an agent sent."""
+
+    def __init__(self, *frames: dict) -> None:
+        self.frames, self.sent = list(frames), []
+
+    async def send(self, message: dict) -> None:
+        self.sent.append(message)
+
+    async def receive(self) -> dict:
+        if self.frames:
+            return self.frames.pop(0)
+        await asyncio.Event().wait()  # until the connection closes
+
+    async def close(self) -> None:
+        pass
+
+
+async def answered(ai_chat_env, method) -> list[dict]:
+    """A request with this `method` through acp's real connection and Mk1's real client router."""
+    transport = FramesFromTheAgent({"jsonrpc": "2.0", "id": 9, "method": method, "params": {}})
+    connection = Connection(build_client_router(ai_chat_env.session()._client), transport)
+    with anyio.fail_after(10):
+        while not transport.sent:
+            await asyncio.sleep(0.01)
+    await connection.close()
+    return transport.sent
+
+
+@pytest.mark.parametrize("method", [{"SECRET-AGENT-TEXT": 1}, ["SECRET-AGENT-TEXT"], {}, []])
+async def test_a_request_whose_method_is_no_string_leaves_no_wire_text_in_the_log(ai_chat_env, caplog, method):
+    [answer] = await answered(ai_chat_env, method)
+    assert answer["error"]["code"] == -32603
+    [line] = caplog.records
+    assert line.getMessage() == "ai_chat.acp_unhandled where=request error=TypeError"
+    assert (line.exc_info, line.exc_text, line.stack_info) == (None, None, None)
+    assert "SECRET-AGENT-TEXT" not in caplog.text
+
+
+@pytest.mark.parametrize("method", ["SECRET-AGENT-TEXT", "_SECRET-AGENT-TEXT"])
+async def test_a_string_method_nothing_handles_logs_nothing(ai_chat_env, caplog, method):
+    await answered(ai_chat_env, method)
+    assert caplog.records == []
 
 
 async def test_thoughts_and_tool_calls_published(ai_chat_env):
