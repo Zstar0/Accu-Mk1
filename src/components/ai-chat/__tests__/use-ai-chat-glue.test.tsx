@@ -791,6 +791,19 @@ describe('a backend restart mid-turn', () => {
     await waitFor(() => expect(store().notice?.message).toBe(INTERRUPTED))
   })
 
+  it('an answer it cannot read rejects nowhere, and is asked for again', async () => {
+    // Vitest fails the run on an unhandled rejection.
+    mocks.getMessages.mockResolvedValue(null as unknown as AiMessage[])
+    await restart([chatRow(1)])
+    await waitFor(() => expect(mocks.getMessages).toHaveBeenCalled())
+    await pause()
+    expect(store().notice).toBeNull()
+
+    mocks.getMessages.mockResolvedValue([prompt(1)])
+    connect()
+    await waitFor(() => expect(store().notice?.message).toBe(INTERRUPTED))
+  })
+
   it('says nothing once the next turn has started in that chat', async () => {
     let finish: (rows: AiMessage[]) => void = () => undefined
     mocks.getMessages.mockReturnValue(

@@ -28,7 +28,6 @@ import {
   listProviders,
   type AiChat,
   type AiChatEvent,
-  type AiMessage,
   type AiProvider,
 } from '@/lib/ai-chat-api'
 import { useAiChatStream } from '@/lib/ai-chat-stream'
@@ -116,25 +115,25 @@ function explainInterrupted(rows: AiChat[]) {
   }
 }
 
+/** Never rejects. A read that fails leaves the chat for the next list that lands. */
 async function explainChat(chatId: number): Promise<void> {
   const userId = currentUserId()
-  let rows: AiMessage[]
   try {
-    rows = await getMessages(chatId)
+    const rows = await getMessages(chatId)
+    // An approval row answers nothing: a restart can land while a card is up.
+    const last = rows.filter(m => m.role !== 'permission').at(-1)
+    // False when the wipe got here first, or another list's check did.
+    if (currentUserId() !== userId || !interrupted.delete(chatId)) return
+    const store = useAiChatStore.getState()
+    if (last?.role === 'user' && store.live[chatId] === undefined) {
+      store.raiseNotice({
+        kind: 'busy',
+        message: 'The reply was interrupted. Send your message again.',
+        chatId,
+      })
+    }
   } catch {
-    return // it stays in the set: the next list that lands asks again
-  }
-  // False when the wipe got here first, or another list's check did.
-  if (currentUserId() !== userId || !interrupted.delete(chatId)) return
-  const store = useAiChatStore.getState()
-  // An approval row answers nothing: a restart can land while a card is up.
-  const last = rows.filter(m => m.role !== 'permission').at(-1)
-  if (last?.role === 'user' && store.live[chatId] === undefined) {
-    store.raiseNotice({
-      kind: 'busy',
-      message: 'The reply was interrupted. Send your message again.',
-      chatId,
-    })
+    // Nothing is known yet, so nothing is said.
   }
 }
 
