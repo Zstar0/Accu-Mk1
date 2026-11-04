@@ -42,7 +42,7 @@ const ERRORS: Record<string, string> = {
     'A value was rejected. Check each field against its hint. A slug that is already in use is rejected too.',
   not_supported: 'Mk1 tools are not available until Phase 2.',
   not_ready:
-    'This provider needs a passing Test connection first. Disable it, or run the test again.',
+    'This provider needs a passing Test connection first. Turn Enabled off and save, run Test connection, then turn Enabled on again.',
   provider_in_use:
     'This provider has chats, so it cannot be deleted. Disable it instead.',
   provider_not_found: 'This provider no longer exists. Reload the list.',
@@ -157,7 +157,7 @@ const FIELDS: FieldDef[] = [
   {
     key: 'host_key',
     label: 'Host key',
-    hint: 'Type and key only, like ssh-ed25519 AAAA..., with no hostname.',
+    hint: 'Paste the key type and the base64 key only, like ssh-ed25519 AAAA..., without the hostname that ssh-keyscan puts in front.',
     area: true,
   },
   {
@@ -243,8 +243,13 @@ const RETEST: TextKey[] = [
 ]
 function changedSinceTest(f: FormState, p: AcpProvider): boolean {
   const saved = initialForm(p)
+  // The server compares ints, so "022" is not a change to port 22.
+  const differs = (k: TextKey) =>
+    (INT_KEYS as readonly string[]).includes(k)
+      ? Number(f[k]) !== Number(saved[k])
+      : f[k].trim() !== saved[k]
   return (
-    RETEST.some(k => f[k].trim() !== saved[k]) ||
+    RETEST.some(differs) ||
     ROLES.some(r => f.roles.includes(r) !== saved.roles.includes(r))
   )
 }
@@ -365,11 +370,25 @@ function ProviderForm({
     }
   }
 
+  // The server refuses this save before writing anything (`not_ready`).
+  const retestLost =
+    provider !== undefined &&
+    f.enabled &&
+    f.roles.includes('standard') &&
+    changedSinceTest(f, provider)
   const fingerprint = provider?.host_key_fingerprint
   const savedHostKey = provider?.host_key
   return (
     <div className="flex flex-col gap-3 rounded-md border p-3">
-      {create && <h4 className="text-sm font-medium">New provider</h4>}
+      <h4 className="text-sm font-medium">
+        {create ? 'New provider' : 'Edit provider'}
+      </h4>
+      {!create && (
+        <p className="text-xs text-muted-foreground">
+          Test connection and Generate key use the saved settings. Save or
+          cancel first.
+        </p>
+      )}
       <div className="grid gap-3 sm:grid-cols-2">
         {FIELDS.map(def => {
           const id = `${uid}-${def.key}`
@@ -446,6 +465,13 @@ function ProviderForm({
           <span className="text-xs text-muted-foreground">Phase 2</span>
         </label>
       </div>
+      {retestLost && (
+        <p className="text-xs text-amber-600">
+          Changing the roles or connection settings removes the passing test, so
+          this provider cannot stay enabled. Turn Enabled off to save, then test
+          and enable it again.
+        </p>
+      )}
       {timeoutsBad && (
         <p className="text-xs text-red-500">
           Approval timeout must be below the agent timeout.
@@ -508,13 +534,14 @@ function TestReport({ r }: { r: AcpTestResult }) {
       {timings.length > 0 && (
         <p>{timings.map(([k, ms]) => `${label(k)} ${ms} ms`).join(', ')}</p>
       )}
-      {r.ok && (
-        <>
-          <p>Capabilities: {caps.join(', ') || 'none reported'}</p>
-          <p className="break-words">
-            Tool list: {r.tools.join(', ') || 'empty'}
-          </p>
-        </>
+      {/* A failed tool check names one offender; the whole list lets an admin fix them all in one go. */}
+      {(r.ok || caps.length > 0) && (
+        <p>Capabilities: {caps.join(', ') || 'none reported'}</p>
+      )}
+      {(r.ok || r.tools.length > 0) && (
+        <p className="break-words">
+          Tool list: {r.tools.join(', ') || 'empty'}
+        </p>
       )}
       {!r.ok && r.stderr_tail && r.stderr_tail.length > 0 && (
         <pre className="max-h-48 overflow-auto whitespace-pre-wrap rounded bg-muted p-2 font-mono">
@@ -569,6 +596,7 @@ function ProviderCard({
       'Could not generate the key. Nothing was changed.',
       async () => {
         upsert(qc, await generateAcpKey(p.id))
+        setReport(null) // it described the old key
       }
     )
   }
@@ -644,7 +672,7 @@ function ProviderCard({
           <Button
             size="sm"
             variant="outline"
-            disabled={!configured || !idle}
+            disabled={!configured || !idle || editing}
             aria-label={`Generate key for ${p.display_name}`}
             onClick={generate}
           >
@@ -653,7 +681,7 @@ function ProviderCard({
           <Button
             size="sm"
             variant="outline"
-            disabled={!idle || !p.public_key || !p.host_key}
+            disabled={!idle || editing || !p.public_key || !p.host_key}
             aria-label={`Test connection for ${p.display_name}`}
             onClick={test}
           >
@@ -717,6 +745,7 @@ function ProviderCard({
           configured={configured}
           onSaved={row => {
             upsert(qc, row)
+            setReport(null) // it described the old settings
             setEditing(false)
           }}
           onCancel={() => setEditing(false)}

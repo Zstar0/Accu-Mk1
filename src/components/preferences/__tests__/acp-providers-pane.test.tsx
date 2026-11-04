@@ -1,4 +1,11 @@
-import { act, render, screen, waitFor, within } from '@testing-library/react'
+import {
+  act,
+  fireEvent,
+  render,
+  screen,
+  waitFor,
+  within,
+} from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
@@ -36,7 +43,11 @@ const HOST_KEY = 'ssh-ed25519 AAAAFAKEHOSTKEYFAKEHOSTKEYFAKEHOSTKEYFAKEHOST'
 const LINE = `from="192.0.2.10",restrict,command="/opt/fake/launch jarvis" ${PUBLIC_KEY} mk1-jarvis`
 const FINGERPRINT = 'SHA256:fakefingerprintfakefingerprintfakefingerp'
 const NOT_READY =
-  'This provider needs a passing Test connection first. Disable it, or run the test again.'
+  'This provider needs a passing Test connection first. Turn Enabled off and save, run Test connection, then turn Enabled on again.'
+const RETEST_LOST =
+  'Changing the roles or connection settings removes the passing test, so this provider cannot stay enabled. Turn Enabled off to save, then test and enable it again.'
+const SAVED_ONLY =
+  'Test connection and Generate key use the saved settings. Save or cancel first.'
 
 const bare: AcpProvider = {
   id: 1,
@@ -212,11 +223,9 @@ describe('AcpProvidersPane', () => {
     expect(api.generateAcpKey).not.toHaveBeenCalled()
   })
 
-  it('resets the form from the row Generate key returns', async () => {
+  it('opens the form from the row Generate key returns, with Enabled off', async () => {
     vi.spyOn(window, 'confirm').mockReturnValue(true)
     const user = setup([{ ...standardUntested, enabled: true }])
-    await edit(user)
-    expect(screen.getByRole('switch', { name: 'Enabled' })).toBeChecked()
     // The server disables a standard-role provider when its key is replaced.
     vi.mocked(api.generateAcpKey).mockResolvedValue({
       ...standardUntested,
@@ -224,11 +233,76 @@ describe('AcpProvidersPane', () => {
       updated_at: '2026-11-03T10:05:00Z',
     })
     await user.click(
+      await screen.findByRole('button', { name: 'Generate key for Jarvis' })
+    )
+    await waitFor(() => expect(screen.getByText('Disabled')).toBeVisible())
+    expect(await edit(user)).not.toBeChecked()
+  })
+
+  it('leaves Test connection and Generate key off while the form is open, and says why', async () => {
+    const user = setup([keyed])
+    expect(
+      await screen.findByRole('button', { name: 'Test connection for Jarvis' })
+    ).toBeEnabled()
+    expect(screen.queryByText(SAVED_ONLY)).toBeNull()
+    await edit(user)
+    // Both act on the saved row: an unsaved host would be tested as the old one,
+    // and a new key would remount the form over the edits.
+    expect(
+      screen.getByRole('button', { name: 'Test connection for Jarvis' })
+    ).toBeDisabled()
+    expect(
+      screen.getByRole('button', { name: 'Generate key for Jarvis' })
+    ).toBeDisabled()
+    expect(screen.getByText(SAVED_ONLY)).toBeInTheDocument()
+    await user.click(screen.getByRole('button', { name: 'Cancel' }))
+    expect(
+      screen.getByRole('button', { name: 'Test connection for Jarvis' })
+    ).toBeEnabled()
+    expect(
+      screen.getByRole('button', { name: 'Generate key for Jarvis' })
+    ).toBeEnabled()
+    expect(screen.queryByText(SAVED_ONLY)).toBeNull()
+  })
+
+  it('clears a stale test report once the form saves', async () => {
+    const user = setup([keyed])
+    vi.mocked(api.testAcpProvider).mockResolvedValue(passedTest)
+    vi.mocked(api.updateAcpProvider).mockResolvedValue({
+      ...keyed,
+      ssh_host: 'other.example.test',
+      last_test_ok: null,
+      updated_at: '2026-11-03T10:05:00Z',
+    })
+    await user.click(
+      await screen.findByRole('button', { name: 'Test connection for Jarvis' })
+    )
+    expect(await screen.findByTestId('test-report')).toBeInTheDocument()
+    await edit(user)
+    await fill(user, 'SSH host', 'other.example.test')
+    await user.click(screen.getByRole('button', { name: 'Save' }))
+    await waitFor(() => expect(screen.queryByLabelText('SSH host')).toBeNull())
+    expect(screen.queryByTestId('test-report')).toBeNull()
+  })
+
+  it('clears a stale test report once a new key is generated', async () => {
+    vi.spyOn(window, 'confirm').mockReturnValue(true)
+    const user = setup([keyed])
+    vi.mocked(api.testAcpProvider).mockResolvedValue(passedTest)
+    vi.mocked(api.generateAcpKey).mockResolvedValue({
+      ...keyed,
+      last_test_ok: null,
+      updated_at: '2026-11-03T10:05:00Z',
+    })
+    await user.click(
+      await screen.findByRole('button', { name: 'Test connection for Jarvis' })
+    )
+    expect(await screen.findByTestId('test-report')).toBeInTheDocument()
+    await user.click(
       screen.getByRole('button', { name: 'Generate key for Jarvis' })
     )
-    await waitFor(() =>
-      expect(screen.getByRole('switch', { name: 'Enabled' })).not.toBeChecked()
-    )
+    await waitFor(() => expect(api.generateAcpKey).toHaveBeenCalledTimes(1))
+    await waitFor(() => expect(screen.queryByTestId('test-report')).toBeNull())
   })
 
   it.each([
@@ -295,6 +369,20 @@ describe('AcpProvidersPane', () => {
     expect(toggle).toBeDisabled()
   })
 
+  it('keeps Enabled available when only the spelling of the port changes', async () => {
+    const user = setup([{ ...standardUntested, last_test_ok: true }])
+    const toggle = await edit(user)
+    // The server compares ints, and "022" is port 22: the test still holds.
+    // fireEvent, not typing: user-event normalises a number field to "22".
+    const port = screen.getByLabelText('SSH port')
+    fireEvent.change(port, { target: { value: '022' } })
+    expect(port).toHaveValue(22)
+    expect((port as HTMLInputElement).value).toBe('022')
+    expect(toggle).toBeEnabled()
+    await fill(user, 'SSH port', '2222')
+    expect(toggle).toBeDisabled()
+  })
+
   it('never traps an enabled provider on: it can always be switched off', async () => {
     const user = setup([{ ...standardUntested, enabled: true }])
     const toggle = await edit(user)
@@ -310,6 +398,39 @@ describe('AcpProvidersPane', () => {
     expect(screen.getByText(FINGERPRINT)).toBeInTheDocument()
     await fill(user, 'Host key', 'ssh-ed25519 AAAAFAKEOTHER')
     expect(screen.queryByText(FINGERPRINT)).toBeNull()
+  })
+
+  it('tells the admin to paste the key type and base64 without the hostname', async () => {
+    const user = setup([keyed])
+    await edit(user)
+    // ssh-keyscan puts the hostname first; the backend rejects that line.
+    expect(
+      screen.getByText(/key type and the base64 key only.*without the hostname/)
+    ).toBeInTheDocument()
+  })
+
+  it('cannot save with no role chosen', async () => {
+    const user = setup([keyed])
+    await edit(user)
+    expect(screen.getByRole('button', { name: 'Save' })).toBeEnabled()
+    await user.click(screen.getByRole('checkbox', { name: 'admin' }))
+    expect(screen.getByRole('button', { name: 'Save' })).toBeDisabled()
+  })
+
+  it('says when the list cannot be loaded', async () => {
+    vi.mocked(api.listAcpProviders).mockRejectedValue(new Error('down'))
+    const qc = new QueryClient({
+      defaultOptions: { queries: { retry: false } },
+    })
+    render(
+      <QueryClientProvider client={qc}>
+        <AcpProvidersPane />
+      </QueryClientProvider>
+    )
+    expect(
+      await screen.findByText('Could not load the providers.')
+    ).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'Add provider' })).toBeNull()
   })
 
   it('offers the Mk1 tools switch as disabled, marked Phase 2', async () => {
@@ -408,14 +529,51 @@ describe('AcpProvidersPane', () => {
   })
 
   it('says what to do on a 409 not_ready save', async () => {
-    const user = setup([{ ...standardUntested, enabled: true }])
+    const user = setup([
+      { ...standardUntested, enabled: true, last_test_ok: true },
+    ])
     vi.mocked(api.updateAcpProvider).mockRejectedValue(
       new CrmError(409, 'not_ready')
     )
     await edit(user)
+    // The server refuses before writing: a passing test does not survive this edit.
+    await fill(user, 'SSH host', 'other.example.test')
     await user.click(screen.getByRole('button', { name: 'Save' }))
     expect(await screen.findByText(NOT_READY)).toBeInTheDocument()
     // The form stays open for the fix.
+    expect(screen.getByRole('switch', { name: 'Enabled' })).toBeChecked()
+  })
+
+  it('warns before Save that changing roles or connection settings cannot stay enabled', async () => {
+    const user = setup([
+      { ...standardUntested, enabled: true, last_test_ok: true },
+    ])
+    await edit(user)
+    expect(screen.queryByText(RETEST_LOST)).toBeNull()
+    await fill(user, 'SSH host', 'other.example.test')
+    expect(screen.getByText(RETEST_LOST)).toBeInTheDocument()
+    // Turning Enabled off is the way through, and the warning goes with it.
+    await user.click(screen.getByRole('switch', { name: 'Enabled' }))
+    expect(screen.queryByText(RETEST_LOST)).toBeNull()
+  })
+
+  it('does not warn for an admin-only provider', async () => {
+    const user = setup([{ ...keyed, enabled: true, last_test_ok: true }])
+    await edit(user)
+    await fill(user, 'SSH host', 'other.example.test')
+    expect(screen.queryByText(RETEST_LOST)).toBeNull()
+  })
+
+  it('does not warn when the change does not touch the test', async () => {
+    const user = setup([
+      { ...standardUntested, enabled: true, last_test_ok: true },
+    ])
+    await edit(user)
+    await fill(user, 'Display name', 'Jarvis Two')
+    await fill(user, 'Max sessions', '8')
+    // "022" is the same port to the server, so it must not count as a change.
+    await fill(user, 'SSH port', '022')
+    expect(screen.queryByText(RETEST_LOST)).toBeNull()
     expect(screen.getByRole('switch', { name: 'Enabled' })).toBeChecked()
   })
 
@@ -491,15 +649,43 @@ describe('AcpProvidersPane', () => {
   it('refetches after a test, which is what unlocks Enabled for a standard-role provider', async () => {
     const user = setup([standardUntested])
     vi.mocked(api.testAcpProvider).mockResolvedValue(passedTest)
-    const toggle = await edit(user)
-    expect(toggle).toBeDisabled()
     vi.mocked(api.listAcpProviders).mockResolvedValue(
-      list([{ ...standardUntested, last_test_ok: true }])
+      list([
+        {
+          ...standardUntested,
+          last_test_ok: true,
+          last_test_at: '2026-11-03T10:30:00Z',
+        },
+      ])
     )
+    // The form is closed while testing: the test runs on the saved settings.
     await user.click(
-      screen.getByRole('button', { name: 'Test connection for Jarvis' })
+      await screen.findByRole('button', { name: 'Test connection for Jarvis' })
     )
-    await waitFor(() => expect(toggle).toBeEnabled())
+    expect(await screen.findByText(/Last test passed/)).toBeInTheDocument()
+    expect(await edit(user)).toBeEnabled()
+  })
+
+  it('shows the tool list and capabilities of a failed test, so every offender is visible at once', async () => {
+    const user = setup([keyed])
+    vi.mocked(api.testAcpProvider).mockResolvedValue({
+      ...failedTest,
+      error: 'The tool list includes terminal.',
+      stderr_tail: null,
+      capabilities: { loadSession: true },
+      tools: ['terminal', 'read_file', 'todo_list'],
+    })
+    await user.click(
+      await screen.findByRole('button', { name: 'Test connection for Jarvis' })
+    )
+    const report = await screen.findByTestId('test-report')
+    expect(report).toHaveTextContent(
+      'Test failed: The tool list includes terminal.'
+    )
+    expect(report).toHaveTextContent(
+      'Tool list: terminal, read_file, todo_list'
+    )
+    expect(report).toHaveTextContent('Capabilities: loadSession')
   })
 
   it.each([
