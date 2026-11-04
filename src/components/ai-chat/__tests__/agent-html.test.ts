@@ -107,6 +107,58 @@ describe('renderAgentHtml', () => {
     expect(dom.querySelector('[onerror]')).toBeNull()
   })
 
+  it('keeps a heading as a heading', () => {
+    const dom = parse('# One\n\n## Two\n\n###### Six\n\nbody')
+    expect(dom.querySelector('h1')?.textContent).toBe('One')
+    expect(dom.querySelector('h2')?.textContent).toBe('Two')
+    expect(dom.querySelector('h6')?.textContent).toBe('Six')
+  })
+
+  it('keeps the header row and the cells of a table', () => {
+    const dom = parse(
+      '| Planet | Moons |\n| --- | --- |\n| Mercury | 0 |\n| Venus | 0 |'
+    )
+    expect(
+      [...dom.querySelectorAll('thead th')].map(cell => cell.textContent)
+    ).toEqual(['Planet', 'Moons'])
+    expect(
+      [...dom.querySelectorAll('tbody tr')].map(tr =>
+        [...tr.querySelectorAll('td')].map(cell => cell.textContent)
+      )
+    ).toEqual([
+      ['Mercury', '0'],
+      ['Venus', '0'],
+    ])
+  })
+
+  it('drops the alignment style a :---: column carries', () => {
+    const dom = parse('| a | b |\n| :---: | ---: |\n| 1 | 2 |')
+    expect(dom.querySelectorAll('th')).toHaveLength(2)
+    expect(dom.querySelector('[style]')).toBeNull()
+  })
+
+  it('still writes out the address of a link in a table cell or a heading', () => {
+    const dom = parse(
+      '## See [docs](https://e.example/x)\n\n| a |\n| --- |\n| [go](https://e.example/y) |'
+    )
+    expect(dom.querySelector('a')).toBeNull()
+    expect(dom.querySelector('h2')?.textContent).toBe(
+      'See docs (https://e.example/x)'
+    )
+    expect(dom.querySelector('td')?.textContent).toBe(
+      'go (https://e.example/y)'
+    )
+  })
+
+  it('still removes an image in a table cell', () => {
+    const dom = parse(
+      '| a |\n| --- |\n| {attachment:9} <img src=x onerror=1> |'
+    )
+    expect(dom.querySelector('td')).not.toBeNull()
+    expect(dom.querySelectorAll('img')).toHaveLength(0)
+    expect(dom.querySelector('[onerror]')).toBeNull()
+  })
+
   it('keeps the existing guarantees: no script, no event handler, no image source', () => {
     const dom = parse(
       '<img src=x onerror="window.__pwned=2">\n\n<script>window.__pwned=3</script>\n\n![r](https://evil.example/p.png)'

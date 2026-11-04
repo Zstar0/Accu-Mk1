@@ -61,7 +61,12 @@ function AssistantText({ text }: { text: string }) {
         '[&_pre]:my-2 [&_pre]:max-w-full [&_pre]:overflow-x-auto [&_pre]:rounded [&_pre]:bg-muted [&_pre]:p-2',
         '[&_pre_code]:bg-transparent [&_pre_code]:p-0',
         '[&_ul]:my-1 [&_ul]:list-disc [&_ul]:pl-5 [&_ol]:my-1 [&_ol]:list-decimal [&_ol]:pl-5',
-        '[&_blockquote]:border-l-2 [&_blockquote]:pl-3 [&_blockquote]:text-muted-foreground'
+        '[&_blockquote]:border-l-2 [&_blockquote]:pl-3 [&_blockquote]:text-muted-foreground',
+        '[&_:is(h1,h2,h3,h4,h5,h6)]:mb-1 [&_:is(h1,h2,h3,h4,h5,h6)]:mt-3 [&_:is(h1,h2,h3,h4,h5,h6)]:font-semibold',
+        '[&_:is(h1,h2)]:text-base [&_:is(h3,h4,h5,h6)]:text-sm [&>:first-child]:mt-0',
+        // The parent's `overflow-wrap:anywhere` would crush the columns; normal lets the table scroll instead.
+        '[&_table]:my-2 [&_table]:block [&_table]:max-w-full [&_table]:overflow-x-auto [&_table]:border-collapse [&_table]:[overflow-wrap:normal]',
+        '[&_th]:border [&_th]:px-2 [&_th]:py-1 [&_th]:text-left [&_th]:font-semibold [&_td]:border [&_td]:px-2 [&_td]:py-1'
       )}
       // Safe: `renderAgentHtml` sanitizes with renderCommentHtml, then makes every
       // link plain text.

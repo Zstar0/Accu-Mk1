@@ -117,10 +117,12 @@ md.renderer.rules.link_open = (tokens, idx, options, env, self) => {
 }
 md.use(flagTokenPlugin)
 
-/** Render markdown-lite comment body → sanitized HTML string. */
+/** Render markdown-lite comment body → sanitized HTML string. `extraTags` are
+ *  allowed on top of the comment set (the AI chat adds headings and tables). */
 export function renderCommentHtml(
   body: string,
-  mentionTokens: MentionToken[]
+  mentionTokens: MentionToken[],
+  extraTags: string[] = []
 ): string {
   const raw = md.render(body ?? '', { mentionTokens })
   return DOMPurify.sanitize(raw, {
@@ -141,6 +143,7 @@ export function renderCommentHtml(
       'blockquote',
       'span',
       'img',
+      ...extraTags,
     ],
     // NOTE: no custom ALLOWED_URI_REGEXP — it would be applied to `target`/`rel`
     // too and strip the link hardening set above. DOMPurify's default URI filter
