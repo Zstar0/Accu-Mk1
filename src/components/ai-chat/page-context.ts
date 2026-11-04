@@ -42,9 +42,10 @@ export function currentPageContext(ui: PageContextSource): PageContext {
     ['worksheet', 'worksheet', ui.worksheetPageId],
   ] as const
   for (const [kind, page, id] of targets) {
-    // `!== null`, not truthiness: 0 is an id. The backend only accepts a
-    // string `target_id`, so the numeric ids are converted here.
-    if (subsection === page && id !== null) {
+    // `!= null`, not truthiness: 0 is an id; it also skips an undefined one,
+    // as `buildHash` does. The backend only accepts a string `target_id`, so
+    // the numeric ids are converted here.
+    if (subsection === page && id != null) {
       return { section, subsection, target_kind: kind, target_id: String(id) }
     }
   }

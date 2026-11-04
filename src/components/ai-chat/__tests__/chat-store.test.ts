@@ -340,6 +340,16 @@ describe('applyEvent', () => {
     expect(run(loaded, ended(2)).messages[1]).toEqual([message(1)])
   })
 
+  it('turn_ended adds no empty provisional row after a reload mid-turn', () => {
+    // A reload seeds the live turn from the chat list: no text, and no chunk
+    // has arrived since. An empty bubble must not show until the refetch lands.
+    const loaded: ChatData = { ...emptyData(), messages: { 1: [message(1)] } }
+    const d = run(loaded, started(), ended(2, 'end_turn'))
+    expect(d.messages[1]).toEqual([message(1)])
+    expect(d.live).toEqual({})
+    expect(d.needsRefetch).toEqual([1])
+  })
+
   it('turn_ended of another turn neither ends nor borrows the live turn', () => {
     const loaded: ChatData = { ...emptyData(), messages: { 1: [message(1)] } }
     const d = run(
@@ -466,13 +476,7 @@ describe('applyEvent', () => {
 
 describe('useAiChatStore', () => {
   beforeEach(() => {
-    useAiChatStore.setState({
-      ...emptyData(),
-      open: false,
-      activeChatId: null,
-      providerId: null,
-      notice: null,
-    })
+    useAiChatStore.getState().reset()
   })
 
   const store = () => useAiChatStore.getState()
@@ -498,6 +502,49 @@ describe('useAiChatStore', () => {
     store().selectChat(null)
     store().setNotice(null)
     expect(store()).toMatchObject({ activeChatId: null, notice: null })
+  })
+
+  it('setProviderId sets the provider', () => {
+    store().setProviderId(3)
+    expect(store().providerId).toBe(3)
+    store().setProviderId(null)
+    expect(store().providerId).toBeNull()
+  })
+
+  it('selectChat clears the notice, so it cannot sit on the wrong chat', () => {
+    store().selectChat(1)
+    store().setNotice({ kind: 'busy', message: 'b' })
+    store().selectChat(2)
+    expect(store().notice).toBeNull()
+    store().setNotice({ kind: 'error', message: 'e', chatId: 2 })
+    store().selectChat(null)
+    expect(store().notice).toBeNull()
+  })
+
+  describe('dismissApproval', () => {
+    it('removes a stale card and nothing else', () => {
+      store().apply(started())
+      store().apply(permission('p1'))
+      store().apply(permission('p2'))
+      store().dismissApproval('p1')
+      expect(Object.keys(store().approvals)).toEqual(['p2'])
+      expect(store().live[1]?.phase).toBe('waiting')
+    })
+
+    it('puts a waiting turn back to running when its last card goes', () => {
+      store().apply(started())
+      store().apply(permission('p1'))
+      store().dismissApproval('p1')
+      expect(store().approvals).toEqual({})
+      expect(store().live[1]?.phase).toBe('running')
+    })
+
+    it('leaves the state object alone for an unknown id', () => {
+      store().apply(started())
+      const before = store()
+      store().dismissApproval('ghost')
+      expect(store()).toBe(before)
+    })
   })
 
   it('apply runs the reducer on the store', () => {
@@ -581,6 +628,23 @@ describe('useAiChatStore', () => {
         },
       })
       expect(store().chats.map(c => c.id)).toEqual([1, 2])
+    })
+
+    it('clears the active chat when it has left the list', () => {
+      store().selectChat(5)
+      store().setChats([chatRow(1), chatRow(2)])
+      expect(store().activeChatId).toBeNull()
+    })
+
+    it('keeps the active chat while it is in the list', () => {
+      store().selectChat(2)
+      store().setChats([chatRow(1), chatRow(2)])
+      expect(store().activeChatId).toBe(2)
+    })
+
+    it('leaves a missing selection alone', () => {
+      store().setChats([chatRow(1)])
+      expect(store().activeChatId).toBeNull()
     })
 
     it('never removes a card a stale list no longer holds', () => {
@@ -855,6 +919,20 @@ describe('currentPageContext', () => {
         })
       )
     ).toMatchObject({ target_kind: 'customer', target_id: '0' })
+  })
+
+  it('treats an undefined id (a store that never set it) as no target', () => {
+    const open = currentPageContext(
+      ui({
+        activeSection: 'accumark-tools',
+        activeSubSection: 'customer-detail',
+        customerDetailTargetId: undefined as unknown as null,
+      })
+    )
+    expect(open).toEqual({
+      section: 'accumark-tools',
+      subsection: 'customer-detail',
+    })
   })
 
   it('sends no target for a sticky id left over from another page', () => {

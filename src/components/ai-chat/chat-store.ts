@@ -126,6 +126,31 @@ function mergeBySeq(base: AiMessage[], incoming: AiMessage[]): AiMessage[] {
 }
 
 /**
+ * Remove a card, and put the chat's turn back to running when that was its
+ * last one. Nothing to change: the same object back.
+ */
+function dropCard(
+  data: ChatData,
+  permissionId: string,
+  chatId: number
+): ChatData {
+  const known = Object.hasOwn(data.approvals, permissionId)
+  const approvals = omit(data.approvals, permissionId)
+  const turn = data.live[chatId]
+  // Back to running only when no other card of this chat is open.
+  const resumes = turn?.phase === 'waiting' && !hasCard(approvals, chatId)
+  if (!known && !resumes) return data
+  return {
+    ...data,
+    approvals,
+    live:
+      turn && resumes
+        ? { ...data.live, [chatId]: { ...turn, phase: 'running' } }
+        : data.live,
+  }
+}
+
+/**
  * `now` stamps a provisional row (default: the clock; pass it in a test). An event with an unknown
  * `type` (a newer server) and `error` (a `turn_ended` follows it) change nothing.
  */
@@ -213,23 +238,8 @@ export function applyEvent(
       }
     }
 
-    case 'permission_resolved': {
-      const known = Object.hasOwn(data.approvals, e.permission_id)
-      const approvals = omit(data.approvals, e.permission_id)
-      const turn = data.live[e.chat_id]
-      // Back to running only when no other card of this chat is open.
-      const resumes =
-        turn?.phase === 'waiting' && !hasCard(approvals, e.chat_id)
-      if (!known && !resumes) return data
-      return {
-        ...data,
-        approvals,
-        live:
-          turn && resumes
-            ? { ...data.live, [e.chat_id]: { ...turn, phase: 'running' } }
-            : data.live,
-      }
-    }
+    case 'permission_resolved':
+      return dropCard(data, e.permission_id, e.chat_id)
 
     case 'turn_ended': {
       // Only this turn's own live state is its to read or to remove.
@@ -239,11 +249,17 @@ export function applyEvent(
           : undefined
       const live = turn ? omit(data.live, e.chat_id) : data.live
 
-      // Keep the reply on screen until the refetch returns the stored row.
+      // Keep the reply on screen until the refetch returns the stored row. A
+      // turn with no text (a reload seeded it from the chat list) has none to
+      // keep, and an empty bubble would show until the refetch lands.
       const loaded = data.messages[e.chat_id]
       const seqKnown = loaded?.some(m => m.seq === e.message_seq)
       const messages =
-        turn && loaded && typeof e.message_seq === 'number' && !seqKnown
+        turn &&
+        turn.text !== '' &&
+        loaded &&
+        typeof e.message_seq === 'number' &&
+        !seqKnown
           ? {
               ...data.messages,
               [e.chat_id]: mergeBySeq(loaded, [
@@ -368,11 +384,19 @@ const initialFields = (): AiChatFields => ({
 
 interface AiChatState extends AiChatFields {
   setOpen: (open: boolean) => void
+  /** Also clears the notice, so one cannot sit on the wrong chat. */
   selectChat: (chatId: number | null) => void
+  setProviderId: (providerId: number | null) => void
+  /**
+   * Drop a card no event will ever remove (the request expired or was already
+   * decided), as `permission_resolved` would.
+   */
+  dismissApproval: (permissionId: string) => void
   /** Reduce one SSE event, and raise its notice if it has one. */
   apply: (e: AiChatEvent) => void
   /** Merge by `seq`, the server's row winning; never loses a newer row. */
   setMessages: (chatId: number, rows: AiMessage[]) => void
+  /** Also clears the active chat when it is no longer in `rows`. */
   setChats: (rows: AiChat[]) => void
   setNotice: (notice: ChatNotice | null) => void
   /** Stop answered "nothing runs": drop the chat's live turn. */
@@ -401,7 +425,25 @@ export const useAiChatStore = create<AiChatState>()(
       setOpen: open => set({ open }, undefined, 'setOpen'),
 
       selectChat: chatId =>
-        set({ activeChatId: chatId }, undefined, 'selectChat'),
+        set({ activeChatId: chatId, notice: null }, undefined, 'selectChat'),
+
+      setProviderId: providerId =>
+        set({ providerId }, undefined, 'setProviderId'),
+
+      dismissApproval: permissionId =>
+        set(
+          state => {
+            const chatId = Object.hasOwn(state.approvals, permissionId)
+              ? state.approvals[permissionId]?.chatId
+              : undefined
+            if (chatId === undefined) return state
+            const data = chatDataOf(state)
+            const next = dropCard(data, permissionId, chatId)
+            return next === data ? state : next
+          },
+          undefined,
+          'dismissApproval'
+        ),
 
       apply: e =>
         set(
@@ -431,7 +473,14 @@ export const useAiChatStore = create<AiChatState>()(
 
       setChats: rows =>
         set(
-          state => withChatList(chatDataOf(state), rows),
+          state => {
+            const next = withChatList(chatDataOf(state), rows)
+            // A chat archived in another tab must not stay selected.
+            const gone =
+              state.activeChatId !== null &&
+              !rows.some(row => row.id === state.activeChatId)
+            return gone ? { ...next, activeChatId: null } : next
+          },
           undefined,
           'setChats'
         ),
