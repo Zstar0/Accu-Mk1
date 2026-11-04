@@ -130,6 +130,35 @@ def test_bw_title_without_bw_key_raises(db):
     assert bw.next_value == 1000
 
 
+@pytest.mark.parametrize("original", ["BW-1009", "BW-0020"])
+@pytest.mark.parametrize("keys", [None, [], ["sterility-usp71"]])
+def test_bw_retest_takes_prefix_from_original(db, original, keys):
+    """A retest that carries or drops the panel orders no BW key, but it is
+    still a BW sample: native or SENAITE-born, the original's id decides."""
+    _seed_customer_counters(db)
+    minted = mint_customer_sample_id(
+        db, "Bacteriostatic Water", ordered_service_keys=keys, retest_of_sample_id=original,
+    )
+    assert minted == "BW-1000"
+
+
+@pytest.mark.parametrize("original", [None, "", "P-5000", "PB-1000", "XBW-1", 7])
+def test_bw_title_with_non_bw_original_still_raises(db, original):
+    _seed_customer_counters(db)
+    with pytest.raises(ValueError, match="BW key"):
+        mint_customer_sample_id(
+            db, "Bacteriostatic Water", ordered_service_keys=["sterility-usp71"],
+            retest_of_sample_id=original,
+        )
+    bw = db.query(LimsNativeIdSequence).filter_by(prefix="BW").one()
+    assert bw.next_value == 1000
+
+
+def test_peptide_retest_keeps_title_prefix(db):
+    _seed_customer_counters(db)
+    assert mint_customer_sample_id(db, "Peptide", retest_of_sample_id="P-4000") == "P-5000"
+
+
 @pytest.mark.parametrize("bad", [NATIVE_BW_KEY, "x-" + NATIVE_BW_KEY, b"x", 5, {NATIVE_BW_KEY: 1}])
 def test_ordered_service_keys_wrong_type_raises(db, bad):
     _seed_customer_counters(db)

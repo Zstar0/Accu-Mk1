@@ -80,7 +80,8 @@ CUSTOMER_ID_PREFIXES = ("P", "PB", "BW")
 
 
 def mint_customer_sample_id(db: Session, sample_type_title: Optional[str],
-                            *, ordered_service_keys: Optional[Iterable[str]] = None) -> str:
+                            *, ordered_service_keys: Optional[Iterable[str]] = None,
+                            retest_of_sample_id: Optional[str] = None) -> str:
     from models import LimsSample
     from catalog.bw_keys import NATIVE_BW_KEY
 
@@ -90,7 +91,10 @@ def mint_customer_sample_id(db: Session, sample_type_title: Optional[str],
             "OrderedServiceKeys must be a list of str, "
             f"got {type(ordered_service_keys).__name__}"
         )
-    if any(k == NATIVE_BW_KEY for k in (ordered_service_keys or ())):
+    # A retest that carries or drops the panel orders no BW key, so a BW retest
+    # also keys on its original's id (never the title).
+    bw_retest = isinstance(retest_of_sample_id, str) and retest_of_sample_id.startswith("BW-")
+    if bw_retest or any(k == NATIVE_BW_KEY for k in (ordered_service_keys or ())):
         prefix = "BW"
     else:
         key = (sample_type_title or "").strip().lower()
