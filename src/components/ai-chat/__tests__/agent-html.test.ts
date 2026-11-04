@@ -99,6 +99,14 @@ describe('renderAgentHtml', () => {
     expect(document.body.innerHTML).toBe(before)
   })
 
+  it('removes every image, so hiding one never rests on CSS', () => {
+    const dom = parse(
+      '{attachment:9} and <img src=x onerror=1> and ![r](https://evil.example/p.png)'
+    )
+    expect(dom.querySelectorAll('img')).toHaveLength(0)
+    expect(dom.querySelector('[onerror]')).toBeNull()
+  })
+
   it('keeps the existing guarantees: no script, no event handler, no image source', () => {
     const dom = parse(
       '<img src=x onerror="window.__pwned=2">\n\n<script>window.__pwned=3</script>\n\n![r](https://evil.example/p.png)'

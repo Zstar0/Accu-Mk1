@@ -523,3 +523,89 @@ describe('ChatPanel', () => {
     })
   })
 })
+
+describe('a waiting approval can be reached', () => {
+  const card = {
+    permission_id: 'p1',
+    source: 'agent',
+    title: 'Run rm',
+    detail: 'rm -rf /tmp/x',
+    can_allow: true,
+  }
+  /** Chat 8 is the most recent; the card waits on chat 7. */
+  const seed = () =>
+    act(() =>
+      store().setChats([chatRow(8), chatRow(7, { pending_approvals: [card] })])
+    )
+
+  it('the button opens the chat that holds the card, not the most recent one', async () => {
+    await mount()
+    const open = await screen.findByRole('button', { name: 'Open AI chat' })
+    seed()
+    await userEvent.click(open)
+
+    expect(store().open).toBe(true)
+    expect(store().activeChatId).toBe(7)
+    expect(
+      await screen.findByRole('button', { name: 'Allow once' })
+    ).toBeInTheDocument()
+  })
+
+  it('leaves an active chat alone when it already holds a card', async () => {
+    await mount()
+    const open = await screen.findByRole('button', { name: 'Open AI chat' })
+    act(() =>
+      store().setChats([
+        chatRow(9, { pending_approvals: [{ ...card, permission_id: 'p9' }] }),
+        chatRow(7, { pending_approvals: [card] }),
+      ])
+    )
+    act(() => store().selectChat(9))
+    await userEvent.click(open)
+    expect(store().activeChatId).toBe(9)
+  })
+
+  it('opens the latest chat as before when no card waits', async () => {
+    await mount()
+    const open = await screen.findByRole('button', { name: 'Open AI chat' })
+    act(() => store().setChats([chatRow(8), chatRow(7)]))
+    await userEvent.click(open)
+    await waitFor(() => expect(store().activeChatId).toBe(8))
+  })
+
+  it('marks the rows of the recent-chats menu that hold a card', async () => {
+    await mount()
+    await screen.findByRole('button', { name: 'Open AI chat' })
+    seed()
+    act(() => {
+      store().selectChat(8)
+      store().setOpen(true)
+    })
+    await userEvent.click(screen.getByRole('button', { name: 'Recent chats' }))
+    const rows = await screen.findAllByRole('menuitem')
+    const named = (title: string) =>
+      rows.find(r => r.textContent?.includes(title))
+    expect(named('Chat 7')?.textContent).toContain('Approval waiting')
+    expect(named('Chat 8')?.textContent).not.toContain('Approval waiting')
+  })
+})
+
+describe('New chat', () => {
+  it('keeps the agent of the chat it leaves', async () => {
+    await mount([NOVA, GEORGE])
+    await screen.findByRole('button', { name: 'Open AI chat' })
+    act(() => {
+      store().setChats([chatRow(3, { provider_id: 2 })])
+      store().setMessages(3, [])
+      store().selectChat(3)
+      store().setOpen(true)
+    })
+    expect(store().providerId).toBeNull()
+    await userEvent.click(screen.getByRole('button', { name: 'New chat' }))
+    expect(store().activeChatId).toBeNull()
+    expect(store().providerId).toBe(2)
+    expect(
+      screen.getByText('Ask George about the page you are on.')
+    ).toBeInTheDocument()
+  })
+})

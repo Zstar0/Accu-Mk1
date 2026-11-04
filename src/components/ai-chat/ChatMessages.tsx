@@ -8,7 +8,7 @@
  * thoughts and approval text render as plain text.
  */
 
-import { useLayoutEffect, useMemo, useRef } from 'react'
+import { useDeferredValue, useLayoutEffect, useMemo, useRef } from 'react'
 import { Check, Loader2, ShieldCheck, Wrench, X } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import {
@@ -48,7 +48,10 @@ function toolsOf(meta: AiMessage['meta']): ToolChip[] {
 
 /** Sanitized markdown; re-rendered only when the text changes. */
 function AssistantText({ text }: { text: string }) {
-  const html = useMemo(() => renderAgentHtml(text), [text])
+  // A streaming reply changes on every chunk and the parse reads all of it;
+  // deferred, a burst of chunks costs one parse, not one each.
+  const shown = useDeferredValue(text)
+  const html = useMemo(() => renderAgentHtml(shown), [shown])
   return (
     <div
       className={cn(
@@ -58,10 +61,7 @@ function AssistantText({ text }: { text: string }) {
         '[&_pre]:my-2 [&_pre]:max-w-full [&_pre]:overflow-x-auto [&_pre]:rounded [&_pre]:bg-muted [&_pre]:p-2',
         '[&_pre_code]:bg-transparent [&_pre_code]:p-0',
         '[&_ul]:my-1 [&_ul]:list-disc [&_ul]:pl-5 [&_ol]:my-1 [&_ol]:list-decimal [&_ol]:pl-5',
-        '[&_blockquote]:border-l-2 [&_blockquote]:pl-3 [&_blockquote]:text-muted-foreground',
-        // Replies cannot load images (no `src` survives sanitizing), so an
-        // attachment token would only leave a broken box.
-        '[&_img]:hidden'
+        '[&_blockquote]:border-l-2 [&_blockquote]:pl-3 [&_blockquote]:text-muted-foreground'
       )}
       // Safe: `renderAgentHtml` sanitizes with renderCommentHtml, then makes every
       // link plain text.

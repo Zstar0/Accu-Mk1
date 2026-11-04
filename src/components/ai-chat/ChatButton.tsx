@@ -16,6 +16,20 @@ import { useAiProviders } from './use-ai-chat-glue'
 /** Stable DOM id, as `FLAGS_BUTTON_ID` is for the flags button. */
 export const CHAT_BUTTON_ID = 'ai-chat-button'
 
+/**
+ * Open the panel. A waiting approval wins over the most recent chat: unless the
+ * active chat already holds a card, select the chat of one, so the amber dot
+ * leads to the card it announces.
+ */
+function openPanel() {
+  const s = useAiChatStore.getState()
+  const cards = Object.values(s.approvals)
+  const activeHolds = cards.some(card => card.chatId === s.activeChatId)
+  const first = cards[0]
+  if (!activeHolds && first !== undefined) s.selectChat(first.chatId)
+  s.setOpen(true)
+}
+
 export function ChatButton() {
   const visible = useAiProviders().length > 0
   const open = useAiChatStore(s => s.open)
@@ -47,7 +61,7 @@ export function ChatButton() {
             ? 'invisible fixed right-4 bottom-4 z-40 rounded-full shadow-lg'
             : 'fixed right-4 bottom-4 z-40 rounded-full shadow-lg'
         }
-        onClick={() => useAiChatStore.getState().setOpen(true)}
+        onClick={openPanel}
       >
         <MessageSquare className="size-5" aria-hidden="true" />
         {running && (

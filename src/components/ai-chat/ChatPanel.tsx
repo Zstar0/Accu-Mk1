@@ -59,6 +59,7 @@ export function ChatPanel() {
   const agent = useActiveProvider()
   const open = useAiChatStore(s => s.open)
   const chats = useAiChatStore(s => s.chats)
+  const approvals = useAiChatStore(s => s.approvals)
   const activeChatId = useAiChatStore(s => s.activeChatId)
   const loaded = useAiChatStore(s =>
     s.activeChatId === null ? true : s.messages[s.activeChatId] !== undefined
@@ -110,10 +111,18 @@ export function ChatPanel() {
   if (providers.length === 0 || agent === null) return null
 
   const name = agent.display_name
+  const agentId = agent.id
+  // Chats with an approval waiting, marked in the recent-chats menu.
+  const holdingCards = new Set(
+    Object.values(approvals).map(card => card.chatId)
+  )
   const close = () => useAiChatStore.getState().setOpen(false)
 
   function newChat() {
     settled.current = true
+    // The new chat is with the agent of the one left (a toast may have opened a
+    // second provider's chat, and `providerId` is still unset).
+    useAiChatStore.getState().setProviderId(agentId)
     useAiChatStore.getState().selectChat(null)
     focusComposer()
   }
@@ -255,12 +264,21 @@ export function ChatPanel() {
                     <span className="truncate">
                       {chat.title || 'Untitled chat'}
                     </span>
-                    {providers.length > 1 && (
-                      <span className="ml-auto text-xs text-muted-foreground">
-                        {providers.find(p => p.id === chat.provider_id)
-                          ?.display_name ?? ''}
-                      </span>
-                    )}
+                    <span className="ml-auto flex items-center gap-2 text-xs text-muted-foreground">
+                      {providers.length > 1 &&
+                        (providers.find(p => p.id === chat.provider_id)
+                          ?.display_name ??
+                          '')}
+                      {holdingCards.has(chat.id) && (
+                        <>
+                          <span
+                            aria-hidden="true"
+                            className="size-2 shrink-0 rounded-full bg-amber-500"
+                          />
+                          <span className="sr-only">Approval waiting</span>
+                        </>
+                      )}
+                    </span>
                   </DropdownMenuItem>
                 ))
               )}

@@ -8,19 +8,20 @@
  * Chat state belongs to one signed-in user. The store and the query client live
  * outside `MainWindow`, and logout unmounts `MainWindow` (`App` renders the
  * login page instead), so the glue cannot watch the id turn null. It wipes in
- * the cleanup of an effect keyed on the id, which runs on unmount (logout) and
- * on any in-place change. Everything that can write late checks the id it
- * started with.
+ * the cleanup of an effect keyed on the id (and on `visible`, so the wipe also
+ * runs when the feature goes dark), which runs on unmount (logout) and on any
+ * in-place change. Everything that can write late checks the id it started
+ * with.
  */
 
-import { useEffect } from 'react'
+import { useEffect, useRef } from 'react'
 import {
   useQuery,
   useQueryClient,
   type Query,
   type QueryClient,
 } from '@tanstack/react-query'
-import { toast } from 'sonner'
+import { toast, type ToasterProps } from 'sonner'
 import {
   getMessages,
   listChats,
@@ -30,7 +31,7 @@ import {
 } from '@/lib/ai-chat-api'
 import { useAiChatStream } from '@/lib/ai-chat-stream'
 import { useAuthStore } from '@/store/auth-store'
-import { useAiChatStore } from './chat-store'
+import { useAiChatStore, type ApprovalCard } from './chat-store'
 
 export const AI_CHAT_KEY = ['ai-chat'] as const
 export const CHATS_KEY = ['ai-chat', 'chats'] as const
@@ -45,17 +46,22 @@ const currentUserId = (): number | null =>
 
 // ---- providers -------------------------------------------------------------
 
+function useProvidersQuery() {
+  const userId = useAuthStore(s => s.user?.id ?? null)
+  return useQuery({
+    queryKey: providersKey(userId),
+    queryFn: listProviders,
+    enabled: userId != null,
+  })
+}
+
 /**
  * The providers the signed-in user may use. Empty while loading, on an error
  * and for a user with none: the feature stays dark in all three.
  */
 export function useAiProviders(): AiProvider[] {
   const userId = useAuthStore(s => s.user?.id ?? null)
-  const { data } = useQuery({
-    queryKey: providersKey(userId),
-    queryFn: listProviders,
-    enabled: userId != null,
-  })
+  const { data } = useProvidersQuery()
   return userId == null ? NO_PROVIDERS : (data ?? NO_PROVIDERS)
 }
 
@@ -102,6 +108,12 @@ export async function refreshChats(qc: QueryClient): Promise<void> {
 let loadCounter = 0
 /** Highest load that has written, per chat. */
 const lastWrite = new Map<number, number>()
+/**
+ * Chats whose last load failed. The next connect tries them again; the catch
+ * must not, or the refetch effect would fire at once and loop for as long as
+ * the backend is down.
+ */
+const failedLoads = new Set<number>()
 
 /**
  * Fetch a chat's messages into the store. The refetch flag is cleared first,
@@ -118,33 +130,41 @@ export async function loadMessages(chatId: number): Promise<boolean> {
     if (currentUserId() !== userId) return false
     if ((lastWrite.get(chatId) ?? 0) > mine) return false
     lastWrite.set(chatId, mine)
+    failedLoads.delete(chatId)
     useAiChatStore.getState().setMessages(chatId, rows)
     return true
   } catch {
+    // Not for a user who has left: their failures are not the next user's.
+    if (currentUserId() === userId) failedLoads.add(chatId)
     return false
   }
 }
 
+/** The stream reconnected: load again what failed, once each. */
+function retryFailedLoads() {
+  for (const id of [...failedLoads]) void loadMessages(id)
+}
+
 // ---- approval toasts -------------------------------------------------------
 
-/** Sonner ids (= permission ids) of the toasts that are up. */
+/**
+ * Sonner ids (= permission ids) of the cards that have a toast. An id stays
+ * here after the reader swipes its toast away, so the toast does not come back
+ * while the card stays; it leaves when its card goes or comes into view, so a
+ * card that returns (a resync, a switch back) is toasted again.
+ */
 const toasted = new Set<string>()
 
-function toastForApproval(
-  e: Extract<AiChatEvent, { type: 'permission_requested' }>
-) {
-  const s = useAiChatStore.getState()
-  // The card is already in view.
-  if (s.open && s.activeChatId === e.chat_id) return
-  toasted.add(e.permission_id)
-  toast(`${e.agent} is waiting for your approval`, {
-    id: e.permission_id,
+function raiseApprovalToast(card: ApprovalCard, agent: string) {
+  toasted.add(card.permission_id)
+  toast(`${agent} is waiting for your approval`, {
+    id: card.permission_id,
     duration: Infinity,
     action: {
       label: 'Open',
       onClick: () => {
         const st = useAiChatStore.getState()
-        st.selectChat(e.chat_id)
+        st.selectChat(card.chatId)
         st.setOpen(true)
       },
     },
@@ -155,7 +175,6 @@ function handleEvent(qc: QueryClient, e: AiChatEvent) {
   useAiChatStore.getState().apply(e)
   // The stream treats a throw as a dropped connection and skips this event.
   try {
-    if (e.type === 'permission_requested') toastForApproval(e)
     if (e.type === 'turn_ended' || e.type === 'resync') void refreshChats(qc)
   } catch {
     // A side effect must not cost the stream the event the store already took.
@@ -178,13 +197,22 @@ function teardown(qc: QueryClient) {
   useAiChatStore.getState().reset()
   for (const id of toasted) toast.dismiss(id)
   toasted.clear()
+  failedLoads.clear()
 }
 
 // ---- the hook --------------------------------------------------------------
 
-export function useAiChatGlue(): { visible: boolean } {
+/** Keep in step with `w-[clamp(360px,35vw,720px)]` in `ChatPanel.tsx`. */
+const PANEL_WIDTH = 'clamp(360px, 35vw, 720px)'
+
+export function useAiChatGlue(): {
+  visible: boolean
+  /** For `<Toaster offset>`: clears the button, and the panel while it is open. */
+  toasterOffset: ToasterProps['offset']
+} {
   const qc = useQueryClient()
   const userId = useAuthStore(s => s.user?.id ?? null)
+  const providersQuery = useProvidersQuery()
   const providers = useAiProviders()
   const visible = userId != null && providers.length > 0
 
@@ -196,24 +224,56 @@ export function useAiChatGlue(): { visible: boolean } {
   useAiChatStream(
     visible,
     e => handleEvent(qc, e),
-    () => void refreshChats(qc)
+    () => {
+      void refreshChats(qc)
+      retryFailedLoads()
+    }
   )
 
-  useEffect(() => () => teardown(qc), [qc, userId])
+  // Also when the feature goes dark (the list emptied while signed in): a
+  // toast with an Open action, an open panel and a held card would stay behind,
+  // and a stream restarted later has no Last-Event-ID, so stale turns would
+  // come back as a spinner. Cleanups run before setups, so going dark and
+  // coming back in one commit is safe.
+  useEffect(() => () => teardown(qc), [qc, userId, visible])
 
-  // A toast lasts until its card is gone or in view.
+  // The panel vanishes when the list empties, with whatever notice or draft it
+  // held. Say why; a user switch or logout is not that.
+  const wasVisible = useRef(false)
+  const settled = providersQuery.isSuccess
+  useEffect(() => {
+    if (wasVisible.current && !visible && userId != null && settled) {
+      toast('AI chat is no longer available to you.', {
+        id: 'ai-chat-unavailable',
+      })
+    }
+    wasVisible.current = visible
+  }, [visible, userId, settled])
+
+  // A toast for every card that is not in view, however the card arrived (an
+  // event, the chat list after a reload, a resync). It lasts until its card is
+  // gone or in view. The agent is named from the card's chat.
   const approvals = useAiChatStore(s => s.approvals)
   const open = useAiChatStore(s => s.open)
   const activeChatId = useAiChatStore(s => s.activeChatId)
+  const chats = useAiChatStore(s => s.chats)
   useEffect(() => {
+    const inView = (card: ApprovalCard) => open && activeChatId === card.chatId
     for (const id of [...toasted]) {
       const card = Object.hasOwn(approvals, id) ? approvals[id] : undefined
-      if (card === undefined || (open && activeChatId === card.chatId)) {
+      if (card === undefined || inView(card)) {
         toast.dismiss(id)
         toasted.delete(id)
       }
     }
-  }, [approvals, open, activeChatId])
+    for (const card of Object.values(approvals)) {
+      if (toasted.has(card.permission_id) || inView(card)) continue
+      const providerId = chats.find(c => c.id === card.chatId)?.provider_id
+      const agent =
+        providers.find(p => p.id === providerId)?.display_name ?? 'The agent'
+      raiseApprovalToast(card, agent)
+    }
+  }, [approvals, open, activeChatId, chats, providers])
 
   // A turn ended (or the stream resynced): fetch the stored rows of the chats
   // the panel has loaded. An unloaded chat stays flagged; whoever loads it
@@ -226,5 +286,11 @@ export function useAiChatGlue(): { visible: boolean } {
     }
   }, [needsRefetch, messages])
 
-  return { visible }
+  const toasterOffset: ToasterProps['offset'] = !visible
+    ? undefined
+    : open
+      ? { bottom: 72, right: `calc(${PANEL_WIDTH} + 16px)` }
+      : { bottom: 72 }
+
+  return { visible, toasterOffset }
 }

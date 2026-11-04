@@ -31,10 +31,14 @@ export const COMPOSER_ID = 'ai-chat-composer'
 const MAX_LENGTH = 8000
 const TRY_NEW = 'Try a new chat.'
 const GONE = `This chat is not available any more. ${TRY_NEW}`
+// The same words `auth-api.ts` uses for a 401 on its own requests.
+const SESSION_EXPIRED = 'Session expired. Please log in again.'
 
 /** An error notice always ends by telling the reader what to do. */
 const withAdvice = (message: string) =>
-  message.endsWith(TRY_NEW) ? message : `${message} ${TRY_NEW}`
+  message === SESSION_EXPIRED || message.endsWith(TRY_NEW)
+    ? message
+    : `${message} ${TRY_NEW}`
 
 export function ChatComposer() {
   const qc = useQueryClient()
@@ -55,6 +59,7 @@ export function ChatComposer() {
 
   const [text, setText] = useState('')
   const [sending, setSending] = useState(false)
+  const [stopping, setStopping] = useState(false)
   // What each chat was last asked in this session, for Retry. Component
   // state, not the store. Replaced, never mutated, so a change re-renders.
   const [prompts, setPrompts] = useState<ReadonlyMap<number, string>>(
@@ -75,7 +80,10 @@ export function ChatComposer() {
     // A turn already runs on this chat; the reply is on its way.
     if (status === 409 && code === 'turn_running') return
 
-    if (status === 429) {
+    if (status === 401) {
+      // `crmFetch` does not clear auth on a 401. The chat is fine; the login is not.
+      store.setNotice({ kind: 'error', message: SESSION_EXPIRED, ...where })
+    } else if (status === 429) {
       store.setNotice({
         kind: 'busy',
         message: `${agentName} is busy, try again in a minute.`,
@@ -116,11 +124,17 @@ export function ChatComposer() {
     setSending(true)
     if (fromBox) setText('')
     useAiChatStore.getState().setNotice(null)
+    // Whoever is signed in now owns this send. If they log out while it is in
+    // flight, nothing it learns may reach the store the next user will see,
+    // and nothing more may be sent.
+    const userId = useAuthStore.getState().user?.id
+    const left = () => useAuthStore.getState().user?.id !== userId
 
     let chatId = useAiChatStore.getState().activeChatId
     try {
       if (chatId === null) {
         const chat = await createChat(agent.id)
+        if (left()) return
         // End any list fetch that began before this chat existed, so it cannot
         // land after the selection below and clear it.
         void refreshChats(qc)
@@ -134,10 +148,12 @@ export function ChatComposer() {
         prompt,
         currentPageContext(useUIStore.getState())
       )
+      if (left()) return
       const sentTo = chatId // `chatId` is reassigned above; a closure would see number | null
       setPrompts(p => new Map(p).set(sentTo, prompt))
       void loadMessages(sentTo)
     } catch (e) {
+      if (left()) return
       // Keep whatever was typed since; otherwise put the message back.
       if (fromBox) setText(now => (now === '' ? raw : now))
       explain(e, chatId)
@@ -151,14 +167,27 @@ export function ChatComposer() {
     const chatId = activeChatId
     if (chatId === null) return
     const userId = useAuthStore.getState().user?.id
+    const left = () => useAuthStore.getState().user?.id !== userId
+    // The server holds a Stop for up to 5 s: one at a time.
+    setStopping(true)
     try {
       const { cancelled } = await cancelTurn(chatId)
-      if (cancelled || useAuthStore.getState().user?.id !== userId) return
+      if (cancelled || left()) return
       // Nothing was running: the turn_ended we wait for never comes.
       useAiChatStore.getState().clearLive(chatId)
       void loadMessages(chatId)
     } catch {
-      // Stop stays on offer; the reader can press it again.
+      // Not kind 'error': that tells the reader to try a new chat, and the
+      // chat is fine. Stop stays on offer.
+      if (!left()) {
+        useAiChatStore.getState().setNotice({
+          kind: 'busy',
+          message: 'Could not stop that. Try again.',
+          chatId,
+        })
+      }
+    } finally {
+      setStopping(false)
     }
   }
 
@@ -210,6 +239,7 @@ export function ChatComposer() {
             variant="outline"
             size="icon"
             aria-label="Stop"
+            disabled={stopping}
             onClick={() => void stop()}
           >
             <Square className="size-4" aria-hidden="true" />

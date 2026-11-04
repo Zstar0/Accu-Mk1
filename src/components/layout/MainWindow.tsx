@@ -82,7 +82,7 @@ export function MainWindow() {
   // AI chat: the one event stream, and whether the button shows (the user has
   // a provider). Nothing renders and nothing connects until an admin enables
   // one for them.
-  const { visible: aiChatVisible } = useAiChatGlue()
+  const { toasterOffset } = useAiChatGlue()
 
   useEffect(() => {
     getVersion()
@@ -206,8 +206,8 @@ export function MainWindow() {
         <ChatPanel />
         <Toaster
           position="bottom-right"
-          // Clear the AI chat button (16px gap + 40px button + 16px gap).
-          offset={aiChatVisible ? { bottom: 72 } : undefined}
+          // Clear the AI chat button, and the panel while it is open.
+          offset={toasterOffset}
           theme={
             theme === 'dark' ? 'dark' : theme === 'light' ? 'light' : 'system'
           }

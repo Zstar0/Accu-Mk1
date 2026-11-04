@@ -439,3 +439,168 @@ describe('ChatComposer notices and Retry', () => {
     expect(store().notice).toBeNull()
   })
 })
+
+describe('ChatComposer: a send in flight when the user leaves', () => {
+  const tick = () =>
+    act(async () => {
+      await new Promise(r => setTimeout(r, 20))
+    })
+  /** Logout: auth cleared and the store wiped, as the glue's teardown does. */
+  const logout = () =>
+    act(() => {
+      useAuthStore.setState({ user: null, token: null })
+      store().reset()
+    })
+
+  it('a chat created after the user left is not written, selected or sent to', async () => {
+    let finish: (c: AiChat) => void = () => undefined
+    mocks.createChat.mockReturnValue(
+      new Promise(resolve => {
+        finish = resolve
+      })
+    )
+    const { box } = await mount()
+    await userEvent.type(box, 'secret question{Enter}')
+    await waitFor(() => expect(mocks.createChat).toHaveBeenCalled())
+
+    logout()
+    finish(chatRow(99, { title: 'user one chat' }))
+    await tick()
+
+    expect(mocks.sendPrompt).not.toHaveBeenCalled()
+    expect(store()).toEqual(useAiChatStore.getInitialState())
+  })
+
+  it('a failure that arrives after the user left raises no notice and restores no text', async () => {
+    let fail: (e: unknown) => void = () => undefined
+    mocks.sendPrompt.mockReturnValue(
+      new Promise((_resolve, reject) => {
+        fail = reject
+      })
+    )
+    act(() => {
+      store().setChats([chatRow(5)])
+      store().selectChat(5)
+    })
+    const { box } = await mount()
+    await userEvent.type(box, 'secret question{Enter}')
+    await waitFor(() => expect(mocks.sendPrompt).toHaveBeenCalled())
+
+    logout()
+    fail(new CrmError(500, null))
+    await tick()
+
+    expect(store()).toEqual(useAiChatStore.getInitialState())
+    expect(box.value).toBe('')
+  })
+
+  it('a send accepted after the user left does not fetch messages', async () => {
+    let accept: (v: { turn_id: string }) => void = () => undefined
+    mocks.sendPrompt.mockReturnValue(
+      new Promise(resolve => {
+        accept = resolve
+      })
+    )
+    act(() => {
+      store().setChats([chatRow(5)])
+      store().selectChat(5)
+    })
+    const { box } = await mount()
+    await userEvent.type(box, 'q{Enter}')
+    await waitFor(() => expect(mocks.sendPrompt).toHaveBeenCalled())
+
+    logout()
+    accept({ turn_id: 't' })
+    await tick()
+
+    expect(mocks.getMessages).not.toHaveBeenCalled()
+    expect(store()).toEqual(useAiChatStore.getInitialState())
+  })
+})
+
+describe('ChatComposer: Stop', () => {
+  const startTurn = () =>
+    act(() => {
+      store().setChats([chatRow(5)])
+      store().selectChat(5)
+      store().apply({
+        seq: 1,
+        type: 'turn_started',
+        chat_id: 5,
+        turn_id: 't1',
+        starting: false,
+        resuming: false,
+      })
+    })
+
+  it('says so when it fails, and is not an error that blames the chat', async () => {
+    mocks.cancelTurn.mockRejectedValue(new TypeError('Failed to fetch'))
+    startTurn()
+    await mount()
+    await userEvent.click(screen.getByRole('button', { name: 'Stop' }))
+
+    expect(
+      await screen.findByText('Could not stop that. Try again.')
+    ).toBeInTheDocument()
+    expect(store().notice).toMatchObject({ kind: 'busy', chatId: 5 })
+    expect(screen.queryByText(/Try a new chat/)).toBeNull()
+    expect(screen.getByRole('button', { name: 'Stop' })).toBeEnabled()
+  })
+
+  it('is off while the request is out, so it cannot be fired twice', async () => {
+    let finish: (v: { cancelled: boolean }) => void = () => undefined
+    mocks.cancelTurn.mockReturnValue(
+      new Promise(resolve => {
+        finish = resolve
+      })
+    )
+    startTurn()
+    await mount()
+    await userEvent.click(screen.getByRole('button', { name: 'Stop' }))
+    expect(screen.getByRole('button', { name: 'Stop' })).toBeDisabled()
+    await userEvent.click(screen.getByRole('button', { name: 'Stop' }))
+    expect(mocks.cancelTurn).toHaveBeenCalledTimes(1)
+
+    await act(async () => finish({ cancelled: true }))
+    expect(screen.getByRole('button', { name: 'Stop' })).toBeEnabled()
+  })
+
+  it('raises no notice for a failure that arrives after the user left', async () => {
+    let fail: (e: unknown) => void = () => undefined
+    mocks.cancelTurn.mockReturnValue(
+      new Promise((_resolve, reject) => {
+        fail = reject
+      })
+    )
+    startTurn()
+    await mount()
+    await userEvent.click(screen.getByRole('button', { name: 'Stop' }))
+    act(() => {
+      useAuthStore.setState({ user: null, token: null })
+      store().reset()
+    })
+    await act(async () => {
+      fail(new TypeError('Failed to fetch'))
+      await new Promise(r => setTimeout(r, 20))
+    })
+    expect(store().notice).toBeNull()
+  })
+})
+
+describe('ChatComposer: an expired session', () => {
+  it('says to log in again, not to try a new chat', async () => {
+    mocks.sendPrompt.mockRejectedValue(new CrmError(401, null))
+    const { box } = await mount()
+    await userEvent.type(box, 'hello{Enter}')
+    await waitFor(() => expect(box.value).toBe('hello'))
+
+    expect(store().notice).toMatchObject({
+      kind: 'error',
+      message: 'Session expired. Please log in again.',
+    })
+    expect(
+      screen.getByText('Session expired. Please log in again.')
+    ).toBeInTheDocument()
+    expect(screen.queryByText(/Try a new chat/)).toBeNull()
+  })
+})

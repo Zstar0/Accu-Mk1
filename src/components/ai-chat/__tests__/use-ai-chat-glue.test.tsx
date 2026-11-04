@@ -1,8 +1,12 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { useEffect } from 'react'
 import { act, render, screen, waitFor } from '@testing-library/react'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { toast } from 'sonner'
+import userEvent from '@testing-library/user-event'
+import { CrmError } from '@/lib/api-crm'
 import {
+  createChat,
   getMessages,
   listChats,
   listProviders,
@@ -13,6 +17,7 @@ import {
 import { useAiChatStream } from '@/lib/ai-chat-stream'
 import { useAuthStore, type AuthUser } from '@/store/auth-store'
 import { useAiChatStore } from '../chat-store'
+import { ChatPanel } from '../ChatPanel'
 import {
   CHATS_KEY,
   loadMessages,
@@ -25,6 +30,7 @@ import type * as Api from '@/lib/ai-chat-api'
 
 vi.mock('@/lib/ai-chat-api', async importOriginal => ({
   ...(await importOriginal<typeof Api>()),
+  createChat: vi.fn(),
   getMessages: vi.fn(),
   listChats: vi.fn(),
   listProviders: vi.fn(),
@@ -38,6 +44,7 @@ const stream = vi.mocked(useAiChatStream)
 const showToast = vi.mocked(toast)
 const dismissToast = vi.mocked(toast.dismiss)
 const mocks = {
+  createChat: vi.mocked(createChat),
   getMessages: vi.mocked(getMessages),
   listChats: vi.mocked(listChats),
   listProviders: vi.mocked(listProviders),
@@ -65,6 +72,14 @@ const chatRow = (id: number, over: Partial<AiChat> = {}): AiChat => ({
   running_turn_id: null,
   pending_approvals: [],
   ...over,
+})
+
+const pending = (permission_id: string) => ({
+  permission_id,
+  source: 'agent',
+  title: 'Run ls',
+  detail: 'ls',
+  can_allow: true,
 })
 
 const message = (seq: number, text = `m${seq}`): AiMessage => ({
@@ -113,8 +128,13 @@ const resyncEvent = (): AiChatEvent => ({
 })
 
 function Harness() {
-  const { visible } = useAiChatGlue()
-  return <div data-testid="visible">{String(visible)}</div>
+  const { visible, toasterOffset } = useAiChatGlue()
+  return (
+    <>
+      <div data-testid="visible">{String(visible)}</div>
+      <div data-testid="offset">{JSON.stringify(toasterOffset ?? null)}</div>
+    </>
+  )
 }
 
 function setup() {
@@ -227,6 +247,7 @@ describe('approval toasts', () => {
   it('raises one toast per permission, by its id, until it is answered', async () => {
     setup()
     await waitFor(() => expect(lastStream().enabled).toBe(true))
+    act(() => store().setChats([chatRow(1)]))
     deliver(permissionEvent('p1'))
 
     expect(showToast).toHaveBeenCalledTimes(1)
@@ -243,6 +264,7 @@ describe('approval toasts', () => {
   it('its action opens the panel on that chat', async () => {
     setup()
     await waitFor(() => expect(lastStream().enabled).toBe(true))
+    act(() => store().setChats([chatRow(4)]))
     deliver(permissionEvent('p1', 4))
     const options = showToast.mock.calls[0]?.[1] as unknown as {
       action: { onClick: () => void }
@@ -292,6 +314,101 @@ describe('approval toasts', () => {
     deliver(resyncEvent())
     await waitFor(() => expect(dismissToast).toHaveBeenCalledWith('p1'))
   })
+
+  describe('for a card that did not arrive as a live event', () => {
+    it('raises one for a card found through the chat list after a reload', async () => {
+      mocks.listChats.mockResolvedValue([
+        chatRow(7, { pending_approvals: [pending('p1')] }),
+      ])
+      setup()
+      await waitFor(() => expect(lastStream().enabled).toBe(true))
+      connect()
+      await waitFor(() =>
+        expect(Object.keys(store().approvals)).toEqual(['p1'])
+      )
+      expect(showToast).toHaveBeenCalledTimes(1)
+      expect(showToast).toHaveBeenCalledWith(
+        'Nova is waiting for your approval',
+        expect.objectContaining({ id: 'p1', duration: Infinity })
+      )
+    })
+
+    it('says "The agent" when the chat is not known yet', async () => {
+      setup()
+      await waitFor(() => expect(lastStream().enabled).toBe(true))
+      deliver(permissionEvent('p1', 99))
+      expect(showToast).toHaveBeenCalledWith(
+        'The agent is waiting for your approval',
+        expect.objectContaining({ id: 'p1' })
+      )
+    })
+
+    it('does not bring back a toast the reader swiped away', async () => {
+      setup()
+      await waitFor(() => expect(lastStream().enabled).toBe(true))
+      act(() => store().setChats([chatRow(1)]))
+      deliver(permissionEvent('p1'))
+      expect(showToast).toHaveBeenCalledTimes(1)
+      // Swiping removes it inside sonner and the glue is not told. Unrelated
+      // changes to the chats and the cards must not raise it again.
+      act(() => store().setChats([chatRow(1), chatRow(2)]))
+      deliver(permissionEvent('p2', 2))
+      expect(
+        showToast.mock.calls.map(c => (c[1] as { id: string }).id)
+      ).toEqual(['p1', 'p2'])
+    })
+
+    it('raises a new toast for a card that comes back after a resync', async () => {
+      setup()
+      await waitFor(() => expect(lastStream().enabled).toBe(true))
+      act(() => store().setChats([chatRow(7)]))
+      deliver(permissionEvent('p1', 7))
+      expect(showToast).toHaveBeenCalledTimes(1)
+
+      mocks.listChats.mockResolvedValue([
+        chatRow(7, { pending_approvals: [pending('p1')] }),
+      ])
+      deliver(resyncEvent())
+      await waitFor(() => expect(dismissToast).toHaveBeenCalledWith('p1'))
+      await waitFor(() =>
+        expect(Object.keys(store().approvals)).toEqual(['p1'])
+      )
+      await waitFor(() => expect(showToast).toHaveBeenCalledTimes(2))
+    })
+
+    it('raises one when the reader switches away from a card that was in view', async () => {
+      setup()
+      await waitFor(() => expect(lastStream().enabled).toBe(true))
+      act(() => {
+        store().setChats([chatRow(1), chatRow(2)])
+        store().selectChat(1)
+        store().setOpen(true)
+      })
+      deliver(permissionEvent('p1', 1))
+      expect(showToast).not.toHaveBeenCalled()
+
+      act(() => store().selectChat(2))
+      expect(showToast).toHaveBeenCalledTimes(1)
+      expect(showToast).toHaveBeenCalledWith(
+        'Nova is waiting for your approval',
+        expect.objectContaining({ id: 'p1' })
+      )
+    })
+
+    it('raises one when the reader closes the panel on an unanswered card', async () => {
+      setup()
+      await waitFor(() => expect(lastStream().enabled).toBe(true))
+      act(() => {
+        store().setChats([chatRow(1)])
+        store().selectChat(1)
+        store().setOpen(true)
+      })
+      deliver(permissionEvent('p1', 1))
+      expect(showToast).not.toHaveBeenCalled()
+      act(() => store().setOpen(false))
+      expect(showToast).toHaveBeenCalledTimes(1)
+    })
+  })
 })
 
 describe('refetching messages', () => {
@@ -336,6 +453,66 @@ describe('refetching messages', () => {
       'm1',
       'partial reply',
     ])
+  })
+
+  describe('a refetch that failed', () => {
+    /** A reload mid-turn: the turn is known only from the list, so no row stands in for its reply. */
+    async function endTurnWhileBackendDown() {
+      mocks.getMessages.mockRejectedValue(new Error('down'))
+      const view = setup()
+      await waitFor(() => expect(lastStream().enabled).toBe(true))
+      act(() => store().setMessages(1, [message(1)]))
+      act(() => store().setChats([chatRow(1, { running_turn_id: 't1' })]))
+      deliver({
+        seq: ++seq,
+        type: 'turn_ended',
+        chat_id: 1,
+        turn_id: 't1',
+        stop_reason: 'end_turn',
+        message_seq: 2,
+      })
+      await waitFor(() => expect(mocks.getMessages).toHaveBeenCalledTimes(1))
+      return view
+    }
+    const pause = (ms: number) =>
+      act(async () => {
+        await new Promise(r => setTimeout(r, ms))
+      })
+
+    it('is fetched again when the stream reconnects, and the reply appears', async () => {
+      await endTurnWhileBackendDown()
+      expect(store().messages[1]?.map(m => m.text)).toEqual(['m1'])
+
+      mocks.getMessages.mockResolvedValue([message(1), message(2, 'the reply')])
+      connect()
+      await waitFor(() =>
+        expect(store().messages[1]?.map(m => m.text)).toEqual([
+          'm1',
+          'the reply',
+        ])
+      )
+    })
+
+    it('does not hammer a backend that is down: no retry until the next connect', async () => {
+      await endTurnWhileBackendDown()
+      await pause(60)
+      expect(mocks.getMessages).toHaveBeenCalledTimes(1)
+      // Still down at the next connect: one more try, not a loop.
+      connect()
+      await pause(60)
+      expect(mocks.getMessages).toHaveBeenCalledTimes(2)
+    })
+
+    it('is forgotten when the user changes', async () => {
+      await endTurnWhileBackendDown()
+      act(() => useAuthStore.setState({ user: user(2), token: 't2' }))
+      mocks.getMessages.mockClear()
+      mocks.getMessages.mockResolvedValue([])
+      await waitFor(() => expect(lastStream().enabled).toBe(true))
+      connect()
+      await pause(40)
+      expect(mocks.getMessages).not.toHaveBeenCalled()
+    })
   })
 })
 
@@ -467,5 +644,155 @@ describe('one user to the next', () => {
     expect(store().chats).toBe(before.chats)
     expect(store().messages).toBe(before.messages)
     expect(dismissToast).not.toHaveBeenCalled()
+  })
+})
+
+describe('the provider list empties while signed in', () => {
+  async function goDark() {
+    const view = setup()
+    await waitFor(() => expect(lastStream().enabled).toBe(true))
+    act(() => store().setChats([chatRow(7)]))
+    deliver(permissionEvent('p1', 7))
+    act(() => store().setOpen(true))
+    act(() => store().selectChat(8))
+    act(() =>
+      store().apply({
+        seq: ++seq,
+        type: 'turn_started',
+        chat_id: 8,
+        turn_id: 't9',
+        starting: false,
+        resuming: false,
+      })
+    )
+    expect(showToast).toHaveBeenCalledTimes(1)
+    mocks.listProviders.mockResolvedValue([])
+    await act(async () => {
+      await view.qc.invalidateQueries({ queryKey: providersKey(1) })
+    })
+    await waitFor(() => expect(lastStream().enabled).toBe(false))
+    return view
+  }
+
+  it('dismisses the approval toast and wipes the store, so nothing is left behind', async () => {
+    await goDark()
+    expect(dismissToast).toHaveBeenCalledWith('p1')
+    expect(store()).toEqual(useAiChatStore.getInitialState())
+  })
+
+  it('tells the reader the assistant is gone, so the panel does not just vanish', async () => {
+    await goDark()
+    expect(showToast).toHaveBeenCalledWith(
+      'AI chat is no longer available to you.',
+      expect.objectContaining({ id: 'ai-chat-unavailable' })
+    )
+  })
+
+  it('says nothing when the user logs out', async () => {
+    const { unmount } = setup()
+    await waitFor(() => expect(lastStream().enabled).toBe(true))
+    act(() => useAuthStore.setState({ user: null, token: null }))
+    unmount()
+    expect(showToast).not.toHaveBeenCalled()
+  })
+
+  it("says nothing while a new user's providers are still loading", async () => {
+    setup()
+    await waitFor(() => expect(lastStream().enabled).toBe(true))
+    act(() => useAuthStore.setState({ user: user(2), token: 't2' }))
+    await waitFor(() => expect(lastStream().enabled).toBe(true))
+    expect(showToast).not.toHaveBeenCalled()
+  })
+
+  it('brings back no stale turn, card or open panel when providers return', async () => {
+    const view = await goDark()
+    mocks.listProviders.mockResolvedValue([NOVA])
+    await act(async () => {
+      await view.qc.invalidateQueries({ queryKey: providersKey(1) })
+    })
+    await waitFor(() => expect(lastStream().enabled).toBe(true))
+    expect(store().live).toEqual({})
+    expect(store().open).toBe(false)
+    expect(store().approvals).toEqual({})
+  })
+})
+
+describe('a 403 on send that empties the provider list', () => {
+  it('takes the panel away, and the reader is told why instead of it just vanishing', async () => {
+    mocks.createChat.mockRejectedValue(new CrmError(403, 'role_not_allowed'))
+    const qc = new QueryClient({
+      defaultOptions: { queries: { retry: false } },
+    })
+    render(
+      <QueryClientProvider client={qc}>
+        <Harness />
+        <ChatPanel />
+      </QueryClientProvider>
+    )
+    await waitFor(() => expect(lastStream().enabled).toBe(true))
+    act(() => store().setOpen(true))
+    const box = await screen.findByRole('textbox', { name: 'Message' })
+
+    // The access is gone: the send is refused and the list is now empty.
+    mocks.listProviders.mockResolvedValue([])
+    await userEvent.type(box, 'hello{Enter}')
+
+    await waitFor(() => expect(lastStream().enabled).toBe(false))
+    expect(screen.queryByRole('complementary', { hidden: true })).toBeNull()
+    expect(showToast).toHaveBeenCalledWith(
+      'AI chat is no longer available to you.',
+      expect.objectContaining({ id: 'ai-chat-unavailable' })
+    )
+  })
+})
+
+describe('the order of a wipe', () => {
+  it('closes the stream, then removes the queries, then resets the store', async () => {
+    const order: string[] = []
+    stream.mockImplementation(enabled => {
+      // A real effect, as useAiChatStream has: its cleanup is the close.
+      useEffect(() => {
+        if (!enabled) return
+        return () => {
+          order.push('stream closed')
+        }
+      }, [enabled])
+    })
+    const { qc, unmount } = setup()
+    await waitFor(() => expect(lastStream().enabled).toBe(true))
+    const remove = qc.removeQueries.bind(qc)
+    qc.removeQueries = ((filters: never) => {
+      order.push('queries removed')
+      return remove(filters)
+    }) as typeof qc.removeQueries
+    const stop = useAiChatStore.subscribe(() => order.push('store reset'))
+
+    unmount()
+    stop()
+    expect(order).toEqual(['stream closed', 'queries removed', 'store reset'])
+  })
+})
+
+describe('where the toaster sits', () => {
+  it('has no offset while the feature is dark', async () => {
+    mocks.listProviders.mockResolvedValue([])
+    setup()
+    await waitFor(() => expect(mocks.listProviders).toHaveBeenCalled())
+    expect(screen.getByTestId('offset')).toHaveTextContent('null')
+  })
+
+  it('clears the button while it shows, and the panel while it is open', async () => {
+    setup()
+    await waitFor(() =>
+      expect(screen.getByTestId('visible')).toHaveTextContent('true')
+    )
+    expect(screen.getByTestId('offset')).toHaveTextContent('{"bottom":72}')
+
+    act(() => store().setOpen(true))
+    const open = JSON.parse(
+      screen.getByTestId('offset').textContent ?? 'null'
+    ) as { bottom: number; right: string }
+    expect(open.bottom).toBe(72)
+    expect(open.right).toContain('clamp(360px, 35vw, 720px)')
   })
 })
