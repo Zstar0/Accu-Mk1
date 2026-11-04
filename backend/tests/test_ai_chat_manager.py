@@ -433,6 +433,7 @@ def v4a(patch, **arguments) -> dict:
 
 def test_a_v4a_patch_is_shown_as_it_is_whatever_the_size_of_the_file():
     assert diff_detail("old\n", "new\n", v4a("new\n")) == ("/a\nnew\n", False)
+    assert diff_detail("old\n", "new\n", v4a("new\n", path="/a")) == ("/a\nnew\n", False)  # Hermes passes all of them
     assert diff_detail("x" * 200001, "new\n", v4a("new\n")) == ("/a\nnew\n", False)  # over the ceiling
     assert diff_detail("x\n" * 10001, "new\n", v4a("new\n")) == ("/a\nnew\n", False)  # over the line bound
     assert diff_detail("new\n", "new\n", v4a("new\n")) == ("/a\nnew\n", False)  # applied all the same: no "No change."
