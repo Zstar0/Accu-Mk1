@@ -30,6 +30,11 @@ from models import LimsSample, Peptide
 # second peptide and silently turn the conversion off.
 _DEAD_STATES = ("retracted", "rejected", "cancelled")
 
+# PEPT-Total's label is "mg/mL" but its value is the per-vial mass in mg (Handler
+# ruling, reports_analyte_trends._MASS_UNITS), so it converts like any mg row.
+# Leaving it would print page 1 in mg/mL beside NULL-unit vials in IU.
+_MASS_UNITS = {"mg", "mg/ml"}
+
 
 def naive_utc(dt: datetime) -> datetime:
     return dt.astimezone(timezone.utc).replace(tzinfo=None) if dt.tzinfo else dt
@@ -102,9 +107,9 @@ def iu_factor_for_sample(db, parent) -> Optional[Decimal]:
 
 def to_iu(value, unit, factor: Optional[Decimal]) -> tuple:
     """(value, unit) for the wire. Only a mass in mg converts: a row already in
-    IU or mg/mL stays as filed, and a value it cannot read keeps its unit, so a
-    number is never relabeled without converting."""
-    if factor is None or (unit or "mg").strip().lower() != "mg":
+    IU stays as filed, and a value it cannot read keeps its unit, so a number is
+    never relabeled without converting."""
+    if factor is None or (unit or "mg").strip().lower() not in _MASS_UNITS:
         return value, unit
     text = "" if value is None else str(value).strip()
     if not text:

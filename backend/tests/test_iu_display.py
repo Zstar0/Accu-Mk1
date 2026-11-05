@@ -101,7 +101,8 @@ def _stub(monkeypatch, rows, wires=()):
     (None, "mg", (None, "IU")),         # pending row: unit follows, nothing to convert
     ("", "mg", ("", "IU")),
     ("55.65", "IU", ("55.65", "IU")),   # P-2878 row 43971 stays as filed
-    ("4.2", "mg/mL", ("4.2", "mg/mL")),
+    ("18.55", "mg/mL", ("55.65", "IU")),  # PEPT-Total's label, the value is mg (reports_analyte_trends)
+    ("4.2", "ug", ("4.2", "ug")),
     ("N/A", "mg", ("N/A", "mg")),       # never relabel a value it could not convert
 ])
 def test_to_iu(value, unit, want):
@@ -237,6 +238,13 @@ def test_row_already_in_iu_is_untouched(db, monkeypatch):
     assert (row["Result"], row["Unit"]) == ("55.65", "IU")
 
 
+def test_pept_total_labelled_mg_per_ml_converts_on_page_1(db, monkeypatch):
+    parent = _sample(db, [_peptide(db)])
+    _stub(monkeypatch, [_wire_row("PEPT-Total", "18.55", "mg/mL")])
+    row = build_legacy_rows(db, parent)[0]
+    assert (row["Result"], row["Unit"]) == ("55.65", "IU")
+
+
 def test_native_quantity_converts_and_the_spec_judges_raw_mg(db, monkeypatch):
     svcs = native_catalog(db)
     hgh = _peptide(db)
@@ -257,19 +265,19 @@ def test_native_quantity_converts_and_the_spec_judges_raw_mg(db, monkeypatch):
 
 # variance + per-vial -------------------------------------------------------
 
-def _variance_world(db, ordered=AFTER):
+def _variance_world(db, ordered=AFTER, values=("18", "18.55", "19"), svc_unit="mg", vial_unit="mg"):
     hgh = _peptide(db)
     parent = _sample(db, [hgh], ordered=ordered)
-    qty = _service(db, "PEPT-Total", unit="mg", variance_capable=True)
+    qty = _service(db, "PEPT-Total", unit=svc_unit, variance_capable=True)
     pur = _service(db, "HPLC-PUR", unit="%")
     idsvc = _service(db, "ID_HGH")
-    for seq, kind, value in ((1, "core", "18"), (2, "variance", "18.55"), (3, "variance", "19")):
+    for seq, kind, value in zip((1, 2, 3), ("core", "variance", "variance"), values):
         sub = LimsSubSample(parent_sample_pk=parent.id, external_lims_uid=f"mk1://v{seq}",
                             sample_id=f"{parent.sample_id}-S{seq:02d}", vial_sequence=seq,
                             assignment_role="hplc", assignment_kind=kind, in_variance_set=True)
         db.add(sub)
         db.flush()
-        for svc, val, unit in ((qty, value, "mg"), (pur, "99.1", None), (idsvc, "HGH", None)):
+        for svc, val, unit in ((qty, value, vial_unit), (pur, "99.1", None), (idsvc, "HGH", None)):
             db.add(LimsAnalysis(lims_sub_sample_pk=sub.id, analysis_service_id=svc.id, keyword=svc.keyword,
                                 title=svc.title, result_value=val, result_unit=unit,
                                 review_state="variance_verified", reportable=True))
@@ -296,6 +304,19 @@ def test_variance_series_carries_iu_for_the_headline(db):
 def test_variance_series_stays_mg_before_the_cutoff(db):
     series = build_variance_analyte_series(db, _variance_world(db, ordered=BEFORE))["PEPT-Total"]
     assert series == {"unit": "mg", "values": ["18.55", "19"]}
+
+
+def test_variance_series_label_ignores_a_first_vial_it_cannot_read(db):
+    world = _variance_world(db, values=("18", "< LOQ", "19"))
+    assert build_variance_analyte_series(db, world)["PEPT-Total"] == {"unit": "IU", "values": ["< LOQ", "57"]}
+
+
+def test_every_surface_agrees_when_the_service_is_labelled_mg_per_ml(db):
+    world = _variance_world(db, svc_unit="mg/mL", vial_unit=None)
+    assert build_variance_analyte_series(db, world)["PEPT-Total"] == {"unit": "IU", "values": ["55.65", "57"]}
+    recs = build_variance_replicates(db, world)["HGH (Somatropin)"]
+    assert [r["QUANTITY"] for r in recs] == ["54 IU", "55.65 IU", "57 IU"]
+    assert list_vials_for_certificates(db, world)[1][1]["HGH (Somatropin)"]["QUANTITY"] == "55.65 IU"
 
 
 def test_per_vial_certificates_print_iu(db):

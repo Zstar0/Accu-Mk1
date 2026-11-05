@@ -26,7 +26,7 @@ No per-sample choice. I read "default it to UI" as IU; veto here if wrong.
 ## Not converted
 
 - `hplc_processor`, `prep_bridge`, stored results, spec judgement.
-- Rows already in another unit (`IU`, `mg/mL`).
+- Rows already in `IU`. A `PEPT-Total` row labelled `mg/mL` holds mg (Handler ruling, `reports_analyte_trends.py`) and does convert, so page 1 and the vial figures always agree.
 
 ## Known ceilings
 

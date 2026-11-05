@@ -457,5 +457,9 @@ def build_variance_analyte_series(db: Session, parent) -> dict:
             if _category(kw) == "quantity":
                 value, unit = to_iu(value, unit, iu_factor)
             entry = out.setdefault(kw, {"unit": unit, "values": []})
+            # A vial to_iu could not read keeps its unit, so it must not label
+            # the converted ones just by coming first.
+            if iu_factor is not None and unit == "IU":
+                entry["unit"] = unit
             entry["values"].append(value)
     return {k: v for k, v in out.items() if v["values"]}
