@@ -124,6 +124,19 @@ Key documents:
 - `tauri-commands.md` - Adding new Rust commands
 - `static-analysis.md` - All linting tools and quality gates
 
+## Cloud Agent
+
+Postgres, the FastAPI backend, and the Vite dev server are started on boot.
+
+- UI: http://127.0.0.1:1420
+- API: http://127.0.0.1:8012 (`GET /health` returns the app version)
+- Sign in as `admin@accumark.local`. The password is created on first boot and stored in `/opt/mk1-dev/admin-password`.
+- `backend/.env` is copied from `backend/.env.example` when it is missing. Local photo, flag, and document files are under `/var/lib/mk1`.
+- Python lives in `/opt/mk1-venv`. From `backend/`, run `/opt/mk1-venv/bin/python -m pytest`. Frontend checks stay `npm run typecheck` and `npm run test:run`.
+- Logs: `/tmp/mk1-backend.log` and `/tmp/mk1-frontend.log`. The processes are tmux sessions `mk1-backend` and `mk1-frontend`.
+- The Integration Service, SENAITE, and WordPress are not running here. Screens that call them show a disconnected state.
+- `npm run check:all` also compiles the Tauri crate. WebKit and GTK libraries are installed for that; the desktop shell itself is not launched.
+
 ## Claude Code Commands & Agents
 
 These are specific to Claude Code but documented here for context.
