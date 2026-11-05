@@ -1,5 +1,12 @@
 # Changelog
 
+## v1.57.0 - 2026-11-05
+
+### HGH quantity in IU
+- **A peptide can print its COA quantity in IU from a date we choose.** The peptide flyout's Aliases tab has a new COA Quantity in IU section with a factor and a cutoff. Samples ordered from the cutoff forward print IU on page 1, the variance page and per-vial certificates. The lab keeps entering mg, stored results stay mg, and spec is still judged on the mg.
+- **Nothing changes until both fields are set on a peptide.** They can be changed or cleared until the cutoff passes, and then they lock.
+- **Sample details, receiving and the prep wizard read the declared amount as IU on those samples,** and prep divides it back to mg.
+
 ## v1.56.1 - 2026-10-30
 
 ### Flags and Tasks
