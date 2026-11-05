@@ -186,7 +186,8 @@ def test_upgrade_is_idempotent(db_session):
 # --- route guard (PATCH /analysis-profiles/{id}) ------------------------
 
 def test_coa_archetypes_accepts_legacy_hplc_and_rejects_bogus():
+    from coa.bw_shim import LEGACY_BW_ARCHETYPE
     from coa.hplc_shim import LEGACY_HPLC_ARCHETYPE
     from main import COA_ARCHETYPES
-    assert COA_ARCHETYPES == {"limit_table", LEGACY_HPLC_ARCHETYPE}
+    assert COA_ARCHETYPES == {"limit_table", LEGACY_HPLC_ARCHETYPE, LEGACY_BW_ARCHETYPE}
     assert "bogus" not in COA_ARCHETYPES

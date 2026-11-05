@@ -34,6 +34,39 @@ log = logging.getLogger(__name__)
 PROVENANCE_ORDERED = "ordered"
 
 
+def orders_native_bw(db, parent, services: dict | None) -> bool:
+    """True when `parent` is a native-born sample that ordered the native BW panel.
+
+    Keys on the profile key, never the sample type title. `is True` on the
+    NATIVE key only: the legacy `bac_water_panel` key means SENAITE-born.
+    Callers often pass a partial services map (add profile, retest, add-on,
+    vial create), so a live ordered placeholder of the BW profile's members
+    also counts (two cheap queries, only when the map lacks the key)."""
+    from catalog.bw_keys import NATIVE_BW_KEY
+    from lims_analyses.hplc_native import is_native_born
+    if not is_native_born(parent):
+        return False
+    if (services or {}).get(NATIVE_BW_KEY) is True:
+        return True
+    # Not manage_native.placeholder_profile_keys: it filters active profiles,
+    # and the native BW profile is seeded (and stays) INACTIVE.
+    from lims_analyses.manage_native import DEAD_STATES
+    from models import AnalysisProfile, LimsAnalysis
+    prof = db.query(AnalysisProfile).filter_by(key=NATIVE_BW_KEY).one_or_none()
+    if prof is None:
+        return False
+    member_ids = [m.id for m in prof.analysis_services]
+    if not member_ids:
+        return False
+    return db.query(LimsAnalysis.id).filter(
+        LimsAnalysis.lims_sample_pk == parent.id,
+        LimsAnalysis.lims_sub_sample_pk.is_(None),
+        LimsAnalysis.provenance == PROVENANCE_ORDERED,
+        LimsAnalysis.review_state.notin_(DEAD_STATES),
+        LimsAnalysis.analysis_service_id.in_(member_ids),
+    ).first() is not None
+
+
 def seed_parent_placeholders(
     db, *, parent, services: dict, package=None,
     reason: str | None = None, created_by_user_id: int | None = None,
@@ -60,6 +93,7 @@ def seed_parent_placeholders(
     to the archetype gate here would reintroduce the exact invisibility this
     feature exists to remove.
     """
+    from coa.bw_shim import LEGACY_BW_ARCHETYPE
     from models import LimsAnalysis
     from coa.native_sections import _ordered_native_profiles
     from lims_analyses.hplc_native import (AGGREGATES, TRIO, flag_unresolved_slots,
@@ -73,8 +107,15 @@ def seed_parent_placeholders(
     profiles = _ordered_native_profiles(db, services or {}, package,
                                         require_archetype=False)
 
+    # Slots are the PEPTIDE model (one HPLC trio per analyte). A native-born
+    # Bac Water parent (spec 2026-10-05 MB3) carries "Benzyl Alcohol" as its
+    # analyte but its panel is slot-less, so it never resolves slots and never
+    # raises the unresolved-analyte flag (which would block its COA). Gated by
+    # the ORDERED profile key (never the sample type title), and by BW
+    # exclusion, not a peptide allow-list: native rows with a NULL
+    # sample_type_title (retest rows) must keep resolving slots.
     native_slots = None
-    if is_native_born(parent):
+    if is_native_born(parent) and not orders_native_bw(db, parent, services):
         native_slots = resolve_slot_peptides(db, parent)
         if not native_slots:
             log.error("registry.native_placeholder_no_analyte_slots sample_id=%s", parent.sample_id)
@@ -105,6 +146,12 @@ def seed_parent_placeholders(
         stats["created_ids"].append(row.id)
 
     for prof in profiles:
+        # The native BW panel is placeheld ONLY on a native-born parent; a
+        # SENAITE-born BW sample keeps its SENAITE shadow trio as the single
+        # entry surface.
+        if prof.coa_archetype == LEGACY_BW_ARCHETYPE and not is_native_born(parent):
+            stats["skipped"] += len(prof.analysis_services)
+            continue
         for svc in prof.analysis_services:
             if (getattr(svc, "origin", None) or "") != "mk1":
                 stats["skipped"] += 1

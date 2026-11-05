@@ -17,6 +17,7 @@ from datetime import datetime
 from sqlalchemy import and_, select
 from sqlalchemy.orm import Session
 
+from catalog.bw_keys import LEGACY_BW_KEY, NATIVE_BW_KEY
 from catalog.hplc_keys import LEGACY_HPLC_KEY, NATIVE_HPLC_KEY
 from lims_analyses.service import BadRequestError
 from models import AnalysisProfile, AnalysisService, LimsAnalysis, LimsSample
@@ -542,14 +543,20 @@ def _has_warning(db: Session, sample: LimsSample, reason: str, message: str) -> 
 
 
 def _seed_keys(db: Session) -> dict[str, str]:
-    """{alias: twin} when the HPLC alias has no members and its native twin
-    does (prod since the native switch): a retest seeds and snapshots the
-    twin in the alias's place. Empty otherwise."""
-    profs = _profiles_by_key(db, [LEGACY_HPLC_KEY, NATIVE_HPLC_KEY])
-    alias, twin = profs.get(LEGACY_HPLC_KEY), profs.get(NATIVE_HPLC_KEY)
-    if (alias is None or not alias.analysis_services) and twin is not None and twin.analysis_services:
-        return {LEGACY_HPLC_KEY: NATIVE_HPLC_KEY}
-    return {}
+    """{alias: twin} for each primary whose legacy alias has no members and
+    whose native twin does. HPLC: prod since the native switch. Bac Water:
+    seed_bw_native_catalog runs on every boot, so the native profile always has
+    members and the legacy one never does; the alias fires whenever a spec lists
+    `bac_water_panel`, before the WP flip too. Pre-flip that is harmless: a
+    SENAITE-born retest is not native-born, so seed_parent_placeholders skips
+    the legacy_bw profile and mints nothing. Empty when neither pair qualifies."""
+    out: dict[str, str] = {}
+    for legacy, native in ((LEGACY_HPLC_KEY, NATIVE_HPLC_KEY), (LEGACY_BW_KEY, NATIVE_BW_KEY)):
+        profs = _profiles_by_key(db, [legacy, native])
+        alias, twin = profs.get(legacy), profs.get(native)
+        if (alias is None or not alias.analysis_services) and twin is not None and twin.analysis_services:
+            out[legacy] = native
+    return out
 
 
 def _hplc_key(spec: RetestSpec, seed_keys: dict | None = None) -> str:

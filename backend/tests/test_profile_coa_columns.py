@@ -185,6 +185,17 @@ def test_coa_footnotes_shape_rejected_at_create():
     assert r.status_code == 400, r.text
 
 
+def test_profile_coa_archetype_accepts_legacy_bw():
+    r = client.post("/analysis-profiles", json={
+        "key": "bw_legacy_arch_test", "name": "BW Arch", "is_addon": True,
+    })
+    assert r.status_code == 201, r.text
+    r = client.patch(f"/analysis-profiles/{r.json()['id']}",
+                     json={"coa_archetype": "legacy_bw"})
+    assert r.status_code == 200, r.text
+    assert r.json()["coa_archetype"] == "legacy_bw"
+
+
 def _new_profile(key):
     r = client.post("/analysis-profiles", json={"key": key, "name": key, "is_addon": True})
     assert r.status_code == 201, r.text
