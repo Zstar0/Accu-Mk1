@@ -3,7 +3,7 @@ import {
   retestChipFor,
   isCarriedPromotion,
   carriedSourceLabel,
-  carriedHplcVial,
+  carriedHplcVials,
 } from '@/lib/retest-chips'
 
 const info = {
@@ -109,25 +109,34 @@ describe('carried promotions', () => {
   })
 })
 
-describe('carriedHplcVial', () => {
+describe('carriedHplcVials', () => {
   const info = { sample_id: 'PB-1179', carried_hplc_vials: ['PB-1141-S01'] }
 
   it('names the vial behind the carried HPLC on the retest', () => {
-    expect(carriedHplcVial('PB-1179', info)).toBe('PB-1141-S01')
+    expect(carriedHplcVials('PB-1179', info)).toEqual(['PB-1141-S01'])
   })
 
-  it('is null when HPLC was not carried, so the sample reads its own prep', () => {
-    expect(carriedHplcVial('PB-1179', { sample_id: 'PB-1179' })).toBeNull()
+  it('names every vial when HPLC came from more than one, so none is picked', () => {
     expect(
-      carriedHplcVial('PB-1179', {
+      carriedHplcVials('PB-1179', {
+        sample_id: 'PB-1179',
+        carried_hplc_vials: ['PB-1141-S01', 'PB-1141-S04'],
+      })
+    ).toEqual(['PB-1141-S01', 'PB-1141-S04'])
+  })
+
+  it('is empty when HPLC was not carried, so the sample reads its own prep', () => {
+    expect(carriedHplcVials('PB-1179', { sample_id: 'PB-1179' })).toEqual([])
+    expect(
+      carriedHplcVials('PB-1179', {
         sample_id: 'PB-1179',
         carried_hplc_vials: [],
       })
-    ).toBeNull()
-    expect(carriedHplcVial('PB-1179', null)).toBeNull()
+    ).toEqual([])
+    expect(carriedHplcVials('PB-1179', null)).toEqual([])
   })
 
   it('ignores info still loaded from the sample the user just left', () => {
-    expect(carriedHplcVial('P-0001', info)).toBeNull()
+    expect(carriedHplcVials('P-0001', info)).toEqual([])
   })
 })

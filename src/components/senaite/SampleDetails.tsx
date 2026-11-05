@@ -150,7 +150,7 @@ import {
 } from '@/lib/native-parent-analyses'
 import { NativeManageAnalysesBlock } from '@/components/senaite/NativeManageAnalysesBlock'
 import { pickerSourceFor } from '@/lib/manage-analyses-picker'
-import { carriedHplcVial } from '@/lib/retest-chips'
+import { carriedHplcVials } from '@/lib/retest-chips'
 import { fieldEditKey, hasParentIdentity } from '@/lib/parent-identity'
 import { ParentRetestConfirmDialog } from '@/components/senaite/ParentRetestConfirmDialog'
 import { useParentRetestFlow } from '@/hooks/use-parent-retest-flow'
@@ -4279,8 +4279,16 @@ export function SampleDetails() {
     if (!sampleId) return
     try {
       const ownPreps = await listSamplePreps({ search: sampleId, limit: 1 })
-      const carriedVial =
-        ownPreps.length === 0 ? carriedHplcVial(sampleId, retestInfo) : null
+      const carried =
+        ownPreps.length === 0 ? carriedHplcVials(sampleId, retestInfo) : []
+      if (carried.length > 1) {
+        // Same rule as the backend's chromatogram copy: no single run to pick.
+        toast.error(
+          `HPLC was carried from more than one vial (${carried.join(', ')}), so there is no single run to show`
+        )
+        return
+      }
+      const carriedVial = carried[0] ?? null
       // Finished preps only: a newer unrun re-prep would hide the run that was carried.
       const preps = carriedVial
         ? await listSamplePreps({

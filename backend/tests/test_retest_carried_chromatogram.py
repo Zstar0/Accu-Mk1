@@ -29,6 +29,7 @@ from sub_samples.photo_storage import get_storage, set_storage_for_tests
 HPLC_KEY = "hplc-purity-identity"
 HM_KEY = "heavy_metals"
 ENDO_KEY = "endotoxin-usp85-lal"
+BW_KEY = "bac_water_panel"
 TRACE = {"times": [0.0, 0.1], "signals": [1.0, 2.5]}
 
 
@@ -66,11 +67,14 @@ def cat(db_session):
                          fulfillment_role="hm", fulfillment_dim="role", active=True)
     endo = AnalysisProfile(key=ENDO_KEY, name="Endotoxin", is_addon=True, vials_required=1,
                            fulfillment_role="endo85", fulfillment_dim="role", active=True)
+    bw = AnalysisProfile(key=BW_KEY, name="Bac Water", is_addon=False, vials_required=1,
+                         fulfillment_role="hplc", fulfillment_dim="role", active=True)
     pur = AnalysisService(title="Purity", keyword="HPLC-PURITY", origin="mk1")
     qty = AnalysisService(title="Quantity", keyword="HPLC-QUANTITY", origin="mk1")
     arsenic = AnalysisService(title="Arsenic", keyword="ARSENIC-PPM", origin="mk1")
     lal = AnalysisService(title="Endotoxin", keyword="ENDOTOXIN-USP85LAL", origin="mk1")
-    db.add_all([hplc, hm, endo, pur, qty, arsenic, lal,
+    benzyl = AnalysisService(title="Benzyl Alcohol", keyword="BENZYL", origin="mk1")
+    db.add_all([hplc, hm, endo, bw, pur, qty, arsenic, lal, benzyl,
                 VialRole(code="hplc", label="HPLC", sort_order=0),
                 VialRole(code="hm", label="Heavy Metals", sort_order=1),
                 VialRole(code="endo85", label="Endotoxin", sort_order=2)])
@@ -78,16 +82,16 @@ def cat(db_session):
     hplc.analysis_services.extend([pur, qty])
     hm.analysis_services.append(arsenic)
     endo.analysis_services.append(lal)
+    bw.analysis_services.append(benzyl)
     db.flush()
-    return {"pur": pur, "qty": qty, "arsenic": arsenic, "hplc": hplc, "hm": hm, "endo": endo}
+    return {"pur": pur, "qty": qty, "arsenic": arsenic, "benzyl": benzyl,
+            "hplc": hplc, "hm": hm, "endo": endo, "bw": bw}
 
 
-def _original(db, cat):
+def _original(db, cat, *, profiles=("hplc", "hm", "endo")):
     row = LimsSample(sample_id="PB-1141", external_lims_system="mk1", status="verified",
                      catalog_snapshot={"profiles": [
-                         {"key": HPLC_KEY, "profile_id": cat["hplc"].id},
-                         {"key": HM_KEY, "profile_id": cat["hm"].id},
-                         {"key": ENDO_KEY, "profile_id": cat["endo"].id}]})
+                         {"key": cat[p].key, "profile_id": cat[p].id} for p in profiles]})
     db.add(row)
     db.flush()
     return row
@@ -287,6 +291,60 @@ def test_storage_failure_warns_and_never_costs_the_mint(db_session, cat, storage
     assert retest.is_retest is True and _atts(db, retest) == []
     [warning] = _warnings(db, retest)
     assert "secret-name" not in warning.details["message"]
+
+
+def test_a_failed_copy_is_retried_on_the_next_push(db_session, cat, storage):
+    """A re-push carries no new rows, so only the earlier warning says the copy is owed."""
+    db = db_session
+    original = _original(db, cat)
+    s01 = _vial(db, original, 1)
+    _verified(db, original, s01, cat["pur"])
+    _trace(db, s01.sample_id)
+    storage.save_error = RuntimeError("s3 down")
+    retest, _ = _mint(db)
+    assert _atts(db, retest) == []
+
+    storage.save_error = None
+    _, out = _mint(db, retest=retest)
+
+    assert out["carried"] == 0
+    [row] = _atts(db, retest)
+    assert row.filename == "chromatogram_PB-1141-S01.csv"
+    assert len(_events(db, retest, "chromatogram_carried")) == 1
+    _mint(db, retest=retest)
+    assert len(_atts(db, retest)) == 1 and len(storage.saved) == 1
+
+
+def test_a_re_push_does_not_heal_a_retest_minted_before_the_copy(db_session, cat, storage, monkeypatch):
+    """PB-1178 and P-5502 never warned: healing them waits on the Handler, not on an order re-push."""
+    db = db_session
+    original = _original(db, cat)
+    s01 = _vial(db, original, 1)
+    _verified(db, original, s01, cat["pur"])
+    _trace(db, s01.sample_id)
+    with monkeypatch.context() as m:
+        m.setattr(retest_carry, "_carry_chromatogram", lambda db, **kw: None)
+        retest, _ = _mint(db)
+
+    _mint(db, retest=retest)
+
+    assert _atts(db, retest) == [] and storage.saved == []
+
+
+def test_a_bac_water_carry_files_the_chromatogram_too(db_session, cat, storage):
+    """bac_water_panel anchors the hplc vial role (seeder ROLE_TO_WP_KEYS), and its COA gate wants a trace."""
+    db = db_session
+    original = _original(db, cat, profiles=("bw", "endo"))
+    s01 = _vial(db, original, 1)
+    _verified(db, original, s01, cat["benzyl"], value="0.9")
+    _trace(db, s01.sample_id)
+
+    retest, out = _mint(db, carry=(BW_KEY,))
+
+    assert out["carried"] == 1
+    [row] = _atts(db, retest)
+    assert row.filename == "chromatogram_PB-1141-S01.csv"
+    assert [v.sample_id for v in carried_hplc_source_vials(db, retest)] == ["PB-1141-S01"]
 
 
 def test_a_carry_without_hplc_files_nothing(db_session, cat, storage):

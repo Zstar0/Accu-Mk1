@@ -522,10 +522,12 @@ def carry_results(db: Session, *, original: LimsSample, retest: LimsSample,
 
 
 def _carries_hplc(retest: LimsSample) -> bool:
-    """The spec carried the HPLC profile. A vial's role can't say: riders
-    (fentanyl) live on an hplc-role host vial."""
+    """The spec carried a profile that anchors the hplc vial role: HPLC or Bac
+    Water. A vial's role can't say: riders (fentanyl) live on an hplc-role host vial."""
+    from lims_analyses.seeder import ROLE_TO_WP_KEYS
     spec = (retest.catalog_snapshot or {}).get("retest") or {}
-    return bool(HPLC_PROFILE_KEYS.intersection(spec.get("carry") or []) - set(spec.get("missing") or []))
+    return bool(ROLE_TO_WP_KEYS["hplc"].intersection(spec.get("carry") or [])
+                - set(spec.get("missing") or []))
 
 
 def carried_hplc_source_vials(db: Session, retest: LimsSample) -> list:
@@ -635,12 +637,13 @@ def _event(db: Session, sample: LimsSample, event: str, details: dict,
                               user_id=user_id))
 
 
-def _has_warning(db: Session, sample: LimsSample, reason: str, message: str) -> bool:
+def _has_warning(db: Session, sample: LimsSample, reason: str, message: str | None = None) -> bool:
+    """Any warning for `reason` when `message` is None."""
     from models import LimsSubSampleEvent
     for d in db.execute(select(LimsSubSampleEvent.details).where(
             LimsSubSampleEvent.lims_sample_pk == sample.id,
             LimsSubSampleEvent.event == "retest_spec_warning")).scalars():
-        if (d or {}).get("reason") == reason and (d or {}).get("message") == message:
+        if (d or {}).get("reason") == reason and message in (None, (d or {}).get("message")):
             return True
     return False
 
@@ -774,7 +777,9 @@ def apply_retest_spec(db: Session, *, parent: LimsSample, raw_spec: dict,
         _event(db, parent, "analysis_carried",
                {**c, "verified_at": c["verified_at"].isoformat() if c["verified_at"] else None},
                user_id)
-    if carried:
+    # A re-push carries nothing new: an earlier warning is what says a copy is still
+    # owed. Retests minted before the copy existed never warned, so a push can't heal them.
+    if carried or _has_warning(db, parent, "chromatogram_not_carried"):
         _carry_chromatogram(db, retest=parent, user_id=user_id)
 
     if first_time:
