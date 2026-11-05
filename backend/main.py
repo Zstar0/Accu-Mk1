@@ -3587,6 +3587,8 @@ class PeptideUpdate(BaseModel):
     prep_vial_count: Optional[int] = None
     hplc_aliases: Optional[list[str]] = None  # Alternate names used in HPLC filenames
     display_aliases: Optional[list[str]] = None  # Approved customer-facing COA display aliases
+    iu_per_mg: Optional[float] = Field(None, gt=0, le=1000)  # COA quantity display factor (coa/iu_display.py)
+    iu_from: Optional[datetime] = None  # Samples ordered from here on print IU; locked once set
     method_ids: Optional[list[int]] = None  # Set all method assignments (one per instrument)
     analytes: Optional[list[AnalyteInput]] = None
     component_ids: Optional[list[int]] = None
@@ -3662,6 +3664,8 @@ class PeptideResponse(BaseModel):
     prep_vial_count: int = 1
     hplc_aliases: Optional[list[str]] = None
     display_aliases: Optional[list[str]] = None
+    iu_per_mg: Optional[float] = None
+    iu_from: Optional[datetime] = None
     created_at: datetime
     updated_at: datetime
     methods: list[MethodBrief] = []
@@ -3797,6 +3801,31 @@ def _build_analyte_responses(analytes) -> list[AnalyteResponse]:
             component_abbreviation=comp.abbreviation if comp else None,
         ))
     return results
+
+
+def _check_iu_update(peptide: Peptide, update: dict) -> None:
+    """Both IU fields lock once the cutoff arrives: moving either one then would
+    flip the numbers on published COAs at their next regen, so a slip is a
+    reviewed data fix, not an edit. Until then nothing has converted, so a
+    scheduled cutoff can still change. A new cutoff cannot be in the past: those
+    orders were declared in mg."""
+    from coa.iu_display import naive_utc
+    if update.get("iu_from"):
+        update["iu_from"] = naive_utc(update["iu_from"])
+    now = datetime.utcnow()
+    factor = float(peptide.iu_per_mg) if peptide.iu_per_mg is not None else None
+    new_factor = update.get("iu_per_mg", factor)
+    new_from = update.get("iu_from", peptide.iu_from)
+    if peptide.iu_from is not None and peptide.iu_from <= now:
+        if new_from != peptide.iu_from or new_factor != factor:
+            raise HTTPException(409, "IU factor and cutoff are locked once the cutoff has passed")
+        return
+    if peptide.is_blend and (update.get("iu_per_mg") or update.get("iu_from")):
+        raise HTTPException(422, "A blend never converts to IU")
+    if new_from is not None and new_factor is None:
+        raise HTTPException(422, "An IU cutoff needs an IU per mg factor")
+    if update.get("iu_from") and update["iu_from"] <= now:
+        raise HTTPException(422, "An IU cutoff cannot be in the past: those orders were declared in mg")
 
 
 def _peptide_to_response(db: Session, peptide: Peptide) -> PeptideResponse:
@@ -6135,6 +6164,7 @@ async def update_peptide(peptide_id: int, data: PeptideUpdate, db: Session = Dep
         raise HTTPException(404, f"Peptide {peptide_id} not found")
 
     update_data = data.model_dump(exclude_unset=True)
+    _check_iu_update(peptide, update_data)
     method_ids = update_data.pop("method_ids", None)
     analytes_data = update_data.pop("analytes", None)
     component_ids = update_data.pop("component_ids", None)
@@ -17786,9 +17816,13 @@ def _attach_sample_form(db: Session, result, row: Optional[LimsSample]) -> None:
 
     Mutable Mk1 state like priority: re-stamped on every cache hit so a PATCHed
     form never shows stale. `result` is the lookup model (or a plain dict);
-    all three fields stay None/False for a SENAITE-only sample."""
+    all three fields stay None/False for a SENAITE-only sample. The declared
+    unit rides along: it follows the peptide record, so it is mutable too."""
+    from coa.iu_display import declared_payload
     from sample_forms.service import form_payload
-    payload = form_payload(db, row)
+    shown = (result.get("declared_weight_mg") if isinstance(result, dict)
+             else getattr(result, "declared_weight_mg", None))
+    payload = {**form_payload(db, row), **declared_payload(db, row, shown)}
     if isinstance(result, dict):
         result.update(payload)
         return
@@ -24523,11 +24557,13 @@ def _worksheet_item_parents(db: Session, sample_ids,
     return out
 
 
-def _worksheet_item_parent_facts(parent: "Optional[LimsSample]") -> dict:
+def _worksheet_item_parent_facts(parent: "Optional[LimsSample]", iu_factor=None) -> dict:
     """Parent-sample facts the endotoxin bench needs on a worksheet item
     (spec 2026-09-18-endo-worksheet-design §4). None-safe: every key is
     present even when the item has no resolvable parent, so the FE never
-    branches on a missing key."""
+    branches on a missing key. `iu_factor` (coa.iu_display.iu_factors, batched
+    by the caller) turns an IU declared amount into the mg the bench reads."""
+    from coa.iu_display import declared_to_mg
     if parent is None:
         return {"declared_weight_mg": None, "sample_type": None,
                 "client_order_number": None, "sample_identity": None}
@@ -24553,7 +24589,7 @@ def _worksheet_item_parent_facts(parent: "Optional[LimsSample]") -> dict:
                     names.append(str(name))
             identity = ", ".join(names) or None
     return {
-        "declared_weight_mg": declared,
+        "declared_weight_mg": declared_to_mg(declared, iu_factor),
         "sample_type": parent.sample_type_title or parent.sample_type,
         "client_order_number": parent.client_order_number,
         "sample_identity": identity or parent.peptide_name,
@@ -24776,6 +24812,13 @@ def _serialize_worksheets(db: Session, worksheets: "list[Worksheet]") -> list:
     def _parent_for(sample_id: str) -> Optional[LimsSample]:
         return parent_by_sample.get(sample_id)
 
+    from coa.iu_display import iu_factors
+    iu_by_parent = iu_factors(db, list(parent_by_sample.values()))
+
+    def _parent_facts(sample_id: str) -> dict:
+        parent = _parent_for(sample_id)
+        return _worksheet_item_parent_facts(parent, iu_factor=iu_by_parent.get(parent.id) if parent else None)
+
     # Resolve per-item stamped method/instrument names (bench-stamping
     # slice 2, task 5): the DISTINCT non-null stamped values across a
     # vial's lims_analyses rows -- one distinct name -> that name; >1
@@ -24987,7 +25030,7 @@ def _serialize_worksheets(db: Session, worksheets: "list[Worksheet]") -> list:
                         "prep_note": it.prep_note, "prep_history": it.prep_history,
                         "sample_peptide_id": peptide_by_parent.get(rule_parent_pk[it.id])}
                        if it.id in rule_parent_pk else {}),
-                    **_worksheet_item_parent_facts(_parent_for(it.sample_id)),
+                    **_parent_facts(it.sample_id),
                 }
                 for it in items
             ],

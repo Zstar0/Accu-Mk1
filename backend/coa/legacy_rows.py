@@ -52,8 +52,10 @@ from coa.hplc_shim import (
     native_hplc_service_archetypes, slot_wires, wire_keyword, wire_title,
 )
 from coa.identity_verdict import identity_wire_result
+from coa.iu_display import iu_factor_for_sample, to_iu
 from coa.native_sections import NativeSectionsError, _spec_wire_dict
 from coa.spec_rules import SpecRuleError, evaluate, normalize_matrix, normalize_unit, resolve_spec
+from coa.variance_series import _category
 from lims_analyses.hplc_native import TRIO, is_native_born
 
 # Twin contract: src/coabuilder_core/legacy_rows.py + tests/
@@ -217,6 +219,7 @@ def build_legacy_rows(db, parent) -> list[dict]:
                 f"legacy rows: {parent.sample_id} registry slot "
                 f"{empty_slots[0]} has no analysis rows — remove it via "
                 f"relabel/Manage Analyses before COA")
+    iu_factor = iu_factor_for_sample(db, parent)
     rows = []
     bw_wire_keywords: set = set()
     for r in legacy:
@@ -259,17 +262,22 @@ def build_legacy_rows(db, parent) -> list[dict]:
             db, keyword=r.keyword, result=r.result,
             analysis_service_id=getattr(r, "analysis_service_id", None),
         )
+        # The spec judges the raw mg; the IU display comes after it.
+        spec_fields = (_native_spec_fields(db, parent, r, wire_result)
+                       if _page_one_archetype(r, parent) else {})
+        result, unit = wire_result, r.unit
+        if _category(r.keyword) == "quantity":
+            result, unit = to_iu(result, unit, iu_factor)
         rows.append({
             "uid": r.uid,
             "Keyword": keyword,
             "Title": title,
             "ServiceTitle": title,
-            "Result": wire_result,
-            "Unit": r.unit,
+            "Result": result,
+            "Unit": unit,
             "review_state": r.review_state,
             "ResultCaptureDate": r.captured,
-            **(_native_spec_fields(db, parent, r, wire_result)
-               if _page_one_archetype(r, parent) else {}),
+            **spec_fields,
         })
     # Fail closed on a re-keyed BW row colliding with another emitted row
     # (e.g. a native-born parent that also carries a live shadow PH-DETERM):

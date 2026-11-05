@@ -2520,6 +2520,8 @@ export interface PeptideRecord {
   prep_vial_count: number
   hplc_aliases?: string[] | null
   display_aliases?: string[] | null
+  iu_per_mg?: number | null
+  iu_from?: string | null
   created_at: string
   updated_at: string
   methods: MethodBrief[]
@@ -2600,6 +2602,8 @@ export async function updatePeptide(
     prep_vial_count: number
     hplc_aliases: string[] | null
     display_aliases: string[] | null
+    iu_per_mg: number | null
+    iu_from: string | null
     component_vial_assignments: Record<string, number>
   }>
 ): Promise<PeptideRecord> {
@@ -4552,6 +4556,10 @@ export interface SenaiteLookupResult {
   tracking_url?: string | null
   review_state: string | null
   declared_weight_mg: number | null
+  /** 'IU' when the declared amount is in IU (peptide cutoff); null means mg. */
+  declared_unit?: string | null
+  /** The declared amount in mg for prep, set only when declared_unit is 'IU'. */
+  declared_prep_mg?: number | null
   analytes: SenaiteAnalyte[]
   coa: SenaiteCOAInfo
   remarks: SenaiteRemark[]
