@@ -17,6 +17,7 @@ from typing import Optional
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from coa.iu_display import iu_factors
 from coa.spec_rules import sample_peptide_ids
 from models import AuditLog, EndoPrepRule, LimsAnalysis, LimsSubSample, WorksheetItem
 
@@ -310,14 +311,16 @@ def _row_inputs(db: Session, items) -> dict[int, dict]:
     # Only real parent pks: sample_peptide_ids cannot sort a None among ints.
     pks = sorted({p.id for p in parents.values()})
     peptide_by_parent = sample_peptide_ids(db, pks) if pks else {}
+    iu_by_parent = iu_factors(db, list(parents.values()))
     names = _served_peptide_names(db, endo)
     out = {}
     for it in endo:
         parent = parents.get(it.sample_id)
+        iu_factor = iu_by_parent.get(parent.id) if parent is not None else None
         out[it.id] = {
             "peptide_id": peptide_by_parent.get(parent.id) if parent is not None else None,
             "weight_mg": (it.prep_weight_mg if it.prep_weight_mg is not None
-                          else _worksheet_item_parent_facts(parent)["declared_weight_mg"]),
+                          else _worksheet_item_parent_facts(parent, iu_factor=iu_factor)["declared_weight_mg"]),
             "sample_bac": _sample_is_bac(it, parent, names.get(it.id, [])),
         }
     return out

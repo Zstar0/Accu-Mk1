@@ -413,6 +413,9 @@ def _run_migrations():
         "ALTER TABLE peptides ADD COLUMN IF NOT EXISTS hplc_aliases JSON",
         # Customer-facing display aliases — approved alternate names shown on COA
         "ALTER TABLE peptides ADD COLUMN IF NOT EXISTS display_aliases JSON",
+        # COA quantity display in IU from a cutoff forward (coa/iu_display.py)
+        "ALTER TABLE peptides ADD COLUMN IF NOT EXISTS iu_per_mg NUMERIC(10,4)",
+        "ALTER TABLE peptides ADD COLUMN IF NOT EXISTS iu_from TIMESTAMP",
         # Per-sample analyte display-alias picks (denormalized — survives changes to peptides.display_aliases)
         """
         CREATE TABLE IF NOT EXISTS sample_analyte_aliases (
