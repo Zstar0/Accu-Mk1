@@ -1,5 +1,14 @@
 # Changelog
 
+## v1.58.0 - 2026-11-05
+
+### Bacteriostatic Water native-born
+- **New Bac Water orders can be born in Mk1, with no SENAITE AR.** The native services `PH-BW`, `BENZYL-ALCOHOL-BW` and `FILL-VOLUME-BW` and the profile `bacteriostatic-water-panel` are seeded. Nothing changes until WordPress puts that profile key on the Bac Water Panel row; the profile itself stays inactive.
+- **Native BW samples get `BW-` ids from 1000,** minted from the ordered profile key, never from a title. A BW retest takes its prefix from the sample it retests.
+- **The panel seeds on the S01 vial at check-in** and goes through promote and verify like every native family.
+- **The COA prints native BW results on page 1** under the legacy keywords, with Mk1's specification and conforms.
+- A legacy `bac_water_panel` retest carries the native panel key, the same as HPLC.
+
 ## v1.57.0 - 2026-11-05
 
 ### HGH quantity in IU
