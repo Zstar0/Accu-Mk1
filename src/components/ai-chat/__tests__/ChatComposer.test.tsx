@@ -1,3 +1,5 @@
+// Real i18n resources, so the assertions below read the English copy.
+import '@/i18n/config'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { act, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'

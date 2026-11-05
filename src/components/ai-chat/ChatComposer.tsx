@@ -8,6 +8,8 @@
  */
 
 import { useRef, useState, type KeyboardEvent } from 'react'
+import { useTranslation } from 'react-i18next'
+import type { TFunction } from 'i18next'
 import { useQueryClient } from '@tanstack/react-query'
 import { SendHorizontal, Square, X } from 'lucide-react'
 import { Button } from '@/components/ui/button'
@@ -29,18 +31,21 @@ import {
 export const COMPOSER_ID = 'ai-chat-composer'
 
 const MAX_LENGTH = 8000
-const TRY_NEW = 'Try a new chat.'
-const GONE = `This chat is not available any more. ${TRY_NEW}`
-// The same words `auth-api.ts` uses for a 401 on its own requests.
-const SESSION_EXPIRED = 'Session expired. Please log in again.'
 
-/** An error notice always ends by telling the reader what to do. */
-const withAdvice = (message: string) =>
-  message === SESSION_EXPIRED || message.endsWith(TRY_NEW)
+/**
+ * An error notice always ends by telling the reader what to do. `t` is passed
+ * in, not imported, so the compiler re-runs this when the language changes.
+ */
+function withAdvice(message: string, t: TFunction) {
+  const tryNew = t('aiChat.notice.tryNew')
+  return message === t('aiChat.notice.sessionExpired') ||
+    message.endsWith(tryNew)
     ? message
-    : `${message} ${TRY_NEW}`
+    : `${message} ${tryNew}`
+}
 
 export function ChatComposer() {
+  const { t } = useTranslation()
   const qc = useQueryClient()
   const agent = useActiveProvider()
   const activeChatId = useAiChatStore(s => s.activeChatId)
@@ -67,7 +72,7 @@ export function ChatComposer() {
   )
   const guard = useRef(false)
 
-  const agentName = agent?.display_name ?? 'The agent'
+  const agentName = agent?.display_name ?? t('aiChat.theAgent')
   const empty = text.trim() === ''
 
   /** Turn a rejected create/send into a notice. */
@@ -82,11 +87,16 @@ export function ChatComposer() {
 
     if (status === 401) {
       // `crmFetch` does not clear auth on a 401. The chat is fine; the login is not.
-      store.setNotice({ kind: 'error', message: SESSION_EXPIRED, ...where })
+      // The same words `auth-api.ts` uses for a 401 on its own requests.
+      store.setNotice({
+        kind: 'error',
+        message: t('aiChat.notice.sessionExpired'),
+        ...where,
+      })
     } else if (status === 429) {
       store.setNotice({
         kind: 'busy',
-        message: `${agentName} is busy, try again in a minute.`,
+        message: t('aiChat.notice.busy', { agent: agentName }),
         ...where,
       })
     } else if (
@@ -99,14 +109,14 @@ export function ChatComposer() {
       if (gone) store.selectChat(null) // clears the notice, so set it after
       store.setNotice({
         kind: 'error',
-        message: GONE,
+        message: `${t('aiChat.notice.gone')} ${t('aiChat.notice.tryNew')}`,
         ...(gone ? {} : where),
       })
       void qc.invalidateQueries({ queryKey: [...AI_CHAT_KEY, 'providers'] })
     } else {
       store.setNotice({
         kind: 'error',
-        message: withAdvice('Could not send that message.'),
+        message: withAdvice(t('aiChat.notice.sendFailed'), t),
         ...where,
       })
     }
@@ -182,7 +192,7 @@ export function ChatComposer() {
       if (!left()) {
         useAiChatStore.getState().setNotice({
           kind: 'busy',
-          message: 'Could not stop that. Try again.',
+          message: t('aiChat.notice.stopFailed'),
           chatId,
         })
       }
@@ -224,8 +234,8 @@ export function ChatComposer() {
       >
         <Textarea
           id={COMPOSER_ID}
-          aria-label="Message"
-          placeholder={`Message ${agentName}`}
+          aria-label={t('aiChat.composer.message')}
+          placeholder={t('aiChat.composer.placeholder', { agent: agentName })}
           value={text}
           maxLength={MAX_LENGTH}
           rows={1}
@@ -238,7 +248,7 @@ export function ChatComposer() {
             type="button"
             variant="outline"
             size="icon"
-            aria-label="Stop"
+            aria-label={t('aiChat.composer.stop')}
             disabled={stopping}
             onClick={() => void stop()}
           >
@@ -248,7 +258,7 @@ export function ChatComposer() {
           <Button
             type="submit"
             size="icon"
-            aria-label="Send"
+            aria-label={t('aiChat.composer.send')}
             disabled={empty || sending || agent === null}
           >
             <SendHorizontal className="size-4" aria-hidden="true" />
@@ -268,6 +278,7 @@ function NoticeBanner({
   chatId: number | null
   onRetry?: (() => void) | undefined
 }) {
+  const { t } = useTranslation()
   // A notice without a chat belongs to wherever the reader is.
   if (
     notice === null ||
@@ -276,7 +287,7 @@ function NoticeBanner({
     return null
   }
   const message =
-    notice.kind === 'error' ? withAdvice(notice.message) : notice.message
+    notice.kind === 'error' ? withAdvice(notice.message, t) : notice.message
   return (
     <div
       role={notice.kind === 'cancelled' ? 'status' : 'alert'}
@@ -290,12 +301,12 @@ function NoticeBanner({
           className="h-6 px-2 text-xs"
           onClick={onRetry}
         >
-          Retry
+          {t('aiChat.retry')}
         </Button>
       )}
       <button
         type="button"
-        aria-label="Dismiss"
+        aria-label={t('aiChat.dismiss')}
         className="text-muted-foreground hover:text-foreground"
         onClick={() => useAiChatStore.getState().setNotice(null)}
       >

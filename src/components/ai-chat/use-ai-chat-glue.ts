@@ -15,6 +15,7 @@
  */
 
 import { useEffect, useRef } from 'react'
+import { useTranslation } from 'react-i18next'
 import {
   useQuery,
   useQueryClient,
@@ -22,6 +23,7 @@ import {
   type QueryClient,
 } from '@tanstack/react-query'
 import { toast, type ToasterProps } from 'sonner'
+import i18n from '@/i18n/config'
 import {
   getMessages,
   listChats,
@@ -78,6 +80,7 @@ export function useAiProviders(): AiProvider[] {
  * New chat and the menu, but no other agent's name.
  */
 export function useActiveProvider(): AiProvider | null {
+  const { t } = useTranslation()
   const providers = useAiProviders()
   const providerId = useAiChatStore(s => s.providerId)
   const chatProviderId = useAiChatStore(s =>
@@ -90,7 +93,7 @@ export function useActiveProvider(): AiProvider | null {
   if (found !== undefined) return found
   const first = providers[0] ?? null
   return first !== null && chatProviderId !== null
-    ? { ...first, display_name: 'The agent' }
+    ? { ...first, display_name: t('aiChat.theAgent') }
     : first
 }
 
@@ -128,7 +131,7 @@ async function explainChat(chatId: number): Promise<void> {
     if (last?.role === 'user' && store.live[chatId] === undefined) {
       store.raiseNotice({
         kind: 'busy',
-        message: 'The reply was interrupted. Send your message again.',
+        message: i18n.t('aiChat.notice.interrupted'),
         chatId,
       })
     }
@@ -222,11 +225,11 @@ let raised = 0 // never reset: a reused id could meet a toast still leaving
 function raiseApprovalToast(card: ApprovalCard, agent: string) {
   const id = `${card.permission_id}#${++raised}`
   toastIds.set(card.permission_id, id)
-  toast(`${agent} is waiting for your approval`, {
+  toast(i18n.t('aiChat.waitingForApproval', { agent }), {
     id,
     duration: Infinity,
     action: {
-      label: 'Open',
+      label: i18n.t('aiChat.toast.open'),
       onClick: () => {
         const st = useAiChatStore.getState()
         st.selectChat(card.chatId)
@@ -244,7 +247,8 @@ function agentOf(qc: QueryClient, chatId: number): string {
   return (
     qc
       .getQueryData<AiProvider[]>(providersKey(currentUserId()))
-      ?.find(p => p.id === providerId)?.display_name ?? 'The agent'
+      ?.find(p => p.id === providerId)?.display_name ??
+    i18n.t('aiChat.theAgent')
   )
 }
 
@@ -327,7 +331,7 @@ export function useAiChatGlue(): {
   const settled = providersQuery.isSuccess
   useEffect(() => {
     if (wasVisible.current && !visible && userId != null && settled) {
-      toast('AI chat is no longer available to you.', {
+      toast(i18n.t('aiChat.toast.unavailable'), {
         id: 'ai-chat-unavailable',
       })
     }
@@ -358,7 +362,7 @@ export function useAiChatGlue(): {
       const agent =
         card.agent ??
         providers.find(p => p.id === providerId)?.display_name ??
-        'The agent'
+        i18n.t('aiChat.theAgent')
       raiseApprovalToast(card, agent)
     }
   }, [approvals, open, activeChatId, chats, providers])

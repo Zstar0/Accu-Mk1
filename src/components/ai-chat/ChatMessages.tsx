@@ -8,13 +8,8 @@
  * thoughts and approval text render as plain text.
  */
 
-import {
-  useDeferredValue,
-  useEffect,
-  useLayoutEffect,
-  useMemo,
-  useRef,
-} from 'react'
+import { useDeferredValue, useEffect, useLayoutEffect, useRef } from 'react'
+import { useTranslation } from 'react-i18next'
 import { Check, Loader2, ShieldCheck, Wrench, X } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import {
@@ -57,7 +52,7 @@ function AssistantText({ text }: { text: string }) {
   // A streaming reply changes on every chunk and the parse reads all of it;
   // deferred, a burst of chunks costs one parse, not one each.
   const shown = useDeferredValue(text)
-  const html = useMemo(() => renderAgentHtml(shown), [shown])
+  const html = renderAgentHtml(shown)
   return (
     <div
       className={cn(
@@ -66,14 +61,14 @@ function AssistantText({ text }: { text: string }) {
         '[&_code]:rounded [&_code]:bg-muted [&_code]:px-1',
         '[&_pre]:my-2 [&_pre]:max-w-full [&_pre]:overflow-x-auto [&_pre]:rounded [&_pre]:bg-muted [&_pre]:p-2',
         '[&_pre_code]:bg-transparent [&_pre_code]:p-0',
-        '[&_ul]:my-1 [&_ul]:list-disc [&_ul]:pl-5 [&_ol]:my-1 [&_ol]:list-decimal [&_ol]:pl-5',
-        '[&_blockquote]:border-l-2 [&_blockquote]:pl-3 [&_blockquote]:text-muted-foreground',
+        '[&_ul]:my-1 [&_ul]:list-disc [&_ul]:ps-5 [&_ol]:my-1 [&_ol]:list-decimal [&_ol]:ps-5',
+        '[&_blockquote]:border-s-2 [&_blockquote]:ps-3 [&_blockquote]:text-muted-foreground',
         '[&_:is(h1,h2,h3,h4,h5,h6)]:mb-1 [&_:is(h1,h2,h3,h4,h5,h6)]:mt-3 [&_:is(h1,h2,h3,h4,h5,h6)]:font-semibold',
         '[&_:is(h1,h2)]:text-base [&_:is(h3,h4,h5,h6)]:text-sm [&>:first-child]:mt-0',
         // The parent's `overflow-wrap:anywhere` would crush the columns; normal lets the table scroll instead.
         // ponytail: `display:block` drops table semantics for some assistive tech and the scrolling table is not keyboard-focusable, because the sanitizer cannot add `role` or `tabindex`. A wrapper div around the table is the upgrade if a screen reader user needs it.
         '[&_table]:my-2 [&_table]:block [&_table]:max-w-full [&_table]:overflow-x-auto [&_table]:border-collapse [&_table]:[overflow-wrap:normal]',
-        '[&_th]:border [&_th]:px-2 [&_th]:py-1 [&_th]:text-left [&_th]:font-semibold [&_td]:border [&_td]:px-2 [&_td]:py-1'
+        '[&_th]:border [&_th]:px-2 [&_th]:py-1 [&_th]:text-start [&_th]:font-semibold [&_td]:border [&_td]:px-2 [&_td]:py-1'
       )}
       // Safe: `renderAgentHtml` sanitizes with renderCommentHtml, then makes every
       // link plain text.
@@ -101,11 +96,15 @@ function ChipIcon({ status }: { status: string | null }) {
 }
 
 function ToolChips({ tools }: { tools: ToolChip[] }) {
+  const { t } = useTranslation()
   if (tools.length === 0) return null
   return (
-    <ul className="flex flex-wrap gap-1.5" aria-label="Tools used">
+    <ul
+      className="flex flex-wrap gap-1.5"
+      aria-label={t('aiChat.messages.toolsUsed')}
+    >
       {tools.map(tool => {
-        const label = tool.title ?? tool.kind ?? 'tool'
+        const label = tool.title ?? tool.kind ?? t('aiChat.messages.tool')
         return (
           <li key={tool.id}>
             <Tooltip>
@@ -131,15 +130,21 @@ function ToolChips({ tools }: { tools: ToolChip[] }) {
 }
 
 const DECISION_LABEL: Record<string, string> = {
-  allow: 'Allowed once',
-  deny: 'Denied',
-  cancelled: 'Cancelled',
-  expired: 'Expired',
+  allow: 'aiChat.decision.allow',
+  deny: 'aiChat.decision.deny',
+  cancelled: 'aiChat.decision.cancelled',
+  expired: 'aiChat.decision.expired',
 }
 
 /** A stored approval. Never a live card: only `approvals` makes one. */
 function PermissionRow({ message }: { message: AiMessage }) {
+  const { t } = useTranslation()
   const decision = str(message.meta?.decision)
+  // `hasOwn`: the decision comes off the wire, and could be `constructor`.
+  const decisionKey =
+    decision !== null && Object.hasOwn(DECISION_LABEL, decision)
+      ? DECISION_LABEL[decision]
+      : undefined
   const title = str(message.meta?.title) ?? message.text
   const permissionId = str(message.meta?.permission_id)
   const waiting = useAiChatStore(
@@ -151,8 +156,11 @@ function PermissionRow({ message }: { message: AiMessage }) {
       <div className="min-w-0">
         <p className="break-words">{title}</p>
         <p className="font-medium">
-          {(decision !== null ? DECISION_LABEL[decision] : undefined) ??
-            (waiting ? 'Waiting for your decision.' : 'No decision recorded')}
+          {decisionKey !== undefined
+            ? t(decisionKey)
+            : waiting
+              ? t('aiChat.decision.waiting')
+              : t('aiChat.decision.none')}
         </p>
       </div>
     </div>
@@ -160,13 +168,12 @@ function PermissionRow({ message }: { message: AiMessage }) {
 }
 
 const STOP_NOTE: Record<string, string> = {
-  max_tokens: 'This reply was cut off at the length limit.',
-  max_turn_requests:
-    'The agent stopped at its step limit, so this reply may be incomplete.',
-  refusal: 'The agent declined to continue.',
+  max_tokens: 'aiChat.stop.maxTokens',
+  max_turn_requests: 'aiChat.stop.maxTurnRequests',
+  refusal: 'aiChat.stop.refusal',
 }
 
-/** What to say under a stored reply about how it ended, if anything. */
+/** The key of what to say under a stored reply about how it ended, if anything. */
 function stopNote(meta: AiMessage['meta']): string | null {
   const reason = str(meta?.stop_reason)
   if (reason === null || reason === 'end_turn' || reason === 'cancelled') {
@@ -175,10 +182,11 @@ function stopNote(meta: AiMessage['meta']): string | null {
   // `hasOwn`: the reason comes off the wire, and could be `constructor`.
   return Object.hasOwn(STOP_NOTE, reason)
     ? (STOP_NOTE[reason] ?? null)
-    : 'This reply may be incomplete.'
+    : 'aiChat.stop.incomplete'
 }
 
 function MessageRow({ message }: { message: AiMessage }) {
+  const { t } = useTranslation()
   if (message.role === 'user') {
     return (
       <div className="flex justify-end">
@@ -194,19 +202,19 @@ function MessageRow({ message }: { message: AiMessage }) {
     <div className="flex flex-col gap-2">
       <ToolChips tools={toolsOf(message.meta)} />
       {message.text !== '' && <AssistantText text={message.text} />}
-      {note !== null && <p className="text-xs text-muted-foreground">{note}</p>}
+      {note !== null && (
+        <p className="text-xs text-muted-foreground">{t(note)}</p>
+      )}
     </div>
   )
 }
 
 export function ChatMessages({ chatId }: { chatId: number }) {
+  const { t } = useTranslation()
   const rows = useAiChatStore(s => s.messages[chatId])
   const live = useAiChatStore(s => s.live[chatId])
   const approvals = useAiChatStore(s => s.approvals)
-  const cards = useMemo(
-    () => Object.values(approvals).filter(card => card.chatId === chatId),
-    [approvals, chatId]
-  )
+  const cards = Object.values(approvals).filter(card => card.chatId === chatId)
 
   // Follow the end of the conversation only while the reader is already near
   // it; someone reading history must not be pulled away by a streaming reply.
@@ -240,7 +248,7 @@ export function ChatMessages({ chatId }: { chatId: number }) {
       ref={scroller}
       data-testid="chat-scroll"
       role="region"
-      aria-label="Conversation"
+      aria-label={t('aiChat.messages.conversation')}
       tabIndex={0}
       className="flex min-h-0 flex-1 flex-col gap-3 overflow-y-auto px-3 py-3"
       onScroll={e => {
@@ -257,7 +265,9 @@ export function ChatMessages({ chatId }: { chatId: number }) {
         <div className="flex flex-col gap-2">
           {live.thought !== '' && (
             <details className="text-xs text-muted-foreground">
-              <summary className="cursor-pointer select-none">Thinking</summary>
+              <summary className="cursor-pointer select-none">
+                {t('aiChat.messages.thinking')}
+              </summary>
               <p className="mt-1 whitespace-pre-wrap break-words">
                 {live.thought}
               </p>

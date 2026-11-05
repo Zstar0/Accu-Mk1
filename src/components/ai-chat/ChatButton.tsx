@@ -8,6 +8,7 @@
  */
 
 import { useEffect, useRef } from 'react'
+import { useTranslation } from 'react-i18next'
 import { Loader2, MessageSquare } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { hasPendingApproval, isRunning, useAiChatStore } from './chat-store'
@@ -31,6 +32,7 @@ function openPanel() {
 }
 
 export function ChatButton() {
+  const { t } = useTranslation()
   const visible = useAiProviders().length > 0
   const open = useAiChatStore(s => s.open)
   const running = useAiChatStore(isRunning)
@@ -52,14 +54,14 @@ export function ChatButton() {
       <Button
         id={CHAT_BUTTON_ID}
         size="icon-lg"
-        aria-label="Open AI chat"
+        aria-label={t('aiChat.button.open')}
         aria-describedby="ai-chat-button-state"
         // The panel covers the button while open; hidden, it also leaves the
         // tab order and the accessibility tree.
         className={
           open
-            ? 'invisible fixed right-4 bottom-4 z-40 rounded-full shadow-lg'
-            : 'fixed right-4 bottom-4 z-40 rounded-full shadow-lg'
+            ? 'invisible fixed end-4 bottom-4 z-40 rounded-full shadow-lg'
+            : 'fixed end-4 bottom-4 z-40 rounded-full shadow-lg'
         }
         onClick={openPanel}
       >
@@ -68,22 +70,22 @@ export function ChatButton() {
           <Loader2
             data-testid="ai-chat-running"
             aria-hidden="true"
-            className="absolute -top-1 -left-1 size-4 animate-spin rounded-full bg-background text-primary motion-reduce:animate-none"
+            className="absolute -top-1 -start-1 size-4 animate-spin rounded-full bg-background text-primary motion-reduce:animate-none"
           />
         )}
         {pending && (
           <span
             data-testid="ai-chat-pending"
             aria-hidden="true"
-            className="absolute -top-0.5 -right-0.5 size-3 rounded-full bg-amber-500 ring-2 ring-background"
+            className="absolute -top-0.5 -end-0.5 size-3 rounded-full bg-amber-500 ring-2 ring-background"
           />
         )}
       </Button>
       <span id="ai-chat-button-state" className="sr-only">
         {pending
-          ? 'An approval is waiting'
+          ? t('aiChat.button.pending')
           : running
-            ? 'A reply is in progress'
+            ? t('aiChat.button.running')
             : ''}
       </span>
     </>

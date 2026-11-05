@@ -10,6 +10,7 @@
  */
 
 import { useState } from 'react'
+import { useTranslation } from 'react-i18next'
 import { ShieldQuestion } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { CrmError } from '@/lib/api-crm'
@@ -22,10 +23,10 @@ import {
 type Status = 'idle' | 'sending' | 'sent' | 'expired' | 'decided' | 'failed'
 
 const NOTE: Partial<Record<Status, string>> = {
-  sent: 'Sent.',
-  expired: 'This request expired.',
-  decided: 'Already decided.',
-  failed: 'Could not send that. Try again.',
+  sent: 'aiChat.approval.sent',
+  expired: 'aiChat.approval.expired',
+  decided: 'aiChat.approval.decided',
+  failed: 'aiChat.approval.failed',
 }
 
 /** What a rejected answer means for the card. */
@@ -39,6 +40,7 @@ function statusAfterError(e: unknown): Status {
 }
 
 export function ApprovalCard({ card }: { card: ApprovalCardData }) {
+  const { t } = useTranslation()
   const [status, setStatus] = useState<Status>('idle')
   const locked = status !== 'idle' && status !== 'failed'
   const stale = status === 'expired' || status === 'decided'
@@ -58,12 +60,12 @@ export function ApprovalCard({ card }: { card: ApprovalCardData }) {
   return (
     <div
       role="group"
-      aria-label="Approval needed"
+      aria-label={t('aiChat.approval.title')}
       className="rounded-md border border-amber-500/50 bg-amber-500/5 p-3 text-sm"
     >
       <div className="flex items-center gap-1.5 text-xs font-medium text-amber-700 dark:text-amber-400">
         <ShieldQuestion className="size-3.5" aria-hidden="true" />
-        Approval needed
+        {t('aiChat.approval.title')}
       </div>
       {/* Both scroll in place, so a long command cannot push the buttons away. */}
       <p
@@ -82,7 +84,7 @@ export function ApprovalCard({ card }: { card: ApprovalCardData }) {
       )}
       {card.hidden && (
         <p className="mt-1.5 text-xs text-muted-foreground">
-          Not all of this can be shown here, so it can only be denied.
+          {t('aiChat.approval.hidden')}
         </p>
       )}
       <div className="mt-2 flex flex-wrap items-center gap-2">
@@ -92,7 +94,7 @@ export function ApprovalCard({ card }: { card: ApprovalCardData }) {
             disabled={locked}
             onClick={() => void send('allow')}
           >
-            Allow once
+            {t('aiChat.approval.allowOnce')}
           </Button>
         )}
         <Button
@@ -101,11 +103,11 @@ export function ApprovalCard({ card }: { card: ApprovalCardData }) {
           disabled={locked}
           onClick={() => void send('deny')}
         >
-          Deny
+          {t('aiChat.approval.deny')}
         </Button>
         {note !== undefined && (
           <span role="status" className="text-xs text-muted-foreground">
-            {note}
+            {t(note)}
           </span>
         )}
         {stale && (
@@ -116,7 +118,7 @@ export function ApprovalCard({ card }: { card: ApprovalCardData }) {
               useAiChatStore.getState().dismissApproval(card.permission_id)
             }
           >
-            Dismiss
+            {t('aiChat.dismiss')}
           </Button>
         )}
       </div>

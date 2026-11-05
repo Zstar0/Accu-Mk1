@@ -11,6 +11,7 @@
 
 import { create } from 'zustand'
 import { devtools } from 'zustand/middleware'
+import i18n from '@/i18n/config'
 import type {
   AiChat,
   AiChatErrorCode,
@@ -335,13 +336,17 @@ function noticeFor(
   if (e.type === 'permission_resolved' && e.decision === 'expired') {
     return {
       kind: 'busy',
-      message: 'That approval request expired.',
+      message: i18n.t('aiChat.notice.approvalExpired'),
       chatId: e.chat_id,
     }
   }
   if (e.type !== 'turn_ended') return null
   if (e.stop_reason === 'cancelled') {
-    return { kind: 'cancelled', message: 'Stopped.', chatId: e.chat_id }
+    return {
+      kind: 'cancelled',
+      message: i18n.t('aiChat.notice.stopped'),
+      chatId: e.chat_id,
+    }
   }
   if (typeof e.message_seq === 'number') return null
   // The `error` event ahead of this one has already said why, with its advice
@@ -356,7 +361,7 @@ function noticeFor(
     : {
         // `busy`: an `error` notice would append "Try a new chat."
         kind: 'busy',
-        message: `${agent} ended without a reply.`,
+        message: i18n.t('aiChat.notice.noReply', { agent }),
         chatId: e.chat_id,
       }
 }
@@ -518,7 +523,7 @@ export const useAiChatStore = create<AiChatState>()(
           'dismissApproval'
         ),
 
-      apply: (e, agent = 'The agent') =>
+      apply: (e, agent = i18n.t('aiChat.theAgent')) =>
         set(
           state => {
             const data = chatDataOf(state)

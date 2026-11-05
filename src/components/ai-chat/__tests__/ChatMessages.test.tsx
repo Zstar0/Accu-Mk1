@@ -1,3 +1,5 @@
+// Real i18n resources, so the assertions below read the English copy.
+import '@/i18n/config'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { act, render, screen, within } from '@testing-library/react'
 import type { AiMessage } from '@/lib/ai-chat-api'

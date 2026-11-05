@@ -1,3 +1,5 @@
+// Real i18n resources, so the assertions below read the English copy.
+import '@/i18n/config'
 import {
   act,
   fireEvent,
