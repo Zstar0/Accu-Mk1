@@ -131,6 +131,7 @@ export type SettingsSubSection =
   | 'workflow'
   | 'integrations'
   | 'agents'
+  | 'acpProviders'
   | 'advanced'
 export type ActiveSubSection =
   | DashboardSubSection

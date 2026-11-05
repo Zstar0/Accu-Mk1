@@ -252,6 +252,7 @@
   "preferences.documents": "Documents",
   "preferences.integrations": "Integrations",
   "preferences.agents": "Agents",
+  "preferences.acpProviders": "ACP Providers",
   "preferences.documents.loadError": "Could not load document categories.",
   "preferences.documents.readOnly": "Only administrators can change document categories.",
   "preferences.documents.sectionTitle": "Document categories",

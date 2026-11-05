@@ -67,22 +67,24 @@ export interface FlagStreamEvent {
  * `rest` to be prepended to the next chunk. Comment/heartbeat frames (only
  * `:`-lines) and frames without a `data:` line yield nothing.
  */
-export function parseFrames(buffer: string): {
-  events: FlagStreamEvent[]
+export function parseFrames<T = FlagStreamEvent>(
+  buffer: string
+): {
+  events: T[]
   rest: string
 } {
   const segments = buffer.split('\n\n')
   // The final segment is the (possibly incomplete) leftover — carry it forward.
   const rest = segments.pop() ?? ''
-  const events: FlagStreamEvent[] = []
+  const events: T[] = []
   for (const seg of segments) {
-    const parsed = parseFrame(seg)
+    const parsed = parseFrame<T>(seg)
     if (parsed) events.push(parsed)
   }
   return { events, rest }
 }
 
-function parseFrame(segment: string): FlagStreamEvent | null {
+function parseFrame<T>(segment: string): T | null {
   const dataLines: string[] = []
   for (const raw of segment.split('\n')) {
     const line = raw.replace(/\r$/, '')
@@ -94,7 +96,7 @@ function parseFrame(segment: string): FlagStreamEvent | null {
   }
   if (dataLines.length === 0) return null
   try {
-    return JSON.parse(dataLines.join('\n')) as FlagStreamEvent
+    return JSON.parse(dataLines.join('\n')) as T
   } catch {
     return null // malformed — skip rather than tear down the stream
   }

@@ -31,6 +31,9 @@ import { TasksHeaderButton } from '@/components/tasks/TasksHeaderButton'
 import { QuickNav } from './QuickNav'
 import { FlagsFlyout } from '@/components/flags/FlagsFlyout'
 import { useFlagStreamGlue } from '@/components/flags/use-flag-stream-glue'
+import { ChatButton } from '@/components/ai-chat/ChatButton'
+import { ChatPanel } from '@/components/ai-chat/ChatPanel'
+import { useAiChatGlue } from '@/components/ai-chat/use-ai-chat-glue'
 
 // Backend connection status type
 type BackendStatus =
@@ -75,6 +78,11 @@ export function MainWindow() {
   // side-effect — the header pulse now reads the persisted `useFlagUnseen`
   // store directly, so nothing to thread through here.
   useFlagStreamGlue()
+
+  // AI chat: the one event stream, and whether the button shows (the user has
+  // a provider). Nothing renders and nothing connects until an admin enables
+  // one for them.
+  const { toasterOffset } = useAiChatGlue()
 
   useEffect(() => {
     getVersion()
@@ -194,8 +202,12 @@ export function MainWindow() {
         <CommandPalette />
         <WorksheetDrawer />
         <FlagsFlyout />
+        <ChatButton />
+        <ChatPanel />
         <Toaster
           position="bottom-right"
+          // Clear the AI chat button, and the panel while it is open.
+          offset={toasterOffset}
           theme={
             theme === 'dark' ? 'dark' : theme === 'light' ? 'light' : 'system'
           }

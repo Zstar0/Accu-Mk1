@@ -47,6 +47,13 @@ describe('renderCommentHtml', () => {
     expect(h).toMatch(/data-attachment-id="12"/)
     expect(h).not.toMatch(/<img[^>]+src=/)
   })
+  it('gives a heading and a table no tags unless asked (flags unchanged)', () => {
+    const body = '## Title\n\n| a | b |\n| - | - |\n| 1 | 2 |'
+    const h = renderCommentHtml(body, [])
+    expect(h).toContain('Title')
+    expect(h).not.toMatch(/<(h2|table|thead|tbody|tr|th|td)[\s>]/)
+    expect(renderCommentHtml(body, [], ['h2', 'table'])).toMatch(/<h2>Title/)
+  })
   it('neutralizes a javascript: link href (no active href)', () => {
     // markdown-it's validateLink rejects the URL (inert text); DOMPurify also
     // strips javascript: hrefs. Either way, no executable href survives.

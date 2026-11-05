@@ -246,6 +246,7 @@ def init_db():
     import groups.models  # noqa: F401  (register user_groups tables on Base)
     import boards.models  # noqa: F401  (register board_* tables on Base)
     import agents.models  # noqa: F401  (register agent_credentials on Base)
+    import ai_chat.models  # noqa: F401  (register acp_providers, ai_chats, ai_chat_messages on Base)
     # Run column migrations before create_all so ORM mappings match the DB schema
     _run_migrations()
     Base.metadata.create_all(bind=engine)

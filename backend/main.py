@@ -134,6 +134,8 @@ from customer_insights.routes import router as customer_insights_router
 from crm_close.routes import router as crm_close_router
 from support_plain.routes import router as support_plain_router
 from integration_keys.routes import router as integration_keys_router
+from ai_chat.providers import router as acp_providers_router
+from ai_chat.routes import router as ai_chat_router
 from agents.routes import router as agents_router
 from customer_review.routes import router as customer_review_router
 from workflow.cancel_routes import router as cancel_router
@@ -460,6 +462,9 @@ async def lifespan(app: FastAPI):
     from flags import bus as _flag_bus
     _flag_bus.BUS.set_loop(_asyncio.get_running_loop())
     _flag_seams.set_event_sink(_flag_bus.SSEEventSink(_flag_bus.BUS))
+    # AI chat: the idle-session reaper. Shutdown closes the sessions below, after `yield`.
+    from ai_chat import sessions as _ai_sessions, transport as _ai_transport
+    _ai_sessions.MANAGER.start_reaper()
     # Slack DM notifications (spec 2026-07-02) — dormant without the token.
     from slack_notify.notifier import maybe_start as _slack_maybe_start
     _slack_notifier_task = _slack_maybe_start(_flag_bus.BUS)
@@ -611,6 +616,17 @@ async def lifespan(app: FastAPI):
 
     yield
 
+    # --- AI chat shutdown --- first, and guarded: agent processes must not outlive the app, and a failure here
+    # must not stop the shutdown below. close_all cancels running turns, so it is bounded.
+    try:
+        await _asyncio.wait_for(_ai_sessions.MANAGER.close_all(), 10)
+    except Exception as exc:
+        _logger.warning("ai_chat.shutdown_failed error=%s", type(exc).__name__)
+    try:
+        _ai_transport.KEYFILES.cleanup()
+    except Exception as exc:
+        _logger.warning("ai_chat.keyfiles_cleanup_failed error=%s", type(exc).__name__)
+
     # --- Scale Bridge shutdown ---
     if getattr(app.state, 'scale_bridge', None) is not None:
         await app.state.scale_bridge.stop()
@@ -672,6 +688,8 @@ app.include_router(customer_insights_router)
 app.include_router(crm_close_router)
 app.include_router(support_plain_router)
 app.include_router(integration_keys_router)
+app.include_router(acp_providers_router)
+app.include_router(ai_chat_router)
 app.include_router(agents_router)
 app.include_router(customer_review_router)
 app.include_router(cancel_router)
