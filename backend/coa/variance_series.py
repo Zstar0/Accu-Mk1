@@ -22,6 +22,7 @@ from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from coa.hplc_shim import slot_wires, wire_keyword
+from coa.iu_display import iu_factor_for_sample, iu_factors, to_iu
 from lims_analyses.hplc_native import AGGREGATES, TRIO, native_category
 from models import AnalysisService, LimsAnalysis, LimsSubSample, Peptide
 
@@ -66,13 +67,14 @@ def _category(keyword: Optional[str]) -> Optional[str]:
     return None
 
 
-def _fmt(category: str, value: str, unit: Optional[str], default_unit: str = "mg") -> str:
+def _fmt(category: str, value: str, unit: Optional[str], default_unit: str = "mg", iu_factor=None) -> str:
     """Format a replicate value to match the single-cell COA convention."""
     v = (value or "").strip()
     if category == "purity":
         return v if v.endswith("%") else f"{v}%"
     if category == "quantity":
-        u = (unit or default_unit or "").strip()
+        v, unit = to_iu(v, unit or default_unit, iu_factor)
+        u = (unit or "").strip()
         return f"{v} {u}" if u and not v.endswith(u) else v
     return v  # identity: raw
 
@@ -169,6 +171,7 @@ def build_variance_replicates(db: Session, parent) -> dict:
     vial) return {} — the variance path must never fire for standard certs.
     """
     qty_unit = _parent_quantity_unit(db, parent) or "mg"
+    iu_factor = iu_factor_for_sample(db, parent)
     # Variance sample = has >=1 in-set variance vial. Then list ALL in-set subs
     # (core + variance) so each physical vial is its own row; the parent record
     # is never a row (its figure is a promoted copy of one of these vials).
@@ -228,7 +231,7 @@ def build_variance_replicates(db: Session, parent) -> dict:
             if pname is None:
                 continue
             rec = per_peptide.setdefault(pname, {"vial_sequence": sub.vial_sequence})
-            rec[key] = _fmt(category, la.result_value, la.result_unit, default_unit=qty_unit)
+            rec[key] = _fmt(category, la.result_value, la.result_unit, default_unit=qty_unit, iu_factor=iu_factor)
         for pname, rec in per_peptide.items():
             # Only records that carry at least one analyte value.
             if len(rec) > 1:
@@ -237,7 +240,7 @@ def build_variance_replicates(db: Session, parent) -> dict:
     return {k: v for k, v in out.items() if v}
 
 
-def build_vial_figures(db: Session, sub: LimsSubSample, qty_unit: str = "mg") -> dict:
+def build_vial_figures(db: Session, sub: LimsSubSample, qty_unit: str = "mg", iu_factor=None) -> dict:
     """{peptide_name: {PURITY?, QUANTITY?, IDENTITY?}} for ONE HPLC vial.
 
     The per-vial COA shape COABuilder's engine consumes as `vial_figures`: a
@@ -274,7 +277,7 @@ def build_vial_figures(db: Session, sub: LimsSubSample, qty_unit: str = "mg") ->
         if pname is None:
             continue
         rec = per_peptide.setdefault(pname, {})
-        rec[key] = _fmt(category, la.result_value, la.result_unit, default_unit=qty_unit)
+        rec[key] = _fmt(category, la.result_value, la.result_unit, default_unit=qty_unit, iu_factor=iu_factor)
     return {k: v for k, v in per_peptide.items() if v}
 
 
@@ -286,6 +289,7 @@ def list_hplc_vials_with_figures(db: Session, parent) -> list[tuple[int, dict]]:
     HPLC vial can be spun off into its own honest-verdict COA.
     """
     qty_unit = _parent_quantity_unit(db, parent) or "mg"
+    iu_factor = iu_factor_for_sample(db, parent)
     subs = db.execute(
         select(LimsSubSample).where(
             LimsSubSample.parent_sample_pk == parent.id,
@@ -294,7 +298,7 @@ def list_hplc_vials_with_figures(db: Session, parent) -> list[tuple[int, dict]]:
     ).scalars().all()
     out: list[tuple[int, dict]] = []
     for sub in subs:
-        figs = build_vial_figures(db, sub, qty_unit)
+        figs = build_vial_figures(db, sub, qty_unit, iu_factor)
         if figs:
             out.append((sub.vial_sequence, figs))
     return out
@@ -344,6 +348,7 @@ def list_vials_for_certificates(db: Session, parent) -> list[tuple[int, dict, se
     at least one certified parent result promoted from it; an unused vial
     gets no certificate. vial_figures is {} for a vial without HPLC."""
     qty_unit = _parent_quantity_unit(db, parent) or "mg"
+    iu_factor = iu_factor_for_sample(db, parent)
     subs = db.execute(
         select(LimsSubSample)
         .where(LimsSubSample.parent_sample_pk == parent.id)
@@ -351,7 +356,7 @@ def list_vials_for_certificates(db: Session, parent) -> list[tuple[int, dict, se
     ).scalars().all()
     out: list[tuple[int, dict, set[int]]] = []
     for sub in subs:
-        figs = build_vial_figures(db, sub, qty_unit) if sub.assignment_role == "hplc" else {}
+        figs = build_vial_figures(db, sub, qty_unit, iu_factor) if sub.assignment_role == "hplc" else {}
         ids = vial_parent_row_ids(db, sub)
         if figs or ids:
             out.append((sub.vial_sequence, figs, ids))
@@ -414,6 +419,7 @@ def build_variance_analyte_series(db: Session, parent) -> dict:
     if not subs:
         return {}
     n_slots = len(slot_wires(db, parent))
+    iu_factor = iu_factor_for_sample(db, parent)
     out: dict[str, dict] = {}
     for sub in subs:
         rows = db.execute(
@@ -447,8 +453,9 @@ def build_variance_analyte_series(db: Session, parent) -> dict:
             # (la.result_unit, else the lab-configured svc.unit). A keyword maps
             # to one physical measurement, so vials share a unit; divergence
             # isn't detected.
-            entry = out.setdefault(
-                kw, {"unit": (la.result_unit or svc.unit or "").strip(), "values": []}
-            )
-            entry["values"].append(str(la.result_value).strip())
+            value, unit = str(la.result_value).strip(), (la.result_unit or svc.unit or "").strip()
+            if _category(kw) == "quantity":
+                value, unit = to_iu(value, unit, iu_factor)
+            entry = out.setdefault(kw, {"unit": unit, "values": []})
+            entry["values"].append(value)
     return {k: v for k, v in out.items() if v["values"]}

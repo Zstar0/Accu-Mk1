@@ -873,6 +873,8 @@ class Peptide(Base):
     prep_vial_count: Mapped[int] = mapped_column(Integer, default=1)
     hplc_aliases: Mapped[Optional[list]] = mapped_column(JSON, nullable=True)  # ["TB17-23", "TB4"] — alternate names used in HPLC filenames
     display_aliases: Mapped[Optional[list]] = mapped_column(JSON, nullable=True)  # ["Mounjaro", "GLP/GIP"] — approved customer-facing aliases for COA display
+    iu_per_mg: Mapped[Optional[Decimal]] = mapped_column(Numeric(10, 4), nullable=True)  # COA quantity display factor, HGH 3.0 (coa/iu_display.py)
+    iu_from: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)  # Samples ordered from here on print IU; locked once set
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 

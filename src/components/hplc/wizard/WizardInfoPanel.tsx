@@ -100,7 +100,7 @@ function SenaiteCard({ senaiteResult }: { senaiteResult: NonNullable<ReturnType<
           <span className="text-muted-foreground text-xs">Declared Weight</span>
           <p className="font-medium text-sm">
             {senaiteResult.declared_weight_mg != null
-              ? `${senaiteResult.declared_weight_mg} mg`
+              ? `${senaiteResult.declared_weight_mg} ${senaiteResult.declared_unit ?? 'mg'}`
               : '—'}
           </p>
         </div>
@@ -123,7 +123,7 @@ function SenaiteCard({ senaiteResult }: { senaiteResult: NonNullable<ReturnType<
                 <span className="truncate">{a.raw_name}</span>
                 {a.declared_quantity != null && (
                   <span className="ml-auto shrink-0 font-mono text-[10px] text-foreground">
-                    {a.declared_quantity} mg
+                    {a.declared_quantity} {senaiteResult.declared_unit ?? 'mg'}
                   </span>
                 )}
               </li>
