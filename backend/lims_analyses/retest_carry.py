@@ -521,6 +521,112 @@ def carry_results(db: Session, *, original: LimsSample, retest: LimsSample,
     return out
 
 
+def _carries_hplc(retest: LimsSample) -> bool:
+    """The spec carried a profile that anchors the hplc vial role: HPLC or Bac
+    Water. A vial's role can't say: riders (fentanyl) live on an hplc-role host vial."""
+    from lims_analyses.seeder import ROLE_TO_WP_KEYS
+    spec = (retest.catalog_snapshot or {}).get("retest") or {}
+    return bool(ROLE_TO_WP_KEYS["hplc"].intersection(spec.get("carry") or [])
+                - set(spec.get("missing") or []))
+
+
+def carried_hplc_source_vials(db: Session, retest: LimsSample) -> list:
+    """The HPLC vials behind a retest's live carried rows, in vial order. The
+    run lives there: a carried retest has no HPLC vial, prep or trace of its own."""
+    from sqlalchemy.orm import aliased
+    from models import LimsAnalysisPromotion, LimsSubSample
+    if not _carries_hplc(retest):
+        return []
+    carried_row, source = aliased(LimsAnalysis), aliased(LimsAnalysis)
+    # An IN subquery, not DISTINCT on the entity: Postgres can't DISTINCT a json column.
+    source_vial_pks = (
+        select(source.lims_sub_sample_pk)
+        .join(LimsAnalysisPromotion, LimsAnalysisPromotion.source_analysis_id == source.id)
+        .join(carried_row, carried_row.id == LimsAnalysisPromotion.parent_analysis_id)
+        .where(carried_row.lims_sample_pk == retest.id,
+               carried_row.review_state.notin_(_DEAD_STATES),
+               LimsAnalysisPromotion.contribution_kind == CARRIED))
+    return list(db.execute(select(LimsSubSample).where(
+        LimsSubSample.id.in_(source_vial_pks), LimsSubSample.assignment_role == "hplc",
+    ).order_by(LimsSubSample.vial_sequence, LimsSubSample.id)).scalars())
+
+
+def _source_chromatogram(db: Session, vial):
+    """(bytes, filename, content type, lineage) of the file the original's own
+    COA reads for `vial`, in coa.sample_meta._select_parent_row's order minus
+    its writes: the row stamped with the vial, its own HPLC trace, then a
+    non-variance sample's unstamped file (Handler ruling 2026-10-23). Never
+    "the newest file": PB-1141's was its variance vial's. None when nothing
+    qualifies. Read-only on the original."""
+    from coa.sample_meta import _newest, vial_trace_analysis
+    from hplc_csv import build_chromatogram_csv
+    from models import LimsSubSample
+    from sub_samples.photo_storage import get_storage
+
+    pk = vial.parent_sample_pk
+    row = _newest(db, pk, chromatogram=True, source_sub_pks=[vial.id])
+    if row is None:
+        analysis = vial_trace_analysis(db, vial)
+        if analysis is not None:
+            return (build_chromatogram_csv(analysis), f"chromatogram_{analysis.sample_id_label}.csv",
+                    "text/csv", {"hplc_analysis_id": analysis.id})
+        has_variance = db.execute(select(LimsSubSample.id).where(
+            LimsSubSample.parent_sample_pk == pk, LimsSubSample.assignment_role == "hplc",
+            LimsSubSample.assignment_kind == "variance").limit(1)).first() is not None
+        if not has_variance:
+            row = _newest(db, pk, chromatogram=True, source_sub_pks=[vial.id], or_unstamped=True)
+    if row is None:
+        return None
+    return (get_storage().fetch_photo(row.storage_key), row.filename, row.content_type,
+            {"source_attachment_id": row.id})
+
+
+def _carry_chromatogram(db: Session, *, retest: LimsSample, user_id: int | None) -> None:
+    """File the chromatogram behind the carried HPLC on the retest, whose COA
+    gate reads only its own attachments (PB-1179). Writes on the retest only.
+    A vial stamp can't cross samples, so the row is unstamped and the event holds
+    the lineage. Best-effort: any miss warns and leaves the gate to block, the
+    sample must never lose its mint over this. Does NOT commit."""
+    from coa.sample_meta import _newest
+
+    if not _carries_hplc(retest) or _newest(db, retest.id, chromatogram=True) is not None:
+        return
+    vials = carried_hplc_source_vials(db, retest)
+    names = ", ".join(v.sample_id for v in vials) or retest.retest_of_sample_id
+
+    def _warn(why: str) -> None:
+        message = f"{why} {names}: attach the chromatogram CSV on {retest.sample_id}"
+        if not _has_warning(db, retest, "chromatogram_not_carried", message):
+            _event(db, retest, "retest_spec_warning",
+                   {"reason": "chromatogram_not_carried", "message": message}, user_id)
+
+    if len(vials) != 1:
+        _warn("carried HPLC came from more than one vial:" if vials
+              else "no HPLC vial found behind the carried HPLC on")
+        return
+    try:
+        # The read too: a failed statement in here must not abort the mint's transaction.
+        with db.begin_nested():
+            source = _source_chromatogram(db, vials[0])
+            if source is not None:
+                file_bytes, filename, content_type, lineage = source
+                from main import write_parent_attachment  # lazy: main imports this module
+                row = write_parent_attachment(
+                    db, retest, file_bytes=file_bytes, filename=filename, content_type=content_type,
+                    kind="chromatogram", source_sample_id=None, user_id=None,
+                    render_in_report=False, attachment_type="HPLC Graph")
+                _event(db, retest, "chromatogram_carried",
+                       {"attachment_id": row.id, "filename": row.filename,
+                        "source_vial": vials[0].sample_id, **lineage}, user_id)
+    except Exception as e:  # noqa: BLE001
+        logger.warning("retest_spec.chromatogram_failed sample_id=%s vial=%s err=%s",
+                       retest.sample_id, names, e)
+        _warn("could not copy the chromatogram from")
+    else:
+        if source is None:
+            _warn("no chromatogram found for")
+
+
 VARIANCE_KEY = "samplevariance"      # WP buy-flag (bool); the counts ride services["variance"]
 
 
@@ -531,12 +637,13 @@ def _event(db: Session, sample: LimsSample, event: str, details: dict,
                               user_id=user_id))
 
 
-def _has_warning(db: Session, sample: LimsSample, reason: str, message: str) -> bool:
+def _has_warning(db: Session, sample: LimsSample, reason: str, message: str | None = None) -> bool:
+    """Any warning for `reason` when `message` is None."""
     from models import LimsSubSampleEvent
     for d in db.execute(select(LimsSubSampleEvent.details).where(
             LimsSubSampleEvent.lims_sample_pk == sample.id,
             LimsSubSampleEvent.event == "retest_spec_warning")).scalars():
-        if (d or {}).get("reason") == reason and (d or {}).get("message") == message:
+        if (d or {}).get("reason") == reason and message in (None, (d or {}).get("message")):
             return True
     return False
 
@@ -670,6 +777,10 @@ def apply_retest_spec(db: Session, *, parent: LimsSample, raw_spec: dict,
         _event(db, parent, "analysis_carried",
                {**c, "verified_at": c["verified_at"].isoformat() if c["verified_at"] else None},
                user_id)
+    # A re-push carries nothing new: an earlier warning is what says a copy is still
+    # owed. Retests minted before the copy existed never warned, so a push can't heal them.
+    if carried or _has_warning(db, parent, "chromatogram_not_carried"):
+        _carry_chromatogram(db, retest=parent, user_id=user_id)
 
     if first_time:
         _event(db, parent, "retest_created", {

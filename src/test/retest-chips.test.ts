@@ -3,6 +3,7 @@ import {
   retestChipFor,
   isCarriedPromotion,
   carriedSourceLabel,
+  carriedHplcVials,
 } from '@/lib/retest-chips'
 
 const info = {
@@ -105,5 +106,37 @@ describe('carried promotions', () => {
         sources: [{ sample_id: null, contribution_kind: 'carried' }],
       })
     ).toBe('original')
+  })
+})
+
+describe('carriedHplcVials', () => {
+  const info = { sample_id: 'PB-1179', carried_hplc_vials: ['PB-1141-S01'] }
+
+  it('names the vial behind the carried HPLC on the retest', () => {
+    expect(carriedHplcVials('PB-1179', info)).toEqual(['PB-1141-S01'])
+  })
+
+  it('names every vial when HPLC came from more than one, so none is picked', () => {
+    expect(
+      carriedHplcVials('PB-1179', {
+        sample_id: 'PB-1179',
+        carried_hplc_vials: ['PB-1141-S01', 'PB-1141-S04'],
+      })
+    ).toEqual(['PB-1141-S01', 'PB-1141-S04'])
+  })
+
+  it('is empty when HPLC was not carried, so the sample reads its own prep', () => {
+    expect(carriedHplcVials('PB-1179', { sample_id: 'PB-1179' })).toEqual([])
+    expect(
+      carriedHplcVials('PB-1179', {
+        sample_id: 'PB-1179',
+        carried_hplc_vials: [],
+      })
+    ).toEqual([])
+    expect(carriedHplcVials('PB-1179', null)).toEqual([])
+  })
+
+  it('ignores info still loaded from the sample the user just left', () => {
+    expect(carriedHplcVials('P-0001', info)).toEqual([])
   })
 })

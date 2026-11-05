@@ -150,6 +150,7 @@ import {
 } from '@/lib/native-parent-analyses'
 import { NativeManageAnalysesBlock } from '@/components/senaite/NativeManageAnalysesBlock'
 import { pickerSourceFor } from '@/lib/manage-analyses-picker'
+import { carriedHplcVials } from '@/lib/retest-chips'
 import { fieldEditKey, hasParentIdentity } from '@/lib/parent-identity'
 import { ParentRetestConfirmDialog } from '@/components/senaite/ParentRetestConfirmDialog'
 import { useParentRetestFlow } from '@/hooks/use-parent-retest-flow'
@@ -4277,10 +4278,37 @@ export function SampleDetails() {
   async function openHplcResults() {
     if (!sampleId) return
     try {
-      const preps = await listSamplePreps({ search: sampleId, limit: 1 })
-      if (preps.length === 0) {
-        toast.error('No sample prep found for this sample')
+      const ownPreps = await listSamplePreps({ search: sampleId, limit: 1 })
+      const carried =
+        ownPreps.length === 0 ? carriedHplcVials(sampleId, retestInfo) : []
+      if (carried.length > 1) {
+        // Same rule as the backend's chromatogram copy: no single run to pick.
+        toast.error(
+          `HPLC was carried from more than one vial (${carried.join(', ')}), so there is no single run to show`
+        )
         return
+      }
+      const carriedVial = carried[0] ?? null
+      // Finished preps only: a newer unrun re-prep would hide the run that was carried.
+      const preps = carriedVial
+        ? await listSamplePreps({
+            search: carriedVial,
+            statuses: ['hplc_complete', 'completed'],
+            limit: 1,
+          })
+        : ownPreps
+      if (preps.length === 0) {
+        toast.error(
+          carriedVial
+            ? `HPLC was carried from ${carriedVial}, which has no finished sample prep to show`
+            : 'No sample prep found for this sample'
+        )
+        return
+      }
+      if (carriedVial) {
+        toast.info(
+          `HPLC was carried from ${carriedVial}. Showing that vial's results.`
+        )
       }
       const prep = preps[0]!
       setHplcFlyoutMatch({

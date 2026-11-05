@@ -42,3 +42,10 @@ def test_retested_as_and_warning():
     assert retest_activity_label("retest_spec_warning", {"reason": "invalid_spec", "message": "bad fee"}) == \
         "Retest spec warning: invalid_spec (bad fee)"
     assert retest_activity_label("coa_published", {}) is None
+
+
+def test_chromatogram_carried():
+    d = {"source_vial": "PB-1141-S01", "attachment_id": 10064, "hplc_analysis_id": 10338}
+    want = "Chromatogram carried from PB-1141-S01"
+    assert retest_activity_label("chromatogram_carried", d) == want
+    assert retest_activity_label("chromatogram_carried_manual", d) == want
