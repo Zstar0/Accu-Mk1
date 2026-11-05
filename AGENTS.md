@@ -12,6 +12,7 @@ This repository is a template with sensible defaults for building Tauri React ap
 - Review `docs/developer/architecture-guide.md` for high-level patterns
 - Check `docs/developer/README.md` for the full documentation index
 - Check git status and project structure
+- Team process (memory first, design gate, worktree per task, devbox stacks, PR contract): `.claude/skills/accumark-feature-workflow/SKILL.md`. A review-ready PR on your own feature branch is the standing request; "No Unsolicited Commits" below refers to the main checkout and `master`.
 
 ### Development Practices
 
