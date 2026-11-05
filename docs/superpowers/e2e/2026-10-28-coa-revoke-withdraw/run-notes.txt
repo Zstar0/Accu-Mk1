@@ -1,0 +1,6 @@
+2026-10-28T15:57:16.169Z PB-0069: primary HS9V-S6VC verified; pdf_url HEAD 200; mailhog mentions 0
+2026-10-28T15:57:17.215Z revoke response: {"revoked":[{"generation_id":"e0cefb6b-e6f8-46a3-9c38-0f12dc704cbf","verification_code":"HS9V-S6VC","status":"revoked","kind":"primary","brand":null,"revoked_at":"2026-10-28T15:57:15.140221Z","revocation_reason":"E2E: PDF withdrawal and follow-ups check"}],"skipped":[],"wp_notified":true,"wp_error":null,"wp_warning":null,"pdfs_withdrawn":["HS9V-S6VC"],"pdfs_withdraw_failed":[],"resumed":false}
+2026-10-28T15:57:17.232Z after revoke: verdict revoked; old pdf_url HEAD 200 -> 404
+2026-10-28T15:57:18.499Z mailhog: 1 mention(s) of HS9V-S6VC; newest subject: Your Certificate of Analysis Has Been Revoked: BPC-TB, HS9V-S6VC (Order #3166)
+2026-10-28T15:57:20.608Z resume response: {"revoked":[{"generation_id":"e0cefb6b-e6f8-46a3-9c38-0f12dc704cbf","verification_code":"HS9V-S6VC","status":"revoked","kind":"primary","brand":null,"revoked_at":"2026-10-28T15:57:15.140221Z","revocation_reason":"E2E: PDF withdrawal and follow-ups check"}],"skipped":[],"wp_notified":true,"wp_error":null,"wp_warning":"WordPress did not send the customer email","pdfs_withdrawn":[],"pdfs_withdraw_failed":[],"resumed":true}
+2026-10-28T15:57:20.701Z resume: idempotent, no second email (1 mention(s) still)

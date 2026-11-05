@@ -1,0 +1,34 @@
+
+Running 16 tests using 1 worker
+
+primary before: 7RE7-338Y published on PB-0069
+IS public verdict 7RE7-338Y: status=verified forward_enabled=false current=null
+primary after: 584L-Q2LS published, 7RE7-338Y retired
+IS public verdict 7RE7-338Y: status=superseded forward_enabled=true current=584L-Q2LS
+IS public verdict 584L-Q2LS: status=verified forward_enabled=false current=null
+mailhog: 1 message(s) mention 584L-Q2LS; newest subject: =?UTF-8?Q?=F0=9F=94=84_Your_Certificate_of_Analysis_Has_Been_Reissued_=E2=80=93_BPC-TB,_584L-Q2LS_(Order_#3166)?=
+IS public verdict 7RE7-338Y: status=superseded forward_enabled=false current=null
+IS public verdict 7RE7-338Y: status=superseded forward_enabled=true current=584L-Q2LS
+  ok  1 [chromium] › e2e\coa-forward.spec.ts:103:3 › AccuVerify forward pointer on re-publish › Regen & Republish on the primary: old code announces the new one; lab can switch it off and on (36.0s)
+additional before: 6RSP-FQSD published on PB-0069
+IS public verdict 6RSP-FQSD: status=verified forward_enabled=false current=null
+additional after: 5YFV-4AWH published, 6RSP-FQSD retired
+IS public verdict 6RSP-FQSD: status=superseded forward_enabled=true current=5YFV-4AWH
+  ok  2 [chromium] › e2e\coa-forward.spec.ts:218:3 › AccuVerify forward pointer on re-publish › Regen on an additional COA: its old code announces the new one (14.8s)
+  ok  3 [chromium] › e2e\customers.spec.ts:35:3 › Phase 29 — Mk1 Customer-Centric Frontend › sidebar shows Customers entry under AccuMark Tools (7.7s)
+  ok  4 [chromium] › e2e\customers.spec.ts:72:3 › Phase 29 — Mk1 Customer-Centric Frontend › list view renders 6-column table with real WC data (8.2s)
+  ok  5 [chromium] › e2e\customers.spec.ts:94:3 › Phase 29 — Mk1 Customer-Centric Frontend › pagination row shows range subtitle + Prev/Next buttons (7.3s)
+  ok  6 [chromium] › e2e\customers.spec.ts:115:3 › Phase 29 — Mk1 Customer-Centric Frontend › search input is debounced and resets to page 0 (8.1s)
+  -   7 [chromium] › e2e\customers.spec.ts:160:3 › Phase 29 — Mk1 Customer-Centric Frontend › clicking a registered customer drills through to detail view
+  ok  8 [chromium] › e2e\customers.spec.ts:182:3 › Phase 29 — Mk1 Customer-Centric Frontend › back navigation preserves page + search (8.1s)
+  ok  9 [chromium] › e2e\customers.spec.ts:202:3 › Phase 29 — Mk1 Customer-Centric Frontend › test-account toggle defaults to hidden and round-trips on click (7.8s)
+  -  10 [chromium] › e2e\customers.spec.ts:241:3 › Phase 29 — Mk1 Customer-Centric Frontend › detail page shows tabs with Customer Orders default and Dashboard placeholder
+  -  11 [chromium] › e2e\customers.spec.ts:269:3 › Phase 29 — Mk1 Customer-Centric Frontend › search by sample ID auto-expands matching order with highlighted sample card
+  -  12 [chromium] › e2e\customers.spec.ts:304:3 › Phase 29 — Mk1 Customer-Centric Frontend › search by analyte returns matching orders auto-expanded
+  -  13 [chromium] › e2e\customers.spec.ts:327:3 › Phase 29 — Mk1 Customer-Centric Frontend › clear-search button resets all three inputs and shows full order list
+  -  14 [chromium] › e2e\customers.spec.ts:350:3 › Phase 29 — Mk1 Customer-Centric Frontend › AND search: typing in Sample ID AND Analyte sends both per-axis params on the wire
+  -  15 [chromium] › e2e\retest.spec.ts:50:3 › Mk1-native retest dialog › Re-test tab: customer block, Billing Charged, total = fee, creates the WP order
+  -  16 [chromium] › e2e\retest.spec.ts:133:3 › Mk1-native retest dialog › Add services tab: fixed title, catalog add-ons, Billing radio
+
+  8 skipped
+  8 passed (2.4m)
