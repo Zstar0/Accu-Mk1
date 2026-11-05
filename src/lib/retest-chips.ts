@@ -50,3 +50,17 @@ export function carriedSourceLabel(
     p.sources.find(x => x.contribution_kind === 'carried') ?? p.sources[0]
   return s?.sample_id ?? s?.parent_sample_id ?? 'original'
 }
+
+/** The vial behind a retest's carried HPLC. The retest has no prep of its own,
+ *  so HPLC Results reads this vial's. Null when HPLC was not carried, or while
+ *  `info` still belongs to the sample the user just left. */
+export function carriedHplcVial(
+  sampleId: string,
+  info:
+    | Pick<SampleRetestInfo, 'sample_id' | 'carried_hplc_vials'>
+    | null
+    | undefined
+): string | null {
+  if (info?.sample_id !== sampleId) return null
+  return info.carried_hplc_vials?.[0] ?? null
+}

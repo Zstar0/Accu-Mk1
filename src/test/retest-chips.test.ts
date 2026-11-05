@@ -3,6 +3,7 @@ import {
   retestChipFor,
   isCarriedPromotion,
   carriedSourceLabel,
+  carriedHplcVial,
 } from '@/lib/retest-chips'
 
 const info = {
@@ -105,5 +106,28 @@ describe('carried promotions', () => {
         sources: [{ sample_id: null, contribution_kind: 'carried' }],
       })
     ).toBe('original')
+  })
+})
+
+describe('carriedHplcVial', () => {
+  const info = { sample_id: 'PB-1179', carried_hplc_vials: ['PB-1141-S01'] }
+
+  it('names the vial behind the carried HPLC on the retest', () => {
+    expect(carriedHplcVial('PB-1179', info)).toBe('PB-1141-S01')
+  })
+
+  it('is null when HPLC was not carried, so the sample reads its own prep', () => {
+    expect(carriedHplcVial('PB-1179', { sample_id: 'PB-1179' })).toBeNull()
+    expect(
+      carriedHplcVial('PB-1179', {
+        sample_id: 'PB-1179',
+        carried_hplc_vials: [],
+      })
+    ).toBeNull()
+    expect(carriedHplcVial('PB-1179', null)).toBeNull()
+  })
+
+  it('ignores info still loaded from the sample the user just left', () => {
+    expect(carriedHplcVial('P-0001', info)).toBeNull()
   })
 })
