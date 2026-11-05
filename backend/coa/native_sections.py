@@ -304,6 +304,30 @@ def _section_footnotes(raw, values: dict) -> list:
     return out
 
 
+def _coa_variants_for_form(db: Session, profiles, sample_form_id) -> dict:
+    """The active COA text variants for this form and these profiles, in one
+    query, keyed by profile id. No form, no query."""
+    from models import AnalysisProfileCoaVariant
+
+    if sample_form_id is None:
+        return {}
+    rows = db.execute(
+        select(AnalysisProfileCoaVariant).where(
+            AnalysisProfileCoaVariant.sample_form_id == sample_form_id,
+            AnalysisProfileCoaVariant.analysis_profile_id.in_([p.id for p in profiles]),
+            AnalysisProfileCoaVariant.active.is_(True),
+        )
+    ).scalars().all()
+    return {v.analysis_profile_id: v for v in rows}
+
+
+def _variant_text(override: Optional[str], default: Optional[str], values: dict) -> Optional[str]:
+    """NULL prints the default. '' resolves to None (left off). Text is the variant's own."""
+    if override is None:
+        return resolve(default, values)
+    return resolve(override, values) or None
+
+
 def build_native_sections(db: Session, parent, *, vial_parent_ids=None) -> dict:
     """Assemble the native-sections wire document for a parent LimsSample.
 
@@ -368,6 +392,9 @@ def build_native_sections(db: Session, parent, *, vial_parent_ids=None) -> dict:
         sample_form_id = None        # the form tier is peptide-family only (resolve_spec)
     # The form tier is only "consulted" when the sample has a form.
     form_tier = f"form={sample_form_id!r}, " if sample_form_id is not None else ""
+    # A variant is picked by the same form the spec tier just settled, so its
+    # text can never come from a different form than the limits.
+    variants = _coa_variants_for_form(db, profiles, sample_form_id)
 
     sections = []
     deferred_profiles: list[str] = []
@@ -404,6 +431,9 @@ def build_native_sections(db: Session, parent, *, vial_parent_ids=None) -> dict:
         # Whether every printed row is a report-only row filed for the
         # sample's form (the basis-note rule below).
         all_form_report_only = True
+        # Whether every printed row was judged by a spec filed for the sample's
+        # form (the limits guard below).
+        all_rows_form_judged = True
         for svc, row in member_rows:
             if row is None:
                 if _withdrawn_by_lab(db, parent.id, svc.id):
@@ -494,6 +524,7 @@ def build_native_sections(db: Session, parent, *, vial_parent_ids=None) -> dict:
             all_form_report_only = (all_form_report_only
                                     and spec.rule_kind == "informational"
                                     and spec.sample_form_id is not None)
+            all_rows_form_judged = all_rows_form_judged and spec.sample_form_id == sample_form_id
         if not rows:
             # Rule 3 (section half): unreachable while members are required
             # non-empty in _ordered_native_profiles, kept as defence.
@@ -504,28 +535,48 @@ def build_native_sections(db: Session, parent, *, vial_parent_ids=None) -> dict:
         # [ ... ] segments, filled from this section's rows (coa.text_macros).
         # Text with no macro comes back exactly as typed.
         values = {"lod": format_lod(limits)}
+        # Limits guard (Handler, 2026-10-30): title, method and prep describe
+        # what the lab did, so they follow the variant whenever there is one.
+        # Basis note and footnotes describe the limits, so they follow it only
+        # when every printed row was judged by a spec filed for this form. A
+        # section judged on general or peptide limits keeps the default's
+        # disclosure, and the fallback is logged when it held an override back.
+        variant = variants.get(prof.id)
+        limit_variant = variant if all_rows_form_judged else None
+        if (variant is not None and limit_variant is None
+                and (variant.coa_basis_note is not None or variant.coa_footnotes is not None)):
+            log.warning("native_section_variant_limits_guard sample=%s profile=%s",
+                        sample_id, prof.key)
+        basis_override = limit_variant.coa_basis_note if limit_variant else None
+        notes_override = limit_variant.coa_footnotes if limit_variant else None
         # A heavy-metal basis note describes how the limits scale ("Limits
         # scale with dose"); a section whose every row is a report-only row
         # filed for the sample's form (nasal spray) has no limits to describe,
         # so the note would be noise. Form rows only (Handler, 2026-10-28,
         # after the prod pre-check): a section that is report-only for every
         # sample, like the vial vacuum test, uses its note to describe the
-        # method and keeps it. The key stays on the wire.
+        # method and keeps it. The key stays on the wire. A variant's own note
+        # (custom or left off) overrides this hide; the lab chose it for the form.
         sections.append({
             "profile_key": prof.key,
-            "title": prof.coa_section_title or prof.name,
+            "title": ((variant.coa_section_title if variant else None)
+                      or prof.coa_section_title or prof.name),
             "archetype": prof.coa_archetype,
             "sort_order": prof.coa_sort_order,
-            "basis_note": (None if all_form_report_only
-                           else resolve(prof.coa_basis_note, values)),
-            "method_text": resolve(prof.coa_method_text, values),
-            "prep_text": resolve(prof.coa_prep_text, values),
+            "basis_note": _variant_text(basis_override,
+                                        None if all_form_report_only else prof.coa_basis_note,
+                                        values),
+            "method_text": _variant_text(variant.coa_method_text if variant else None,
+                                         prof.coa_method_text, values),
+            "prep_text": _variant_text(variant.coa_prep_text if variant else None,
+                                       prof.coa_prep_text, values),
             # Fail-open to [] on a malformed container is deliberate: the
             # certificate must not 500 on a bad footnote row (module's
             # NativeSectionsError-only failure surface). The validated
             # routes enforce list shape on every authored write — a non-list
             # here means seed/migration/direct SQL, not user input.
-            "footnotes": _section_footnotes(prof.coa_footnotes, values),
+            "footnotes": _section_footnotes(notes_override if notes_override is not None
+                                            else prof.coa_footnotes, values),
             "rows": rows,
         })
 

@@ -1,4 +1,4 @@
-import { useState, useCallback } from 'react'
+import { useState, useCallback, useRef } from 'react'
 import {
   Loader2,
   AlertCircle,
@@ -25,6 +25,13 @@ import {
   Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
 } from '@/components/ui/select'
 import { COA_ARCHETYPE_OPTIONS } from './coa-archetype-options'
+import { FootnoteListEditor } from './FootnoteListEditor'
+import { ProfileCoaVariantsSection } from './ProfileCoaVariantsSection'
+import {
+  COA_MACRO_HINT,
+  UNSAVED_VERSION_PROMPT,
+  overrideLine,
+} from './coa-variant-logic'
 import {
   Table,
   TableBody,
@@ -59,6 +66,7 @@ import { useAnalysisProfiles, analysisProfilesQueryKeys } from '@/services/analy
 import { useVialRoles, vialRolesQueryKeys } from '@/services/vial-roles'
 import { useDepartments } from '@/services/departments'
 import { useSlaTiers } from '@/services/sla'
+import { useProfileCoaVariants } from '@/services/profile-coa-variants'
 import { suggestRoleCode } from '@/lib/role-code'
 import { useQueryClient } from '@tanstack/react-query'
 
@@ -149,9 +157,21 @@ export default function AnalysisProfilesPage() {
   // without a dedicated endpoint. Best-effort — see openEdit's .catch below.
   const [allMethods, setAllMethods] = useState<HplcMethod[]>([])
   const [selectedOrder, setSelectedOrder] = useState<number[]>([])
+  // Members as last loaded or saved. selectedOrder also holds unsaved edits,
+  // and the COA version guard line must only read what is saved.
+  const [savedMemberIds, setSavedMemberIds] = useState<number[]>([])
   const [loadingMembers, setLoadingMembers] = useState(false)
   const [savingMembers, setSavingMembers] = useState(false)
   const [memberSearch, setMemberSearch] = useState('')
+
+  const { data: coaVariants = [] } = useProfileCoaVariants(
+    editingProfile?.id ?? null
+  )
+  // A ref so handleSave's closure reads the latest value when it calls closePanel.
+  const variantEditsDirty = useRef(false)
+  const handleVariantsDirty = useCallback((dirty: boolean) => {
+    variantEditsDirty.current = dirty
+  }, [])
 
   // Ride-hosts editor state (spec 4) — an ORDERED list of host role codes.
   // Order becomes priority on save (0 = first choice); see catalog_demand.
@@ -276,6 +296,7 @@ export default function AnalysisProfilesPage() {
       ])
       setAllServices(services)
       setSelectedOrder(memberIds)
+      setSavedMemberIds(memberIds)
       setRideHosts(hosts)
       setAllMethods(methods)
     } catch (err) {
@@ -286,14 +307,22 @@ export default function AnalysisProfilesPage() {
     }
   }
 
-  const closePanel = () => {
+  const resetPanel = () => {
     setPanelOpen(false)
     setEditingProfile(null)
     setForm(DEFAULT_FORM)
     setAllServices([])
     setAllMethods([])
     setSelectedOrder([])
+    setSavedMemberIds([])
     setRideHosts([])
+    variantEditsDirty.current = false
+  }
+
+  const closePanel = () => {
+    if (variantEditsDirty.current && !window.confirm(UNSAVED_VERSION_PROMPT))
+      return
+    resetPanel()
   }
 
   // Fills the coa_method_text field from suggestedMethodText — never
@@ -346,7 +375,7 @@ export default function AnalysisProfilesPage() {
         .map(row => ({ label: row.label.trim(), text: row.text.trim() }))
 
       if (editingProfile) {
-        await updateAnalysisProfile(editingProfile.id, {
+        const saved = await updateAnalysisProfile(editingProfile.id, {
           name: form.name.trim(),
           description: form.description.trim() || null,
           is_addon: form.is_addon,
@@ -366,6 +395,9 @@ export default function AnalysisProfilesPage() {
           sla_tier_id: form.sla_tier_id,
           role_department_id: form.role_department_id,
         })
+        // Cancelling closePanel's unsaved-edits prompt must not leave the
+        // version cards showing the old Default.
+        setEditingProfile(cur => (cur?.id === saved.id ? saved : cur))
         toast.success(`"${form.name.trim()}" updated`)
       } else {
         await createAnalysisProfile({
@@ -407,7 +439,7 @@ export default function AnalysisProfilesPage() {
       await deleteAnalysisProfile(profile.id)
       toast.success(`"${profile.name}" deleted`)
       await refreshProfiles()
-      if (editingProfile?.id === profile.id) closePanel()
+      if (editingProfile?.id === profile.id) resetPanel()
     } catch (err) {
       toast.error(err instanceof Error ? err.message : 'Delete failed')
     }
@@ -444,6 +476,7 @@ export default function AnalysisProfilesPage() {
       // already prevents duplicates from entering selectedOrder.
       const deduped = [...new Set(selectedOrder)]
       const result = await setAnalysisProfileMembers(editingProfile.id, deduped)
+      setSavedMemberIds(deduped)
       toast.success(`Membership saved — ${result.count} service${result.count !== 1 ? 's' : ''} assigned`)
       await refreshProfiles()
     } catch (err) {
@@ -451,38 +484,6 @@ export default function AnalysisProfilesPage() {
     } finally {
       setSavingMembers(false)
     }
-  }
-
-  // ── COA footnotes (Task 6) ── part of the main form state (not a
-  // separate save action like Members/Ride Hosts above) — these ride along
-  // in handleSave's payload, same as coa_section_title.
-
-  const addFootnote = () => {
-    setForm(f => ({ ...f, coa_footnotes: [...f.coa_footnotes, { label: '', text: '' }] }))
-  }
-
-  const removeFootnote = (index: number) => {
-    setForm(f => ({ ...f, coa_footnotes: f.coa_footnotes.filter((_, i) => i !== index) }))
-  }
-
-  const updateFootnote = (index: number, patch: Partial<{ label: string; text: string }>) => {
-    setForm(f => ({
-      ...f,
-      coa_footnotes: f.coa_footnotes.map((row, i) => (i === index ? { ...row, ...patch } : row)),
-    }))
-  }
-
-  const moveFootnote = (index: number, direction: -1 | 1) => {
-    setForm(f => {
-      const target = index + direction
-      const indexRow = f.coa_footnotes[index]
-      const targetRow = f.coa_footnotes[target]
-      if (!indexRow || !targetRow) return f
-      const next = [...f.coa_footnotes]
-      next[index] = targetRow
-      next[target] = indexRow
-      return { ...f, coa_footnotes: next }
-    })
   }
 
   // ── Ride hosts (spec 4) ──
@@ -709,7 +710,12 @@ export default function AnalysisProfilesPage() {
                   {editingProfile ? `Edit: ${editingProfile.name}` : 'New Analysis Profile'}
                 </span>
               </div>
-              <Button variant="ghost" size="icon" onClick={closePanel}>
+              <Button
+                variant="ghost"
+                size="icon"
+                aria-label="Close panel"
+                onClick={closePanel}
+              >
                 <X className="h-4 w-4" />
               </Button>
             </div>
@@ -1109,9 +1115,20 @@ export default function AnalysisProfilesPage() {
                     section. Same "settable at CREATE, inert until archetype
                     armed" contract as Section Title/Order above. */}
                 <div className="space-y-4 border-t pt-4">
-                  <p className="text-xs text-muted-foreground" data-testid="coa-macro-hint">
-                    Macros: {'{lod}'}. Wrap optional text in [ ], for example [LOD {'{lod}'}.]
-                  </p>
+                  <div className="space-y-1">
+                    <h4 className="text-sm font-semibold">Default text</h4>
+                    {coaVariants.map(v => {
+                      const line = overrideLine(v)
+                      return line ? (
+                        <p key={v.id} className="text-xs text-muted-foreground">
+                          {line}
+                        </p>
+                      ) : null
+                    })}
+                    <p className="text-xs text-muted-foreground" data-testid="coa-macro-hint">
+                      {COA_MACRO_HINT}
+                    </p>
+                  </div>
                   <div className="space-y-1.5">
                     <div className="flex items-center gap-1.5">
                       <label htmlFor="coa-basis-note" className="text-sm font-medium">
@@ -1225,8 +1242,12 @@ export default function AnalysisProfilesPage() {
                     />
                   </div>
 
-                  <div className="space-y-1.5">
-                    <div className="flex items-center justify-between">
+                  <FootnoteListEditor
+                    value={form.coa_footnotes}
+                    onChange={next =>
+                      setForm(f => ({ ...f, coa_footnotes: next }))
+                    }
+                    header={
                       <div className="flex items-center gap-1.5">
                         <label className="text-sm font-medium">Footnotes</label>
                         <TooltipProvider delayDuration={200}>
@@ -1247,72 +1268,8 @@ export default function AnalysisProfilesPage() {
                           </Tooltip>
                         </TooltipProvider>
                       </div>
-                      <Button type="button" size="sm" variant="outline" onClick={addFootnote}>
-                        <Plus className="mr-1 h-3.5 w-3.5" />
-                        Add Footnote
-                      </Button>
-                    </div>
-
-                    {form.coa_footnotes.length === 0 ? (
-                      <p className="py-2 text-xs text-muted-foreground">No footnotes.</p>
-                    ) : (
-                      <div className="space-y-2">
-                        {form.coa_footnotes.map((footnote, index) => (
-                          <div key={index} className="flex gap-2 rounded-md border p-2">
-                            <div className="flex-1 space-y-1.5">
-                              <Input
-                                aria-label={`Footnote ${index + 1} label`}
-                                placeholder="Label"
-                                value={footnote.label}
-                                onChange={e => updateFootnote(index, { label: e.target.value })}
-                              />
-                              <Textarea
-                                aria-label={`Footnote ${index + 1} text`}
-                                className="min-h-[52px] text-xs"
-                                placeholder="Footnote text"
-                                value={footnote.text}
-                                onChange={e => updateFootnote(index, { text: e.target.value })}
-                              />
-                            </div>
-                            <div className="flex flex-col gap-0.5 shrink-0">
-                              <Button
-                                type="button"
-                                variant="ghost"
-                                size="icon"
-                                className="h-6 w-6"
-                                disabled={index === 0}
-                                aria-label={`Move footnote ${index + 1} up`}
-                                onClick={() => moveFootnote(index, -1)}
-                              >
-                                <ChevronUp className="h-3.5 w-3.5" />
-                              </Button>
-                              <Button
-                                type="button"
-                                variant="ghost"
-                                size="icon"
-                                className="h-6 w-6"
-                                disabled={index === form.coa_footnotes.length - 1}
-                                aria-label={`Move footnote ${index + 1} down`}
-                                onClick={() => moveFootnote(index, 1)}
-                              >
-                                <ChevronDown className="h-3.5 w-3.5" />
-                              </Button>
-                              <Button
-                                type="button"
-                                variant="ghost"
-                                size="icon"
-                                className="h-6 w-6 text-destructive hover:text-destructive"
-                                aria-label={`Remove footnote ${index + 1}`}
-                                onClick={() => removeFootnote(index)}
-                              >
-                                <X className="h-3.5 w-3.5" />
-                              </Button>
-                            </div>
-                          </div>
-                        ))}
-                      </div>
-                    )}
-                  </div>
+                    }
+                  />
                 </div>
 
                 {/* SLA tier (Task 11) — edit only. Beats the member services'
@@ -1371,6 +1328,17 @@ export default function AnalysisProfilesPage() {
                   {editingProfile ? 'Save Changes' : 'Create Profile'}
                 </Button>
               </div>
+
+              {editingProfile && (
+                <ProfileCoaVariantsSection
+                  key={editingProfile.id}
+                  profile={editingProfile}
+                  savedMemberIds={savedMemberIds}
+                  membersLoading={loadingMembers}
+                  services={allServices}
+                  onDirtyChange={handleVariantsDirty}
+                />
+              )}
 
               {/* Membership editor — only when editing an existing profile */}
               {editingProfile && (
