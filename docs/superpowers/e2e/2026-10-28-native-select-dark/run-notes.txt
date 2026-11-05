@@ -1,0 +1,18 @@
+NativeSelect option list in dark mode, 2026-10-28
+
+Found on the Sample Forms settings pane (Zstar0/Accu-Mk1#341): a native <select> opened its option list white
+on white in dark mode. The list is drawn by the browser outside the app theme; the options had no background
+of their own and inherited the light foreground.
+
+Checked on devbox stack sforms (dark color scheme, html.dark set), SLA Performance report, the received-window
+picker (a NativeSelect), headless Chromium via Playwright. Computed styles on the select and its first option:
+
+  before (master)  select color-scheme: normal  option background: rgba(0, 0, 0, 0)  option color: oklch(0.985 0 0)
+  after (this PR)  select color-scheme: dark    option background: oklch(0.205 0 0)  option color: oklch(0.985 0 0)
+
+Before: transparent option background, so the browser paints its default white, under near-white text.
+After: the options carry the popover colors the themed Select menu uses.
+
+Not captured: the opened popup itself. Chromium draws it as a separate native widget that a headless
+screenshot does not include, so the check reads the colors the popup is painted with instead.
+Light mode is unchanged: popover is white with dark text there, as before.
