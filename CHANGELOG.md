@@ -9,6 +9,11 @@
 - **The COA prints native BW results on page 1** under the legacy keywords, with Mk1's specification and conforms.
 - A legacy `bac_water_panel` retest carries the native panel key, the same as HPLC.
 
+### AI chat (admin only, off until a provider is set up)
+- **A chat button on every Mk1 page opens a side panel to a Hermes agent over ACP.** Settings gets an ACP Providers page; the first provider is Jarvis, admin only. Agent approvals show up as cards in the chat.
+- Nothing appears until an admin adds and enables a provider, and Jarvis also needs Mk1's key on its host, which is a separate sign-off. Three new tables (`acp_providers`, `ai_chats`, `ai_chat_messages`) are created empty.
+- The chat and the ACP Providers page are translated (English, French, Arabic). In Arabic the button and panel stay on the right, clear of the sidebar.
+
 ## v1.57.0 - 2026-11-05
 
 ### HGH quantity in IU
