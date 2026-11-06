@@ -368,8 +368,9 @@ def slot_clause(slot: Optional[int]):
 # The only sanctioned way to change a native-born sample's slot peptide
 # (spec 2026-09-10 M6). A slot may be relabeled only while every row it
 # touches — parent-tier + every family vial — is still pristine (no result,
-# no retest, no promotion link): anything else means the bench has already
-# acted on the old identity and the slot must go through retest instead.
+# no promotion link): anything else means the bench has already acted on the
+# old identity and the slot must go through retest first. Rows a retest
+# superseded stay on the old label as history and no longer block.
 
 
 class NativeSlotLockedError(Exception):
@@ -403,12 +404,14 @@ def slot_rows(db: Session, parent: LimsSample, slot: int) -> list[LimsAnalysis]:
 
 
 def is_slot_pristine(db: Session, rows: list[LimsAnalysis]) -> bool:
-    """True iff every row is still untouched: no result, still in an
-    unassigned/assigned review_state, never retested, not itself a retest,
-    and not linked as a promotion source."""
+    """True iff every current row is still untouched (no result, still in an
+    unassigned/assigned review_state) and no row is linked as a promotion
+    source. Rows superseded by a retest (retested=True) are history: they
+    keep their old label (restamp skips them) and do not block, so a
+    mislabel caught at the bench can retest, then relabel (P-5866)."""
     from models import LimsAnalysisPromotion
     if any(r.review_state not in _PRISTINE_STATES or r.result_value is not None
-           or r.retested or r.retest_of_id is not None for r in rows):
+           for r in rows if not r.retested):
         return False
     ids = [r.id for r in rows]
     if not ids:
