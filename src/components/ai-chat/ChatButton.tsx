@@ -60,8 +60,8 @@ export function ChatButton() {
         // tab order and the accessibility tree.
         className={
           open
-            ? 'invisible fixed end-4 bottom-4 z-40 rounded-full shadow-lg'
-            : 'fixed end-4 bottom-4 z-40 rounded-full shadow-lg'
+            ? 'invisible fixed right-4 bottom-4 z-40 rounded-full shadow-lg'
+            : 'fixed right-4 bottom-4 z-40 rounded-full shadow-lg'
         }
         onClick={openPanel}
       >

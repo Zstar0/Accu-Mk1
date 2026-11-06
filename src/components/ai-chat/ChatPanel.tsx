@@ -208,14 +208,15 @@ export function ChatPanel() {
         // ponytail: top-8 is the title bar (h-8). In a dev stack the 24px
         // StackBanner sits above it and the panel overlaps that much of the
         // title bar; read the banner height if that ever matters.
-        'fixed top-8 end-0 bottom-0 z-40 flex flex-col border-s bg-background shadow-xl',
+        'fixed top-8 right-0 bottom-0 z-40 flex flex-col border-l bg-background shadow-xl',
         // Keep in step with `PANEL_WIDTH` in `use-ai-chat-glue.ts`: the toaster
         // is moved left by this width while the panel is open. Tailwind needs
         // the literal here, so the two cannot share one constant.
         'w-[clamp(360px,35vw,720px)] max-w-[100vw]',
         'transition-transform duration-200 motion-reduce:transition-none',
-        // RTL docks it at the left edge, so closed it slides out to the left.
-        open ? 'translate-x-0' : 'translate-x-full rtl:-translate-x-full'
+        // Physically right in every direction: the sidebar stays pinned left
+        // under RTL, so a logical `end-0` would dock the panel over it.
+        open ? 'translate-x-0' : 'translate-x-full'
       )}
     >
       <header className="flex items-center gap-1 border-b px-3 py-2">
