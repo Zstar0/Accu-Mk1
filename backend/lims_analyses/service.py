@@ -1017,6 +1017,11 @@ def promote_to_parent(
                 f"source {sid} is in {row.review_state!r}; "
                 f"only 'to_be_verified' rows can be promoted"
             )
+        if row.retested:
+            # A retest leaves the old row in to_be_verified; it is history now.
+            raise BadRequestError(
+                f"source {sid} was superseded by a retest; promote the retest row"
+            )
         if row.lims_sub_sample_pk is not None:
             sub = db.get(LimsSubSample, row.lims_sub_sample_pk)
             if sub is None:

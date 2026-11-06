@@ -78,6 +78,33 @@ def test_relabel_409_once_any_row_has_a_result(db):
     relabel_native_slot(db, parent=parent, slot=1, new_peptide_id=ghk.id, user_id=1, commit=False)
 
 
+def test_relabel_unlocks_after_retest_and_keeps_history(db):
+    # P-5866: customer mislabel caught by a failed identity; the bench retests,
+    # then the slot must relabel onto the right peptide. The superseded rows
+    # keep their old label (that is what was measured).
+    parent, services, peps, vial_rows = native_family(db, sample_id="P-1405", slots=[("TB-500", "TB500")])
+    pur = next(r for r in next(iter(vial_rows.values())) if r.keyword == KW_PURITY)
+    apply_transition(db, analysis_id=pur.id, kind="submit", result_value="99.9", user_id=1, commit=False)
+    new = apply_transition(db, analysis_id=pur.id, kind="retest", user_id=1, commit=False)
+    frag = Peptide(name="TB500 (17-23 Fragment)", abbreviation="TB1723", active=True); db.add(frag); db.flush()
+    relabel_native_slot(db, parent=parent, slot=1, new_peptide_id=frag.id, user_id=1, commit=False)
+    assert db.get(LimsAnalysis, new.id).peptide_id == frag.id
+    old = db.get(LimsAnalysis, pur.id)
+    assert old.peptide_id == peps[1].id and old.result_value == "99.9"
+    assert all(r.peptide_id == frag.id for r in _rows(db, parent, 1) if not r.retested)
+
+
+def test_relabel_still_409_when_retest_copy_has_a_result(db):
+    parent, services, peps, vial_rows = native_family(db, sample_id="P-1406", slots=[("TB-500", "TB500")])
+    pur = next(r for r in next(iter(vial_rows.values())) if r.keyword == KW_PURITY)
+    apply_transition(db, analysis_id=pur.id, kind="submit", result_value="99.9", user_id=1, commit=False)
+    new = apply_transition(db, analysis_id=pur.id, kind="retest", user_id=1, commit=False)
+    apply_transition(db, analysis_id=new.id, kind="submit", result_value="99.8", user_id=1, commit=False)
+    frag = Peptide(name="TB500 (17-23 Fragment)", abbreviation="TB1723", active=True); db.add(frag); db.flush()
+    with pytest.raises(NativeSlotLockedError):
+        relabel_native_slot(db, parent=parent, slot=1, new_peptide_id=frag.id, user_id=1, commit=False)
+
+
 def test_relabel_rejects_duplicate_peptide_across_slots(db):
     from lims_analyses.hplc_native import NativeSlotLockedError
     parent, services, peps, vial_rows = native_family(db, sample_id="PB-1404",
