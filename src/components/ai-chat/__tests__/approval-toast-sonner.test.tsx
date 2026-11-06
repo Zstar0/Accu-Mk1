@@ -10,6 +10,8 @@
  * test counts toasts that are not marked removed.
  */
 
+// Real i18n resources, so the assertions below read the English copy.
+import '@/i18n/config'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { act, render, screen, waitFor } from '@testing-library/react'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'

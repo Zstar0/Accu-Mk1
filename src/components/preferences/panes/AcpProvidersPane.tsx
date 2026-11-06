@@ -1,4 +1,6 @@
 import { useId, useState, type ChangeEvent } from 'react'
+import { useTranslation } from 'react-i18next'
+import type { TFunction } from 'i18next'
 import {
   useQuery,
   useQueryClient,
@@ -35,24 +37,22 @@ import {
 import { SettingsSection } from '../shared/SettingsComponents'
 
 const QK = ['acp-providers']
-const NO_KEYS = 'Key storage is not set up on this server.'
 // `crmFetch` keeps only `detail.code`, so a 422 `invalid_input` cannot say
 // which field it means; the form hints carry the formats instead.
 const ERRORS: Record<string, string> = {
-  invalid_input:
-    'A value was rejected. Check each field against its hint. A slug that is already in use is rejected too.',
-  not_supported: 'Mk1 tools are not available until Phase 2.',
-  not_ready:
-    'This provider needs a passing Test connection first. Turn Enabled off and save, run Test connection, then turn Enabled on again.',
-  provider_in_use:
-    'This provider has chats, so it cannot be deleted. Disable it instead.',
-  provider_not_found: 'This provider no longer exists. Reload the list.',
-  keys_not_configured: NO_KEYS,
+  invalid_input: 'preferences.acpProviders.error.invalidInput',
+  not_supported: 'preferences.acpProviders.error.notSupported',
+  not_ready: 'preferences.acpProviders.error.notReady',
+  provider_in_use: 'preferences.acpProviders.error.providerInUse',
+  provider_not_found: 'preferences.acpProviders.error.providerNotFound',
+  keys_not_configured: 'preferences.acpProviders.noKeys',
 }
+/** `fallback` and the `ERRORS` values are translation keys. */
 const errorText = (
   e: unknown,
-  fallback = 'Could not save. Nothing was changed.'
-) => (e instanceof CrmError && e.code && ERRORS[e.code]) || fallback
+  t: TFunction,
+  fallback = 'preferences.acpProviders.error.saveFailed'
+) => t((e instanceof CrmError && e.code && ERRORS[e.code]) || fallback)
 
 const when = (iso: string) => new Date(iso).toLocaleString()
 
@@ -72,19 +72,26 @@ function capabilityNames(caps: Record<string, unknown> | null, prefix = '') {
 const agentLabel = (info: Record<string, unknown> | null) =>
   [info?.name, info?.version].filter(x => typeof x === 'string').join(' ')
 
-function lastTestText(p: AcpProvider): string {
-  if (!p.last_test_at) return 'Never tested.'
+function lastTestText(p: AcpProvider, t: TFunction): string {
+  if (!p.last_test_at) return t('preferences.acpProviders.lastTest.never')
   const at = when(p.last_test_at)
   if (p.last_test_ok === null)
-    return `The ${at} test no longer applies after a change. Run Test connection again.`
+    return t('preferences.acpProviders.lastTest.stale', { at })
   if (!p.last_test_ok)
-    return `Last test failed ${at}${p.last_test_error ? `: ${p.last_test_error}` : '.'}`
+    return p.last_test_error
+      ? t('preferences.acpProviders.lastTest.failedWithError', {
+          at,
+          error: p.last_test_error,
+        })
+      : t('preferences.acpProviders.lastTest.failed', { at })
   const agent = agentLabel(p.last_agent_info)
   const caps = capabilityNames(p.last_capabilities).join(', ')
   return [
-    `Last test passed ${at}.`,
+    t('preferences.acpProviders.lastTest.passed', { at }),
     agent && `${agent}.`,
-    `Capabilities: ${caps || 'none reported'}.`,
+    t('preferences.acpProviders.lastTest.capabilities', {
+      caps: caps || t('preferences.acpProviders.noneReported'),
+    }),
   ]
     .filter(Boolean)
     .join(' ')
@@ -134,6 +141,7 @@ type FormState = Record<TextKey, string> & { roles: string[]; enabled: boolean }
 
 interface FieldDef {
   key: TextKey
+  /** Translation keys. */
   label: string
   hint: string
   area?: boolean
@@ -142,61 +150,69 @@ interface FieldDef {
 const FIELDS: FieldDef[] = [
   {
     key: 'display_name',
-    label: 'Display name',
-    hint: 'Shown in the chat panel. 1 to 100 characters.',
+    label: 'preferences.acpProviders.displayName.label',
+    hint: 'preferences.acpProviders.displayName.description',
   },
   {
     key: 'slug',
-    label: 'Slug',
-    hint: 'Lowercase letters, digits and dashes, 2 to 32. Fixed once created.',
+    label: 'preferences.acpProviders.slug.label',
+    hint: 'preferences.acpProviders.slug.description',
   },
   {
     key: 'ssh_host',
-    label: 'SSH host',
-    hint: 'IP address or hostname of the agent host.',
+    label: 'preferences.acpProviders.sshHost.label',
+    hint: 'preferences.acpProviders.sshHost.description',
   },
-  { key: 'ssh_port', label: 'SSH port', hint: '1 to 65535.' },
+  {
+    key: 'ssh_port',
+    label: 'preferences.acpProviders.sshPort.label',
+    hint: 'preferences.acpProviders.sshPort.description',
+  },
   {
     key: 'ssh_user',
-    label: 'SSH user',
-    hint: 'Lowercase letters, digits, - and _.',
+    label: 'preferences.acpProviders.sshUser.label',
+    hint: 'preferences.acpProviders.sshUser.description',
   },
   {
     key: 'host_key',
-    label: 'Host key',
-    hint: 'Paste the key type and the base64 key only, like ssh-ed25519 AAAA..., without the hostname that ssh-keyscan puts in front.',
+    label: 'preferences.acpProviders.hostKey.label',
+    hint: 'preferences.acpProviders.hostKey.description',
     area: true,
   },
   {
     key: 'launcher_path',
-    label: 'Launcher path',
-    hint: 'Absolute path on the host. Display only: it fills the authorized_keys line.',
+    label: 'preferences.acpProviders.launcherPath.label',
+    hint: 'preferences.acpProviders.launcherPath.description',
   },
   {
     key: 'authorized_from',
-    label: 'Authorized from',
-    hint: 'IP of this Mk1 server as the host sees it. The key only works from there.',
+    label: 'preferences.acpProviders.authorizedFrom.label',
+    hint: 'preferences.acpProviders.authorizedFrom.description',
   },
   {
     key: 'session_cwd',
-    label: 'Session directory',
-    hint: 'Absolute path the agent works in.',
+    label: 'preferences.acpProviders.sessionCwd.label',
+    hint: 'preferences.acpProviders.sessionCwd.description',
   },
-  { key: 'max_sessions', label: 'Max sessions', hint: '1 to 16 live chats.' },
+  {
+    key: 'max_sessions',
+    label: 'preferences.acpProviders.maxSessions.label',
+    hint: 'preferences.acpProviders.maxSessions.description',
+  },
   {
     key: 'idle_minutes',
-    label: 'Idle minutes',
-    hint: 'An idle chat session closes after this long. 1 to 240.',
+    label: 'preferences.acpProviders.idleMinutes.label',
+    hint: 'preferences.acpProviders.idleMinutes.description',
   },
   {
     key: 'permission_timeout_s',
-    label: 'Approval timeout (s)',
-    hint: 'Mk1 denies an approval card left unanswered this long.',
+    label: 'preferences.acpProviders.permissionTimeout.label',
+    hint: 'preferences.acpProviders.permissionTimeout.description',
   },
   {
     key: 'agent_approval_timeout_s',
-    label: 'Agent approval timeout (s)',
-    hint: "The agent's own approval timeout. Must be above the approval timeout.",
+    label: 'preferences.acpProviders.agentApprovalTimeout.label',
+    hint: 'preferences.acpProviders.agentApprovalTimeout.description',
   },
 ]
 
@@ -261,16 +277,16 @@ function changedSinceTest(f: FormState, p: AcpProvider): boolean {
   )
 }
 
-/** Why Enabled cannot go on yet, or null. The server enforces the same rules. */
+/** The key of why Enabled cannot go on yet, or null. The server enforces the same rules. */
 function enableBlocker(p: AcpProvider | undefined, f: FormState) {
-  if (!p) return 'Save the provider, then generate a key.'
-  if (!p.public_key) return 'Generate a key first, then install it on the host.'
-  if (!p.host_key) return 'Add the host key first.'
+  if (!p) return 'preferences.acpProviders.blocker.notSaved'
+  if (!p.public_key) return 'preferences.acpProviders.blocker.noKey'
+  if (!p.host_key) return 'preferences.acpProviders.blocker.noHostKey'
   if (f.roles.includes('standard')) {
     if (changedSinceTest(f, p))
-      return 'You changed the roles or connection settings. Save, then run Test connection again.'
+      return 'preferences.acpProviders.blocker.changed'
     if (p.last_test_ok !== true)
-      return 'A provider open to standard users needs a passing Test connection first.'
+      return 'preferences.acpProviders.blocker.untested'
   }
   return null
 }
@@ -289,6 +305,7 @@ function EnabledSwitch({
   blocker: string | null
   onChange: (on: boolean) => void
 }) {
+  const { t } = useTranslation()
   const blocked = !checked && blocker !== null
   return (
     <Tooltip>
@@ -306,9 +323,9 @@ function EnabledSwitch({
               checked={checked}
               disabled={blocked}
               onCheckedChange={onChange}
-              aria-label="Enabled"
+              aria-label={t('common.enabled')}
             />
-            Enabled
+            {t('common.enabled')}
           </label>
         </span>
       </TooltipTrigger>
@@ -316,9 +333,9 @@ function EnabledSwitch({
         <TooltipContent className="max-w-xs p-0">
           <div className="flex flex-col gap-1.5 p-3 font-mono text-xs">
             <div className="border-b border-primary-foreground/20 pb-1.5 font-semibold">
-              Cannot enable yet
+              {t('preferences.acpProviders.cannotEnable')}
             </div>
-            <div>{blocker}</div>
+            <div>{t(blocker)}</div>
           </div>
         </TooltipContent>
       )}
@@ -337,6 +354,7 @@ function ProviderForm({
   onSaved: (row: AcpProvider) => void
   onCancel: () => void
 }) {
+  const { t } = useTranslation()
   const uid = useId()
   const create = provider === undefined
   const [f, setF] = useState(() => initialForm(provider))
@@ -371,7 +389,7 @@ function ProviderForm({
           : createAcpProvider(toInput(f, true)))
       )
     } catch (e) {
-      setError(errorText(e))
+      setError(errorText(e, t))
     } finally {
       setBusy(false)
     }
@@ -388,12 +406,13 @@ function ProviderForm({
   return (
     <div className="flex flex-col gap-3 rounded-md border p-3">
       <h4 className="text-sm font-medium">
-        {create ? 'New provider' : 'Edit provider'}
+        {create
+          ? t('preferences.acpProviders.newProvider')
+          : t('preferences.acpProviders.editProvider')}
       </h4>
       {!create && (
         <p className="text-xs text-muted-foreground">
-          Test connection and Generate key use the saved settings. Save or
-          cancel first.
+          {t('preferences.acpProviders.editNote')}
         </p>
       )}
       <div className="grid gap-3 sm:grid-cols-2">
@@ -411,7 +430,7 @@ function ProviderForm({
           const isInt = (INT_KEYS as readonly string[]).includes(def.key)
           return (
             <div key={def.key} className="flex flex-col gap-1">
-              <Label htmlFor={id}>{def.label}</Label>
+              <Label htmlFor={id}>{t(def.label)}</Label>
               {def.area ? (
                 <Textarea {...common} rows={2} className="font-mono text-xs" />
               ) : (
@@ -421,16 +440,17 @@ function ProviderForm({
                   disabled={def.key === 'slug' && !create}
                 />
               )}
-              <p className="text-xs text-muted-foreground">{def.hint}</p>
+              <p className="text-xs text-muted-foreground">{t(def.hint)}</p>
               {def.key === 'host_key' &&
                 fingerprint &&
                 (f.host_key.trim() === savedHostKey ? (
                   <p className="text-xs">
-                    Fingerprint: <code>{fingerprint}</code>
+                    {t('preferences.acpProviders.fingerprint')}{' '}
+                    <code>{fingerprint}</code>
                   </p>
                 ) : (
                   <p className="text-xs text-muted-foreground">
-                    The fingerprint shows after you save.
+                    {t('preferences.acpProviders.fingerprintAfterSave')}
                   </p>
                 ))}
             </div>
@@ -438,7 +458,9 @@ function ProviderForm({
         })}
       </div>
       <div className="flex flex-wrap items-center gap-4 text-sm">
-        <span className="text-muted-foreground">Allowed roles:</span>
+        <span className="text-muted-foreground">
+          {t('preferences.acpProviders.allowedRoles')}
+        </span>
         {ROLES.map(role => (
           <label key={role} className="flex items-center gap-2 capitalize">
             <Checkbox
@@ -452,13 +474,12 @@ function ProviderForm({
                 )
               }
             />
-            {role}
+            {t(`preferences.acpProviders.role.${role}`)}
           </label>
         ))}
       </div>
       <p className="text-xs text-muted-foreground">
-        Standard also lets non-admin users chat with it. It then needs a passing
-        Test connection before it can be enabled.
+        {t('preferences.acpProviders.standardNote')}
       </p>
       <div className="flex flex-wrap items-center gap-6">
         <EnabledSwitch
@@ -467,29 +488,35 @@ function ProviderForm({
           onChange={on => set('enabled', on)}
         />
         <label className="flex items-center gap-2 text-sm">
-          <Switch checked={false} disabled aria-label="Mk1 tools" />
-          Mk1 tools
-          <span className="text-xs text-muted-foreground">Phase 2</span>
+          <Switch
+            checked={false}
+            disabled
+            aria-label={t('preferences.acpProviders.mk1Tools')}
+          />
+          {t('preferences.acpProviders.mk1Tools')}
+          <span className="text-xs text-muted-foreground">
+            {t('preferences.acpProviders.phase2')}
+          </span>
         </label>
       </div>
       {retestLost && (
         <p className="text-xs text-amber-600">
-          Changing the roles or connection settings removes the passing test, so
-          this provider cannot stay enabled. Turn Enabled off to save, then test
-          and enable it again.
+          {t('preferences.acpProviders.retestLost')}
         </p>
       )}
       {timeoutsBad && (
         <p className="text-xs text-red-500">
-          Approval timeout must be below the agent timeout.
+          {t('preferences.acpProviders.timeoutsBad')}
         </p>
       )}
       <div className="flex gap-2">
         <Button size="sm" disabled={!canSave} onClick={() => void save()}>
-          {create ? 'Create provider' : 'Save'}
+          {create
+            ? t('preferences.acpProviders.createProvider')
+            : t('preferences.acpProviders.save')}
         </Button>
         <Button size="sm" variant="ghost" onClick={onCancel}>
-          Cancel
+          {t('preferences.acpProviders.cancel')}
         </Button>
       </div>
       {error && <p className="text-xs text-red-500">{error}</p>}
@@ -500,6 +527,7 @@ function ProviderForm({
 // ---- list ---------------------------------------------------------------
 
 function CopyButton({ text }: { text: string }) {
+  const { t } = useTranslation()
   const [copied, setCopied] = useState(false)
   return (
     <Button
@@ -512,7 +540,10 @@ function CopyButton({ text }: { text: string }) {
         )
       }}
     >
-      <Copy className="mr-1 h-3 w-3" /> {copied ? 'Copied' : 'Copy'}
+      <Copy className="me-1 h-3 w-3" />{' '}
+      {copied
+        ? t('preferences.acpProviders.copied')
+        : t('preferences.acpProviders.copy')}
     </Button>
   )
 }
@@ -524,6 +555,7 @@ const label = (key: string) => {
 
 /** `stderr_tail` comes from the agent side: text in a `<pre>`, never markup. */
 function TestReport({ r }: { r: AcpTestResult }) {
+  const { t } = useTranslation()
   const timings = Object.entries(r.timings_ms).filter(
     (e): e is [string, number] => e[1] !== null
   )
@@ -535,19 +567,31 @@ function TestReport({ r }: { r: AcpTestResult }) {
       className="flex flex-col gap-1 rounded-md border p-3 text-xs"
     >
       <p className={r.ok ? 'text-emerald-600' : 'text-red-500'}>
-        {r.ok ? 'Test passed.' : `Test failed: ${r.error ?? 'unknown error'}`}
+        {r.ok
+          ? t('preferences.acpProviders.test.passed')
+          : t('preferences.acpProviders.test.failed', {
+              error: r.error ?? t('preferences.acpProviders.test.unknownError'),
+            })}
       </p>
-      {agent && <p>Agent: {agent}</p>}
+      {agent && <p>{t('preferences.acpProviders.test.agent', { agent })}</p>}
       {timings.length > 0 && (
         <p>{timings.map(([k, ms]) => `${label(k)} ${ms} ms`).join(', ')}</p>
       )}
       {/* A failed tool check names one offender; the whole list lets an admin fix them all in one go. */}
       {(r.ok || caps.length > 0) && (
-        <p>Capabilities: {caps.join(', ') || 'none reported'}</p>
+        <p>
+          {t('preferences.acpProviders.test.capabilities', {
+            caps: caps.join(', ') || t('preferences.acpProviders.noneReported'),
+          })}
+        </p>
       )}
       {(r.ok || r.tools.length > 0) && (
         <p className="break-words">
-          Tool list: {r.tools.join(', ') || 'empty'}
+          {t('preferences.acpProviders.test.tools', {
+            tools:
+              r.tools.join(', ') ||
+              t('preferences.acpProviders.test.toolsEmpty'),
+          })}
         </p>
       )}
       {!r.ok && r.stderr_tail && r.stderr_tail.length > 0 && (
@@ -566,12 +610,14 @@ function ProviderCard({
   p: AcpProvider
   configured: boolean
 }) {
+  const { t } = useTranslation()
   const qc = useQueryClient()
   const [editing, setEditing] = useState(false)
   const [busy, setBusy] = useState<string | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [report, setReport] = useState<AcpTestResult | null>(null)
 
+  /** `status` is shown while it runs; `fallback` is the key of the error text. */
   const run = async (
     status: string,
     fallback: string,
@@ -582,25 +628,20 @@ function ProviderCard({
     try {
       await action()
     } catch (e) {
-      setError(errorText(e, fallback))
+      setError(errorText(e, t, fallback))
     } finally {
       setBusy(null)
     }
   }
 
   const generate = () => {
-    const replaces = p.public_key
-      ? 'This replaces the existing key, so the line now installed on the host stops working. '
-      : ''
-    if (
-      !window.confirm(
-        `Generate a new key for ${p.display_name}? ${replaces}A provider open to standard users is disabled until it passes a new test. Install the new line on the host afterwards.`
-      )
-    )
-      return
+    const confirmKey = p.public_key
+      ? 'preferences.acpProviders.confirmRegenerate'
+      : 'preferences.acpProviders.confirmGenerate'
+    if (!window.confirm(t(confirmKey, { name: p.display_name }))) return
     void run(
-      'Generating the key...',
-      'Could not generate the key. Nothing was changed.',
+      t('preferences.acpProviders.generating'),
+      'preferences.acpProviders.error.generateFailed',
       async () => {
         upsert(qc, await generateAcpKey(p.id))
         setReport(null) // it described the old key
@@ -612,8 +653,8 @@ function ProviderCard({
   const test = () => {
     setReport(null)
     void run(
-      'Testing the connection. This can take up to two minutes.',
-      'Could not run the test.',
+      t('preferences.acpProviders.testing'),
+      'preferences.acpProviders.error.testFailed',
       async () => {
         try {
           setReport(await testAcpProvider(p.id))
@@ -628,13 +669,13 @@ function ProviderCard({
   const remove = () => {
     if (
       !window.confirm(
-        `Delete ${p.display_name}? Remove its line from authorized_keys on the host too.`
+        t('preferences.acpProviders.confirmDelete', { name: p.display_name })
       )
     )
       return
     void run(
-      'Deleting...',
-      'Could not delete. Nothing was changed.',
+      t('preferences.acpProviders.deleting'),
+      'preferences.acpProviders.error.deleteFailed',
       async () => {
         await deleteAcpProvider(p.id)
         qc.setQueryData<AcpProviderList>(
@@ -659,61 +700,77 @@ function ProviderCard({
           {p.slug}
         </span>
         <span className="rounded-md bg-muted px-2 py-0.5 text-xs">
-          {p.enabled ? 'Enabled' : 'Disabled'}
+          {p.enabled ? t('common.enabled') : t('common.disabled')}
         </span>
         <span className="text-xs text-muted-foreground">
-          Roles: {p.allowed_roles.join(', ')}
+          {t('preferences.acpProviders.roles', {
+            // An unknown role from the server shows as it is.
+            roles: p.allowed_roles
+              .map(r =>
+                t(`preferences.acpProviders.role.${r}`, { defaultValue: r })
+              )
+              .join(', '),
+          })}
         </span>
         <span className="text-xs text-muted-foreground">
-          {`${p.live_sessions} live ${p.live_sessions === 1 ? 'session' : 'sessions'}`}
+          {t('preferences.acpProviders.liveSessions', {
+            count: p.live_sessions,
+          })}
         </span>
-        <div className="ml-auto flex flex-wrap gap-2">
+        <div className="ms-auto flex flex-wrap gap-2">
           <Button
             size="sm"
             variant="outline"
             disabled={editing}
-            aria-label={`Edit ${p.display_name}`}
+            aria-label={t('preferences.acpProviders.editAria', {
+              name: p.display_name,
+            })}
             onClick={() => setEditing(true)}
           >
-            Edit
+            {t('preferences.acpProviders.edit')}
           </Button>
           <Button
             size="sm"
             variant="outline"
             disabled={!configured || !idle || editing}
-            aria-label={`Generate key for ${p.display_name}`}
+            aria-label={t('preferences.acpProviders.generateKeyAria', {
+              name: p.display_name,
+            })}
             onClick={generate}
           >
-            Generate key
+            {t('preferences.acpProviders.generateKey')}
           </Button>
           <Button
             size="sm"
             variant="outline"
             disabled={!idle || editing || !p.public_key || !p.host_key}
-            aria-label={`Test connection for ${p.display_name}`}
+            aria-label={t('preferences.acpProviders.testConnectionAria', {
+              name: p.display_name,
+            })}
             onClick={test}
           >
-            Test connection
+            {t('preferences.acpProviders.testConnection')}
           </Button>
           <Button
             size="sm"
             variant="ghost"
             disabled={!idle}
-            aria-label={`Delete ${p.display_name}`}
+            aria-label={t('preferences.acpProviders.deleteAria', {
+              name: p.display_name,
+            })}
             onClick={remove}
           >
-            Delete
+            {t('preferences.acpProviders.delete')}
           </Button>
         </div>
       </div>
       <p className="text-xs text-muted-foreground" data-testid="last-test">
-        {lastTestText(p)}
+        {lastTestText(p, t)}
       </p>
       {p.authorized_keys_line ? (
         <div className="flex flex-col gap-1">
           <p className="text-xs text-muted-foreground">
-            Install this line in authorized_keys on the host. It holds the
-            public key only.
+            {t('preferences.acpProviders.installLine')}
           </p>
           <pre className="overflow-x-auto whitespace-pre-wrap break-all rounded bg-muted p-2 font-mono text-xs">
             {p.authorized_keys_line}
@@ -727,13 +784,11 @@ function ProviderCard({
         </div>
       ) : p.public_key ? (
         <p className="text-xs text-amber-600">
-          The authorized_keys line could not be built. Check the launcher path
-          and Authorized from.
+          {t('preferences.acpProviders.lineUnbuilt')}
         </p>
       ) : (
         <p className="text-xs text-muted-foreground">
-          No key yet. Generate a key, install its line on the host, then run
-          Test connection.
+          {t('preferences.acpProviders.noKeyYet')}
         </p>
       )}
       {busy && (
@@ -765,6 +820,7 @@ function ProviderCard({
 
 /** Settings > ACP Providers: the agents the AI chat panel can reach over SSH. Admins only. */
 export function AcpProvidersPane() {
+  const { t } = useTranslation()
   const isAdmin = useAuthStore(state => state.user?.role === 'admin')
   const qc = useQueryClient()
   const [adding, setAdding] = useState(false)
@@ -777,24 +833,26 @@ export function AcpProvidersPane() {
   if (!isAdmin)
     return (
       <p className="text-sm text-muted-foreground">
-        Only admins can manage ACP providers.
+        {t('preferences.acpProviders.adminOnly')}
       </p>
     )
   return (
-    <SettingsSection title="ACP providers">
+    <SettingsSection title={t('preferences.acpProviders.title')}>
       <p className="text-sm text-muted-foreground">
-        Agents the AI chat panel connects to over SSH. Add a provider, generate
-        its key, install the key line on the agent host, run Test connection,
-        then enable it.
+        {t('preferences.acpProviders.intro')}
       </p>
       {q.isLoading && (
         <Loader2 className="h-4 w-4 animate-spin text-muted-foreground" />
       )}
       {q.isError && (
-        <p className="text-sm text-red-500">Could not load the providers.</p>
+        <p className="text-sm text-red-500">
+          {t('preferences.acpProviders.loadError')}
+        </p>
       )}
       {q.data && !q.data.configured && (
-        <p className="text-sm text-amber-600">{NO_KEYS}</p>
+        <p className="text-sm text-amber-600">
+          {t('preferences.acpProviders.noKeys')}
+        </p>
       )}
       {q.data && (
         <>
@@ -819,7 +877,7 @@ export function AcpProvidersPane() {
                 disabled={!q.data.configured}
                 onClick={() => setAdding(true)}
               >
-                Add provider
+                {t('preferences.acpProviders.addProvider')}
               </Button>
             </div>
           )}

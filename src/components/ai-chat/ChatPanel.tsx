@@ -15,6 +15,8 @@ import {
   type ReactNode,
 } from 'react'
 import { createPortal } from 'react-dom'
+import { useTranslation } from 'react-i18next'
+import type { TFunction } from 'i18next'
 import { ChevronDown, History, Loader2, Plus, X } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import {
@@ -37,16 +39,20 @@ import {
   useAiProviders,
 } from './use-ai-chat-glue'
 
-function statusText(phase: LivePhase | undefined, agent: string): string {
+function statusText(
+  phase: LivePhase | undefined,
+  agent: string,
+  t: TFunction
+): string {
   switch (phase) {
     case 'starting':
-      return `Starting ${agent}...`
+      return t('aiChat.status.starting', { agent })
     case 'resuming':
-      return 'Resuming...'
+      return t('aiChat.status.resuming')
     case 'running':
-      return 'Working...'
+      return t('aiChat.status.running')
     case 'waiting':
-      return `${agent} is waiting for your approval`
+      return t('aiChat.waitingForApproval', { agent })
     default:
       return ''
   }
@@ -55,6 +61,7 @@ function statusText(phase: LivePhase | undefined, agent: string): string {
 const focusComposer = () => document.getElementById(COMPOSER_ID)?.focus()
 
 export function ChatPanel() {
+  const { t } = useTranslation()
   const providers = useAiProviders()
   const agent = useActiveProvider()
   const open = useAiChatStore(s => s.open)
@@ -150,7 +157,7 @@ export function ChatPanel() {
   if (activeChatId === null) {
     body = (
       <div className="flex min-h-0 flex-1 items-center justify-center px-6 text-center text-sm text-muted-foreground">
-        <p>Ask {name} about the page you are on.</p>
+        <p>{t('aiChat.panel.empty', { agent: name })}</p>
       </div>
     )
   } else {
@@ -162,7 +169,7 @@ export function ChatPanel() {
           <div className="flex shrink-0 items-center justify-center gap-2 px-3 py-2 text-xs text-muted-foreground">
             {failedChat === activeChatId ? (
               <>
-                <span>Could not load this chat.</span>
+                <span>{t('aiChat.panel.loadFailed')}</span>
                 <Button
                   size="sm"
                   variant="outline"
@@ -172,13 +179,13 @@ export function ChatPanel() {
                     setAttempt(n => n + 1)
                   }}
                 >
-                  Retry
+                  {t('aiChat.retry')}
                 </Button>
               </>
             ) : (
               <Loader2
                 className="size-4 animate-spin motion-reduce:animate-none"
-                aria-label="Loading"
+                aria-label={t('aiChat.panel.loading')}
               />
             )}
           </div>
@@ -191,7 +198,7 @@ export function ChatPanel() {
   const panel = (
     <div
       role="complementary"
-      aria-label="AI chat"
+      aria-label={t('aiChat.panel.label')}
       // Closed, the panel sits off screen; `inert` keeps it out of the tab
       // order and the accessibility tree.
       inert={!open}
@@ -207,6 +214,8 @@ export function ChatPanel() {
         // the literal here, so the two cannot share one constant.
         'w-[clamp(360px,35vw,720px)] max-w-[100vw]',
         'transition-transform duration-200 motion-reduce:transition-none',
+        // Physically right in every direction: the sidebar stays pinned left
+        // under RTL, so a logical `end-0` would dock the panel over it.
         open ? 'translate-x-0' : 'translate-x-full'
       )}
     >
@@ -217,7 +226,7 @@ export function ChatPanel() {
               <Button
                 variant="ghost"
                 size="sm"
-                aria-label="Choose agent"
+                aria-label={t('aiChat.panel.chooseAgent')}
                 className="min-w-0 gap-1 px-2"
               >
                 <span className="truncate text-sm font-semibold">{name}</span>
@@ -225,7 +234,7 @@ export function ChatPanel() {
               </Button>
             </DropdownMenuTrigger>
             <DropdownMenuContent align="start">
-              <DropdownMenuLabel>Agent</DropdownMenuLabel>
+              <DropdownMenuLabel>{t('aiChat.panel.agent')}</DropdownMenuLabel>
               <DropdownMenuRadioGroup
                 value={String(agent.id)}
                 onValueChange={v => pickProvider(Number(v))}
@@ -243,16 +252,22 @@ export function ChatPanel() {
             {name}
           </h2>
         )}
-        <div className="ml-auto flex items-center gap-1">
+        <div className="ms-auto flex items-center gap-1">
           <DropdownMenu>
             <DropdownMenuTrigger asChild>
-              <Button variant="ghost" size="icon-sm" aria-label="Recent chats">
+              <Button
+                variant="ghost"
+                size="icon-sm"
+                aria-label={t('aiChat.panel.recentChats')}
+              >
                 <History className="size-4" aria-hidden="true" />
               </Button>
             </DropdownMenuTrigger>
             <DropdownMenuContent align="end" className="max-h-80 w-64">
               {chats.length === 0 ? (
-                <DropdownMenuItem disabled>No chats yet</DropdownMenuItem>
+                <DropdownMenuItem disabled>
+                  {t('aiChat.panel.noChats')}
+                </DropdownMenuItem>
               ) : (
                 chats.map(chat => (
                   <DropdownMenuItem
@@ -265,9 +280,9 @@ export function ChatPanel() {
                     }}
                   >
                     <span className="truncate">
-                      {chat.title || 'Untitled chat'}
+                      {chat.title || t('aiChat.panel.untitled')}
                     </span>
-                    <span className="ml-auto flex items-center gap-2 text-xs text-muted-foreground">
+                    <span className="ms-auto flex items-center gap-2 text-xs text-muted-foreground">
                       {providers.length > 1 &&
                         (providers.find(p => p.id === chat.provider_id)
                           ?.display_name ??
@@ -278,7 +293,9 @@ export function ChatPanel() {
                             aria-hidden="true"
                             className="size-2 shrink-0 rounded-full bg-amber-500"
                           />
-                          <span className="sr-only">Approval waiting</span>
+                          <span className="sr-only">
+                            {t('aiChat.panel.approvalWaiting')}
+                          </span>
                         </>
                       )}
                     </span>
@@ -290,16 +307,16 @@ export function ChatPanel() {
           <Button
             variant="ghost"
             size="sm"
-            aria-label="New chat"
+            aria-label={t('aiChat.panel.newChat')}
             onClick={newChat}
           >
             <Plus className="size-4" aria-hidden="true" />
-            New chat
+            {t('aiChat.panel.newChat')}
           </Button>
           <Button
             variant="ghost"
             size="icon-sm"
-            aria-label="Close AI chat"
+            aria-label={t('aiChat.panel.close')}
             onClick={close}
           >
             <X className="size-4" aria-hidden="true" />
@@ -310,10 +327,10 @@ export function ChatPanel() {
       <div
         role="status"
         aria-live="polite"
-        aria-label="Chat status"
+        aria-label={t('aiChat.panel.status')}
         className="px-3 text-xs text-muted-foreground"
       >
-        {statusText(phase, name)}
+        {statusText(phase, name, t)}
       </div>
 
       {body}
@@ -321,7 +338,7 @@ export function ChatPanel() {
       <ChatComposer />
 
       <p className="border-t px-3 py-2 text-[11px] leading-snug text-muted-foreground">
-        {`Chats are processed and stored by ${name} on Accumark's bot server.`}
+        {t('aiChat.panel.privacy', { agent: name })}
       </p>
     </div>
   )
