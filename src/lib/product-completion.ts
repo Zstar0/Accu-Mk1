@@ -117,12 +117,15 @@ export function analysisFamily(
 /** HPLC single-component package keys — each one's category is the hplc
  *  family (plus any keywords a dev-seeded catalog maps to them directly).
  *  'hplc-purity-identity' is the native profile key (spec 2026-09-10); it
- *  and the legacy 'hplcpurity_identity' both mean the HPLC primary. */
+ *  and the legacy 'hplcpurity_identity' both mean the HPLC primary.
+ *  'bacteriostatic-water-panel' is the native Bac Water profile key (spec
+ *  2026-10-05); it behaves exactly like the legacy 'bac_water_panel'. */
 const HPLC_PACKAGE_KEYS = new Set([
   'core',
   'hplcpurity_identity',
   'hplc-purity-identity',
   'bac_water_panel',
+  'bacteriostatic-water-panel',
 ])
 
 /** Does `family` (from analysisFamily) count toward `productKey`'s check? */
@@ -198,8 +201,8 @@ export function computeProductCompletion(
   const category = categoryAnalyses(product, ctx.analyses, ctx.keywordFamilies)
   if (category.length === 0) return { met: false, vials: [] }
 
-  const allPromoted = category.every(a =>
-    promotionForRow(ctx.promotions, a) != null
+  const allPromoted = category.every(
+    a => promotionForRow(ctx.promotions, a) != null
   )
   if (!allPromoted) return { met: false, vials: [] }
 
