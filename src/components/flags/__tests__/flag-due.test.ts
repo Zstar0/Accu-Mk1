@@ -1,7 +1,23 @@
 import { describe, it, expect } from 'vitest'
-import { dueLabel } from '@/components/flags/flag-format'
+import { dueLabel, formatDateTime } from '@/components/flags/flag-format'
 
 const now = new Date('2026-07-09T12:00:00Z')
+
+describe('formatDateTime', () => {
+  it('shows the date, not just the clock', () => {
+    const out = formatDateTime('2026-07-03T12:00:00Z', now)
+    expect(out).toMatch(/Jul/)
+    expect(out).toMatch(/\d:\d\d/)
+    expect(out).not.toMatch(/2026/)
+  })
+  it('adds the year outside the current one', () =>
+    expect(formatDateTime('2025-12-30T12:00:00Z', now)).toMatch(/2025/))
+  it('naive timestamps are UTC', () =>
+    expect(formatDateTime('2026-07-03T12:00:00', now)).toBe(
+      formatDateTime('2026-07-03T12:00:00Z', now)
+    ))
+  it('empty', () => expect(formatDateTime('', now)).toBe(''))
+})
 
 describe('dueLabel', () => {
   it('future', () =>

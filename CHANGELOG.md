@@ -1,5 +1,10 @@
 # Changelog
 
+## v1.58.1 - 2026-11-06
+
+### Flags
+- **Flag threads show the date on every comment and event.** A comment used to read only "1:35 PM", so one from last week looked the same as one from today. It now reads "Nov 3, 1:35 PM", with the year added for anything outside the current year. The "raised this" and "assigned to" lines show the date too.
+
 ## v1.58.0 - 2026-11-05
 
 ### Bacteriostatic Water native-born
