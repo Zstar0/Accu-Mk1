@@ -545,6 +545,11 @@ def apply_transition(
         ):
             raise InvalidTransitionError(from_state, kind)
 
+        # An endotoxin vial's worksheet row goes back to the bench, before
+        # anything here writes (the worksheet lock order). Same transaction.
+        from endo_prep_rules import reopen_for_retest
+        reopen_for_retest(db, row, user_id=user_id)
+
         now = datetime.utcnow()
 
         new_row = LimsAnalysis(

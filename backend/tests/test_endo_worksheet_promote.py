@@ -7,6 +7,7 @@ worksheets (Review Focus 5) and the endo_analysis key on worksheet items.
 In-memory SQLite + dependency overrides, test_endo_v2_worksheets.py's
 pattern and helpers."""
 import json
+from datetime import datetime
 from decimal import Decimal
 from types import SimpleNamespace
 from unittest.mock import MagicMock
@@ -1137,3 +1138,56 @@ def test_endo_promote_plan_without_a_form_keeps_the_matrix_limit(client, db):
     db.commit()
     [res] = _results(_promote(client, w.ws, _line(item)))
     assert res["promoted"] is True, res
+
+
+# --- a retest gives the worksheet row back to the bench (Dennis, P-5901-S02) --
+
+def test_a_retest_reopens_a_completed_worksheet_and_moves_the_reading_to_history(client, db):
+    w = _world(client, db)
+    item, vial = _row(db, w)
+    other, _ = _row(db, w, "P-4002-S01")
+    item.ran_at = datetime(2026, 11, 6, 22, 57)
+    item.prep_status = "complete"
+    db.commit()
+    vial_id, ws_id = vial.id, w.ws.id
+    _results(_promote(client, w.ws, _line(item), _line(other)))
+    assert client.post(f"/worksheets/{ws_id}/complete").status_code == 200
+    assert client.patch(f"/worksheets/{ws_id}/items/{item.id}",
+                        json={"result_reading": "0.1"}).status_code == 409
+
+    apply_transition(db, analysis_id=vial_id, kind="retest", user_id=7)
+    db.expire_all()
+
+    assert (w.ws.status, w.ws.completed_at, w.ws.completed_by) == ("open", None, None)
+    assert (item.result_reading, item.ran_at, item.prep_status) == (None, None, "ready")
+    [entry] = item.prep_history
+    assert (entry["why"], entry["result_reading"], entry["reading_moved"]) == ("retest", "<0.05", True)
+    assert entry["ticks"]["prep_status"] == "complete"
+    audit = db.query(AuditLog).filter_by(operation="endo_worksheet_reopened_for_retest").one()
+    assert audit.details["worksheet_id"] == ws_id and audit.details["was_completed"] is True
+    # The row that was not retested stays as promoted: its reading, and its prep final.
+    assert other.result_reading == "<0.05"
+    assert client.patch(f"/worksheets/{ws_id}/items/{other.id}",
+                        json={"result_reading": "0.2"}).status_code == 409
+    # The bench enters the re-run and promotes it over the first result.
+    assert client.patch(f"/worksheets/{ws_id}/items/{item.id}",
+                        json={"result_reading": "0.1"}).status_code == 200
+    assert _results(_promote(client, w.ws, _line(item, 50)))[0]["promoted"] is True
+    assert client.post(f"/worksheets/{ws_id}/complete").status_code == 200
+
+
+def test_a_retest_on_an_open_worksheet_touches_only_its_own_row(client, db):
+    w = _world(client, db)
+    item, vial = _row(db, w)
+    due, _ = _row(db, w, "P-4002-S01", reading=None)
+    db.commit()
+    _results(_promote(client, w.ws, _line(item)))
+
+    apply_transition(db, analysis_id=vial.id, kind="retest", user_id=7)
+    db.expire_all()
+
+    assert w.ws.status == "open"
+    assert item.result_reading is None and item.prep_history[0]["why"] == "retest"
+    assert due.prep_history is None and due.result_reading is None
+    assert client.patch(f"/worksheets/{w.ws.id}/items/{due.id}",
+                        json={"result_reading": "0.1", "cartridge_type_id": w.c05.id}).status_code == 200

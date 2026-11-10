@@ -19,7 +19,8 @@ from sqlalchemy.orm import Session
 
 from coa.iu_display import iu_factors
 from coa.spec_rules import sample_peptide_ids
-from models import AuditLog, EndoPrepRule, LimsAnalysis, LimsSubSample, WorksheetItem
+from models import (AnalysisService, AuditLog, EndoPrepRule, LimsAnalysis, LimsSubSample,
+                    Worksheet, WorksheetItem)
 
 # Step 1's standard Tris ratio 1:N. Mirrors src/lib/endo-prep-2ml.ts
 # STEP1_RATIO; tests/test_endo_prep_rules.py pins it to
@@ -457,6 +458,74 @@ def _ticks(item) -> dict:
     return {"made_at": at(item.made_at), "made_by_user_id": item.made_by_user_id,
             "ran_at": at(item.ran_at), "ran_by_user_id": item.ran_by_user_id,
             "prep_status": item.prep_status}
+
+
+def reopen_for_retest(db: Session, analysis, *, user_id: Optional[int]) -> None:
+    """A vial's endotoxin analysis is being retested (lims_analyses.service
+    apply_transition, before it writes): give its worksheet row back to the
+    bench (Handler ruling 2026-11-09, P-5901-S02). The newest worksheet row
+    of the vial only. A completed worksheet goes back to open, since nothing
+    on a completed one can be edited; an open one stays as it is. The row's
+    reading was the retested run's, so it moves into the row's history in
+    full (why "retest", marked reading_moved like Re-apply's) with its Made
+    and Ran ticks, and the row is unmade again. No other row changes: a
+    promoted row's prep stays final (worksheets_endo.PREP_FINAL), a row
+    still due stays editable. Locks in the worksheet order
+    (lock_items_for_update): worksheet, analysis, item. One audit row. Does
+    not commit; any other analysis is left alone."""
+    if analysis.lims_sub_sample_pk is None:
+        return
+    from main import _bench_kind_for_keyword  # lazy: main imports this module
+
+    svc = db.get(AnalysisService, analysis.analysis_service_id) if analysis.analysis_service_id else None
+    if _bench_kind_for_keyword(svc.keyword if svc else analysis.keyword) != "endo":
+        return
+    found = db.execute(
+        select(WorksheetItem.id, WorksheetItem.worksheet_id)
+        .join(Worksheet, Worksheet.id == WorksheetItem.worksheet_id)
+        .join(LimsSubSample, LimsSubSample.sample_id == WorksheetItem.sample_id)
+        .where(LimsSubSample.id == analysis.lims_sub_sample_pk,
+               Worksheet.status.in_(("open", "completed")))
+        .order_by(WorksheetItem.id.desc()).limit(1)).first()
+    if found is None:
+        return
+
+    def locked(model, pk):
+        return db.execute(select(model).where(model.id == pk).with_for_update()
+                          .execution_options(populate_existing=True)).scalar_one()
+
+    worksheet = locked(Worksheet, found.worksheet_id)
+    db.execute(select(LimsAnalysis.id).where(LimsAnalysis.id == analysis.id).with_for_update())
+    item = locked(WorksheetItem, found.id)
+    was_completed = worksheet.status == "completed"
+    if not was_completed and not _has_result(item):
+        return
+    details = {"user_id": user_id, "worksheet_id": worksheet.id, "item_id": item.id,
+               "sample_id": item.sample_id, "analysis_id": analysis.id,
+               "was_completed": was_completed}
+    if was_completed:
+        details.update(completed_at=worksheet.completed_at.isoformat() + "Z"
+                       if worksheet.completed_at else None, completed_by=worksheet.completed_by)
+        worksheet.status = "open"
+        worksheet.completed_at = worksheet.completed_by = None
+    if _has_result(item):
+        _, effective = row_effective(db, worksheet, item)
+        ticks = _ticks(item)
+        append_history(item, why="retest", user_id=user_id, effective=effective,
+                       reader_tested_at=(item.result_reader or {}).get("tested_at"),
+                       result_reader=item.result_reader,
+                       result_entered_by_user_id=item.result_entered_by_user_id,
+                       reading_moved=True, ticks=ticks, retest_of_analysis_id=analysis.id)
+        details.update(old_reading=item.result_reading, old_reader=item.result_reader,
+                       old_ticks=ticks)
+        # As Re-apply clears a moved reading (apply_reapply). The cartridge
+        # and the row's lock stay: the re-run is prepped the same way.
+        item.result_reading = item.result_reader = None
+        item.result_entered_at = item.result_entered_by_user_id = None
+        item.made_at = item.made_by_user_id = item.ran_at = item.ran_by_user_id = None
+        item.prep_status = "ready"
+    db.add(AuditLog(operation="endo_worksheet_reopened_for_retest", entity_type="worksheet",
+                    entity_id=str(worksheet.id), details=details))
 
 
 def reading_was_moved(item, record: dict) -> bool:
