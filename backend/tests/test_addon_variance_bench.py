@@ -159,3 +159,43 @@ def test_pcr_replicate_lands_on_the_pcr_bench(lite, monkeypatch):
     assert _bench_kind(w) == "pcr"
     assert _ROLE_BENCH_KIND["pcr"] == "pcr"
     assert _bench_kind_for_item(w.core.assignment_role, None) == "pcr"
+
+
+# ── Task 10: sterility plate, USP 71 (usp71) ────────────────────────────────
+
+USP71_KW = ["BACTERIA", "FUNGI"]
+
+
+def test_usp71_replicate_submits_and_variance_verifies(lite, monkeypatch):
+    w = _replicate_world(lite, "usp71", USP71_KEY, USP71_KW, monkeypatch=monkeypatch)
+    assert w.replicate.assignment_kind == "variance"
+    assert [r.keyword for r in w.rows] == USP71_KW
+    for row in w.rows:
+        _submit(lite, row, "No Growth")
+    _variance_verify(lite, w.rows[0])
+    lite.expire_all()
+    assert [r.review_state for r in _rows(lite, w.replicate)] == [
+        "variance_verified", "to_be_verified"]
+    _variance_verify(lite, w.rows[1])
+    lite.expire_all()
+    signed = _rows(lite, w.replicate)
+    assert [r.review_state for r in signed] == ["variance_verified", "variance_verified"]
+    assert all(r.verified_at is not None for r in signed)
+    assert _parent_tier_rows(lite, w.parent) == 0
+
+
+def test_usp71_replicate_promote_is_refused(lite, monkeypatch):
+    w = _replicate_world(lite, "usp71", USP71_KEY, USP71_KW, monkeypatch=monkeypatch)
+    for row in w.rows:
+        _submit(lite, row, "No Growth")
+        with pytest.raises(BadRequestError, match="assigned to a variance bucket"):
+            _promote_chosen(lite, row)
+        lite.rollback()
+    assert _parent_tier_rows(lite, w.parent) == 0
+
+
+def test_usp71_replicate_lands_on_the_sterility_bench(lite, monkeypatch):
+    w = _replicate_world(lite, "usp71", USP71_KEY, USP71_KW, monkeypatch=monkeypatch)
+    from main import _bench_kind_for_item
+    assert _bench_kind(w) == "sterility"
+    assert _bench_kind_for_item(w.core.assignment_role, None) == "sterility"
