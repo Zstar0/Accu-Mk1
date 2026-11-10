@@ -195,7 +195,10 @@ export function buildMatrix(
   const cutoff = days == null ? -Infinity : now - days * DAY_MS
   const recentFrom = now - TREND_WINDOW_DAYS * DAY_MS
   const priorFrom = now - 2 * TREND_WINDOW_DAYS * DAY_MS
-  const rows = new Map<string, ProductRow & { deltas: number[] }>()
+  const rows = new Map<
+    string,
+    ProductRow & { deltas: number[]; seen: number }
+  >()
 
   for (const c of coas) {
     let r = rows.get(c.product)
@@ -214,13 +217,16 @@ export function buildMatrix(
         ) as Record<TestKey, Cell>,
         qty: { n: 0, median: null, flagged: 0 },
         deltas: [],
+        seen: 0,
       }
       rows.set(c.product, r)
     }
     const t = ts(c)
     const inPeriod = t >= cutoff
     if (inPeriod) {
-      r.total++
+      r.seen++
+      // MEASURED has no verdict: it would dilute the failure rate.
+      if (c.overall !== 'MEASURED') r.total++
       if (isFailed(c)) r.failed++
       r.last = Math.max(r.last, t || 0)
       const d = qtyDeltaPct(c)
@@ -241,8 +247,8 @@ export function buildMatrix(
   }
 
   return [...rows.values()]
-    .filter(r => r.total > 0)
-    .map(({ deltas, ...r }) => ({
+    .filter(r => r.seen > 0)
+    .map(({ deltas, seen: _seen, ...r }) => ({
       ...r,
       qty: {
         n: deltas.length,

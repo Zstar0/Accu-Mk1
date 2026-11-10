@@ -101,6 +101,44 @@ describe('buildMatrix', () => {
     expect(row?.qty).toEqual({ n: 2, median: 5, flagged: 0 })
   })
 
+  it('leaves MEASURED COAs out of the failure-rate total', () => {
+    const [row] = buildMatrix(
+      [
+        coa({ overall: 'FAILED' }),
+        coa(),
+        coa({
+          overall: 'MEASURED',
+          purity_ok: null,
+          identity_ok: null,
+          endo: true,
+        }),
+      ],
+      NOW,
+      null
+    )
+    expect(row?.total).toBe(2)
+    expect(row?.failed).toBe(1)
+    expect(row?.cells.endo).toMatchObject({ tested: 1, failed: 0 })
+  })
+
+  it('keeps a product whose COAs are all MEASURED', () => {
+    const rows = buildMatrix(
+      [
+        coa({
+          overall: 'MEASURED',
+          purity_ok: null,
+          identity_ok: null,
+          endo: true,
+        }),
+      ],
+      NOW,
+      null
+    )
+    expect(rows).toHaveLength(1)
+    expect(rows[0]).toMatchObject({ total: 0, failed: 0 })
+    expect(rows[0]?.cells.endo).toMatchObject({ tested: 1, failed: 0 })
+  })
+
   it('applies the period to counts but not to the trend windows', () => {
     const rows = buildMatrix([coa({ published_at: daysAgo(120) })], NOW, 30)
     expect(rows).toEqual([])
