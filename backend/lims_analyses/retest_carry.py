@@ -382,7 +382,47 @@ def validate_retest_spec(db: Session, *, original: LimsSample, spec: RetestSpec)
     if not_eligible:
         raise BadRequestError(
             f"cannot carry unverified profile(s): {not_eligible}; retest them instead")
+    _refuse_variance_test_retest(db, original, spec.retest)
     return [k for k in (*spec.retest, *spec.carry) if k not in have]
+
+
+def _refuse_variance_test_retest(db: Session, original: LimsSample, keys) -> None:
+    """Version 1 does not carry Variance to a retest: refuse to retest one of
+    the four add-on Variance tests that ran with Variance on the original.
+    Evidence is Mk1's own (no Integration Service call): a replicate anchor
+    vial of the test's role on the original, or the original's variance
+    override naming the key."""
+    import json
+
+    from sub_samples.service import normalize_variance_entitlement
+    from sub_samples.variance_tests import (
+        LEGACY_BUCKETS,
+        VARIANCE_TEST_KEYS,
+        replicate_anchor_vials,
+    )
+
+    keys = [k for k in keys if k in VARIANCE_TEST_KEYS]
+    if not keys:
+        return
+    try:
+        override = normalize_variance_entitlement(
+            {"variance": json.loads(original.variance_override or "null") or {}})
+    except (ValueError, TypeError, AttributeError):
+        override = {}
+    snap_roles = {p.get("key"): p.get("fulfillment_role")
+                  for p in (original.catalog_snapshot or {}).get("profiles") or []
+                  if isinstance(p, dict)}
+    live = _profiles_by_key(db, keys)
+    for key in keys:
+        # Snapshot and live role both count, so a catalog edit after
+        # registration cannot hide a replicate. Legacy buckets never carry
+        # the four tests' Variance.
+        roles = {snap_roles.get(key), getattr(live.get(key), "fulfillment_role", None)}
+        roles -= {None, *LEGACY_BUCKETS}
+        if key in override or any(replicate_anchor_vials(db, original.id, r) for r in roles):
+            raise BadRequestError(
+                f"{key} ran with Variance on {original.sample_id}; "
+                "retesting a Variance test is not supported in this version")
 
 
 def dropped_profile_keys(original: LimsSample, spec: RetestSpec) -> list[str]:
