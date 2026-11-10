@@ -7970,18 +7970,32 @@ export interface VialPlanSection {
   roles: VialPlanRoleSpot[]
 }
 
+export interface VialPlanVarianceTest {
+  key: string
+  n: number
+  replicate_runs: number
+  replicate_vials: number
+  run_label: 'Vial' | 'Digest'
+}
+
 export interface VialPlanResponse {
   // Shape-driven like VialDemandResponse below: demand/base_demand carry
   // hplc/endo/ster plus any catalog-only role (e.g. 'hm') the order actually
-  // demanded. `variance` stays the legacy 3-bucket shape BY CONTRACT —
-  // derive_variance_demand only ever emits hplc/endo/ster (a catalog-only
-  // role like hm is never variance-eligible, Task 3).
+  // demanded. `variance` carries the legacy three plus any role with
+  // replicates bought.
   /** Base (core) vial demand per role — NOT inflated by variance. */
   demand: Record<string, number>
   /** Per-role variance target: count of variance vials IN ADDITION to core
    *  demand (zeros when none purchased). Display-only paid marker for the
    *  AssignStep variance drop zones — never a drop blocker. */
-  variance: { hplc: number; endo: number; ster: number }
+  variance: Record<string, number> & { hplc: number; endo: number; ster: number }
+  /** Add-on test Variance per role code: the test key, its total runs `n`,
+   *  the paid replicate runs and vials, and the certificate run label. */
+  variance_tests?: Record<string, VialPlanVarianceTest>
+  /** Refusals from the backend variance resolver, one sentence each. */
+  variance_errors?: string[]
+  /** Informational variance notes, one sentence each. */
+  variance_notes?: string[]
   /** Pre-variance lab baseline; equals demand under the separate-bucket
    *  contract. Kept for back-compat. */
   base_demand: Record<string, number>
@@ -8567,10 +8581,7 @@ export interface VialDemandResponse {
   // Shape-driven like OrderBoxLabelSummary.counts: demand/base_demand come
   // from the backend's derive_base_demand, which carries hplc/endo/ster plus
   // any catalog-only role (e.g. 'hm') the order actually demanded. `variance`
-  // is widened to match for consistency, but is legacy-only by backend
-  // contract (derive_variance_demand only ever emits hplc/endo/ster — a
-  // catalog-only role like hm is never variance-eligible, Task 3) — it just
-  // never happens to carry extra keys in practice.
+  // carries the legacy three plus any role with replicates bought.
   demand: Record<string, number>
   variance: Record<string, number>
   base_demand: Record<string, number>

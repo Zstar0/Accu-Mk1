@@ -2,7 +2,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { render, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { QueryClient, QueryClientProvider, useQuery } from '@tanstack/react-query'
-import { AssignStep, bucketToAssignment, toastAssignmentError } from '@/components/intake/ReceiveWizard/AssignStep'
+import { AssignStep, bucketToAssignment, toastAssignmentError, varianceFor } from '@/components/intake/ReceiveWizard/AssignStep'
 import type { VialPlanResponse } from '@/lib/api'
 
 vi.mock('@/lib/api', async importOriginal => {
@@ -585,5 +585,200 @@ describe('vial-roles loading gate (fix round 1)', () => {
 
     resolveRoles([])
     expect(await screen.findByText('Analytical')).toBeInTheDocument()
+  })
+})
+
+// Add-on test Variance (plan 3, Task 7): plan.variance carries the legacy
+// three buckets plus any role with replicates bought, keyed by role code,
+// in vials. variance_tests describes each such role's runs.
+const ENDO85_VARIANCE_PLAN: VialPlanResponse = {
+  demand: { hplc: 0, endo: 0, ster: 0, endo85: 1, pcr: 1 },
+  variance: { hplc: 0, endo: 0, ster: 0, endo85: 2 },
+  variance_tests: {
+    endo85: { key: 'endotoxin-usp85-lal', n: 3, replicate_runs: 2, replicate_vials: 2, run_label: 'Vial' },
+  },
+  base_demand: { hplc: 0, endo: 0, ster: 0, endo85: 1, pcr: 1 },
+  wp_order_number: null,
+  is_unreachable: false,
+  sections: [
+    {
+      department_id: 2, department_name: 'Microbiology', sort_order: 1,
+      roles: [
+        {
+          code: 'endo85', label: 'Endotoxin USP85', sort_order: 1, variance_eligible: true,
+          profiles: [{ id: 6, key: 'endotoxin-usp85-lal', name: 'Endotoxin USP85', relation: 'host' as const }],
+        },
+        {
+          code: 'pcr', label: 'Rapid PCR', sort_order: 2, variance_eligible: true,
+          profiles: [{ id: 7, key: 'rapid-sterility-pcr', name: 'Rapid PCR', relation: 'host' as const }],
+        },
+      ],
+    },
+  ],
+  vials: [
+    { sample_id: 'P-0144-S01', is_parent: false, vial_sequence: 1, assignment_role: 'endo85', assignment_kind: 'core' },
+    { sample_id: 'P-0144-S02', is_parent: false, vial_sequence: 2, assignment_role: 'pcr', assignment_kind: 'core' },
+  ],
+}
+
+const HM_VARIANCE_PLAN: VialPlanResponse = {
+  demand: { hplc: 0, endo: 0, ster: 0, hm: 2 },
+  variance: { hplc: 0, endo: 0, ster: 0, hm: 2 },
+  variance_tests: {
+    hm: { key: 'heavy_metals', n: 2, replicate_runs: 1, replicate_vials: 2, run_label: 'Digest' },
+  },
+  base_demand: { hplc: 0, endo: 0, ster: 0, hm: 2 },
+  wp_order_number: null,
+  is_unreachable: false,
+  sections: [
+    {
+      department_id: 3, department_name: 'Heavy Metals', sort_order: 3,
+      roles: [
+        {
+          code: 'hm', label: 'Heavy Metals', sort_order: 3, variance_eligible: true,
+          profiles: [{ id: 5, key: 'heavy_metals', name: 'Heavy Metals', relation: 'host' as const }],
+        },
+      ],
+    },
+  ],
+  vials: [
+    { sample_id: 'P-0144-S01', is_parent: false, vial_sequence: 1, assignment_role: 'hm', assignment_kind: 'core' },
+    { sample_id: 'P-0144-S02', is_parent: false, vial_sequence: 2, assignment_role: 'hm', assignment_kind: 'core' },
+  ],
+}
+
+function renderStepWithContainer() {
+  const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } })
+  return render(
+    <QueryClientProvider client={qc}>
+      <AssignStep parentSampleId="P-0144" parentSampleUid="uid-1" />
+    </QueryClientProvider>
+  )
+}
+
+describe('add-on test Variance on the check-in screen (Task 7)', () => {
+  it('varianceFor returns the vial count for any role', () => {
+    expect(varianceFor({ hplc: 0, endo: 0, ster: 0, hm: 2 }, 'hm')).toBe(2)
+    expect(varianceFor({ hplc: 0, endo: 0, ster: 0, hm: 2 }, 'pcr')).toBe(0)
+    expect(varianceFor({ hplc: 3, endo: 2, ster: 1 }, 'hplc')).toBe(3)
+    expect(varianceFor({ hplc: 3, endo: 2, ster: 1 }, 'ster')).toBe(1)
+  })
+
+  it('shows an endotoxin variance zone with paid 2 when endo85 has replicates', async () => {
+    vi.mocked(getVialPlan).mockResolvedValue(ENDO85_VARIANCE_PLAN)
+    const { container } = renderStepWithContainer()
+    await screen.findByText('Microbiology')
+    const zone = container.querySelector('[data-bucket-id="endo85_variance"]')
+    expect(zone).not.toBeNull()
+    expect(within(zone as HTMLElement).getByText(/paid 2/)).toBeInTheDocument()
+    // pcr bought no replicates: no zone for it
+    expect(container.querySelector('[data-bucket-id="pcr_variance"]')).toBeNull()
+  })
+
+  it('heavy metals zone counts digests', async () => {
+    vi.mocked(getVialPlan).mockResolvedValue(HM_VARIANCE_PLAN)
+    const { container } = renderStepWithContainer()
+    await screen.findByText('P-0144-S01')
+    const zone = container.querySelector('[data-bucket-id="hm_variance"]')
+    expect(zone).not.toBeNull()
+    expect(within(zone as HTMLElement).getByText(/paid 1 digest \(2 vials\)/)).toBeInTheDocument()
+  })
+
+  it('a legacy HPLC zone keeps the plain paid N wording', async () => {
+    vi.mocked(getVialPlan).mockResolvedValue(VARIANCE_PLAN)
+    const { container } = renderStepWithContainer()
+    await screen.findByText('P-0144-S01')
+    const zone = container.querySelector('[data-bucket-id="hplc_variance"]')
+    expect(zone).not.toBeNull()
+    expect(within(zone as HTMLElement).getByText('· paid 3')).toBeInTheDocument()
+  })
+
+  it('variance errors render as an alert', async () => {
+    vi.mocked(getVialPlan).mockResolvedValue({
+      ...ENDO85_VARIANCE_PLAN,
+      variance_errors: ['Variance for heavy_metals: the test is not on this sample'],
+    })
+    renderStep()
+    const alert = await screen.findByRole('alert')
+    expect(within(alert).getByText('Variance for heavy_metals: the test is not on this sample')).toBeInTheDocument()
+  })
+
+  it('variance notes render as a muted note, not an alert', async () => {
+    vi.mocked(getVialPlan).mockResolvedValue({
+      ...ENDO85_VARIANCE_PLAN,
+      variance_notes: ['Variance for heavy_metals is not carried to a retest in this version'],
+    })
+    renderStep()
+    expect(
+      await screen.findByText('Variance for heavy_metals is not carried to a retest in this version'),
+    ).toBeInTheDocument()
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument()
+  })
+
+  it('no alert when the plan carries no variance errors', async () => {
+    vi.mocked(getVialPlan).mockResolvedValue(VARIANCE_PLAN)
+    renderStep()
+    await screen.findByText('P-0144-S01')
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument()
+  })
+
+  it('override editor lists only the tests on the sample', async () => {
+    vi.mocked(getVialPlan).mockResolvedValue(ENDO85_VARIANCE_PLAN)
+    renderStep()
+    await screen.findByText('Microbiology')
+    const endo85 = screen.getByRole('spinbutton', { name: 'Variance Endotoxin USP85' })
+    expect(endo85).toHaveValue(3) // n from variance_tests
+    expect(endo85).toHaveAttribute('max', '10')
+    expect(screen.getByRole('spinbutton', { name: 'Variance Rapid PCR' })).toHaveValue(0)
+    expect(screen.queryByRole('spinbutton', { name: 'Variance Heavy Metals' })).not.toBeInTheDocument()
+    expect(screen.queryByRole('spinbutton', { name: 'Variance USP 71' })).not.toBeInTheDocument()
+    expect(screen.getByRole('spinbutton', { name: 'Variance HPLC' })).toBeInTheDocument()
+    expect(screen.getByRole('spinbutton', { name: 'Variance Endo' })).toBeInTheDocument()
+    expect(screen.getByRole('spinbutton', { name: 'Variance Sterility' })).toBeInTheDocument()
+  })
+
+  it('saving sends the shown test keys with n of 2 or more', async () => {
+    vi.mocked(getVialPlan).mockResolvedValue(ENDO85_VARIANCE_PLAN)
+    renderStep()
+    await screen.findByText('Microbiology')
+    const pcr = screen.getByRole('spinbutton', { name: 'Variance Rapid PCR' })
+    await userEvent.clear(pcr)
+    await userEvent.type(pcr, '2')
+    await userEvent.click(screen.getByRole('button', { name: /save variance/i }))
+    await waitFor(() => {
+      expect(putVarianceOverride).toHaveBeenCalledWith('P-0144', {
+        'endotoxin-usp85-lal': 3,
+        'rapid-sterility-pcr': 2,
+      })
+    })
+  })
+
+  it('a variance_override_invalid refusal shows its message in the error toast', async () => {
+    const msg = 'Variance for heavy_metals: the test is not on this sample'
+    vi.mocked(getVialPlan).mockResolvedValue(ENDO85_VARIANCE_PLAN)
+    vi.mocked(putVarianceOverride).mockRejectedValue(new Error(msg))
+    renderStep()
+    await screen.findByText('Microbiology')
+    await userEvent.click(screen.getByRole('button', { name: /save variance/i }))
+    await waitFor(() => expect(toast.error).toHaveBeenCalledWith(msg))
+  })
+
+  it('putVarianceOverride surfaces detail.message from a 422 variance_override_invalid', async () => {
+    const actual = await vi.importActual<{ putVarianceOverride: typeof putVarianceOverride }>('@/lib/api')
+    const msg = 'Variance for endotoxin-usp85-lal: n must be between 2 and 10'
+    const fetchMock = vi.fn(async () =>
+      new Response(JSON.stringify({ detail: { code: 'variance_override_invalid', message: msg } }), {
+        status: 422,
+        headers: { 'Content-Type': 'application/json' },
+      }),
+    )
+    vi.stubGlobal('fetch', fetchMock)
+    try {
+      await expect(
+        actual.putVarianceOverride('P-0144', { 'endotoxin-usp85-lal': 11 }),
+      ).rejects.toThrow(msg)
+    } finally {
+      vi.unstubAllGlobals()
+    }
   })
 })
