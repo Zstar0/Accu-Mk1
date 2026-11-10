@@ -12395,6 +12395,9 @@ async def reports_resync(
 ):
     """Re-sync published_coa_results: backfill missing codes, remove orphans."""
     import json as _json
+    from reports_flagged_row import (
+        ENDOTOXIN_PROFILE_KEYS, STERILITY_PROFILE_KEYS, is_flagged, native_section_flag,
+    )
     synced = 0
     removed = 0
     try:
@@ -12466,6 +12469,18 @@ async def reports_resync(
                         quantity_value, quantity_unit, overall_status,
                         has_endotoxin, endotoxin_conforms, has_sterility, sterility_conforms
                     ) VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)"""
+
+                    if is_flagged(coa_data):
+                        # A la carte: one row, no result values, flags from
+                        # native_sections by profile_key (same as IS).
+                        ns = coa_data.get("native_sections")
+                        cur.execute(insert_sql, base + (
+                            product_name or "Unknown", is_blend,
+                            None, None, None, None, None, None, overall_status,
+                            *native_section_flag(ns, ENDOTOXIN_PROFILE_KEYS),
+                            *native_section_flag(ns, STERILITY_PROFILE_KEYS)))
+                        synced += 1
+                        continue
 
                     analytes = results.get("analytes", [])
                     if analytes:
