@@ -541,21 +541,32 @@ def reopen_for_retest(db: Session, analysis, *, user_id: Optional[int]):
     return worksheet, item
 
 
-def claim_retest_row(db: Session, bench_row, *, user_id: Optional[int]) -> None:
+def claim_retest_row(db: Session, bench_row, new_row, *, user_id: Optional[int]) -> None:
     """The retest row just minted under an open worksheet row is claimed by
-    that worksheet as a row added to it is (worksheet_analyst.stamp_for_item):
-    `assigned`, with the worksheet's analyst, and a worksheet_assigned event.
-    Otherwise it sits `unassigned` with no analyst on a sheet the bench is
-    working. `bench_row` is reopen_for_retest's answer. Does not commit."""
+    that worksheet as a row added to it is: `assigned`, with the worksheet's
+    analyst, and a worksheet_assigned event. Otherwise it sits `unassigned`
+    with no analyst on a sheet the bench is working. That row ONLY, not
+    worksheet_analyst.stamp_for_item: its scope is the row's department,
+    which endotoxin shares with Sterility PCR, and it would re-stamp the
+    run being retested too. `bench_row` is reopen_for_retest's answer. Does
+    not commit."""
     if bench_row is None:
         return
-    from lims_analyses.worksheet_analyst import stamp_for_item  # lazy: it imports the service
+    from lims_analyses.service import apply_transition  # lazy: the service imports this module
+    from lims_analyses.worksheet_analyst import _email, _emit
 
     worksheet, item = bench_row
-    stamp_for_item(db, sample_uid=item.sample_uid, service_group_id=item.service_group_id,
-                   analyst_user_id=worksheet.assigned_analyst_id or item.assigned_analyst_id,
-                   acting_user_id=user_id, worksheet_id=worksheet.id,
-                   worksheet_title=worksheet.title, department_id=item.department_id)
+    analyst = worksheet.assigned_analyst_id or item.assigned_analyst_id
+    new_row.analyst_user_id = analyst
+    db.flush()
+    apply_transition(db, analysis_id=new_row.id, kind="assign", user_id=user_id,
+                     reason=f"worksheet_assigned: {worksheet.title or worksheet.id}", commit=False)
+    _emit(db, new_row.lims_sub_sample_pk, "worksheet_assigned", {
+        "worksheet_id": worksheet.id, "worksheet_title": worksheet.title,
+        "analyst_email": _email(db, analyst),
+        "keywords": [new_row.keyword] if analyst else [],
+        "assigned_keywords": [new_row.keyword],
+    }, user_id)
 
 
 def reading_was_moved(item, record: dict) -> bool:

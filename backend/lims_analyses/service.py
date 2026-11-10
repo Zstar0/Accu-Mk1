@@ -596,9 +596,9 @@ def apply_transition(
             details=_deltas(before, row),
         ))
 
-        # Flushed first: the claim reads the vial's rows as this retest leaves them.
+        # The worksheet the vial sits on claims the new row, and that row only.
         db.flush()
-        claim_retest_row(db, bench_row, user_id=user_id)
+        claim_retest_row(db, bench_row, new_row, user_id=user_id)
 
         if commit:
             db.commit()
