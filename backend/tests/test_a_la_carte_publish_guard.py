@@ -81,6 +81,39 @@ def test_publish_route_refuses_before_any_is_call(db_session, monkeypatch):
     assert "IN REVIEW" in ei.value.detail
 
 
+def test_regen_primary_refuses_in_review_flagged_draft(db_session, monkeypatch):
+    # Review Focus 5: regen-primary reaches the guard through its own call to
+    # publish_sample_coa, after COABuilder made the new (IN REVIEW) draft.
+    import scheduled_publish
+    from tests.test_a_la_carte_verdict import _alc
+    from tests.test_coa_deferred_sections_warning import _patch_generate_prereqs
+
+    p = _alc(db_session, monkeypatch)
+    p.sample_id = SID
+    db_session.flush()
+    order = {"services": {"fentanyl": True}, "package": "alacarte"}
+    monkeypatch.setattr("sub_samples.service.fetch_sample_services", lambda sid: order)
+    monkeypatch.setattr("coa.source_setting.coa_generation_source", lambda db: "mk1")
+    monkeypatch.setattr("coa.wire_document.coa_generation_source", lambda db: "mk1")
+    monkeypatch.setattr("coa.wire_document.build_sample_meta",
+                        lambda db, p, vial=None: {"source": "mk1"})
+    monkeypatch.setattr(integration_db, "fetch_stale_draft_primary", lambda sid: None)
+    monkeypatch.setattr(scheduled_publish, "has_pending", lambda db, sid: False)
+    _patch_badge(monkeypatch, _badge(page1="none", overall_status="IN REVIEW"))
+    client = _patch_generate_prereqs(
+        monkeypatch, {"verification_code": "ALCT-9602", "pdf_base64": None})
+
+    with pytest.raises(HTTPException) as ei:
+        asyncio.run(main.regen_primary_coa(
+            sample_id=SID, db=db_session, current_user=SimpleNamespace(id=1)))
+    assert ei.value.status_code == 409
+    assert ei.value.detail == (
+        "This a la carte COA (Gen #3, ALCT-9602) is IN REVIEW: a test has no "
+        "results yet. Finish it, regenerate, then publish.")
+    # Only the COABuilder regen POST went out; nothing was published.
+    assert [c[0] for c in client.calls] == ["http://coabuilder.test/process/" + SID]
+
+
 # The function's real SQL, run against sqlite (the _db() idiom from
 # tests/test_api_reports_sync_grain.py). The query is plain ANSI.
 

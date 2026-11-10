@@ -399,6 +399,7 @@ def fetch_publish_draft_badge(sample_id: str) -> Optional[dict]:
         "overall_status": coa_data.get("overall_status"),
     }
 
+
 def fetch_existing_vial_sequences(parent_generation_id) -> set:
     """vial_sequence values that already have a non-superseded per-vial child
     under the given parent generation.

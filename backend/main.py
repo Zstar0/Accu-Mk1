@@ -15152,6 +15152,7 @@ def _refuse_in_review_a_la_carte(sample_id: str) -> None:
             ),
         )
 
+
 def _refuse_while_publish_scheduled(db: Session, sample_id: str) -> None:
     """409 while a publish is parked for the sample (backend/scheduled_publish.py).
     Its newest draft carries the scheduled, future Published Date, and IS
