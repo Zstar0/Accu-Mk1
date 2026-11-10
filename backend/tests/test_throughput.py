@@ -491,3 +491,18 @@ def test_envelope_carries_window_calendar_and_notes():
     assert r["start"] == "2026-07-01" and r["today"] == "2026-07-07" and r["tz"] == LA
     assert r["holidays"] == ["2026-07-03"]  # only holidays inside the window
     assert r["notes"] == {"jan_excluded": True, "vials_from": "2026-06", "bench_from": "2026-03"}
+
+
+def test_throughput_counts_endo_replicate_as_one_test_two_vials():
+    # Add-on test Variance (Task 16): one endotoxin parent analysis plus one
+    # replicate vial whose row is variance_verified. The loader
+    # (_load_throughput_inputs) reads parent-tier rows only (lims_sample_pk set),
+    # so the replicate vial row never reaches the engine; the vial itself is
+    # counted through vial_counts. A repeated keyword for one sample counts once.
+    r = build(
+        samples=[sample(1, "P-1", datetime(2026, 7, 1, 18, 0))],
+        analyses=[AnalysisIn(1, "ENDOTOXIN-USP85LAL"), AnalysisIn(1, "ENDOTOXIN-USP85LAL")],
+        vial_counts={1: 2},
+    )
+    d = day(r, "2026-07-01")
+    assert (d["endo"], d["tests"], d["vials"]) == (1, 1, 2)
