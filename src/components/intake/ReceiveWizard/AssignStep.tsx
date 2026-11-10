@@ -29,6 +29,16 @@ import { Input } from '@/components/ui/input'
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
 import { Textarea } from '@/components/ui/textarea'
 import { Alert, AlertDescription } from '@/components/ui/alert'
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from '@/components/ui/alert-dialog'
 import { Spinner } from '@/components/ui/spinner'
 import { cn } from '@/lib/utils'
 import { invalidateVialAssignmentCaches } from '@/lib/vial-assignment'
@@ -238,13 +248,13 @@ export function AssignStep({ parentSampleId, parentSampleUid }: Props) {
         {plan.variance_errors && plan.variance_errors.length > 0 && (
           <Alert variant="destructive" className="mb-4">
             <AlertDescription>
-              {plan.variance_errors.map(msg => <p key={msg}>{msg}</p>)}
+              {plan.variance_errors.map((msg, i) => <p key={`${i}-${msg}`}>{msg}</p>)}
             </AlertDescription>
           </Alert>
         )}
         {plan.variance_notes && plan.variance_notes.length > 0 && (
           <div className="mb-4 text-xs text-muted-foreground space-y-0.5">
-            {plan.variance_notes.map(msg => <p key={msg}>{msg}</p>)}
+            {plan.variance_notes.map((msg, i) => <p key={`${i}-${msg}`}>{msg}</p>)}
           </div>
         )}
         <div className="grid gap-4" style={{ gridTemplateColumns }}>
@@ -295,16 +305,17 @@ const LEGACY_VARIANCE_OVERRIDE_FIELDS = [
 ] as const
 
 const VARIANCE_TEST_OVERRIDE_FIELDS = [
-  { key: 'endotoxin-usp85-lal', label: 'Endotoxin USP85' },
-  { key: 'rapid-sterility-pcr', label: 'Rapid PCR' },
-  { key: 'sterility-usp71', label: 'USP 71' },
-  { key: 'heavy_metals', label: 'Heavy Metals' },
+  { key: 'endotoxin-usp85-lal', label: 'Endotoxin USP85', unit: 'vials' },
+  { key: 'rapid-sterility-pcr', label: 'Rapid PCR', unit: 'vials' },
+  { key: 'sterility-usp71', label: 'USP 71', unit: 'vials' },
+  // One heavy metals run is a digest of 2 vials: n counts digests.
+  { key: 'heavy_metals', label: 'Heavy Metals', unit: 'digests' },
 ] as const
 
 /** Same cap as the backend's VARIANCE_N_MAX. */
 const VARIANCE_TEST_N_MAX = 10
 
-interface OverrideField { key: string; label: string; ariaLabel: string; max?: number }
+interface OverrideField { key: string; label: string; ariaLabel: string; max?: number; unit?: string }
 
 function overrideFieldsFor(plan: VialPlanResponse): OverrideField[] {
   const keysOnSample = new Set(
@@ -347,7 +358,21 @@ function VarianceOverrideEditor({
     setCounts(overrideCountsFor(plan))
   }, [plan])
 
-  async function handleSave() {
+  const [confirmOpen, setConfirmOpen] = useState(false)
+  const refused = plan.variance_errors ?? []
+
+  // A save replaces the order's Variance entries wholesale, so an entry the
+  // backend refused (no variance_tests row, never sent) would be removed.
+  // Ask first whenever there are refusals; otherwise save as before.
+  function handleSave() {
+    if (refused.length > 0) {
+      setConfirmOpen(true)
+      return
+    }
+    void doSave()
+  }
+
+  async function doSave() {
     setSaving(true)
     try {
       const map: Record<string, number> = {}
@@ -382,17 +407,18 @@ function VarianceOverrideEditor({
               </span>
             </TooltipTrigger>
             <TooltipContent className="max-w-sm text-left space-y-1.5 p-3">
-              <p className="font-semibold">Variance count = total vials tested</p>
+              <p className="font-semibold">Variance count = total runs of the test</p>
               <p>
-                The number is the TOTAL vials tested from the lot. The first
-                vial is part of the <span className="font-medium">core
+                The number is the TOTAL runs of the test on the lot. The first
+                run is part of the <span className="font-medium">core
                 offering</span>, so the client pays for n&nbsp;−&nbsp;1
                 replicates: HPLC&nbsp;2 = the core vial + 1 paid variance
-                replicate. The paid marker on the Variance drop zone below
-                shows the replicate count — it never blocks assignment.
+                replicate. A run is one vial, except heavy metals, where a run
+                is one digest of 2 vials. The paid marker on the Variance drop
+                zone below shows the replicates; it never blocks assignment.
               </p>
               <p>
-                0 = no variance testing purchased. 1 is meaningless (one vial
+                0 = no variance testing purchased. 1 is meaningless (one run
                 is just the core test) and is treated as none.
               </p>
               <p className="text-muted-foreground">
@@ -404,8 +430,8 @@ function VarianceOverrideEditor({
           </Tooltip>
         </div>
         <p className="text-xs text-muted-foreground">
-          Lab override — replaces the order's variance until the WP addon ships. 0 = none,
-          otherwise the TOTAL vials tested (≥2; the first is the core vial).
+          Lab override: replaces the order's variance. 0 = none, otherwise the TOTAL
+          runs (≥2; the first is the core run). A heavy metals run is a digest of 2 vials.
         </p>
       </div>
       <div className="flex items-end gap-3 flex-wrap">
@@ -427,6 +453,11 @@ function VarianceOverrideEditor({
               disabled={saving}
               className="w-20 text-sm"
             />
+            {f.unit && (
+              <span className="text-[10px] text-muted-foreground" data-testid={`varov-unit-${f.key}`}>
+                {f.unit}
+              </span>
+            )}
           </div>
         ))}
         <Button
@@ -441,6 +472,24 @@ function VarianceOverrideEditor({
           Save
         </Button>
       </div>
+      <AlertDialog open={confirmOpen} onOpenChange={setConfirmOpen}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Remove the refused Variance entries?</AlertDialogTitle>
+            <AlertDialogDescription>
+              Saving replaces the order&apos;s Variance entries. These entries were
+              refused and will be removed:
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <ul className="list-disc pl-5 text-sm space-y-1">
+            {refused.map((msg, i) => <li key={`${i}-${msg}`}>{msg}</li>)}
+          </ul>
+          <AlertDialogFooter>
+            <AlertDialogCancel>Cancel</AlertDialogCancel>
+            <AlertDialogAction onClick={() => void doSave()}>Save anyway</AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </div>
   )
 }

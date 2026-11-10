@@ -799,3 +799,80 @@ describe('add-on test Variance on the check-in screen (Task 7)', () => {
     }
   })
 })
+
+describe('override save with refused Variance entries (Task 7 fix round 1)', () => {
+  const REFUSED = [
+    'Variance for heavy_metals: the test is not on this sample',
+    'Variance for sterility-usp71: n must be between 2 and 10',
+  ]
+  const REFUSED_PLAN: VialPlanResponse = { ...ENDO85_VARIANCE_PLAN, variance_errors: REFUSED }
+
+  it('Save shows a confirm that lists the refused sentences verbatim', async () => {
+    vi.mocked(getVialPlan).mockResolvedValue(REFUSED_PLAN)
+    renderStep()
+    await screen.findByText('Microbiology')
+    await userEvent.click(screen.getByRole('button', { name: /save variance/i }))
+    const dialog = await screen.findByRole('alertdialog')
+    expect(within(dialog).getByText(/replaces the order's Variance entries/)).toBeInTheDocument()
+    for (const msg of REFUSED) expect(within(dialog).getByText(msg)).toBeInTheDocument()
+    expect(putVarianceOverride).not.toHaveBeenCalled()
+  })
+
+  it('cancel sends no request', async () => {
+    vi.mocked(getVialPlan).mockResolvedValue(REFUSED_PLAN)
+    renderStep()
+    await screen.findByText('Microbiology')
+    await userEvent.click(screen.getByRole('button', { name: /save variance/i }))
+    const dialog = await screen.findByRole('alertdialog')
+    await userEvent.click(within(dialog).getByRole('button', { name: 'Cancel' }))
+    await waitFor(() => expect(screen.queryByRole('alertdialog')).not.toBeInTheDocument())
+    expect(putVarianceOverride).not.toHaveBeenCalled()
+    expect(screen.getByRole('spinbutton', { name: 'Variance Endotoxin USP85' })).toHaveValue(3)
+  })
+
+  it('confirm sends the request', async () => {
+    vi.mocked(getVialPlan).mockResolvedValue(REFUSED_PLAN)
+    renderStep()
+    await screen.findByText('Microbiology')
+    await userEvent.click(screen.getByRole('button', { name: /save variance/i }))
+    const dialog = await screen.findByRole('alertdialog')
+    await userEvent.click(within(dialog).getByRole('button', { name: 'Save anyway' }))
+    await waitFor(() =>
+      expect(putVarianceOverride).toHaveBeenCalledWith('P-0144', { 'endotoxin-usp85-lal': 3 }),
+    )
+  })
+
+  it('with no refusals Save goes straight through, no confirm', async () => {
+    vi.mocked(getVialPlan).mockResolvedValue(ENDO85_VARIANCE_PLAN)
+    renderStep()
+    await screen.findByText('Microbiology')
+    await userEvent.click(screen.getByRole('button', { name: /save variance/i }))
+    await waitFor(() => expect(putVarianceOverride).toHaveBeenCalledTimes(1))
+    expect(screen.queryByRole('alertdialog')).not.toBeInTheDocument()
+  })
+})
+
+describe('override units (Task 7 fix round 1)', () => {
+  it('the Heavy Metals field prefills n in digests and says digests', async () => {
+    vi.mocked(getVialPlan).mockResolvedValue({
+      ...HM_VARIANCE_PLAN,
+      variance: { hplc: 0, endo: 0, ster: 0, hm: 4 },
+      variance_tests: {
+        hm: { key: 'heavy_metals', n: 3, replicate_runs: 2, replicate_vials: 4, run_label: 'Digest' },
+      },
+    })
+    renderStep()
+    await screen.findByText('P-0144-S01')
+    expect(screen.getByRole('spinbutton', { name: 'Variance Heavy Metals' })).toHaveValue(3)
+    expect(screen.getByTestId('varov-unit-heavy_metals')).toHaveTextContent('digests')
+  })
+
+  it('the other test fields say vials and the legacy fields carry no unit', async () => {
+    vi.mocked(getVialPlan).mockResolvedValue(ENDO85_VARIANCE_PLAN)
+    renderStep()
+    await screen.findByText('Microbiology')
+    expect(screen.getByTestId('varov-unit-endotoxin-usp85-lal')).toHaveTextContent('vials')
+    expect(screen.getByTestId('varov-unit-rapid-sterility-pcr')).toHaveTextContent('vials')
+    expect(screen.queryByTestId('varov-unit-hplcpurity_identity')).not.toBeInTheDocument()
+  })
+})
