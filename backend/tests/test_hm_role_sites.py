@@ -2,7 +2,8 @@
 
 hm is the first catalog-only fulfillment role (profile heavy_metals,
 fulfillment_role='hm', fulfillment_dim='role'). These tests pin the sites
-that let an hm vial be assigned, seeded, laned, and variance-excluded.
+that let an hm vial be assigned, seeded and laned, plus the
+generic variance-exclusion rule (no longer on hm, Decision 5).
 
 Spec 4 Task 7 update: every site below is now catalog-driven off the
 vial_roles table (catalog.roles.role_registry / real_bucket_codes /
@@ -35,7 +36,7 @@ def _mk_parent_and_vial(db, *, role):
     _throwaway_vial.
 
     vial_sequence=1 (fix-round finding): the original vial_sequence=0 made
-    test_hm_vial_is_variance_excluded a false green for ANY role, since the
+    test_ineligible_role_vial_is_variance_excluded a false green for ANY role, since the
     runtime rule `(vial_sequence == 1) or (assignment_kind == "variance")`
     (service.py) is False for seq=0 regardless of role — the test never
     exercised the actual "first vial" case an hm-only order can produce.
@@ -88,41 +89,48 @@ def test_role_flip_cleanup_keys_hm_on_its_own_department(db_session):
     assert registry["hplc"].department.name != "Heavy Metals"
 
 
-def test_hm_vial_is_variance_excluded(db_session):
-    """Site 7 — the physical-outcome site. An hm vial must never be
-    variance-eligible. Exercise the real recompute path, not the backfill.
+def test_ineligible_role_vial_is_variance_excluded(db_session):
+    """Site 7, the physical-outcome site, on the generic mechanism: a vial of
+    a role created with variance_eligible=False is forced out of the set.
+    Exercise the real recompute path, not a backfill.
 
-    vial_sequence=1 is deliberate (fix round): it's the "first vial" position
-    the normal (vial_sequence==1 or assignment_kind=="variance") rule would
-    otherwise flag TRUE for, regardless of role — the case an hm-only order
-    can actually produce. wp_services={} is passed explicitly (rather than
+    So this test no longer uses hm; it keeps pinning the exclusion rule on a
+    throwaway ineligible role. vial_sequence=1 is deliberate (fix round):
+    it's the "first vial" position the normal (vial_sequence==1 or
+    assignment_kind=="variance") rule would otherwise flag TRUE for,
+    regardless of role. wp_services={} is passed explicitly (rather than
     left to default None) so the role-flip seeding hook inside
-    set_assignment_role skips its WP/IS fetch entirely — no catalog profile
-    is set up here, and no live HTTP call should happen in a unit test (see
+    set_assignment_role skips its WP/IS fetch entirely (no catalog profile
+    is set up here, and no live HTTP call should happen in a unit test; see
     test_seeder_mirror.py:88 for the monkeypatch alternative when a call
     genuinely needs to be stubbed).
 
-    The reason string is the NEW generic runtime string (spec 4, Task 7) —
-    `_VARIANCE_INELIGIBLE_REASON`'s hm-specific wording stays ONLY in the
-    database.py historical backfill; a live set_assignment_role call always
-    writes the generic `auto: role <code> is not variance-eligible` now."""
+    The reason string is the generic runtime string (spec 4, Task 7): a live
+    set_assignment_role call always writes
+    `auto: role <code> is not variance-eligible`."""
+    # Decision 5 (2026-11-10): a heavy metals replicate is a full digest; hm is variance-eligible.
+    from tests.test_role_site_conversions import _mk_role
     _seed_catalog(db_session)
-    sub = _mk_parent_and_vial(db_session, role="hm")
+    _mk_role(db_session, "zzinelig", variance_eligible=False)
+    sub = _mk_parent_and_vial(db_session, role="zzinelig")
     from sub_samples.service import set_assignment_role
-    set_assignment_role(db_session, sub.sample_id, "hm", wp_services={})
+    set_assignment_role(db_session, sub.sample_id, "zzinelig", wp_services={})
     db_session.refresh(sub)
     assert sub.in_variance_set is False
-    assert sub.variance_exclusion_reason == "auto: role hm is not variance-eligible"
+    assert sub.variance_exclusion_reason == "auto: role zzinelig is not variance-eligible"
 
 
-def test_hm_exclusion_reason_clears_on_role_flip_away(db_session):
-    """A vial that was hm (excluded, reason set) and gets reassigned to a
-    role that's naturally eligible must not keep the stale hm-specific
+def test_exclusion_reason_clears_on_role_flip_away(db_session):
+    """A vial that was on an ineligible role (excluded, reason set) and gets
+    reassigned to a role that's naturally eligible must not keep the stale
     reason string once in_variance_set flips back to True."""
+    # Decision 5 (2026-11-10): a heavy metals replicate is a full digest; hm is variance-eligible.
+    from tests.test_role_site_conversions import _mk_role
     _seed_catalog(db_session)
-    sub = _mk_parent_and_vial(db_session, role="hm")
+    _mk_role(db_session, "zzinelig", variance_eligible=False)
+    sub = _mk_parent_and_vial(db_session, role="zzinelig")
     from sub_samples.service import set_assignment_role
-    set_assignment_role(db_session, sub.sample_id, "hm", wp_services={})
+    set_assignment_role(db_session, sub.sample_id, "zzinelig", wp_services={})
     db_session.refresh(sub)
     assert sub.in_variance_set is False  # sanity: starts excluded
 
