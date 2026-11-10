@@ -32,7 +32,7 @@ def test_constants_match_the_code():
 
 
 def test_self_check_is_silent_when_clean(capsys):
-    gate.self_check()
+    gate._self_check()
     assert capsys.readouterr().out == ""
 
 
@@ -52,13 +52,13 @@ def _with_sql(label, sql):
 ])
 def test_self_check_catches_planted_faults(sql, message):
     with pytest.raises(gate.GateError, match=message):
-        gate.self_check(checks=_with_sql("3 vial roles", sql))
+        gate._self_check(checks=_with_sql("3 vial roles", sql))
 
 
 def test_self_check_catches_a_drifted_key():
     drifted = [k for k in gate.KEYS if k != "heavy_metals"] + ["heavy-metals"]
     with pytest.raises(gate.GateError, match="keys"):
-        gate.self_check(keys=drifted)
+        gate._self_check(keys=drifted)
 
 
 def test_selfcheck_run_prints_nothing_and_exits_0():

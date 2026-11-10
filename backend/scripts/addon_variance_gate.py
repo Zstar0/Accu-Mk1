@@ -132,10 +132,10 @@ def _judge_profiles(rows):
         elif (vials if analytical is None else analytical) != 1:
             problems.append(f"{key} has {vials if analytical is None else analytical} "
                             "analytical vials per run (Mk1 refuses its Variance until ruled)")
+    wp = "confirm each test's WordPress `vials` value equals its vials_required"
     if problems:
-        return "BLOCK", "fix or rule on each before release: " + "; ".join(problems)
-    return "PASS", ("nothing to fix; confirm each test's WordPress `vials` value "
-                    "equals its vials_required")
+        return "BLOCK", "fix or rule on each before release: " + "; ".join(problems) + f"; {wp}"
+    return "PASS", f"nothing to fix; {wp}"
 
 
 def _judge_members(rows):
@@ -342,7 +342,7 @@ _WHOLE_VALUE = re.compile(r"(?<!count\()\*|\bSELECT\s+(\w+\.)?(catalog_snapshot|
                           re.IGNORECASE)
 
 
-def self_check(checks=None, keys=None):
+def _self_check(checks=None, keys=None):
     """Assert the query list is read only and customer-data free, and that
     the constants are in step with the code when it is importable. Raises
     GateError. Silent on success, except one line when the code could not
@@ -441,7 +441,7 @@ def _run_checks(checks, params):
 
 def _self_check_or_exit():
     try:
-        self_check()
+        _self_check()
     except GateError as exc:
         print(f"self-check failed: {exc}")
         print("VERDICT: BLOCK (self-check)")
