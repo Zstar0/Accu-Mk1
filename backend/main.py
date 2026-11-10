@@ -14558,13 +14558,11 @@ async def generate_sample_coa(
                     if _alc_parent is not None:
                         # Savepoint: a DB error inside the helper comes back as
                         # an "error:" verdict but leaves Postgres aborted, and
-                        # the gates below still query this session.
+                        # the gates below still query this session. The helper
+                        # only reads, so the savepoint always rolls back.
                         _alc_sp = db.begin_nested()
                         _alc_v = a_la_carte_verdict(db, _alc_parent, sections=None)
-                        if _alc_v.reason.startswith("error:"):
-                            _alc_sp.rollback()
-                        else:
-                            _alc_sp.commit()
+                        _alc_sp.rollback()
                         if _alc_v.eligible:
                             needs_chromatogram = False  # a la carte: no HPLC, no chromatogram to attach
                         else:

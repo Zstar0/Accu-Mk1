@@ -15,6 +15,9 @@ from tests.test_coa_deferred_sections_warning import _patch_generate_prereqs
 
 FLAGGED = {"source": "mk1", "rows": [], "page1": "none"}
 SID = "P-9601"
+# The gate's wording, verbatim from main.generate_sample_coa (do not reword).
+CHROMATOGRAM_MESSAGE = ("Chromatogram — attach one from the sample page "
+                        "(Select Vial Chromatogram, after processing the HPLC prep).")
 
 
 def _setup(db, monkeypatch, *, image=True, services=None):
@@ -46,11 +49,23 @@ def _generate(db):
         sample_id=SID, db=db, current_user=SimpleNamespace(id=1)))
 
 
-def _blocked(db):
+def _blocked_detail(db):
     with pytest.raises(HTTPException) as ei:
         _generate(db)
     assert ei.value.status_code == 422
-    return str(ei.value.detail)
+    return ei.value.detail
+
+
+def _blocked(db):
+    return str(_blocked_detail(db))
+
+
+def _assert_chromatogram_blocked(db):
+    blockers = _blocked_detail(db)["blockers"]
+    attach = [b for b in blockers if b["code"] == "missing_attachments"]
+    assert len(attach) == 1
+    assert attach[0]["missing"] == ["chromatogram"]
+    assert f"- {CHROMATOGRAM_MESSAGE}" in attach[0]["message"].splitlines()
 
 
 def test_generate_fentanyl_only_posts_flagged_block_with_image_and_no_chromatogram(
@@ -72,7 +87,7 @@ def test_generate_a_la_carte_without_image_still_blocked(db_session, monkeypatch
 def test_generate_hplc_sample_without_chromatogram_still_blocked(db_session, monkeypatch):
     p, client = _setup(db_session, monkeypatch, services={"hplc-purity-identity": True})
     _add_row(db_session, p, "HPLC-PURITY", "mk1")
-    assert "chromatogram" in _blocked(db_session)
+    _assert_chromatogram_blocked(db_session)
     assert client.calls == []
 
 
@@ -83,7 +98,7 @@ def test_generate_keeps_chromatogram_requirement_when_lookup_fails(db_session, m
         raise RuntimeError("IS down")
     monkeypatch.setattr("coa.native_sections.fetch_sample_services", boom)
     monkeypatch.setattr("sub_samples.service.fetch_sample_services", boom)
-    assert "chromatogram" in _blocked(db_session)
+    _assert_chromatogram_blocked(db_session)
     assert client.calls == []
 
 
@@ -97,12 +112,10 @@ def test_generate_keeps_422_when_verdict_query_aborts_transaction(db_session, mo
     aborted = {"on": False}
     engine = db_session.get_bind()
 
-    @event.listens_for(engine, "before_cursor_execute")
     def _pg_aborted(conn, cursor, statement, *a):
         if aborted["on"] and not statement.startswith("ROLLBACK"):
             raise RuntimeError("current transaction is aborted")
 
-    @event.listens_for(engine, "rollback_savepoint")
     def _cleared(conn, name, context):
         aborted["on"] = False
 
@@ -110,5 +123,11 @@ def test_generate_keeps_422_when_verdict_query_aborts_transaction(db_session, mo
         aborted["on"] = True
         raise RuntimeError("division by zero")
     monkeypatch.setattr("coa.native_sections._lab_added_profile_keys", failing_query)
-    assert "chromatogram" in _blocked(db_session)
+    event.listen(engine, "before_cursor_execute", _pg_aborted)
+    event.listen(engine, "rollback_savepoint", _cleared)
+    try:
+        _assert_chromatogram_blocked(db_session)
+    finally:
+        event.remove(engine, "before_cursor_execute", _pg_aborted)
+        event.remove(engine, "rollback_savepoint", _cleared)
     assert client.calls == []
