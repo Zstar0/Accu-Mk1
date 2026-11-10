@@ -186,3 +186,9 @@ def test_sla_records_kept_per_order_for_turnaround() -> None:
     ds = build([order_row(1)], sla=[rec, {**rec, "state": "cancelled"}])
     (r,) = ds.sla
     assert r.order_number == "1" and r.late and r.family_bh == {"hplc": 6.0}
+
+
+def test_measured_coa_has_no_verdict() -> None:
+    rows = [("1001", "P-1", "BPC-157", st, PAID) for st in ("MEASURED", "PASSED", "FAILED", "IN REVIEW")]
+    ds = build([order_row(1001)], coas=rows)
+    assert [c.passed for c in ds.coas] == [None, True, False, False]

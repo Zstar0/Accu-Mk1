@@ -57,6 +57,9 @@ const FAIL_LABEL: Record<TestKey | 'other', string> = {
 }
 
 export function FailChips({ coa }: { coa: AnalyteTrendCoa }) {
+  // MEASURED: every row informational, so no verdict either way.
+  if (coa.overall === 'MEASURED' && failedTests(coa).length === 0)
+    return <span className="text-muted-foreground">Measured</span>
   if (!isFailed(coa) && failedTests(coa).length === 0)
     return <span className="text-emerald-400">Conforms</span>
   return (
