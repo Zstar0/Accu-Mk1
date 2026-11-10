@@ -419,11 +419,14 @@ def test_a_la_carte_riders_share_one_sample_vial(db_session):
         for key, role in rider_roles.items()
     }
     roles = tuple(rider_roles.values())
+    sort_order = {vr.code: vr.sort_order for vr in db_session.query(VialRole)}
 
     def _check_one_shared_vial(result, subset, perm):
         assert sum(result[r].demand for r in roles if r in result) == 1, perm
         minted = [r for r in roles if r in result and result[r].demand]
         assert len(minted) == 1, perm
+        # The ordered rider whose role sorts first mints; service order never decides.
+        assert minted[0] == min((rider_roles[k] for k in subset), key=sort_order.get), perm
         vial = result[minted[0]]
         assert sorted(vial.host_profile_ids + vial.rider_profile_ids) == sorted(
             riders[k].id for k in subset), perm
@@ -450,3 +453,5 @@ def test_a_la_carte_riders_share_one_sample_vial(db_session):
     assert sum(rf.demand for rf in with_endo.values()) == 2
     assert with_endo["tendo"].demand == 1
     assert with_endo["tfent"].demand == 1
+    assert with_endo["tfent"].host_profile_ids == [riders["t_fent"].id]
+    assert with_endo["tfent"].rider_profile_ids == []
