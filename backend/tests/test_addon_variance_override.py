@@ -138,6 +138,24 @@ def test_override_lock_check_stays_first(lite, monkeypatch):
     assert calls == []
 
 
+def test_override_refused_when_locked_during_order_lookup(lite, monkeypatch):
+    # Lock race: another request locks the set while the IS lookup runs.
+    # Raw SQL with no commit through this session, so the in-memory parent
+    # stays stale (unlocked): only a fresh re-read before the write sees it.
+    from sqlalchemy import text
+    parent = _parent(lite, "ZZT4-RACE")
+    pk = parent.id
+
+    def lock_then_answer(sid):
+        lite.execute(text("UPDATE lims_samples SET variance_locked_at = '2026-11-10 12:00:00' "
+                          "WHERE id = :id"), {"id": pk})
+        return {"services": {ENDO85_KEY: True}}
+    monkeypatch.setattr(sub_service, "fetch_sample_services", lock_then_answer)
+    with pytest.raises(sub_service.VarianceLockedError, match="ZZT4-RACE is locked"):
+        sub_service.set_variance_override(lite, "ZZT4-RACE", {ENDO85_KEY: 2})
+    assert _stored(lite, "ZZT4-RACE") == PREVIOUS
+
+
 def test_put_override_route_returns_422(lite, lite_client, monkeypatch):
     _parent(lite, "ZZT4-RTE")
     _order(monkeypatch, {ENDO85_KEY: True})

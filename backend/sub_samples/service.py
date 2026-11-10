@@ -1530,10 +1530,21 @@ def set_variance_override(db: Session, parent_sample_id: str, variance: Optional
     ).scalar_one_or_none()
     if not parent:
         raise LookupError(f"parent {parent_sample_id} not found")
-    if parent.variance_locked_at is not None:
+    if parent.variance_locked_at is not None:  # fast path, before any IS call
         raise VarianceLockedError(f"variance set for {parent.sample_id} is locked")
     if has_variance_test_entry({"variance": variance}):
-        _check_variance_test_override(db, parent, variance)
+        _check_variance_test_override(db, parent, variance)  # HTTP, no row lock held
+    # The check that counts: a fresh read under the row lock, so a lock taken
+    # while the order lookup ran is seen (populate_existing skips the stale
+    # identity-map copy). Write and commit in the same transaction.
+    parent = db.execute(
+        select(LimsSample).where(LimsSample.id == parent.id)
+        .with_for_update().execution_options(populate_existing=True)
+    ).scalar_one()
+    if parent.variance_locked_at is not None:
+        msg = f"variance set for {parent.sample_id} is locked"
+        db.rollback()  # release the row lock now, not at session close
+        raise VarianceLockedError(msg)
     cleaned = normalize_variance_entitlement({"variance": variance or {}})
     parent.variance_override = json.dumps(cleaned) if cleaned else None
     db.commit()
