@@ -45,7 +45,7 @@ def _mk1_mode(monkeypatch):
 
 def _alc_world(db, monkeypatch, *, endo_reps=(("0.5", "variance_verified"),
                                               ("0.6", "variance_verified")),
-               locked=True):
+               locked=True, endo_n=3):
     """Endotoxin max 25 EU/mL, heavy metals max 100 ppm."""
     _p, [endo] = _profile(db, ENDO_KEY, "endo85", ENDO_KW)
     _p, hms = _profile(db, HM_KEY, "hm", HM_KW, vials_required=2, analytical_vials=1,
@@ -70,7 +70,7 @@ def _alc_world(db, monkeypatch, *, endo_reps=(("0.5", "variance_verified"),
     if locked:
         parent.variance_locked_at = datetime(2026, 11, 10, 12, 0, 0)
     services = {ENDO_KEY: True, HM_KEY: True, "samplevariance": True,
-                "variance": {ENDO_KEY: 3, HM_KEY: 2}}
+                "variance": {ENDO_KEY: endo_n, HM_KEY: 2}}
     _patch_order(monkeypatch, services)
     _mk1_mode(monkeypatch)
     db.commit()
@@ -127,6 +127,19 @@ def test_a_la_carte_variance_generate_posts_no_hplc_shapes(db, monkeypatch):
     assert body["native_sections"]["legacy_rows"]["page1"] == "none"
     assert len(_rows(body["native_sections"], ENDO_KEY)) == 3
     assert len(_rows(body["native_sections"], HM_KEY)) == 8
+    # Both follow-up emitters are awaited inline by generate and gate on the
+    # HPLC series, which the four roles never switch on.
+    from coa.variance_series import build_variance_replicates
+    assert build_variance_replicates(db, w.parent) == {}
+
+
+@pytest.mark.parametrize("n", [1, 11])
+def test_a_la_carte_out_of_range_n_passes_verdict_but_builder_refuses(db, monkeypatch, n):
+    from coa.a_la_carte import a_la_carte_verdict
+    w = _alc_world(db, monkeypatch, endo_n=n)
+    assert a_la_carte_verdict(db, w.parent, sections=None).eligible
+    with pytest.raises(NativeSectionsError, match=f"Variance for {ENDO_KEY}: "):
+        build_coa_wire_document(db, w.parent)
 
 
 def test_a_la_carte_one_failing_replicate_is_a_false_row(db, monkeypatch):
