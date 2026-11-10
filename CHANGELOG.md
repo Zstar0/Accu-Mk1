@@ -1,5 +1,17 @@
 # Changelog
 
+## v1.59.0 - 2026-11-10
+
+### À la carte orders (tests with no HPLC panel)
+- **A sample ordered with tests only now gets a certificate.** When a native-born sample's order carries no HPLC and no Bac Water primary, Mk1 asks COABuilder for the no-HPLC page: the tests print as native sections and no chromatogram is required. Nothing changes for a sample with an HPLC or Bac Water primary. A prod recount on 2026-11-10 (1,187 native samples) found no existing sample that starts certifying this way.
+- **A certificate still in review cannot be published.** An à la carte certificate whose overall status is IN REVIEW (a deferred section, for example USP 71 before sign-off) is refused at publish until the section is signed off and the certificate regenerated.
+- **MEASURED is its own status.** A certificate whose every result is informational (pH, vial vacuum) reads MEASURED. Reports count it as neither conforming nor failed, and Re-sync writes its reporting row the way the Integration Service does.
+- **The sample list reads right for these samples.** The Assigned column shows the vials' own roles when no vial carries the parent's role, and the Analytes column prints the bare peptide name when no HPLC was ordered.
+- Fentanyl, pH and vial vacuum share one sample vial when the order has no primary vial. This is catalog ride-list data, applied on prod on 2026-11-10.
+
+### Flags
+- v1.58.1 (flag threads show the date on every comment and event, PR #358) is now on master and ships with this frontend. So does the "Retested" label in the row history that v1.58.2 announced.
+
 ## v1.58.4 - 2026-11-10
 
 ### Endotoxin worksheets
