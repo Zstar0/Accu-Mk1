@@ -16,7 +16,7 @@ from tests.test_coa_deferred_sections_warning import _patch_generate_prereqs
 FLAGGED = {"source": "mk1", "rows": [], "page1": "none"}
 SID = "P-9601"
 # The gate's wording, verbatim from main.generate_sample_coa (do not reword).
-CHROMATOGRAM_MESSAGE = ("Chromatogram — attach one from the sample page "
+CHROMATOGRAM_MESSAGE = ("Chromatogram \u2014 attach one from the sample page "
                         "(Select Vial Chromatogram, after processing the HPLC prep).")
 
 

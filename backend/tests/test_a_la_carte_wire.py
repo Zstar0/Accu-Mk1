@@ -101,7 +101,7 @@ def test_guard_still_aborts_when_verdict_errors(db_session, monkeypatch):
     with pytest.raises(NativeSectionsError) as ei:
         build_legacy_rows(db_session, p, sections=sections)
     assert str(ei.value) == (
-        f"legacy rows: no legacy-family analyses found for {p.sample_id} — "
+        f"legacy rows: no legacy-family analyses found for {p.sample_id} \u2014 "
         "refusing to assemble an empty results table (mirror gap?)")
 
 
