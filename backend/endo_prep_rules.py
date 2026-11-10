@@ -475,18 +475,23 @@ def reopen_for_retest(db: Session, analysis, *, user_id: Optional[int]) -> None:
     not commit; any other analysis is left alone."""
     if analysis.lims_sub_sample_pk is None:
         return
-    from main import _bench_kind_for_keyword  # lazy: main imports this module
+    from main import _bench_kind_for_item, _bench_kind_for_keyword  # lazy: main imports this module
 
     svc = db.get(AnalysisService, analysis.analysis_service_id) if analysis.analysis_service_id else None
     if _bench_kind_for_keyword(svc.keyword if svc else analysis.keyword) != "endo":
         return
-    found = db.execute(
-        select(WorksheetItem.id, WorksheetItem.worksheet_id)
+    # The vial's newest row on the ENDOTOXIN bench, judged as the worksheet
+    # screens judge a row: a vial that also hosts PCR has a row on that
+    # bench's worksheet too, and it is not this retest's to touch.
+    found = next((r for r in db.execute(
+        select(WorksheetItem.id, WorksheetItem.worksheet_id, WorksheetItem.analyses_json,
+               LimsSubSample.assignment_role)
         .join(Worksheet, Worksheet.id == WorksheetItem.worksheet_id)
         .join(LimsSubSample, LimsSubSample.sample_id == WorksheetItem.sample_id)
         .where(LimsSubSample.id == analysis.lims_sub_sample_pk,
                Worksheet.status.in_(("open", "completed")))
-        .order_by(WorksheetItem.id.desc()).limit(1)).first()
+        .order_by(WorksheetItem.id.desc()))
+        if _bench_kind_for_item(r.assignment_role, r.analyses_json) == "endo"), None)
     if found is None:
         return
 
@@ -495,7 +500,12 @@ def reopen_for_retest(db: Session, analysis, *, user_id: Optional[int]) -> None:
                           .execution_options(populate_existing=True)).scalar_one()
 
     worksheet = locked(Worksheet, found.worksheet_id)
-    db.execute(select(LimsAnalysis.id).where(LimsAnalysis.id == analysis.id).with_for_update())
+    # As committed, under its lock: a row already retested (a double click,
+    # a retried request) is no longer the vial's run, and the reading now on
+    # the worksheet row belongs to its re-run.
+    if db.execute(select(LimsAnalysis.retested).where(LimsAnalysis.id == analysis.id)
+                  .with_for_update()).scalar_one():
+        return
     item = locked(WorksheetItem, found.id)
     was_completed = worksheet.status == "completed"
     if not was_completed and not _has_result(item):

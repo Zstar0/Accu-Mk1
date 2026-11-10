@@ -1191,3 +1191,41 @@ def test_a_retest_on_an_open_worksheet_touches_only_its_own_row(client, db):
     assert due.prep_history is None and due.result_reading is None
     assert client.patch(f"/worksheets/{w.ws.id}/items/{due.id}",
                         json={"result_reading": "0.1", "cartridge_type_id": w.c05.id}).status_code == 200
+
+
+def test_a_retest_never_touches_the_vials_row_on_another_bench(client, db):
+    """One vial hosts endotoxin and PCR: its newer row is on the PCR
+    worksheet, and that worksheet is not the retest's to reopen."""
+    w = _world(client, db)
+    item, vial = _row(db, w, state="to_be_verified", role=None)
+    item.analyses_json = json.dumps([{"keyword": w.svc.keyword}])
+    pcr_ws = _ws(db, "PCR 11/06/2026", status="completed")
+    pcr = WorksheetItem(worksheet_id=pcr_ws.id, sample_uid=item.sample_uid, sample_id=item.sample_id,
+                        analyses_json=json.dumps([{"keyword": "STER-PCR"}]), prep_status="complete")
+    db.add(pcr)
+    w.ws.status = "completed"
+    db.commit()
+
+    apply_transition(db, analysis_id=vial.id, kind="retest", user_id=7)
+    db.expire_all()
+
+    assert (pcr_ws.status, pcr.prep_status, pcr.prep_history) == ("completed", "complete", None)
+    assert w.ws.status == "open" and item.result_reading is None
+
+
+def test_a_second_retest_of_the_superseded_row_keeps_the_re_runs_reading(client, db):
+    w = _world(client, db)
+    item, vial = _row(db, w, state="to_be_verified")
+    db.commit()
+    vial_id = vial.id
+    apply_transition(db, analysis_id=vial_id, kind="retest", user_id=7)
+    item.result_reading = "0.1"            # the re-run, entered on the row
+    db.commit()
+
+    try:                                   # a double click, a retried request
+        apply_transition(db, analysis_id=vial_id, kind="retest", user_id=7)
+    except Exception:
+        db.rollback()
+    db.expire_all()
+
+    assert item.result_reading == "0.1" and len(item.prep_history) == 1
