@@ -12395,6 +12395,9 @@ async def reports_resync(
 ):
     """Re-sync published_coa_results: backfill missing codes, remove orphans."""
     import json as _json
+    from reports_flagged_row import (
+        ENDOTOXIN_PROFILE_KEYS, STERILITY_PROFILE_KEYS, is_flagged, native_section_flag,
+    )
     synced = 0
     removed = 0
     try:
@@ -12441,7 +12444,9 @@ async def reports_resync(
                     product_components = product.get("components", [])
                     product_name = ", ".join(product_components) if product_components else product.get("name")
                     is_blend = len(product_components) > 1
-                    addons = results.get("addons", [])
+                    flagged = is_flagged(coa_data)
+                    # Flagged: flags come from native_sections only (IS twin), add-ons are never parsed.
+                    addons = [] if flagged else results.get("addons", [])
                     has_endo = any("endotoxin" in (a.get("test_name", "")).lower() for a in addons)
                     endo_conf = None
                     if has_endo:
@@ -12466,6 +12471,18 @@ async def reports_resync(
                         quantity_value, quantity_unit, overall_status,
                         has_endotoxin, endotoxin_conforms, has_sterility, sterility_conforms
                     ) VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)"""
+
+                    if flagged:
+                        # A la carte: one row, no result values, flags from
+                        # native_sections by profile_key (same as IS).
+                        ns = coa_data.get("native_sections")
+                        cur.execute(insert_sql, base + (
+                            product_name or "Unknown", is_blend,
+                            None, None, None, None, None, None, overall_status,
+                            *native_section_flag(ns, ENDOTOXIN_PROFILE_KEYS),
+                            *native_section_flag(ns, STERILITY_PROFILE_KEYS)))
+                        synced += 1
+                        continue
 
                     analytes = results.get("analytes", [])
                     if analytes:
@@ -14535,6 +14552,21 @@ async def generate_sample_coa(
                         )
                     except Exception:
                         needs_chromatogram = False
+                if _coa_src == "mk1" and needs_chromatogram and not kinds["has_chromatogram"]:
+                    from coa.a_la_carte import a_la_carte_verdict
+                    _alc_parent = db.get(LimsSample, _gate_parent_pk) if _gate_parent_pk is not None else None
+                    if _alc_parent is not None:
+                        # Savepoint: a DB error inside the helper comes back as
+                        # an "error:" verdict but leaves Postgres aborted, and
+                        # the gates below still query this session. The helper
+                        # only reads, so the savepoint always rolls back.
+                        _alc_sp = db.begin_nested()
+                        _alc_v = a_la_carte_verdict(db, _alc_parent, sections=None)
+                        _alc_sp.rollback()
+                        if _alc_v.eligible:
+                            needs_chromatogram = False  # a la carte: no HPLC, no chromatogram to attach
+                        else:
+                            _logger.info("a la carte check for %s: %s", sample_id, _alc_v.reason)
                 gate_missing = []
                 if not kinds["has_image"]:
                     gate_missing.append({
@@ -15096,6 +15128,31 @@ def _refuse_stale_draft_primary(sample_id: str) -> None:
         )
 
 
+def _refuse_in_review_a_la_carte(sample_id: str) -> None:
+    """409 when the draft Publish would pick is a flagged (a la carte) COA
+    whose badge is IN REVIEW: one ordered test has no results yet, so the
+    customer would get an incomplete certificate. Unflagged drafts are never
+    refused here. Fails open when the Integration Service can't be read, the
+    same as _refuse_stale_draft_primary."""
+    import logging as _logging
+    from integration_db import fetch_publish_draft_badge
+    try:
+        badge = fetch_publish_draft_badge(sample_id)
+    except Exception as e:  # noqa: BLE001
+        _logging.getLogger(__name__).warning(
+            "a la carte in-review check skipped for %s: %s", sample_id, e)
+        return
+    if badge and badge.get("page1") == "none" and badge.get("overall_status") == "IN REVIEW":
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                f"This a la carte COA (Gen #{badge['generation_number']}, "
+                f"{badge['verification_code']}) is IN REVIEW: a test has no "
+                "results yet. Finish it, regenerate, then publish."
+            ),
+        )
+
+
 def _refuse_while_publish_scheduled(db: Session, sample_id: str) -> None:
     """409 while a publish is parked for the sample (backend/scheduled_publish.py).
     Its newest draft carries the scheduled, future Published Date, and IS
@@ -15140,6 +15197,7 @@ async def publish_sample_coa(
         )
     _refuse_while_publish_scheduled(db, sample_id)
     _refuse_stale_draft_primary(sample_id)
+    _refuse_in_review_a_la_carte(sample_id)
 
     # 2. Resolve SENAITE UID upfront so we fail before touching integration service state.
     # Native-born samples (external_lims_system == "mk1") have no SENAITE AR at

@@ -1,5 +1,17 @@
 # Changelog
 
+## v1.59.0 - 2026-11-10
+
+### À la carte orders (tests with no HPLC panel)
+- **A sample ordered with tests only now gets a certificate.** When a native-born sample's order carries no HPLC and no Bac Water primary, Mk1 asks COABuilder for the no-HPLC page: the tests print as native sections and no chromatogram is required. Nothing changes for a sample with an HPLC or Bac Water primary. A prod recount on 2026-11-10 (1,187 native samples) found no existing sample that starts certifying this way.
+- **A certificate still in review cannot be published.** An à la carte certificate whose overall status is IN REVIEW (a deferred section, for example USP 71 before sign-off) is refused at publish until the section is signed off and the certificate regenerated.
+- **MEASURED is its own status.** A certificate whose every result is informational (pH, vial vacuum) reads MEASURED. Reports count it as neither conforming nor failed, and Re-sync writes its reporting row the way the Integration Service does.
+- **The sample list reads right for these samples.** The Assigned column shows the vials' own roles when no vial carries the parent's role, and the Analytes column prints the bare peptide name when no HPLC was ordered.
+- Fentanyl, pH and vial vacuum share one sample vial when the order has no primary vial. This is catalog ride-list data, applied on prod on 2026-11-10.
+
+### Flags
+- v1.58.1 (flag threads show the date on every comment and event, PR #358) is now on master and ships with this frontend. So does the "Retested" label in the row history that v1.58.2 announced.
+
 ## v1.58.4 - 2026-11-10
 
 ### Endotoxin worksheets
@@ -15,6 +27,11 @@
 ### Endotoxin worksheets
 - **Retesting an endotoxin vial gives its worksheet row back to the bench.** If the worksheet was already completed it goes back to open, so the re-run can be entered and promoted; complete it again when done. The first reading moves into the row's history with its Made and Ran ticks. An open worksheet stays open, and no other row changes: a promoted row that was not retested keeps its final prep.
 - Backend-only release. The "Retested" label in the row history ships with the next frontend release; until then the entry reads "override". v1.58.1 (flag thread dates, frontend only) is live on prod from PR #358 and is not on master yet.
+
+## v1.58.1 - 2026-11-06
+
+### Flags
+- **Flag threads show the date on every comment and event.** A comment used to read only "1:35 PM", so one from last week looked the same as one from today. It now reads "Nov 3, 1:35 PM", with the year added for anything outside the current year. The "raised this" and "assigned to" lines show the date too.
 
 ## v1.58.0 - 2026-11-05
 

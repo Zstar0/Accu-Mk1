@@ -42,8 +42,10 @@ aborts generation.
 
 Spec: docs/superpowers/specs/2026-08-26-coa-legacy-rows-mk1-source-design.md
 """
+import logging
 from collections import Counter
 
+from coa.a_la_carte import a_la_carte_verdict
 from coa.bw_shim import (
     LEGACY_BW_ARCHETYPE, bw_wire_keyword, bw_wire_title, is_native_bw_row,
 )
@@ -57,6 +59,8 @@ from coa.native_sections import NativeSectionsError, _spec_wire_dict
 from coa.spec_rules import SpecRuleError, evaluate, normalize_matrix, normalize_unit, resolve_spec
 from coa.variance_series import _category
 from lims_analyses.hplc_native import TRIO, is_native_born
+
+log = logging.getLogger(__name__)
 
 # Twin contract: src/coabuilder_core/legacy_rows.py + tests/
 # test_legacy_rows_contract.py in the coabuilder repo pin the same tuple.
@@ -130,7 +134,7 @@ def _page_one_archetype(r, parent):
     return None
 
 
-def build_legacy_rows(db, parent) -> list[dict]:
+def build_legacy_rows(db, parent, *, sections: list | None = None) -> list[dict]:
     shaped = _shaped_rows(db, parent.sample_id)
     # Check for unresolvable service_origin (None) — indicates a broken service FK
     for r in shaped:
@@ -194,6 +198,16 @@ def build_legacy_rows(db, parent) -> list[dict]:
     # all-skip-state sample hits the existing fail-closed empty abort.
     legacy = [r for r in legacy if r.review_state not in SKIP_STATES]
     if not legacy:
+        # A la carte (no-HPLC order): an empty page 1 is the product, not a
+        # mirror gap. Asked only when the caller passed the native sections;
+        # any other verdict keeps the abort below unchanged.
+        if sections is not None:
+            verdict = a_la_carte_verdict(db, parent, sections=sections, shaped=shaped)
+            if verdict.eligible:
+                log.info("a_la_carte sample=%s", parent.sample_id)
+                return []
+            log.info("a_la_carte not eligible sample=%s reason=%s",
+                     parent.sample_id, verdict.reason)
         raise NativeSectionsError(
             f"legacy rows: no legacy-family analyses found for "
             f"{parent.sample_id} — refusing to assemble an empty results "
