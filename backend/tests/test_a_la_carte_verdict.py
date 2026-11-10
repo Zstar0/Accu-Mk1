@@ -97,7 +97,9 @@ def test_lookup_failure_aborts(db_session, monkeypatch):
     def boom(sample_id):
         raise RuntimeError("IS down")
     monkeypatch.setattr("coa.native_sections.fetch_sample_services", boom)
-    assert _verdict(db_session, parent).reason.startswith("c3")
+    # The reason names the exception type only: raw exception text can carry
+    # SQL and bound parameters, and callers log the reason.
+    assert _verdict(db_session, parent).reason == "c3: order lookup failed: RuntimeError"
 
 
 def test_lookup_404_aborts(db_session, monkeypatch):
@@ -215,4 +217,29 @@ def test_panel_drop_bw_retest_eligible_when_is_still_lists_bw(db_session, monkey
 def test_verdict_never_raises(db_session, monkeypatch):
     parent = _alc(db_session, monkeypatch)
     v = _verdict(db_session, parent, shaped=[object()])
-    assert v.eligible is False and v.reason.startswith("error")
+    assert v == ALaCarteVerdict(False, "error: AttributeError")
+
+
+def test_verdict_error_reason_carries_no_exception_text(db_session, monkeypatch):
+    parent = _alc(db_session, monkeypatch)
+
+    def failing_query(db, pk):
+        raise RuntimeError("SELECT secret FROM t WHERE x = 'bound-param'")
+    monkeypatch.setattr("coa.native_sections._lab_added_profile_keys", failing_query)
+    assert _verdict(db_session, parent) == ALaCarteVerdict(False, "error: RuntimeError")
+
+
+def test_bw_retest_rider_carry_of_bw_panel_aborts_at_c3(db_session, monkeypatch):
+    # The rider carry (minus missing) feeds the key set, so a carried BW panel
+    # is an ordered BW primary even when the IS services no longer list it.
+    parent = _alc(
+        db_session, monkeypatch, "endotoxin-usp85-lal", "ENDOTOXIN-USP85LAL",
+        matrix="Bacteriostatic Water",
+        services={"endotoxin-usp85-lal": True},
+        is_retest=True, retest_of_sample_id="BW-0001",
+        catalog_snapshot={"retest": {
+            "retest": ["endotoxin-usp85-lal"], "carry": ["bacteriostatic-water-panel"],
+            "missing": [], "drop": [],
+            "add": {"profiles": [], "variance_points": 0}}},
+    )
+    assert _verdict(db_session, parent).reason == "c3: ordered ['bacteriostatic-water-panel']"

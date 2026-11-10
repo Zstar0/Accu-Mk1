@@ -48,7 +48,9 @@ def a_la_carte_verdict(db, parent, *, sections: list | None,
     try:
         return _verdict(db, parent, sections, shaped)
     except Exception as e:
-        return ALaCarteVerdict(False, f"error: {e}")
+        # Type name only: exception text can carry SQL and bound parameters,
+        # and callers log the reason.
+        return ALaCarteVerdict(False, f"error: {type(e).__name__}")
 
 
 def _verdict(db, parent, sections, shaped) -> ALaCarteVerdict:
@@ -64,8 +66,9 @@ def _verdict(db, parent, sections, shaped) -> ALaCarteVerdict:
     if retest and normalize_matrix(parent.sample_type_title) != BW_MATRIX:
         return no("c6: retest of a non-Bacteriostatic-Water sample")
 
-    # c2: no SENAITE-origin, native HPLC or native BW row. Pre-filter rows:
-    # a rejected or retracted HPLC row still means HPLC was on this sample.
+    # c2: no SENAITE-origin, native HPLC or native BW row. c2 sees a rejected
+    # ORDERED placeholder (HPLC was on this sample); canonical retracted rows
+    # and retested rows are dropped by the shaped read before c2 runs.
     if shaped is None:
         from lims_analyses.service import list_parent_analyses_senaite_shape
         shaped = list_parent_analyses_senaite_shape(db, parent.sample_id)
@@ -79,7 +82,7 @@ def _verdict(db, parent, sections, shaped) -> ALaCarteVerdict:
     try:
         raw = native_sections.fetch_sample_services(parent.sample_id)
     except Exception as e:
-        return no(f"c3: order lookup failed: {e}")
+        return no(f"c3: order lookup failed: {type(e).__name__}")
     if raw is None:
         return no("c3: no linked order")
     services = {k: v for k, v in (raw.get("services") or {}).items() if v}

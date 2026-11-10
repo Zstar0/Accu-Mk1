@@ -88,6 +88,23 @@ def test_guard_still_aborts(db_session, monkeypatch, case):
         build_legacy_rows(db_session, p, sections=[{"profile_key": "x"}])
 
 
+def test_guard_still_aborts_when_verdict_errors(db_session, monkeypatch):
+    from coa.a_la_carte import a_la_carte_verdict
+
+    p = _alc(db_session, monkeypatch)
+
+    def failing_query(db, pk):
+        raise RuntimeError("lookup failed")
+    monkeypatch.setattr("coa.native_sections._lab_added_profile_keys", failing_query)
+    sections = [{"profile_key": "x"}]
+    assert a_la_carte_verdict(db_session, p, sections=sections).reason.startswith("error:")
+    with pytest.raises(NativeSectionsError) as ei:
+        build_legacy_rows(db_session, p, sections=sections)
+    assert str(ei.value) == (
+        f"legacy rows: no legacy-family analyses found for {p.sample_id} — "
+        "refusing to assemble an empty results table (mirror gap?)")
+
+
 @pytest.mark.parametrize("key,keyword", ELIGIBLE)
 def test_wire_document_emits_flagged_block_for_each_eligible_key(
         db_session, monkeypatch, mk1_mode, key, keyword):
