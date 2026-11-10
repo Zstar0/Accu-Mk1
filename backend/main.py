@@ -15113,6 +15113,30 @@ def _refuse_stale_draft_primary(sample_id: str) -> None:
         )
 
 
+def _refuse_in_review_a_la_carte(sample_id: str) -> None:
+    """409 when the draft Publish would pick is a flagged (a la carte) COA
+    whose badge is IN REVIEW: one ordered test has no results yet, so the
+    customer would get an incomplete certificate. Unflagged drafts are never
+    refused here. Fails open when the Integration Service can't be read, the
+    same as _refuse_stale_draft_primary."""
+    import logging as _logging
+    from integration_db import fetch_publish_draft_badge
+    try:
+        badge = fetch_publish_draft_badge(sample_id)
+    except Exception as e:  # noqa: BLE001
+        _logging.getLogger(__name__).warning(
+            "a la carte in-review check skipped for %s: %s", sample_id, e)
+        return
+    if badge and badge.get("page1") == "none" and badge.get("overall_status") == "IN REVIEW":
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                f"This a la carte COA (Gen #{badge['generation_number']}, "
+                f"{badge['verification_code']}) is IN REVIEW: a test has no "
+                "results yet. Finish it, regenerate, then publish."
+            ),
+        )
+
 def _refuse_while_publish_scheduled(db: Session, sample_id: str) -> None:
     """409 while a publish is parked for the sample (backend/scheduled_publish.py).
     Its newest draft carries the scheduled, future Published Date, and IS
@@ -15157,6 +15181,7 @@ async def publish_sample_coa(
         )
     _refuse_while_publish_scheduled(db, sample_id)
     _refuse_stale_draft_primary(sample_id)
+    _refuse_in_review_a_la_carte(sample_id)
 
     # 2. Resolve SENAITE UID upfront so we fail before touching integration service state.
     # Native-born samples (external_lims_system == "mk1") have no SENAITE AR at
