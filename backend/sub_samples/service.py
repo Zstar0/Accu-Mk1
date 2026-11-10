@@ -1494,10 +1494,37 @@ def fetch_sample_services(sample_id: str) -> Optional[dict]:
     return _apply_variance_override(sample_id, resp.json())
 
 
+class VarianceOverrideError(ValueError):
+    """A lab override names a Variance test Mk1 cannot run on this sample.
+    Raised before anything is stored."""
+
+
+def _check_variance_test_override(db: Session, parent: LimsSample, variance: dict) -> None:
+    """Fail closed for the four add-on tests: resolve the RAW proposed map
+    (so a bad n is refused, not dropped) against the order. A retest note
+    is a refusal here (R3): the override would store something Mk1 will
+    not run."""
+    try:
+        raw = fetch_sample_services(parent.sample_id)
+    except Exception:
+        log.warning("variance_override.order_lookup_failed sample=%s",
+                    parent.sample_id, exc_info=True)
+        raw = None
+    if not raw:
+        raise VarianceOverrideError("cannot check Variance: the order lookup failed")
+    services = {**(raw.get("services") or {}), "variance": variance}
+    plan = variance_plan_for_parent(db, parent, services)
+    problems = (*plan.errors, *plan.notes) if plan is not None else ()
+    if problems:
+        raise VarianceOverrideError("; ".join(problems))
+
+
 def set_variance_override(db: Session, parent_sample_id: str, variance: Optional[dict]) -> dict:
     """Store the lab-side variance override (None/empty clears). Counts are
     normalized like the WP map (int >= 2 only); invalid entries are dropped.
-    Blocked while the variance set is locked."""
+    Blocked while the variance set is locked. A map naming one of the four
+    add-on tests is checked against the order first and refused whole
+    (VarianceOverrideError) when Mk1 cannot run it."""
     parent = db.execute(
         select(LimsSample).where(LimsSample.sample_id == parent_sample_id)
     ).scalar_one_or_none()
@@ -1505,6 +1532,8 @@ def set_variance_override(db: Session, parent_sample_id: str, variance: Optional
         raise LookupError(f"parent {parent_sample_id} not found")
     if parent.variance_locked_at is not None:
         raise VarianceLockedError(f"variance set for {parent.sample_id} is locked")
+    if has_variance_test_entry({"variance": variance}):
+        _check_variance_test_override(db, parent, variance)
     cleaned = normalize_variance_entitlement({"variance": variance or {}})
     parent.variance_override = json.dumps(cleaned) if cleaned else None
     db.commit()

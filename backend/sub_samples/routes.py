@@ -1014,6 +1014,11 @@ def put_variance_override(
             status_code=409,
             detail={"code": "variance_locked", "message": str(e)},
         )
+    except service.VarianceOverrideError as e:
+        raise HTTPException(
+            status_code=422,
+            detail={"code": "variance_override_invalid", "message": str(e)},
+        )
 
 
 @router.get("/{parent_sample_id}/variance-set", response_model=VarianceSetResponse)
