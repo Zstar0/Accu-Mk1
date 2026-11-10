@@ -333,7 +333,7 @@ def test_s2s_coa_sections_carries_legacy_rows_in_mk1_mode(client, db_session, mo
     monkeypatch.setattr(wd, "coa_generation_source", lambda db: "mk1")
     monkeypatch.setattr(
         wd, "build_legacy_rows",
-        lambda db, p: [{"uid": "mk1:1", "Keyword": "HPLC-PUR", "Title": "t",
+        lambda db, p, **kw: [{"uid": "mk1:1", "Keyword": "HPLC-PUR", "Title": "t",
                         "ServiceTitle": "t", "Result": "12", "Unit": "%",
                         "review_state": "published", "ResultCaptureDate": None}],
     )
@@ -348,6 +348,30 @@ def test_s2s_coa_sections_carries_legacy_rows_in_mk1_mode(client, db_session, mo
     assert body["legacy_rows"]["source"] == "mk1"
     assert body["legacy_rows"]["rows"][0]["Keyword"] == "HPLC-PUR"
     assert body["sample_meta"]["source"] == "mk1"
+
+
+def test_s2s_coa_sections_carries_page1_none(client, db_session, monkeypatch):
+    """A la carte (plan 4 Task 2): the S2S document carries the flagged
+    block verbatim; no response_model sits on this route to strip page1."""
+    from models import LimsSample
+    db_session.add(LimsSample(sample_id="P-9003"))
+    db_session.commit()
+
+    import coa.wire_document as wd
+    monkeypatch.setattr(
+        wd, "build_native_sections",
+        lambda db, p: {"sample_id": "P-9003", "ordered_profiles": [], "sections": []},
+    )
+    monkeypatch.setattr(wd, "coa_generation_source", lambda db: "mk1")
+    monkeypatch.setattr(wd, "build_legacy_rows", lambda db, p, **kw: [])
+    monkeypatch.setattr(
+        wd, "build_sample_meta",
+        lambda db, p: {"source": "mk1", "SampleID": "P-9003", "attachments": []},
+    )
+    with patch.dict(os.environ, {"ACCUMK1_INTERNAL_SERVICE_TOKEN": SVC_TOKEN}):
+        resp = client.get("/samples/P-9003/coa-sections", headers=SVC_TOKEN_HEADER)
+    assert resp.status_code == 200
+    assert resp.json()["legacy_rows"] == {"source": "mk1", "rows": [], "page1": "none"}
 
 
 def test_s2s_coa_sections_unchanged_in_senaite_mode(client, db_session, monkeypatch):
