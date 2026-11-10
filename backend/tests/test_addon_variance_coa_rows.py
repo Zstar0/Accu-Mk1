@@ -15,6 +15,7 @@ and the generate route's lock gate).
 """
 from __future__ import annotations
 
+from datetime import datetime
 from decimal import Decimal
 from types import SimpleNamespace
 
@@ -23,7 +24,7 @@ from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import StaticPool
 
-from coa.native_sections import build_native_sections
+from coa.native_sections import NativeSectionsError, build_native_sections
 from database import Base
 from models import (AnalysisProfile, AnalysisService, AnalysisServiceSpec, LimsAnalysis,
                     LimsSample, LimsSubSample, Peptide, VialRole, analysis_profile_members)
@@ -456,3 +457,200 @@ def test_fence_role_set_is_live_plus_snapshot(db):
                                             {"key": "zz-other", "fulfillment_role": "zz"}]}
     db.commit()
     assert variance_test_roles(db, parent) == frozenset({"endo86"})
+
+
+# ── Task 14: the builder refuses an unfinished Variance run ────────────────
+
+def test_unsigned_replicate_aborts_even_when_lock_skipped_its_guard(db, monkeypatch):
+    w = _endo_world(db, monkeypatch, "P-7420", n=2, replicates=(("0.5", "to_be_verified"),))
+    w.parent.variance_locked_at = datetime(2026, 11, 10, 12, 0, 0)
+    db.commit()
+    with pytest.raises(NativeSectionsError) as e:
+        build_native_sections(db, w.parent)
+    assert e.value.detail == (
+        "native sections: 'endotoxin-usp85-lal' run 2 (vial P-7420-S02) member "
+        "'ENDOTOXIN-USP85LAL' is not signed off (needs variance_verified with a result) "
+        "on P-7420")
+
+
+def test_never_entered_replicate_aborts_naming_run_and_vial(db, monkeypatch):
+    # The worksheet completed but the reading never reached the row: it is
+    # still a live row (so the lock counts it as an anchor) with no result.
+    w = _endo_world(db, monkeypatch, "P-7421", n=2, replicates=((None, "unassigned"),))
+    w.parent.variance_locked_at = datetime(2026, 11, 10, 12, 0, 0)
+    db.commit()
+    with pytest.raises(NativeSectionsError, match=r"run 2 \(vial P-7421-S02\) member "
+                                                  r"'ENDOTOXIN-USP85LAL' is not signed off"):
+        build_native_sections(db, w.parent)
+
+
+def test_signed_off_row_with_blank_result_aborts(db, monkeypatch):
+    w = _endo_world(db, monkeypatch, "P-7422", n=2, replicates=(("  ", "variance_verified"),))
+    with pytest.raises(NativeSectionsError, match=r"run 2 \(vial P-7422-S02\).*is not signed off"):
+        build_native_sections(db, w.parent)
+
+
+def test_replicate_missing_a_member_row_aborts(db, monkeypatch):
+    w = _hm_world(db, monkeypatch, "P-7423")
+    db.query(LimsAnalysis).filter_by(lims_sub_sample_pk=w.rep.id, keyword="HM-CD").delete()
+    db.commit()
+    with pytest.raises(NativeSectionsError, match=r"'heavy_metals' run 2 \(vial P-7423-S03\) "
+                                                  r"member 'HM-CD' is not signed off"):
+        build_native_sections(db, w.parent)
+
+
+def test_missing_replicate_run_aborts(db, monkeypatch):
+    w = _endo_world(db, monkeypatch, "P-7424", n=3, replicates=(("0.5", "variance_verified"),))
+    with pytest.raises(NativeSectionsError) as e:
+        build_native_sections(db, w.parent)
+    assert e.value.detail == (
+        "native sections: 'endotoxin-usp85-lal' bought 3 runs, 1 replicate runs carry "
+        "results on P-7424; finish them or set the Variance count")
+
+
+def test_material_only_replicate_vial_is_a_missing_run(db, monkeypatch):
+    w = _endo_world(db, monkeypatch, "P-7425", n=2, replicates=(None,))
+    with pytest.raises(NativeSectionsError, match="bought 2 runs, 0 replicate runs carry results"):
+        build_native_sections(db, w.parent)
+
+
+def test_extra_in_set_replicate_aborts_and_out_of_set_is_left_out(db, monkeypatch):
+    w = _endo_world(db, monkeypatch, "P-7426", n=2,
+                    replicates=(("0.5", "variance_verified"), ("0.6", "variance_verified")))
+    with pytest.raises(NativeSectionsError) as e:
+        build_native_sections(db, w.parent)
+    assert e.value.detail == (
+        "native sections: 'endotoxin-usp85-lal' bought 2 runs, 2 replicate runs carry "
+        "results on P-7426; take the extra vials out of the variance set")
+    w.reps[1].in_variance_set = False
+    db.commit()
+    rows = _rows(build_native_sections(db, w.parent), ENDO_KEY)
+    assert [(r["name"], r["result"]) for r in rows] == [
+        (f"{ENDO_NAME}, Vial 1", "1.2"), (f"{ENDO_NAME}, Vial 2", "0.5")]
+
+
+def test_missing_core_run_aborts(db, monkeypatch):
+    w = _endo_world(db, monkeypatch, "P-7427", n=2)
+    db.query(LimsAnalysis).filter_by(lims_sub_sample_pk=w.core.id).update(
+        {"review_state": "retracted"})
+    db.commit()
+    with pytest.raises(NativeSectionsError) as e:
+        build_native_sections(db, w.parent)
+    assert e.value.detail == (
+        "native sections: variance series incomplete: endotoxin-usp85-lal is missing the "
+        "core run: no core vial of role endo85 carries results on P-7427")
+
+
+def test_unfulfillable_entry_aborts(db, monkeypatch):
+    _profile(db, HM_KEY, "hm", HM_KW, vials_required=2, analytical_vials=1)
+    w = _endo_world(db, monkeypatch, "P-7428", n=None,
+                    extra_services={"variance": {HM_KEY: 2}})
+    with pytest.raises(NativeSectionsError) as e:
+        build_native_sections(db, w.parent)
+    assert e.value.detail == (
+        "native sections: Variance for heavy_metals: the test is not on this sample on P-7428")
+
+
+def test_retested_replicate_blocks_until_resigned_then_prints_current_value(db, monkeypatch):
+    from lims_analyses.service import apply_transition
+    w = _endo_world(db, monkeypatch, "P-7429", n=2, replicates=(("0.5", "variance_verified"),))
+    old = db.query(LimsAnalysis).filter_by(lims_sub_sample_pk=w.reps[0].id).one()
+    new = apply_transition(db, analysis_id=old.id, kind="retest")
+    assert new.review_state == "unassigned"
+    with pytest.raises(NativeSectionsError, match=r"run 2 \(vial P-7429-S02\).*not signed off"):
+        build_native_sections(db, w.parent)
+    apply_transition(db, analysis_id=new.id, kind="submit", result_value="0.7")
+    with pytest.raises(NativeSectionsError, match="not signed off"):
+        build_native_sections(db, w.parent)
+    apply_transition(db, analysis_id=new.id, kind="variance_verify")
+    rows = _rows(build_native_sections(db, w.parent), ENDO_KEY)
+    assert [(r["name"], r["result"]) for r in rows] == [
+        (f"{ENDO_NAME}, Vial 1", "1.2"), (f"{ENDO_NAME}, Vial 2", "0.7")]
+
+
+# ── Task 14: every path that builds the document refuses ───────────────────
+
+class _FakeClient:
+    def __init__(self):
+        self.calls = []
+
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, *exc):
+        return False
+
+    async def post(self, url, **kwargs):
+        self.calls.append((url, kwargs))
+        raise AssertionError("COABuilder must not be called")
+
+
+def _patch_coabuilder(monkeypatch):
+    import main
+    monkeypatch.setattr(main, "COA_BUILDER_URL", "http://coabuilder.test")
+    monkeypatch.setattr(main, "SENAITE_URL", None)
+    client = _FakeClient()
+    monkeypatch.setattr(main.httpx, "AsyncClient", lambda *a, **k: client)
+    return main, client
+
+
+UNSIGNED_P7430 = ("native sections: 'endotoxin-usp85-lal' run 2 (vial P-7430-S02) member "
+                  "'ENDOTOXIN-USP85LAL' is not signed off (needs variance_verified with a "
+                  "result) on P-7430")
+
+
+def _unsigned_locked_world(db, monkeypatch):
+    w = _endo_world(db, monkeypatch, "P-7430", n=2, replicates=(("0.5", "to_be_verified"),))
+    w.parent.variance_locked_at = datetime(2026, 11, 10, 12, 0, 0)
+    db.commit()
+    return w
+
+
+@pytest.mark.asyncio
+async def test_generate_refuses_with_clear_message(db, monkeypatch):
+    _unsigned_locked_world(db, monkeypatch)
+    main, client = _patch_coabuilder(monkeypatch)
+    result = await main.generate_sample_coa(sample_id="P-7430", db=db,
+                                            current_user=SimpleNamespace(id=1))
+    assert result.success is False
+    assert UNSIGNED_P7430 in result.message
+    assert client.calls == []
+
+
+@pytest.mark.asyncio
+async def test_regen_primary_refuses_with_clear_message(db, monkeypatch):
+    _unsigned_locked_world(db, monkeypatch)
+    main, client = _patch_coabuilder(monkeypatch)
+    result = await main.regen_primary_coa(sample_id="P-7430", db=db,
+                                          current_user=SimpleNamespace(id=1))
+    assert result.success is False
+    assert UNSIGNED_P7430 in result.message
+    assert client.calls == []
+
+
+def test_coa_sections_route_answers_502_with_the_message(db, monkeypatch):
+    from fastapi import HTTPException
+    import main
+    _unsigned_locked_world(db, monkeypatch)
+    with pytest.raises(HTTPException) as e:
+        main.get_sample_coa_sections(sample_id="P-7430", db=db, _=None)
+    assert e.value.status_code == 502
+    assert e.value.detail == UNSIGNED_P7430
+
+
+@pytest.mark.asyncio
+async def test_regular_child_is_not_emitted(db, monkeypatch, caplog):
+    # Retired since 2026-10-20 and HPLC-series only; forced on here so the
+    # child's own fail-closed attach is exercised with the new refusal.
+    import logging
+
+    import coa.variance_series as vs
+    w = _unsigned_locked_world(db, monkeypatch)
+    main, client = _patch_coabuilder(monkeypatch)
+    monkeypatch.setattr(main, "_emit_regular_child_enabled", lambda: True)
+    monkeypatch.setattr(vs, "build_variance_replicates", lambda db, parent: {"X": [{}]})
+    with caplog.at_level(logging.ERROR):
+        await main._maybe_emit_regular_coa_child(db, "P-7430", w.parent,
+                                                 {"generation_id": "g-1"})
+    assert client.calls == []
+    assert any(UNSIGNED_P7430 in r.getMessage() for r in caplog.records)

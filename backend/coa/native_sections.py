@@ -42,7 +42,8 @@ from coa.spec_rules import (SpecRuleError, effective_unit, evaluate, normalize_m
                             resolve_spec, sample_peptide_id)
 from coa.text_macros import format_lod, resolve
 from sub_samples.service import fetch_sample_services, variance_plan_for_parent
-from sub_samples.variance_tests import replicate_anchor_vials
+from sub_samples.variance_tests import (VariancePlan, replicate_anchor_vials,
+                                        variance_run_problems)
 
 log = logging.getLogger(__name__)
 
@@ -470,6 +471,11 @@ def build_native_sections(db: Session, parent, *, vial_parent_ids=None) -> dict:
     # document never resolves a plan.
     plan = (variance_plan_for_parent(db, parent, services)
             if vial_parent_ids is None else None)
+    if plan is not None and plan.errors:
+        # An entry Mk1 cannot fulfil aborts the WHOLE document, whichever
+        # profile it names: the lock skips its guard when the Integration
+        # Service is down, so this is the only place it is caught.
+        raise NativeSectionsError(f"native sections: {plan.errors[0]} on {sample_id}")
 
     sections = []
     deferred_profiles: list[str] = []
@@ -553,17 +559,49 @@ def build_native_sections(db: Session, parent, *, vial_parent_ids=None) -> dict:
             # runs 2..n are the in-set replicate anchors in vial order, one
             # row per printed member, judged like the base row. No identity
             # gate, no mean, no summary row.
-            for row_out, svc in zip(rows, printed):
-                row_out["name"] = f"{svc.title}, {rv.run_label} 1"
-            for i, vial in enumerate(replicate_anchor_vials(db, parent.id, rv.role), 2):
+            # Completeness is the builder's job (the lock and the generate
+            # gate fail open when the Integration Service is down), so every
+            # check runs before any replicate row is appended. Sign-off
+            # first: variance_run_problems counts live rows, and a row that
+            # was never entered is live, so its counts are trusted only once
+            # every anchor's rows are signed off with a result.
+            anchors = replicate_anchor_vials(db, parent.id, rv.role)
+            runs = []
+            for i, vial in enumerate(anchors, 2):
+                run = []
                 for svc in printed:
                     rep = _replicate_row(db, vial.id, svc.id)
-                    if rep is None or rep.review_state != "variance_verified":
+                    if (rep is None or rep.review_state != "variance_verified"
+                            or not (rep.result_value or "").strip()):
                         raise NativeSectionsError(
                             f"native sections: '{prof.key}' run {i} (vial "
-                            f"{vial.sample_id}) member '{svc.keyword}' has no "
-                            f"signed-off result on {sample_id}"
+                            f"{vial.sample_id}) member '{svc.keyword}' is not signed "
+                            f"off (needs variance_verified with a result) on {sample_id}"
                         )
+                    run.append((svc, rep))
+                runs.append((i, run))
+            # The shared run-count check (Task 12, the lock's) decides pass
+            # or fail for this role; the customer-facing sentence is ours.
+            problems = variance_run_problems(
+                db, parent, VariancePlan({rv.role: rv}, (), ()))
+            if problems:
+                k = len(anchors)
+                if k < rv.replicate_runs:
+                    tail = "finish them or set the Variance count"
+                elif k > rv.replicate_runs:
+                    tail = "take the extra vials out of the variance set"
+                else:
+                    # The count is right, so the helper found no core anchor.
+                    raise NativeSectionsError(
+                        f"native sections: {problems[0]} on {sample_id}")
+                raise NativeSectionsError(
+                    f"native sections: '{prof.key}' bought {rv.n} runs, {k} replicate "
+                    f"runs carry results on {sample_id}; {tail}"
+                )
+            for row_out, svc in zip(rows, printed):
+                row_out["name"] = f"{svc.title}, {rv.run_label} 1"
+            for i, run in runs:
+                for svc, rep in run:
                     row_out, limit, form_report_only = _member_row(
                         db, prof, svc, rep, sample_id=sample_id, matrix=matrix,
                         peptide_id=peptide_id, sample_form_id=sample_form_id,
