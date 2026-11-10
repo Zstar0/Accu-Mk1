@@ -26,6 +26,7 @@ from coa.hplc_shim import slot_wires, wire_keyword
 from coa.iu_display import iu_factor_for_sample, iu_factors, to_iu
 from lims_analyses.hplc_native import AGGREGATES, TRIO, is_native_born, native_category
 from models import AnalysisService, LimsAnalysis, LimsSubSample, Peptide
+from sub_samples.variance_tests import variance_test_roles
 
 _NATIVE_KWS = frozenset(TRIO + AGGREGATES)
 
@@ -182,6 +183,10 @@ def build_variance_replicates(db: Session, parent) -> dict:
             LimsSubSample.in_variance_set.is_(True),
         ).order_by(LimsSubSample.vial_sequence)
     ).scalars().all()
+    # The four add-on tests' replicates are certified in their own native
+    # section, never as an HPLC series: skip their vials entirely.
+    fenced = variance_test_roles(db)
+    subs = [s for s in subs if s.assignment_role not in fenced]
     if not any(s.assignment_kind == "variance" for s in subs):
         return {}
 
@@ -417,6 +422,10 @@ def build_variance_analyte_series(db: Session, parent) -> dict:
             LimsSubSample.in_variance_set.is_(True),
         ).order_by(LimsSubSample.vial_sequence)
     ).scalars().all()
+    # Same fence as build_variance_replicates: a four-test replicate never
+    # reaches variance_analytes, even on a variance_capable service.
+    fenced = variance_test_roles(db)
+    subs = [s for s in subs if s.assignment_role not in fenced]
     if not subs:
         return {}
     n_slots = len(slot_wires(db, parent))

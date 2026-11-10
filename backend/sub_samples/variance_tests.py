@@ -194,6 +194,17 @@ def resolve_variance_plan(db, services: dict | None, *, snapshot: dict | None = 
     return VariancePlan(by_role, tuple(msg for _, msg in errors), tuple(notes))
 
 
+def variance_test_roles(db) -> frozenset[str]:
+    """Vial roles of the four tests, from the live catalog. The HPLC
+    variance builders skip these roles so a micro replicate never switches
+    on the HPLC series. A legacy bucket is never fenced (the resolver
+    refuses it anyway), so HPLC and Bac Water stay exactly as today."""
+    roles = db.execute(select(AnalysisProfile.fulfillment_role).where(
+        AnalysisProfile.key.in_(VARIANCE_TEST_KEYS),
+        AnalysisProfile.fulfillment_role.isnot(None))).scalars()
+    return frozenset(r for r in roles if r and r not in LEGACY_BUCKETS)
+
+
 def replicate_anchor_vials(db, parent_pk: int, role: str) -> list:
     """In-set variance vials of `role` that carry at least one live row,
     by vial_sequence. Material vials (no rows) are never anchors."""

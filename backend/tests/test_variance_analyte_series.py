@@ -308,3 +308,37 @@ def test_native_bw_row_on_senaite_born_parent_not_rekeyed(db):
 
     parent = _bw_world(db, "senaite", "BW-9001")
     assert set(build_variance_analyte_series(db, parent)) == {"PH-BW"}
+
+
+# --- Add-on test Variance (Task 3): micro replicates never reach analytes ---
+
+
+def test_variance_capable_service_on_test_role_never_reaches_analytes(db):
+    from coa.variance_series import build_variance_analyte_series
+    from models import AnalysisProfile
+
+    db.add(AnalysisProfile(key="endotoxin-usp85-lal", name="Endotoxin USP 85", is_addon=True,
+                           vials_required=1, fulfillment_dim="role", fulfillment_role="endo85",
+                           active=True))
+    endo = _svc(db, "ENDOTOXIN-USP85LAL", variance_capable=True, unit="EU/mL")
+    parent = LimsSample(sample_id="P-7310", external_lims_uid="uid-p7310")
+    db.add(parent); db.flush()
+    sub = LimsSubSample(parent_sample_pk=parent.id, external_lims_uid="mk1://p7310-2",
+                        sample_id="P-7310-S02", vial_sequence=2,
+                        assignment_role="endo85", assignment_kind="variance", in_variance_set=True)
+    db.add(sub); db.flush()
+    _row(db, sub, endo, "<0.5", unit="EU/mL")
+    db.commit()
+    assert build_variance_analyte_series(db, parent) == {}
+
+    # A BW variance vial (role hplc) keeps its PH-DETERM series.
+    ph = _svc(db, "PH-DETERM", variance_capable=True, unit="pH")
+    bw = LimsSample(sample_id="BW-7311", external_lims_uid="uid-bw7311")
+    db.add(bw); db.flush()
+    bsub = LimsSubSample(parent_sample_pk=bw.id, external_lims_uid="mk1://bw7311-1",
+                         sample_id="BW-7311-S01", vial_sequence=1,
+                         assignment_role="hplc", assignment_kind="variance", in_variance_set=True)
+    db.add(bsub); db.flush()
+    _row(db, bsub, ph, "5.4", unit="pH")
+    db.commit()
+    assert build_variance_analyte_series(db, bw) == {"PH-DETERM": {"unit": "pH", "values": ["5.4"]}}
