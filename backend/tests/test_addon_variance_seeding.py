@@ -1,10 +1,14 @@
 """Add-on test Variance, Task 5: replicate vials seed host work only, and a
 heavy metals replicate digest anchors on its own first vial.
 
-Gate that keeps other inputs identical: a core (non-variance) vial counts
-only core siblings for its anchor slot and never resolves a variance plan,
-so a sample with no variance vial of a catalog role seeds exactly as today.
-The characterization tests below pin that half.
+Gates that keep other inputs identical (fix round 1 ruling):
+- the kind-scoped anchor count and the raised cap apply only when the
+  sample's VariancePlan covers the role; with no plan (no purchase, or the
+  lookup failed and services is `{}`) the anchor rule is exactly the base
+  rule, whatever the vial's kind;
+- host-work-only applies only to a variance vial on one of the four test
+  roles (`variance_test_roles`); any other variance vial seeds as at base.
+The tests marked "base" below assert behaviour captured on the base checkout.
 
 In-memory SQLite (conftest `db_session`), so nothing touches the dev
 Postgres. The resolver acts only on the four real keys, so the catalog here
@@ -21,6 +25,7 @@ from models import (
 HM_KEY = "heavy_metals"
 ENDO85_KEY = "endotoxin-usp85-lal"
 RIDER_KEY = "zz_t5_rider"
+OTHER_KEY = "zz_t5_other"  # a catalog role that is not one of the four tests
 
 
 def _profile(db, key, role, keywords, *, vials_required=1, analytical_vials=None):
@@ -52,6 +57,7 @@ def _catalog(db):
                        vials_required=2, analytical_vials=1),
         "endo85": _profile(db, ENDO85_KEY, "endo85", ["ENDO85-EU"]),
         "rider": _profile(db, RIDER_KEY, "zz_t5_role", ["ZZ-RIDE"]),
+        "other": _profile(db, OTHER_KEY, "zz_t5_other", ["ZZ-OTHER"]),
     }
     db.commit()
     return profs
@@ -162,14 +168,84 @@ def test_hm_three_runs_anchor_two_replicate_digests(db_session):
     assert [_keywords(db_session, v) for v in vials] == [HM_ROWS, HM_ROWS, [], []]
 
 
-def test_hand_set_variance_vial_without_purchase_is_one_digest(db_session):
-    """No four-key entry: a variance hm vial keeps the plain cap (one run),
-    and it no longer takes the core digest's anchor slot."""
+def test_hand_set_variance_after_core_without_purchase_seeds_as_base(db_session):
+    """Base, shape (a): no four-key entry; core anchors, then a hand-set
+    variance hm vial is material (kind-blind count, plain cap)."""
     profs = _catalog(db_session)
     parent = _parent(db_session, "ZZT5-H4")
-    v1, v2, c1 = _hm_vials(db_session, parent, profs,
-                           ["variance", "variance", "core"], {HM_KEY: True})
-    assert [_keywords(db_session, v) for v in (v1, v2, c1)] == [HM_ROWS, [], HM_ROWS]
+    vials = _hm_vials(db_session, parent, profs, ["core", "variance"], {HM_KEY: True})
+    assert [_keywords(db_session, v) for v in vials] == [HM_ROWS, []]
+
+
+def test_hand_set_variance_before_core_without_purchase_seeds_as_base(db_session):
+    """Base, shape (b): no four-key entry; a hand-set variance hm vial
+    anchors first, then the core vial is material."""
+    profs = _catalog(db_session)
+    parent = _parent(db_session, "ZZT5-H5")
+    vials = _hm_vials(db_session, parent, profs, ["variance", "core"], {HM_KEY: True})
+    assert [_keywords(db_session, v) for v in vials] == [HM_ROWS, []]
+
+
+def test_lookup_outage_keeps_plain_cap_and_warns(db_session, caplog):
+    """The order is hm n=3, but the seeder sees services `{}` (lookup
+    failed): no plan, so the base rule holds (one anchor across kinds) and
+    one seeder.variance_plan_unknown warning per variance vial that reaches
+    the cap logic. The cap is never raised without a plan."""
+    import logging
+    profs = _catalog(db_session)
+    parent = _parent(db_session, "ZZT5-H6")
+    with caplog.at_level(logging.WARNING, logger="lims_analyses.seeder"):
+        vials = _hm_vials(db_session, parent, profs, ["variance"] * 4, {})
+    assert [_keywords(db_session, v) for v in vials] == [HM_ROWS, [], [], []]
+    warns = [r.getMessage() for r in caplog.records
+             if "seeder.variance_plan_unknown" in r.getMessage()]
+    assert len(warns) == 4
+    assert "sample=ZZT5-H6 role=hm sub=ZZT5-H6-S01" in warns[0]
+
+
+def test_variance_vial_on_other_role_seeds_rider_work_as_base(db_session):
+    """Base, shape (c) on a role that is not one of the four tests: a
+    variance vial with a host and a rider edge seeds both."""
+    profs = _catalog(db_session)
+    parent = _parent(db_session, "ZZT5-R3")
+    rep = _vial(db_session, parent, 2, "zz_t5_other", "variance",
+                (profs["other"], "host"), (profs["rider"], "rider"))
+    _seed(db_session, rep, {OTHER_KEY: True, RIDER_KEY: True})
+    assert _keywords(db_session, rep) == ["ZZ-OTHER", "ZZ-RIDE"]
+
+
+def test_hplc_variance_with_hplc_rider_seeds_as_base(db_session, monkeypatch):
+    """Base, HPLC Variance byte for byte: an HPLC Variance order with a
+    rider that rides the hplc vial (fentanyl-like). The core hplc vial gets
+    the mirror rows plus the rider row; the variance hplc vial gets the
+    mirror rows only (_seed_rider_members skips replicates)."""
+    from catalog.departments import ANALYTICAL_DEPARTMENT
+    from models import profile_ride_hosts
+
+    dep = Department(name=ANALYTICAL_DEPARTMENT)
+    db_session.add(dep)
+    db_session.flush()
+    for kw in ("HPLC-PUR", "HPLC-ID"):
+        db_session.add(AnalysisService(title=kw, keyword=kw, origin="senaite",
+                                       unit="%", department_id=dep.id))
+    fent = _profile(db_session, "zz_t5_fent", "zz_t5_fent", ["ZZ-FENT"])
+    db_session.execute(profile_ride_hosts.insert().values(
+        analysis_profile_id=fent.id, host_role_code="hplc", priority=0))
+    db_session.commit()
+    monkeypatch.setattr("sub_samples.senaite.fetch_parent_analysis_keywords",
+                        lambda sid: ["HPLC-PUR", "HPLC-ID"])
+    parent = LimsSample(sample_id="ZZT5-HP1", external_lims_uid="ZZT5-HP1-uid")
+    db_session.add(parent)
+    db_session.flush()
+    services = {"hplcpurity_identity": True, "zz_t5_fent": True,
+                "variance": {"hplcpurity_identity": 3}}
+    core = _vial(db_session, parent, 1, "hplc", "core", (fent, "rider"))
+    rep = _vial(db_session, parent, 2, "hplc", "variance", (fent, "rider"))
+    for v in (core, rep):
+        seed_analyses_for_vial(db_session, sub_sample=v, role="hplc", wp_services=services,
+                               parent_sample_id=parent.sample_id, commit=True)
+    assert _keywords(db_session, core) == ["HPLC-ID", "HPLC-PUR", "ZZ-FENT"]
+    assert _keywords(db_session, rep) == ["HPLC-ID", "HPLC-PUR"]
 
 
 def test_variance_vial_seeds_no_rider_work(db_session):
