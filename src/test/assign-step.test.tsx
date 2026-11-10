@@ -682,6 +682,23 @@ describe('add-on test Variance on the check-in screen (Task 7)', () => {
     const zone = container.querySelector('[data-bucket-id="hm_variance"]')
     expect(zone).not.toBeNull()
     expect(within(zone as HTMLElement).getByText(/paid 1 digest \(2 vials\)/)).toBeInTheDocument()
+    // The pill counts replicate runs (1 here, below the pill threshold), not vials.
+    expect(screen.queryByText(/Variance ×/)).not.toBeInTheDocument()
+  })
+
+  it('heavy metals n=3: the pill counts digests, the zone counts digests and vials', async () => {
+    vi.mocked(getVialPlan).mockResolvedValue({
+      ...HM_VARIANCE_PLAN,
+      variance: { hplc: 0, endo: 0, ster: 0, hm: 4 },
+      variance_tests: {
+        hm: { key: 'heavy_metals', n: 3, replicate_runs: 2, replicate_vials: 4, run_label: 'Digest' },
+      },
+    })
+    const { container } = renderStepWithContainer()
+    await screen.findByText('P-0144-S01')
+    expect(screen.getByText('Variance ×2')).toBeInTheDocument()
+    const zone = container.querySelector('[data-bucket-id="hm_variance"]')
+    expect(within(zone as HTMLElement).getByText(/paid 2 digests \(4 vials\)/)).toBeInTheDocument()
   })
 
   it('a legacy HPLC zone keeps the plain paid N wording', async () => {

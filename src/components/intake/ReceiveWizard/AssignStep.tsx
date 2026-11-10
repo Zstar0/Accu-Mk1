@@ -590,6 +590,9 @@ function Bucket({
   const { setNodeRef, isOver } = useDroppable({ id })
   const isShort = demand !== null && vials.length < demand
   const isFull = demand !== null && vials.length === demand
+  // The pill counts replicate runs; varianceN is vials (equal except for a
+  // pooled test such as heavy metals).
+  const pillN = varianceTest?.replicate_runs ?? varianceN
 
   return (
     <div
@@ -608,7 +611,7 @@ function Bucket({
       <header className="flex justify-between items-baseline mb-2 text-xs uppercase tracking-wide text-muted-foreground">
         <strong className="text-foreground font-semibold">{label}</strong>
         <div className="flex items-center gap-2">
-          {varianceN >= 2 && <VariancePill n={varianceN} />}
+          {pillN >= 2 && <VariancePill n={pillN} />}
           {demand !== null && (
             <span className={cn(isShort && 'text-amber-500')}>
               {vials.length} / {demand}
@@ -823,7 +826,7 @@ function MultiRoleSection({
               label={role.label}
               vials={core}
               demand={roleDemand}
-              varianceN={roleVarianceN}
+              varianceN={plan.variance_tests?.[role.code]?.replicate_runs ?? roleVarianceN}
               onReset={() => onReset(role.code)}
               roleShort={roleShort}
               roleColor={roleColor}
