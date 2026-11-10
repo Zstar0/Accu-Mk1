@@ -30,7 +30,8 @@ from lims_analyses.service import BadRequestError, apply_transition
 from main import app
 from models import (
     AnalysisProfile, AnalysisServiceSpec, AuditLog, LimsAnalysis, LimsAnalysisPromotion,
-    LimsAnalysisTransition, LimsSample, LimsSubSample, ServiceGroup, WorksheetItem,
+    LimsAnalysisTransition, LimsSample, LimsSubSample, LimsSubSampleEvent, ServiceGroup,
+    WorksheetItem,
     analysis_profile_members, service_group_members,
 )
 from tests.test_endo_v2_worksheets import _cartridge, _count_sql, _method, _record, _service, _ws
@@ -1248,6 +1249,32 @@ def test_the_retest_row_is_claimed_by_its_worksheet_like_a_row_added_to_it(clien
     new = db.get(LimsAnalysis, new_id)
     assert (new.review_state, new.analyst_user_id) == ("assigned", 9)
     assert w.ws.status == "open"
+
+
+def test_the_claim_takes_the_retest_row_only_never_the_vials_other_rows(client, db):
+    """Endotoxin and Sterility PCR share a department: the claim must not
+    reach a PCR row on the same vial, nor re-stamp the run being retested."""
+    w = _world(client, db)
+    item, vial = _row(db, w, state="to_be_verified")
+    vial.analyst_user_id = 4
+    w.ws.assigned_analyst_id = 9
+    pcr_svc = _service(db, "STER-PCR")
+    pcr = [LimsAnalysis(lims_sub_sample_pk=vial.lims_sub_sample_pk, analysis_service_id=pcr_svc.id,
+                        keyword="STER-PCR", title="PCR", review_state=state,
+                        analyst_user_id=analyst, provenance="canonical")
+           for state, analyst in (("unassigned", None), ("to_be_verified", 5))]
+    db.add_all(pcr)
+    db.commit()
+
+    new_id = apply_transition(db, analysis_id=vial.id, kind="retest", user_id=7).id
+    db.expire_all()
+
+    assert [(p.review_state, p.analyst_user_id) for p in pcr] == [("unassigned", None), ("to_be_verified", 5)]
+    assert vial.analyst_user_id == 4
+    new = db.get(LimsAnalysis, new_id)
+    assert (new.review_state, new.analyst_user_id) == ("assigned", 9)
+    [event] = db.query(LimsSubSampleEvent).filter_by(event="worksheet_assigned").all()
+    assert event.details["assigned_keywords"] == [w.svc.keyword]
 
 
 def test_a_retest_of_a_vial_on_no_open_worksheet_stays_unassigned(client, db):
