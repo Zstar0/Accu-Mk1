@@ -460,7 +460,7 @@ def _ticks(item) -> dict:
             "prep_status": item.prep_status}
 
 
-def reopen_for_retest(db: Session, analysis, *, user_id: Optional[int]) -> None:
+def reopen_for_retest(db: Session, analysis, *, user_id: Optional[int]):
     """A vial's endotoxin analysis is being retested (lims_analyses.service
     apply_transition, before it writes): give its worksheet row back to the
     bench (Handler ruling 2026-11-09, P-5901-S02). The newest worksheet row
@@ -472,14 +472,16 @@ def reopen_for_retest(db: Session, analysis, *, user_id: Optional[int]) -> None:
     promoted row's prep stays final (worksheets_endo.PREP_FINAL), a row
     still due stays editable. Locks in the worksheet order
     (lock_items_for_update): worksheet, analysis, item. One audit row. Does
-    not commit; any other analysis is left alone."""
+    not commit; any other analysis is left alone. Returns the (worksheet,
+    item) the vial now sits on when that worksheet is open, so the caller
+    can claim the retest row for it (claim_retest_row); else None."""
     if analysis.lims_sub_sample_pk is None:
-        return
+        return None
     from main import _bench_kind_for_item, _bench_kind_for_keyword  # lazy: main imports this module
 
     svc = db.get(AnalysisService, analysis.analysis_service_id) if analysis.analysis_service_id else None
     if _bench_kind_for_keyword(svc.keyword if svc else analysis.keyword) != "endo":
-        return
+        return None
     # The vial's newest row on the ENDOTOXIN bench, judged as the worksheet
     # screens judge a row: a vial that also hosts PCR has a row on that
     # bench's worksheet too, and it is not this retest's to touch.
@@ -493,7 +495,7 @@ def reopen_for_retest(db: Session, analysis, *, user_id: Optional[int]) -> None:
         .order_by(WorksheetItem.id.desc()))
         if _bench_kind_for_item(r.assignment_role, r.analyses_json) == "endo"), None)
     if found is None:
-        return
+        return None
 
     def locked(model, pk):
         return db.execute(select(model).where(model.id == pk).with_for_update()
@@ -505,11 +507,11 @@ def reopen_for_retest(db: Session, analysis, *, user_id: Optional[int]) -> None:
     # the worksheet row belongs to its re-run.
     if db.execute(select(LimsAnalysis.retested).where(LimsAnalysis.id == analysis.id)
                   .with_for_update()).scalar_one():
-        return
+        return None
     item = locked(WorksheetItem, found.id)
     was_completed = worksheet.status == "completed"
     if not was_completed and not _has_result(item):
-        return
+        return worksheet, item
     details = {"user_id": user_id, "worksheet_id": worksheet.id, "item_id": item.id,
                "sample_id": item.sample_id, "analysis_id": analysis.id,
                "was_completed": was_completed}
@@ -536,6 +538,24 @@ def reopen_for_retest(db: Session, analysis, *, user_id: Optional[int]) -> None:
         item.prep_status = "ready"
     db.add(AuditLog(operation="endo_worksheet_reopened_for_retest", entity_type="worksheet",
                     entity_id=str(worksheet.id), details=details))
+    return worksheet, item
+
+
+def claim_retest_row(db: Session, bench_row, *, user_id: Optional[int]) -> None:
+    """The retest row just minted under an open worksheet row is claimed by
+    that worksheet as a row added to it is (worksheet_analyst.stamp_for_item):
+    `assigned`, with the worksheet's analyst, and a worksheet_assigned event.
+    Otherwise it sits `unassigned` with no analyst on a sheet the bench is
+    working. `bench_row` is reopen_for_retest's answer. Does not commit."""
+    if bench_row is None:
+        return
+    from lims_analyses.worksheet_analyst import stamp_for_item  # lazy: it imports the service
+
+    worksheet, item = bench_row
+    stamp_for_item(db, sample_uid=item.sample_uid, service_group_id=item.service_group_id,
+                   analyst_user_id=worksheet.assigned_analyst_id or item.assigned_analyst_id,
+                   acting_user_id=user_id, worksheet_id=worksheet.id,
+                   worksheet_title=worksheet.title, department_id=item.department_id)
 
 
 def reading_was_moved(item, record: dict) -> bool:

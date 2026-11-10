@@ -547,8 +547,8 @@ def apply_transition(
 
         # An endotoxin vial's worksheet row goes back to the bench, before
         # anything here writes (the worksheet lock order). Same transaction.
-        from endo_prep_rules import reopen_for_retest
-        reopen_for_retest(db, row, user_id=user_id)
+        from endo_prep_rules import claim_retest_row, reopen_for_retest
+        bench_row = reopen_for_retest(db, row, user_id=user_id)
 
         now = datetime.utcnow()
 
@@ -595,6 +595,10 @@ def apply_transition(
             ),
             details=_deltas(before, row),
         ))
+
+        # Flushed first: the claim reads the vial's rows as this retest leaves them.
+        db.flush()
+        claim_retest_row(db, bench_row, user_id=user_id)
 
         if commit:
             db.commit()
