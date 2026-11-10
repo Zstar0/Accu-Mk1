@@ -1,5 +1,10 @@
 # Changelog
 
+## v1.58.3 - 2026-11-09
+
+### Endotoxin worksheets
+- **A retested vial's new row is claimed by the worksheet it sits on.** After a retest the new row used to sit unassigned with no analyst, even though its worksheet was open again. It is now assigned to the worksheet's analyst, the same as a row added to a sheet. Backend-only release.
+
 ## v1.58.2 - 2026-11-09
 
 ### Endotoxin worksheets
