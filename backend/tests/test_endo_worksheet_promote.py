@@ -1354,10 +1354,13 @@ def test_a_variance_vial_on_a_legacy_role_is_refused_as_today(client, db):
     assert _parent_rows(db, "P-4001") == []
 
 
-def test_a_replicate_row_is_submitted_not_promoted(client, db):
+def test_a_replicate_row_is_submitted_not_promoted(client, db, cascade_calls):
     w, item, vial = _replicate(client, db, "P-4001-S01")
     vial_id = vial.id
     assert _results(_promote(client, w.ws, _line(item))) == [_submitted(item)]
+    # The cascade the sample page's submit schedules, once, for the parent.
+    parent_pk = db.execute(select(LimsSample.id).where(LimsSample.sample_id == "P-4001")).scalar_one()
+    assert cascade_calls == [(parent_pk, 1)]
     vial = db.get(LimsAnalysis, vial_id)
     assert (vial.review_state, vial.result_value, vial.result_unit, vial.loq, vial.lod,
             vial.lod_unit, vial.method_id) == (

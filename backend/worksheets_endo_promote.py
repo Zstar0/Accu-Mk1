@@ -442,6 +442,11 @@ def _promote_one(db: Session, current_user, worksheet, item, row: EndoPromoteRow
                         entity_type="lims_analysis", entity_id=str(analysis.id),
                         details=plan["details"]))
         db.commit()
+        # The side-by-side cascade the sample page's submit schedules
+        # (lims_analyses.routes.transition), through the same helper.
+        from lims_analyses.routes import _schedule_sbs_cascade  # call time: routes imports promote_flow
+        _schedule_sbs_cascade(background_tasks if background_tasks is not None
+                              else promote_flow._RunNow(), db, analysis, current_user)
         return EndoPromoteRowResult(item_id=row.item_id, promoted=False,
                                     state=analysis.review_state,
                                     reason=REASON_REPLICATE_SUBMITTED)
