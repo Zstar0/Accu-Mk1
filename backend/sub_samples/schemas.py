@@ -131,8 +131,9 @@ class VialPlanResponse(BaseModel):
     # Per-bucket variance target (purchased count from the order/override);
     # zeros when none purchased. Informational — auto-assign fills core to
     # demand first, then the variance bucket up to this target. Never blocks.
-    # _LEGACY_BUCKETS zero-floor contract (catalog_demand.py): stays hplc/
-    # endo/ster only — variance is never catalog-role-eligible (Task 3).
+    # _LEGACY_BUCKETS zero-floor contract (catalog_demand.py): always carries
+    # hplc/endo/ster; an add-on Variance test (the four VARIANCE_TEST_KEYS)
+    # adds its role's replicate vial count on top.
     variance: dict = {"hplc": 0, "endo": 0, "ster": 0}
     # _LEGACY_BUCKETS zero-floor contract (catalog_demand.py) — pre-variance
     # baseline shape kept 3-bucket for back-compat; real catalog roles (e.g.
@@ -150,6 +151,13 @@ class VialPlanResponse(BaseModel):
     # unconditionally, outside this catalog-driven metadata). Empty on the
     # IS-unreachable early return.
     sections: list = []
+    # Add-on Variance (plan 3 Task 2), empty unless services.variance names
+    # one of the four tests. variance_tests: {role: {key, n, replicate_runs,
+    # replicate_vials, run_label}}. variance_errors / variance_notes: the
+    # resolver's refusal sentences and retest notes.
+    variance_tests: dict = {}
+    variance_errors: list[str] = []
+    variance_notes: list[str] = []
 
 
 class AssignmentPatchRequest(BaseModel):

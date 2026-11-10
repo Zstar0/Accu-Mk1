@@ -563,9 +563,19 @@ def get_vial_demand(
             "is_unreachable": True,
         }
     services = services_resp.get("services") or {}
+    # Add-on Variance (R1): the header counts the four tests' replicate
+    # vials. Gated on a four-key entry; the parent lookup is read-only
+    # (no ensure_sample_row upsert), and no row means today's answer.
+    variance_plan = None
+    if service.has_variance_test_entry(services):
+        parent = db.execute(
+            select(LimsSample).where(LimsSample.sample_id == parent_sample_id)
+        ).scalar_one_or_none()
+        if parent is not None:
+            variance_plan = service.variance_plan_for_parent(db, parent, services)
     return {
         "demand": service.derive_demand(services, db=db),
-        "variance": service.derive_variance_demand(services),
+        "variance": service.derive_variance_demand(services, variance_plan),
         "base_demand": service.derive_base_demand(services, db=db),
         "wp_order_number": services_resp.get("wp_order_number"),
         "is_unreachable": False,

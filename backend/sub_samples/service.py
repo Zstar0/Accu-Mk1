@@ -26,6 +26,8 @@ from sub_samples import native
 from sub_samples import senaite
 from sub_samples.native_id import mint_native_id
 from sub_samples.senaite import SecondaryFalloutError
+from sub_samples.variance_tests import (VARIANCE_TEST_KEYS, VariancePlan, is_bac_water_sample,
+                                        is_retest_sample, resolve_variance_plan)
 from users_display import user_display_name
 
 
@@ -1538,7 +1540,42 @@ def _apply_variance_override(sample_id: str, result: Optional[dict]) -> Optional
     return result
 
 
-def derive_variance_demand(services: dict) -> dict:
+def has_variance_test_entry(services: Optional[dict]) -> bool:
+    """The raw `services["variance"]` names one of the four add-on Variance
+    tests (VARIANCE_TEST_KEYS). The additive gate: without such an entry no
+    caller resolves a VariancePlan and every demand answer is today's."""
+    raw = (services or {}).get("variance")
+    return isinstance(raw, dict) and any(k in VARIANCE_TEST_KEYS for k in raw)
+
+
+def variance_plan_for_parent(db: Session, parent: LimsSample,
+                             services: Optional[dict]) -> Optional[VariancePlan]:
+    """The sample's VariancePlan, or None when it has no four-key entry
+    (has_variance_test_entry), so legacy samples never reach the resolver."""
+    if not has_variance_test_entry(services):
+        return None
+    from lims_analyses.hplc_native import is_native_born
+    return resolve_variance_plan(
+        db, services, snapshot=parent.catalog_snapshot, is_retest=is_retest_sample(parent),
+        native_born=is_native_born(parent), bac_water=is_bac_water_sample(parent))
+
+
+def variance_plan_fields(plan: Optional[VariancePlan]) -> dict:
+    """The three VialPlanResponse fields for a plan (empty for None)."""
+    if plan is None:
+        return {"variance_tests": {}, "variance_errors": [], "variance_notes": []}
+    return {
+        "variance_tests": {
+            role: {"key": rv.key, "n": rv.n, "replicate_runs": rv.replicate_runs,
+                   "replicate_vials": rv.replicate_vials, "run_label": rv.run_label}
+            for role, rv in plan.by_role.items()
+        },
+        "variance_errors": list(plan.errors),
+        "variance_notes": list(plan.notes),
+    }
+
+
+def derive_variance_demand(services: dict, plan: Optional[VariancePlan] = None) -> dict:
     """Per-bucket variance target (PAID REPLICATES) from a WP services payload.
 
     Product semantics (PB-0077 decision, 2026-06-10): purchased n = TOTAL
@@ -1553,24 +1590,36 @@ def derive_variance_demand(services: dict) -> dict:
     The hplc bucket is BW-aware — it reads either HPLC primary key (legacy
     `hplcpurity_identity` or native `hplc-purity-identity`, see catalog/hplc_keys.py)
     OR either BW primary key (BW_PRIMARY_KEYS, mirroring derive_base_demand), since both produce chromatography vials and
-    are mutually exclusive per order. (Handler decision 2026-06-17.)"""
+    are mutually exclusive per order. (Handler decision 2026-06-17.)
+
+    `plan` (add-on Variance, plan 3 Task 2): None gives exactly the three
+    buckets above. A VariancePlan adds `{role: replicate_vials}` per
+    resolved four-key test, in VIALS (auto_assign and the wizard header add
+    demand + variance per bucket). A plan role never overwrites a legacy
+    bucket (the resolver already refuses that collision)."""
     from catalog.bw_keys import bw_primary_count
     from catalog.hplc_keys import hplc_primary_count
     entitlement = normalize_variance_entitlement({"variance": (services or {}).get("variance")})
     hplc_total = max(hplc_primary_count(entitlement), bw_primary_count(entitlement))
-    return {
+    out = {
         "hplc": max(0, hplc_total - 1),
         "endo": max(0, entitlement.get("endotoxin", 0) - 1),
         "ster": max(0, entitlement.get("sterility_pcr", 0) - 1),
     }
+    if plan is not None:
+        for role, rv in plan.by_role.items():
+            out.setdefault(role, rv.replicate_vials)
+    return out
 
 
 def variance_lock_required(services: Optional[dict], variance_locked_at) -> bool:
     """True when COA generation must be blocked pending a variance-set lock:
-    variance was purchased (any bucket target >= 1) AND the set isn't locked yet.
-    `services` is the inner WP services dict (with the 'variance' map)."""
+    variance was purchased (any legacy bucket target >= 1, or any four-key
+    add-on Variance entry at all) AND the set isn't locked yet. A four-key
+    entry that does not resolve still holds the certificate; the lock then
+    refuses it. `services` is the inner WP services dict (with the 'variance' map)."""
     demand = derive_variance_demand(services or {})
-    purchased = any(n >= 1 for n in demand.values())
+    purchased = any(n >= 1 for n in demand.values()) or has_variance_test_entry(services)
     return purchased and variance_locked_at is None
 
 
@@ -1744,7 +1793,10 @@ def compute_vial_plan(db: Session, parent_sample_id: str) -> dict:
     # before this task.
     snapshot = parent.catalog_snapshot
     demand = derive_demand(services, db=db, snapshot=snapshot)  # core demand == base (inflation retired)
-    variance = derive_variance_demand(services)
+    # Add-on Variance (plan 3 Task 2): None unless services.variance names
+    # one of the four tests, so every other sample gets today's variance.
+    variance_plan = variance_plan_for_parent(db, parent, services)
+    variance = derive_variance_demand(services, variance_plan)
     base_demand = derive_base_demand(services, db=db, snapshot=snapshot)
 
     # Variance lock guard: a locked set blocks re-assignment of its members
@@ -1771,6 +1823,7 @@ def compute_vial_plan(db: Session, parent_sample_id: str) -> dict:
             "vials": locked_vials,
             "container_mode": parent.container_mode,
             "sections": _build_vial_plan_sections(db, demand, locked_vials, services_for_sections, snapshot=snapshot),
+            **variance_plan_fields(variance_plan),
         }
 
     from catalog.roles import real_bucket_codes
@@ -1822,6 +1875,7 @@ def compute_vial_plan(db: Session, parent_sample_id: str) -> dict:
         "vials": assigned,
         "container_mode": parent.container_mode,
         "sections": _build_vial_plan_sections(db, demand, assigned, services_for_sections, snapshot=snapshot),
+        **variance_plan_fields(variance_plan),
     }
 
 
