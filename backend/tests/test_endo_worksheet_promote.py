@@ -1229,3 +1229,31 @@ def test_a_second_retest_of_the_superseded_row_keeps_the_re_runs_reading(client,
     db.expire_all()
 
     assert item.result_reading == "0.1" and len(item.prep_history) == 1
+
+
+@pytest.mark.parametrize("status, reading", [("completed", "<0.05"), ("open", "<0.05"), ("open", None)])
+def test_the_retest_row_is_claimed_by_its_worksheet_like_a_row_added_to_it(client, db, status,
+                                                                           reading):
+    """On an open worksheet a row is `assigned` and carries the worksheet's
+    analyst; the retest row minted under it must not sit unclaimed."""
+    w = _world(client, db)
+    item, vial = _row(db, w, state="to_be_verified", reading=reading)
+    w.ws.assigned_analyst_id = 9
+    w.ws.status = status
+    db.commit()
+
+    new_id = apply_transition(db, analysis_id=vial.id, kind="retest", user_id=7).id
+    db.expire_all()
+
+    new = db.get(LimsAnalysis, new_id)
+    assert (new.review_state, new.analyst_user_id) == ("assigned", 9)
+    assert w.ws.status == "open"
+
+
+def test_a_retest_of_a_vial_on_no_open_worksheet_stays_unassigned(client, db):
+    w = _world(client, db)
+    _item, vial = _row(db, w, state="to_be_verified", role=None)   # no endo row: no bench kind
+    db.commit()
+    new_id = apply_transition(db, analysis_id=vial.id, kind="retest", user_id=7).id
+    db.expire_all()
+    assert db.get(LimsAnalysis, new_id).review_state == "unassigned"
