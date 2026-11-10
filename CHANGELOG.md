@@ -1,5 +1,10 @@
 # Changelog
 
+## v1.58.4 - 2026-11-10
+
+### Endotoxin worksheets
+- **A retest claims only its own new row.** The claim added in v1.58.3 reached every analysis on the vial in the same department, so it could change the analyst on a Sterility PCR row or on the run being retested. It now touches the new retest row and nothing else. Backend-only release.
+
 ## v1.58.3 - 2026-11-09
 
 ### Endotoxin worksheets
