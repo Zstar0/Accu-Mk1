@@ -37,6 +37,17 @@ def test_hm_variance_vial_joins_the_set(db_session):
     db_session.refresh(sub)
     assert sub.in_variance_set is True
     assert sub.variance_exclusion_reason is None
+    # The replicate case itself: vial 2 is in the set only because of its kind.
+    from models import LimsSubSample
+    rep = LimsSubSample(sample_id="ZZTEST-HMSITES-S02", vial_sequence=2,
+                        parent_sample_pk=sub.parent_sample_pk,
+                        external_lims_uid="zz-vuid-hmsites-2", assignment_role="hm")
+    db_session.add(rep)
+    db_session.flush()
+    set_assignment_role(db_session, rep.sample_id, "hm", kind="variance", wp_services={})
+    db_session.refresh(rep)
+    assert rep.in_variance_set is True
+    assert rep.variance_exclusion_reason is None
 
 
 def test_seed_never_clobbers_an_admin_flag(db_session):

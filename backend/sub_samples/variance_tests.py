@@ -205,14 +205,18 @@ def variance_test_roles(db) -> frozenset[str]:
     return frozenset(r for r in roles if r and r not in LEGACY_BUCKETS)
 
 
-def replicate_anchor_vials(db, parent_pk: int, role: str) -> list:
-    """In-set variance vials of `role` that carry at least one live row,
-    by vial_sequence. Material vials (no rows) are never anchors."""
-    live = (select(LimsAnalysis.id)
+def _live_row_exists():
+    return (select(LimsAnalysis.id)
             .where(LimsAnalysis.lims_sub_sample_pk == LimsSubSample.id,
                    LimsAnalysis.retested.is_(False),
                    LimsAnalysis.review_state.notin_(["rejected", "retracted"]))
             .exists())
+
+
+def replicate_anchor_vials(db, parent_pk: int, role: str) -> list:
+    """In-set variance vials of `role` that carry at least one live row,
+    by vial_sequence. Material vials (no rows) are never anchors."""
+    live = _live_row_exists()
     return list(db.execute(
         select(LimsSubSample)
         .where(LimsSubSample.parent_sample_pk == parent_pk,
@@ -222,3 +226,41 @@ def replicate_anchor_vials(db, parent_pk: int, role: str) -> list:
                live)
         .order_by(LimsSubSample.vial_sequence)
     ).scalars())
+
+
+def _has_core_anchor(db, parent_pk: int, role: str) -> bool:
+    """A vial of `role` whose kind is not variance (core or NULL) carries a
+    live row. Set membership is not asked: a core vial past sequence 1 is
+    outside the variance set by design and still anchors the core run."""
+    return db.execute(
+        select(LimsSubSample.id)
+        .where(LimsSubSample.parent_sample_pk == parent_pk,
+               LimsSubSample.assignment_role == role,
+               (LimsSubSample.assignment_kind.is_(None)
+                | (LimsSubSample.assignment_kind != "variance")),
+               _live_row_exists())
+        .limit(1)
+    ).first() is not None
+
+
+def variance_run_problems(db, parent, plan: VariancePlan | None) -> list[str]:
+    """Every purchased run of the four tests that has no anchor, one
+    sentence each (empty: complete). The lock refuses on a non-empty list;
+    the certificate builder (Task 14) reuses the same sentences.
+
+    Anchors are counted per kind: the in-set variance anchors of a role
+    must equal its replicate runs, and the role must have a core anchor,
+    so a kind flip inside one role can never pass as a complete set."""
+    if plan is None:
+        return []
+    problems: list[str] = []
+    for rv in plan.by_role.values():
+        k = len(replicate_anchor_vials(db, parent.id, rv.role))
+        if k != rv.replicate_runs:
+            problems.append(f"variance series incomplete: {rv.key} bought {rv.n} runs, "
+                            f"{k} replicate runs carry results")
+        if not _has_core_anchor(db, parent.id, rv.role):
+            word = "digest" if rv.pooled else "run"
+            problems.append(f"variance series incomplete: {rv.key} is missing the core "
+                            f"{word}: no core vial of role {rv.role} carries results")
+    return problems

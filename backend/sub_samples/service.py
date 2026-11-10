@@ -27,7 +27,8 @@ from sub_samples import senaite
 from sub_samples.native_id import mint_native_id
 from sub_samples.senaite import SecondaryFalloutError
 from sub_samples.variance_tests import (VARIANCE_TEST_KEYS, VariancePlan, is_bac_water_sample,
-                                        is_retest_sample, resolve_variance_plan)
+                                        is_retest_sample, resolve_variance_plan,
+                                        variance_run_problems)
 from users_display import user_display_name
 
 
@@ -1499,21 +1500,30 @@ class VarianceOverrideError(ValueError):
     Raised before anything is stored."""
 
 
-def _check_variance_test_override(db: Session, parent: LimsSample, variance: dict) -> None:
+def _fetch_order_for_override(sample_id: str) -> dict:
+    """The order lookup for a four-key override. Takes the sample id as a
+    plain string: touching an expired ORM attribute here would open a
+    transaction for the length of the HTTP call."""
+    try:
+        raw = fetch_sample_services(sample_id)
+    except Exception:
+        log.warning("variance_override.order_lookup_failed sample=%s",
+                    sample_id, exc_info=True)
+        raw = None
+    if not raw:
+        raise VarianceOverrideError("cannot check Variance: the order lookup failed")
+    return raw
+
+
+def _check_variance_test_override(db: Session, parent: LimsSample, variance: dict,
+                                  raw: dict) -> None:
     """Fail closed for the four add-on tests: resolve the RAW proposed map
     (so a bad n is refused, not dropped) against the order. A retest note
     is a refusal here (R3): the override would store something Mk1 will
     not run."""
-    try:
-        raw = fetch_sample_services(parent.sample_id)
-    except Exception:
-        log.warning("variance_override.order_lookup_failed sample=%s",
-                    parent.sample_id, exc_info=True)
-        raw = None
-    if not raw:
-        raise VarianceOverrideError("cannot check Variance: the order lookup failed")
     services = {**(raw.get("services") or {}), "variance": variance}
     plan = variance_plan_for_parent(db, parent, services)
+    # Errors AND notes refuse: any new resolver note becomes a refusal here.
     problems = (*plan.errors, *plan.notes) if plan is not None else ()
     if problems:
         raise VarianceOverrideError("; ".join(problems))
@@ -1532,19 +1542,28 @@ def set_variance_override(db: Session, parent_sample_id: str, variance: Optional
         raise LookupError(f"parent {parent_sample_id} not found")
     if parent.variance_locked_at is not None:  # fast path, before any IS call
         raise VarianceLockedError(f"variance set for {parent.sample_id} is locked")
+    pk, raw = parent.id, None
     if has_variance_test_entry({"variance": variance}):
-        _check_variance_test_override(db, parent, variance)  # HTTP, no row lock held
+        sample_id = parent.sample_id
+        db.rollback()  # no transaction (and no share lock) held across the HTTP call
+        raw = _fetch_order_for_override(sample_id)
     # The check that counts: a fresh read under the row lock, so a lock taken
     # while the order lookup ran is seen (populate_existing skips the stale
     # identity-map copy). Write and commit in the same transaction.
     parent = db.execute(
-        select(LimsSample).where(LimsSample.id == parent.id)
+        select(LimsSample).where(LimsSample.id == pk)
         .with_for_update().execution_options(populate_existing=True)
     ).scalar_one()
     if parent.variance_locked_at is not None:
         msg = f"variance set for {parent.sample_id} is locked"
         db.rollback()  # release the row lock now, not at session close
         raise VarianceLockedError(msg)
+    if raw is not None:
+        try:
+            _check_variance_test_override(db, parent, variance, raw)
+        except Exception:
+            db.rollback()  # release the row lock before the refusal leaves
+            raise
     cleaned = normalize_variance_entitlement({"variance": variance or {}})
     parent.variance_override = json.dumps(cleaned) if cleaned else None
     db.commit()
@@ -2386,13 +2405,14 @@ def set_assignment_role(db: Session, sample_id: str, role: Optional[str],
         # Variance-set membership follows assignment: the first vial (baseline)
         # is always in; any variance replicate is in; everything else is out.
         # Manual overrides via set_variance_membership still apply afterward.
-        # A role with variance_eligible=False (catalog-driven, spec 4 Task 7 —
+        # A role with variance_eligible=False (catalog-driven, spec 4 Task 7,
         # was a hardcoded {"hm"} set) is scoped OUT of that position-based
-        # rule: hm is the seed example (heavy_metals is vials_required=1, so
-        # an hm vial can never have a same-role replicate to compare against —
-        # landing on vial_sequence==1, an hm-only order's first and only vial,
-        # must not make it eligible). Every eligible role's position-based
-        # expression is unchanged.
+        # rule: landing on vial_sequence==1 must not make its vial eligible.
+        # hm is no longer the example: since add-on test Variance a heavy
+        # metals replicate is a full second digest, so hm seeds eligible on a
+        # fresh database and an hm variance vial joins the set once the owner
+        # flips the flag. Every eligible role's position-based expression is
+        # unchanged.
         if role is not None and not registry[role].variance_eligible:
             sub.in_variance_set = False
             sub.variance_exclusion_reason = f"auto: role {role} is not variance-eligible"
@@ -2400,9 +2420,10 @@ def set_assignment_role(db: Session, sample_id: str, role: Optional[str],
             sub.in_variance_set = (sub.vial_sequence == 1) or (sub.assignment_kind == "variance")
             if (sub.in_variance_set and old_role is not None and old_role in registry
                     and not registry[old_role].variance_eligible):
-                # Role flipped away from a variance-ineligible role (e.g. hm)
-                # into a naturally-eligible slot — clear the stale reason so
-                # it doesn't linger.
+                # Role flipped away from a variance-ineligible role (e.g. hm
+                # where the owner has not flipped it yet) into a
+                # naturally-eligible slot: clear the stale reason so it
+                # doesn't linger.
                 sub.variance_exclusion_reason = None
         db.add(LimsSubSampleEvent(
             sub_sample_pk=sub.id,
@@ -2897,20 +2918,30 @@ def set_variance_membership(
     }
 
 
+def _selected_variance_vials(parent: LimsSample) -> int:
+    return (1 if parent.in_variance_set else 0) + sum(
+        1 for s in parent.sub_samples if s.in_variance_set
+    )
+
+
 def lock_variance_set(db: Session, parent_sample_id: str, user_id: int) -> LimsSample:
-    """Lock a family's variance set. Requires n_selected >= 2."""
+    """Lock a family's variance set. Requires n_selected >= 2.
+
+    Rolls back the session before the order lookup (no transaction is held
+    across the HTTP call), then judges and writes on a fresh read under the
+    row lock. Callers must not hold uncommitted work in `db`."""
     parent = db.execute(
         select(LimsSample).where(LimsSample.sample_id == parent_sample_id)
     ).scalar_one_or_none()
     if not parent:
         raise LookupError(f"parent {parent_sample_id} not found")
-    selected = (1 if parent.in_variance_set else 0) + sum(
-        1 for s in parent.sub_samples if s.in_variance_set
-    )
+    selected = _selected_variance_vials(parent)
     if selected < 2:
         raise VarianceTooFewVialsError(
             f"need >=2 selected vials, have {selected}"
         )
+    pk, seen_override, seen_locked_at = parent.id, parent.variance_override, parent.variance_locked_at
+    db.rollback()  # no transaction (and no share lock) held across the HTTP call
     # Series-complete guard (variance addon Phase 2, spec §5): when the order
     # purchased variance, every live analysis row on in-set sub vials in a
     # variance-purchased bucket must be signed off (promoted or
@@ -2920,9 +2951,41 @@ def lock_variance_set(db: Session, parent_sample_id: str, user_id: int) -> LimsS
         services_resp = fetch_sample_services(parent_sample_id)
     except Exception:
         services_resp = None
-    variance = derive_variance_demand(
-        (services_resp or {}).get("services") or {}
-    )
+    # Judge the row as it is now, under the row lock (populate_existing skips
+    # the stale identity-map copy); every refusal below releases the lock.
+    parent = db.execute(
+        select(LimsSample).where(LimsSample.id == pk)
+        .with_for_update().execution_options(populate_existing=True)
+    ).scalar_one()
+    try:
+        if seen_locked_at is None and parent.variance_locked_at is not None:
+            db.rollback()  # another request locked the set meanwhile: nothing to write
+            return parent
+        return _lock_fresh_variance_set(db, parent, services_resp, seen_override, user_id)
+    except Exception:
+        db.rollback()
+        raise
+
+
+def _lock_fresh_variance_set(db: Session, parent: LimsSample, services_resp: Optional[dict],
+                             seen_override: Optional[str], user_id: int) -> LimsSample:
+    """The body of lock_variance_set on the fresh, row-locked parent."""
+    if parent.variance_override != seen_override:
+        # The lookup merged the override as it stood before; a stale map
+        # must never decide the lock.
+        raise VarianceSeriesIncompleteError(
+            "variance cannot lock: the variance override changed while the order "
+            "was looked up; lock again")
+    selected = _selected_variance_vials(parent)
+    if selected < 2:
+        raise VarianceTooFewVialsError(
+            f"need >=2 selected vials, have {selected}"
+        )
+    services = (services_resp or {}).get("services") or {}
+    plan = variance_plan_for_parent(db, parent, services)
+    if plan is not None and plan.errors:
+        raise VarianceSeriesIncompleteError("variance cannot lock: " + "; ".join(plan.errors))
+    variance = derive_variance_demand(services, plan)
     # Targets are paid replicates (n - 1): any bucket >= 1 has variance testing.
     variance_buckets = {b for b, n in variance.items() if n >= 1}
     if variance_buckets:
@@ -2948,6 +3011,10 @@ def lock_variance_set(db: Session, parent_sample_id: str, user_id: int) -> LimsS
                 "variance series incomplete — unfinished rows: "
                 + ", ".join(sorted(unfinished))
             )
+    # Four tests: every purchased run (the core run and each replicate) has an anchor.
+    problems = variance_run_problems(db, parent, plan)
+    if problems:
+        raise VarianceSeriesIncompleteError("; ".join(problems))
     from models import AuditLog
     parent.variance_locked_at = datetime.utcnow()
     parent.variance_locked_by_user_id = user_id
