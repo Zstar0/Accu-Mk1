@@ -41,7 +41,8 @@ from sqlalchemy.orm import Session
 from coa.spec_rules import (SpecRuleError, effective_unit, evaluate, normalize_matrix,
                             resolve_spec, sample_peptide_id)
 from coa.text_macros import format_lod, resolve
-from sub_samples.service import fetch_sample_services
+from sub_samples.service import fetch_sample_services, variance_plan_for_parent
+from sub_samples.variance_tests import replicate_anchor_vials
 
 log = logging.getLogger(__name__)
 
@@ -179,6 +180,23 @@ def _eligible_parent_row(db: Session, parent_pk: int, service_id: int):
     ).scalars().first()
 
 
+def _replicate_row(db: Session, vial_pk: int, service_id: int):
+    """A replicate vial's current row for a member service: not retested,
+    not rejected or retracted, newest id (the HPLC series' current-row
+    idiom, coa/variance_series.py). Its state is NOT filtered here: the
+    caller refuses anything that is not variance_verified with a result."""
+    from models import LimsAnalysis
+
+    return db.execute(
+        select(LimsAnalysis).where(
+            LimsAnalysis.lims_sub_sample_pk == vial_pk,
+            LimsAnalysis.analysis_service_id == service_id,
+            LimsAnalysis.retested.is_(False),
+            LimsAnalysis.review_state.notin_(_DEAD_STATES),
+        ).order_by(LimsAnalysis.id.desc())
+    ).scalars().first()
+
+
 def _withdrawn_by_lab(db: Session, parent_pk: int, service_id: int) -> bool:
     """True iff the lab took this member OFF the sample in Manage Analyses
     (lims_analyses/manage_native.remove_parent_native_analysis): every
@@ -306,6 +324,82 @@ def _section_footnotes(raw, values: dict) -> list:
     return out
 
 
+def _member_row(db: Session, prof, svc, row, *, sample_id, matrix, peptide_id,
+                sample_form_id, form_tier) -> tuple[dict, tuple, bool]:
+    """One printed row for member `svc` from result row `row`: (the wire row,
+    its (lod, lod_unit), whether it is a report-only row filed for the
+    sample's form). Raises NativeSectionsError (Rules 3 and 5, an unappliable
+    rule). The base row of a profile and every Variance run row go through
+    here, so each run is judged by the same spec engine and carries its own
+    specification.loq and conforms."""
+    if not (row.result_value or "").strip():
+        # Rule 3 (row half): an eligible row with an empty result.
+        raise NativeSectionsError(
+            f"native sections: profile '{prof.key}' row "
+            f"'{svc.keyword}' has an empty result on {sample_id}"
+        )
+    unit = row.result_unit or (svc.unit or "")
+    if unit == "":
+        # A numeric result with a blank unit is the ENDO-LAL failure
+        # class (catalog unit missing), but pH's unit is legitimately
+        # blank, so this is NOT a rule-3 abort. Surface it instead of
+        # printing it silently; the section still builds.
+        log.warning(
+            "native_section_blank_unit sample=%s profile=%s keyword=%s",
+            sample_id, prof.key, svc.keyword,
+        )
+    spec = resolve_spec(db, svc.id, matrix, peptide_id=peptide_id,
+                        unit=effective_unit(row.result_unit, svc.unit),
+                        sample_form_id=sample_form_id)
+    if spec is None:
+        # Rule 5 (relocated from COABuilder): a result must not print
+        # without a verdict. Names the service, every tier consulted
+        # (peptide/matrix/wildcard) and the unit (endo slice 3: a
+        # result is judged only by a spec in its own unit), so the lab
+        # knows exactly which analysis_service_specs row to file.
+        raise NativeSectionsError(
+            f"native sections: profile '{prof.key}' member service "
+            f"'{svc.keyword}' (id={svc.id}) has no active spec "
+            f"(tiers consulted: peptide={peptide_id!r}, "
+            f"{form_tier}matrix={matrix!r}, wildcard) on {sample_id}: No active "
+            f"{svc.title} spec in {unit or 'no unit'} for "
+            f"{matrix or 'any sample type'}. File one in "
+            f"analysis_service_specs"
+        )
+    floor = bool(row.result_floor)
+    try:
+        conforms = evaluate(spec, row.result_value, floor=floor)
+    except SpecRuleError as e:
+        raise NativeSectionsError(
+            f"native sections: profile '{prof.key}' row "
+            f"'{svc.keyword}' on {sample_id}: {e.detail}"
+        ) from e
+    # The result's own LOQ wins over the spec's (endo slice 3, spec
+    # section 7): it decides "< <LOQ>" and rides specification.loq, the
+    # field coabuilder's LOQ column and the digital COA already read.
+    # Range and report-only rows, as _spec_wire_dict publishes it. A
+    # row without its own LOQ (every heavy metal) keeps the spec's,
+    # byte for byte.
+    loq = effective_loq(row, spec)
+    specification = _spec_wire_dict(spec)
+    if spec.rule_kind in _LOQ_KINDS:
+        specification["loq"] = loq
+    out = {
+        "keyword": svc.keyword,
+        "name": svc.title,
+        "result": row.result_value,
+        "unit": unit,
+        "method": _method_label(db, row.method_id),
+        "specification": specification,
+        "conforms": conforms,
+        "result_display": _result_display(spec, row.result_value, loq,
+                                          floor=floor),
+    }
+    form_report_only = (spec.rule_kind == "informational"
+                        and spec.sample_form_id is not None)
+    return out, (row.lod, row.lod_unit), form_report_only
+
+
 def build_native_sections(db: Session, parent, *, vial_parent_ids=None) -> dict:
     """Assemble the native-sections wire document for a parent LimsSample.
 
@@ -370,6 +464,12 @@ def build_native_sections(db: Session, parent, *, vial_parent_ids=None) -> dict:
         sample_form_id = None        # the form tier is peptide-family only (resolve_spec)
     # The form tier is only "consulted" when the sample has a form.
     form_tier = f"form={sample_form_id!r}, " if sample_form_id is not None else ""
+    # Add-on test Variance: resolved once, from the merged services (they
+    # carry `variance`), for the parent document only. None (no four-key
+    # entry, every sample today) prints exactly today's rows; the per-vial
+    # document never resolves a plan.
+    plan = (variance_plan_for_parent(db, parent, services)
+            if vial_parent_ids is None else None)
 
     sections = []
     deferred_profiles: list[str] = []
@@ -406,6 +506,9 @@ def build_native_sections(db: Session, parent, *, vial_parent_ids=None) -> dict:
         # Whether every printed row is a report-only row filed for the
         # sample's form (the basis-note rule below).
         all_form_report_only = True
+        # The members that printed (a withdrawn member is skipped), in
+        # member order: every Variance run prints the same members.
+        printed = []
         for svc, row in member_rows:
             if row is None:
                 if _withdrawn_by_lab(db, parent.id, svc.id):
@@ -429,79 +532,46 @@ def build_native_sections(db: Session, parent, *, vial_parent_ids=None) -> dict:
                     f"— enter and verify it, or remove it from the sample in "
                     f"Manage Analyses to issue the certificate without it"
                 )
-            if not (row.result_value or "").strip():
-                # Rule 3 (row half): an eligible row with an empty result.
-                raise NativeSectionsError(
-                    f"native sections: profile '{prof.key}' row "
-                    f"'{svc.keyword}' has an empty result on {sample_id}"
-                )
-            unit = row.result_unit or (svc.unit or "")
-            if unit == "":
-                # A numeric result with a blank unit is the ENDO-LAL failure
-                # class (catalog unit missing) — but pH's unit is legitimately
-                # blank, so this is NOT a rule-3 abort. Surface it instead of
-                # printing it silently; the section still builds.
-                log.warning(
-                    "native_section_blank_unit sample=%s profile=%s keyword=%s",
-                    sample_id, prof.key, svc.keyword,
-                )
-            spec = resolve_spec(db, svc.id, matrix, peptide_id=peptide_id,
-                                unit=effective_unit(row.result_unit, svc.unit),
-                                sample_form_id=sample_form_id)
-            if spec is None:
-                # Rule 5 (relocated from COABuilder): a result must not print
-                # without a verdict. Names the service, every tier consulted
-                # (peptide/matrix/wildcard) and the unit (endo slice 3: a
-                # result is judged only by a spec in its own unit), so the lab
-                # knows exactly which analysis_service_specs row to file.
-                raise NativeSectionsError(
-                    f"native sections: profile '{prof.key}' member service "
-                    f"'{svc.keyword}' (id={svc.id}) has no active spec "
-                    f"(tiers consulted: peptide={peptide_id!r}, "
-                    f"{form_tier}matrix={matrix!r}, wildcard) on {sample_id}: No active "
-                    f"{svc.title} spec in {unit or 'no unit'} for "
-                    f"{matrix or 'any sample type'}. File one in "
-                    f"analysis_service_specs"
-                )
-            floor = bool(row.result_floor)
-            try:
-                conforms = evaluate(spec, row.result_value, floor=floor)
-            except SpecRuleError as e:
-                raise NativeSectionsError(
-                    f"native sections: profile '{prof.key}' row "
-                    f"'{svc.keyword}' on {sample_id}: {e.detail}"
-                ) from e
-            # The result's own LOQ wins over the spec's (endo slice 3, spec
-            # section 7): it decides "< <LOQ>" and rides specification.loq, the
-            # field coabuilder's LOQ column and the digital COA already read.
-            # Range and report-only rows, as _spec_wire_dict publishes it. A
-            # row without its own LOQ (every heavy metal) keeps the spec's,
-            # byte for byte.
-            loq = effective_loq(row, spec)
-            specification = _spec_wire_dict(spec)
-            if spec.rule_kind in _LOQ_KINDS:
-                specification["loq"] = loq
-            rows.append({
-                "keyword": svc.keyword,
-                "name": svc.title,
-                "result": row.result_value,
-                "unit": unit,
-                "method": _method_label(db, row.method_id),
-                "specification": specification,
-                "conforms": conforms,
-                "result_display": _result_display(spec, row.result_value, loq,
-                                                  floor=floor),
-            })
-            limits.append((row.lod, row.lod_unit))
-            all_form_report_only = (all_form_report_only
-                                    and spec.rule_kind == "informational"
-                                    and spec.sample_form_id is not None)
+            row_out, limit, form_report_only = _member_row(
+                db, prof, svc, row, sample_id=sample_id, matrix=matrix,
+                peptide_id=peptide_id, sample_form_id=sample_form_id,
+                form_tier=form_tier)
+            rows.append(row_out)
+            limits.append(limit)
+            all_form_report_only = all_form_report_only and form_report_only
+            printed.append(svc)
         if not rows:
             # Rule 3 (section half): unreachable while members are required
             # non-empty in _ordered_native_profiles, kept as defence.
             raise NativeSectionsError(
                 f"native sections: profile '{prof.key}' produced zero rows on {sample_id}"
             )
+        rv = plan.for_key(prof.key) if plan is not None else None
+        if rv is not None:
+            # Add-on test Variance (contract, Mk1 to COABuilder): one ordinary
+            # row per run, run by run. Run 1 is today's rows with a suffix;
+            # runs 2..n are the in-set replicate anchors in vial order, one
+            # row per printed member, judged like the base row. No identity
+            # gate, no mean, no summary row.
+            for row_out, svc in zip(rows, printed):
+                row_out["name"] = f"{svc.title}, {rv.run_label} 1"
+            for i, vial in enumerate(replicate_anchor_vials(db, parent.id, rv.role), 2):
+                for svc in printed:
+                    rep = _replicate_row(db, vial.id, svc.id)
+                    if rep is None or rep.review_state != "variance_verified":
+                        raise NativeSectionsError(
+                            f"native sections: '{prof.key}' run {i} (vial "
+                            f"{vial.sample_id}) member '{svc.keyword}' has no "
+                            f"signed-off result on {sample_id}"
+                        )
+                    row_out, limit, form_report_only = _member_row(
+                        db, prof, svc, rep, sample_id=sample_id, matrix=matrix,
+                        peptide_id=peptide_id, sample_form_id=sample_form_id,
+                        form_tier=form_tier)
+                    row_out["name"] = f"{svc.title}, {rv.run_label} {i}"
+                    rows.append(row_out)
+                    limits.append(limit)
+                    all_form_report_only = all_form_report_only and form_report_only
         # Endo slice 4: the profile's COA text may carry {lod} and optional
         # [ ... ] segments, filled from this section's rows (coa.text_macros).
         # Text with no macro comes back exactly as typed.

@@ -185,7 +185,7 @@ def build_variance_replicates(db: Session, parent) -> dict:
     ).scalars().all()
     # The four add-on tests' replicates are certified in their own native
     # section, never as an HPLC series: skip their vials entirely.
-    fenced = variance_test_roles(db)
+    fenced = variance_test_roles(db, parent)
     subs = [s for s in subs if s.assignment_role not in fenced]
     if not any(s.assignment_kind == "variance" for s in subs):
         return {}
@@ -424,7 +424,7 @@ def build_variance_analyte_series(db: Session, parent) -> dict:
     ).scalars().all()
     # Same fence as build_variance_replicates: a four-test replicate never
     # reaches variance_analytes, even on a variance_capable service.
-    fenced = variance_test_roles(db)
+    fenced = variance_test_roles(db, parent)
     subs = [s for s in subs if s.assignment_role not in fenced]
     if not subs:
         return {}
