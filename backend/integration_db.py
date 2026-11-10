@@ -400,6 +400,25 @@ def fetch_publish_draft_badge(sample_id: str) -> Optional[dict]:
     }
 
 
+def fetch_publish_draft_generated_at(sample_id: str):
+    """created_at of the top-level draft Publish would pick (newest by
+    created_at, the same rule as fetch_publish_draft_badge), or None when
+    there is no draft. The Variance publish guard compares it with the
+    replicate rows' last change."""
+    query = """
+        SELECT created_at
+        FROM coa_generations
+        WHERE sample_id = %s AND parent_generation_id IS NULL AND status = 'draft'
+        ORDER BY created_at DESC
+        LIMIT 1
+    """
+    with get_integration_db() as conn:
+        with conn.cursor(cursor_factory=RealDictCursor) as cur:
+            cur.execute(query, [sample_id])
+            row = cur.fetchone()
+    return row["created_at"] if row else None
+
+
 def fetch_existing_vial_sequences(parent_generation_id) -> set:
     """vial_sequence values that already have a non-superseded per-vial child
     under the given parent generation.

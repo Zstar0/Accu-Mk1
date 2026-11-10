@@ -15153,6 +15153,22 @@ def _refuse_in_review_a_la_carte(sample_id: str) -> None:
         )
 
 
+def _refuse_unfinished_variance_runs(db: Session, sample_id: str) -> None:
+    """409 when the draft Publish would pick no longer matches the sample's
+    add-on test Variance runs (coa.native_sections.variance_publish_refusal):
+    a run is missing or unsigned, or a replicate row changed after the draft
+    was generated. Out of scope (no variance vial of the four test roles,
+    every sample today) it costs one SELECT and nothing else. In
+    scope it fails CLOSED: an order or draft read that fails refuses."""
+    import integration_db
+    from coa.native_sections import variance_publish_refusal
+    reason = variance_publish_refusal(
+        db, sample_id,
+        draft_generated_at=lambda: integration_db.fetch_publish_draft_generated_at(sample_id))
+    if reason:
+        raise HTTPException(status_code=409, detail=reason)
+
+
 def _refuse_while_publish_scheduled(db: Session, sample_id: str) -> None:
     """409 while a publish is parked for the sample (backend/scheduled_publish.py).
     Its newest draft carries the scheduled, future Published Date, and IS
@@ -15198,6 +15214,7 @@ async def publish_sample_coa(
     _refuse_while_publish_scheduled(db, sample_id)
     _refuse_stale_draft_primary(sample_id)
     _refuse_in_review_a_la_carte(sample_id)
+    _refuse_unfinished_variance_runs(db, sample_id)
 
     # 2. Resolve SENAITE UID upfront so we fail before touching integration service state.
     # Native-born samples (external_lims_system == "mk1") have no SENAITE AR at

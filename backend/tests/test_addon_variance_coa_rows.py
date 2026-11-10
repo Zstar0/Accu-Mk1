@@ -537,8 +537,8 @@ def test_missing_core_run_aborts(db, monkeypatch):
     with pytest.raises(NativeSectionsError) as e:
         build_native_sections(db, w.parent)
     assert e.value.detail == (
-        "native sections: variance series incomplete: endotoxin-usp85-lal is missing the "
-        "core run: no core vial of role endo85 carries results on P-7427")
+        "native sections: 'endotoxin-usp85-lal' core run has no live result on its core "
+        "vial (role endo85) on P-7427; restore or re-run the core vial")
 
 
 def test_unfulfillable_entry_aborts(db, monkeypatch):

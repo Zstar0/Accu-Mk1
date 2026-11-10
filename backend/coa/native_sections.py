@@ -42,8 +42,8 @@ from coa.spec_rules import (SpecRuleError, effective_unit, evaluate, normalize_m
                             resolve_spec, sample_peptide_id)
 from coa.text_macros import format_lod, resolve
 from sub_samples.service import fetch_sample_services, variance_plan_for_parent
-from sub_samples.variance_tests import (VariancePlan, replicate_anchor_vials,
-                                        variance_run_problems)
+from sub_samples.variance_tests import (DEAD_ROW_STATES, VariancePlan,
+                                        replicate_anchor_vials, variance_run_problems)
 
 log = logging.getLogger(__name__)
 
@@ -193,7 +193,7 @@ def _replicate_row(db: Session, vial_pk: int, service_id: int):
             LimsAnalysis.lims_sub_sample_pk == vial_pk,
             LimsAnalysis.analysis_service_id == service_id,
             LimsAnalysis.retested.is_(False),
-            LimsAnalysis.review_state.notin_(_DEAD_STATES),
+            LimsAnalysis.review_state.notin_(DEAD_ROW_STATES),
         ).order_by(LimsAnalysis.id.desc())
     ).scalars().first()
 
@@ -401,6 +401,39 @@ def _member_row(db: Session, prof, svc, row, *, sample_id, matrix, peptide_id,
     return out, (row.lod, row.lod_unit), form_report_only
 
 
+def _merged_services(db: Session, parent) -> tuple:
+    """(raw IS payload, services) for the parent: the order lookup (Rule 1,
+    fail-closed) plus the lab-added and native-retest unions. Shared by the
+    builder and the publish guard so both judge the same services."""
+    sample_id = parent.sample_id
+
+    # Rule 1: the order lookup itself is fail-closed.
+    try:
+        raw = fetch_sample_services(sample_id)
+    except Exception as e:
+        raise NativeSectionsError(
+            f"native sections: order lookup failed for {sample_id}: {e}"
+        ) from e
+
+    # Lab-added union (2026-09-01 gate-rule change): profiles the lab put on
+    # the sample via Manage Analyses report like ordered ones. An ordered
+    # False key the lab deliberately added anyway flips True, same authority
+    # the seeding union already grants (manage_native.placeholder_profile_keys).
+    services = dict(((raw or {}).get("services")) or {})
+    for key in _lab_added_profile_keys(db, parent.id):
+        if not services.get(key):
+            services[key] = True
+    # Native retest: carried profiles report from the retest's own carried
+    # rows, whatever shape the IS payload gives their keys. Keys in `missing`
+    # were never on the original, so nothing was carried for them.
+    rider = (parent.catalog_snapshot or {}).get("retest") or {}
+    for key in set(rider.get("carry") or []) - set(rider.get("missing") or []):
+        if not services.get(key):
+            services[key] = True
+
+    return raw, services
+
+
 def build_native_sections(db: Session, parent, *, vial_parent_ids=None) -> dict:
     """Assemble the native-sections wire document for a parent LimsSample.
 
@@ -414,38 +447,20 @@ def build_native_sections(db: Session, parent, *, vial_parent_ids=None) -> dict:
 
     Returns {"sample_id", "ordered_profiles", "sections"}, plus
     "deferred_sections" (list of profile keys) when one or more profiles were
-    deferred rather than aborted — the key is OMITTED entirely when nothing
+    deferred rather than aborted; the key is OMITTED entirely when nothing
     was deferred (additive-only wire shape; existing consumers see no
     difference). An order with no reportable native profiles yields empty
-    lists — a VALID document (the ordered_profiles cross-check is what lets
+    lists, a VALID document (the ordered_profiles cross-check is what lets
     callers distinguish "nothing ordered" from "something broke"). All
     non-deferral failures raise NativeSectionsError.
     """
+    raw, services = _merged_services(db, parent)
+    return _build_from_services(db, parent, raw, services, vial_parent_ids=vial_parent_ids)
+
+
+def _build_from_services(db: Session, parent, raw, services, *, vial_parent_ids) -> dict:
+    """build_native_sections after the order lookup (see its docstring)."""
     sample_id = parent.sample_id
-
-    # Rule 1: the order lookup itself is fail-closed.
-    try:
-        raw = fetch_sample_services(sample_id)
-    except Exception as e:
-        raise NativeSectionsError(
-            f"native sections: order lookup failed for {sample_id}: {e}"
-        ) from e
-
-    # Lab-added union (2026-09-01 gate-rule change): profiles the lab put on
-    # the sample via Manage Analyses report like ordered ones. An ordered
-    # False key the lab deliberately added anyway flips True — same authority
-    # the seeding union already grants (manage_native.placeholder_profile_keys).
-    services = dict(((raw or {}).get("services")) or {})
-    for key in _lab_added_profile_keys(db, parent.id):
-        if not services.get(key):
-            services[key] = True
-    # Native retest: carried profiles report from the retest's own carried
-    # rows, whatever shape the IS payload gives their keys. Keys in `missing`
-    # were never on the original, so nothing was carried for them.
-    rider = (parent.catalog_snapshot or {}).get("retest") or {}
-    for key in set(rider.get("carry") or []) - set(rider.get("missing") or []):
-        if not services.get(key):
-            services[key] = True
 
     if raw is None and not services:
         # IS 404 — no linked order AND nothing lab-added. Nothing native can
@@ -593,7 +608,9 @@ def build_native_sections(db: Session, parent, *, vial_parent_ids=None) -> dict:
                 else:
                     # The count is right, so the helper found no core anchor.
                     raise NativeSectionsError(
-                        f"native sections: {problems[0]} on {sample_id}")
+                        f"native sections: '{prof.key}' core run has no live result on "
+                        f"its core vial (role {rv.role}) on {sample_id}; restore or "
+                        f"re-run the core vial")
                 raise NativeSectionsError(
                     f"native sections: '{prof.key}' bought {rv.n} runs, {k} replicate "
                     f"runs carry results on {sample_id}; {tail}"
@@ -656,3 +673,87 @@ def build_native_sections(db: Session, parent, *, vial_parent_ids=None) -> dict:
         # tolerates a key with no matching section; do not touch coab).
         doc["deferred_sections"] = deferred_profiles
     return doc
+
+
+def _utc_naive(value):
+    """A datetime as naive UTC (Mk1 stores naive UTC; the Integration
+    Service's coa_generations.created_at is timestamptz)."""
+    from datetime import datetime, timezone
+    if isinstance(value, str):
+        value = datetime.fromisoformat(value)
+    if value.tzinfo is not None:
+        value = value.astimezone(timezone.utc).replace(tzinfo=None)
+    return value
+
+
+def _replicate_changed_at(db: Session, rows: list) -> dict:
+    """{row id: last change} for replicate rows: the newest of the row's
+    created_at, verified_at and its newest transition (every verb writes
+    one: submit, variance_verify, retest, reject, retract)."""
+    from sqlalchemy import func
+
+    from models import LimsAnalysisTransition
+
+    last_transition = dict(db.execute(
+        select(LimsAnalysisTransition.analysis_id, func.max(LimsAnalysisTransition.occurred_at))
+        .where(LimsAnalysisTransition.analysis_id.in_([r.id for r in rows]))
+        .group_by(LimsAnalysisTransition.analysis_id)
+    ).all()) if rows else {}
+    return {r.id: max(t for t in (r.created_at, r.verified_at, last_transition.get(r.id))
+                      if t is not None)
+            for r in rows}
+
+
+def variance_publish_refusal(db: Session, sample_id: str, *,
+                             draft_generated_at) -> Optional[str]:
+    """Why the newest draft of `sample_id` must not be published, or None.
+
+    Publish ships an existing draft and never builds the document, so a
+    replicate retested, rejected or taken out of the set after generation
+    would ship the old value. Scope first: a sample with no variance vial
+    (in set or not) of a four-test role returns None after one SELECT (every
+    sample today). In scope: (1) completeness, by building the parent document with
+    the same builder generation uses (read-only: SELECTs and the order
+    lookup, nothing posted or written), so a failed order lookup refuses
+    (Rule 1); (2) staleness: no current row on a replicate anchor of a
+    planned role may have changed after the draft was generated.
+    `draft_generated_at` is a zero-argument callable (the Integration
+    Service read), called only in scope; a failed read refuses too."""
+    from models import LimsAnalysis
+    from sub_samples.variance_tests import four_test_replicate_parent
+
+    parent = four_test_replicate_parent(db, sample_id)
+    if parent is None:
+        return None
+    try:
+        raw, services = _merged_services(db, parent)
+        _build_from_services(db, parent, raw, services, vial_parent_ids=None)
+    except NativeSectionsError as e:
+        return f"cannot publish {sample_id}: {e.detail}"
+    plan = variance_plan_for_parent(db, parent, services)
+    if plan is None or not plan.by_role:
+        return None
+    try:
+        generated = draft_generated_at()
+    except Exception as e:  # noqa: BLE001 (in scope, a failed read refuses)
+        return (f"cannot publish {sample_id}: the draft certificate could not be read to "
+                f"check its Variance runs ({type(e).__name__}); try again")
+    if generated is None:
+        return None     # no draft: the Integration Service has nothing to publish
+    generated = _utc_naive(generated)
+    for rv in plan.by_role.values():
+        for vial in replicate_anchor_vials(db, parent.id, rv.role):
+            rows = list(db.execute(select(LimsAnalysis).where(
+                LimsAnalysis.lims_sub_sample_pk == vial.id,
+                LimsAnalysis.retested.is_(False),
+                LimsAnalysis.review_state.notin_(DEAD_ROW_STATES),
+            ).order_by(LimsAnalysis.id)).scalars())
+            changed = _replicate_changed_at(db, rows)
+            for row in rows:
+                if changed[row.id] > generated:
+                    detail = (f"vial {vial.sample_id} member '{row.keyword}' changed "
+                              f"{changed[row.id]:%Y-%m-%d %H:%M:%S} UTC, the draft was "
+                              f"generated {generated:%Y-%m-%d %H:%M:%S} UTC")
+                    return (f"cannot publish {sample_id}: a Variance run changed after this "
+                            f"certificate was generated; regenerate it first ({detail})")
+    return None

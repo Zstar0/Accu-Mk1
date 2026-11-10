@@ -32,6 +32,9 @@ VARIANCE_N_MAX: int = 10            # Handler confirms (design open question 4)
 RUN_LABEL_VIAL: str = "Vial"        # Handler confirms copy (C12)
 RUN_LABEL_DIGEST: str = "Digest"    # Handler confirms copy (C12)
 LEGACY_BUCKETS: frozenset[str] = frozenset({"hplc", "endo", "ster"})
+# Row states that are no longer a result: the anchors here and the
+# certificate builder's replicate rows (coa.native_sections) share it.
+DEAD_ROW_STATES: tuple[str, ...] = ("rejected", "retracted")
 
 
 @dataclass(frozen=True)
@@ -216,7 +219,7 @@ def _live_row_exists():
     return (select(LimsAnalysis.id)
             .where(LimsAnalysis.lims_sub_sample_pk == LimsSubSample.id,
                    LimsAnalysis.retested.is_(False),
-                   LimsAnalysis.review_state.notin_(["rejected", "retracted"]))
+                   LimsAnalysis.review_state.notin_(DEAD_ROW_STATES))
             .exists())
 
 
@@ -271,3 +274,24 @@ def variance_run_problems(db, parent, plan: VariancePlan | None) -> list[str]:
             problems.append(f"variance series incomplete: {rv.key} is missing the core "
                             f"{word}: no core vial of role {rv.role} carries results")
     return problems
+
+
+def four_test_replicate_parent(db, sample_id: str):
+    """The parent LimsSample when it has a variance vial whose role is a
+    four-test role (`variance_test_roles(db, parent)`), else None. The
+    publish guard's scope test: a sample with no variance vial costs exactly
+    one SELECT here and nothing else. Out-of-set vials count on purpose:
+    taking the only replicate out of the set must still reach the count
+    check, or the draft's stale run row would ship."""
+    from models import LimsSample
+    rows = db.execute(
+        select(LimsSubSample.assignment_role, LimsSample)
+        .join(LimsSample, LimsSample.id == LimsSubSample.parent_sample_pk)
+        .where(LimsSample.sample_id == sample_id,
+               LimsSubSample.assignment_kind == "variance")
+    ).all()
+    if not rows:
+        return None
+    parent = rows[0][1]
+    fenced = variance_test_roles(db, parent)
+    return parent if any(role in fenced for role, _ in rows) else None
