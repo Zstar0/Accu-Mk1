@@ -413,12 +413,14 @@ describe('VarianceOverrideEditor', () => {
     expect(trigger).toHaveAttribute('data-slot', 'tooltip-trigger')
   })
 
-  it('renders with HPLC input prefilled from plan.variance', async () => {
+  it('renders with HPLC input prefilled with total n from plan.variance', async () => {
+    // Legacy prefill fix (Task 7 fix round 1, ruling 2): plan.variance.hplc = 3
+    // replicates means n = 4 total.
     vi.mocked(getVialPlan).mockResolvedValue(VARIANCE_PLAN)
     renderStep()
     await screen.findByText('P-0144-S01')
     const hplcInput = screen.getByRole('spinbutton', { name: /variance hplc/i })
-    expect(hplcInput).toHaveValue(3)
+    expect(hplcInput).toHaveValue(4)
   })
 
   it('changing HPLC to 4 + Save calls putVarianceOverride and re-fetches plan', async () => {
@@ -436,7 +438,8 @@ describe('VarianceOverrideEditor', () => {
     await waitFor(() => {
       expect(putVarianceOverride).toHaveBeenCalledWith(
         'P-0144',
-        expect.objectContaining({ hplcpurity_identity: 4, endotoxin: 2 }),
+        // endo variance 2 replicates = n 3 (legacy prefill fix, ruling 2)
+        expect.objectContaining({ hplcpurity_identity: 4, endotoxin: 3 }),
       )
     })
     // getVialPlan should have been called a second time (refresh after save)
@@ -874,5 +877,42 @@ describe('override units (Task 7 fix round 1)', () => {
     expect(screen.getByTestId('varov-unit-endotoxin-usp85-lal')).toHaveTextContent('vials')
     expect(screen.getByTestId('varov-unit-rapid-sterility-pcr')).toHaveTextContent('vials')
     expect(screen.queryByTestId('varov-unit-hplcpurity_identity')).not.toBeInTheDocument()
+  })
+})
+
+describe('legacy override prefill is total n (Task 7 fix round 1, ruling 2)', () => {
+  it('HPLC n=3 prefills 3 and saving without editing sends 3', async () => {
+    vi.mocked(getVialPlan).mockResolvedValue({ ...PLAN, variance: { hplc: 2, endo: 0, ster: 0 } })
+    renderStep()
+    await screen.findByText('P-0144-S01')
+    expect(screen.getByRole('spinbutton', { name: 'Variance HPLC' })).toHaveValue(3)
+    await userEvent.click(screen.getByRole('button', { name: /save variance/i }))
+    await waitFor(() =>
+      expect(putVarianceOverride).toHaveBeenCalledWith('P-0144', { hplcpurity_identity: 3 }),
+    )
+  })
+
+  it('HPLC n=2 prefills 2 and is kept on save', async () => {
+    vi.mocked(getVialPlan).mockResolvedValue({ ...PLAN, variance: { hplc: 1, endo: 0, ster: 0 } })
+    renderStep()
+    await screen.findByText('P-0144-S01')
+    expect(screen.getByRole('spinbutton', { name: 'Variance HPLC' })).toHaveValue(2)
+    await userEvent.click(screen.getByRole('button', { name: /save variance/i }))
+    await waitFor(() =>
+      expect(putVarianceOverride).toHaveBeenCalledWith('P-0144', { hplcpurity_identity: 2 }),
+    )
+  })
+
+  it('a bucket at 0 stays 0 and is not sent', async () => {
+    vi.mocked(getVialPlan).mockResolvedValue({ ...PLAN, variance: { hplc: 1, endo: 0, ster: 0 } })
+    renderStep()
+    await screen.findByText('P-0144-S01')
+    expect(screen.getByRole('spinbutton', { name: 'Variance Endo' })).toHaveValue(0)
+    expect(screen.getByRole('spinbutton', { name: 'Variance Sterility' })).toHaveValue(0)
+    await userEvent.click(screen.getByRole('button', { name: /save variance/i }))
+    await waitFor(() => expect(putVarianceOverride).toHaveBeenCalledTimes(1))
+    const sent = vi.mocked(putVarianceOverride).mock.calls[0]?.[1]
+    expect(sent).not.toHaveProperty('endotoxin')
+    expect(sent).not.toHaveProperty('sterility_pcr')
   })
 })

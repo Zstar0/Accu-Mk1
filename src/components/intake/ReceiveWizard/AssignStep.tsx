@@ -333,7 +333,11 @@ function overrideFieldsFor(plan: VialPlanResponse): OverrideField[] {
 
 function overrideCountsFor(plan: VialPlanResponse): Record<string, number> {
   const counts: Record<string, number> = {}
-  for (const f of LEGACY_VARIANCE_OVERRIDE_FIELDS) counts[f.key] = plan.variance[f.bucket] ?? 0
+  // plan.variance[bucket] is the replicate count (n - 1); the input means total n.
+  for (const f of LEGACY_VARIANCE_OVERRIDE_FIELDS) {
+    const replicates = plan.variance[f.bucket] ?? 0
+    counts[f.key] = replicates > 0 ? replicates + 1 : 0
+  }
   for (const t of Object.values(plan.variance_tests ?? {})) counts[t.key] = t.n
   return counts
 }
