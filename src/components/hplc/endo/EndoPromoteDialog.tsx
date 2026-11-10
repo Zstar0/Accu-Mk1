@@ -26,9 +26,21 @@ export interface PromotePick {
 
 const PCELL = 'border-b border-border/60 px-2 py-1.5 align-top'
 
-function Outcome({ result }: { result: EndoPromoteRowResult | undefined }) {
+export function Outcome({
+  result,
+}: {
+  result: EndoPromoteRowResult | undefined
+}) {
   if (!result)
     return <span className="text-muted-foreground">no reply for this row</span>
+  // A Variance replicate is entered, never promoted: the server submits it
+  // for Verify (Variance) on the sample page and says so in its reason.
+  if (!result.promoted && result.state === 'to_be_verified')
+    return (
+      <span className="text-emerald-700 dark:text-emerald-300">
+        {result.reason}
+      </span>
+    )
   if (!result.promoted)
     return (
       <span className="text-red-600 dark:text-red-400">
