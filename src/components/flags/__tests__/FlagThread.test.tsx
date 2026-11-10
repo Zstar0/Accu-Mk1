@@ -124,6 +124,14 @@ describe('FlagThread', () => {
     expect(iAssigned).toBeLessThan(iComment2)
   })
 
+  it('shows the date on comments and events, not just the clock', async () => {
+    const { FlagThread } = await import('@/components/flags/FlagThread')
+    render(<FlagThread flagId={7} tabLabel="Assigned to me" />)
+
+    // 2 comments + 2 events, all on Jun 30 (the fixture is from 2026).
+    expect(document.body.textContent?.match(/Jun 30/g)).toHaveLength(4)
+  })
+
   it('submits a comment on Enter', async () => {
     const { FlagThread } = await import('@/components/flags/FlagThread')
     render(<FlagThread flagId={7} tabLabel="Assigned to me" />)

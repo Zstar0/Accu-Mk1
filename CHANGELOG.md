@@ -16,6 +16,11 @@
 - **Retesting an endotoxin vial gives its worksheet row back to the bench.** If the worksheet was already completed it goes back to open, so the re-run can be entered and promoted; complete it again when done. The first reading moves into the row's history with its Made and Ran ticks. An open worksheet stays open, and no other row changes: a promoted row that was not retested keeps its final prep.
 - Backend-only release. The "Retested" label in the row history ships with the next frontend release; until then the entry reads "override". v1.58.1 (flag thread dates, frontend only) is live on prod from PR #358 and is not on master yet.
 
+## v1.58.1 - 2026-11-06
+
+### Flags
+- **Flag threads show the date on every comment and event.** A comment used to read only "1:35 PM", so one from last week looked the same as one from today. It now reads "Nov 3, 1:35 PM", with the year added for anything outside the current year. The "raised this" and "assigned to" lines show the date too.
+
 ## v1.58.0 - 2026-11-05
 
 ### Bacteriostatic Water native-born

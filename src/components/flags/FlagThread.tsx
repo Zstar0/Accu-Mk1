@@ -71,11 +71,7 @@ import {
   activeMentionQuery,
   mentionIdsInBody,
 } from '@/components/flags/mention-parse'
-import {
-  formatClock,
-  formatDateTime,
-  dueLabel,
-} from '@/components/flags/flag-format'
+import { formatDateTime, dueLabel } from '@/components/flags/flag-format'
 import { STATUS_LABELS, STATUS_DOT } from '@/components/flags/flag-status'
 import { FlagAvatar } from '@/components/flags/FlagAvatar'
 import { FlagWatchers } from '@/components/flags/FlagWatchers'
@@ -493,7 +489,7 @@ export function FlagThread({
             >
               <span className="h-px flex-1 bg-border" />
               <span className="text-center">
-                {eventText(entry.event)} · {formatClock(entry.at)}
+                {eventText(entry.event)} · {formatDateTime(entry.at)}
               </span>
               <span className="h-px flex-1 bg-border" />
             </div>
@@ -826,7 +822,7 @@ function CommentRow({
           <div className="flex items-baseline gap-2">
             <b className="text-xs text-foreground">{isMe ? 'You' : name}</b>
             <span className="text-[10.5px] text-muted-foreground">
-              {formatClock(comment.created_at)}
+              {formatDateTime(comment.created_at)}
             </span>
           </div>
           {content}
@@ -856,7 +852,7 @@ function CommentRow({
         <div className="mb-0.5 flex items-center gap-2">
           <b className="text-xs text-foreground">{isMe ? 'You' : name}</b>
           <span className="text-[10.5px] text-muted-foreground">
-            {formatClock(comment.created_at)}
+            {formatDateTime(comment.created_at)}
           </span>
         </div>
         {content}
