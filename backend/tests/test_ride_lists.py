@@ -412,7 +412,9 @@ def test_a_la_carte_riders_share_one_sample_vial(db_session):
 
     hplc = _mk(db_session, "t_hplc_fam", "thplc", vials=1)
     _mk(db_session, "t_endo", "tendo", vials=1)
-    rider_roles = {"t_fent": "tfent", "t_ph": "tph", "t_vac": "tvac"}
+    # Role sort order (call order) deliberately differs from key order, so
+    # the minting assertion below pins sort_order, not the profile key.
+    rider_roles = {"t_vac": "tvac", "t_fent": "tfent", "t_ph": "tph"}
     riders = {
         key: _mk(db_session, key, role, vials=0,
                  rides=["thplc"] + [r for r in rider_roles.values() if r != role])
