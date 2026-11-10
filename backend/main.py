@@ -14535,6 +14535,23 @@ async def generate_sample_coa(
                         )
                     except Exception:
                         needs_chromatogram = False
+                if _coa_src == "mk1" and needs_chromatogram and not kinds["has_chromatogram"]:
+                    from coa.a_la_carte import a_la_carte_verdict
+                    _alc_parent = db.get(LimsSample, _gate_parent_pk) if _gate_parent_pk is not None else None
+                    if _alc_parent is not None:
+                        # Savepoint: a DB error inside the helper comes back as
+                        # an "error:" verdict but leaves Postgres aborted, and
+                        # the gates below still query this session.
+                        _alc_sp = db.begin_nested()
+                        _alc_v = a_la_carte_verdict(db, _alc_parent, sections=None)
+                        if _alc_v.reason.startswith("error:"):
+                            _alc_sp.rollback()
+                        else:
+                            _alc_sp.commit()
+                        if _alc_v.eligible:
+                            needs_chromatogram = False  # a la carte: no HPLC, no chromatogram to attach
+                        else:
+                            _logger.info("a la carte check for %s: %s", sample_id, _alc_v.reason)
                 gate_missing = []
                 if not kinds["has_image"]:
                     gate_missing.append({
