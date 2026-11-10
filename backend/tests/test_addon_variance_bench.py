@@ -199,3 +199,45 @@ def test_usp71_replicate_lands_on_the_sterility_bench(lite, monkeypatch):
     from main import _bench_kind_for_item
     assert _bench_kind(w) == "sterility"
     assert _bench_kind_for_item(w.core.assignment_role, None) == "sterility"
+
+
+# ── Task 11: heavy metals (hm), one digest per run ──────────────────────────
+
+HM_KW = ["HM-AS", "HM-CD", "HM-HG", "HM-PB"]
+
+
+def _hm_world(db, monkeypatch):
+    """n=2: two core vials (S01 anchor, S02 material), then two variance vials
+    (S03 replicate digest anchor, S04 material), assigned in that order."""
+    return _replicate_world(db, "hm", HM_KEY, HM_KW, monkeypatch=monkeypatch,
+                            vials_required=2, analytical_vials=1)
+
+
+def test_hm_replicate_digest_anchor_signs_off_every_metal(lite, monkeypatch):
+    from sub_samples.variance_tests import replicate_anchor_vials
+    w = _hm_world(lite, monkeypatch)
+    s01, s02, s03, s04 = w.vials
+    assert [v.assignment_kind for v in w.vials] == ["core", "core", "variance", "variance"]
+    assert w.replicate is s03
+    assert [r.keyword for r in w.core_rows] == HM_KW
+    assert [r.keyword for r in w.rows] == HM_KW
+    assert _rows(lite, s02) == []
+    assert _rows(lite, s04) == []
+    for row in w.rows:
+        _submit(lite, row, "0.1")
+        _variance_verify(lite, row)
+    lite.expire_all()
+    signed = _rows(lite, s03)
+    assert [r.review_state for r in signed] == ["variance_verified"] * 4
+    assert all(r.verified_at is not None for r in signed)
+    assert _rows(lite, s04) == []
+    assert _parent_tier_rows(lite, w.parent) == 0
+    assert replicate_anchor_vials(lite, w.parent.id, "hm") == [s03]
+
+
+def test_hm_material_vial_has_nothing_to_sign_off(lite, monkeypatch):
+    w = _hm_world(lite, monkeypatch)
+    material = w.vials[3]
+    assert material.assignment_kind == "variance"
+    assert material.in_variance_set is True
+    assert lite.query(LimsAnalysis).filter_by(lims_sub_sample_pk=material.id).count() == 0
