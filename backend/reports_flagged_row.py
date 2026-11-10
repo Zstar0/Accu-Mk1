@@ -28,7 +28,7 @@ def native_section_flag(
         return False, None
     matched = [
         s for s in native_sections
-        if isinstance(s, dict) and s.get("profile_key") in profile_keys
+        if isinstance(s, dict) and isinstance(s.get("profile_key"), str) and s["profile_key"] in profile_keys
     ]
     verdicts = [
         row["conforms"]

@@ -12444,7 +12444,9 @@ async def reports_resync(
                     product_components = product.get("components", [])
                     product_name = ", ".join(product_components) if product_components else product.get("name")
                     is_blend = len(product_components) > 1
-                    addons = results.get("addons", [])
+                    flagged = is_flagged(coa_data)
+                    # Flagged: flags come from native_sections only (IS twin), add-ons are never parsed.
+                    addons = [] if flagged else results.get("addons", [])
                     has_endo = any("endotoxin" in (a.get("test_name", "")).lower() for a in addons)
                     endo_conf = None
                     if has_endo:
@@ -12470,7 +12472,7 @@ async def reports_resync(
                         has_endotoxin, endotoxin_conforms, has_sterility, sterility_conforms
                     ) VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)"""
 
-                    if is_flagged(coa_data):
+                    if flagged:
                         # A la carte: one row, no result values, flags from
                         # native_sections by profile_key (same as IS).
                         ns = coa_data.get("native_sections")

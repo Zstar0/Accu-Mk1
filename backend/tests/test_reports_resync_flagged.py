@@ -78,6 +78,7 @@ def test_native_section_flag(sections, expected):
     (None, False), ({}, False), ("x", False), ([None, "x", 3], False),
     ([{"profile_key": ENDO}], True), ([{"profile_key": ENDO, "rows": None}], True),
     ([{"profile_key": ENDO, "rows": ["x", None]}], True),
+    ([{"profile_key": [ENDO]}], False), ([{"profile_key": {ENDO: True}}], False),
 ])
 def test_native_section_flag_malformed_never_raises(native_sections, has_endo):
     assert native_section_flag(native_sections, ENDOTOXIN_PROFILE_KEYS) == (has_endo, None)
@@ -222,6 +223,14 @@ def test_resync_flagged_malformed_native_sections_still_writes_one_row(monkeypat
     assert len(rows) == 1
     assert rows[0]["has_endotoxin"] is False
     assert rows[0]["has_sterility"] is False
+    assert rows[0]["endotoxin_conforms"] is None
+    assert rows[0]["sterility_conforms"] is None
+
+
+def test_resync_flagged_skips_malformed_addons(monkeypatch):
+    rows = _resync(monkeypatch, _flagged_doc(["BPC-157"], results={"addons": [{"test_name": None}]}))
+    assert len(rows) == 1
+    assert rows[0]["has_endotoxin"] is True
 
 
 def test_resync_passes_measured_through(monkeypatch):
