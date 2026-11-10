@@ -95,13 +95,14 @@ describe('buildMatrix', () => {
       null
     )
     expect(row?.total).toBe(3)
+    expect(row?.judged).toBe(3)
     expect(row?.failed).toBe(1)
     expect(row?.cells.endo).toMatchObject({ tested: 2, failed: 1 })
     expect(row?.cells.purity).toMatchObject({ tested: 3, failed: 0 })
     expect(row?.qty).toEqual({ n: 2, median: 5, flagged: 0 })
   })
 
-  it('leaves MEASURED COAs out of the failure-rate total', () => {
+  it('counts MEASURED COAs but leaves them out of the failure rate', () => {
     const [row] = buildMatrix(
       [
         coa({ overall: 'FAILED' }),
@@ -116,8 +117,8 @@ describe('buildMatrix', () => {
       NOW,
       null
     )
-    expect(row?.total).toBe(2)
-    expect(row?.failed).toBe(1)
+    expect(row?.total).toBe(3)
+    expect(row).toMatchObject({ failed: 1, judged: 2 })
     expect(row?.cells.endo).toMatchObject({ tested: 1, failed: 0 })
   })
 
@@ -135,7 +136,7 @@ describe('buildMatrix', () => {
       null
     )
     expect(rows).toHaveLength(1)
-    expect(rows[0]).toMatchObject({ total: 0, failed: 0 })
+    expect(rows[0]).toMatchObject({ total: 1, judged: 0, failed: 0 })
     expect(rows[0]?.cells.endo).toMatchObject({ tested: 1, failed: 0 })
   })
 

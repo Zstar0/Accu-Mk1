@@ -153,7 +153,7 @@ function sortValue(r: ProductRow, k: SortKey): number | string {
     case 'total':
       return r.total
     case 'failed':
-      return r.total ? r.failed / r.total + r.failed / 1e6 : -1
+      return r.judged ? r.failed / r.judged + r.failed / 1e6 : -1
     case 'qty':
       return r.qty.median == null ? -1 : Math.abs(r.qty.median)
     case 'last':
@@ -230,8 +230,12 @@ export function AnalyteTrends() {
   }
 
   const totals = rows.reduce(
-    (a, r) => ({ coas: a.coas + r.total, failed: a.failed + r.failed }),
-    { coas: 0, failed: 0 }
+    (a, r) => ({
+      coas: a.coas + r.total,
+      judged: a.judged + r.judged,
+      failed: a.failed + r.failed,
+    }),
+    { coas: 0, judged: 0, failed: 0 }
   )
 
   const toggleSort = (key: SortKey) =>
@@ -311,7 +315,7 @@ export function AnalyteTrends() {
             <Stat value={totals.coas} label="COAs" />
             <Stat
               value={totals.failed}
-              label={`Non-conforming${totals.coas ? ` · ${pctText(totals.failed / totals.coas)}` : ''}`}
+              label={`Non-conforming${totals.judged ? ` · ${pctText(totals.failed / totals.judged)}` : ''}`}
               tone={totals.failed ? 'red' : undefined}
             />
             <RisingPanel
@@ -371,7 +375,7 @@ export function AnalyteTrends() {
                         <span className="text-red-400">
                           {r.failed}
                           <span className="text-muted-foreground text-xs ml-1">
-                            {pctText(r.failed / r.total)}
+                            {pctText(r.failed / r.judged)}
                           </span>
                         </span>
                       ) : (

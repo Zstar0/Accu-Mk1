@@ -166,6 +166,8 @@ export interface ProductRow {
   product: string
   is_blend: boolean
   total: number
+  /** COAs with a verdict (MEASURED has none): the failure-rate denominator. */
+  judged: number
   failed: number
   last: number
   cells: Record<TestKey, Cell>
@@ -195,10 +197,7 @@ export function buildMatrix(
   const cutoff = days == null ? -Infinity : now - days * DAY_MS
   const recentFrom = now - TREND_WINDOW_DAYS * DAY_MS
   const priorFrom = now - 2 * TREND_WINDOW_DAYS * DAY_MS
-  const rows = new Map<
-    string,
-    ProductRow & { deltas: number[]; seen: number }
-  >()
+  const rows = new Map<string, ProductRow & { deltas: number[] }>()
 
   for (const c of coas) {
     let r = rows.get(c.product)
@@ -207,6 +206,7 @@ export function buildMatrix(
         product: c.product,
         is_blend: c.is_blend,
         total: 0,
+        judged: 0,
         failed: 0,
         last: 0,
         cells: Object.fromEntries(
@@ -217,16 +217,15 @@ export function buildMatrix(
         ) as Record<TestKey, Cell>,
         qty: { n: 0, median: null, flagged: 0 },
         deltas: [],
-        seen: 0,
       }
       rows.set(c.product, r)
     }
     const t = ts(c)
     const inPeriod = t >= cutoff
     if (inPeriod) {
-      r.seen++
-      // MEASURED has no verdict: it would dilute the failure rate.
-      if (c.overall !== 'MEASURED') r.total++
+      r.total++
+      // MEASURED has no verdict: counted as a COA, never in the failure rate.
+      if (c.overall !== 'MEASURED') r.judged++
       if (isFailed(c)) r.failed++
       r.last = Math.max(r.last, t || 0)
       const d = qtyDeltaPct(c)
@@ -247,8 +246,8 @@ export function buildMatrix(
   }
 
   return [...rows.values()]
-    .filter(r => r.seen > 0)
-    .map(({ deltas, seen: _seen, ...r }) => ({
+    .filter(r => r.total > 0)
+    .map(({ deltas, ...r }) => ({
       ...r,
       qty: {
         n: deltas.length,
