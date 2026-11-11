@@ -268,3 +268,145 @@ def test_options_orders_default_to_empty_list_when_absent(client, db_session):
     with patch.dict(os.environ, {"INTEGRATION_SERVICE_URL": "http://is", "ACCU_MK1_API_KEY": "k"}),             patch("lims_analyses.retest_routes.requests.get", return_value=resp):
         body = client.get("/api/samples/P-2799/retest-options").json()
     assert body["context"]["orders"] == []
+
+
+# -- add-on test Variance (Task 17 fix round 2): the options tell the truth ----
+
+ENDO = "endotoxin-usp85-lal"
+
+
+def _options(client):
+    resp = MagicMock(status_code=200)
+    resp.json.return_value = CONTEXT
+    with patch.dict(os.environ, {"INTEGRATION_SERVICE_URL": "http://is", "ACCU_MK1_API_KEY": "k"}), \
+            patch("lims_analyses.retest_routes.requests.get", return_value=resp) as get:
+        r = client.get("/api/samples/P-2799/retest-options")
+    assert r.status_code == 200, r.text
+    assert get.call_count == 1   # the retest context only; Variance evidence is Mk1's own
+    return r.json()
+
+
+def _vial(db, original, *, seq, role, kind="variance"):
+    from models import LimsSubSample
+    v = LimsSubSample(sample_id=f"P-2799-S{seq:02d}", parent_sample_pk=original.id,
+                      external_lims_uid=f"p2799-r{seq}", vial_sequence=seq,
+                      assignment_role=role, assignment_kind=kind)
+    db.add(v)
+    db.flush()
+    return v
+
+
+def _hplc_variance(db):
+    """_seed plus HPLC Variance: an hplc variance vial and an HPLC override."""
+    import json
+    _seed(db)
+    original = db.query(LimsSample).filter_by(sample_id="P-2799").one()
+    original.variance_override = json.dumps({"hplcpurity_identity": 3})
+    _vial(db, original, seq=2, role="hplc")
+    db.commit()
+
+
+def _endo_variance(db):
+    """_seed plus a verified endotoxin (role endo85) that ran with Variance."""
+    _seed(db)
+    original = db.query(LimsSample).filter_by(sample_id="P-2799").one()
+    endo = db.query(AnalysisProfile).filter_by(key=ENDO).one()
+    endo.fulfillment_role = "endo85"
+    lal = AnalysisService(title="Endotoxin", keyword="ENDOTOXIN-USP85LAL", origin="mk1")
+    db.add(lal)
+    db.flush()
+    endo.analysis_services.append(lal)
+    original.catalog_snapshot = {"profiles": [*original.catalog_snapshot["profiles"],
+                                              {"key": ENDO, "profile_id": endo.id,
+                                               "service_ids": [lal.id], "fulfillment_role": "endo85"}]}
+    db.add(LimsAnalysis(lims_sample_pk=original.id, analysis_service_id=lal.id,
+                        keyword="ENDOTOXIN-USP85LAL", title="Endotoxin", provenance="canonical",
+                        review_state="published", result_value="0.5",
+                        verified_at=datetime(2026, 9, 20, 10, 0, 0)))
+    _vial(db, original, seq=2, role="endo85")
+    db.commit()
+
+
+def test_options_for_a_plain_sample_unchanged(client, db_session):
+    # Characterization: equal to the base payload (captured with the base
+    # retest_carry.py, see the Task 16+17 report, fix round 2).
+    _seed(db_session)
+    assert _options(client) == EXPECTED_PLAIN_OPTIONS
+
+
+def test_options_for_an_hplc_variance_sample_unchanged(client, db_session):
+    _hplc_variance(db_session)
+    assert _options(client) == EXPECTED_PLAIN_OPTIONS
+
+
+def test_options_report_a_variance_test_as_not_carryable(client, db_session):
+    _endo_variance(db_session)
+    body = _options(client)
+    by_key = {p["key"]: p for p in body["profiles"]}
+    assert by_key[ENDO]["carry_eligible"] is False
+    assert by_key[ENDO]["carry_blocked_reason"] == (
+        "ran with Variance; carrying a Variance test is not supported in this version")
+    # HPLC (pending) and heavy metals (no Variance) read exactly as on a plain sample.
+    plain = {p["key"]: p for p in EXPECTED_PLAIN_OPTIONS["profiles"]}
+    assert by_key["hplcpurity_identity"] == plain["hplcpurity_identity"]
+    assert by_key["heavy_metals"] == plain["heavy_metals"]
+
+
+def test_submit_built_from_the_options_is_accepted(client, db_session):
+    # What the dialog sends by default: carry what the options allow, every
+    # other unticked profile dropped (the Variance test among them).
+    _endo_variance(db_session)
+    profiles = _options(client)["profiles"]
+    retest = ["hplcpurity_identity"]
+    carry = [p["key"] for p in profiles if p["carry_eligible"] and p["key"] not in retest]
+    drop = [p["key"] for p in profiles if p["key"] not in retest and p["key"] not in carry]
+    assert carry == ["heavy_metals"] and drop == [ENDO]
+    resp = MagicMock(status_code=200)
+    resp.json.return_value = {"order_id": 1, "order_number": "WP-1", "status": "pending"}
+    with patch.dict(os.environ, {"INTEGRATION_SERVICE_URL": "http://is", "ACCU_MK1_API_KEY": "k"}), \
+            patch("lims_analyses.retest_routes.requests.post", return_value=resp):
+        r = client.post("/api/samples/P-2799/retest",
+                        json=_body(retest=retest, carry=carry, drop=drop,
+                                   add={"profiles": [], "variance_points": 0, "additional_vials": 0}))
+    assert r.status_code == 200, r.text
+
+
+def test_retest_route_refuses_a_variance_carry_with_400(client, db_session):
+    _endo_variance(db_session)
+    with patch("lims_analyses.retest_routes.requests.post") as post:
+        r = client.post("/api/samples/P-2799/retest",
+                        json=_body(retest=["hplcpurity_identity"], carry=["heavy_metals", ENDO],
+                                   add={"profiles": [], "variance_points": 0, "additional_vials": 0}))
+    assert r.status_code == 400
+    assert r.json()["detail"] == (f"{ENDO} ran with Variance on P-2799; "
+                                  "carrying a Variance test is not supported in this version")
+    post.assert_not_called()
+
+
+# The options payload for _seed, captured with the BASE (ca191646) retest_carry.py.
+EXPECTED_PLAIN_OPTIONS = {
+    "sample_id": "P-2799", "status": "published", "original_published": True,
+    "order_number": "WP-7437",
+    "profiles": [
+        {"key": "hplcpurity_identity", "name": "HPLC", "carry_eligible": False,
+         "carry_blocked_reason": "not verified yet", "state": "parent_to_verify",
+         "verified_at": None, "state_label": "Pending"},
+        {"key": "heavy_metals", "name": "Heavy Metals", "carry_eligible": True,
+         "carry_blocked_reason": None, "state": "published",
+         "verified_at": "2026-09-20T10:00:00", "state_label": "Verified 9/20"},
+    ],
+    "addons": [
+        {"key": ENDO, "name": "Endotoxin", "wp_type": "endotoxin", "price": 200.0,
+         "sellable": True, "vials": 1},
+        {"key": "fentanyl", "name": "Fentanyl Screening", "wp_type": None, "price": None,
+         "sellable": False, "vials": 0},
+    ],
+    "variance": {"point_price": 76.5, "allowed": True},
+    "prices_available": True,
+    "context": {
+        "order": CONTEXT["order"],
+        "retest_fee": {"price": 85.0},
+        "pending_orders": CONTEXT["pending_retest_orders"],
+        "orders": [],
+    },
+}

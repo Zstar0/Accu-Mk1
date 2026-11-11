@@ -461,3 +461,42 @@ def test_push_with_a_non_variance_invalid_spec_still_falls_back(db):
     assert "retest" not in (retest.catalog_snapshot or {})
     [warn] = _warnings(db, retest)
     assert warn.details["reason"] == "invalid_spec" and "fee" in warn.details["message"]
+
+
+def test_push_invalid_inside_the_validator_and_variance_still_falls_back(db):
+    # The spec parses, then fails a non-Variance validator rule (a drop of a
+    # profile not on the original) while also retesting a Variance test:
+    # the base fallback, with only the invalid_spec warning.
+    _variance_original(db)
+    retest, out = _push(db, _raw(retest=[ENDO], carry=[], drop=["fentanyl"]))
+    assert out == {"applied": False, "carried": 0, "missing": [], "demand_keys": []}
+    assert "retest" not in (retest.catalog_snapshot or {})
+    [warn] = _warnings(db, retest)
+    assert warn.details["reason"] == "invalid_spec"
+    assert warn.details["message"] == "not on P-2799, cannot be dropped: ['fentanyl']"
+
+
+def test_every_variance_refusal_is_listed(db):
+    # Retest of one Variance test and carry of another: both sentences, retest first.
+    original = _variance_original(db)
+    _variance_vial(db, original, seq=3, role="hm")
+    spec = parse_retest_spec(_raw(retest=[ENDO], carry=["heavy_metals"]))
+    with pytest.raises(BadRequestError) as exc:
+        validate_retest_spec(db, original=original, spec=spec)
+    assert str(exc.value) == (
+        VARIANCE_REFUSAL + "; heavy_metals ran with Variance on P-2799; "
+        "carrying a Variance test is not supported in this version")
+
+
+def test_carry_eligible_keys_leave_out_a_variance_test(db):
+    from lims_analyses.retest_carry import carry_blocked_reason
+    original = _variance_original(db)
+    assert ENDO not in carry_eligible_profile_keys(db, original)
+    endo = db.query(AnalysisProfile).filter_by(key=ENDO).one()
+    assert carry_blocked_reason(db, original, endo) == (
+        "ran with Variance; carrying a Variance test is not supported in this version")
+
+
+def test_carry_eligible_keys_keep_a_test_without_variance(db):
+    original = _variance_original(db, endo_replicate=False)
+    assert ENDO in carry_eligible_profile_keys(db, original)

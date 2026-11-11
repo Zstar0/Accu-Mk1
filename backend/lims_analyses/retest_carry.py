@@ -337,7 +337,7 @@ def _carry_plan(db: Session, original: LimsSample, prof: AnalysisProfile):
     return rows, withdrawn
 
 
-def carry_eligible_profile_keys(db: Session, original: LimsSample) -> set[str]:
+def _carry_plan_keys(db: Session, original: LimsSample) -> set[str]:
     """Snapshot profiles on the original that _carry_plan accepts.
 
     A member with no row at any tier on the original does not block the
@@ -347,10 +347,19 @@ def carry_eligible_profile_keys(db: Session, original: LimsSample) -> set[str]:
     return {key for key, prof in profiles.items() if _carry_plan(db, original, prof) is not None}
 
 
+def carry_eligible_profile_keys(db: Session, original: LimsSample) -> set[str]:
+    """_carry_plan_keys less the tests that ran with Variance (never carried in
+    this version), so the retest options offer only what the route accepts."""
+    keys = _carry_plan_keys(db, original)
+    return keys - _ran_with_variance(db, original, keys)
+
+
 def carry_blocked_reason(db: Session, original: LimsSample, prof: AnalysisProfile | None) -> str:
     """Why a profile _carry_plan refused cannot be carried (the overlay text)."""
     if prof is None:
         return "not in the catalog"
+    if _ran_with_variance(db, original, [prof.key]):
+        return _VARIANCE_REFUSAL["carry_option"]
     if prof.key == LEGACY_HPLC_KEY:
         why = _legacy_hplc_plan(db, original)[1]
         if why:
@@ -380,7 +389,8 @@ def validate_retest_spec(db: Session, *, original: LimsSample, spec: RetestSpec,
     unknown = [k for k in spec.add_profiles if k not in known]
     if unknown:
         raise BadRequestError(f"unknown profile(s): {unknown}")
-    eligible = carry_eligible_profile_keys(db, original)
+    # Variance is judged below (its own sentence, advisory at push time).
+    eligible = _carry_plan_keys(db, original)
     not_eligible = [k for k in spec.carry if k in have and k not in eligible]
     if not_eligible:
         raise BadRequestError(
@@ -398,6 +408,8 @@ _VARIANCE_REFUSAL = {
               "retesting a Variance test is not supported in this version",
     "carry": "{key} ran with Variance on {sample_id}; "
              "carrying a Variance test is not supported in this version",
+    # Shown inline by the retest dialog after "cannot carry: ".
+    "carry_option": "ran with Variance; carrying a Variance test is not supported in this version",
 }
 
 
@@ -441,14 +453,12 @@ def _ran_with_variance(db: Session, original: LimsSample, keys) -> set[str]:
 
 
 def variance_test_refusal(db: Session, original: LimsSample, spec: RetestSpec) -> str | None:
-    """The first sentence refusing to retest or carry a test that ran with
-    Variance on the original, or None."""
+    """Every sentence refusing to retest or carry a test that ran with
+    Variance on the original (retests first), joined with "; ", or None."""
     ran = _ran_with_variance(db, original, (*spec.retest, *spec.carry))
-    for field in ("retest", "carry"):
-        for key in getattr(spec, field):
-            if key in ran:
-                return _VARIANCE_REFUSAL[field].format(key=key, sample_id=original.sample_id)
-    return None
+    why = [_VARIANCE_REFUSAL[field].format(key=key, sample_id=original.sample_id)
+           for field in ("retest", "carry") for key in getattr(spec, field) if key in ran]
+    return "; ".join(why) or None
 
 
 def dropped_profile_keys(original: LimsSample, spec: RetestSpec) -> list[str]:
