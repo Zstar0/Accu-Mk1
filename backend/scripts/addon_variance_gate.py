@@ -88,7 +88,11 @@ OVERRIDE_SQL = (
     "SELECT k, count(*), "
     "count(*) FILTER (WHERE ls.variance_locked_at IS NOT NULL) AS locked, "
     "count(*) FILTER (WHERE ls.external_lims_system IS DISTINCT FROM 'mk1') AS not_native, "
-    "count(*) FILTER (WHERE ls.is_retest) AS retest, "
+    # The resolver's retest rule (coa.a_la_carte._is_retest).
+    "count(*) FILTER (WHERE ls.is_retest "
+    "OR coalesce(ls.retest_of_sample_id, '') <> '' "
+    "OR (jsonb_typeof(ls.catalog_snapshot) = 'object' "
+    "AND jsonb_exists(ls.catalog_snapshot, 'retest'))) AS retest, "
     "(array_agg(ls.sample_id ORDER BY ls.sample_id))[1:200] "
     "FROM lims_samples ls, unnest(CAST(:{param} AS text[])) AS k "
     "WHERE ls.variance_override IS NOT NULL "
@@ -124,7 +128,11 @@ def _judge_profiles(rows):
         if archetype != "limit_table":
             problems.append(f"{key} coa_archetype is {archetype!r}, not 'limit_table'")
         if role != ROLE_BY_KEY[key]:
-            problems.append(f"{key} role is {role!r}, expected {ROLE_BY_KEY[key]}")
+            problems.append(
+                f"{key} role is {role!r}, expected {ROLE_BY_KEY[key]} (do not change the "
+                "catalog to pass this check; if the live role code is intended (unique, and "
+                "not hplc, endo or ster), update ROLE_BY_KEY in this script and its tests "
+                "and re-run)")
         elif not role_row:
             problems.append(f"{key} role {role} has no vial_roles row")
         if not isinstance(vials, int) or isinstance(vials, bool) or vials < 1:
@@ -198,6 +206,19 @@ def _judge_snapshot_roles(rows):
     return "PASS", "nothing to do; every frozen role is one of " + ", ".join(ROLES)
 
 
+IS_GATE_TOO = ("Mk1 stores only variance_override; samples whose stored services map holds "
+               "a four-test key are counted by the Integration Service gate's check B: "
+               "run it too.")
+
+
+def _judge_overrides(rows):
+    if rows:
+        return "BLOCK", ("rule on each sample before release: after it these samples need the "
+                         "variance lock before a certificate can be generated, and a non-native "
+                         f"or retest sample is refused. {IS_GATE_TOO}")
+    return "PASS", f"no stored override holds a four-test key. {IS_GATE_TOO}"
+
+
 def _info_legacy(_rows):
     return "INFO", "evidence only; legacy overrides keep today's path and lock rule"
 
@@ -266,7 +287,7 @@ CHECKS = [
     (
         "4b hm in set or variance kind",
         "SELECT ss.sample_id, ss.vial_sequence, ss.assignment_kind, ss.in_variance_set, "
-        "ls.variance_locked_at IS NOT NULL AS parent_locked "
+        "ls.variance_locked_at IS NOT NULL AS parent_locked, count(*) OVER () AS total "
         "FROM lims_sub_samples ss JOIN lims_samples ls ON ls.id = ss.parent_sample_pk "
         "WHERE ss.assignment_role = :hm "
         "AND (ss.in_variance_set OR ss.assignment_kind = 'variance') "
@@ -286,13 +307,16 @@ CHECKS = [
     ),
     (
         "5b in-set test-role vials with HPLC or variance-capable rows",
+        # Starts from the filtered sub-samples (in set, test role: a small set)
+        # and only then joins lims_analyses, whose lims_sub_sample_pk has no
+        # index in the prod model.
         "SELECT ss.sample_id, ss.assignment_role, ss.assignment_kind, count(*) AS rows, "
-        f"count(*) FILTER (WHERE {LIVE_ROW}) AS live_rows "
-        "FROM lims_sub_samples ss "
+        f"count(*) FILTER (WHERE {LIVE_ROW}) AS live_rows, count(*) OVER () AS total "
+        "FROM (SELECT ss.id, ss.sample_id, ss.assignment_role, ss.assignment_kind "
+        f"FROM lims_sub_samples ss WHERE ss.in_variance_set AND {TEST_ROLE}) ss "
         "JOIN lims_analyses a ON a.lims_sub_sample_pk = ss.id "
         "JOIN analysis_services s ON s.id = a.analysis_service_id "
-        f"WHERE ss.in_variance_set AND {TEST_ROLE} "
-        "AND (s.category = ANY(CAST(:hplc_categories AS text[])) OR s.variance_capable) "
+        "WHERE s.category = ANY(CAST(:hplc_categories AS text[])) OR s.variance_capable "
         "GROUP BY 1, 2, 3 ORDER BY 1 LIMIT :cap",
         _block_if_rows(
             "rule on each vial before release: the fence drops it from the HPLC variance "
@@ -301,10 +325,7 @@ CHECKS = [
     (
         "6 four-test overrides",
         OVERRIDE_SQL.format(param="keys"),
-        _block_if_rows(
-            "rule on each sample before release: after it these samples need the variance "
-            "lock before a certificate can be generated, and a non-native or retest sample "
-            "is refused"),
+        _judge_overrides,
     ),
     (
         "6b legacy overrides",
@@ -322,6 +343,10 @@ CHECKS = [
         _judge_snapshot_roles,
     ),
 ]
+
+# Checks cut at LIMIT :cap; their last column is the uncut total.
+LIMITED = {"4b hm in set or variance kind",
+           "5b in-set test-role vials with HPLC or variance-capable rows"}
 
 _WRITE_WORDS = re.compile(
     r"\b(INSERT|UPDATE|DELETE|MERGE|UPSERT|CREATE|ALTER|DROP|TRUNCATE|GRANT|REVOKE|"
@@ -436,6 +461,11 @@ def _run_checks(checks, params):
         print(f"{tag} {label}: {why}")
         for r in rows:
             print(f"    {r}")
+            if (len(r) > 1 and isinstance(r[1], int) and r[1] > ID_CAP
+                    and any(isinstance(v, list) and len(v) == ID_CAP for v in r)):
+                print(f"    (first {ID_CAP} ids shown of {r[1]})")
+        if label in LIMITED and rows and rows[0][-1] > len(rows):
+            print(f"    (first {len(rows)} shown of {rows[0][-1]})")
     return _verdict(blocked, errored)
 
 
@@ -446,10 +476,20 @@ def _self_check_or_exit():
         print(f"self-check failed: {exc}")
         print("VERDICT: BLOCK (self-check)")
         sys.exit(1)
+    except Exception as exc:  # the type only, never str(exc)
+        print(f"self-check failed: {type(exc).__name__}")
+        print("VERDICT: BLOCK (self-check)")
+        sys.exit(1)
+
+
+HEADER = ("add-on Variance gate (read only). Run it after lab hours. A hang before the "
+          "first check means the database is unreachable: Ctrl+C is safe, nothing is "
+          "ever written.")
 
 
 if __name__ == "__main__":
     _self_check_or_exit()
+    print(HEADER)
     sys.exit(run())
 else:
     _self_check_or_exit()

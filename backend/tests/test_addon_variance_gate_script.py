@@ -31,6 +31,14 @@ def test_constants_match_the_code():
     assert not set(gate.ROLES) & vt.LEGACY_BUCKETS
 
 
+def test_role_codes_match_the_bench_routing():
+    """main._ROLE_BENCH_KIND is the only code that names the four test role
+    codes (vial_roles_seed seeds only the legacy five; endo85, pcr, usp71 are
+    admin-minted). Importing main is what many tests here already do."""
+    from main import _ROLE_BENCH_KIND
+    assert set(gate.ROLES) <= set(_ROLE_BENCH_KIND)
+
+
 def test_self_check_is_silent_when_clean(capsys):
     gate._self_check()
     assert capsys.readouterr().out == ""
@@ -55,10 +63,29 @@ def test_self_check_catches_planted_faults(sql, message):
         gate._self_check(checks=_with_sql("3 vial roles", sql))
 
 
-def test_self_check_catches_a_drifted_key():
+def test_self_check_catches_keys_out_of_step_with_the_role_map():
     drifted = [k for k in gate.KEYS if k != "heavy_metals"] + ["heavy-metals"]
-    with pytest.raises(gate.GateError, match="keys"):
+    with pytest.raises(gate.GateError, match="keys and roles disagree"):
         gate._self_check(keys=drifted)
+
+
+def test_self_check_catches_keys_drifted_from_the_code(monkeypatch):
+    """The code renamed a key; the script did not."""
+    renamed = (vt.VARIANCE_TEST_KEYS - {"heavy_metals"}) | {"heavy-metals"}
+    monkeypatch.setattr(vt, "VARIANCE_TEST_KEYS", frozenset(renamed))
+    with pytest.raises(gate.GateError, match="keys drifted from the code"):
+        gate._self_check()
+
+
+def test_unexpected_self_check_failure_prints_type_only(monkeypatch, capsys):
+    def boom(*_a, **_k):
+        raise ValueError("postgresql://user:secret@host/db")
+    monkeypatch.setattr(gate, "_self_check", boom)
+    with pytest.raises(SystemExit) as exit_:
+        gate._self_check_or_exit()
+    out = capsys.readouterr().out
+    assert exit_.value.code == 1
+    assert out.splitlines() == ["self-check failed: ValueError", "VERDICT: BLOCK (self-check)"]
 
 
 def test_selfcheck_run_prints_nothing_and_exits_0():
@@ -90,17 +117,20 @@ def test_failed_self_check_prints_block_verdict(tmp_path):
 
 
 def test_old_image_prints_one_line_that_keys_were_not_compared(tmp_path):
-    """Isolated from backend/ (as on the prod image before this release, where
-    sub_samples.variance_tests does not exist): one plain line, exit 0."""
+    """The prod image before this release: a `sub_samples` package exists but
+    has no `variance_tests` module, so the import raises ImportError
+    ("cannot import name"). One plain line, exit 0."""
+    (tmp_path / "sub_samples").mkdir()
+    (tmp_path / "sub_samples" / "__init__.py").write_text("", encoding="utf-8")
     proc = subprocess.run(
-        [sys.executable, "-I", "-c", "import runpy, sys; runpy.run_path(sys.argv[1], "
-         "run_name='selfcheck')", str(SCRIPT)],
+        [sys.executable, "-I", "-c", "import runpy, sys; sys.path.insert(0, sys.argv[2]); "
+         "runpy.run_path(sys.argv[1], run_name='selfcheck')", str(SCRIPT), str(tmp_path)],
         capture_output=True, text=True, cwd=tmp_path, timeout=120,
     )
     assert proc.returncode == 0
     assert proc.stdout.splitlines() == [
         "self-check: the key list was NOT compared with the code on this run "
-        "(ModuleNotFoundError; expected on the image before this release)"]
+        "(ImportError; expected on the image before this release)"]
     assert proc.stderr == ""
 
 
@@ -119,7 +149,8 @@ def test_profile_rule_mirrors_the_resolver():
     for planted, needle in [
         (_profile_row("sterility-usp71", vials=2), "2 analytical vials"),
         (_profile_row("sterility-usp71", vials=2, analytical=2), "2 analytical vials"),
-        (_profile_row("endotoxin-usp85-lal", role="endo"), "expected endo85"),
+        (_profile_row("endotoxin-usp85-lal", role="endo"),
+         "expected endo85 (do not change the catalog to pass this check"),
         (_profile_row("rapid-sterility-pcr", role_row=False), "no vial_roles row"),
         (_profile_row("heavy_metals", dim="kind"), "fulfillment_dim"),
         (_profile_row("heavy_metals", pid=None), "no catalog profile"),
@@ -129,10 +160,20 @@ def test_profile_rule_mirrors_the_resolver():
         assert tag == "BLOCK" and needle in why
 
 
+def test_override_sentences_point_at_the_is_gate():
+    for rows in ([], [("heavy_metals", 1, 0, 0, 0, ["P-0001"])]):
+        _tag, why = gate._judge_overrides(rows)
+        assert why.endswith(
+            "Mk1 stores only variance_override; samples whose stored services map holds "
+            "a four-test key are counted by the Integration Service gate's check B: run it too.")
+
+
 def _dev_postgres_or_skip():
     from sqlalchemy import text
 
-    from database import SessionLocal
+    from database import SessionLocal, engine
+    if engine.url.host not in ("127.0.0.1", "localhost"):
+        pytest.skip("the engine is not a local database")
     try:
         db = SessionLocal()
         try:
@@ -167,3 +208,27 @@ def test_a_write_is_refused_by_the_read_only_transaction(capsys):
     assert out.splitlines()[0].startswith("ERROR planted write: ")
     assert "read-only" not in out and "zz_gate_t18" not in out
     assert out.strip().splitlines()[-1] == "VERDICT: BLOCK (planted write error)"
+
+
+def test_a_failed_check_does_not_poison_the_next(capsys):
+    """Each check gets a fresh transaction: a check that fails is followed
+    by one that reads normally in the same run."""
+    _dev_postgres_or_skip()
+    code = gate.run(checks=[
+        ("planted error", "SELECT 1 / 0", gate._info_legacy),
+        ("after it", "SELECT 1", gate._info_legacy),
+    ])
+    lines = capsys.readouterr().out.strip().splitlines()
+    assert code == 1
+    assert lines[0].startswith("ERROR planted error: ")
+    assert lines[1].startswith("INFO after it: ")
+    assert lines[2] == "    (1,)"
+    assert lines[-1] == "VERDICT: BLOCK (planted error error)"
+
+
+def test_a_cut_list_says_how_many_were_left_out(capsys):
+    _dev_postgres_or_skip()
+    gate.run(checks=[(
+        "cut", "SELECT 'k', count(*), (array_agg(g ORDER BY g))[1:200] "
+        "FROM generate_series(1, 250) g", gate._info_legacy)])
+    assert "    (first 200 ids shown of 250)" in capsys.readouterr().out.splitlines()
