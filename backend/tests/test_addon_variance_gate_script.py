@@ -232,3 +232,88 @@ def test_a_cut_list_says_how_many_were_left_out(capsys):
         "cut", "SELECT 'k', count(*), (array_agg(g ORDER BY g))[1:200] "
         "FROM generate_series(1, 250) g", gate._info_legacy)])
     assert "    (first 200 ids shown of 250)" in capsys.readouterr().out.splitlines()
+
+
+def test_a_printer_failure_is_an_errored_check(capsys):
+    """A LIMIT-capped label whose last column is not a number makes the
+    printer raise: the check is errored by type, the run still ends in a
+    verdict and exits 1."""
+    _dev_postgres_or_skip()
+    label = "4b hm in set or variance kind"
+    code = gate.run(checks=[(label, "SELECT 'x'", gate._info_legacy),
+                            ("after it", "SELECT 1", gate._info_legacy)])
+    lines = capsys.readouterr().out.strip().splitlines()
+    assert code == 1
+    assert lines[0] == f"ERROR {label}: TypeError; {gate.ERROR_WHY}"
+    assert lines[1].startswith("INFO after it: ")
+    assert lines[-1] == f"VERDICT: BLOCK ({label} error)"
+
+
+def test_a_limit_capped_check_says_how_many_were_left_out(capsys):
+    _dev_postgres_or_skip()
+    label = "5b in-set test-role vials with HPLC or variance-capable rows"
+    gate.run(checks=[(label, "SELECT g, count(*) OVER () FROM generate_series(1, 250) g "
+                             f"ORDER BY g LIMIT {gate.ID_CAP}", gate._info_legacy)])
+    assert f"    (first {gate.ID_CAP} shown of 250)" in capsys.readouterr().out.splitlines()
+
+
+def test_snapshot_path_reads_never_raise_on_any_shape():
+    """The JSON path pieces of checks 7 and 8 over every snapshot shape:
+    (unreadable by the resolver's rule, other non-array, profile entries)."""
+    _dev_postgres_or_skip()
+    shapes = {
+        "a json null": ("null", False, False, 0),
+        "b array": ("[1]", False, True, 0),
+        "c string": ('"x"', False, True, 0),
+        "d empty object": ("{}", False, True, 0),
+        "e profiles null": ('{"profiles": null}', False, True, 0),
+        "f profiles string": ('{"profiles": "s"}', True, False, 0),
+        "g profiles empty object": ('{"profiles": {}}', False, True, 0),
+        "h profiles object": ('{"profiles": {"a": 1}}', True, False, 0),
+        "i profiles false": ('{"profiles": false}', False, True, 0),
+        "j profiles array": ('{"profiles": [{"key": "heavy_metals"}]}', False, False, 1),
+    }
+    values = ", ".join(f"('{k}', CAST('{v[0]}' AS jsonb))" for k, v in shapes.items())
+    got = {}
+
+    def keep(rows):
+        got.update({r[0]: tuple(r[1:]) for r in rows})
+        return "INFO", "test"
+    sql = (f"SELECT t.label, {gate.UNREADABLE('t')}, {gate.NOT_ARRAY('t')}, "
+           f"(SELECT count(*) FROM jsonb_array_elements({gate.PROFILES('t')}) e) "
+           f"FROM (VALUES {values}) AS t(label, catalog_snapshot)")
+    assert gate.run(checks=[("shapes", sql, keep)]) == 0
+    assert got == {k: v[1:] for k, v in shapes.items()}
+
+
+def _fact_row(key="heavy_metals", **kw):
+    row = dict(n=3, ids=["P-1"], f_role="hm", f_vials="2", has_av=True, f_av="1",
+               l_role="hm", l_vials=2, l_av=1)
+    row.update(kw)
+    return (key, row["n"], row["ids"], row["f_role"], row["f_vials"], row["has_av"],
+            row["f_av"], row["l_role"], row["l_vials"], row["l_av"])
+
+
+def test_snapshot_facts_rule():
+    assert gate._judge_snapshot_facts([_fact_row()])[0] == "INFO"
+    # An entry without analytical_vials reads it live: not a difference.
+    assert gate._judge_snapshot_facts([_fact_row(has_av=False, f_av=None)])[0] == "INFO"
+    assert gate._judge_snapshot_facts([_fact_row(f_av=None, l_av=None)])[0] == "INFO"
+    for planted, needle in [
+        (_fact_row(f_vials="1"), "vials_required 1 vs live 2"),
+        (_fact_row(f_av=None), "analytical_vials None vs live 1"),
+        (_fact_row(f_role="hplc"), "a frozen role outside"),
+    ]:
+        tag, why = gate._judge_snapshot_facts([planted])
+        assert tag == "BLOCK" and needle in why
+
+
+def test_check_5_names_the_publish_guard_scope():
+    judge = {c[0]: c[2] for c in gate.CHECKS}["5 variance vials on test roles"]
+    tag, why = judge([("pcr", 1, ["P-1-S02"])])
+    assert tag == "BLOCK" and "publish guard's scope" in why
+
+
+def test_one_cap_constant_everywhere():
+    src = SCRIPT.read_text(encoding="utf-8")
+    assert "[1:200]" not in src and "LIMIT 200" not in src

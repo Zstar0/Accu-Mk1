@@ -84,6 +84,33 @@ TEST_ROLE = (
     "AND p.fulfillment_role <> ALL(CAST(:legacy AS text[]))))"
 )
 LIVE_ROW = "(NOT a.retested AND a.review_state NOT IN ('rejected', 'retracted'))"
+
+
+# JSON path reads inside catalog_snapshot (never the whole document). `a`
+# is the table alias. None of them raises on a snapshot of any JSON type.
+def PROFILES(a):
+    """The snapshot's profiles array, or an empty array for any other shape."""
+    snap = a + ".catalog_snapshot"
+    return ("CASE WHEN jsonb_typeof(" + snap + "->'profiles') = 'array' "
+            "THEN " + snap + "->'profiles' ELSE '[]'::jsonb END")
+
+
+def UNREADABLE(a):
+    """The resolver's unreadable rule (variance_tests._snapshot_readable is
+    False): an object snapshot whose `profiles` is truthy and not a list."""
+    p = a + ".catalog_snapshot->'profiles'"
+    return ("coalesce(jsonb_typeof(" + a + ".catalog_snapshot) = 'object' "
+            "AND jsonb_typeof(" + p + ") NOT IN ('array', 'null') "
+            "AND " + p + " NOT IN ('false'::jsonb, '0'::jsonb, '\"\"'::jsonb, '{}'::jsonb), "
+            "false)")
+
+
+def NOT_ARRAY(a):
+    """Any other present snapshot without a profiles array (non-object, or
+    profiles missing, null or falsy): Mk1 reads it as having no profiles."""
+    return ("(jsonb_typeof(" + a + ".catalog_snapshot) <> 'null' "
+            "AND coalesce(jsonb_typeof(" + a + ".catalog_snapshot->'profiles'), 'missing') "
+            "<> 'array' AND NOT " + UNREADABLE(a) + ")")
 OVERRIDE_SQL = (
     "SELECT k, count(*), "
     "count(*) FILTER (WHERE ls.variance_locked_at IS NOT NULL) AS locked, "
@@ -93,7 +120,7 @@ OVERRIDE_SQL = (
     "OR coalesce(ls.retest_of_sample_id, '') <> '' "
     "OR (jsonb_typeof(ls.catalog_snapshot) = 'object' "
     "AND jsonb_exists(ls.catalog_snapshot, 'retest'))) AS retest, "
-    "(array_agg(ls.sample_id ORDER BY ls.sample_id))[1:200] "
+    "(array_agg(ls.sample_id ORDER BY ls.sample_id))[1:{cap}] "
     "FROM lims_samples ls, unnest(CAST(:{param} AS text[])) AS k "
     "WHERE ls.variance_override IS NOT NULL "
     "AND strpos(ls.variance_override, '\"' || k || '\"') > 0 "
@@ -197,13 +224,49 @@ def _block_if_rows(why):
     return judge
 
 
-def _judge_snapshot_roles(rows):
-    bad = [f"{r[0]} -> {r[1]}" for r in rows if r[1] is not None and r[1] not in ROLES]
-    if bad:
-        return "BLOCK", ("rule on these snapshot roles: a four-test role that HPLC or another "
-                         "test also uses would drop those vials out of the HPLC series: "
-                         + ", ".join(bad))
-    return "PASS", "nothing to do; every frozen role is one of " + ", ".join(ROLES)
+def _as_text(value):
+    """A live column as the frozen JSON's ->> text (None stays None)."""
+    return None if value is None else str(value)
+
+
+def _judge_snapshot_facts(rows):
+    """Rows: key, count, ids, frozen role, frozen vials_required, frozen has
+    analytical_vials, frozen analytical_vials, live role, live vials_required,
+    live analytical_vials. Frozen values decide a replicate plan."""
+    bad_roles, drift = [], []
+    for key, n, _ids, f_role, f_vials, has_av, f_av, l_role, l_vials, l_av in rows:
+        if f_role is not None and f_role not in ROLES:
+            bad_roles.append(f"{key} -> {f_role}")
+        diffs = []
+        if f_role != l_role:
+            diffs.append(f"role {f_role} vs live {l_role}")
+        if f_vials != _as_text(l_vials):
+            diffs.append(f"vials_required {f_vials} vs live {l_vials}")
+        # An entry without the key reads analytical_vials live (_profile_facts).
+        if has_av and f_av != _as_text(l_av):
+            diffs.append(f"analytical_vials {f_av} vs live {l_av}")
+        if diffs:
+            drift.append(f"{key} on {n} sample(s): " + ", ".join(diffs))
+    parts = []
+    if bad_roles:
+        parts.append("a frozen role outside " + ", ".join(ROLES) + " (a role HPLC or another "
+                     "test also uses would drop those vials out of the HPLC series): "
+                     + ", ".join(bad_roles))
+    if drift:
+        parts.append("frozen catalog facts differ from live (a Variance upgrade on these "
+                     "samples plans its vials and its Vial or Digest label from the frozen "
+                     "values; decide what happens to them before selling Variance upgrades "
+                     "on them): " + "; ".join(drift))
+    if parts:
+        return "BLOCK", "rule on: " + " | ".join(parts)
+    return "INFO", "nothing to do; every frozen role and vial count equals the live catalog"
+
+
+def _judge_unreadable_snapshots(_rows):
+    return "INFO", ("samples counted as unreadable cannot take four-test Variance until "
+                    "their snapshot is repaired (the resolver refuses and the role fence logs "
+                    "a warning); they are otherwise unaffected. The second row is evidence "
+                    "only: Mk1 reads those snapshots as having no profiles")
 
 
 IS_GATE_TOO = ("Mk1 stores only variance_override; samples whose stored services map holds "
@@ -297,13 +360,16 @@ CHECKS = [
     (
         "5 variance vials on test roles",
         "SELECT ss.assignment_role, count(*), "
-        "(array_agg(ss.sample_id ORDER BY ss.sample_id))[1:200] "
+        f"(array_agg(ss.sample_id ORDER BY ss.sample_id))[1:{ID_CAP}] "
         f"FROM lims_sub_samples ss WHERE ss.assignment_kind = 'variance' AND {TEST_ROLE} "
         "GROUP BY 1 ORDER BY 1",
         _block_if_rows(
             "give these vial ids to the owner before release: after it they leave the HPLC "
             "variance series and, on a sample with a four-test Variance map, count as "
-            "replicate runs"),
+            "replicate runs. Any such vial also puts its sample in the publish guard's "
+            "scope: one extra order read and one extra draft read at publish, and publish "
+            "is refused on any rebuild error until the certificate is regenerated on the "
+            "new code"),
     ),
     (
         "5b in-set test-role vials with HPLC or variance-capable rows",
@@ -324,23 +390,41 @@ CHECKS = [
     ),
     (
         "6 four-test overrides",
-        OVERRIDE_SQL.format(param="keys"),
+        OVERRIDE_SQL.format(param="keys", cap=ID_CAP),
         _judge_overrides,
     ),
     (
         "6b legacy overrides",
-        OVERRIDE_SQL.format(param="legacy_keys"),
+        OVERRIDE_SQL.format(param="legacy_keys", cap=ID_CAP),
         _info_legacy,
     ),
     (
-        "7 snapshot roles of the four keys",
-        "SELECT e->>'key' AS key, e->>'fulfillment_role' AS role, count(*) "
-        "FROM lims_samples ls, jsonb_array_elements(CASE WHEN "
-        "jsonb_typeof(ls.catalog_snapshot->'profiles') = 'array' "
-        "THEN ls.catalog_snapshot->'profiles' ELSE '[]'::jsonb END) e "
+        "7 snapshot facts of the four keys",
+        # Frozen values are read as ->> text inside the snapshot (never the
+        # whole document) and printed beside the live catalog values.
+        "SELECT e->>'key' AS key, count(*), "
+        f"(array_agg(ls.sample_id ORDER BY ls.sample_id))[1:{ID_CAP}], "
+        "e->>'fulfillment_role' AS frozen_role, e->>'vials_required' AS frozen_vials, "
+        "jsonb_exists(e, 'analytical_vials') AS frozen_has_analytical, "
+        "e->>'analytical_vials' AS frozen_analytical, "
+        "p.fulfillment_role AS live_role, p.vials_required AS live_vials, "
+        "p.analytical_vials AS live_analytical "
+        f"FROM lims_samples ls CROSS JOIN LATERAL jsonb_array_elements({PROFILES('ls')}) e "
+        "LEFT JOIN analysis_profiles p ON p.key = e->>'key' "
         "WHERE jsonb_typeof(e) = 'object' AND e->>'key' = ANY(CAST(:keys AS text[])) "
-        "GROUP BY 1, 2 ORDER BY 1, 2",
-        _judge_snapshot_roles,
+        "GROUP BY 1, 4, 5, 6, 7, 8, 9, 10 ORDER BY 1, 4, 5, 7",
+        _judge_snapshot_facts,
+    ),
+    (
+        "8 unreadable snapshots",
+        f"SELECT 'unreadable', count(*) FILTER (WHERE {UNREADABLE('ls')}), "
+        f"(array_agg(ls.sample_id ORDER BY ls.sample_id) FILTER (WHERE {UNREADABLE('ls')}))"
+        f"[1:{ID_CAP}] FROM lims_samples ls WHERE ls.catalog_snapshot IS NOT NULL "
+        "UNION ALL "
+        f"SELECT 'profiles not an array', count(*) FILTER (WHERE {NOT_ARRAY('ls')}), "
+        f"(array_agg(ls.sample_id ORDER BY ls.sample_id) FILTER (WHERE {NOT_ARRAY('ls')}))"
+        f"[1:{ID_CAP}] FROM lims_samples ls WHERE ls.catalog_snapshot IS NOT NULL",
+        _judge_unreadable_snapshots,
     ),
 ]
 
@@ -447,7 +531,12 @@ def _run_checks(checks, params):
             finally:
                 db.rollback()
                 db.close()
+            # Judged and printed only after the rollback; a failure here is
+            # an errored check like any other.
             tag, why = judge(rows)
+            lines = _report_lines(label, tag, why, rows)
+            for line in lines:
+                print(line)
         except GateError as exc:
             errored.append(label)
             print(f"ERROR {label}: {exc}; {ERROR_WHY}")
@@ -458,15 +547,19 @@ def _run_checks(checks, params):
             continue
         if tag == "BLOCK":
             blocked.append(label)
-        print(f"{tag} {label}: {why}")
-        for r in rows:
-            print(f"    {r}")
-            if (len(r) > 1 and isinstance(r[1], int) and r[1] > ID_CAP
-                    and any(isinstance(v, list) and len(v) == ID_CAP for v in r)):
-                print(f"    (first {ID_CAP} ids shown of {r[1]})")
-        if label in LIMITED and rows and rows[0][-1] > len(rows):
-            print(f"    (first {len(rows)} shown of {rows[0][-1]})")
     return _verdict(blocked, errored)
+
+
+def _report_lines(label, tag, why, rows):
+    lines = [f"{tag} {label}: {why}"]
+    for r in rows:
+        lines.append(f"    {r}")
+        if (len(r) > 1 and isinstance(r[1], int) and r[1] > ID_CAP
+                and any(isinstance(v, list) and len(v) == ID_CAP for v in r)):
+            lines.append(f"    (first {ID_CAP} ids shown of {r[1]})")
+    if label in LIMITED and rows and rows[0][-1] > len(rows):
+        lines.append(f"    (first {len(rows)} shown of {rows[0][-1]})")
+    return lines
 
 
 def _self_check_or_exit():
