@@ -545,7 +545,11 @@ def test_loader_counts_endo_parent_row_plus_replicate_row_as_one_test():
                          review_state="variance_verified", result_value="0.4"),
         ])
         db.commit()
+        parent_id = parent.id
         inputs = _load_throughput_inputs(db)
+        # The loader alone keeps parent-tier rows only: the replicate row is out.
+        assert [(a.sample_pk, a.keyword) for a in inputs["analyses"]] == [
+            (parent_id, "ENDOTOXIN-USP85LAL")]
     finally:
         db.close()
     r = build(samples=inputs["samples"], analyses=inputs["analyses"],
