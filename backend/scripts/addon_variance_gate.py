@@ -95,22 +95,53 @@ def PROFILES(a):
             "THEN " + snap + "->'profiles' ELSE '[]'::jsonb END")
 
 
+# Python falsy JSON values. jsonb compares numbers by value, so 0.0 and -0
+# equal '0' (falsy, as in Python); '{}' and '[]' are the empty containers.
+_FALSY = ("('null'::jsonb, 'false'::jsonb, '0'::jsonb, '\"\"'::jsonb, "
+          "'[]'::jsonb, '{}'::jsonb)")
+
+
+def NONDICT_UNREADABLE(a):
+    """A truthy non-object snapshot (non-empty array or string, non-zero
+    number, true). Mirrors variance_tests._snapshot_readable (truthy and not
+    a dict) and coa.native_sections._merged_services, which refuses EVERY
+    native certificate of such a sample."""
+    s = a + ".catalog_snapshot"
+    return ("coalesce(jsonb_typeof(" + s + ") <> 'object' AND " + s + " NOT IN " + _FALSY
+            + ", false)")
+
+
+def PROFILES_UNREADABLE(a):
+    """An object snapshot whose `profiles` is truthy and not a list.
+    Mirrors variance_tests._snapshot_readable (a dict whose
+    `profiles or []` is not a list) and _snapshot_profiles (the fence logs a
+    warning): the resolver refuses four-test Variance."""
+    s = a + ".catalog_snapshot"
+    p = s + "->'profiles'"
+    return ("coalesce(jsonb_typeof(" + s + ") = 'object' AND jsonb_typeof(" + p
+            + ") <> 'array' AND " + p + " NOT IN " + _FALSY + ", false)")
+
+
 def UNREADABLE(a):
-    """The resolver's unreadable rule (variance_tests._snapshot_readable is
-    False): an object snapshot whose `profiles` is truthy and not a list."""
-    p = a + ".catalog_snapshot->'profiles'"
-    return ("coalesce(jsonb_typeof(" + a + ".catalog_snapshot) = 'object' "
-            "AND jsonb_typeof(" + p + ") NOT IN ('array', 'null') "
-            "AND " + p + " NOT IN ('false'::jsonb, '0'::jsonb, '\"\"'::jsonb, '{}'::jsonb), "
-            "false)")
+    """variance_tests._snapshot_readable is False: either shape above."""
+    return "(" + NONDICT_UNREADABLE(a) + " OR " + PROFILES_UNREADABLE(a) + ")"
 
 
 def NOT_ARRAY(a):
-    """Any other present snapshot without a profiles array (non-object, or
-    profiles missing, null or falsy): Mk1 reads it as having no profiles."""
+    """Any other present snapshot without a profiles array (a falsy
+    non-object snapshot other than JSON null, or an object whose profiles are
+    missing, null or falsy): Mk1 reads it as having no profiles, no refusal."""
     return ("(jsonb_typeof(" + a + ".catalog_snapshot) <> 'null' "
             "AND coalesce(jsonb_typeof(" + a + ".catalog_snapshot->'profiles'), 'missing') "
             "<> 'array' AND NOT " + UNREADABLE(a) + ")")
+# Check 8's rows: (label, predicate), in that order.
+SNAPSHOT_ROWS = [
+    ("unreadable snapshot, not an object", NONDICT_UNREADABLE("ls")),
+    ("unreadable profiles", PROFILES_UNREADABLE("ls")),
+    ("no profiles array, read as no profiles", NOT_ARRAY("ls")),
+]
+
+
 OVERRIDE_SQL = (
     "SELECT k, count(*), "
     "count(*) FILTER (WHERE ls.variance_locked_at IS NOT NULL) AS locked, "
@@ -263,10 +294,15 @@ def _judge_snapshot_facts(rows):
 
 
 def _judge_unreadable_snapshots(_rows):
-    return "INFO", ("samples counted as unreadable cannot take four-test Variance until "
-                    "their snapshot is repaired (the resolver refuses and the role fence logs "
-                    "a warning); they are otherwise unaffected. The second row is evidence "
-                    "only: Mk1 reads those snapshots as having no profiles")
+    """INFO: existing data. Row 1 is already broken before this release."""
+    return "INFO", (
+        "row 1 (unreadable snapshot, not an object): these samples are broken already; "
+        "they cannot generate ANY native certificate until the snapshot is repaired "
+        "(before this release generation crashed on them, now it is refused) and cannot "
+        "take four-test Variance. Row 2 (unreadable profiles): these cannot take "
+        "four-test Variance until the snapshot is repaired (the resolver refuses and the "
+        "role fence logs a warning); other certificates are unaffected. Row 3: evidence "
+        "only; Mk1 reads these snapshots as having no profiles and refuses nothing")
 
 
 IS_GATE_TOO = ("Mk1 stores only variance_override; samples whose stored services map holds "
@@ -417,13 +453,11 @@ CHECKS = [
     ),
     (
         "8 unreadable snapshots",
-        f"SELECT 'unreadable', count(*) FILTER (WHERE {UNREADABLE('ls')}), "
-        f"(array_agg(ls.sample_id ORDER BY ls.sample_id) FILTER (WHERE {UNREADABLE('ls')}))"
-        f"[1:{ID_CAP}] FROM lims_samples ls WHERE ls.catalog_snapshot IS NOT NULL "
-        "UNION ALL "
-        f"SELECT 'profiles not an array', count(*) FILTER (WHERE {NOT_ARRAY('ls')}), "
-        f"(array_agg(ls.sample_id ORDER BY ls.sample_id) FILTER (WHERE {NOT_ARRAY('ls')}))"
-        f"[1:{ID_CAP}] FROM lims_samples ls WHERE ls.catalog_snapshot IS NOT NULL",
+        " UNION ALL ".join(
+            f"SELECT '{name}', count(*) FILTER (WHERE {pred}), "
+            f"(array_agg(ls.sample_id ORDER BY ls.sample_id) FILTER (WHERE {pred}))"
+            f"[1:{ID_CAP}] FROM lims_samples ls WHERE ls.catalog_snapshot IS NOT NULL"
+            for name, pred in SNAPSHOT_ROWS),
         _judge_unreadable_snapshots,
     ),
 ]

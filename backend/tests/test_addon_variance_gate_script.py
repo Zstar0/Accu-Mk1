@@ -258,32 +258,49 @@ def test_a_limit_capped_check_says_how_many_were_left_out(capsys):
 
 
 def test_snapshot_path_reads_never_raise_on_any_shape():
-    """The JSON path pieces of checks 7 and 8 over every snapshot shape:
-    (unreadable by the resolver's rule, other non-array, profile entries)."""
+    """The JSON path pieces of checks 7 and 8 over every snapshot shape, each
+    judged against the Python code itself so the SQL cannot drift from it:
+    variance_tests._snapshot_readable, _snapshot_profiles, and the
+    `parent.catalog_snapshot or {}` dict test of native_sections._merged_services
+    (copied, since that function needs an order lookup)."""
+    import json
     _dev_postgres_or_skip()
-    shapes = {
-        "a json null": ("null", False, False, 0),
-        "b array": ("[1]", False, True, 0),
-        "c string": ('"x"', False, True, 0),
-        "d empty object": ("{}", False, True, 0),
-        "e profiles null": ('{"profiles": null}', False, True, 0),
-        "f profiles string": ('{"profiles": "s"}', True, False, 0),
-        "g profiles empty object": ('{"profiles": {}}', False, True, 0),
-        "h profiles object": ('{"profiles": {"a": 1}}', True, False, 0),
-        "i profiles false": ('{"profiles": false}', False, True, 0),
-        "j profiles array": ('{"profiles": [{"key": "heavy_metals"}]}', False, False, 1),
-    }
-    values = ", ".join(f"('{k}', CAST('{v[0]}' AS jsonb))" for k, v in shapes.items())
+    shapes = [
+        "null", "[1]", '"x"', "{}", '{"profiles": null}', '{"profiles": "s"}',
+        '{"profiles": {}}', '{"profiles": {"a": 1}}', '{"profiles": false}',
+        '{"profiles": [{"key": "heavy_metals"}]}',
+        # whole-snapshot scalars and arrays, truthy and falsy
+        "[1, 2]", '"text"', "3", "true", "0", "0.0", "-0", "false", '""', "[]",
+        '{"profiles": 0.0}', '{"profiles": []}',
+    ]
+    values = ", ".join(f"({i}, CAST('{v}' AS jsonb))" for i, v in enumerate(shapes))
     got = {}
 
     def keep(rows):
         got.update({r[0]: tuple(r[1:]) for r in rows})
         return "INFO", "test"
-    sql = (f"SELECT t.label, {gate.UNREADABLE('t')}, {gate.NOT_ARRAY('t')}, "
+    sql = (f"SELECT t.i, {gate.NONDICT_UNREADABLE('t')}, {gate.PROFILES_UNREADABLE('t')}, "
+           f"{gate.NOT_ARRAY('t')}, "
            f"(SELECT count(*) FROM jsonb_array_elements({gate.PROFILES('t')}) e) "
-           f"FROM (VALUES {values}) AS t(label, catalog_snapshot)")
+           f"FROM (VALUES {values}) AS t(i, catalog_snapshot)")
     assert gate.run(checks=[("shapes", sql, keep)]) == 0
-    assert got == {k: v[1:] for k, v in shapes.items()}
+    for i, text in enumerate(shapes):
+        snap = json.loads(text)
+        unreadable = not vt._snapshot_readable(snap)
+        refuses_every_certificate = not isinstance(snap or {}, dict)
+        profiles = snap.get("profiles") if isinstance(snap, dict) else None
+        no_profiles = (snap is not None and not unreadable
+                       and not isinstance(profiles, list))
+        expected = (unreadable and not isinstance(snap, dict),
+                    unreadable and isinstance(snap, dict),
+                    no_profiles, len(vt._snapshot_profiles(snap)))
+        assert got[i] == expected, text
+        assert expected[0] == refuses_every_certificate, text
+
+
+def test_check_8_rows_use_the_tested_predicates():
+    assert [pred for _name, pred in gate.SNAPSHOT_ROWS] == [
+        gate.NONDICT_UNREADABLE("ls"), gate.PROFILES_UNREADABLE("ls"), gate.NOT_ARRAY("ls")]
 
 
 def _fact_row(key="heavy_metals", **kw):
