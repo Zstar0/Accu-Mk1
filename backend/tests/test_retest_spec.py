@@ -205,10 +205,13 @@ def test_variance_accepts_either_hplc_profile_key(hplc_key):
 ENDO = "endotoxin-usp85-lal"
 VARIANCE_REFUSAL = (f"{ENDO} ran with Variance on P-2799; "
                     "retesting a Variance test is not supported in this version")
+CARRY_REFUSAL = (f"{ENDO} ran with Variance on P-2799; "
+                 "carrying a Variance test is not supported in this version")
 
 
 def _variance_original(db, *, endo_replicate=True, override=None):
-    """Original over HPLC, heavy metals and endotoxin (role endo85). With
+    """Original over HPLC, heavy metals and endotoxin (role endo85), with a
+    published endotoxin parent row (so endotoxin is carry-eligible). With
     endo_replicate, one signed-off endotoxin replicate anchor vial."""
     from models import LimsSubSample
     original = _original(db, keys=("hplcpurity_identity", "heavy_metals", ENDO))
@@ -219,6 +222,9 @@ def _variance_original(db, *, endo_replicate=True, override=None):
     db.add(lal)
     db.flush()
     profiles[ENDO].analysis_services.append(lal)
+    db.add(LimsAnalysis(lims_sample_pk=original.id, analysis_service_id=lal.id,
+                        keyword="ENDOTOXIN-USP85LAL", title="Endotoxin", provenance="canonical",
+                        review_state="published", result_value="0.5"))
     original.variance_override = override
     for seq, kind in ((1, "core"), (2, "variance")):
         if kind == "variance" and not endo_replicate:
@@ -288,36 +294,170 @@ def test_hplc_variance_retest_unchanged(db):
     assert validate_retest_spec(db, original=original, spec=spec) == []
 
 
-def test_apply_retest_spec_falls_back_with_warning_event(db):
+def _variance_vial(db, original, *, seq, role="endo85", in_set=True, row=False):
+    """A variance-kind vial on the original, optionally with one live row."""
+    from models import LimsSubSample
+    vial = LimsSubSample(sample_id=f"P-2799-S{seq:02d}", parent_sample_pk=original.id,
+                         external_lims_uid=f"p2799-x{seq}", vial_sequence=seq,
+                         assignment_role=role, assignment_kind="variance", in_variance_set=in_set)
+    db.add(vial)
+    db.flush()
+    if row:
+        svc = db.query(AnalysisService).filter_by(keyword="ENDOTOXIN-USP85LAL").one()
+        db.add(LimsAnalysis(lims_sub_sample_pk=vial.id, analysis_service_id=svc.id,
+                            keyword="ENDOTOXIN-USP85LAL", title="Endotoxin", result_value="0.4",
+                            review_state="variance_verified"))
+    db.commit()
+
+
+# -- ruling 3: any variance-kind vial of the role is evidence ----
+
+def test_variance_vial_assigned_but_not_seeded_is_evidence(db):
+    original = _variance_original(db, endo_replicate=False)
+    _variance_vial(db, original, seq=3)
+    spec = parse_retest_spec(_raw(retest=[ENDO], carry=[]))
+    with pytest.raises(BadRequestError) as exc:
+        validate_retest_spec(db, original=original, spec=spec)
+    assert str(exc.value) == VARIANCE_REFUSAL
+
+
+def test_heavy_metals_material_vial_is_evidence(db):
+    original = _variance_original(db, endo_replicate=False)
+    _variance_vial(db, original, seq=3, role="hm")   # material vial: no rows
+    spec = parse_retest_spec(_raw(retest=["heavy_metals"], carry=[]))
+    with pytest.raises(BadRequestError,
+                       match="^heavy_metals ran with Variance on P-2799; retesting a Variance test"):
+        validate_retest_spec(db, original=original, spec=spec)
+
+
+def test_variance_vial_taken_out_of_the_set_is_evidence(db):
+    original = _variance_original(db, endo_replicate=False)
+    _variance_vial(db, original, seq=3, in_set=False, row=True)
+    spec = parse_retest_spec(_raw(retest=[ENDO], carry=[]))
+    with pytest.raises(BadRequestError) as exc:
+        validate_retest_spec(db, original=original, spec=spec)
+    assert str(exc.value) == VARIANCE_REFUSAL
+
+
+def test_malformed_override_is_treated_as_absent_and_logged(db, caplog):
+    original = _variance_original(db, endo_replicate=False, override="{not json")
+    spec = parse_retest_spec(_raw(retest=[ENDO], carry=[]))
+    with caplog.at_level("WARNING", logger="lims_analyses.retest_carry"):
+        assert validate_retest_spec(db, original=original, spec=spec) == []
+    assert any("retest.variance_override_unreadable sample_id=P-2799" in r.getMessage()
+               for r in caplog.records)
+
+
+# -- ruling 2: carrying a test that ran with Variance is refused ----
+
+def test_carry_of_endotoxin_that_ran_variance_is_refused(db):
+    original = _variance_original(db)
+    spec = parse_retest_spec(_raw(retest=["heavy_metals"], carry=[ENDO]))
+    with pytest.raises(BadRequestError) as exc:
+        validate_retest_spec(db, original=original, spec=spec)
+    assert str(exc.value) == CARRY_REFUSAL
+
+
+def test_carry_of_endotoxin_without_variance_unchanged(db):
+    original = _variance_original(db, endo_replicate=False)
+    spec = parse_retest_spec(_raw(retest=["heavy_metals"], carry=[ENDO]))
+    assert validate_retest_spec(db, original=original, spec=spec) == []
+
+
+def test_drop_of_endotoxin_that_ran_variance_is_accepted(db):
+    original = _variance_original(db)
+    spec = parse_retest_spec(_raw(retest=["heavy_metals"], carry=[], drop=[ENDO]))
+    assert validate_retest_spec(db, original=original, spec=spec) == []
+    assert ENDO in dropped_profile_keys(original, spec)
+
+
+def test_hplc_carry_on_hplc_variance_sample_unchanged(db):
+    # Characterization (passes on the base): an original that ran HPLC
+    # Variance carries its verified HPLC line exactly as before.
+    from models import LimsSubSample
+    original = _original(db)
+    original.variance_override = json.dumps({"hplcpurity_identity": 3})
+    old = AnalysisService(title="Purity", keyword="HPLC-PUR", origin="senaite")
+    db.add(old)
+    db.flush()
+    db.add(LimsAnalysis(lims_sample_pk=original.id, analysis_service_id=old.id,
+                        keyword="HPLC-PUR", title="Purity", provenance="canonical",
+                        review_state="published", result_value="99.2"))
+    vial = LimsSubSample(sample_id="P-2799-S02", parent_sample_pk=original.id,
+                         external_lims_uid="p2799-h2", vial_sequence=2,
+                         assignment_role="hplc", assignment_kind="variance", in_variance_set=True)
+    db.add(vial)
+    db.commit()
+    assert "hplcpurity_identity" in carry_eligible_profile_keys(db, original)
+    spec = parse_retest_spec(_raw(retest=["heavy_metals"], carry=["hplcpurity_identity"]))
+    assert validate_retest_spec(db, original=original, spec=spec) == []
+
+
+# -- ruling 1: at push time the Variance rule only warns ----
+
+def _push(db, raw, services=None):
+    from lims_analyses.retest_carry import apply_retest_spec
+    retest = db.query(LimsSample).filter_by(sample_id="P-3017").one_or_none()
+    if retest is None:
+        # Prod shape: the registration signal stamps the lineage first.
+        retest = LimsSample(sample_id="P-3017", external_lims_system="mk1", status="sample_due",
+                            retest_of_sample_id="P-2799")
+        db.add(retest)
+        db.commit()
+    out = apply_retest_spec(db, parent=retest, raw_spec=raw,
+                            services=services or {ENDO: True, "heavy_metals": True},
+                            package=None, source="test")
+    db.commit()
+    return retest, out
+
+
+def _warnings(db, sample):
     from sqlalchemy import select
 
-    from lims_analyses.retest_carry import apply_retest_spec
     from models import LimsSubSampleEvent
-    from sub_samples.service import variance_plan_for_parent
-    from sub_samples.variance_tests import is_retest_sample
-
-    _variance_original(db)
-    # Prod shape: the registration signal stamps retest_of_sample_id
-    # (RetestOfSampleId) before the order upsert calls apply_retest_spec.
-    retest = LimsSample(sample_id="P-3017", external_lims_system="mk1", status="sample_due",
-                        retest_of_sample_id="P-2799")
-    db.add(retest)
-    db.commit()
-    services = {ENDO: True, "samplevariance": True, "variance": {ENDO: 3}}
-    out = apply_retest_spec(db, parent=retest, raw_spec=_raw(retest=[ENDO], carry=[]),
-                            services=services, package=None, source="test")
-    db.commit()
-    assert out["applied"] is False
-    warns = db.execute(select(LimsSubSampleEvent).where(
-        LimsSubSampleEvent.lims_sample_pk == retest.id,
+    return db.execute(select(LimsSubSampleEvent).where(
+        LimsSubSampleEvent.lims_sample_pk == sample.id,
         LimsSubSampleEvent.event == "retest_spec_warning")).scalars().all()
+
+
+def test_push_applies_a_variance_retest_with_one_warning(db):
+    from lims_analyses.parent_placeholders import PROVENANCE_ORDERED
+    _variance_original(db)
+    retest, out = _push(db, _raw(retest=[ENDO], carry=["heavy_metals"]))
+    assert out["applied"] is True
+    assert out["demand_keys"] == [ENDO]
+    # Rider, demand and carry are all present.
+    assert retest.catalog_snapshot["retest"]["retest"] == [ENDO]
+    assert retest.is_retest is True and retest.retest_of_sample_id == "P-2799"
+    kws = {r.keyword: r.provenance for r in db.query(LimsAnalysis).filter_by(lims_sample_pk=retest.id)}
+    assert kws.get("ENDOTOXIN-USP85LAL") == PROVENANCE_ORDERED
+    assert out["carried"] == 1 and "ARSENIC-PPM" in kws
+    warns = [w for w in _warnings(db, retest) if w.details.get("reason") == "variance_test_retest"]
+    assert [w.details["message"] for w in warns] == [VARIANCE_REFUSAL]
+
+
+def test_push_applies_a_variance_carry_with_one_warning(db):
+    _variance_original(db)
+    retest, out = _push(db, _raw(retest=["heavy_metals"], carry=[ENDO]))
+    assert out["applied"] is True
+    warns = [w for w in _warnings(db, retest) if w.details.get("reason") == "variance_test_retest"]
+    assert [w.details["message"] for w in warns] == [CARRY_REFUSAL]
+
+
+def test_second_push_writes_no_second_variance_warning(db):
+    _variance_original(db)
+    raw = _raw(retest=[ENDO], carry=["heavy_metals"])
+    _push(db, raw)
+    retest, out = _push(db, raw)
+    assert out["applied"] is True
+    warns = [w for w in _warnings(db, retest) if w.details.get("reason") == "variance_test_retest"]
     assert len(warns) == 1
-    assert warns[0].details["reason"] == "invalid_spec"
-    assert warns[0].details["message"] == VARIANCE_REFUSAL
-    # Pinned so a change is deliberate (see the Task 17 report): the fallback
-    # keeps the signal's lineage, so the sample still reads as a retest and
-    # its four-key entry is a note, not a replicate plan.
-    assert is_retest_sample(retest) is True
-    plan = variance_plan_for_parent(db, retest, services)
-    assert plan.by_role == {}
-    assert plan.notes == (f"Variance for {ENDO} is not carried to a retest in this version",)
+
+
+def test_push_with_a_non_variance_invalid_spec_still_falls_back(db):
+    _variance_original(db)
+    retest, out = _push(db, _raw(retest=[ENDO], carry=[], fee="gratis"))
+    assert out == {"applied": False, "carried": 0, "missing": [], "demand_keys": []}
+    assert "retest" not in (retest.catalog_snapshot or {})
+    [warn] = _warnings(db, retest)
+    assert warn.details["reason"] == "invalid_spec" and "fee" in warn.details["message"]
