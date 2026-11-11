@@ -299,3 +299,32 @@ def test_replicate_anchor_vials_skip_material_core_and_out_of_set(db_session):
     _vial(db, parent, 9, "variance", rows=live, role="endo85")  # other role
     got = replicate_anchor_vials(db, parent.id, "hm")
     assert [v.id for v in got] == [v3.id, v5.id]
+
+
+# ── Final fix wave ──────────────────────────────────────────────────────────
+
+@pytest.mark.parametrize("snapshot", [[{"key": HM, "fulfillment_role": "hm"}], "profiles", 7],
+                         ids=["list", "string", "number"])
+def test_truthy_non_dict_snapshot_is_unreadable_and_never_raises(cat, snapshot):
+    plan = _plan(cat, {HM: True, "variance": {HM: 2}}, snapshot=snapshot)
+    assert plan.by_role == {}
+    assert plan.errors == (f"Variance for {HM}: the registration snapshot is unreadable",)
+
+
+def test_bool_vials_required_is_not_one_vial(cat):
+    snap = {"profiles": [{"key": ENDO, "fulfillment_role": "endo85", "vials_required": True,
+                          "analytical_vials": None}]}
+    plan = _plan(cat, {ENDO: True, "variance": {ENDO: 2}}, snapshot=snap)
+    assert plan.by_role == {}
+    assert plan.errors == (f"Variance for {ENDO}: the test ships no vials of its own",)
+
+
+def test_snapshot_explicit_null_analytical_vials_is_not_read_live(cat):
+    # Live USP71 is one vial a run and would resolve; the frozen entry says
+    # two vials and no analytical split, so both are analytical.
+    snap = {"profiles": [{"key": USP71, "fulfillment_role": "usp71", "vials_required": 2,
+                          "analytical_vials": None}]}
+    plan = _plan(cat, {USP71: True, "variance": {USP71: 2}}, snapshot=snap)
+    assert plan.by_role == {}
+    assert plan.errors == (f"Variance for {USP71}: Mk1 supports one analytical vial per run, "
+                           f"the catalog says 2",)

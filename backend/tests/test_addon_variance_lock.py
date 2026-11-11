@@ -397,11 +397,13 @@ def pg():
 
 
 def _pg_parent(db, sid, *, vials=0):
+    svc_id = db.execute(text("SELECT id FROM analysis_services LIMIT 1")).scalar_one_or_none()
+    if svc_id is None:
+        pytest.skip("the dev analysis_services table is empty")
     parent = LimsSample(sample_id=sid, peptide_name="ZZ", status="received",
                         external_lims_system="mk1")
     db.add(parent)
     db.flush()
-    svc_id = db.execute(text("SELECT id FROM analysis_services LIMIT 1")).scalar_one()
     for seq in range(1, vials + 1):
         v = LimsSubSample(sample_id=f"{sid}-S{seq:02d}", parent_sample_pk=parent.id,
                           external_lims_uid=f"zzt12pg-{sid}-{seq}", vial_sequence=seq,

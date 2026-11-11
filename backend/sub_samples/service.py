@@ -1672,14 +1672,23 @@ def derive_variance_demand(services: dict, plan: Optional[VariancePlan] = None) 
     return out
 
 
-def variance_lock_required(services: Optional[dict], variance_locked_at) -> bool:
+def variance_lock_required(services: Optional[dict], variance_locked_at,
+                           plan: Optional[VariancePlan] = None) -> bool:
     """True when COA generation must be blocked pending a variance-set lock:
-    variance was purchased (any legacy bucket target >= 1, or any four-key
-    add-on Variance entry at all) AND the set isn't locked yet. A four-key
-    entry that does not resolve still holds the certificate; the lock then
-    refuses it. `services` is the inner WP services dict (with the 'variance' map)."""
+    variance was purchased (any legacy bucket target >= 1, or a four-key
+    add-on Variance entry) AND the set isn't locked yet. A four-key entry
+    that does not resolve still holds the certificate; the lock then
+    refuses it. `services` is the inner WP services dict (with the 'variance' map).
+
+    `plan` (variance_plan_for_parent) narrows the four-key rule: the entry
+    holds the certificate only when the plan gives it a role or carries an
+    error. A plan of notes only (a retest) needs no lock, as at base.
+    Without a plan every four-key entry holds it."""
     demand = derive_variance_demand(services or {})
-    purchased = any(n >= 1 for n in demand.values()) or has_variance_test_entry(services)
+    four_key = has_variance_test_entry(services)
+    if four_key and plan is not None:
+        four_key = bool(plan.by_role or plan.errors)
+    purchased = any(n >= 1 for n in demand.values()) or four_key
     return purchased and variance_locked_at is None
 
 

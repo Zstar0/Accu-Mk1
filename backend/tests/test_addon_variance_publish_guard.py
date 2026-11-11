@@ -732,3 +732,55 @@ def test_a_builder_refusal_keeps_result_values_out_of_logs_and_flags(factory, db
     # The lab's manual route still sees the full detail.
     detail = _refused(lab, db, "P-7494")
     assert "'x0.777'" in detail and detail.startswith("cannot publish P-7494: native sections:")
+
+
+# ── Final fix wave: a non-dict snapshot; the lock on a retest ──────────────
+
+@pytest.mark.parametrize("snapshot", [[{"key": ENDO_KEY}], "profiles", 7],
+                         ids=["list", "string", "number"])
+def test_truthy_non_dict_snapshot_refuses_publish_and_never_raises(db, monkeypatch, lab,
+                                                                    snapshot):
+    w = _generated(db, monkeypatch, lab, "P-7494")
+    w.parent.catalog_snapshot = snapshot
+    db.commit()
+    # The builder reads the snapshot's retest rider before the plan, so it
+    # refuses there (it used to raise AttributeError, a 500).
+    assert _refused(lab, db, "P-7494") == (
+        "cannot publish P-7494: native sections: the registration snapshot is unreadable "
+        "on P-7494")
+
+
+def _lock_blocked(lab, db, sid):
+    with pytest.raises(HTTPException) as e:
+        lab.generate(db, sid)
+    assert e.value.status_code == 422
+    assert "variance" in str(e.value.detail).lower()
+
+
+def test_retest_with_four_test_variance_generates_without_a_lock(db, monkeypatch, lab):
+    from tests.test_addon_variance_coa_rows import ENDO_NAME, _names
+    w = _endo_world(db, monkeypatch, "P-7495", n=3, replicates=(("0.5", "to_be_verified"),))
+    w.parent.is_retest = True
+    w.parent.retest_of_sample_id = "P-7000"
+    db.commit()
+    assert w.parent.variance_locked_at is None
+    plan = sub_service.variance_plan_for_parent(db, w.parent, w.services)
+    assert (plan.by_role, plan.errors) == ({}, ())
+    assert sub_service.variance_lock_required(w.services, None, plan=plan) is False
+    res = lab.generate(db, "P-7495")
+    assert res.success is True, res.message
+    assert _names(build_native_sections(db, w.parent), ENDO_KEY) == [ENDO_NAME]
+
+
+def test_non_retest_with_the_same_entry_still_needs_the_lock(db, monkeypatch, lab):
+    _endo_world(db, monkeypatch, "P-7496", n=3,
+                replicates=(("0.5", "variance_verified"), ("0.6", "variance_verified")))
+    _lock_blocked(lab, db, "P-7496")
+
+
+def test_an_entry_with_a_plan_error_still_needs_the_lock(db, monkeypatch, lab):
+    w = _endo_world(db, monkeypatch, "P-7497", n=1, replicates=())
+    plan = sub_service.variance_plan_for_parent(db, w.parent, w.services)
+    assert plan.errors and not plan.by_role
+    assert sub_service.variance_lock_required(w.services, None, plan=plan) is True
+    _lock_blocked(lab, db, "P-7497")

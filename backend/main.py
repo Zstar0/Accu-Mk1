@@ -14593,10 +14593,14 @@ async def generate_sample_coa(
         ).scalar_one_or_none()
         if _pre_parent is not None:
             try:
-                from sub_samples.service import fetch_sample_services, variance_lock_required
+                from sub_samples.service import (fetch_sample_services, variance_lock_required,
+                                                 variance_plan_for_parent)
                 _vsvc = fetch_sample_services(sample_id)
+                _vservices = (_vsvc or {}).get("services") or {}
+                # A retest's four-key entry is a note, not a run: no lock, as at base.
                 _variance_required = variance_lock_required(
-                    (_vsvc or {}).get("services") or {}, _pre_parent.variance_locked_at
+                    _vservices, _pre_parent.variance_locked_at,
+                    plan=variance_plan_for_parent(db, _pre_parent, _vservices),
                 )
             except HTTPException:
                 raise

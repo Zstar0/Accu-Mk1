@@ -94,8 +94,13 @@ def is_bac_water_sample(parent) -> bool:
 
 
 def _snapshot_readable(snapshot) -> bool:
-    entries = (snapshot.get("profiles") if isinstance(snapshot, dict) else None) or []
-    return isinstance(entries, (list, tuple))
+    """No snapshot reads live; a truthy non-dict, or a dict whose profiles
+    are not a list, is unreadable (never `.get` on it)."""
+    if not snapshot:
+        return True
+    if not isinstance(snapshot, dict):
+        return False
+    return isinstance(snapshot.get("profiles") or [], (list, tuple))
 
 
 def _snapshot_profiles(snapshot, sample_id=None) -> list:
@@ -138,7 +143,7 @@ def _profile_facts(db, key: str, snapshot: dict | None):
                       else (live.analytical_vials if live is not None else None))
     if not role:
         return None, "the test has no vial role"
-    if not isinstance(vials, int) or vials < 1:
+    if not isinstance(vials, int) or isinstance(vials, bool) or vials < 1:
         return None, "the test ships no vials of its own"
     return (role, vials, vials if analytical is None else analytical), None
 

@@ -654,3 +654,76 @@ async def test_regular_child_is_not_emitted(db, monkeypatch, caplog):
                                                  {"generation_id": "g-1"})
     assert client.calls == []
     assert any(UNSIGNED_P7430 in r.getMessage() for r in caplog.records)
+
+
+# ── Final fix wave: a planned test that never prints; the fence's cost ─────
+
+def _not_reportable(prof, svcs):
+    prof.coa_archetype = None
+
+
+def _not_all_native(prof, svcs):
+    svcs[0].origin = "senaite"
+
+
+@pytest.mark.parametrize("mutate", [_not_reportable, _not_all_native],
+                         ids=["not_reportable", "not_all_native"])
+def test_planned_profile_that_never_reaches_the_loop_refuses(db, monkeypatch, mutate):
+    w = _hm_world(db, monkeypatch, "P-7440")
+    mutate(w.prof, w.svcs)
+    db.commit()
+    with pytest.raises(NativeSectionsError) as e:
+        build_native_sections(db, w.parent)
+    assert str(e.value) == (
+        "native sections: 'heavy_metals' bought 2 Variance runs but its profile does not "
+        "print on P-7440 (not reportable or not all-native); fix the profile or set the "
+        "Variance count")
+
+
+def test_deferred_planned_profile_is_not_a_missing_one(db, monkeypatch):
+    w = _endo_world(db, monkeypatch, "P-7441", n=2)
+    db.delete(w.base)
+    db.commit()
+    doc = build_native_sections(db, w.parent)
+    assert doc["sections"] == []
+    assert doc["deferred_sections"] == [ENDO_KEY]
+
+
+def test_fence_is_asked_only_when_a_vial_has_a_non_legacy_role(db, monkeypatch):
+    import coa.variance_series as vs
+    calls = []
+    real = vs.variance_test_roles
+
+    def spy(db, parent=None):
+        calls.append(parent.sample_id)
+        return real(db, parent)
+    monkeypatch.setattr(vs, "variance_test_roles", spy)
+
+    # No variance vial (an endotoxin core vial only): no fence, no query.
+    w = _endo_world(db, monkeypatch, "P-7442", n=None, replicates=())
+    assert vs.build_variance_replicates(db, w.parent) == {}
+    assert vs.build_variance_analyte_series(db, w.parent) == {}
+    assert calls == []
+
+    # HPLC Variance only (legacy role on every vial): no fence either.
+    pep = Peptide(name="BPC-157", abbreviation="BPC157", active=True)
+    db.add(pep)
+    db.flush()
+    pur = _svc(db, "PUR_BPC157", pep.id)
+    parent = _parent(db, "P-7443")
+    for seq, kind, state in ((1, "core", "promoted"), (2, "variance", "variance_verified")):
+        _vial_row(db, _vial(db, parent, seq, "hplc", kind), pur, f"99.{seq}", state=state,
+                  reportable=True)
+    db.commit()
+    series = vs.build_variance_replicates(db, parent)
+    analytes = vs.build_variance_analyte_series(db, parent)
+    assert [r["vial_sequence"] for r in series["BPC-157"]] == [1, 2]
+    assert calls == []
+
+    # An endotoxin replicate joins: the fence runs and keeps it out.
+    endo = _svc(db, "ENDOTOXIN-USP85LAL")
+    _vial_row(db, _vial(db, parent, 3, "endo85", "variance"), endo, "0.5", reportable=True)
+    db.commit()
+    assert vs.build_variance_replicates(db, parent) == series
+    assert vs.build_variance_analyte_series(db, parent) == analytes
+    assert calls == ["P-7443", "P-7443"]

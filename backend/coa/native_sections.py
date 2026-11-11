@@ -427,7 +427,13 @@ def _merged_services(db: Session, parent) -> tuple:
     # Native retest: carried profiles report from the retest's own carried
     # rows, whatever shape the IS payload gives their keys. Keys in `missing`
     # were never on the original, so nothing was carried for them.
-    rider = (parent.catalog_snapshot or {}).get("retest") or {}
+    snapshot = parent.catalog_snapshot or {}
+    if not isinstance(snapshot, dict):
+        # Fail closed (was an AttributeError, a 500): a retest's carried
+        # profiles cannot be read, so nothing may print without them.
+        raise NativeSectionsError(
+            f"native sections: the registration snapshot is unreadable on {sample_id}")
+    rider = snapshot.get("retest") or {}
     for key in set(rider.get("carry") or []) - set(rider.get("missing") or []):
         if not services.get(key):
             services[key] = True
@@ -672,6 +678,18 @@ def _build_from_services(db: Session, parent, raw, services, *, vial_parent_ids,
             "footnotes": _section_footnotes(prof.coa_footnotes, values),
             "rows": rows,
         })
+
+    if plan is not None:
+        # A planned test whose profile never reached the loop (not
+        # reportable, not all-native) would lose its paid runs silently.
+        # A deferred profile is accounted for (deferred_sections, trace).
+        reached = {s["profile_key"] for s in sections} | set(deferred_profiles)
+        for rv in sorted(plan.by_role.values(), key=lambda rv: rv.key):
+            if rv.key not in reached:
+                raise NativeSectionsError(
+                    f"native sections: '{rv.key}' bought {rv.n} Variance runs but its "
+                    f"profile does not print on {sample_id} (not reportable or not "
+                    f"all-native); fix the profile or set the Variance count")
 
     if vial_parent_ids is not None:
         return {
