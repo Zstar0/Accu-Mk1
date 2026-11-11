@@ -25,13 +25,15 @@ def _legacy_block(db, parent, sections: list | None = None) -> dict:
     return block
 
 
-def build_coa_wire_document(db, parent) -> dict:
+def build_coa_wire_document(db, parent, *, trace=None) -> dict:
     """The document COABuilder receives as `native_sections`.
 
     Raises NativeSectionsError (from either builder) — callers keep their
-    existing fail-closed handling.
+    existing fail-closed handling. `trace` is build_native_sections' (the
+    Variance fingerprint content; never on the wire).
     """
-    doc = build_native_sections(db, parent)
+    doc = (build_native_sections(db, parent) if trace is None
+           else build_native_sections(db, parent, trace=trace))
     if coa_generation_source(db) == "mk1":
         doc["legacy_rows"] = _legacy_block(db, parent, doc["sections"])
         doc["sample_meta"] = build_sample_meta(db, parent)

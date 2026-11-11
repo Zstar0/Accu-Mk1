@@ -434,7 +434,8 @@ def _merged_services(db: Session, parent) -> tuple:
     return raw, services
 
 
-def build_native_sections(db: Session, parent, *, vial_parent_ids=None) -> dict:
+def build_native_sections(db: Session, parent, *, vial_parent_ids=None,
+                          trace: Optional[list] = None) -> dict:
     """Assemble the native-sections wire document for a parent LimsSample.
 
     `vial_parent_ids` (per-vial certificates, 2026-10-20): the ids of the
@@ -453,12 +454,19 @@ def build_native_sections(db: Session, parent, *, vial_parent_ids=None) -> dict:
     lists, a VALID document (the ordered_profiles cross-check is what lets
     callers distinguish "nothing ordered" from "something broke"). All
     non-deferral failures raise NativeSectionsError.
+
+    `trace` (a list, filled in place, never on the wire): one entry per
+    planned four-test Variance profile, in print order, the content
+    `variance_fingerprint` hashes. The publish guard compares it with the
+    one recorded when the draft was generated.
     """
     raw, services = _merged_services(db, parent)
-    return _build_from_services(db, parent, raw, services, vial_parent_ids=vial_parent_ids)
+    return _build_from_services(db, parent, raw, services,
+                                vial_parent_ids=vial_parent_ids, trace=trace)
 
 
-def _build_from_services(db: Session, parent, raw, services, *, vial_parent_ids) -> dict:
+def _build_from_services(db: Session, parent, raw, services, *, vial_parent_ids,
+                         trace: Optional[list] = None) -> dict:
     """build_native_sections after the order lookup (see its docstring)."""
     sample_id = parent.sample_id
 
@@ -518,6 +526,8 @@ def _build_from_services(db: Session, parent, raw, services, *, vial_parent_ids)
                 sample_id, prof.key,
             )
             deferred_profiles.append(prof.key)
+            if trace is not None and plan is not None and plan.for_key(prof.key) is not None:
+                trace.append({"profile_key": prof.key, "deferred": True, "runs": []})
             continue
 
         rows = []
@@ -530,6 +540,7 @@ def _build_from_services(db: Session, parent, raw, services, *, vial_parent_ids)
         # The members that printed (a withdrawn member is skipped), in
         # member order: every Variance run prints the same members.
         printed = []
+        printed_rows = []
         for svc, row in member_rows:
             if row is None:
                 if _withdrawn_by_lab(db, parent.id, svc.id):
@@ -561,6 +572,7 @@ def _build_from_services(db: Session, parent, raw, services, *, vial_parent_ids)
             limits.append(limit)
             all_form_report_only = all_form_report_only and form_report_only
             printed.append(svc)
+            printed_rows.append(row)
         if not rows:
             # Rule 3 (section half): unreachable while members are required
             # non-empty in _ordered_native_profiles, kept as defence.
@@ -617,6 +629,7 @@ def _build_from_services(db: Session, parent, raw, services, *, vial_parent_ids)
                 )
             for row_out, svc in zip(rows, printed):
                 row_out["name"] = f"{svc.title}, {rv.run_label} 1"
+            traced = [_trace_row(1, row, row_out) for row_out, row in zip(rows, printed_rows)]
             for i, run in runs:
                 for svc, rep in run:
                     row_out, limit, form_report_only = _member_row(
@@ -624,9 +637,12 @@ def _build_from_services(db: Session, parent, raw, services, *, vial_parent_ids)
                         peptide_id=peptide_id, sample_form_id=sample_form_id,
                         form_tier=form_tier)
                     row_out["name"] = f"{svc.title}, {rv.run_label} {i}"
+                    traced.append(_trace_row(i, rep, row_out))
                     rows.append(row_out)
                     limits.append(limit)
                     all_form_report_only = all_form_report_only and form_report_only
+            if trace is not None:
+                trace.append({"profile_key": prof.key, "deferred": False, "runs": traced})
         # Endo slice 4: the profile's COA text may carry {lod} and optional
         # [ ... ] segments, filled from this section's rows (coa.text_macros).
         # Text with no macro comes back exactly as typed.
@@ -675,85 +691,157 @@ def _build_from_services(db: Session, parent, raw, services, *, vial_parent_ids)
     return doc
 
 
-def _utc_naive(value):
-    """A datetime as naive UTC (Mk1 stores naive UTC; the Integration
-    Service's coa_generations.created_at is timestamptz)."""
-    from datetime import datetime, timezone
-    if isinstance(value, str):
-        value = datetime.fromisoformat(value)
-    if value.tzinfo is not None:
-        value = value.astimezone(timezone.utc).replace(tzinfo=None)
-    return value
+# ── Add-on test Variance: generation fingerprint and the publish guard ─────
+#
+# Publish ships an existing draft and never builds the document. So each
+# generation records, on its `coa_generated` sample event, a fingerprint of
+# the four-test Variance content the builder returned (`trace`), and publish
+# rebuilds and compares. Whatever changed since (a retest, a rejected row, a
+# vial out of the set, a kind or role flip, a count change, a deferral, a
+# core row) changes the build or the fingerprint.
+
+GENERATED_EVENT = "coa_generated"
 
 
-def _replicate_changed_at(db: Session, rows: list) -> dict:
-    """{row id: last change} for replicate rows: the newest of the row's
-    created_at, verified_at and its newest transition (every verb writes
-    one: submit, variance_verify, retest, reject, retract)."""
-    from sqlalchemy import func
-
-    from models import LimsAnalysisTransition
-
-    last_transition = dict(db.execute(
-        select(LimsAnalysisTransition.analysis_id, func.max(LimsAnalysisTransition.occurred_at))
-        .where(LimsAnalysisTransition.analysis_id.in_([r.id for r in rows]))
-        .group_by(LimsAnalysisTransition.analysis_id)
-    ).all()) if rows else {}
-    return {r.id: max(t for t in (r.created_at, r.verified_at, last_transition.get(r.id))
-                      if t is not None)
-            for r in rows}
+def _trace_row(run: int, row, row_out: dict) -> dict:
+    return {"run": run, "vial_pk": row.lims_sub_sample_pk, "row_pk": row.id,
+            "keyword": row_out["keyword"], "result": row_out["result"],
+            "result_display": row_out.get("result_display"),
+            "conforms": row_out.get("conforms")}
 
 
-def variance_publish_refusal(db: Session, sample_id: str, *,
-                             draft_generated_at) -> Optional[str]:
-    """Why the newest draft of `sample_id` must not be published, or None.
+def _canonical(trace: list) -> list:
+    """The trace as it reads back from a JSON column."""
+    import json
+    return json.loads(json.dumps(trace, default=str))
 
-    Publish ships an existing draft and never builds the document, so a
-    replicate retested, rejected or taken out of the set after generation
-    would ship the old value. Scope first: a sample with no variance vial
-    (in set or not) of a four-test role returns None after one SELECT (every
-    sample today). In scope: (1) completeness, by building the parent document with
-    the same builder generation uses (read-only: SELECTs and the order
-    lookup, nothing posted or written), so a failed order lookup refuses
-    (Rule 1); (2) staleness: no current row on a replicate anchor of a
-    planned role may have changed after the draft was generated.
-    `draft_generated_at` is a zero-argument callable (the Integration
-    Service read), called only in scope; a failed read refuses too."""
-    from models import LimsAnalysis
+
+def variance_fingerprint(trace: list) -> str:
+    """sha256 of the canonical JSON (sorted keys) of a builder `trace`. A
+    document with no four-test plan has the fingerprint of []."""
+    import hashlib
+    import json
+    return hashlib.sha256(json.dumps(_canonical(trace), sort_keys=True,
+                                     separators=(",", ":")).encode()).hexdigest()
+
+
+def _recorded_generations(db: Session, sample_id: str) -> list:
+    """details of the sample's parent `coa_generated` events, newest first
+    (per-vial events, which carry vial_sequence, left out). ONE indexed read
+    (lims_samples.sample_id, ix_lims_sub_sample_events_parent)."""
+    from models import LimsSample, LimsSubSampleEvent
+    rows = db.execute(
+        select(LimsSubSampleEvent.details)
+        .join(LimsSample, LimsSample.id == LimsSubSampleEvent.lims_sample_pk)
+        .where(LimsSample.sample_id == sample_id,
+               LimsSubSampleEvent.event == GENERATED_EVENT)
+        .order_by(LimsSubSampleEvent.id.desc())
+    ).scalars().all()
+    return [d or {} for d in rows if "vial_sequence" not in (d or {})]
+
+
+def _printed_runs(details: dict) -> bool:
+    return bool((details.get("variance") or {}).get("trace"))
+
+
+def _variance_scope(db: Session, sample_id: str):
+    """(in scope, recorded generations, parent or None). In scope when the
+    newest recorded generation printed Variance runs, or the sample has a
+    variance vial of a four-test role (any set state). Neither costs exactly
+    two SELECTs: the events read and the vial read."""
     from sub_samples.variance_tests import four_test_replicate_parent
-
+    generations = _recorded_generations(db, sample_id)
     parent = four_test_replicate_parent(db, sample_id)
-    if parent is None:
+    in_scope = parent is not None or bool(generations and _printed_runs(generations[0]))
+    return in_scope, generations, parent
+
+
+def variance_generation_record(db: Session, sample_id: str, trace: list, *,
+                               generation_id=None) -> Optional[dict]:
+    """`details["variance"]` for the `coa_generated` event of a successful
+    generation, or None to leave the event exactly as today (no runs printed
+    and the sample out of the guard's scope)."""
+    if not trace and not _variance_scope(db, sample_id)[0]:
         return None
+    trace = _canonical(trace)
+    return {"fingerprint": variance_fingerprint(trace),
+            "runs": len({(p["profile_key"], r["run"]) for p in trace for r in p["runs"]}),
+            "generation_id": generation_id,
+            "trace": trace}
+
+
+def _first_difference(old: list, new: list, draft: str) -> str:
+    """The first differing profile and run, in plain words."""
+    from itertools import zip_longest
+    old_by = {p["profile_key"]: p for p in old}
+    new_by = {p["profile_key"]: p for p in new}
+    state = {True: "deferred", False: "printed"}
+    for key in dict.fromkeys([p["profile_key"] for p in old] + [p["profile_key"] for p in new]):
+        o, n = old_by.get(key), new_by.get(key)
+        if o is None:
+            return f"'{key}' prints Variance runs now but not on {draft}"
+        if n is None:
+            return f"'{key}' printed Variance runs on {draft} but no longer does"
+        if o["deferred"] != n["deferred"]:
+            return f"'{key}' was {state[o['deferred']]} on {draft} and is {state[n['deferred']]} now"
+        for a, b in zip_longest(o["runs"], n["runs"]):
+            if a == b:
+                continue
+            if a is None:
+                return f"'{key}' run {b['run']} member '{b['keyword']}' is new since {draft}"
+            if b is None:
+                return f"'{key}' run {a['run']} member '{a['keyword']}' on {draft} no longer prints"
+            where = f"'{key}' run {a['run']} member '{a['keyword']}'"
+            if (a["result"], a["conforms"]) != (b["result"], b["conforms"]):
+                return f"{where} printed {a['result']} on {draft}, now {b['result']}"
+            return f"{where} now comes from a different vial or result row than on {draft}"
+    return f"the Variance runs differ from {draft}"
+
+
+def variance_publish_refusal(db: Session, sample_id: str, *, draft_badge) -> Optional[str]:
+    """Why the draft Publish would ship must not be published, or None.
+
+    Out of scope (see _variance_scope) it returns None after two SELECTs
+    and calls nothing else. In scope it rebuilds the parent document with
+    the builder generation uses (read-only; a failed order lookup refuses,
+    Rule 1), then compares the rebuilt fingerprint with the one recorded
+    for the draft. `draft_badge` is a zero-argument callable returning the
+    draft's badge (integration_db.fetch_publish_draft_badge), called only in
+    scope; a failed read refuses, no draft at all passes (nothing to ship)."""
+    from models import LimsSample
+    in_scope, generations, parent = _variance_scope(db, sample_id)
+    if not in_scope:
+        return None
+    if parent is None:
+        parent = db.execute(select(LimsSample).where(LimsSample.sample_id == sample_id)
+                            ).scalar_one_or_none()
+        if parent is None:
+            return None
+    trace: list = []
     try:
         raw, services = _merged_services(db, parent)
-        _build_from_services(db, parent, raw, services, vial_parent_ids=None)
+        _build_from_services(db, parent, raw, services, vial_parent_ids=None, trace=trace)
     except NativeSectionsError as e:
         return f"cannot publish {sample_id}: {e.detail}"
-    plan = variance_plan_for_parent(db, parent, services)
-    if plan is None or not plan.by_role:
-        return None
+    trace = _canonical(trace)
     try:
-        generated = draft_generated_at()
+        badge = draft_badge()
     except Exception as e:  # noqa: BLE001 (in scope, a failed read refuses)
         return (f"cannot publish {sample_id}: the draft certificate could not be read to "
                 f"check its Variance runs ({type(e).__name__}); try again")
-    if generated is None:
-        return None     # no draft: the Integration Service has nothing to publish
-    generated = _utc_naive(generated)
-    for rv in plan.by_role.values():
-        for vial in replicate_anchor_vials(db, parent.id, rv.role):
-            rows = list(db.execute(select(LimsAnalysis).where(
-                LimsAnalysis.lims_sub_sample_pk == vial.id,
-                LimsAnalysis.retested.is_(False),
-                LimsAnalysis.review_state.notin_(DEAD_ROW_STATES),
-            ).order_by(LimsAnalysis.id)).scalars())
-            changed = _replicate_changed_at(db, rows)
-            for row in rows:
-                if changed[row.id] > generated:
-                    detail = (f"vial {vial.sample_id} member '{row.keyword}' changed "
-                              f"{changed[row.id]:%Y-%m-%d %H:%M:%S} UTC, the draft was "
-                              f"generated {generated:%Y-%m-%d %H:%M:%S} UTC")
-                    return (f"cannot publish {sample_id}: a Variance run changed after this "
-                            f"certificate was generated; regenerate it first ({detail})")
-    return None
+    if badge is None:
+        return None
+    number = badge.get("generation_number")
+    draft = f"draft #{number}" if number is not None else "the draft"
+    recorded = next((g for g in generations if g.get("generation_number") == number), None)
+    variance = (recorded or {}).get("variance")
+    if variance is None:
+        if not trace and not any(_printed_runs(g) for g in generations):
+            return None     # no runs printed then or now (a retest sample, no plan)
+        detail = f"{draft} has no record of its Variance runs"
+    elif variance.get("fingerprint") == variance_fingerprint(trace):
+        return None
+    else:
+        detail = _first_difference(variance.get("trace") or [], trace, draft)
+    return (f"cannot publish {sample_id}: a Variance run changed after this certificate "
+            f"was generated; regenerate it first ({detail})")
