@@ -14597,10 +14597,17 @@ async def generate_sample_coa(
                                                  variance_plan_for_parent)
                 _vsvc = fetch_sample_services(sample_id)
                 _vservices = (_vsvc or {}).get("services") or {}
-                # A retest's four-key entry is a note, not a run: no lock, as at base.
+                # A retest's four-key entry is a note, not a run: no lock, as at
+                # base. A failed resolve keeps the strict rule (plan=None: any
+                # four-key entry holds the certificate), never fails open.
+                try:
+                    _vplan = variance_plan_for_parent(db, _pre_parent, _vservices)
+                except Exception:
+                    logger.warning("variance_lock_gate.plan_failed sample=%s", sample_id,
+                                   exc_info=True)
+                    _vplan = None
                 _variance_required = variance_lock_required(
-                    _vservices, _pre_parent.variance_locked_at,
-                    plan=variance_plan_for_parent(db, _pre_parent, _vservices),
+                    _vservices, _pre_parent.variance_locked_at, plan=_vplan,
                 )
             except HTTPException:
                 raise

@@ -784,3 +784,17 @@ def test_an_entry_with_a_plan_error_still_needs_the_lock(db, monkeypatch, lab):
     assert plan.errors and not plan.by_role
     assert sub_service.variance_lock_required(w.services, None, plan=plan) is True
     _lock_blocked(lab, db, "P-7497")
+
+
+def test_a_failed_plan_resolve_keeps_the_strict_lock_rule(db, monkeypatch, lab):
+    # The gate never fails open on the resolver: plan=None, any four-key
+    # entry holds the certificate.
+    w = _endo_world(db, monkeypatch, "P-7498", n=3, replicates=(("0.5", "to_be_verified"),))
+    w.parent.is_retest = True
+    w.parent.retest_of_sample_id = "P-7000"
+    db.commit()
+
+    def boom(*a, **k):
+        raise RuntimeError("resolver down")
+    monkeypatch.setattr(sub_service, "variance_plan_for_parent", boom)
+    _lock_blocked(lab, db, "P-7498")

@@ -328,3 +328,11 @@ def test_snapshot_explicit_null_analytical_vials_is_not_read_live(cat):
     assert plan.by_role == {}
     assert plan.errors == (f"Variance for {USP71}: Mk1 supports one analytical vial per run, "
                            f"the catalog says 2",)
+
+
+def test_snapshot_without_an_entry_for_the_key_reads_the_live_profile(cat):
+    snap = {"profiles": [{"key": "zz-other", "fulfillment_role": "zz", "vials_required": 1,
+                          "analytical_vials": None}]}
+    plan = _plan(cat, {HM: True, "variance": {HM: 2}}, snapshot=snap)
+    assert plan.errors == ()
+    assert plan.by_role["hm"] == RoleVariance(HM, "hm", 2, 2, 1)
