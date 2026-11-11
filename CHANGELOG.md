@@ -1,5 +1,10 @@
 # Changelog
 
+## v1.60.0 - 2026-11-11
+
+### Customer Insights
+- **A new Top customers tab.** It sits between At risk and New customers and lists every customer ranked by paid spend in the period picked at the top of the page, with a sortable "Period spend" column. It follows the "Exclude launch accounts" switch. Customers with no spend in the period sit at the bottom of the list.
+
 ## v1.59.0 - 2026-11-10
 
 ### À la carte orders (tests with no HPLC panel)
