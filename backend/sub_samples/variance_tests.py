@@ -19,11 +19,14 @@ module, so the a la carte helpers are imported inside the functions.
 """
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass
 
 from sqlalchemy import select
 
 from models import AnalysisProfile, LimsAnalysis, LimsSubSample, VialRole
+
+log = logging.getLogger(__name__)
 
 VARIANCE_TEST_KEYS: frozenset[str] = frozenset({
     "endotoxin-usp85-lal", "rapid-sterility-pcr", "sterility-usp71", "heavy_metals"})
@@ -90,6 +93,18 @@ def is_bac_water_sample(parent) -> bool:
     return normalize_matrix(parent.sample_type_title) == BW_MATRIX
 
 
+def _snapshot_profiles(snapshot, sample_id=None) -> list:
+    """The snapshot's profile entries, or [] when there are none or they are
+    unreadable (logged once per read): an unreadable snapshot means "no
+    snapshot roles", never a 500 on every publish and generation."""
+    entries = (snapshot.get("profiles") if isinstance(snapshot, dict) else None) or []
+    if not isinstance(entries, (list, tuple)):
+        log.warning("variance_test_roles.unreadable_snapshot sample=%s profiles=%s",
+                    sample_id, type(entries).__name__)
+        return []
+    return list(entries)
+
+
 def _profile_facts(db, key: str, snapshot: dict | None):
     """(fulfillment_role, vials_required, analytical_vials) or an error tail.
 
@@ -97,7 +112,7 @@ def _profile_facts(db, key: str, snapshot: dict | None):
     snapshot only freezes role-dim profiles, so an entry implies role dim.
     An old entry without `analytical_vials` reads that one field live.
     """
-    entry = next((e for e in ((snapshot or {}).get("profiles") or [])
+    entry = next((e for e in _snapshot_profiles(snapshot)
                   if isinstance(e, dict) and e.get("key") == key), None)
     live = None
     if entry is None or "analytical_vials" not in entry:
@@ -209,7 +224,7 @@ def variance_test_roles(db, parent=None) -> frozenset[str]:
         AnalysisProfile.key.in_(VARIANCE_TEST_KEYS),
         AnalysisProfile.fulfillment_role.isnot(None))).scalars())
     snapshot = getattr(parent, "catalog_snapshot", None)
-    entries = (snapshot.get("profiles") if isinstance(snapshot, dict) else None) or []
+    entries = _snapshot_profiles(snapshot, getattr(parent, "sample_id", None))
     roles.update(e.get("fulfillment_role") for e in entries
                  if isinstance(e, dict) and e.get("key") in VARIANCE_TEST_KEYS)
     return frozenset(r for r in roles if isinstance(r, str) and r and r not in LEGACY_BUCKETS)

@@ -38,6 +38,9 @@ from models import (BusinessHoursConfig, LimsAnalysis, LimsScheduledPublish, Lim
                     User)
 from tests.test_addon_variance_coa_rows import (ENDO_KEY, HPLC_KEY, _endo_world, _order,
                                                 _parent, _parent_row, _vial)
+from sub_samples import service as sub_service
+
+REAL_FETCH = sub_service.fetch_sample_services
 
 STALE = ("cannot publish {sid}: a Variance run changed after this certificate was "
          "generated; regenerate it first ({detail})")
@@ -138,8 +141,27 @@ def lab(monkeypatch):
             monkeypatch.setattr(scheduled_publish, "has_pending", lambda db, s: False)
         return asyncio.run(main.publish_sample_coa(sample_id=sid,
                                                    current_user=SimpleNamespace(id=1), db=db))
-    state.generate, state.run = generate, run
+    def count_orders():
+        """Count the publish guard's Integration Service order reads (the
+        builder's fetch_sample_services, faked by _order)."""
+        import coa.native_sections as ns
+        inner = ns.fetch_sample_services
+        state.order_reads = 0
+
+        def counted(sid):
+            state.order_reads += 1
+            return inner(sid)
+        monkeypatch.setattr(ns, "fetch_sample_services", counted)
+
+    def regen(db, sid):
+        return asyncio.run(main.regen_primary_coa(sample_id=sid, db=db,
+                                                  current_user=SimpleNamespace(id=1)))
+    state.generate, state.run, state.regen, state.count_orders = generate, run, regen, count_orders
     return state
+
+
+DRAFT_1 = {"generation_number": 1, "verification_code": "V-1", "page1": None,
+           "overall_status": None}
 
 
 def _base_literal(sid):
@@ -300,7 +322,7 @@ def test_replicate_role_changed_refuses(db, monkeypatch, lab):
     assert _refused(lab, db, "P-7474") == _builder_message(db, w.parent)
 
 
-def test_variance_count_lowered_refuses(db, monkeypatch, lab):
+def test_order_variance_count_lowered_refuses(db, monkeypatch, lab):
     _generated(db, monkeypatch, lab, "P-7475", n=3,
                replicates=(("0.5", "variance_verified"), ("0.6", "variance_verified")))
     _order(monkeypatch, {ENDO_KEY: True, "variance": {ENDO_KEY: 2}})
@@ -355,7 +377,181 @@ def test_failed_draft_read_refuses(db, monkeypatch, lab):
         "Variance runs (RuntimeError); try again")
 
 
+# ── the scope and the matcher (round 2) ─────────────────────────────────────
+
+def _bare_event(db, w, number, code="S-1"):
+    """A coa_generated parent event with no record, as a sub-sample
+    generation writes it (generate_sample_coa on P-x-S01)."""
+    db.add(LimsSubSampleEvent(lims_sample_pk=w.parent.id, event="coa_generated",
+                              details={"verification_code": code, "generation_number": number}))
+    db.commit()
+
+
+def test_newer_record_less_event_keeps_the_sample_in_scope(db, monkeypatch, lab):
+    w = _generated(db, monkeypatch, lab, "P-7480")
+    _bare_event(db, w, 7)
+    w.reps[0].assignment_kind = "core"      # no variance vial left
+    db.commit()
+    assert _refused(lab, db, "P-7480") == _builder_message(db, w.parent)
+
+
+def test_failed_record_write_between_keeps_the_sample_in_scope(db, monkeypatch, lab):
+    import coa.native_sections as ns
+    w = _generated(db, monkeypatch, lab, "P-7481")
+    real = ns.variance_generation_record
+
+    def broken(*a, **k):
+        raise RuntimeError("record write failed")
+    monkeypatch.setattr(ns, "variance_generation_record", broken)
+    assert lab.generate(db, "P-7481").success is True
+    assert [("variance" in e) for e in _events(db)] == [True, False]
+    monkeypatch.setattr(ns, "variance_generation_record", real)
+    w.reps[0].assignment_kind = "core"
+    db.commit()
+    assert _refused(lab, db, "P-7481") == _builder_message(db, w.parent)
+
+
+def test_a_sub_sample_event_sharing_the_number_does_not_shadow_the_record(db, monkeypatch, lab):
+    w = _generated(db, monkeypatch, lab, "P-7482")
+    _bare_event(db, w, 1)                   # newer, same generation number, no record
+    assert lab.run(db, "P-7482").success is True
+    lab.calls.clear()
+    lab.after.clear()
+    _resign(db, w, "0.7")
+    assert _refused(lab, db, "P-7482") == STALE.format(sid="P-7482", detail=(
+        "'endotoxin-usp85-lal' run 2 member 'ENDOTOXIN-USP85LAL' printed 0.5 on draft #1, "
+        "now 0.7"))
+
+
+def test_draft_without_a_generation_number_refuses_in_scope(db, monkeypatch, lab):
+    _generated(db, monkeypatch, lab, "P-7483")
+    lab.badge = {**DRAFT_1, "generation_number": None}
+    assert _refused(lab, db, "P-7483") == STALE.format(sid="P-7483", detail=(
+        "the draft has no record of its Variance runs"))
+
+
+def test_unreadable_snapshot_profiles_never_raise_out_of_publish(db, monkeypatch, lab, caplog):
+    w = _generated(db, monkeypatch, lab, "P-7484")
+    w.parent.catalog_snapshot = {"profiles": 5}
+    db.commit()
+    with caplog.at_level(logging.WARNING, logger="sub_samples.variance_tests"):
+        assert lab.run(db, "P-7484").success is True
+    assert any(r.getMessage() == "variance_test_roles.unreadable_snapshot sample=P-7484 "
+               "profiles=int" for r in caplog.records)
+
+
+def test_a_database_error_in_the_record_keeps_the_base_event(db, monkeypatch, lab):
+    import coa.native_sections as ns
+    _signed_world(db, monkeypatch, "P-7485")
+
+    def db_error(db, *a, **k):
+        # A failed flush leaves the session needing a rollback (on Postgres
+        # any failed statement aborts the transaction the same way).
+        db.add(LimsSubSampleEvent(lims_sample_pk=None, event=None))
+        db.flush()
+    monkeypatch.setattr(ns, "variance_generation_record", db_error)
+    assert lab.generate(db, "P-7485").success is True
+    assert _events(db) == [{"verification_code": "V-1", "generation_number": 1}]
+
+
+def test_a_result_display_change_is_reported_as_a_printed_change():
+    from coa.native_sections import _first_difference
+    row = {"run": 2, "vial_pk": 3, "row_pk": 4, "keyword": "K", "result": "0.5",
+           "result_display": "0.5", "conforms": True}
+    old = [{"profile_key": "p", "deferred": False, "runs": [row]}]
+    new = [{"profile_key": "p", "deferred": False, "runs": [{**row, "result_display": "< 1"}]}]
+    assert _first_difference(old, new, "draft #1") == (
+        "'p' run 2 member 'K' printed 0.5 on draft #1, now < 1", "'p' run 2")
+
+
+def test_one_dead_state_list():
+    import coa.native_sections as ns
+    from sub_samples.variance_tests import DEAD_ROW_STATES
+    assert ns._DEAD_STATES is DEAD_ROW_STATES
+
+
+# ── regen-primary, the lab's one-step way out ──────────────────────────────
+
+def test_regen_primary_after_a_change_records_and_publishes_once(db, monkeypatch, lab):
+    w = _generated(db, monkeypatch, lab, "P-7486")
+    _resign(db, w, "0.7")
+    _refused(lab, db, "P-7486")
+    res = lab.regen(db, "P-7486")
+    assert res.success is True, res.message
+    assert lab.calls == _base_literal("P-7486")["calls"]
+    assert [e["generation_number"] for e in _events(db)] == [1, 2]
+    assert _events(db)[1]["variance"]["trace"][0]["runs"][1]["result"] == "0.7"
+
+
+# ── the lab override store (set_variance_override) ─────────────────────────
+
+def _real_order(monkeypatch, factory, services):
+    """The real fetch_sample_services (so the Mk1 override merge runs) over
+    a faked Integration Service order read."""
+    import database
+    monkeypatch.setenv("INTEGRATION_SERVICE_URL", "http://is.test")
+    monkeypatch.setenv("ACCU_MK1_API_KEY", "test-key")
+    monkeypatch.setattr(database, "SessionLocal", factory)
+
+    class OrderResp:
+        status_code = 200
+
+        def raise_for_status(self):
+            return None
+
+        def json(self):
+            return {"services": dict(services), "package": None}
+    monkeypatch.setattr(sub_service.requests, "get", lambda *a, **k: OrderResp())
+    monkeypatch.setattr("coa.native_sections.fetch_sample_services", REAL_FETCH)
+    monkeypatch.setattr(sub_service, "fetch_sample_services", REAL_FETCH)
+
+
+def _override(db, w, variance):
+    from sub_samples.service import set_variance_override
+    w.parent.variance_locked_at = None
+    db.commit()
+    set_variance_override(db, w.parent.sample_id, variance)
+    w.parent.variance_locked_at = datetime(2026, 11, 10, 12, 0, 0)
+    db.commit()
+
+
+def test_variance_override_lowered_from_3_to_2_refuses(factory, db, monkeypatch, lab):
+    w = _signed_world(db, monkeypatch, "P-7487", n=3,
+                      replicates=(("0.5", "variance_verified"), ("0.6", "variance_verified")))
+    _real_order(monkeypatch, factory, {ENDO_KEY: True, "variance": {ENDO_KEY: 3}})
+    assert lab.generate(db, "P-7487").success is True
+    _override(db, w, {ENDO_KEY: 2})
+    assert _refused(lab, db, "P-7487") == (
+        "cannot publish P-7487: native sections: 'endotoxin-usp85-lal' bought 2 runs, "
+        "2 replicate runs carry results on P-7487; take the extra vials out of the "
+        "variance set")
+
+
+def test_a_failed_override_merge_at_publish_fails_closed(factory, db, monkeypatch, lab):
+    # The draft printed the override (2 runs). At publish the merge fails soft
+    # and the order's 3 comes back: the rebuild refuses, publish does not ship.
+    import database
+    w = _signed_world(db, monkeypatch, "P-7488", n=3,
+                      replicates=(("0.5", "variance_verified"), ("0.6", "variance_verified")))
+    w.reps[1].in_variance_set = False
+    db.commit()
+    _real_order(monkeypatch, factory, {ENDO_KEY: True, "variance": {ENDO_KEY: 3}})
+    _override(db, w, {ENDO_KEY: 2})
+    assert lab.generate(db, "P-7488").success is True
+    assert _events(db)[0]["variance"]["runs"] == 2
+
+    def merge_down():
+        raise RuntimeError("override store unreachable")
+    monkeypatch.setattr(database, "SessionLocal", merge_down)
+    assert _refused(lab, db, "P-7488") == (
+        "cannot publish P-7488: native sections: 'endotoxin-usp85-lal' bought 3 runs, "
+        "1 replicate runs carry results on P-7488; finish them or set the Variance count")
+
+
 # ── out of scope or no four-test plan: publish exactly as at base ──────────
+# Base (C:/tmp/mk1-alacarte-base, scratch/mk1-t14b-base-capture-r2.json): both
+# samples make the one IS publish POST, 0 order reads and 1 draft-badge read
+# (the IN REVIEW guard's).
 
 def test_hplc_variance_only_sample_publishes_as_at_base(db, monkeypatch, lab):
     parent = _parent(db, "P-7450")
@@ -363,19 +559,28 @@ def test_hplc_variance_only_sample_publishes_as_at_base(db, monkeypatch, lab):
     _vial(db, parent, 2, "hplc", "variance")
     _order(monkeypatch, {HPLC_KEY: True, "variance": {HPLC_KEY: 2}})
     db.commit()
+    lab.count_orders()
+    lab.badge = dict(DRAFT_1)
     res = lab.run(db, "P-7450")
     assert {"response": res.model_dump(), "calls": lab.calls,
             "after_publish_native": lab.after} == _base_literal("P-7450")
+    assert (lab.order_reads, lab.badge_reads) == (0, 1)        # exactly as at base
 
 
 def test_retest_sample_publishes_as_at_base(db, monkeypatch, lab):
+    # In scope (an endo85 variance vial), no plan, no record: the decision
+    # branch "no record, nothing printed then or now" passes.
     w = _endo_world(db, monkeypatch, "P-7451", n=3, replicates=(("0.5", "to_be_verified"),))
     w.parent.is_retest = True
     w.parent.retest_of_sample_id = "P-7000"
     db.commit()
+    lab.count_orders()
+    lab.badge = dict(DRAFT_1)
     res = lab.run(db, "P-7451")
     assert {"response": res.model_dump(), "calls": lab.calls,
             "after_publish_native": lab.after} == _base_literal("P-7451")
+    # In scope adds one order read (the rebuild) and one draft-badge read.
+    assert (lab.order_reads, lab.badge_reads) == (1, 2)
 
 
 def test_no_variance_vial_costs_two_selects_and_nothing_else(db, monkeypatch):
@@ -399,7 +604,7 @@ def test_no_variance_vial_costs_two_selects_and_nothing_else(db, monkeypatch):
     assert "lims_sub_samples.assignment_kind" in statements[1]
 
 
-# ── scheduled publish: refused, logged, not retried ────────────────────────
+# ── scheduled publish: refused, logged without values, not retried ─────────
 
 def test_scheduled_publish_refusal_is_logged_and_not_retried(factory, db, monkeypatch,
                                                              lab, caplog):
@@ -416,9 +621,7 @@ def test_scheduled_publish_refusal_is_logged_and_not_retried(factory, db, monkey
         fired.append(sample_id)
         return await main.publish_sample_coa(sample_id=sample_id, current_user=current_user,
                                              db=db)
-    reason = STALE.format(sid="P-7468", detail=(
-        "'endotoxin-usp85-lal' run 2 member 'ENDOTOXIN-USP85LAL' printed 0.5 on draft #1, "
-        "now 0.7"))
+    reason = STALE.format(sid="P-7468", detail="'endotoxin-usp85-lal' run 2")
     with caplog.at_level(logging.WARNING, logger=scheduled_publish.logger.name):
         stats = asyncio.run(scheduled_publish.run_due(factory, real_publish, now=now))
         again = asyncio.run(scheduled_publish.run_due(factory, real_publish,
@@ -428,6 +631,7 @@ def test_scheduled_publish_refusal_is_logged_and_not_retried(factory, db, monkey
     [row] = s.execute(select(LimsScheduledPublish)).scalars().all()
     assert (row.status, row.last_error) == ("failed", reason)
     s.close()
-    assert f"scheduled_publish.failed sample=P-7468 err={reason}" in [
-        r.getMessage() for r in caplog.records]
+    messages = [r.getMessage() for r in caplog.records]
+    assert f"scheduled_publish.failed sample=P-7468 err={reason}" in messages
+    assert not any("0.7" in m or "0.5" in m for m in messages)
     assert lab.calls == []

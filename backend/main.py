@@ -15167,8 +15167,11 @@ def _add_variance_record(db: Session, sample_id: str, details: dict, trace: list
     record fails CLOSED at publish (the guard asks for a regenerate)."""
     try:
         from coa.native_sections import variance_generation_record
-        record = variance_generation_record(db, sample_id, trace,
-                                            generation_id=(data or {}).get("generation_id"))
+        # A savepoint: a database error in the record's reads must not abort
+        # the transaction the base coa_generated event is written in.
+        with db.begin_nested():
+            record = variance_generation_record(
+                db, sample_id, trace, generation_id=(data or {}).get("generation_id"))
         if record is not None:
             details["variance"] = record
     except Exception:  # noqa: BLE001
@@ -15185,11 +15188,15 @@ def _refuse_unfinished_variance_runs(db: Session, sample_id: str) -> None:
     an order or draft read that fails refuses."""
     import integration_db
     from coa.native_sections import variance_publish_refusal
-    reason = variance_publish_refusal(
+    refusal = variance_publish_refusal(
         db, sample_id,
         draft_badge=lambda: integration_db.fetch_publish_draft_badge(sample_id))
-    if reason:
-        raise HTTPException(status_code=409, detail=reason)
+    if refusal:
+        exc = HTTPException(status_code=409, detail=refusal.detail)
+        # The lab sees the full detail; logs and the scheduled row's
+        # last_error carry no result values (scheduled_publish reads this).
+        exc.log_detail = refusal.log_detail
+        raise exc
 
 
 def _refuse_while_publish_scheduled(db: Session, sample_id: str) -> None:

@@ -33,7 +33,7 @@ from __future__ import annotations
 
 import logging
 import math
-from typing import Optional
+from typing import NamedTuple, Optional
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session
@@ -54,9 +54,10 @@ ELIGIBLE_STATES = ("verified", "published")
 
 # Liveness predicate for the lab-added union below. MUST stay in lockstep with
 # lims_analyses.manage_native.DEAD_STATES — the import runs the other way
-# (manage_native imports this module), so the tuple is duplicated here and a
-# drift-guard test pins the pair (test_native_sections_lab_added).
-_DEAD_STATES = ("rejected", "retracted")
+# (manage_native imports this module), so the tuple is duplicated there and a
+# drift-guard test pins the pair (test_native_sections_lab_added). Here it is
+# the one dead-state list the Variance rows use (sub_samples.variance_tests).
+_DEAD_STATES = DEAD_ROW_STATES
 
 
 def _lab_added_profile_keys(db: Session, parent_pk: int) -> list[str]:
@@ -745,14 +746,18 @@ def _printed_runs(details: dict) -> bool:
 
 
 def _variance_scope(db: Session, sample_id: str):
-    """(in scope, recorded generations, parent or None). In scope when the
-    newest recorded generation printed Variance runs, or the sample has a
-    variance vial of a four-test role (any set state). Neither costs exactly
-    two SELECTs: the events read and the vial read."""
+    """(in scope, recorded generations, parent or None). In scope when ANY
+    recorded parent generation printed Variance runs (a newer event without
+    a record, from a sub-sample generation or a failed record write, never
+    takes a sample out), or the sample has a variance vial of a four-test
+    role (any set state). A sample with no variance vial and no recorded
+    runs costs exactly two SELECTs (the events read, the vial read); one
+    with variance vials of other roles (HPLC) adds variance_test_roles'
+    catalog read."""
     from sub_samples.variance_tests import four_test_replicate_parent
     generations = _recorded_generations(db, sample_id)
     parent = four_test_replicate_parent(db, sample_id)
-    in_scope = parent is not None or bool(generations and _printed_runs(generations[0]))
+    in_scope = parent is not None or any(_printed_runs(g) for g in generations)
     return in_scope, generations, parent
 
 
@@ -770,8 +775,9 @@ def variance_generation_record(db: Session, sample_id: str, trace: list, *,
             "trace": trace}
 
 
-def _first_difference(old: list, new: list, draft: str) -> str:
-    """The first differing profile and run, in plain words."""
+def _first_difference(old: list, new: list, draft: str) -> tuple[str, str]:
+    """(the first differing profile and run in plain words, the same with
+    no result values: the profile key and run number, for logs)."""
     from itertools import zip_longest
     old_by = {p["profile_key"]: p for p in old}
     new_by = {p["profile_key"]: p for p in new}
@@ -779,30 +785,50 @@ def _first_difference(old: list, new: list, draft: str) -> str:
     for key in dict.fromkeys([p["profile_key"] for p in old] + [p["profile_key"] for p in new]):
         o, n = old_by.get(key), new_by.get(key)
         if o is None:
-            return f"'{key}' prints Variance runs now but not on {draft}"
+            return f"'{key}' prints Variance runs now but not on {draft}", f"'{key}'"
         if n is None:
-            return f"'{key}' printed Variance runs on {draft} but no longer does"
+            return f"'{key}' printed Variance runs on {draft} but no longer does", f"'{key}'"
         if o["deferred"] != n["deferred"]:
-            return f"'{key}' was {state[o['deferred']]} on {draft} and is {state[n['deferred']]} now"
+            return (f"'{key}' was {state[o['deferred']]} on {draft} and is "
+                    f"{state[n['deferred']]} now", f"'{key}'")
         for a, b in zip_longest(o["runs"], n["runs"]):
             if a == b:
                 continue
+            ref = a or b
+            short = f"'{key}' run {ref['run']}"
             if a is None:
-                return f"'{key}' run {b['run']} member '{b['keyword']}' is new since {draft}"
+                return f"'{key}' run {b['run']} member '{b['keyword']}' is new since {draft}", short
             if b is None:
-                return f"'{key}' run {a['run']} member '{a['keyword']}' on {draft} no longer prints"
+                return (f"'{key}' run {a['run']} member '{a['keyword']}' on {draft} no longer "
+                        f"prints", short)
             where = f"'{key}' run {a['run']} member '{a['keyword']}'"
-            if (a["result"], a["conforms"]) != (b["result"], b["conforms"]):
-                return f"{where} printed {a['result']} on {draft}, now {b['result']}"
-            return f"{where} now comes from a different vial or result row than on {draft}"
-    return f"the Variance runs differ from {draft}"
+            printed = ("result", "result_display", "conforms")
+            if any(a.get(k) != b.get(k) for k in printed):
+                was = a["result"] if a["result"] != b["result"] else a.get("result_display")
+                now = b["result"] if a["result"] != b["result"] else b.get("result_display")
+                return f"{where} printed {was} on {draft}, now {now}", short
+            return f"{where} now comes from a different vial or result row than on {draft}", short
+    return f"the Variance runs differ from {draft}", "the Variance runs"
 
 
-def variance_publish_refusal(db: Session, sample_id: str, *, draft_badge) -> Optional[str]:
+class Refusal(NamedTuple):
+    """Why publish is refused: `detail` for the lab (the 409), `log_detail`
+    the same without result values (scheduled publish logs and stores it)."""
+    detail: str
+    log_detail: str
+
+
+def _stale(sample_id: str, detail: str, short: str) -> Refusal:
+    head = (f"cannot publish {sample_id}: a Variance run changed after this certificate "
+            f"was generated; regenerate it first")
+    return Refusal(f"{head} ({detail})", f"{head} ({short})")
+
+
+def variance_publish_refusal(db: Session, sample_id: str, *, draft_badge) -> Optional[Refusal]:
     """Why the draft Publish would ship must not be published, or None.
 
-    Out of scope (see _variance_scope) it returns None after two SELECTs
-    and calls nothing else. In scope it rebuilds the parent document with
+    Out of scope (see _variance_scope) it returns None after the scope
+    reads and calls nothing else. In scope it rebuilds the parent document with
     the builder generation uses (read-only; a failed order lookup refuses,
     Rule 1), then compares the rebuilt fingerprint with the one recorded
     for the draft. `draft_badge` is a zero-argument callable returning the
@@ -822,26 +848,31 @@ def variance_publish_refusal(db: Session, sample_id: str, *, draft_badge) -> Opt
         raw, services = _merged_services(db, parent)
         _build_from_services(db, parent, raw, services, vial_parent_ids=None, trace=trace)
     except NativeSectionsError as e:
-        return f"cannot publish {sample_id}: {e.detail}"
+        msg = f"cannot publish {sample_id}: {e.detail}"
+        return Refusal(msg, msg)
     trace = _canonical(trace)
     try:
         badge = draft_badge()
     except Exception as e:  # noqa: BLE001 (in scope, a failed read refuses)
-        return (f"cannot publish {sample_id}: the draft certificate could not be read to "
-                f"check its Variance runs ({type(e).__name__}); try again")
+        msg = (f"cannot publish {sample_id}: the draft certificate could not be read to "
+               f"check its Variance runs ({type(e).__name__}); try again")
+        return Refusal(msg, msg)
     if badge is None:
         return None
     number = badge.get("generation_number")
     draft = f"draft #{number}" if number is not None else "the draft"
-    recorded = next((g for g in generations if g.get("generation_number") == number), None)
-    variance = (recorded or {}).get("variance")
+    # Matcher: among the events with the draft's generation number, the one
+    # that carries a record (a sub-sample generation lands a record-less
+    # event on the parent and its number can collide). A draft with no
+    # number never matches: no record.
+    same = ([g for g in generations if g.get("generation_number") == number]
+            if number is not None else [])
+    variance = next((g["variance"] for g in same if g.get("variance") is not None), None)
     if variance is None:
         if not trace and not any(_printed_runs(g) for g in generations):
             return None     # no runs printed then or now (a retest sample, no plan)
         detail = f"{draft} has no record of its Variance runs"
-    elif variance.get("fingerprint") == variance_fingerprint(trace):
+        return _stale(sample_id, detail, detail)
+    if variance.get("fingerprint") == variance_fingerprint(trace):
         return None
-    else:
-        detail = _first_difference(variance.get("trace") or [], trace, draft)
-    return (f"cannot publish {sample_id}: a Variance run changed after this certificate "
-            f"was generated; regenerate it first ({detail})")
+    return _stale(sample_id, *_first_difference(variance.get("trace") or [], trace, draft))
