@@ -1616,7 +1616,8 @@ def variance_plan_for_parent(db: Session, parent: LimsSample,
     from lims_analyses.hplc_native import is_native_born
     return resolve_variance_plan(
         db, services, snapshot=parent.catalog_snapshot, is_retest=is_retest_sample(parent),
-        native_born=is_native_born(parent), bac_water=is_bac_water_sample(parent))
+        native_born=is_native_born(parent), bac_water=is_bac_water_sample(parent),
+        sample_id=parent.sample_id)
 
 
 def variance_plan_fields(plan: Optional[VariancePlan]) -> dict:

@@ -423,21 +423,80 @@ def test_a_sub_sample_event_sharing_the_number_does_not_shadow_the_record(db, mo
         "now 0.7"))
 
 
-def test_draft_without_a_generation_number_refuses_in_scope(db, monkeypatch, lab):
+def test_draft_without_a_generation_number_matches_by_code(db, monkeypatch, lab):
     _generated(db, monkeypatch, lab, "P-7483")
     lab.badge = {**DRAFT_1, "generation_number": None}
-    assert _refused(lab, db, "P-7483") == STALE.format(sid="P-7483", detail=(
+    assert lab.run(db, "P-7483").success is True
+
+
+def test_draft_with_neither_code_nor_number_refuses_in_scope(db, monkeypatch, lab):
+    _generated(db, monkeypatch, lab, "P-7489")
+    lab.badge = {**DRAFT_1, "generation_number": None, "verification_code": None}
+    assert _refused(lab, db, "P-7489") == STALE.format(sid="P-7489", detail=(
         "the draft has no record of its Variance runs"))
 
 
-def test_unreadable_snapshot_profiles_never_raise_out_of_publish(db, monkeypatch, lab, caplog):
+def test_the_draft_is_matched_by_its_verification_code(db, monkeypatch, lab):
+    # Right code, a different number: matched (the number may drift).
+    _generated(db, monkeypatch, lab, "P-7490")
+    lab.badge = {**DRAFT_1, "generation_number": 9}
+    assert lab.run(db, "P-7490").success is True
+
+
+def test_a_matching_number_with_another_code_is_not_the_draft(db, monkeypatch, lab):
+    _generated(db, monkeypatch, lab, "P-7491")
+    lab.badge = {**DRAFT_1, "verification_code": "OTHER-CODE"}
+    assert _refused(lab, db, "P-7491") == STALE.format(sid="P-7491", detail=(
+        "draft #1 has no record of its Variance runs"))
+
+
+def test_a_badge_with_no_code_falls_back_to_the_number(db, monkeypatch, lab):
+    _generated(db, monkeypatch, lab, "P-7492")
+    lab.badge = {**DRAFT_1, "verification_code": None}
+    assert lab.run(db, "P-7492").success is True
+
+
+def test_unreadable_snapshot_refuses_publish_and_never_raises(db, monkeypatch, lab, caplog):
+    # The fence reads it as "no snapshot roles"; the resolver refuses it.
     w = _generated(db, monkeypatch, lab, "P-7484")
     w.parent.catalog_snapshot = {"profiles": 5}
     db.commit()
     with caplog.at_level(logging.WARNING, logger="sub_samples.variance_tests"):
-        assert lab.run(db, "P-7484").success is True
-    assert any(r.getMessage() == "variance_test_roles.unreadable_snapshot sample=P-7484 "
-               "profiles=int" for r in caplog.records)
+        detail = _refused(lab, db, "P-7484")
+    assert detail == ("cannot publish P-7484: native sections: Variance for "
+                      "endotoxin-usp85-lal: the registration snapshot is unreadable on P-7484")
+    messages = [r.getMessage() for r in caplog.records]
+    assert "variance_test_roles.unreadable_snapshot sample=P-7484 profiles=int" in messages
+    assert "variance_plan.unreadable_snapshot sample=P-7484" in messages
+
+
+def _plan(db, services, snapshot):
+    from sub_samples.variance_tests import resolve_variance_plan
+    return resolve_variance_plan(db, services, snapshot=snapshot, native_born=True,
+                                 bac_water=False, sample_id="P-7493")
+
+
+def test_unreadable_snapshot_is_a_plan_error_logged_once(db, monkeypatch, caplog):
+    from tests.test_addon_variance_coa_rows import HM_KEY, HM_KW, _profile
+    _endo_world(db, monkeypatch, "P-7493", n=2)
+    _profile(db, HM_KEY, "hm", HM_KW, vials_required=2, analytical_vials=1)
+    db.commit()
+    services = {ENDO_KEY: True, HM_KEY: True, "variance": {ENDO_KEY: 2, HM_KEY: 2}}
+    with caplog.at_level(logging.WARNING, logger="sub_samples.variance_tests"):
+        plan = _plan(db, services, {"profiles": 5})
+    assert list(plan.errors) == [
+        "Variance for endotoxin-usp85-lal: the registration snapshot is unreadable",
+        "Variance for heavy_metals: the registration snapshot is unreadable"]
+    assert plan.by_role == {}
+    assert [r.getMessage() for r in caplog.records] == [
+        "variance_plan.unreadable_snapshot sample=P-7493"]
+
+
+def test_no_four_key_entry_never_reads_the_snapshot(db, caplog):
+    with caplog.at_level(logging.WARNING, logger="sub_samples.variance_tests"):
+        plan = _plan(db, {HPLC_KEY: True, "variance": {HPLC_KEY: 2}}, {"profiles": 5})
+    assert (plan.errors, plan.by_role) == ((), {})
+    assert caplog.records == []
 
 
 def test_a_database_error_in_the_record_keeps_the_base_event(db, monkeypatch, lab):
@@ -462,6 +521,17 @@ def test_a_result_display_change_is_reported_as_a_printed_change():
     new = [{"profile_key": "p", "deferred": False, "runs": [{**row, "result_display": "< 1"}]}]
     assert _first_difference(old, new, "draft #1") == (
         "'p' run 2 member 'K' printed 0.5 on draft #1, now < 1", "'p' run 2")
+
+
+def test_a_verdict_only_change_says_the_verdict_changed():
+    from coa.native_sections import _first_difference
+    row = {"run": 2, "vial_pk": 3, "row_pk": 4, "keyword": "K", "result": "0.5",
+           "result_display": "0.5", "conforms": True}
+    old = [{"profile_key": "p", "deferred": False, "runs": [row]}]
+    new = [{"profile_key": "p", "deferred": False, "runs": [{**row, "conforms": False}]}]
+    assert _first_difference(old, new, "draft #1") == (
+        "'p' run 2 member 'K': the verdict of the same printed result 0.5 changed since "
+        "draft #1", "'p' run 2")
 
 
 def test_one_dead_state_list():
@@ -635,3 +705,30 @@ def test_scheduled_publish_refusal_is_logged_and_not_retried(factory, db, monkey
     assert f"scheduled_publish.failed sample=P-7468 err={reason}" in messages
     assert not any("0.7" in m or "0.5" in m for m in messages)
     assert lab.calls == []
+
+
+def test_a_builder_refusal_keeps_result_values_out_of_logs_and_flags(factory, db, monkeypatch,
+                                                                     lab, caplog):
+    from flags.models import FlagComment, FlagFlag
+    w = _generated(db, monkeypatch, lab, "P-7494")
+    db.query(LimsAnalysis).filter_by(lims_sub_sample_pk=w.reps[0].id).update(
+        {"result_value": "x0.777"})            # not numeric: a SpecRuleError naming it
+    now = datetime(2026, 11, 10, 18, 0)
+    db.add(LimsScheduledPublish(sample_id="P-7494", scheduled_at=now - timedelta(hours=1),
+                                pdf_date="11/10/2026", status="pending", created_by_user_id=1,
+                                created_at=now - timedelta(hours=2)))
+    db.commit()
+    with caplog.at_level(logging.DEBUG):
+        stats = asyncio.run(scheduled_publish.run_due(factory, main.publish_sample_coa, now=now))
+    assert stats["failed"] == 1
+    s = factory()
+    [row] = s.execute(select(LimsScheduledPublish)).scalars().all()
+    assert row.last_error == ("cannot publish P-7494: the rebuilt document was refused "
+                              "(SpecRuleError)")
+    flag_text = [f.title for f in s.query(FlagFlag)] + [c.body for c in s.query(FlagComment)]
+    s.close()
+    assert flag_text and not any("0.777" in t for t in flag_text)
+    assert not any("0.777" in r.getMessage() for r in caplog.records)
+    # The lab's manual route still sees the full detail.
+    detail = _refused(lab, db, "P-7494")
+    assert "'x0.777'" in detail and detail.startswith("cannot publish P-7494: native sections:")

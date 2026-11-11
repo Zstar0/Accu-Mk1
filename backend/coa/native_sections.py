@@ -802,6 +802,10 @@ def _first_difference(old: list, new: list, draft: str) -> tuple[str, str]:
                 return (f"'{key}' run {a['run']} member '{a['keyword']}' on {draft} no longer "
                         f"prints", short)
             where = f"'{key}' run {a['run']} member '{a['keyword']}'"
+            if ((a["result"], a.get("result_display")) == (b["result"], b.get("result_display"))
+                    and a.get("conforms") != b.get("conforms")):
+                return (f"{where}: the verdict of the same printed result {a['result']} "
+                        f"changed since {draft}", short)
             printed = ("result", "result_display", "conforms")
             if any(a.get(k) != b.get(k) for k in printed):
                 was = a["result"] if a["result"] != b["result"] else a.get("result_display")
@@ -848,8 +852,12 @@ def variance_publish_refusal(db: Session, sample_id: str, *, draft_badge) -> Opt
         raw, services = _merged_services(db, parent)
         _build_from_services(db, parent, raw, services, vial_parent_ids=None, trace=trace)
     except NativeSectionsError as e:
-        msg = f"cannot publish {sample_id}: {e.detail}"
-        return Refusal(msg, msg)
+        # The builder's detail can carry a result value (a SpecRuleError
+        # interpolates it): the lab's 409 only, never the log text.
+        cause = e.__cause__ or e
+        return Refusal(f"cannot publish {sample_id}: {e.detail}",
+                       f"cannot publish {sample_id}: the rebuilt document was refused "
+                       f"({type(cause).__name__})")
     trace = _canonical(trace)
     try:
         badge = draft_badge()
@@ -861,12 +869,18 @@ def variance_publish_refusal(db: Session, sample_id: str, *, draft_badge) -> Opt
         return None
     number = badge.get("generation_number")
     draft = f"draft #{number}" if number is not None else "the draft"
-    # Matcher: among the events with the draft's generation number, the one
-    # that carries a record (a sub-sample generation lands a record-less
-    # event on the parent and its number can collide). A draft with no
-    # number never matches: no record.
-    same = ([g for g in generations if g.get("generation_number") == number]
-            if number is not None else [])
+    # Matcher: by identity. The draft's verification code when the badge has
+    # one (every coa_generated event stores it), else its generation number;
+    # a draft with neither matches nothing (no record). Among the matches,
+    # the one that carries a record (a sub-sample generation lands a
+    # record-less event on the parent).
+    code = badge.get("verification_code")
+    if code:
+        same = [g for g in generations if g.get("verification_code") == code]
+    elif number is not None:
+        same = [g for g in generations if g.get("generation_number") == number]
+    else:
+        same = []
     variance = next((g["variance"] for g in same if g.get("variance") is not None), None)
     if variance is None:
         if not trace and not any(_printed_runs(g) for g in generations):

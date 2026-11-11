@@ -93,10 +93,17 @@ def is_bac_water_sample(parent) -> bool:
     return normalize_matrix(parent.sample_type_title) == BW_MATRIX
 
 
+def _snapshot_readable(snapshot) -> bool:
+    entries = (snapshot.get("profiles") if isinstance(snapshot, dict) else None) or []
+    return isinstance(entries, (list, tuple))
+
+
 def _snapshot_profiles(snapshot, sample_id=None) -> list:
-    """The snapshot's profile entries, or [] when there are none or they are
-    unreadable (logged once per read): an unreadable snapshot means "no
-    snapshot roles", never a 500 on every publish and generation."""
+    """The fence's read (variance_test_roles only): the snapshot's profile
+    entries, or [] when there are none or they are unreadable (logged once
+    per read). The fence and the publish scope must never raise; the
+    resolver refuses an unreadable snapshot instead (it is the truth for a
+    certificate)."""
     entries = (snapshot.get("profiles") if isinstance(snapshot, dict) else None) or []
     if not isinstance(entries, (list, tuple)):
         log.warning("variance_test_roles.unreadable_snapshot sample=%s profiles=%s",
@@ -112,7 +119,7 @@ def _profile_facts(db, key: str, snapshot: dict | None):
     snapshot only freezes role-dim profiles, so an entry implies role dim.
     An old entry without `analytical_vials` reads that one field live.
     """
-    entry = next((e for e in _snapshot_profiles(snapshot)
+    entry = next((e for e in ((snapshot or {}).get("profiles") or [])
                   if isinstance(e, dict) and e.get("key") == key), None)
     live = None
     if entry is None or "analytical_vials" not in entry:
@@ -138,7 +145,7 @@ def _profile_facts(db, key: str, snapshot: dict | None):
 
 def resolve_variance_plan(db, services: dict | None, *, snapshot: dict | None = None,
                           is_retest: bool = False, native_born: bool,
-                          bac_water: bool) -> VariancePlan:
+                          bac_water: bool, sample_id: str | None = None) -> VariancePlan:
     """Map the RAW `services["variance"]` (not the normalized entitlement,
     so a bad n is reported, not dropped) to runs and vials per role.
 
@@ -154,6 +161,7 @@ def resolve_variance_plan(db, services: dict | None, *, snapshot: dict | None = 
     errors: list[tuple[str, str]] = []
     notes: list[str] = []
     found: list[RoleVariance] = []
+    unreadable_logged = False
     for key in sorted(raw, key=str):
         if key not in VARIANCE_TEST_KEYS:
             continue  # rule 1: HPLC and legacy keys stay on today's path
@@ -178,6 +186,14 @@ def resolve_variance_plan(db, services: dict | None, *, snapshot: dict | None = 
             continue
         if not services.get(key):
             refuse("the test is not on this sample")
+            continue
+        if not _snapshot_readable(snapshot):
+            # The frozen facts are the truth for a certificate: never fall
+            # back to the live catalog. One warning per call.
+            if not unreadable_logged:
+                log.warning("variance_plan.unreadable_snapshot sample=%s", sample_id)
+                unreadable_logged = True
+            refuse("the registration snapshot is unreadable")
             continue
         facts, why = _profile_facts(db, key, snapshot)
         if facts is None:

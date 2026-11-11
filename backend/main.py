@@ -15184,8 +15184,10 @@ def _refuse_unfinished_variance_runs(db: Session, sample_id: str) -> None:
     the rebuilt document is refused, or its Variance fingerprint differs from
     the one recorded when that draft was generated. Out of scope (no
     recorded runs and no variance vial of the four test roles, every sample
-    today) it costs two SELECTs and nothing else. In scope it fails CLOSED:
-    an order or draft read that fails refuses."""
+    today) it makes no network call: two SELECTs for a sample with no
+    variance vial, three for one with variance vials of other roles (HPLC:
+    the roles read). In scope it fails CLOSED: an order or draft read that
+    fails refuses."""
     import integration_db
     from coa.native_sections import variance_publish_refusal
     refusal = variance_publish_refusal(
