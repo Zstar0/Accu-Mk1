@@ -112,14 +112,16 @@ export function AssignStep({ parentSampleId, parentSampleUid }: Props) {
   const roleColor: RoleColorFn = code =>
     ROLE_COLOR_CHIP[roleColorForCode(code, vialRolesQ.data, departmentsQ.data)]
 
-  const refresh = useCallback(async () => {
+  const refresh = useCallback(async (): Promise<VialPlanResponse | null> => {
     setLoading(true)
     setError(null)
     try {
       const result = await getVialPlan(parentSampleId)
       setPlan(result)
+      return result
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e))
+      return null
     } finally {
       setLoading(false)
     }
@@ -349,7 +351,8 @@ function VarianceOverrideEditor({
 }: {
   parentSampleId: string
   plan: VialPlanResponse
-  refresh: () => void
+  /** Re-fetches the plan; resolves to the new plan, or null on failure. */
+  refresh: () => Promise<VialPlanResponse | null>
 }) {
   const queryClient = useQueryClient()
   const fields = overrideFieldsFor(plan)
@@ -364,10 +367,12 @@ function VarianceOverrideEditor({
 
   const [confirmOpen, setConfirmOpen] = useState(false)
   const refused = plan.variance_errors ?? []
+  const confirmPayloadEmpty = buildPayload() === null
 
-  // A save replaces the order's Variance entries wholesale, so an entry the
-  // backend refused (no variance_tests row, never sent) would be removed.
-  // Ask first whenever there are refusals; otherwise save as before.
+  // A non-empty save replaces the order's Variance entries wholesale, so an
+  // entry the backend refused (no variance_tests row, never sent) is removed;
+  // an empty save leaves the order's own entries, refusals included. Ask
+  // first whenever there are refusals; otherwise save as before.
   function handleSave() {
     if (refused.length > 0) {
       setConfirmOpen(true)
@@ -376,19 +381,31 @@ function VarianceOverrideEditor({
     void doSave()
   }
 
+  // The override map the fields would save, or null when empty. An empty
+  // override is stored as none, so the order's own Variance entries apply.
+  function buildPayload(): Record<string, number> | null {
+    const map: Record<string, number> = {}
+    for (const f of fields) {
+      const n = counts[f.key] ?? 0
+      if (n >= 2) map[f.key] = n
+    }
+    return Object.keys(map).length > 0 ? map : null
+  }
+
   async function doSave() {
     setSaving(true)
     try {
-      const map: Record<string, number> = {}
-      for (const f of fields) {
-        const n = counts[f.key] ?? 0
-        if (n >= 2) map[f.key] = n
-      }
-      const payload = Object.keys(map).length > 0 ? map : null
-      await putVarianceOverride(parentSampleId, payload)
-      toast.success('Variance override saved')
-      void refresh()
+      await putVarianceOverride(parentSampleId, buildPayload())
       queryClient.invalidateQueries({ queryKey: ['variance-entitlement', parentSampleId] })
+      const next = await refresh()
+      const stillRefused = next?.variance_errors ?? []
+      if (stillRefused.length > 0) {
+        toast.warning('Variance override saved, but entries are still refused', {
+          description: stillRefused[0],
+        })
+      } else {
+        toast.success('Variance override saved')
+      }
     } catch (err) {
       toast.error(err instanceof Error ? err.message : 'Failed to save variance override')
     } finally {
@@ -427,8 +444,7 @@ function VarianceOverrideEditor({
               </p>
               <p className="text-muted-foreground">
                 Lab override: while set, it replaces the order&apos;s variance.
-                Clearing all fields falls back to the WP order (none until the
-                addon ships).
+                Clearing all fields falls back to the order.
               </p>
             </TooltipContent>
           </Tooltip>
@@ -479,18 +495,35 @@ function VarianceOverrideEditor({
       <AlertDialog open={confirmOpen} onOpenChange={setConfirmOpen}>
         <AlertDialogContent>
           <AlertDialogHeader>
-            <AlertDialogTitle>Remove the refused Variance entries?</AlertDialogTitle>
-            <AlertDialogDescription>
-              Saving replaces the order&apos;s Variance entries. These entries were
-              refused and will be removed:
-            </AlertDialogDescription>
+            {confirmPayloadEmpty ? (
+              <>
+                <AlertDialogTitle>The refused Variance entries will stay</AlertDialogTitle>
+                <AlertDialogDescription>
+                  With every field at 0 or 1 the override is empty, so the
+                  order&apos;s own Variance entries apply. The refused entries
+                  below come from the order and will stay refused. Correct the
+                  order, or enter a count for a test that can run.
+                </AlertDialogDescription>
+              </>
+            ) : (
+              <>
+                <AlertDialogTitle>Remove the refused Variance entries?</AlertDialogTitle>
+                <AlertDialogDescription>
+                  Saving replaces the order&apos;s Variance entries with the fields
+                  shown. The refused entries below are not among them and will no
+                  longer apply:
+                </AlertDialogDescription>
+              </>
+            )}
           </AlertDialogHeader>
           <ul className="list-disc pl-5 text-sm space-y-1">
             {refused.map((msg, i) => <li key={`${i}-${msg}`}>{msg}</li>)}
           </ul>
           <AlertDialogFooter>
             <AlertDialogCancel>Cancel</AlertDialogCancel>
-            <AlertDialogAction onClick={() => void doSave()}>Save anyway</AlertDialogAction>
+            <AlertDialogAction onClick={() => void doSave()} disabled={saving}>
+              Save anyway
+            </AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>

@@ -23,7 +23,7 @@ vi.mock('@/lib/api', async importOriginal => {
 })
 
 vi.mock('sonner', () => ({
-  toast: { error: vi.fn(), success: vi.fn() },
+  toast: { error: vi.fn(), success: vi.fn(), warning: vi.fn() },
 }))
 
 import { ApiCodeError, getVialPlan, getVialRoles, patchVialAssignment, putVarianceOverride } from '@/lib/api'
@@ -800,6 +800,62 @@ describe('add-on test Variance on the check-in screen (Task 7)', () => {
     } finally {
       vi.unstubAllGlobals()
     }
+  })
+})
+
+describe('override save tells the truth about refused entries (Task 7 final fix wave)', () => {
+  const ORDER_REFUSAL = 'Variance for heavy_metals: the test is not on this sample'
+
+  it('empty payload with order-sourced refusals: the dialog says they stay refused, then a warning, not success', async () => {
+    // No four-test field on the sample and every legacy field at 0: the save
+    // sends null, so the order's own (refused) entries apply again.
+    const plan: VialPlanResponse = { ...PLAN, variance_errors: [ORDER_REFUSAL] }
+    vi.mocked(getVialPlan).mockResolvedValue(plan)
+    renderStep()
+    await screen.findByText('P-0144-S01')
+    await userEvent.click(screen.getByRole('button', { name: /save variance/i }))
+    const dialog = await screen.findByRole('alertdialog')
+    expect(within(dialog).getByText('The refused Variance entries will stay')).toBeInTheDocument()
+    expect(within(dialog).getByText(/come from the order and will stay refused/)).toBeInTheDocument()
+    expect(within(dialog).queryByText(/will no longer apply/)).not.toBeInTheDocument()
+    expect(within(dialog).getByText(ORDER_REFUSAL)).toBeInTheDocument()
+    await userEvent.click(within(dialog).getByRole('button', { name: 'Save anyway' }))
+    await waitFor(() => expect(putVarianceOverride).toHaveBeenCalledWith('P-0144', null))
+    await waitFor(() =>
+      expect(toast.warning).toHaveBeenCalledWith(
+        'Variance override saved, but entries are still refused',
+        { description: ORDER_REFUSAL },
+      ),
+    )
+    expect(toast.success).not.toHaveBeenCalled()
+  })
+
+  it('non-empty payload: the dialog says the refused entries will no longer apply, then success', async () => {
+    vi.mocked(getVialPlan)
+      .mockResolvedValueOnce({ ...ENDO85_VARIANCE_PLAN, variance_errors: [ORDER_REFUSAL] })
+      .mockResolvedValue(ENDO85_VARIANCE_PLAN)
+    renderStep()
+    await screen.findByText('Microbiology')
+    await userEvent.click(screen.getByRole('button', { name: /save variance/i }))
+    const dialog = await screen.findByRole('alertdialog')
+    expect(within(dialog).getByText('Remove the refused Variance entries?')).toBeInTheDocument()
+    expect(within(dialog).getByText(/will no longer apply/)).toBeInTheDocument()
+    await userEvent.click(within(dialog).getByRole('button', { name: 'Save anyway' }))
+    await waitFor(() =>
+      expect(putVarianceOverride).toHaveBeenCalledWith('P-0144', { 'endotoxin-usp85-lal': 3 }),
+    )
+    await waitFor(() => expect(toast.success).toHaveBeenCalledWith('Variance override saved'))
+    expect(toast.warning).not.toHaveBeenCalled()
+  })
+
+  it('no refusals: no dialog, success, exactly as before', async () => {
+    vi.mocked(getVialPlan).mockResolvedValue(VARIANCE_PLAN)
+    renderStep()
+    await screen.findByText('P-0144-S01')
+    await userEvent.click(screen.getByRole('button', { name: /save variance/i }))
+    await waitFor(() => expect(toast.success).toHaveBeenCalledWith('Variance override saved'))
+    expect(screen.queryByRole('alertdialog')).not.toBeInTheDocument()
+    expect(toast.warning).not.toHaveBeenCalled()
   })
 })
 
