@@ -9140,6 +9140,60 @@ export interface VarianceStatsEntry {
   pass: boolean | null
 }
 
+/** One result on a run's vial, as the parent analysis list shows it. */
+export interface VarianceRunValue {
+  keyword: string
+  label: string | null
+  value: string | null
+  unit: string | null
+  conforms: boolean | null
+  review_state: string | null
+  analyst: string | null
+  specification: AnalysisSpecification | null
+}
+
+export interface VarianceRun {
+  sample_id: string
+  vial_sequence: number
+  kind: 'core' | 'variance' | string
+  in_variance_set: boolean
+  exclusion_reason: string | null
+  signed_off: boolean
+  has_result: boolean
+  values: VarianceRunValue[]
+}
+
+export interface VarianceTestStat {
+  keyword: string
+  label: string | null
+  kind: 'numeric' | 'categorical'
+  mean: number | null
+  sd: number | null
+  cv_pct: number | null
+  n: number
+  conforms_count: number | null
+  total: number | null
+}
+
+/** One test bought with Variance (container families only). Values in each
+ *  run come in a fixed order; counts cover the core run plus the in-set
+ *  replicates. */
+export interface VarianceTest {
+  role: string
+  section_key: string | null
+  title: string
+  is_hplc: boolean
+  runs: VarianceRun[]
+  summary: {
+    runs: number
+    runs_with_result: number
+    conforming: number
+    replicates: number
+    replicates_signed_off: number
+    stats: VarianceTestStat[]
+  }
+}
+
 export interface VarianceSetResponse {
   parent: ParentSampleSummary
   vials: VarianceVial[]
@@ -9147,6 +9201,9 @@ export interface VarianceSetResponse {
   locked: boolean
   locked_at: string | null
   locked_by_user_id: number | null
+  locked_by_name?: string | null
+  /** Container families only; empty for legacy families. */
+  tests?: VarianceTest[]
 }
 
 export async function getVarianceSet(parentSampleId: string): Promise<VarianceSetResponse> {
@@ -9190,6 +9247,11 @@ export async function lockVarianceSet(parentSampleId: string): Promise<{ parent_
   if (r.status === 422) {
     const body = await r.json().catch(() => ({}))
     throw new Error(body.detail?.message ?? 'need >=2 selected vials to lock')
+  }
+  if (r.status === 409) {
+    // variance_series_incomplete: the message lists what is unfinished.
+    const body = await r.json().catch(() => ({}))
+    throw new Error(body.detail?.message ?? `lockVarianceSet failed: ${r.status}`)
   }
   if (!r.ok) throw new Error(`lockVarianceSet failed: ${r.status}`)
   return r.json()
