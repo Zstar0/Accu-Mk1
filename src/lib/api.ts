@@ -7732,6 +7732,8 @@ export interface SampleRetestInfo {
   retest?: string[] | null
   add?: string[] | null
   carry?: string[] | null
+  // The original's vials behind this retest's carried HPLC (normally one).
+  carried_hplc_vials?: string[] | null
 }
 
 export async function getSampleRetestInfo(sampleId: string): Promise<SampleRetestInfo> {

@@ -1398,11 +1398,12 @@ export function SamplePrepHplcFlyout({ open, onClose, prep, match, readOnly = fa
   // Auto-run when peak data + calibration are both ready
   useEffect(() => {
     if (isStandard) return // Standards create calibration curves — don't auto-run analysis
+    if (readOnly) return // Viewing must not write: this POST saves an analysis, and with no files, an empty one
     const calsReady = isBlend ? allBlendCalsReady : !!selectedCalId
     if (parseResult && calsReady && prep.peptide_id && !result && !running && !runError) {
       runAllAnalyses()
     }
-  }, [isStandard, parseResult, selectedCalId, allBlendCalsReady, isBlend, prep.peptide_id, result, running, runError, runAllAnalyses])
+  }, [isStandard, readOnly, parseResult, selectedCalId, allBlendCalsReady, isBlend, prep.peptide_id, result, running, runError, runAllAnalyses])
 
   // ── Derived ─────────────────────────────────────────────────────────────────
 

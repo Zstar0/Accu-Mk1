@@ -1047,6 +1047,7 @@ async def get_sample_retest_info(
             result["carry"] = rider.get("carry") or []
             result["drop"] = rider.get("drop") or []
             result["add"] = (rider.get("add") or {}).get("profiles") or []
+            result["carried_hplc_vials"] = [v.sample_id for v in carried_hplc_source_vials(db, row)]
         for f in forward:
             fr = (f.catalog_snapshot or {}).get("retest") or {}
             result["retested_as"].append({
@@ -1292,6 +1293,8 @@ def retest_activity_label(event: str, d: dict) -> Optional[str]:
         if d.get("verified_at"):
             label += f", verified {str(d['verified_at'])[:10]}"
         return label
+    if event in ("chromatogram_carried", "chromatogram_carried_manual"):
+        return f"Chromatogram carried from {d.get('source_vial', '?')}"
     if event == "retested_as":
         head = f"Retested as {d.get('sample_id', '?')} ({', '.join(d.get('retest') or []) or 'add only'})"
         tail = []
@@ -27338,7 +27341,7 @@ def s2s_mirror_lims_sample_fields(
 # (2026-09-08 spec: docs/superpowers/specs/2026-09-08-order-upsert-placeholder-seed-design.md).
 # Module-level import so tests can patch `main.seed_parent_from_services`.
 from lims_analyses.order_seed import seed_parent_from_services  # noqa: E402
-from lims_analyses.retest_carry import apply_retest_spec  # noqa: E402
+from lims_analyses.retest_carry import apply_retest_spec, carried_hplc_source_vials  # noqa: E402
 
 
 class S2SOrderSampleStamp(BaseModel):

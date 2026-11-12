@@ -117,6 +117,22 @@ def _newest(db, parent_pk: int, *, chromatogram: bool, source_sub_pks=None,
     return db.execute(q.order_by(A.id.desc()).limit(1)).scalar_one_or_none()
 
 
+def vial_trace_analysis(db, vial):
+    """The newest HPLC analysis labelled EXACTLY `vial.sample_id` that carries
+    both trace arrays, or None. Never a sibling's label. Read-only."""
+    from models import HPLCAnalysis
+    analyses = db.execute(
+        select(HPLCAnalysis)
+        .where(HPLCAnalysis.sample_id_label == vial.sample_id)
+        .order_by(HPLCAnalysis.id.desc())
+    ).scalars().all()
+    return next(
+        (a for a in analyses
+         if a.chromatogram_data and a.chromatogram_data.get("times")
+         and a.chromatogram_data.get("signals")),
+        None)
+
+
 def _materialize_vial_chromatogram(db, parent, vial):
     """Fallback for a vial with no stamped chromatogram row (P-5324,
     2026-10-19): the raw trace lives on the vial's own HPLC analysis as
@@ -130,18 +146,8 @@ def _materialize_vial_chromatogram(db, parent, vial):
     and it stays inside the vial branch. A writer failure propagates
     uncommitted, so no half-written row survives.
     """
-    from models import HPLCAnalysis
     from hplc_csv import build_chromatogram_csv
-    analyses = db.execute(
-        select(HPLCAnalysis)
-        .where(HPLCAnalysis.sample_id_label == vial.sample_id)
-        .order_by(HPLCAnalysis.id.desc())
-    ).scalars().all()
-    analysis = next(
-        (a for a in analyses
-         if a.chromatogram_data and a.chromatogram_data.get("times")
-         and a.chromatogram_data.get("signals")),
-        None)
+    analysis = vial_trace_analysis(db, vial)
     if analysis is None:
         return None
     return _file_vial_row(
