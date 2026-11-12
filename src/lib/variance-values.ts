@@ -14,6 +14,37 @@ export function parentVarianceRowTests(args: {
     : undefined
 }
 
+/** A refused lock's server message as a readable list: one line per
+ *  unfinished vial result or missing run ("P-5010-S04 ENDOTOXIN not signed
+ *  off"). Unknown shapes come through as they are. */
+export function lockProblems(message: string): string[] {
+  return message
+    .split(/;\s*/)
+    .flatMap(part => {
+      const unfinished = /unfinished rows:\s*(.*)$/.exec(part)
+      if (unfinished?.[1]) {
+        return unfinished[1].split(/,\s*/).map(item => {
+          const [vial, ...kw] = item.split(':')
+          return kw.length ? `${vial} ${kw.join(':')} not signed off` : item
+        })
+      }
+      return [part.replace(/^variance (series incomplete|cannot lock):\s*/i, '')]
+    })
+    .map(s => s.trim())
+    .filter(Boolean)
+}
+
+/** The legacy stats table's Spec cell as text (never raw JSON). */
+export function statSpecText(spec: Record<string, number> | null | undefined): string {
+  if (!spec) return '–'
+  const { min, max, target, tolerance_pct: tol } = spec
+  if (min != null && max != null) return `${min} – ${max}`
+  if (min != null) return `≥ ${min}`
+  if (max != null) return `≤ ${max}`
+  if (target != null) return tol != null ? `${target} ± ${tol}%` : `= ${target}`
+  return '–'
+}
+
 /** Pills shown before "+N more" (ponytail: a count cap, no line measuring). */
 export const VARIANCE_PILL_CAP = 8
 

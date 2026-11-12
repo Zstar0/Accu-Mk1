@@ -39,7 +39,7 @@ export const VARIANCE_HELP = {
   core: {
     title: 'Core run',
     lines: [
-      "The result of record. It goes to the sample's own analysis row, the row you verify and the first row printed on the certificate.",
+      "The result of record. It goes to the sample's own analysis row, the row you verify and the one the certificate prints (for endotoxin, Rapid PCR, USP 71 and heavy metals, as the first run).",
       'It always counts. It cannot be excluded here.',
     ],
   },
@@ -54,7 +54,7 @@ export const VARIANCE_HELP = {
     title: 'Included or excluded',
     lines: [
       'An excluded replicate is left out of the numbers here and off the certificate. A reason is recorded with it.',
-      'The lock still needs one included replicate for every run bought.',
+      'For endotoxin, Rapid PCR, USP 71 and heavy metals, the lock still needs one included replicate for every run bought.',
     ],
   },
   signoff: {
@@ -88,7 +88,7 @@ export const VARIANCE_HELP = {
     title: 'Lock',
     lines: [
       'Freezes which vials count.',
-      'It needs at least 2 in the set (on a Mk1 sample the sample itself counts as one), every included replicate signed off, and a vial with results for every run bought.',
+      'It needs at least 2 vials in the set, every included replicate signed off, and a vial with results for every run bought.',
       'After locking nothing here can be changed.',
     ],
   },
