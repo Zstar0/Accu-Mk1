@@ -12,6 +12,7 @@ export type InsightsSortField =
   | 'rep'
   | 'first_order_at'
   | 'testing_orders'
+  | 'period_spend'
   | 'lifetime'
   | 'last_order_at'
   | 'status'
@@ -23,6 +24,7 @@ const COLUMNS: { field: InsightsSortField; label: string; right?: boolean }[] =
     { field: 'rep', label: 'Rep' },
     { field: 'first_order_at', label: 'First order', right: true },
     { field: 'testing_orders', label: 'Testing orders', right: true },
+    { field: 'period_spend', label: 'Period spend', right: true },
     { field: 'lifetime', label: 'Lifetime', right: true },
     { field: 'last_order_at', label: 'Last order', right: true },
     { field: 'status', label: 'Status' },
@@ -51,6 +53,7 @@ export function InsightsCustomerTable({
   touch,
   onOpenCustomer,
   emptyText,
+  showPeriodSpend = false,
 }: {
   rows: CustomerRow[]
   total: number
@@ -64,7 +67,11 @@ export function InsightsCustomerTable({
   touch: ReturnType<typeof useTouchpoints>
   onOpenCustomer: (key: string, tab?: 'crm' | 'support') => void
   emptyText: string
+  showPeriodSpend?: boolean
 }) {
+  const columns = showPeriodSpend
+    ? COLUMNS
+    : COLUMNS.filter(c => c.field !== 'period_spend')
   if (rows.length === 0)
     return (
       <p className="py-4 text-center text-sm text-muted-foreground">
@@ -78,7 +85,7 @@ export function InsightsCustomerTable({
       <table className="w-full text-sm tabular-nums">
         <thead>
           <tr className="text-[11px] uppercase tracking-wider text-muted-foreground">
-            {COLUMNS.map(c => (
+            {columns.map(c => (
               <th
                 key={c.field}
                 className={cn(
@@ -133,6 +140,9 @@ export function InsightsCustomerTable({
                   {fmtDate(r.first_order_at, tz)}
                 </td>
                 <td className="px-2 text-end">{r.testing_orders}</td>
+                {showPeriodSpend && (
+                  <td className="px-2 text-end">{fmtMoney(r.period_spend)}</td>
+                )}
                 <td className="px-2 text-end">{fmtMoney(r.lifetime)}</td>
                 <td className="px-2 text-end">
                   {fmtDate(r.last_order_at, tz)}
