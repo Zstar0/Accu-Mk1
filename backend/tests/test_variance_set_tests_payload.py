@@ -37,13 +37,24 @@ def db():
 
 @pytest.fixture(autouse=True)
 def no_senaite(monkeypatch):
-    """Any SENAITE lookup fails the test: the family below is native-born."""
+    """Any SENAITE lookup, order lookup or outbound HTTP request fails the
+    test: the family below is native-born and the parent page loads this
+    view, so the whole path must stay off the network."""
+    import requests
     calls: list[str] = []
 
-    def boom(sample_id):
-        calls.append(sample_id)
-        raise AssertionError(f"SENAITE called for {sample_id}")
+    def boom(*args, **kwargs):
+        calls.append(repr(args[:2]))
+        raise AssertionError(f"outbound call: {args[:2]!r}")
     monkeypatch.setattr(sub_service.senaite, "fetch_results_by_keyword", boom)
+    monkeypatch.setattr(sub_service.senaite, "_get", boom)
+    monkeypatch.setattr(sub_service, "fetch_sample_services", boom)
+    monkeypatch.setattr(requests.sessions.Session, "request", boom)
+    try:
+        import httpx
+        monkeypatch.setattr(httpx.Client, "send", boom)
+    except ImportError:
+        pass
     return calls
 
 
