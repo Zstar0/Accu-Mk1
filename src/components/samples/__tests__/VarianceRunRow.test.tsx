@@ -176,6 +176,35 @@ describe('parent Variance row', () => {
     expect(screen.getByText(/P-5010-S02/)).toBeTruthy()
   })
 
+  it('keeps replicate chips when the payload has no tests', () => {
+    const map = new Map<string, VialAssignment>([
+      ['mk1:1', { matches: [{
+        vialSampleId: 'P-5010-S05', vialLabel: 'Vial 5', mk1Analysis: row({ uid: 'mk1:S05' }),
+        assignmentRole: 'endo85', assignmentKind: 'variance',
+      }], editable: false }],
+    ])
+    renderTable({ vialAssignmentByKeyword: map, varianceTests: [] })
+    expect(screen.getByText(/P-5010-S05/)).toBeTruthy()
+    expect(screen.queryByTestId('variance-run-row')).toBeNull()
+  })
+
+  it('hides the row when a filter tab removes its section', () => {
+    renderTable({ varianceTests: [endoTest([run(5)])] })
+    expect(screen.getByTestId('variance-run-row')).toBeTruthy()
+    // Pending keeps only Rapid PCR: the Endotoxin section is gone.
+    fireEvent.click(screen.getByRole('tab', { name: /Pending/ }))
+    expect(screen.getAllByText('Rapid PCR').length).toBeGreaterThan(0)
+    expect(screen.queryByText('Endotoxin')).toBeNull()
+    expect(screen.queryByTestId('variance-run-row')).toBeNull()
+  })
+
+  it('puts the row at the end of a column-sorted table on the All tab', () => {
+    renderTable({ varianceTests: [endoTest([run(5)])] })
+    fireEvent.click(screen.getByRole('button', { name: /^Analysis$/ }))
+    const bodyRows = Array.from(document.querySelectorAll('tbody tr'))
+    expect(bodyRows.at(-1)?.getAttribute('data-testid')).toBe('variance-run-row')
+  })
+
   it('formats an HPLC pill as identity, purity, quantity', () => {
     const hplc: VarianceTest = { ...endoTest([]), role: 'hplc', is_hplc: true }
     const r = run(4, {

@@ -18,14 +18,14 @@ export const VARIANCE_HELP = {
     title: 'Where the set stands',
     lines: [
       'Results in: every counted run has a result.',
-      'Signed off: every included replicate is signed off.',
-      'Locked: the set is frozen.',
+      'Signed off: every included replicate is signed off. The lock also needs the results of a core vial in the set promoted.',
+      'Locked: which vials count is frozen.',
     ],
   },
   lock_banner: {
     title: 'Locked',
     lines: [
-      'The vials that count are frozen. Nothing here can be changed until the set is unlocked.',
+      'Which vials count cannot be changed until the set is unlocked.',
       'Anyone can unlock the set for now. Every lock and unlock is logged.',
     ],
   },
@@ -40,7 +40,8 @@ export const VARIANCE_HELP = {
     title: 'Core run',
     lines: [
       "The result of record. It goes to the sample's own analysis row, the row you verify and the one the certificate prints (for endotoxin, Rapid PCR, USP 71 and heavy metals, as the first run).",
-      'It always counts. It cannot be excluded here.',
+      'For endotoxin, Rapid PCR, USP 71 and heavy metals the core run always counts. It cannot be excluded here.',
+      "For HPLC every vial, the core included, can be left out of the numbers. That does not change the sample's reported value.",
     ],
   },
   replicate: {
@@ -53,8 +54,15 @@ export const VARIANCE_HELP = {
   include: {
     title: 'Included or excluded',
     lines: [
-      'An excluded replicate is left out of the numbers here and off the certificate. A reason is recorded with it.',
-      'For endotoxin, Rapid PCR, USP 71 and heavy metals, the lock still needs one included replicate for every run bought.',
+      'An excluded replicate is left out of the numbers here and off the certificate. An excluded HPLC core vial is left out of the numbers. A reason is recorded with each.',
+      'For endotoxin, Rapid PCR, USP 71 and heavy metals, the lock needs exactly as many included replicates as runs bought: no fewer and no extra.',
+    ],
+  },
+  other_vials: {
+    title: 'Other vials',
+    lines: [
+      'These vials are not part of any test card above, for example a test bought without Variance.',
+      'One that is included still counts toward the 2-vial minimum for locking.',
     ],
   },
   signoff: {
@@ -88,8 +96,9 @@ export const VARIANCE_HELP = {
     title: 'Lock',
     lines: [
       'Freezes which vials count.',
-      'It needs at least 2 vials in the set, every included replicate signed off, and a vial with results for every run bought.',
-      'After locking nothing here can be changed.',
+      'It needs at least 2 vials in the set, the results of every vial in the set signed off for the tests bought with Variance (a core vial in the set needs its results promoted), and a vial with results for every run bought.',
+      'For endotoxin, Rapid PCR, USP 71 and heavy metals it also needs exactly as many included replicates as runs bought: no fewer and no extra.',
+      'After locking, which vials count cannot be changed until the set is unlocked.',
     ],
   },
   greyed_out: {
@@ -100,7 +109,7 @@ export const VARIANCE_HELP = {
     title: 'Variance',
     lines: [
       'The replicate runs of this test, one pill per vial.',
-      'Click a pill to open that vial. The core run is the row above.',
+      "Click a pill to open that vial. The core run is on the sample's own row or rows in this section.",
     ],
   },
 } satisfies Record<string, VarianceHelpEntry>

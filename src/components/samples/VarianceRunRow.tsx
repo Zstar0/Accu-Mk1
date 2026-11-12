@@ -1,4 +1,4 @@
-import { Clock, CornerDownRight, Lock } from 'lucide-react'
+import { Check, Clock, CornerDownRight } from 'lucide-react'
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
 import { cn } from '@/lib/utils'
 import { useUIStore } from '@/store/ui-store'
@@ -126,7 +126,7 @@ export function VarianceRunRow({
             )}
           >
             {allSigned ? (
-              <Lock className="h-3 w-3" aria-hidden="true" />
+              <Check className="h-3 w-3" aria-hidden="true" />
             ) : (
               <Clock className="h-3 w-3" aria-hidden="true" />
             )}

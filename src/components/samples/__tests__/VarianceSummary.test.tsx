@@ -132,11 +132,63 @@ describe('Variance overlay, container family', () => {
     renderOverlay()
     expect(await screen.findByText(/by Dana Lee/)).toBeTruthy()
     expect(screen.queryByText(/user #166/)).toBeNull()
-    for (const id of ['P-5010-S04', 'P-5010-S05']) {
+    for (const id of ['P-5010-S01', 'P-5010-S04', 'P-5010-S05']) {
       const btn = within(runRow(id)).getByRole('button', { name: 'Exclude' }) as HTMLButtonElement
       expect(btn.disabled).toBe(true)
     }
-    expect(screen.getAllByLabelText('Unlock the set to change this')).toHaveLength(2)
+    expect(screen.getAllByLabelText('Unlock the set to change this')).toHaveLength(3)
+  })
+
+  it('gives the HPLC core run a real include control', async () => {
+    vi.mocked(getVarianceSet).mockResolvedValue(containerSet({
+      tests: [{ ...hplc, runs: [run(1, { kind: 'core', in_variance_set: false, exclusion_reason: 'Bad injection' }), run(4)] }, endo],
+    }))
+    renderOverlay()
+    await screen.findByText('P-5010 · Variance')
+    const core = within(runRow('P-5010-S01'))
+    expect(core.queryByTestId('variance-core-always')).toBeNull()
+    expect(core.getByText('Excluded: Bad injection')).toBeTruthy()
+    fireEvent.click(core.getByRole('button', { name: 'Include' }))
+    await waitFor(() => expect(patchVarianceMembership).toHaveBeenCalled())
+    expect(vi.mocked(patchVarianceMembership).mock.calls[0]?.[0]).toEqual({
+      sampleId: 'P-5010-S01', inVarianceSet: true, exclusionReason: null,
+    })
+    // The add-on test's core still always counts.
+    expect(within(runRow('P-5010-S02')).getByTestId('variance-core-always')).toBeTruthy()
+  })
+
+  it('shows no Other vials block when every vial is in a test card', async () => {
+    vi.mocked(getVarianceSet).mockResolvedValue(containerSet())
+    renderOverlay()
+    await screen.findByText('P-5010 · Variance')
+    expect(screen.queryByTestId('variance-other-vials')).toBeNull()
+  })
+
+  it('lists vials outside every test card, collapsed, with an include control', async () => {
+    const base = containerSet()
+    vi.mocked(getVarianceSet).mockResolvedValue({
+      ...base,
+      vials: [...base.vials, {
+        sample_id: 'P-5010-S03', vial_sequence: 3, is_parent: false, in_variance_set: true,
+        exclusion_reason: null, review_state: null,
+        results: { 'RAPID-PCR': { value: 'Not Detected', kind: 'categorical' } },
+      }],
+    })
+    renderOverlay()
+    await screen.findByText('P-5010 · Variance')
+    const block = within(screen.getByTestId('variance-other-vials'))
+    expect(block.getByText('1 · 1 in the set')).toBeTruthy()
+    expect(block.queryByTestId('variance-other-P-5010-S03')).toBeNull()
+    fireEvent.click(block.getByRole('button', { name: /Other vials/ }))
+    const row = within(block.getByTestId('variance-other-P-5010-S03'))
+    expect(row.getByText('RAPID-PCR: Not Detected')).toBeTruthy()
+    fireEvent.click(row.getByRole('button', { name: 'Exclude' }))
+    fireEvent.change(row.getByLabelText('Reason for excluding P-5010-S03'), { target: { value: 'Not a replicate' } })
+    fireEvent.click(row.getByRole('button', { name: 'Exclude' }))
+    await waitFor(() => expect(patchVarianceMembership).toHaveBeenCalled())
+    expect(vi.mocked(patchVarianceMembership).mock.calls[0]?.[0]).toEqual({
+      sampleId: 'P-5010-S03', inVarianceSet: false, exclusionReason: 'Not a replicate',
+    })
   })
 
   it('offers the reported value for HPLC only', async () => {

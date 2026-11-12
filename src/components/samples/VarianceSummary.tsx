@@ -350,9 +350,10 @@ function VialRow({
 
 // ─── Container families: one card per test ──────────────────────────────────
 
-/** Counted runs: every core run, plus the replicates in the set. */
+/** Counted runs, as the server counts them: an add-on test's core run always,
+ *  otherwise (replicates, and every HPLC vial) only when in the set. */
 function countedRuns(test: VarianceTest): VarianceRun[] {
-  return test.runs.filter(r => r.kind !== 'variance' || r.in_variance_set)
+  return test.runs.filter(r => r.in_variance_set || (r.kind !== 'variance' && !test.is_hplc))
 }
 
 function StatusItem({ done, label }: { done: boolean; label: string }) {
@@ -409,8 +410,11 @@ function ContainerVarianceBody({
   const replicates = counted.filter(r => r.kind === 'variance')
   const resultsIn = counted.length > 0 && counted.every(r => r.has_result)
   const signedOff = replicates.length > 0 && replicates.every(r => r.signed_off)
-  // Same enablement as the original body (container sets list vials only).
+  // Same enablement as the original body (container sets list vials only):
+  // every in-set vial counts, including the ones in no test card below.
   const selectedCount = data.vials.filter(v => !v.is_parent && v.in_variance_set).length
+  const inCards = new Set(tests.flatMap(t => t.runs.map(r => r.sample_id)))
+  const otherVials = data.vials.filter(v => !v.is_parent && !inCards.has(v.sample_id))
   const problems = lockRefusal ? lockProblems(lockRefusal) : []
 
   return (
@@ -463,6 +467,14 @@ function ContainerVarianceBody({
       ))}
       {tests.length === 0 && (
         <p className="text-sm text-muted-foreground">No test on this sample has a replicate vial yet.</p>
+      )}
+      {otherVials.length > 0 && (
+        <OtherVials
+          vials={otherVials}
+          locked={locked}
+          pending={membership.isPending}
+          onMembership={args => membership.mutate(args)}
+        />
       )}
 
       <div className="flex items-center gap-3">
@@ -540,7 +552,7 @@ function TestCard({
                 key={run.sample_id}
                 run={run}
                 label={isCore ? 'Core' : `Variance ${replicateIds.indexOf(run.sample_id) + 1}`}
-                isCore={isCore}
+                alwaysCounts={isCore && !test.is_hplc}
                 locked={locked}
                 pending={membershipPending}
                 onMembership={onMembership}
@@ -618,23 +630,166 @@ function hplcStats(test: VarianceTest, stats: Record<string, VarianceStatsEntry>
   return Object.fromEntries(Object.entries(stats).filter(([k]) => keys.has(k)))
 }
 
+type OnMembership = (args: { sampleId: string; inVarianceSet: boolean; exclusionReason?: string | null }) => void
+
+/** Include or exclude one vial from the set. Excluding asks for a reason
+ *  first; greyed out while the set is locked. */
+function IncludeControl({
+  sampleId,
+  inSet,
+  exclusionReason,
+  locked,
+  pending,
+  onMembership,
+}: {
+  sampleId: string
+  inSet: boolean
+  exclusionReason: string | null
+  locked: boolean
+  pending: boolean
+  onMembership: OnMembership
+}) {
+  const [reason, setReason] = useState<string | null>(null) // non-null: asking for a reason
+  if (reason !== null && !locked) {
+    return (
+      <span className="inline-flex items-center gap-1.5">
+        <input
+          type="text"
+          autoFocus
+          aria-label={`Reason for excluding ${sampleId}`}
+          placeholder="Reason (required)"
+          value={reason}
+          onChange={e => setReason(e.target.value)}
+          className="text-xs px-2 py-1 border rounded w-44 bg-background"
+        />
+        <Button
+          size="sm"
+          variant="outline"
+          disabled={!reason.trim() || pending}
+          onClick={() => {
+            onMembership({ sampleId, inVarianceSet: false, exclusionReason: reason.trim() })
+            setReason(null)
+          }}
+        >
+          Exclude
+        </Button>
+        <Button size="sm" variant="ghost" onClick={() => setReason(null)}>
+          Cancel
+        </Button>
+      </span>
+    )
+  }
+  return (
+    <span className="inline-flex items-center gap-2">
+      <span className={inSet ? 'text-foreground' : 'text-muted-foreground'}>
+        {inSet ? 'Included' : 'Excluded'}
+        {!inSet && exclusionReason ? `: ${exclusionReason}` : ''}
+      </span>
+      <LockedHint locked={locked}>
+        <Button
+          size="sm"
+          variant="outline"
+          disabled={locked || pending}
+          onClick={() =>
+            inSet
+              ? setReason('')
+              : onMembership({ sampleId, inVarianceSet: true, exclusionReason: null })
+          }
+        >
+          {inSet ? 'Exclude' : 'Include'}
+        </Button>
+      </LockedHint>
+    </span>
+  )
+}
+
+/** Vials that sit in no test card (e.g. a test bought without Variance).
+ *  Shown because an in-set one still counts toward the lock's minimum. */
+function OtherVials({
+  vials,
+  locked,
+  pending,
+  onMembership,
+}: {
+  vials: VarianceVial[]
+  locked: boolean
+  pending: boolean
+  onMembership: OnMembership
+}) {
+  const [open, setOpen] = useState(false)
+  const inSet = vials.filter(v => v.in_variance_set).length
+  return (
+    <section data-testid="variance-other-vials" className="border rounded-md">
+      <div className="flex items-center gap-1.5 px-4 py-2 text-sm">
+        <button
+          type="button"
+          aria-expanded={open}
+          onClick={() => setOpen(o => !o)}
+          className="inline-flex items-center gap-1.5 text-left cursor-pointer hover:text-foreground"
+        >
+          {open ? <ChevronDown className="h-3.5 w-3.5" /> : <ChevronRight className="h-3.5 w-3.5" />}
+          <span className="font-semibold">Other vials</span>
+          <span className="text-muted-foreground">
+            {vials.length} · {inSet} in the set
+          </span>
+        </button>
+        <VarianceHelp id="other_vials" />
+      </div>
+      {open && (
+        <table className="w-full text-sm border-t">
+          <tbody>
+            {vials.map(v => {
+              const results = Object.entries(v.results)
+              return (
+                <tr
+                  key={v.sample_id}
+                  data-testid={`variance-other-${v.sample_id}`}
+                  className={cn('border-t first:border-t-0', !v.in_variance_set && 'text-muted-foreground')}
+                >
+                  <td className="p-2 font-mono whitespace-nowrap">{v.sample_id}</td>
+                  <td className="p-2 whitespace-nowrap">{vialLabel(v.vial_sequence, true)}</td>
+                  <td className="p-2">
+                    {results.length === 0
+                      ? <span className="text-muted-foreground">No results yet</span>
+                      : results.map(([k, r]) => `${k}: ${String(r.value ?? '–')}`).join(' · ')}
+                  </td>
+                  <td className="p-2">
+                    <IncludeControl
+                      sampleId={v.sample_id}
+                      inSet={v.in_variance_set}
+                      exclusionReason={v.exclusion_reason}
+                      locked={locked}
+                      pending={pending}
+                      onMembership={onMembership}
+                    />
+                  </td>
+                </tr>
+              )
+            })}
+          </tbody>
+        </table>
+      )}
+    </section>
+  )
+}
+
 function RunRow({
   run,
   label,
-  isCore,
+  alwaysCounts,
   locked,
   pending,
   onMembership,
 }: {
   run: VarianceRun
   label: string
-  isCore: boolean
+  /** The core run of an add-on test: counted regardless of the set. */
+  alwaysCounts: boolean
   locked: boolean
   pending: boolean
-  onMembership: (args: { sampleId: string; inVarianceSet: boolean; exclusionReason?: string | null }) => void
+  onMembership: OnMembership
 }) {
-  const [reason, setReason] = useState<string | null>(null) // non-null: asking for a reason
-  const excluded = !isCore && !run.in_variance_set
+  const excluded = !alwaysCounts && !run.in_variance_set
   const lastSegment = run.sample_id.split('-').pop()
   return (
     <tr data-testid={`variance-run-${run.sample_id}`} className={cn('border-t', excluded && 'text-muted-foreground')}>
@@ -657,58 +812,20 @@ function RunRow({
         )}
       </td>
       <td className="p-2">
-        {isCore ? (
+        {alwaysCounts ? (
           <span data-testid="variance-core-always" className="inline-flex items-center gap-1">
             <Lock className="h-3.5 w-3.5" aria-hidden="true" /> Always
             <VarianceHelp id="core" />
           </span>
-        ) : reason !== null && !locked ? (
-          <span className="inline-flex items-center gap-1.5">
-            <input
-              type="text"
-              autoFocus
-              aria-label={`Reason for excluding ${run.sample_id}`}
-              placeholder="Reason (required)"
-              value={reason}
-              onChange={e => setReason(e.target.value)}
-              className="text-xs px-2 py-1 border rounded w-44 bg-background"
-            />
-            <Button
-              size="sm"
-              variant="outline"
-              disabled={!reason.trim() || pending}
-              onClick={() => {
-                onMembership({ sampleId: run.sample_id, inVarianceSet: false, exclusionReason: reason.trim() })
-                setReason(null)
-              }}
-            >
-              Exclude
-            </Button>
-            <Button size="sm" variant="ghost" onClick={() => setReason(null)}>
-              Cancel
-            </Button>
-          </span>
         ) : (
-          <span className="inline-flex items-center gap-2">
-            <span className={excluded ? 'text-muted-foreground' : 'text-foreground'}>
-              {excluded ? 'Excluded' : 'Included'}
-              {excluded && run.exclusion_reason ? `: ${run.exclusion_reason}` : ''}
-            </span>
-            <LockedHint locked={locked}>
-              <Button
-                size="sm"
-                variant="outline"
-                disabled={locked || pending}
-                onClick={() =>
-                  excluded
-                    ? onMembership({ sampleId: run.sample_id, inVarianceSet: true, exclusionReason: null })
-                    : setReason('')
-                }
-              >
-                {excluded ? 'Include' : 'Exclude'}
-              </Button>
-            </LockedHint>
-          </span>
+          <IncludeControl
+            sampleId={run.sample_id}
+            inSet={run.in_variance_set}
+            exclusionReason={run.exclusion_reason}
+            locked={locked}
+            pending={pending}
+            onMembership={onMembership}
+          />
         )}
       </td>
     </tr>
