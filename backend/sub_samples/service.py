@@ -2977,9 +2977,10 @@ def _variance_tests(db: Session, parent: LimsSample, subs: list, stats: dict) ->
     Signed off mirrors the lock guard (_lock_fresh_variance_set): every
     current (retested False), live (not retracted or rejected) row is
     promoted or variance_verified. A vial with no live row is not signed
-    off. Counts run over the core run(s) plus the in-set replicates; a core
-    run always counts (a core vial past vial 1 is out of the set by the
-    assignment rule, yet it is the result of record)."""
+    off. Counts run over the core run(s) plus the in-set replicates; for an
+    add-on test a core run always counts (a core vial past vial 1 is out of
+    the set by the assignment rule, yet it is the result of record). For
+    HPLC only in-set vials count, the core included, as the stats do."""
     from models import LimsAnalysis, VialRole
     from lims_analyses.service import _annotate_profile_sections, _serialize_senaite_shape_rows
     from sub_samples.variance_tests import DEAD_ROW_STATES
@@ -3045,12 +3046,18 @@ def _variance_tests(db: Session, parent: LimsSample, subs: list, stats: dict) ->
                     str(v["value"] or "").strip() for v in values),
                 "values": values,
             })
-        counted = [r for r in runs if r["kind"] != "variance" or r["in_variance_set"]]
+        # Add-on tests: the core run always counts. HPLC: only in-set vials
+        # count, the core included, matching compute_variance_stats.
+        counted = [r for r in runs if r["in_variance_set"]
+                   or (r["kind"] != "variance" and not is_hplc)]
         counted_reps = [r for r in counted if r["kind"] == "variance"]
         summary = {
             "runs": len(counted),
             "runs_with_result": sum(1 for r in counted if r["has_result"]),
-            "conforming": sum(1 for r in counted if _run_conforms(r["values"]) is True),
+            # A half-entered run (e.g. heavy metals with only Pb) is not
+            # within spec: every value must be entered and none may fail.
+            "conforming": sum(1 for r in counted
+                              if r["has_result"] and _run_conforms(r["values"]) is True),
             "replicates": len(counted_reps),
             "replicates_signed_off": sum(1 for r in counted_reps if r["signed_off"]),
             "stats": [],

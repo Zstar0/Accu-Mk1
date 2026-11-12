@@ -221,6 +221,92 @@ def test_no_senaite_call_for_native_born_family(db, family, no_senaite):
     assert no_senaite == []
 
 
+def test_half_entered_run_is_not_within_spec(db, family):
+    """Heavy metals with only Pb entered on the core: not a result, not
+    within spec. `has_result` means every value on the run is entered."""
+    db.add(VialRole(code="hm", label="Heavy metals", department_id=None, variance_eligible=True,
+                    sort_order=2, boxable=False, frozen=False, is_system=False))
+    metals = [_svc(db, kw, title, unit="ppm", spec={"rule_kind": "range", "max_value": Decimal("5")})
+              for kw, title in (("HM-PB", "Lead"), ("HM-CD", "Cadmium"), ("HM-AS", "Arsenic"))]
+    core = _vial(db, family, 8, "hm", "core", in_set=False)
+    rep = _vial(db, family, 9, "hm", "variance")
+    _row(db, core, metals[0], "0.1", "to_be_verified")
+    for svc in metals[1:]:
+        _row(db, core, svc, None, "unassigned")
+    for svc in metals:
+        _row(db, rep, svc, "0.2", "variance_verified")
+    db.commit()
+    out = sub_service.get_variance_set(db, family.sample_id)
+    hm = next(t for t in out["tests"] if t["role"] == "hm")
+    half = hm["runs"][0]
+    entered = [v for v in half["values"] if v["value"]]
+    assert [v["keyword"] for v in entered] == ["HM-PB"] and entered[0]["conforms"] is True
+    assert half["has_result"] is False
+    assert hm["summary"]["runs"] == 2
+    assert hm["summary"]["runs_with_result"] == 1
+    assert hm["summary"]["conforming"] == 1
+
+
+def test_hplc_core_out_of_set_is_not_counted(db, family):
+    s1 = next(s for s in family.sub_samples if s.sample_id == "P-7001-S01")
+    s1.in_variance_set = False
+    s1.variance_exclusion_reason = "Bad injection"
+    db.commit()
+    out = sub_service.get_variance_set(db, family.sample_id)
+    hplc = next(t for t in out["tests"] if t["role"] == "hplc")
+    core = hplc["runs"][0]
+    assert (core["kind"], core["in_variance_set"]) == ("core", False)
+    assert hplc["summary"]["runs"] == 1
+    stats = {s["keyword"]: s for s in hplc["summary"]["stats"]}
+    assert stats["HPLC-PUR"]["n"] == 1
+
+
+@pytest.fixture()
+def legacy_family(db, monkeypatch):
+    """A legacy (non-container) family: the parent is vial 1 and holds its
+    own rows. Two categorical services with filed specs."""
+    monkeypatch.setattr(sub_service.senaite, "fetch_results_by_keyword", lambda sid: {})
+    word = _svc(db, "STER-WORD", "Sterility (word)",
+                options=[{"value": "Pass", "label": "Pass"}, {"value": "Fail", "label": "Fail"}],
+                spec={"rule_kind": "equals", "equals_value": "Fail"})
+    pcr = _svc(db, "RAPID-PCR", "Rapid PCR",
+               options=[{"value": "Not Detected", "label": "Not Detected"},
+                        {"value": "Detected", "label": "Detected"}],
+               spec={"rule_kind": "equals", "equals_value": "Not Detected"})
+    parent = LimsSample(sample_id="P-7003", external_lims_system="senaite",
+                        external_lims_uid="legacy", container_mode=False, sample_type_title="Peptide")
+    db.add(parent)
+    db.flush()
+    vial = _vial(db, parent, 1, None, None)
+    for svc, value in ((word, "Pass"), (pcr, "Not Detected")):
+        db.add(LimsAnalysis(lims_sample_pk=parent.id, analysis_service_id=svc.id, keyword=svc.keyword,
+                            title=svc.title, result_value=value, review_state="verified"))
+        _row(db, vial, svc, value, "verified")
+    db.commit()
+    return parent
+
+
+def test_legacy_word_list_pass_follows_disagreeing_spec(db, legacy_family):
+    """Side effect of the spec verdict on legacy families: "Pass" used to
+    count as conforming by the word list; the filed spec (equals "Fail")
+    now decides, so it reads as failing."""
+    out = sub_service.get_variance_set(db, "P-7003")
+    assert out["tests"] == []
+    assert [v["is_parent"] for v in out["vials"]] == [True, False]
+    for v in out["vials"]:
+        assert v["results"]["STER-WORD"]["conforms"] is False
+    stat = out["stats"]["STER-WORD"]
+    assert (stat["conforms_count"], stat["total"], stat["pass"]) == (0, 2, False)
+
+
+def test_legacy_not_detected_meets_equals_spec(db, legacy_family):
+    out = sub_service.get_variance_set(db, "P-7003")
+    for v in out["vials"]:
+        assert v["results"]["RAPID-PCR"]["conforms"] is True
+    stat = out["stats"]["RAPID-PCR"]
+    assert (stat["conforms_count"], stat["total"], stat["pass"]) == (2, 2, True)
+
+
 def test_senaite_still_called_for_senaite_born_family(db, monkeypatch):
     calls: list[str] = []
     monkeypatch.setattr(sub_service.senaite, "fetch_results_by_keyword",
