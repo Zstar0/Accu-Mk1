@@ -275,6 +275,61 @@ class VarianceStatsEntry(BaseModel):
         populate_by_name = True
 
 
+class VarianceRunValue(BaseModel):
+    """One analysis result on a run's vial, as the analyses table shows it."""
+    keyword: str
+    label: Optional[str] = None
+    value: Optional[str] = None
+    unit: Optional[str] = None
+    conforms: Optional[bool] = None
+    review_state: Optional[str] = None
+    analyst: Optional[str] = None
+    specification: Optional[dict] = None
+
+
+class VarianceRun(BaseModel):
+    sample_id: str
+    vial_sequence: int
+    kind: str  # "core" | "variance"
+    in_variance_set: bool
+    exclusion_reason: Optional[str] = None
+    signed_off: bool
+    has_result: bool
+    values: list[VarianceRunValue] = []
+
+
+class VarianceTestStat(BaseModel):
+    """HPLC only: today's per-analysis numbers (compute_variance_stats)."""
+    keyword: str
+    label: Optional[str] = None
+    kind: str
+    mean: Optional[float] = None
+    sd: Optional[float] = None
+    cv_pct: Optional[float] = None
+    n: int
+    conforms_count: Optional[int] = None
+    total: Optional[int] = None
+
+
+class VarianceTestSummary(BaseModel):
+    """Counts over the core run(s) plus the in-set replicates."""
+    runs: int
+    runs_with_result: int
+    conforming: int
+    replicates: int
+    replicates_signed_off: int
+    stats: list[VarianceTestStat] = []
+
+
+class VarianceTest(BaseModel):
+    role: str
+    section_key: Optional[str] = None  # the parent analysis list's section key
+    title: str
+    is_hplc: bool
+    runs: list[VarianceRun]
+    summary: VarianceTestSummary
+
+
 class VarianceSetResponse(BaseModel):
     parent: ParentSampleSummary
     vials: list[VarianceVialResult]
@@ -282,6 +337,9 @@ class VarianceSetResponse(BaseModel):
     locked: bool
     locked_at: Optional[datetime] = None
     locked_by_user_id: Optional[int] = None
+    locked_by_name: Optional[str] = None
+    # Container families only; [] for legacy families.
+    tests: list[VarianceTest] = []
 
 
 class PatchVarianceMembershipRequest(BaseModel):

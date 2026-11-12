@@ -31,7 +31,7 @@ from sub_samples.schemas import (
     SubSampleResponse, SubSampleListResponse, ParentSampleSummary,
     VialPlanResponse, VialPlanItem, AssignmentPatchRequest,
     AggregatesRequest, AggregatesResponse, ParentAggregate,
-    VarianceSetResponse, VarianceVialResult, VarianceStatsEntry,
+    VarianceSetResponse, VarianceVialResult, VarianceStatsEntry, VarianceTest,
     PatchVarianceMembershipRequest, VarianceEntitlementResponse,
     VarianceOverrideRequest,
     SubSampleAttachmentResponse, SubSampleAttachmentListResponse,
@@ -1050,6 +1050,8 @@ def get_variance_set_endpoint(
         locked=result["locked"],
         locked_at=result["locked_at"],
         locked_by_user_id=result["locked_by_user_id"],
+        locked_by_name=result.get("locked_by_name"),
+        tests=[VarianceTest(**t) for t in result.get("tests", [])],
     )
 
 

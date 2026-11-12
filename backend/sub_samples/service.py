@@ -2682,8 +2682,33 @@ class VarianceSeriesIncompleteError(Exception):
     """Lock refused: variance-purchased buckets still have unfinished rows."""
 
 
+_VALUE_CATEGORY_RANK = {"identity": 0, "purity": 1, "quantity": 2}
+
+
+def _variance_value_order(keyword: Optional[str], slot: Optional[int], row_id: Optional[int]) -> tuple:
+    """The fixed display order of a vial's results: per analyte slot,
+    identity, purity, quantity, then anything else by keyword. Non-HPLC
+    rows carry no slot and no category, so they sort by keyword. The row id
+    breaks ties so a duplicate keyword resolves the same way every time."""
+    from coa.variance_series import _category
+    return (slot or 0, _VALUE_CATEGORY_RANK.get(_category(keyword) or "", 3),
+            (keyword or "").upper(), row_id or 0)
+
+
+def _variance_result_key(keyword: Optional[str], slot: Optional[int],
+                         origin: Optional[str], n_slots: int) -> str:
+    """The results-dict key for a row: native HPLC rows are re-keyed per slot
+    (wire_keyword), everything else keeps its raw keyword."""
+    from coa.variance_series import _NATIVE_KWS
+    from coa.hplc_shim import wire_keyword
+    raw_kw = (keyword or "").strip()
+    if origin == "mk1" and raw_kw.upper() in _NATIVE_KWS:
+        return wire_keyword(raw_kw, slot, n_slots)
+    return raw_kw
+
+
 def _fetch_mk1_results_for_host(
-    db: Session, *, host_kind: str, host_pk: int
+    db: Session, *, host_kind: str, host_pk: int, spec_cache: Optional[dict] = None
 ) -> dict:
     """Phase 4b: collect lims_analyses rows for a vial host and project them
     into the variance result shape.
@@ -2706,8 +2731,10 @@ def _fetch_mk1_results_for_host(
     """
     from models import LimsAnalysis, LimsAnalysisPromotion, AnalysisService, Peptide
     from sub_samples.variance import identity_conforms
-    from coa.variance_series import _category, _NATIVE_KWS
-    from coa.hplc_shim import slot_wires, wire_keyword
+    from coa.variance_series import _category
+    from coa.hplc_shim import slot_wires
+    from coa.identity_verdict import identity_wire_result
+    from coa.spec_rules import display_spec_fields, effective_unit, normalize_matrix
 
     base = (
         select(LimsAnalysis, AnalysisService, Peptide)
@@ -2755,8 +2782,12 @@ def _fetch_mk1_results_for_host(
             .where(LimsSubSample.id == host_pk)
         ).scalar_one_or_none()
     n_slots = len(slot_wires(db, parent)) if parent is not None else 0
+    # Spec tiers key on the PARENT sample's matrix and form, as in the table.
+    matrix = normalize_matrix(parent.sample_type_title) if parent is not None else None
+    form_id = parent.sample_form_id if parent is not None else None
 
-    triples = db.execute(stmt).all()
+    triples = sorted(db.execute(stmt).all(),
+                     key=lambda t: _variance_value_order(t[0].keyword, t[0].slot, t[0].id))
     if not triples:
         return {}
     rows = [t[0] for t in triples]
@@ -2810,11 +2841,27 @@ def _fetch_mk1_results_for_host(
                 peptide_name=pep.name if pep is not None else None,
                 result_options=options,
             )
-        raw_kw = (r.keyword or "").strip()
-        if svc is not None and svc.origin == "mk1" and raw_kw.upper() in _NATIVE_KWS:
-            key = wire_keyword(raw_kw, r.slot, n_slots)
         else:
-            key = raw_kw
+            # Every other row: the verdict the analyses table shows under
+            # Spec (display_spec_fields, the certificate's own resolve_spec /
+            # evaluate), fed the same inputs _serialize_senaite_shape_rows
+            # feeds it. No verdict (no spec, a rule that cannot run) leaves
+            # `conforms` unset, so compute_variance_stats keeps its word list.
+            unit = r.result_unit or (svc.unit if svc else None)
+            verdict = display_spec_fields(
+                db, service_id=r.analysis_service_id, matrix=matrix,
+                sample_form_id=form_id, peptide_id=r.peptide_id,
+                wire_result=identity_wire_result(
+                    db, keyword=r.keyword, result=r.result_value,
+                    analysis_service_id=r.analysis_service_id),
+                cache=spec_cache,
+                unit=effective_unit(unit, svc.unit if svc else None),
+                floor=bool(r.result_floor),
+            ).get("conforms")
+            if verdict is not None:
+                entry["conforms"] = verdict
+        key = _variance_result_key(r.keyword, r.slot, svc.origin if svc is not None else None,
+                                   n_slots)
         out[key] = entry
     return out
 
@@ -2849,6 +2896,15 @@ def get_variance_set(db: Session, parent_sample_id: str) -> Optional[dict]:
 
     subs = sorted(parent.sub_samples, key=lambda s: s.vial_sequence)
 
+    # A native-born (Mk1-born) family has no SENAITE records, so the
+    # per-vial SENAITE lookup could only come back empty. Skip the HTTP
+    # call: the parent page loads this view, and a per-vial fan-out on page
+    # load is what took production down on 2026-09-15.
+    from lims_analyses.hplc_native import is_native_born
+    fetch_senaite = ((lambda _sid: {}) if is_native_born(parent)
+                     else senaite.fetch_results_by_keyword)
+    spec_cache: dict = {}
+
     # Container families: the parent's rows are deposit copies of promoted
     # vial results — listing it as a variance member would double-count.
     # Legacy families: parent IS vial 1, a real member.
@@ -2861,8 +2917,9 @@ def get_variance_set(db: Session, parent_sample_id: str) -> Optional[dict]:
             "exclusion_reason": parent.variance_exclusion_reason,
             "review_state": parent.status,
             "results": _merge_variance_results(
-                _fetch_mk1_results_for_host(db, host_kind="sample", host_pk=parent.id),
-                senaite.fetch_results_by_keyword(parent.sample_id),
+                _fetch_mk1_results_for_host(db, host_kind="sample", host_pk=parent.id,
+                                            spec_cache=spec_cache),
+                fetch_senaite(parent.sample_id),
             ),
         }
     ]
@@ -2875,14 +2932,21 @@ def get_variance_set(db: Session, parent_sample_id: str) -> Optional[dict]:
             "exclusion_reason": s.variance_exclusion_reason,
             "review_state": None,
             "results": _merge_variance_results(
-                _fetch_mk1_results_for_host(db, host_kind="sub_sample", host_pk=s.id),
-                senaite.fetch_results_by_keyword(s.sample_id),
+                _fetch_mk1_results_for_host(db, host_kind="sub_sample", host_pk=s.id,
+                                            spec_cache=spec_cache),
+                fetch_senaite(s.sample_id),
             ),
         }
         for s in subs
     ]
 
     stats = compute_variance_stats(vial_dicts)
+    locked_by_name = None
+    if parent.variance_locked_by_user_id is not None:
+        from models import User
+        from users_display import user_display_name
+        locker = db.get(User, parent.variance_locked_by_user_id)
+        locked_by_name = user_display_name(locker) or None
     return {
         "parent": parent,
         "vials": vial_dicts,
@@ -2890,7 +2954,141 @@ def get_variance_set(db: Session, parent_sample_id: str) -> Optional[dict]:
         "locked": parent.variance_locked_at is not None,
         "locked_at": parent.variance_locked_at,
         "locked_by_user_id": parent.variance_locked_by_user_id,
+        "locked_by_name": locked_by_name,
+        "tests": _variance_tests(db, parent, subs, stats) if parent.container_mode else [],
     }
+
+
+_SIGNED_OFF_STATES = ("promoted", "variance_verified")
+
+
+def _variance_tests(db: Session, parent: LimsSample, subs: list, stats: dict) -> list[dict]:
+    """One entry per vial role that has a `variance` vial (container
+    families): the core run(s) and every replicate run with their values in
+    the fixed order, sign-off, and a per-test summary.
+
+    Values come from the analyses table's own row projection
+    (_serialize_senaite_shape_rows) and section labels from its section
+    rule (_annotate_profile_sections), so the run values, units, verdicts
+    and titles read exactly as the parent analysis list shows them. One
+    query for every run vial's rows, then one projection call: no per-vial
+    queries, no HTTP.
+
+    Signed off mirrors the lock guard (_lock_fresh_variance_set): every
+    current (retested False), live (not retracted or rejected) row is
+    promoted or variance_verified. A vial with no live row is not signed
+    off. Counts run over the core run(s) plus the in-set replicates; a core
+    run always counts (a core vial past vial 1 is out of the set by the
+    assignment rule, yet it is the result of record)."""
+    from models import LimsAnalysis, VialRole
+    from lims_analyses.service import _annotate_profile_sections, _serialize_senaite_shape_rows
+    from sub_samples.variance_tests import DEAD_ROW_STATES
+    from coa.hplc_shim import slot_wires
+
+    roles = sorted({s.assignment_role for s in subs
+                    if s.assignment_kind == "variance" and s.assignment_role})
+    if not roles:
+        return []
+    run_subs = [s for s in subs if s.assignment_role in roles]
+    rows = db.execute(
+        select(LimsAnalysis).where(
+            LimsAnalysis.lims_sub_sample_pk.in_([s.id for s in run_subs]),
+            LimsAnalysis.retested.is_(False),
+            LimsAnalysis.review_state.notin_(DEAD_ROW_STATES),
+        )
+    ).scalars().all()
+    shaped = _serialize_senaite_shape_rows(db, list(rows))
+    _annotate_profile_sections(db, parent, shaped)
+    n_slots = len(slot_wires(db, parent))
+    by_sub: dict[int, list] = {}
+    for r, sh in zip(rows, shaped):
+        by_sub.setdefault(r.lims_sub_sample_pk, []).append((r, sh))
+    role_labels = dict(db.execute(
+        select(VialRole.code, VialRole.label).where(VialRole.code.in_(roles))).all())
+
+    tests: list[dict] = []
+    for role in roles:
+        is_hplc = role == "hplc"
+        role_subs = [s for s in run_subs if s.assignment_role == role]
+        cores = [s for s in role_subs if s.assignment_kind != "variance"]
+        reps = [s for s in role_subs if s.assignment_kind == "variance"]
+        section_key, title, section_sort = None, None, None
+        runs = []
+        for s in cores + reps:
+            pairs = sorted(by_sub.get(s.id, []),
+                           key=lambda p: _variance_value_order(p[0].keyword, p[0].slot, p[0].id))
+            values = []
+            for r, sh in pairs:
+                if section_key is None and sh.profile_section_key:
+                    section_key = sh.profile_section_key
+                    title = sh.profile_section_label
+                    section_sort = sh.profile_section_sort
+                values.append({
+                    "keyword": _variance_result_key(r.keyword, r.slot, sh.service_origin, n_slots),
+                    "label": sh.title,
+                    "value": sh.result,
+                    "unit": sh.unit,
+                    "conforms": sh.conforms,
+                    "review_state": sh.review_state,
+                    "analyst": sh.analyst,
+                    "specification": sh.specification,
+                })
+            runs.append({
+                "sample_id": s.sample_id,
+                "vial_sequence": s.vial_sequence,
+                "kind": s.assignment_kind or "core",
+                "in_variance_set": s.in_variance_set,
+                "exclusion_reason": s.variance_exclusion_reason,
+                "signed_off": bool(values) and all(
+                    v["review_state"] in _SIGNED_OFF_STATES for v in values),
+                "has_result": bool(values) and all(
+                    str(v["value"] or "").strip() for v in values),
+                "values": values,
+            })
+        counted = [r for r in runs if r["kind"] != "variance" or r["in_variance_set"]]
+        counted_reps = [r for r in counted if r["kind"] == "variance"]
+        summary = {
+            "runs": len(counted),
+            "runs_with_result": sum(1 for r in counted if r["has_result"]),
+            "conforming": sum(1 for r in counted if _run_conforms(r["values"]) is True),
+            "replicates": len(counted_reps),
+            "replicates_signed_off": sum(1 for r in counted_reps if r["signed_off"]),
+            "stats": [],
+        }
+        if is_hplc:
+            # Today's numbers: compute_variance_stats over the in-set vials,
+            # one entry per HPLC analysis, in the fixed value order.
+            labels: dict[str, Optional[str]] = {}
+            for r in runs:
+                for v in r["values"]:
+                    labels.setdefault(v["keyword"], v["label"])
+            summary["stats"] = [
+                {"keyword": kw, "label": label, **{k: stats[kw].get(k) for k in (
+                    "kind", "mean", "sd", "cv_pct", "n", "conforms_count", "total")}}
+                for kw, label in labels.items() if kw in stats
+            ]
+        tests.append({
+            "role": role,
+            "section_key": section_key,
+            "title": title or role_labels.get(role) or role,
+            "is_hplc": is_hplc,
+            "runs": runs,
+            "summary": summary,
+            "_sort": section_sort if section_sort is not None else 10_000,
+        })
+    tests.sort(key=lambda t: (t["_sort"], t["role"]))
+    for t in tests:
+        del t["_sort"]
+    return tests
+
+
+def _run_conforms(values: list[dict]) -> Optional[bool]:
+    """A run is within spec when every judged value conforms; None when no
+    value carries a verdict."""
+    verdicts = [v["conforms"] for v in values if v["conforms"] is not None]
+    if not verdicts:
+        return None
+    return all(verdicts)
 
 
 def _resolve_variance_vial(db: Session, sample_id: str) -> tuple:
