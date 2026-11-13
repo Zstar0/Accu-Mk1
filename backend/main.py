@@ -7193,6 +7193,8 @@ def _cal_check_fields(prefix: str, section: str, values: dict) -> None:
             continue
         if abs(v) > _CAL_MAX_NUMBER:
             raise HTTPException(400, f"{label}: that number is far too large. Check it.")
+        if key == "rt" and v < 0:
+            raise HTTPException(400, f"{label}: must be 0 or more.")
         if key == "assay_pct" and not 0 < v <= 150:
             raise HTTPException(400, f"{label}: must be more than 0 and no more than 150.")
         if key == "water_pct" and not 0 <= v < 100:
@@ -7285,6 +7287,7 @@ def _cal_effective_inputs(sheet, original) -> Optional[dict]:
     try:
         effective = replicate_prep(original.inputs, sheet.inputs) if original is not None else sheet.inputs
     except Exception:
+        logger.exception("calibration sheet %s: replicate_prep failed", getattr(sheet, "id", None))
         return None
     return effective if isinstance(effective, dict) else None
 
@@ -7296,16 +7299,26 @@ def _cal_work_out(sheet_id, effective: Optional[dict]) -> Optional[dict]:
     try:
         if effective is None:
             raise ValueError("stored inputs are malformed")
-        return work_out_sheet(effective)
+        worked = work_out_sheet(effective)
+        if not isinstance(worked["blocking"], list):
+            raise ValueError("work_out_sheet returned no blocking list")
+        return worked
     except Exception:
         logger.exception("calibration sheet %s: work_out_sheet failed", sheet_id)
         return None
 
 
-def _cal_refuse_unworkable(sheet_id, effective: Optional[dict]) -> None:
-    """Before a commit that stores inputs: nothing is stored that cannot be worked out."""
-    if _cal_work_out(sheet_id, effective) is None:
-        raise HTTPException(400, "These numbers cannot be worked out. Check the values just typed.")
+def _cal_refuse_unworkable(db: Session, sheet_id, effective: Optional[dict], original=None,
+                           refusal: str = "These numbers cannot be worked out. Check the values just typed.") -> dict:
+    """Before a commit that stores inputs or files a curve: nothing is stored that cannot be
+    worked out. A replicate whose ORIGINAL is the cause is told so, by the original's name."""
+    worked = _cal_work_out(sheet_id, effective)
+    if worked is None:
+        if original is not None and _cal_work_out(original.id, _cal_effective_inputs(original, None)) is None:
+            raise HTTPException(400, f"The original sheet, {curve_name(db, original)}, cannot be worked out. "
+                                     "Correct it there.")
+        raise HTTPException(400, refusal)
+    return worked
 
 
 def curve_name(db: Session, sheet, *, taken_names: Optional[set] = None) -> str:
@@ -7439,7 +7452,7 @@ def create_calibration_sheet(data: CalSheetCreateIn, db: Session = Depends(get_d
         _cal_check_peptide(db, data.peptide_id)
     if data.instrument_id is not None:
         _cal_check_instrument(db, data.instrument_id)
-    _cal_refuse_unworkable(None, inputs)
+    _cal_refuse_unworkable(db, None, inputs)
     user_id = getattr(current_user, "id", None)
     sheet = HplcCalibrationSheet(peptide_id=data.peptide_id, instrument_id=data.instrument_id, inputs=inputs,
                                  version=1, created_by_id=user_id, updated_by_id=user_id)
@@ -7507,7 +7520,7 @@ def save_calibration_sheet(sheet_id: int, data: CalSheetPatchIn, db: Session = D
             stored, sheet.inputs = sheet.inputs, inputs  # the effective inputs as they will be
             effective = _cal_effective_inputs(sheet, original)
             sheet.inputs = stored
-            _cal_refuse_unworkable(sheet.id, effective)
+            _cal_refuse_unworkable(db, sheet.id, effective, original)
         for f, v in changes.items():
             setattr(sheet, f, v)
         if inputs is not None:
@@ -7550,6 +7563,265 @@ def duplicate_calibration_sheet(sheet_id: int, db: Session = Depends(get_db),
         db.rollback()
         raise
     return _cal_sheet_out(db, copy_, full=True)
+
+
+# --- File curve (Task 5): a worked-out sheet becomes a calibration_curves row ---
+class CalFileIn(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    version: StrictInt
+
+
+_CAL_NEEDS_AREAS = ("Type the peak areas of at least two levels first. The sheet is saved; "
+                    "file it once they are in.")
+_CAL_CANNOT_FILE = "These numbers cannot be worked out. Correct the sheet, save it and file it again."
+_CAL_NET_PARTS = ("assay", "counterion", "water")
+# Curve text columns narrower than the 200 characters a sheet saves: column -> sheet input key.
+_CAL_CURVE_TEXT = {"source_sample_id": "standard_id", "cas_number": "cas", "vendor": "supplier",
+                   "lot_number": "lot", "operator": "analyst"}
+
+
+def _cal_finite(x) -> bool:
+    if isinstance(x, dict):
+        return all(_cal_finite(v) for v in x.values())
+    if isinstance(x, (list, tuple)):
+        return all(_cal_finite(v) for v in x)
+    return not isinstance(x, float) or math.isfinite(x)
+
+
+def _cal_curve_fields(db: Session, sheet, effective: dict, worked: dict, name: str, now: datetime) -> dict:
+    """Every column "File curve" writes, except is_active, replicate_of_id and the user columns.
+    A 400 (nothing written) when the fit is missing or anything about to be written is not a
+    finite number: the module's guarantee is checked here, not trusted."""
+    from copy import deepcopy
+
+    from hplc_calibration import standard_data_for
+    fit = worked.get("fit") or {}
+    if fit.get("slope") is None or fit.get("intercept") is None or fit.get("r2") is None:
+        # With no net factor there is no stock and no fit, though the areas are typed.
+        raise HTTPException(400, _CAL_CANNOT_FILE if worked.get("factor_applied") is None else _CAL_NEEDS_AREAS)
+    if fit["slope"] == 0:  # a flat curve gives every sample the same quantity
+        raise HTTPException(400, _CAL_CANNOT_FILE)
+    std = standard_data_for(worked)
+    ref_rt = None
+    if std.get("rts"):
+        total = 0.0
+        for rt in std["rts"]:  # left to right, as the lab tool adds
+            total += rt
+        ref_rt = round(total / len(std["rts"]), 4)
+    net, net_in = worked["net"], effective.get("net") or {}
+    parts = net.get("parts_used") or []
+    if not isinstance(parts, list) or any(p not in _CAL_NET_PARTS for p in parts):
+        raise HTTPException(400, _CAL_CANNOT_FILE)
+
+    def text(v):
+        return v if isinstance(v, str) else None
+
+    def number(v):
+        return v if isinstance(v, (int, float)) and not isinstance(v, bool) else None
+
+    run_date = None
+    if isinstance(effective.get("date"), str):
+        try:
+            run_date = datetime.strptime(effective["date"], "%Y-%m-%d")
+        except ValueError:
+            run_date = None
+    inst = db.get(Instrument, sheet.instrument_id) if sheet.instrument_id else None
+    analyte_id = db.execute(select(PeptideAnalyte.id).where(PeptideAnalyte.peptide_id == sheet.peptide_id)
+                            .order_by(PeptideAnalyte.slot).limit(1)).scalar_one_or_none()
+    injection = re.search(r"-Inj(\d+)$", name) if sheet.replicate_of_sheet_id else None
+    fields = {
+        "peptide_id": sheet.peptide_id, "peptide_analyte_id": analyte_id,
+        "slope": fit["slope"], "intercept": fit["intercept"], "r_squared": fit["r2"],
+        "standard_data": std, "reference_rt": ref_rt,
+        "source_filename": name, "source_date": now, "source_sample_id": text(effective.get("standard_id")),
+        "instrument_id": sheet.instrument_id, "instrument": inst.name if inst else None,
+        "vendor": text(effective.get("supplier")), "lot_number": text(effective.get("lot")),
+        "standard_weight_mg": number(effective.get("coa_weight_mg")),
+        "stock_concentration_ug_ml": worked.get("stock_conc_ug_ml"), "diluent_density": worked.get("density"),
+        "operator": text(effective.get("analyst")), "run_date": run_date, "notes": text(effective.get("notes")),
+        "cas_number": text(effective.get("cas")),
+        # Typed on Step 1b, as entered; the counterion and its mass as the working-out USED them.
+        "net_counterion": net.get("counterion"), "net_counterion_mw": net.get("counterion_mw"),
+        "net_equivalents": number(net_in.get("equivalents")), "net_free_mw": number(net_in.get("free_mw")),
+        "net_stated_fw": number(net_in.get("stated_fw")), "net_ms_mz": number(net_in.get("ms_mz")),
+        "net_ms_ion": text(net_in.get("ms_ion")), "net_assay_pct": number(net_in.get("assay_pct")),
+        "net_water_pct": number(net_in.get("water_pct")), "net_assumption": text(net_in.get("assumption")),
+        "net_factor_computed": net.get("factor"), "net_factor_applied": worked.get("factor_applied"),
+        "net_override_reason": text(net_in.get("override_reason")),
+        "net_parts_used": [p for p in _CAL_NET_PARTS if p in parts],
+        "serial_dilution": deepcopy({k: effective.get(k) for k in (
+            "stock", "levels", "level_volume_ul", "stock_as_top", "top_aliquot_ul", "diluent_density_mg_ml")}),
+        "calibration_sheet_id": sheet.id, "injection": int(injection.group(1)) if injection else None,
+    }
+    if not _cal_finite(fields) or fields["net_factor_applied"] is None or fields["stock_concentration_ug_ml"] is None:
+        raise HTTPException(400, _CAL_CANNOT_FILE)
+    for column, key in _CAL_CURVE_TEXT.items():
+        limit = CalibrationCurve.__table__.c[column].type.length
+        if fields[column] is not None and len(fields[column]) > limit:
+            raise HTTPException(400, f"{_CAL_LABELS['sheet'][key]}: at most {limit} characters on a filed curve. "
+                                     "Shorten it, save the sheet and file it again.")
+    return fields
+
+
+def _cal_fit_of(curve) -> dict:
+    return {"slope": curve.slope, "intercept": curve.intercept, "r_squared": curve.r_squared}
+
+
+@app.post("/hplc-calibration-sheets/{sheet_id}/file")
+def file_calibration_curve(sheet_id: int, data: CalFileIn, db: Session = Depends(get_db),
+                           current_user=Depends(get_current_user)):
+    """File curve (calc.js fileCalSheet 2907): mint the sheet's curve or re-file its own, decide
+    whether a new curve becomes the active one, and re-file an original's other injections with
+    the corrected preparation. Every refusal writes nothing; all of it is one commit.
+
+    Locks, in order: the original sheet row, the replicate sheet rows by id, the peptide row,
+    then the curve rows. Every query runs before the first change, so the sheet's updated_at is
+    stamped once, with filed_at, in the one flush (onupdate would otherwise read "changed since
+    filed" the moment a curve is filed). Filing is not a save: the sheet's version is unchanged."""
+    from models import HplcCalibrationSheet
+    try:
+        if data.version > _CAL_MAX_WHOLE:
+            raise HTTPException(400, "version: that number is far too large.")
+        orig_id = _cal_sheet_get(db, sheet_id).replicate_of_sheet_id
+        original = _cal_sheet_get(db, orig_id, lock=True) if orig_id else None
+        sheet = _cal_sheet_get(db, sheet_id, lock=True)
+        if sheet.replicate_of_sheet_id != orig_id or data.version != sheet.version:
+            raise HTTPException(409, _CAL_STALE)
+        replicas = [] if original is not None else db.execute(
+            select(HplcCalibrationSheet).where(HplcCalibrationSheet.replicate_of_sheet_id == sheet.id)
+            .order_by(HplcCalibrationSheet.id).with_for_update().execution_options(populate_existing=True)
+        ).scalars().all()
+        if sheet.peptide_id is None:
+            raise HTTPException(400, "Pick the compound first. The curve is filed under it.")
+        # ponytail: peptide-row lock, Task 8's index is the real guard.
+        pep = db.execute(select(Peptide).where(Peptide.id == sheet.peptide_id).with_for_update(of=Peptide)
+                         .execution_options(populate_existing=True)).scalar_one_or_none()
+        if pep is None:
+            raise HTTPException(400, "Pick the compound first. The curve is filed under it.")
+        if pep.is_blend:
+            raise HTTPException(400, _CAL_BLEND)
+        inst = db.get(Instrument, sheet.instrument_id) if sheet.instrument_id else None
+        if inst is None:
+            raise HTTPException(400, "Pick the instrument. A curve belongs to the instrument that ran it.")
+        if not inst.active:
+            raise HTTPException(400, f"{inst.name} is retired. A curve cannot be filed on it.")
+
+        effective = _cal_effective_inputs(sheet, original)
+        worked = _cal_refuse_unworkable(db, sheet.id, effective, original, refusal=_CAL_CANNOT_FILE)
+        if worked["blocking"]:
+            raise HTTPException(400, " ".join(w["text"] for w in worked["warnings"] if w["code"] in worked["blocking"]))
+        now = datetime.utcnow()
+        name = curve_name(db, sheet)  # after the locks: two duplicates of one original never share -Inj2
+        fields = _cal_curve_fields(db, sheet, effective, worked, name, now)
+
+        # An original re-files each injection that has a curve, with the corrected preparation.
+        jobs = []  # (replicate sheet, its curve fields)
+        for rep in replicas:
+            if rep.calibration_curve_id is None:
+                continue
+            rep_name = curve_name(db, rep)
+            rep_worked = _cal_work_out(rep.id, _cal_effective_inputs(rep, sheet))
+            try:
+                if rep_worked is None or rep_worked["blocking"]:
+                    raise HTTPException(400, _CAL_CANNOT_FILE)
+                jobs.append((rep, _cal_curve_fields(db, rep, _cal_effective_inputs(rep, sheet), rep_worked,
+                                                    rep_name, now)))
+            except HTTPException:
+                raise HTTPException(400, f"The injection {rep_name} cannot be re-filed with these numbers, so "
+                                         "nothing was filed. Check its peak areas, or correct this sheet again.")
+
+        curve_ids = sorted({c for c in [sheet.calibration_curve_id, *(r.calibration_curve_id for r, _ in jobs)] if c})
+        curves = {c.id: c for c in db.execute(
+            select(CalibrationCurve).where(CalibrationCurve.id.in_(curve_ids)).order_by(CalibrationCurve.id)
+            .with_for_update(of=CalibrationCurve).execution_options(populate_existing=True)).scalars()} \
+            if curve_ids else {}
+        # A curve that analyses have used is part of their record: never re-filed (Review Focus 2).
+        # ponytail: an analysis started between this count and the commit is not seen; Task 8 territory.
+        used = dict(db.execute(select(HPLCAnalysis.calibration_curve_id, func.count()).where(
+            HPLCAnalysis.calibration_curve_id.in_(curve_ids)).group_by(HPLCAnalysis.calibration_curve_id)).all()) \
+            if curve_ids else {}
+        for target, target_fields in [(sheet, fields), *jobs]:
+            curve = curves.get(target.calibration_curve_id)
+            if curve is None:
+                continue
+            n = used.get(curve.id, 0)
+            if n:
+                raise HTTPException(409, f"Curve {curve.source_filename} has been used by {n} "
+                                         f"{'analysis' if n == 1 else 'analyses'}, so its numbers are part of their "
+                                         "record. Start a new worksheet to file a corrected curve.")
+            if (curve.peptide_id, curve.instrument_id) != (target_fields["peptide_id"], target_fields["instrument_id"]):
+                raise HTTPException(409, f"Curve {curve.source_filename} has been moved to another peptide or "
+                                         "instrument since it was filed, so it is not re-filed from here. Start a "
+                                         "new worksheet to file a corrected curve.")
+
+        orig_curve_id = original.calibration_curve_id if original is not None else None
+        curve = curves.get(sheet.calibration_curve_id)
+        none = {"deactivated_ids": [], "other_active_ids": []}
+        active_now = []
+        if curve is not None:
+            activation = {"active": bool(curve.is_active), "reason": "refiled", **none}
+        elif original is not None and sheet.instrument_id == original.instrument_id:
+            # Another injection of the same vials does not demote the original; star it to use it.
+            activation = {"active": False, "reason": "replicate", **none}
+        else:
+            active_now = db.execute(
+                select(CalibrationCurve).where(CalibrationCurve.peptide_id == sheet.peptide_id,
+                                               CalibrationCurve.instrument_id == sheet.instrument_id,
+                                               CalibrationCurve.is_active == True)  # noqa: E712
+                .order_by(CalibrationCurve.id).with_for_update(of=CalibrationCurve)
+                .execution_options(populate_existing=True)).scalars().all()
+            if not active_now:
+                activation = {"active": True, "reason": "first_active", **none}
+            elif len(active_now) == 1:
+                activation = {"active": True, "reason": "replaced", "deactivated_ids": [active_now[0].id],
+                              "other_active_ids": []}
+            else:  # two or more: never pre-empt the Handler's ruling (Review Focus 3)
+                activation = {"active": False, "reason": "several_active", "deactivated_ids": [],
+                              "other_active_ids": [c.id for c in active_now]}
+
+        # Every query is done; from here on only changes, then one flush and one commit.
+        user_id, email = getattr(current_user, "id", None), getattr(current_user, "email", None)
+        old = _cal_fit_of(curve) if curve is not None else None
+        if curve is None:
+            curve = CalibrationCurve(**fields, replicate_of_id=orig_curve_id, is_active=activation["active"],
+                                     created_by_user_id=user_id, created_by_email=email,
+                                     updated_by_user_id=user_id, updated_by_email=email)
+            db.add(curve)
+            for c in active_now if activation["reason"] == "replaced" else []:
+                c.is_active = False
+        else:
+            for k, v in {**fields, "replicate_of_id": orig_curve_id}.items():
+                setattr(curve, k, v)
+            curve.updated_by_user_id, curve.updated_by_email = user_id, email
+        refiled = []
+        for rep, rep_fields in jobs:
+            rc = curves[rep.calibration_curve_id]
+            refiled.append((rc, _cal_fit_of(rc)))
+            for k, v in rep_fields.items():
+                setattr(rc, k, v)
+            rc.updated_by_user_id, rc.updated_by_email = user_id, email
+        db.flush()  # the new curve's id
+        for rc, _ in refiled:
+            rc.replicate_of_id = curve.id
+        sheet.calibration_curve_id = curve.id
+        sheet.filed_at = sheet.updated_at = now
+        db.add(AuditLog(operation="calibration_curve_refiled" if old else "calibration_curve_filed",
+                        entity_type="calibration_curve", entity_id=str(curve.id),
+                        details={"user_id": user_id, "sheet_id": sheet.id, "old": old, "new": _cal_fit_of(curve),
+                                 "activation": activation}))
+        for rc, rc_old in refiled:
+            db.add(AuditLog(operation="calibration_curve_refiled", entity_type="calibration_curve",
+                            entity_id=str(rc.id),
+                            details={"user_id": user_id, "sheet_id": rc.calibration_sheet_id, "old": rc_old,
+                                     "new": _cal_fit_of(rc), "activation": {
+                                         "active": bool(rc.is_active), "reason": "refiled", **none}}))
+        db.commit()
+    except Exception:
+        db.rollback()  # free every row lock before the response
+        raise
+    return {"sheet": _cal_sheet_out(db, sheet, full=True),
+            "curve": _cal_to_response(curve).model_dump(mode="json"),
+            "activation": activation, "refiled_curve_ids": [rc.id for rc, _ in refiled]}
 
 
 # --- Full HPLC Analysis Endpoint ---

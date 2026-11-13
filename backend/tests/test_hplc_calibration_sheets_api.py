@@ -264,6 +264,7 @@ REFUSALS = [
     ("water 100", _at(("net", "water_pct"), 100), "Water, Karl Fischer (%): must be 0 or more and less than 100"),
     ("huge peak area", _at(("levels", 2, "peak_area"), 1e13), "Level 3, Peak Area: that number is far too large"),
     ("huge negative rt", _at(("levels", 2, "rt"), -1e300), "Level 3, RT (min): that number is far too large"),
+    ("negative rt", _at(("levels", 2, "rt"), -0.1), "Level 3, RT (min): must be 0 or more."),
     ("no levels", _at(("levels",), []), "The sheet needs at least one level."),
     ("null levels", _at(("levels",), None), "The sheet needs at least one level."),
     ("13 levels", _at(("levels",), [{"target": 1.0}] * 13), "A sheet holds at most 12 levels."),
@@ -357,15 +358,18 @@ def test_inputs_that_cannot_be_worked_out_are_never_stored(client, seeded, sessi
     res = client.patch(f"/hplc-calibration-sheets/{sheet['id']}", json={"version": 1, "inputs": changed})
     assert res.status_code == 400 and res.json()["detail"] == sentence
     assert _stored(session, sheet["id"]) == before
-    # The same guard on a replicate's save (its effective inputs are worked out).
+    # The same guard on a replicate's save (its effective inputs are worked out). Here the
+    # original cannot be worked out either, so the refusal names it (Task 5, carried item).
     monkeypatch.undo()
-    _file(session, sheet["id"], _curve(session, seeded.peptide, f"orig-{uuid4().hex}", seeded.inst))
+    orig_name = f"orig-{uuid4().hex}"
+    _file(session, sheet["id"], _curve(session, seeded.peptide, orig_name, seeded.inst))
     rep = client.post(f"/hplc-calibration-sheets/{sheet['id']}/duplicate").json()
     rep_before = _stored(session, rep["id"])
     monkeypatch.setattr(hplc_calibration, "work_out_sheet", _raising)
     res = client.patch(f"/hplc-calibration-sheets/{rep['id']}",
                        json={"version": 1, "inputs": {"levels": [{"peak_area": 5.0}]}})
-    assert res.status_code == 400 and res.json()["detail"] == sentence
+    assert res.status_code == 400
+    assert res.json()["detail"] == f"The original sheet, {orig_name}, cannot be worked out. Correct it there."
     assert _stored(session, rep["id"]) == rep_before
 
 
