@@ -103,16 +103,11 @@ function IntermediateCell({
           value={typed[key]}
           placeholder={placeholder}
           disabled={locked}
+          zeroClears={clears}
           onCommit={v =>
             onPatch(
               row.item_id,
-              {
-                hplc_prep: {
-                  vials: {
-                    [n]: { [key]: clears && v !== null && v <= 0 ? null : v },
-                  },
-                },
-              },
+              { hplc_prep: { vials: { [n]: { [key]: v } } } },
               what
             )
           }

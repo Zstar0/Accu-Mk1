@@ -6,6 +6,7 @@ import {
   type QueryClient,
 } from '@tanstack/react-query'
 import {
+  getHplcPrepRules,
   getHplcSheet,
   patchHplcRow,
   promoteHplcRow,
@@ -15,6 +16,8 @@ import {
   type HplcSheetRow,
 } from '@/lib/api'
 import { mergeHplcPrep, type HplcPrepInputs } from '@/lib/hplc-prep'
+import type { HplcPrepRule } from '@/lib/hplc-prep-rules'
+import { HPLC_PREP_RULES_KEY } from '@/services/hplc-prep-rules'
 import { worksheetPageKey } from '@/hooks/use-worksheet-drawer'
 
 /** The HPLC sheet's cache key (GET /worksheets/{id}/hplc). */
@@ -50,19 +53,24 @@ interface SaveVars {
  *  each other, so one that never answers would hold up every later one. */
 const SAVE_TIMEOUT_MS = 15_000
 const TIMED_OUT = 'the save timed out; check the value and try again'
+// The server may have finished after the browser gave up, so this never
+// says the row was not promoted; a second press answers "already".
+const PROMOTE_TIMED_OUT =
+  'The promote did not answer. If the row now shows its prep it was promoted; otherwise press Promote again.'
 
 /** The request, aborted after SAVE_TIMEOUT_MS; it then fails as any other
  *  save does (alert, rollback, the queue moves on), even if the request
  *  ignores the abort. */
 async function withTimeout<T>(
-  send: (signal: AbortSignal) => Promise<T>
+  send: (signal: AbortSignal) => Promise<T>,
+  message = TIMED_OUT
 ): Promise<T> {
   const controller = new AbortController()
   let timer: ReturnType<typeof setTimeout> | undefined
   const timedOut = new Promise<never>((_, reject) => {
     timer = setTimeout(() => {
       // rejected first, so the abort's own error can never win the race
-      reject(new Error(TIMED_OUT))
+      reject(new Error(message))
       controller.abort()
     }, SAVE_TIMEOUT_MS)
   })
@@ -239,28 +247,47 @@ export function useHplcSheetSaving(id: number) {
 }
 
 /**
- * A row's promote. It runs in the sheet's save scope, never retried, so it
- * can never overtake a save still queued; the sheet is read again whatever
- * the answer (its `row` can be null). `readFresh` is the sheet as the server
- * has it now, or null while a save is pending.
+ * A row's promote. It runs in the sheet's save scope, never retried, and
+ * gives up after SAVE_TIMEOUT_MS, so it can neither overtake a save still
+ * queued nor hold one up for long. The sheet is read again whatever the
+ * answer (its `row` can be null), unless saves are queued behind it: the
+ * last of them reads it then. `readFresh` is the sheet and the prep rules as
+ * the server has them now, or null when a save is pending before or after
+ * the read (a save cancels the read, which then answers the cached sheet).
  */
 export function usePromoteHplcRow(id: number) {
   const qc = useQueryClient()
+  const saving = () => qc.isMutating({ mutationKey: SAVE_KEY(id) }) > 0
   const promote = useMutation({
     mutationKey: ['hplc-sheet-promote', id],
     scope: { id: `hplc-sheet-save-${id}` },
     retry: 0,
-    mutationFn: (itemId: number) => promoteHplcRow(id, itemId),
-    onSettled: () => qc.invalidateQueries({ queryKey: HPLC_SHEET_KEY(id) }),
+    mutationFn: (itemId: number) =>
+      withTimeout(() => promoteHplcRow(id, itemId), PROMOTE_TIMED_OUT),
+    onSettled: () =>
+      saving()
+        ? undefined
+        : qc.invalidateQueries({ queryKey: HPLC_SHEET_KEY(id) }),
   })
-  const readFresh = async (): Promise<HplcSheet | null> =>
-    qc.isMutating({ mutationKey: SAVE_KEY(id) })
-      ? null
-      : qc.fetchQuery({
-          queryKey: HPLC_SHEET_KEY(id),
-          queryFn: () => getHplcSheet(id),
-          staleTime: 0,
-        })
+  const readFresh = async (): Promise<{
+    sheet: HplcSheet
+    rules: HplcPrepRule[]
+  } | null> => {
+    if (saving()) return null
+    const [sheet, rules] = await Promise.all([
+      qc.fetchQuery({
+        queryKey: HPLC_SHEET_KEY(id),
+        queryFn: () => getHplcSheet(id),
+        staleTime: 0,
+      }),
+      qc.fetchQuery({
+        queryKey: HPLC_PREP_RULES_KEY,
+        queryFn: getHplcPrepRules,
+        staleTime: 0,
+      }),
+    ])
+    return saving() ? null : { sheet, rules }
+  }
   return { promote, readFresh }
 }
 

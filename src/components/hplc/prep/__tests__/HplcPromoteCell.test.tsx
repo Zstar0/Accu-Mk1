@@ -17,6 +17,7 @@ import type {
 } from '@/lib/api'
 import type * as WorksheetDrawerHook from '@/hooks/use-worksheet-drawer'
 import {
+  getHplcPrepRules,
   getHplcSheet,
   HplcPromoteRefused,
   patchHplcRow,
@@ -191,6 +192,17 @@ describe('Promote on the HPLC worksheet page', () => {
     ).toBeEnabled()
     // the sheet is read after the refusal too
     await waitFor(() => expect(getHplcSheet).toHaveBeenCalledTimes(3))
+    // never retried: a refused promote is sent once
+    await act(() => new Promise(r => setTimeout(r, 30)))
+    expect(promoteHplcRow).toHaveBeenCalledTimes(1)
+    // announced, and kept through the next press into its confirm
+    expect(within(step2()).getByRole('alert')).toHaveTextContent(density)
+    fireEvent.click(promoteButton())
+    const again = await screen.findByRole('dialog')
+    expect(again).toHaveTextContent('Last time the server said:')
+    expect(within(again).getByText(density)).toBeInTheDocument()
+    // the list under the button is still there behind the dialog
+    expect(screen.getAllByText(density)).toHaveLength(2)
   })
 
   it('a promoted row shows its prep and has no button', async () => {
@@ -290,5 +302,179 @@ describe('Promote on the HPLC worksheet page', () => {
     expect(promoteHplcRow).not.toHaveBeenCalled()
     await act(async () => answer(ready()))
     await waitFor(() => expect(promoteHplcRow).toHaveBeenCalledTimes(1))
+  })
+
+  it('a promote that never answers gives up after 15 seconds without saying the row was not promoted, and the queue moves on', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true })
+    try {
+      vi.mocked(getHplcSheet).mockResolvedValue(makeSheet([ready()]))
+      vi.mocked(promoteHplcRow).mockImplementation(
+        () => new Promise(() => undefined)
+      )
+      vi.mocked(patchHplcRow).mockResolvedValue(ready())
+      renderPage()
+      const box = await screen.findByRole('textbox', {
+        name: `${S1}, ${VIAL}`,
+      })
+      fireEvent.click(promoteButton())
+      const dialog = await screen.findByRole('dialog')
+      fireEvent.click(within(dialog).getByRole('button', { name: 'Promote' }))
+      await waitFor(() => expect(promoteHplcRow).toHaveBeenCalledTimes(1))
+      // a save typed meanwhile waits behind the promote
+      typeAndLeave(box, '5001')
+      await act(() => vi.advanceTimersByTimeAsync(14_000))
+      expect(patchHplcRow).not.toHaveBeenCalled()
+      const reads = vi.mocked(getHplcSheet).mock.calls.length
+      await act(() => vi.advanceTimersByTimeAsync(1_500))
+      expect(
+        await within(step2()).findByText(
+          'The promote did not answer. If the row now shows its prep it was promoted; otherwise press Promote again.'
+        )
+      ).toBeInTheDocument()
+      await waitFor(() => expect(patchHplcRow).toHaveBeenCalledTimes(1))
+      // read again once the queued save has answered
+      await waitFor(() =>
+        expect(vi.mocked(getHplcSheet).mock.calls.length).toBeGreaterThan(reads)
+      )
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('a save started while the press reads the sheet again stops the press quietly', async () => {
+    let reread: (s: ReturnType<typeof makeSheet>) => void = () => undefined
+    vi.mocked(getHplcSheet)
+      .mockResolvedValueOnce(makeSheet([ready()]))
+      .mockImplementationOnce(
+        () =>
+          new Promise(resolve => {
+            reread = resolve
+          })
+      )
+      .mockResolvedValue(makeSheet([ready()]))
+    vi.mocked(patchHplcRow).mockImplementation(
+      () => new Promise(() => undefined)
+    )
+    renderPage()
+    const box = await screen.findByRole('textbox', { name: `${S1}, ${VIAL}` })
+    fireEvent.click(promoteButton())
+    await waitFor(() => expect(getHplcSheet).toHaveBeenCalledTimes(2))
+    typeAndLeave(box, '5001')
+    await act(async () => reread(makeSheet([ready()])))
+    await act(() => new Promise(r => setTimeout(r, 30)))
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument()
+    expect(
+      within(step2()).getByRole('button', { name: 'Saving...' })
+    ).toBeDisabled()
+    expect(promoteHplcRow).not.toHaveBeenCalled()
+  })
+
+  it('a press reads the prep rules again and works the row out with the new ones', async () => {
+    vi.mocked(getHplcSheet).mockResolvedValue(makeSheet([ready()]))
+    vi.mocked(getHplcPrepRules)
+      .mockResolvedValueOnce([])
+      .mockResolvedValue([
+        {
+          id: 4,
+          peptide_id: 10,
+          min_mg: null,
+          max_mg: null,
+          target_conc_ug_ml: 300,
+          blend_target_conc_ug_ml: null,
+          lead_component_id: null,
+          lead_priority: null,
+          floor_ug_ml: null,
+          diluent: null,
+          default_instrument_id: null,
+          status: 'validated',
+          note: null,
+          sort_order: 1,
+          active: true,
+          peptide_name: 'BPC-157',
+          peptide_is_blend: false,
+          lead_component_name: null,
+          default_instrument_name: null,
+          updated_at: null,
+        },
+      ])
+    renderPage()
+    await screen.findByRole('textbox', { name: `${S1}, ${VIAL}` })
+    expect(
+      screen.getByRole('textbox', { name: `${S1}, Target Conc (ug/mL)` })
+    ).toHaveAttribute('placeholder', '200')
+    fireEvent.click(promoteButton())
+    const dialog = await screen.findByRole('dialog')
+    expect(getHplcPrepRules).toHaveBeenCalledTimes(2)
+    expect(dialog).toHaveTextContent('Target Conc 300 ug/mL')
+  })
+
+  it('the confirm starts on Cancel: Enter and Escape close it and promote nothing', async () => {
+    vi.mocked(getHplcSheet).mockResolvedValue(makeSheet([ready()]))
+    const user = userEvent.setup()
+    renderPage()
+    await screen.findByRole('textbox', { name: `${S1}, ${VIAL}` })
+    fireEvent.click(promoteButton())
+    const dialog = await screen.findByRole('dialog')
+    expect(within(dialog).getByRole('button', { name: 'Cancel' })).toHaveFocus()
+    await user.keyboard('{Enter}')
+    await waitFor(() =>
+      expect(screen.queryByRole('dialog')).not.toBeInTheDocument()
+    )
+    fireEvent.click(promoteButton())
+    await screen.findByRole('dialog')
+    await user.keyboard('{Escape}')
+    await waitFor(() =>
+      expect(screen.queryByRole('dialog')).not.toBeInTheDocument()
+    )
+    expect(promoteHplcRow).not.toHaveBeenCalled()
+  })
+
+  it('a disabled Promote names its reasons for a screen reader', async () => {
+    vi.mocked(getHplcSheet).mockResolvedValue(
+      makeSheet([ready({ instrument_id: null, instrument_name: null })])
+    )
+    renderPage()
+    await screen.findByRole('textbox', { name: `${S1}, ${VIAL}` })
+    const wrapper = promoteButton().parentElement as HTMLElement
+    const id = wrapper.getAttribute('aria-describedby')
+    expect(id).toBeTruthy()
+    expect(document.getElementById(id as string)).toHaveTextContent(
+      'pick the instrument first'
+    )
+  })
+
+  it('the read-again after a promote waits for the saves queued behind it', async () => {
+    let answerPromote: (r: HplcPromoteResult) => void = () => undefined
+    let answerSave: (row: HplcSheetRow) => void = () => undefined
+    vi.mocked(getHplcSheet).mockResolvedValue(makeSheet([ready()]))
+    vi.mocked(promoteHplcRow).mockImplementation(
+      () =>
+        new Promise(resolve => {
+          answerPromote = resolve
+        })
+    )
+    vi.mocked(patchHplcRow).mockImplementation(
+      () =>
+        new Promise(resolve => {
+          answerSave = resolve
+        })
+    )
+    renderPage()
+    const box = await screen.findByRole('textbox', { name: `${S1}, ${VIAL}` })
+    fireEvent.click(promoteButton())
+    const dialog = await screen.findByRole('dialog')
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Promote' }))
+    await waitFor(() => expect(promoteHplcRow).toHaveBeenCalledTimes(1))
+    typeAndLeave(box, '5001')
+    const reads = vi.mocked(getHplcSheet).mock.calls.length
+    await act(async () =>
+      answerPromote({ prep: PREP, already: false, row: null })
+    )
+    await waitFor(() => expect(patchHplcRow).toHaveBeenCalledTimes(1))
+    // the typed value is not overwritten by a read taken before it saved
+    expect(getHplcSheet).toHaveBeenCalledTimes(reads)
+    expect(box).toHaveValue('5001')
+    await act(async () => answerSave(ready()))
+    await waitFor(() => expect(getHplcSheet).toHaveBeenCalledTimes(reads + 1))
   })
 })

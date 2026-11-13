@@ -279,6 +279,29 @@ describe('WorksheetDrawer — run-context apply + stamped display + native instr
     )
   })
 
+  it('says it right for one promoted row', async () => {
+    vi.mocked(applyWorksheetMethodInstrument).mockResolvedValue({
+      stamped: 1,
+      items_updated: 1,
+      skipped_state: [],
+      skipped_uncovered: [],
+      skipped_promoted: [{ item_id: 2, sample_id: 'P-9300-S01' }],
+    })
+    const user = userEvent.setup()
+    render(<WorksheetDrawer />, { wrapper })
+
+    fireEvent.click(await screen.findByRole('combobox', { name: /method/i }))
+    fireEvent.click(await screen.findByRole('option', { name: /icp-ms f/i }))
+    fireEvent.click(await screen.findByRole('combobox', { name: /instrument/i }))
+    fireEvent.click(await screen.findByRole('option', { name: /7900f/i }))
+    await user.click(screen.getByRole('button', { name: /apply to all/i }))
+
+    await waitFor(() => expect(applyWorksheetMethodInstrument).toHaveBeenCalled())
+    expect(vi.mocked(toast.success).mock.calls[0]?.[0]).toBe(
+      'Stamped 1 analyses on 1 items, 1 promoted row kept its instrument'
+    )
+  })
+
   it('resets the armed run context on worksheet switch, but not on a same-worksheet apply', async () => {
     vi.mocked(listWorksheets).mockResolvedValue([WORKSHEET, WORKSHEET_B])
     vi.mocked(applyWorksheetMethodInstrument).mockResolvedValue({

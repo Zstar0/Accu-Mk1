@@ -94,14 +94,16 @@ export function HplcWorksheetPage({
       ? [REASON_COMPLETED]
       : promoteReasons(v.row, v.computed, s.blend_cap)
 
-  /** A press: the row's reasons from the sheet as the server has it now. */
+  /** A press: the row's reasons, and what the prep will record, from the
+   *  sheet and the rules as the server has them now. */
   async function check(itemId: number) {
     const fresh = await readFresh()
     if (!fresh) return null
-    const v = sheetRowViews(fresh, rules, false).find(
+    const v = sheetRowViews(fresh.sheet, fresh.rules, false).find(
       x => x.row.item_id === itemId
     )
-    return !v || v.row.promoted ? null : reasonsOf(fresh, v)
+    if (!v || v.row.promoted) return null
+    return { reasons: reasonsOf(fresh.sheet, v), computed: v.computed }
   }
 
   // N of M promoted: M counts the rows that can have a prep
@@ -239,9 +241,7 @@ export function HplcWorksheetPage({
             onSetInstrument={(itemId, instrumentId, what) =>
               instrument.mutate({ itemId, instrumentId, what })
             }
-            onNumberRefused={what =>
-              onFailure(what, 'that number is too large')
-            }
+            onNumberRefused={onFailure}
             step2Trailing={{
               header: 'Sample prep',
               cell: v => (

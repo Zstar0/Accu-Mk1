@@ -489,6 +489,22 @@ describe('HplcPrepSheet', () => {
     expect(props.onPatch).not.toHaveBeenCalled()
   })
 
+  it('Escape gives the stored value back and leaving then saves nothing', () => {
+    const { onPatch } = renderSheet([
+      makeRow({ hplc_prep: { stock_vial_mg: 5012.31 } }),
+    ])
+    const el = box(`${S1}, ${VIAL}`)
+    fireEvent.focus(el)
+    fireEvent.change(el, { target: { value: '9999' } })
+    fireEvent.keyDown(el, { key: 'Escape' })
+    expect(el).toHaveValue('5012.31')
+    fireEvent.blur(el)
+    expect(onPatch).not.toHaveBeenCalled()
+    // the box still works after it
+    typeAndLeave(el, '5000')
+    expect(onPatch).toHaveBeenCalledTimes(1)
+  })
+
   it('0 or less in Target Conc clears it, as the source does', () => {
     const { onPatch } = renderSheet([makeRow()])
     const what = `${S1}, Target Conc (ug/mL)`

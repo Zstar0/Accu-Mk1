@@ -115,8 +115,8 @@ export function promoteReasons(
     if (count == null) reasons.push(REASON_CAPSULE_COUNT)
     else if (count > MAX_CAPSULES)
       reasons.push(
-        `a stock of ${count} capsules is more than Process HPLC takes ` +
-          `(${MAX_CAPSULES}); check the count`
+        `a stock of ${g(count)} capsules is more than Process HPLC takes ` +
+          `(${g(MAX_CAPSULES)}); check the count`
       )
   }
   const p = row.params

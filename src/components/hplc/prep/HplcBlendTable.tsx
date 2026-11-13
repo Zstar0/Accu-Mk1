@@ -155,7 +155,8 @@ function BlendCell({
         disabled={locked}
         // 0 or less means "the standard", as on the source sheet: the key
         // is cleared and the box goes back to its placeholder
-        onCommit={v => sendComponent(key, v !== null && v <= 0 ? null : v)}
+        zeroClears
+        onCommit={v => sendComponent(key, v)}
       />
     </InputCell>
   )

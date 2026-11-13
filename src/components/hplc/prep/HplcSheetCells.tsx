@@ -36,23 +36,23 @@ export function Hint({ id, children }: { id?: string; children: ReactNode }) {
   )
 }
 
-/** Where a box reports a number too large to send: the page's failure
- *  list. `what` is the box's name. */
+/** Where a box reports a number the server would refuse: the page's failure
+ *  list. `what` is the box's name, `reason` the sentence. */
 // eslint-disable-next-line react-refresh/only-export-components
 export const NumberRefusedContext = createContext<
-  ((what: string) => void) | undefined
+  ((what: string, reason: string) => void) | undefined
 >(undefined)
 
-// The server's ceilings (worksheets_hplc._MAX_NUMBER, _MAX_WHOLE): it answers
-// 400 above them, so they are refused here instead.
+// The server's limits (worksheets_hplc: 0 to _MAX_NUMBER, a whole number 1
+// to _MAX_WHOLE): it answers 400 outside them, so they are refused here.
 const MAX_NUMBER = 1e12
 const TOO_LARGE = 'that number is too large'
 
 /**
  * A number box that commits on blur or Enter. Empty sends null (never 0); a
  * value that is not a number (or not a whole number, for `integer`), or one
- * larger than the server takes, is refused and stays in the box, marked,
- * until fixed or cleared. While the box is not being edited it shows
+ * outside what the server takes (reported to NumberRefusedContext), is
+ * refused and stays in the box, marked, until fixed or cleared. While the box is not being edited it shows
  * `value`, so a save the server refuses shows the rolled-back figure as soon
  * as the cache has it. A box that turns disabled drops its draft.
  */
@@ -65,6 +65,7 @@ export function NumberBox({
   disabled,
   hint,
   title,
+  zeroClears = false,
   onCommit,
 }: {
   /** The accessible name: <sample id>, <column label>. */
@@ -78,6 +79,9 @@ export function NumberBox({
   hint?: string | null
   /** The box's tooltip (a refused value's reason replaces it). */
   title?: string
+  /** 0 or less goes back to the standard, as on the source sheet: it is
+   *  sent as null, never refused. */
+  zeroClears?: boolean
   onCommit: (v: number | null) => void
 }) {
   const [draft, setDraftState] = useState<string | null>(null)
@@ -120,19 +124,29 @@ export function NumberBox({
       setBad(integer ? 'Type a whole number' : 'Type a number')
       return
     }
-    if (
-      v !== null &&
-      Math.abs(v) > (integer ? Number.MAX_SAFE_INTEGER : MAX_NUMBER)
-    ) {
-      setBad(TOO_LARGE)
-      if (reported.current !== text) refused?.(label)
+    // what the server would answer 400 for, in a plain sentence
+    const refusal =
+      v === null
+        ? null
+        : Math.abs(v) > (integer ? Number.MAX_SAFE_INTEGER : MAX_NUMBER)
+          ? TOO_LARGE
+          : integer && v < 1
+            ? 'type a whole number of 1 or more'
+            : v < 0 && !zeroClears
+              ? 'a number here cannot be below 0'
+              : null
+    if (refusal) {
+      setBad(refusal)
+      if (reported.current !== text) refused?.(label, refusal)
       reported.current = text
       return
     }
     setBad(null)
     reported.current = null
     setDraft(null)
-    if (v !== (value ?? null)) onCommit(v)
+    // 0 or less means "the standard" in a zeroClears box: the key is removed
+    if (v !== (value ?? null))
+      onCommit(zeroClears && v !== null && v <= 0 ? null : v)
   }
 
   return (
@@ -153,6 +167,13 @@ export function NumberBox({
         onBlur={commit}
         onKeyDown={e => {
           if (e.key === 'Enter') commit()
+          // a mistyped value: Escape gives the stored one back, unsaved
+          // (the source has no Escape for a number box)
+          if (e.key === 'Escape') {
+            setDraft(null)
+            setBad(null)
+            reported.current = null
+          }
         }}
         className={`w-[84px] rounded-md border bg-card px-1.5 py-[3px] text-right ${MONO} placeholder:text-muted-foreground/60 focus:border-teal-500 focus:outline-none focus:ring-2 focus:ring-teal-500/20 disabled:cursor-default disabled:opacity-50 ${bad ? 'border-red-500' : ''}`}
       />

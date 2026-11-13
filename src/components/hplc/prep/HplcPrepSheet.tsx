@@ -50,8 +50,8 @@ export interface HplcPrepSheetProps {
   ) => void
   /** A column after Step 2's last (the Sample prep column). */
   step2Trailing?: { header: ReactNode; cell: (v: SheetRowView) => ReactNode }
-  /** A box refused a number too large to send; `what` names it. */
-  onNumberRefused?: (what: string) => void
+  /** A box refused a number the server would refuse; `what` names it. */
+  onNumberRefused?: (what: string, reason: string) => void
 }
 
 /** What every step table takes. */

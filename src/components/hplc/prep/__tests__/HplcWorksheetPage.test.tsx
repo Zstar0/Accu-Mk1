@@ -377,6 +377,32 @@ describe('HplcWorksheetPage', () => {
     expect(patchHplcRow).not.toHaveBeenCalled()
   })
 
+  it('a negative number, a capsule count below 1 and a count past 2**53 - 1 are never sent', async () => {
+    vi.mocked(getHplcSheet).mockResolvedValue(
+      makeSheet([
+        makeRow({
+          form: 'capsule',
+          sample_form: { id: 3, name: 'Capsule', hplc_prep: 'capsule' },
+        }),
+      ])
+    )
+    renderPage()
+    const box = await screen.findByRole('textbox', { name: `${S1}, ${VIAL}` })
+    typeAndLeave(box, '-3')
+    const count = screen.getByRole('textbox', { name: /^P-0120-S01, Capsules/ })
+    typeAndLeave(count, '0')
+    typeAndLeave(count, '9007199254740993')
+    const alerts = await screen.findAllByRole('alert')
+    expect(alerts.map(a => a.textContent)).toEqual([
+      expect.stringContaining(
+        `${S1}, ${VIAL}: a number here cannot be below 0`
+      ),
+      expect.stringMatching(/Capsules.*: type a whole number of 1 or more/),
+      expect.stringMatching(/Capsules.*: that number is too large/),
+    ])
+    expect(patchHplcRow).not.toHaveBeenCalled()
+  })
+
   it('a completed sheet is read-only on the page', async () => {
     vi.mocked(getHplcSheet).mockResolvedValue(
       makeSheet([makeRow()], 'completed')
