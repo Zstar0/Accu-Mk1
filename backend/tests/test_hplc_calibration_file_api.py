@@ -113,6 +113,21 @@ def seeded(session):
                            inst=inst.id, inst_name=inst.name, inst2=inst2.id, inst2_name=inst2.name)
 
 
+@pytest.fixture(autouse=True)
+def sharepoint_calls(monkeypatch):
+    """The Peptides page PATCH fetches a chromatogram from SharePoint when source_sample_id changes.
+    No test here may reach the network: the fetch is stubbed to record the sample id and find nothing."""
+    import sharepoint
+
+    calls = []
+
+    async def nothing_found(sample_id):  # None: the route's "no sample folder"
+        calls.append(sample_id)
+
+    monkeypatch.setattr(sharepoint, "get_sample_files", nothing_found)
+    return calls
+
+
 def _sheet(client, seeded, inputs, instrument=None):
     res = client.post("/hplc-calibration-sheets", json={
         "peptide_id": seeded.peptide, "instrument_id": instrument or seeded.inst, "inputs": inputs})
@@ -1138,13 +1153,15 @@ def test_an_unfiled_injection_of_an_original_in_use_is_told_the_way_out(client, 
     assert detail == _original_in_use(original["curve"]["source_filename"])
 
 
-def test_the_originals_vendor_edited_on_the_peptides_page_does_not_hold_the_injection(client, seeded, session):
+def test_the_originals_vendor_edited_on_the_peptides_page_does_not_hold_the_injection(client, seeded, session,
+                                                                                      sharepoint_calls):
     # The vendor and the source sample are read from the filing record, not the editable column.
     original = _filed(client, _sheet(client, seeded, _case(1))["id"])
     rep = _replicate(client, original["sheet"]["id"], instrument=seeded.inst2)
     res = client.patch(f"/peptides/{seeded.peptide}/calibrations/{original['curve']['id']}",
                        json={"vendor": "Edited vendor", "source_sample_id": "P-9999"})
     assert res.status_code == 200, res.text
+    assert sharepoint_calls == ["P-9999"]  # stubbed: no network
     assert _filed(client, rep["id"])["curve"]["vendor"] == "Cayman Chemical"
 
 
@@ -1284,7 +1301,8 @@ def test_a_notes_only_save_on_the_peptides_page_names_the_notes_alone(client, se
 @pytest.mark.parametrize("typed", [{"notes": "Run on the new column\n"}, {"supplier": "Cayman Chemical "},
                                    {"notes": ""}, {"standard_id": " P-0111"}],
                          ids=["notes newline", "supplier space", "empty notes", "standard id space"])
-def test_a_save_with_nothing_typed_reads_unchanged_whatever_the_edge_spaces(client, seeded, typed):
+def test_a_save_with_nothing_typed_reads_unchanged_whatever_the_edge_spaces(client, seeded, typed,
+                                                                            sharepoint_calls, caplog):
     # Round 3 R1, review sequence Q4: the panel trims, the worksheet files text as typed.
     inputs = _case(1)
     inputs.update(typed)
@@ -1297,6 +1315,10 @@ def test_a_save_with_nothing_typed_reads_unchanged_whatever_the_edge_spaces(clie
     _ui_save(client, seeded, c, (c["notes"] or "") + " checked")
     assert client.get(f"/hplc-calibration-sheets/{sid}").json()["curve_changed_since_filed"] is True
     assert _filed(client, sid)["warnings"] == [_replaced(c["source_filename"], "its notes were changed")]
+    # Round 4: the trimmed standard id differs from the filed one, so the route asks SharePoint (stubbed)
+    # on each save; the other boxes leave it alone.
+    assert sharepoint_calls == (["P-0111", "P-0111"] if "standard_id" in typed else [])
+    assert "Chromatogram auto-fetch failed" not in caplog.text  # the stub answered; nothing tried the network
 
 
 def test_a_curve_never_touched_reads_unchanged_and_refiles_without_that_warning(client, seeded):
