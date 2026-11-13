@@ -1,0 +1,84 @@
+{
+  "run": "qmtw",
+  "seed": {
+    "frameId": 3,
+    "noteId": 4
+  },
+  "short_pull": {
+    "gap": 100,
+    "pulled": 125,
+    "row": {
+      "id": 4,
+      "board_id": 2,
+      "kind": "note",
+      "label": "Launch checklist",
+      "parent_id": 3,
+      "x": 220,
+      "y": 60,
+      "w": null,
+      "h": null,
+      "z": 0,
+      "entity_type": null,
+      "entity_id": null,
+      "data": {
+        "markdown": "Reagent lot, artwork, newsletter."
+      },
+      "version": 2,
+      "created_by": 166,
+      "updated_by": 166,
+      "created_at": "2026-10-13T06:24:56.467641",
+      "updated_at": "2026-10-13T06:24:59.984351",
+      "context": null
+    }
+  },
+  "pull_through": {
+    "gap": 0,
+    "pulled": 150,
+    "before": {
+      "id": 4,
+      "board_id": 2,
+      "kind": "note",
+      "label": "Launch checklist",
+      "parent_id": 3,
+      "x": 220,
+      "y": 60,
+      "w": null,
+      "h": null,
+      "z": 0,
+      "entity_type": null,
+      "entity_id": null,
+      "data": {
+        "markdown": "Reagent lot, artwork, newsletter."
+      },
+      "version": 2,
+      "created_by": 166,
+      "updated_by": 166,
+      "created_at": "2026-10-13T06:24:56.467641",
+      "updated_at": "2026-10-13T06:24:59.984351",
+      "context": null
+    },
+    "after": {
+      "id": 4,
+      "board_id": 2,
+      "kind": "note",
+      "label": "Launch checklist",
+      "parent_id": null,
+      "x": 406,
+      "y": 140,
+      "w": null,
+      "h": null,
+      "z": 0,
+      "entity_type": null,
+      "entity_id": null,
+      "data": {
+        "markdown": "Reagent lot, artwork, newsletter."
+      },
+      "version": 3,
+      "created_by": 166,
+      "updated_by": 166,
+      "created_at": "2026-10-13T06:24:56.467641",
+      "updated_at": "2026-10-13T06:25:03.286123",
+      "context": null
+    }
+  }
+}

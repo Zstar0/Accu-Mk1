@@ -9,6 +9,7 @@ Supports multiple environments:
 Environment can be switched at runtime via set_environment().
 """
 
+import json
 import os
 import re
 from contextlib import contextmanager
@@ -335,6 +336,68 @@ def fetch_primary_generation(sample_id: str) -> Optional[dict]:
             cur.execute(query, [sample_id])
             row = cur.fetchone()
             return dict(row) if row else None
+
+
+def fetch_stale_draft_primary(sample_id: str) -> Optional[dict]:
+    """The top-level draft Publish would pick (newest by created_at, the same
+    rule as IS /explorer/samples/{id}/publish-coa) when it is OLDER than the
+    sample's published primary, else None. Publishing it would replace a newer
+    certificate with an older one (P-5324 gen 1, 2026-10-20)."""
+    query = """
+        WITH draft AS (
+            SELECT id, generation_number, verification_code, created_at
+            FROM coa_generations
+            WHERE sample_id = %s AND parent_generation_id IS NULL AND status = 'draft'
+            ORDER BY created_at DESC
+            LIMIT 1
+        ), live AS (
+            SELECT generation_number, verification_code, created_at
+            FROM coa_generations
+            WHERE sample_id = %s AND parent_generation_id IS NULL AND status = 'published'
+            ORDER BY created_at DESC
+            LIMIT 1
+        )
+        SELECT draft.generation_number AS draft_generation_number,
+               draft.verification_code AS draft_code,
+               live.generation_number AS live_generation_number,
+               live.verification_code AS live_code
+        FROM draft, live
+        WHERE draft.created_at < live.created_at
+    """
+    with get_integration_db() as conn:
+        with conn.cursor(cursor_factory=RealDictCursor) as cur:
+            cur.execute(query, [sample_id, sample_id])
+            row = cur.fetchone()
+            return dict(row) if row else None
+
+
+def fetch_publish_draft_badge(sample_id: str) -> Optional[dict]:
+    """Badge of the top-level draft Publish would pick (newest by created_at,
+    the same rule as fetch_stale_draft_primary), or None when there is no
+    draft. page1 is "none" on a flagged (a la carte) certificate and None
+    otherwise; overall_status is the COA badge ("IN REVIEW" etc.)."""
+    query = """
+        SELECT generation_number, verification_code, coa_data
+        FROM coa_generations
+        WHERE sample_id = %s AND parent_generation_id IS NULL AND status = 'draft'
+        ORDER BY created_at DESC
+        LIMIT 1
+    """
+    with get_integration_db() as conn:
+        with conn.cursor(cursor_factory=RealDictCursor) as cur:
+            cur.execute(query, [sample_id])
+            row = cur.fetchone()
+    if not row:
+        return None
+    coa_data = row["coa_data"]
+    if not isinstance(coa_data, dict):
+        coa_data = json.loads(coa_data or "{}")
+    return {
+        "generation_number": row["generation_number"],
+        "verification_code": row["verification_code"],
+        "page1": coa_data.get("page1"),
+        "overall_status": coa_data.get("overall_status"),
+    }
 
 
 def fetch_existing_vial_sequences(parent_generation_id) -> set:

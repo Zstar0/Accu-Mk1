@@ -284,4 +284,15 @@ describe('AnalysisProfilesPage — COA display fields', () => {
       )
     })
   })
+
+  it('shows the macro hint above the COA text fields', async () => {
+    const user = userEvent.setup()
+    render(<AnalysisProfilesPage />, { wrapper })
+
+    await user.click(await screen.findByText('Heavy Metals'))
+
+    expect(await screen.findByTestId('coa-macro-hint')).toHaveTextContent(
+      'Macros: {lod}. Wrap optional text in [ ], for example [LOD {lod}.]'
+    )
+  })
 })

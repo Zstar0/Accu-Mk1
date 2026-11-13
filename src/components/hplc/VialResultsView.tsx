@@ -314,8 +314,16 @@ export function VialResultsView({ prep, results: hplcResults, onBack, onComplete
             <AnalysisTable
               analyses={analyses}
               analyteNameMap={new Map()}
-              onResultSaved={(uid, newResult, newReviewState) =>
-                setAnalyses(prev => patchAnalysisInList(prev, uid, newResult, newReviewState))
+              onResultSaved={(uid, newResult, newReviewState, newUnit) =>
+                setAnalyses(prev =>
+                  patchAnalysisInList(
+                    prev,
+                    uid,
+                    newResult,
+                    newReviewState,
+                    newUnit
+                  )
+                )
               }
               onTransitionComplete={loadAnalyses}
             />

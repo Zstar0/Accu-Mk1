@@ -18,6 +18,8 @@ import {
   buildServiceToProfileTierMap,
   classifySampleColor,
   resolveSampleTiersByGroup,
+  isSlaWithdrawn,
+  slaSampleKey,
   NO_GROUP_KEY,
   type GroupKey,
   type OrderSlaVerdict,
@@ -116,6 +118,7 @@ export function useOrderSlaStatuses(
         const lq = sampleLookupMap.get(entry.senaite_id)
         if (!lq?.data) continue
         if (lq.data.review_state === 'published') continue
+        if (isSlaWithdrawn(lq.data.review_state)) continue
         if (!lq.data.date_received) continue
         out.push({ senaiteId: entry.senaite_id, lookup: lq.data })
       }
@@ -215,9 +218,10 @@ export function useOrderSlaStatuses(
   const batchItems: SlaStatusRequestItem[] = useMemo(() => {
     const out: SlaStatusRequestItem[] = []
     for (const s of perSampleGroup) {
-      if (!s.tier || !s.lookup.sample_uid) continue
+      const sampleKey = slaSampleKey(s.lookup)
+      if (!s.tier || !sampleKey) continue
       out.push({
-        key: batchKey(s.lookup.sample_uid, s.groupKey),
+        key: batchKey(sampleKey, s.groupKey),
         received_at: s.lookup.date_received,
         target_minutes: s.tier.target_minutes,
         business_hours_only: s.tier.business_hours_only,
@@ -262,7 +266,7 @@ export function useOrderSlaStatuses(
      *  during order aggregation. */
     const cellsBySampleId = new Map<string, SampleSlaCellState[]>()
     for (const s of perSampleGroup) {
-      const uid = s.lookup.sample_uid
+      const uid = slaSampleKey(s.lookup)
       const key = uid ? batchKey(uid, s.groupKey) : null
       const status = key ? (statusByKey.get(key) ?? null) : null
       const color = status && s.tier ? classifySampleColor(status, s.tier) : null

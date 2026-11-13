@@ -112,6 +112,9 @@ class EntityContext(BaseModel):
     # type's context, populated only by seams._order_context.
     customer_name: Optional[str] = None
     customer_email: Optional[str] = None
+    # board_node-only fields (planning boards): unset for every other type's context.
+    board_slug: Optional[str] = None
+    node_kind: Optional[str] = None
     sample_ids: List[str] = Field(default_factory=list)
     deep_link: DeepLink
 

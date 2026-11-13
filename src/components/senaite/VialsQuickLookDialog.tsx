@@ -186,10 +186,18 @@ export function VialsQuickLookDialog({
               isCollapsed={collapsed.has(vial.id)}
               onToggleCollapsed={() => toggleCollapsed(vial.id)}
               onNavigate={() => goToVial(vial.sample_id)}
-              onResultSaved={(uid, newResult, newReviewState) => {
+              onResultSaved={(uid, newResult, newReviewState, newUnit) => {
                 queryClient.setQueryData<SenaiteAnalysis[]>(
                   vialAnalysesKey(vial.id),
-                  prev => prev && patchAnalysisInList(prev, uid, newResult, newReviewState)
+                  prev =>
+                    prev &&
+                    patchAnalysisInList(
+                      prev,
+                      uid,
+                      newResult,
+                      newReviewState,
+                      newUnit
+                    )
                 )
                 // The parent AR overlay shows this vial's analyst + review state;
                 // a result save changes both, so refresh that vial's overlay.
@@ -238,7 +246,12 @@ interface VialSectionProps {
   isCollapsed: boolean
   onToggleCollapsed: () => void
   onNavigate: () => void
-  onResultSaved: (uid: string, newResult: string, newReviewState: string | null) => void
+  onResultSaved: (
+    uid: string,
+    newResult: string,
+    newReviewState: string | null,
+    newUnit?: string | null
+  ) => void
   onMethodInstrumentSaved: (
     uid: string,
     field: 'method' | 'instrument',

@@ -21,6 +21,70 @@ export interface DocumentCategory {
   updated_at: string
 }
 
+export type DocumentSpaceVisibility = 'company' | 'restricted'
+
+export interface DocumentSpace {
+  id: number
+  slug: string
+  name: string
+  description: string | null
+  visibility: DocumentSpaceVisibility
+  is_active: boolean
+  sort_order: number
+  document_count: number
+  /** True for admins (bearer) or for an agent token's allow-list. */
+  can_write: boolean
+  created_at: string
+  updated_at: string
+}
+
+export interface DocumentSpaceCreate {
+  slug: string
+  name: string
+  description?: string | null
+  visibility?: DocumentSpaceVisibility
+  sort_order?: number
+}
+
+export interface DocumentSpaceUpdate {
+  name?: string
+  description?: string | null
+  visibility?: DocumentSpaceVisibility
+  is_active?: boolean
+  sort_order?: number
+}
+
+/**
+ * Who created ONE revision, who asked for it and where it came from (backend
+ * documents/provenance.py). `verified` is the server's word: the creator comes
+ * from the credential, a requester only when Mk1 resolved the login itself, and
+ * a source only for in-process Mk1 writers. Everything else is the caller's claim.
+ */
+export interface DocumentProvenance {
+  version: number
+  creator: {
+    kind: 'user' | 'agent' | 'service' | 'unknown'
+    id: string | null
+    label: string
+    verified: boolean
+  }
+  requested_by: {
+    label: string
+    user_id: number | null
+    verified: boolean
+  } | null
+  source: {
+    system: string
+    system_label: string
+    verified: boolean
+    record_type: string | null
+    record_id: string | null
+    record_label: string | null
+    run_id: string | null
+  } | null
+  content_edited: { by: string; at: string } | null
+}
+
 export interface DocumentRow {
   id: number
   code: string
@@ -30,6 +94,9 @@ export interface DocumentRow {
   category_id: number
   category_name: string
   category_prefix: string
+  space_id: number | null
+  space_slug: string
+  space_name: string
   status: DocumentStatus
   effective_date: string | null
   activated_at: string | null
@@ -47,6 +114,10 @@ export interface DocumentRow {
   created_at: string
   updated_at: string
   revision_count: number
+  /** Open top-level comments on this code (spec §6.2). */
+  open_comment_count: number
+  /** Of THIS revision. Absent from a backend older than provenance. */
+  provenance?: DocumentProvenance
 }
 
 export interface DocumentDetail extends DocumentRow {
@@ -64,6 +135,8 @@ export interface DocumentPatch {
   title?: string
   description?: string | null
   category_id?: number
+  /** Admin only. Moves every revision of the code. */
+  space_id?: number
   effective_date?: string | null
 }
 
@@ -119,6 +192,31 @@ export function patchDocument(
   })
 }
 
+/** Admin-only in-place content replace for a DRAFT (spec 2026-10-03 §10.3). */
+export function replaceDraftContent(
+  id: number,
+  html: string,
+  expectedSha256?: string
+): Promise<DocumentRow> {
+  // expected_sha256: the server 409s when the draft changed since it was opened.
+  return apiFetch<DocumentRow>(`/api/documents/${id}/content`, {
+    method: 'PUT',
+    body: JSON.stringify({ html, expected_sha256: expectedSha256 }),
+  })
+}
+
+/** The next revision of `code` as a DRAFT; title and description are inherited. */
+export function createDocumentRevision(
+  code: string,
+  html: string,
+  author?: string
+): Promise<DocumentRow> {
+  return apiFetch<DocumentRow>('/api/documents', {
+    method: 'POST',
+    body: JSON.stringify({ code, html, activate: false, author }),
+  })
+}
+
 export function activateDocument(id: number): Promise<DocumentRow> {
   return apiFetch<DocumentRow>(`/api/documents/${id}/activate`, {
     method: 'POST',
@@ -163,5 +261,72 @@ export function deleteDocumentCategory(id: number): Promise<void> {
   // keeps @typescript-eslint/no-invalid-void-type happy.
   return apiFetch<undefined>(`/api/document-categories/${id}`, {
     method: 'DELETE',
+  })
+}
+
+export function listDocumentSpaces(
+  includeInactive = false
+): Promise<DocumentSpace[]> {
+  return apiFetch<DocumentSpace[]>(
+    `/api/document-spaces${includeInactive ? '?include_inactive=true' : ''}`
+  )
+}
+
+export function createDocumentSpace(
+  data: DocumentSpaceCreate
+): Promise<DocumentSpace> {
+  return apiFetch<DocumentSpace>('/api/document-spaces', {
+    method: 'POST',
+    body: JSON.stringify(data),
+  })
+}
+
+export function updateDocumentSpace(
+  id: number,
+  data: DocumentSpaceUpdate
+): Promise<DocumentSpace> {
+  return apiFetch<DocumentSpace>(`/api/document-spaces/${id}`, {
+    method: 'PUT',
+    body: JSON.stringify(data),
+  })
+}
+
+export async function getDocumentSpaceGrants(id: number): Promise<number[]> {
+  const out = await apiFetch<{ space_id: number; group_ids: number[] }>(
+    `/api/document-spaces/${id}/grants`
+  )
+  return out.group_ids
+}
+
+export async function replaceDocumentSpaceGrants(
+  id: number,
+  groupIds: number[]
+): Promise<number[]> {
+  const out = await apiFetch<{ space_id: number; group_ids: number[] }>(
+    `/api/document-spaces/${id}/grants`,
+    { method: 'PUT', body: JSON.stringify({ group_ids: groupIds }) }
+  )
+  return out.group_ids
+}
+
+export function deleteDocumentSpace(id: number): Promise<void> {
+  return apiFetch<undefined>(`/api/document-spaces/${id}`, { method: 'DELETE' })
+}
+export interface DocumentCreate {
+  title: string
+  html: string
+  category_id: number
+  description?: string | null
+  effective_date?: string | null
+  author?: string
+  /** Space slug; omitted = General. */
+  space?: string
+}
+
+/** A brand-new controlled document, born as a DRAFT; the server mints the code. */
+export function createDocument(body: DocumentCreate): Promise<DocumentRow> {
+  return apiFetch<DocumentRow>('/api/documents', {
+    method: 'POST',
+    body: JSON.stringify({ ...body, activate: false }),
   })
 }

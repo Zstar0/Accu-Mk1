@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useState, type ReactNode } from 'react'
 import { HelpCircle } from 'lucide-react'
 import { getVialDemand, type VialDemandResponse } from '@/lib/api'
 import { PriorityGlyph } from '@/components/common/PriorityGlyph'
@@ -12,6 +12,11 @@ interface Props {
    *  lookup (sample-priority spec §5). Optional: callers without the lookup
    *  simply render no glyph. */
   priority?: EffectivePriority | null
+  /** Dosage-form picker for a form-eligible parent. A slot, not a component,
+   *  because the picker reads react-query and this header is also rendered by
+   *  callers with no QueryClientProvider. Omitted (Bacteriostatic Water and
+   *  other ineligible parents) renders no form block. */
+  formControl?: ReactNode
 }
 
 // Path is served by Vite from `public/guides/` — the build script
@@ -57,6 +62,7 @@ export function WizardHeader({
   parentSampleId,
   receivedCount,
   priority,
+  formControl,
 }: Props) {
   const [demand, setDemand] = useState<VialDemandResponse | null>(null)
   const [error, setError] = useState<string | null>(null)
@@ -113,6 +119,14 @@ export function WizardHeader({
           <span className="text-xs text-muted-foreground">Loading…</span>
         )}
       </div>
+      {formControl && (
+        <div className="flex flex-col gap-0.5 shrink-0">
+          <span className="text-[10px] uppercase tracking-wider text-muted-foreground">
+            Form
+          </span>
+          {formControl}
+        </div>
+      )}
       <a
         href={CHECKIN_SOP_PATH}
         target="_blank"

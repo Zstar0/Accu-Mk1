@@ -1,4 +1,4 @@
-import type { ReactNode } from 'react'
+import { Fragment, type ReactNode } from 'react'
 import { Check, Flag, X } from 'lucide-react'
 import { useUIStore } from '@/store/ui-store'
 import { SampleIdBadge } from '@/components/samples/SampleIdBadge'
@@ -24,8 +24,35 @@ import { useEntityFlags } from '@/hooks/use-flags'
 import { flagTypeDef } from '@/components/flags/flag-catalog'
 import { useFlagTypesMap } from '@/services/flag-types'
 import { RaiseFlagButton } from '@/components/flags/RaiseFlagButton'
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from '@/components/ui/select'
 import { PrepField } from '@/components/hplc/EndoPrepLine'
 import { ReassignButton } from '@/components/hplc/ReassignButton'
+import {
+  BW_DILUTION,
+  FORMS,
+  formOf,
+  prep2Check,
+  waterOf,
+  type EndoCheck,
+  type EndoCtx,
+  type EndoForm,
+} from '@/lib/endo-prep-2ml'
+import {
+  BW_LAL_UL,
+  BW_SAMPLE_UL,
+  cartridgeNote,
+  cartridgeTitle,
+  fmtConc,
+  standardSteps,
+  type EndoCartridgeOption,
+  type EndoRow,
+} from '@/lib/endo-worksheet-2ml'
 
 /**
  * Dennis's run sheet, in the worksheet flyout: a meta strip (analyst, date
@@ -52,19 +79,41 @@ interface EndoWorksheetTableProps {
   onUpdateItem: (itemId: number, data: WorksheetItemPatch) => void
   /** Tick a whole column: the sheet is worked on paper and keyed in after. */
   onTickAll: (data: { made?: boolean; ran?: boolean }) => void
+  /** 'stock' (the default) renders today's columns. '2ml' swaps Target,
+   *  Volume to add, Sample needed and LAL needed for Form, Water and the
+   *  Cartridge (spec 2026-10-10 6.1); it needs `twoMl`. */
+  prepModel?: 'stock' | '2ml'
+  twoMl?: EndoTwoMl
+  /** The box title over the meta strip (the worksheet page). */
+  heading?: ReactNode
+  /** More cells at the end of the meta strip (the page's run settings). */
+  metaExtra?: ReactNode
 }
 
-const TH =
+/** Box 1 on a 2 mL run: each row's resolved sample and cartridge, the run
+ *  parameters and the allowed cartridges, all from the glue. */
+export interface EndoTwoMl {
+  rows: EndoRow[]
+  ctx: EndoCtx
+  cartridges: EndoCartridgeOption[]
+}
+
+export const TH =
   'sticky top-0 z-[2] bg-muted/60 px-2 pb-[7px] pt-2 text-left align-bottom text-[9.5px] font-semibold uppercase tracking-[0.09em] text-muted-foreground whitespace-nowrap border-b'
-const TH_CALC = 'bg-teal-500/10 text-teal-800 dark:text-teal-200 text-right'
-const UNIT =
+export const TH_CALC =
+  'bg-teal-500/10 text-teal-800 dark:text-teal-200 text-right'
+export const UNIT =
   'block font-mono text-[10px] font-normal normal-case tracking-[0.04em] opacity-80'
-const TD = 'border-b border-border/60 px-2 py-[5px] align-middle text-[13px]'
-const MONO = 'font-mono text-[12.5px] tabular-nums'
-const TD_CALC = `${TD} ${MONO} bg-teal-500/[0.06] text-right text-foreground/80 whitespace-nowrap group-hover/item:bg-teal-500/10`
+export const TD =
+  'border-b border-border/60 px-2 py-[5px] align-middle text-[13px]'
+export const MONO = 'font-mono text-[12.5px] tabular-nums'
+export const TD_CALC = `${TD} ${MONO} bg-teal-500/[0.06] text-right text-foreground/80 whitespace-nowrap group-hover/item:bg-teal-500/10`
 
 // Same words and colours as the status select on every other worksheet.
-const STATUS_CHIP: Record<string, [string, string]> = {
+// Task 17's flyout summary reuses it; an object export costs Fast Refresh
+// on this file only.
+// eslint-disable-next-line react-refresh/only-export-components
+export const STATUS_CHIP: Record<string, [string, string]> = {
   ready: ['Ready', 'border-border text-zinc-400'],
   in_progress: [
     'In Progress',
@@ -90,7 +139,11 @@ const PRIORITY_LABEL: Record<string, string> = {
 }
 
 /** The priority as a chip, in the same words as the inbox. */
-export function PriorityChip({ priority }: { priority: string | null | undefined }) {
+export function PriorityChip({
+  priority,
+}: {
+  priority: string | null | undefined
+}) {
   const key = (priority ?? 'normal').toLowerCase()
   return (
     <span
@@ -98,6 +151,48 @@ export function PriorityChip({ priority }: { priority: string | null | undefined
     >
       {PRIORITY_LABEL[key] ?? key}
     </span>
+  )
+}
+
+// The worksheet's link look (the sample ID cell's): text as it was,
+// underlined on hover.
+const LINK = 'text-left transition-colors hover:text-primary hover:underline'
+
+/** A sample or vial ID that opens its page; a vial ID opens the sub-sample.
+ *  The click stops here, so a row or label around it never sees it. */
+export function SampleLink({ id }: { id: string }) {
+  return (
+    <button
+      type="button"
+      className={LINK}
+      onClick={e => {
+        e.stopPropagation()
+        useUIStore.getState().navigateToSample(id)
+      }}
+    >
+      {id}
+    </button>
+  )
+}
+
+/** An order number, shown without WP-, that opens Order Status filtered to
+ *  that order (the page's consume-once prefill, as the header quick nav
+ *  uses). '-' when the row has none. */
+export function OrderLink({ order }: { order: string | null | undefined }) {
+  const n = shortOrder(order)
+  if (!n) return '-'
+  return (
+    <button
+      type="button"
+      className={LINK}
+      aria-label={`Order ${n}`}
+      onClick={e => {
+        e.stopPropagation()
+        useUIStore.getState().navigateToOrderStatus(n)
+      }}
+    >
+      {n}
+    </button>
   )
 }
 
@@ -115,12 +210,23 @@ export function EndoWorksheetTable({
   onReassign,
   onUpdateItem,
   onTickAll,
+  prepModel = 'stock',
+  twoMl,
+  heading,
+  metaExtra,
 }: EndoWorksheetTableProps) {
   const { calendar } = useLabCalendar()
   const dueAtByItemId = new Map(
     items.map(it => [it.id, slaByKey.get(String(it.id))?.status.due_at ?? null])
   )
-  const ordered = endoItemsInBenchOrder(items, dueAtByItemId, calendar)
+  // 2 mL runs (spec 2026-10-10 6.1): the page hands over each row's sample.
+  const two = prepModel === '2ml' && twoMl ? twoMl : null
+  const twoRows = new Map<number, EndoRow>(two?.rows.map(r => [r.item.id, r]))
+  // On 2 mL the rows come in Box 1's order (bac water last, bacWaterLast);
+  // stock keeps plain bench order.
+  const ordered = two
+    ? two.rows.map(r => r.item)
+    : endoItemsInBenchOrder(items, dueAtByItemId, calendar)
 
   const rows = ordered.map(item => {
     const prep = endoPrepFor(item)
@@ -141,14 +247,16 @@ export function EndoWorksheetTable({
     .map(r => r.due)
     .filter((d): d is string => !!d)
     .sort()[0]
-  const orders = [
+  const orderList = [
     ...new Set(
       rows.map(r => shortOrder(r.item.client_order_number)).filter(Boolean)
     ),
-  ].join(', ')
+  ]
+  const orders = orderList.join(', ')
 
   return (
     <div className="overflow-hidden rounded-[5px] border bg-card shadow-sm">
+      {heading}
       <div className="grid grid-cols-[repeat(auto-fit,minmax(150px,1fr))] border-b">
         <Meta label="Analyst">{analyst}</Meta>
         <Meta label="Date made">
@@ -161,9 +269,17 @@ export function EndoWorksheetTable({
         </Meta>
         <Meta label="Orders">
           <span className={`${MONO} block truncate`} title={orders}>
-            {orders || '-'}
+            {orderList.length
+              ? orderList.map((o, i) => (
+                  <Fragment key={o}>
+                    {i > 0 && ', '}
+                    <OrderLink order={o} />
+                  </Fragment>
+                ))
+              : '-'}
           </span>
         </Meta>
+        {metaExtra}
       </div>
 
       <div className="overflow-x-auto">
@@ -179,24 +295,44 @@ export function EndoWorksheetTable({
               <th className={TH}>Order #</th>
               <th className={TH}>Sample ID</th>
               <th className={TH}>Sample identity</th>
-              <th className={`${TH} text-right`}>
-                Target<span className={UNIT}>mg/mL</span>
-              </th>
-              <th className={`${TH} text-right`}>
-                Declared wt<span className={UNIT}>mg</span>
-              </th>
-              <th className={`${TH} text-right`}>
-                Volume to add<span className={UNIT}>mL</span>
-              </th>
-              <th className={`${TH} ${TH_CALC}`}>
-                Sample needed<span className={UNIT}>µL</span>
-              </th>
-              <th className={`${TH} ${TH_CALC}`}>
-                LAL needed<span className={UNIT}>µL</span>
-              </th>
-              <th className={`${TH} ${TH_CALC}`}>
-                Vial conc.<span className={UNIT}>mg/mL</span>
-              </th>
+              {two ? (
+                <>
+                  <th className={`${TH} text-right`}>
+                    Declared wt<span className={UNIT}>mg</span>
+                  </th>
+                  <th className={TH}>Form</th>
+                  <th className={`${TH} text-right`}>
+                    Reconstitution water<span className={UNIT}>mL</span>
+                  </th>
+                  <th className={`${TH} ${TH_CALC}`}>
+                    Vial conc.<span className={UNIT}>mg/mL</span>
+                  </th>
+                  <th className={`${TH} ${TH_CALC} !text-left`}>
+                    Cartridge<span className={UNIT}>λ EU/mL</span>
+                  </th>
+                </>
+              ) : (
+                <>
+                  <th className={`${TH} text-right`}>
+                    Target<span className={UNIT}>mg/mL</span>
+                  </th>
+                  <th className={`${TH} text-right`}>
+                    Declared wt<span className={UNIT}>mg</span>
+                  </th>
+                  <th className={`${TH} text-right`}>
+                    Volume to add<span className={UNIT}>mL</span>
+                  </th>
+                  <th className={`${TH} ${TH_CALC}`}>
+                    Sample needed<span className={UNIT}>µL</span>
+                  </th>
+                  <th className={`${TH} ${TH_CALC}`}>
+                    LAL needed<span className={UNIT}>µL</span>
+                  </th>
+                  <th className={`${TH} ${TH_CALC}`}>
+                    Vial conc.<span className={UNIT}>mg/mL</span>
+                  </th>
+                </>
+              )}
               <th className={TH}>Status</th>
               <th className={`${TH} text-center`}>
                 <TickAll
@@ -221,14 +357,26 @@ export function EndoWorksheetTable({
           <tbody>
             {rows.map((row, i) => {
               const { item, prep, received, due, skipped } = row
+              const r2 = twoRows.get(item.id)
+              const k2 = two && r2 ? prep2Check(r2.sample, two.ctx) : null
+              const note2 =
+                k2 && r2 ? cartridgeNote(k2, formOf(r2.sample) === 'bac') : null
               const [statusLabel, statusClass] = STATUS_CHIP[
                 item.prep_status
               ] ??
                 STATUS_CHIP.ready ?? ['', '']
-              const edge =
-                prep.warning === 'over_cartridge'
-                  ? 'before:bg-red-500'
+              // The row's edge: on 2 mL the cartridge verdict, on stock the prep warning.
+              const tone = k2
+                ? (note2?.tone ?? null)
+                : prep.warning === 'over_cartridge'
+                  ? 'crit'
                   : prep.warning === 'no_diluent'
+                    ? 'warn'
+                    : null
+              const edge =
+                tone === 'crit'
+                  ? 'before:bg-red-500'
+                  : tone === 'warn'
                     ? 'before:bg-amber-500'
                     : 'before:bg-transparent'
               return (
@@ -239,11 +387,13 @@ export function EndoWorksheetTable({
                   <td
                     className={`${TD} relative pl-3 pr-1.5 text-right font-mono text-[11px] text-muted-foreground before:absolute before:inset-y-0 before:left-0 before:w-[3px] ${edge}`}
                     title={
-                      prep.warning === 'over_cartridge'
-                        ? 'The sample will not fit the 1000 µL cartridge'
-                        : prep.warning === 'no_diluent'
-                          ? 'No room left for LAL diluent'
-                          : undefined
+                      k2
+                        ? note2?.text
+                        : prep.warning === 'over_cartridge'
+                          ? 'The sample will not fit the 1000 µL cartridge'
+                          : prep.warning === 'no_diluent'
+                            ? 'No room left for LAL diluent'
+                            : undefined
                     }
                   >
                     {i + 1}
@@ -284,14 +434,15 @@ export function EndoWorksheetTable({
                     <PriorityChip priority={item.priority} />
                   </td>
                   <td className={`${TD} ${MONO}`}>
-                    {shortOrder(item.client_order_number) || '-'}
+                    <OrderLink order={item.client_order_number} />
                   </td>
                   <td className={TD}>
                     <button
                       className="text-left transition-colors hover:text-primary hover:underline"
-                      onClick={() =>
+                      onClick={e => {
+                        e.stopPropagation()
                         useUIStore.getState().navigateToSample(item.sample_id)
-                      }
+                      }}
                     >
                       <SampleIdBadge
                         stacked
@@ -308,89 +459,105 @@ export function EndoWorksheetTable({
                       {endoIdentityFor(item) || '-'}
                     </span>
                   </td>
-                  {prep.isWater ? (
-                    <>
-                      <td
-                        className={`${TD} text-right text-muted-foreground`}
-                      />
-                      <td
-                        className={`${TD} text-right text-muted-foreground`}
-                      />
-                      <td className={`${TD} w-[92px] px-1`}>
-                        <PrepField
-                          bare
-                          label="Dilution factor"
-                          unit="×"
-                          value={prep.dilution}
-                          overridden={item.prep_dilution_factor != null}
-                          computed={20}
-                          disabled={isCompleted}
-                          onCommit={v =>
-                            onUpdateItem(item.id, { prep_dilution_factor: v })
-                          }
-                        />
-                      </td>
-                    </>
+                  {two && r2 && k2 ? (
+                    <TwoMlPrepCells
+                      row={r2}
+                      check={k2}
+                      note={note2}
+                      ctx={two.ctx}
+                      cartridges={two.cartridges}
+                      isCompleted={isCompleted}
+                      onUpdateItem={onUpdateItem}
+                    />
                   ) : (
                     <>
-                      <td className={`${TD} w-[72px] px-1 text-right`}>
-                        <PrepField
-                          bare
-                          label="Target concentration"
-                          unit="mg/mL"
-                          value={prep.targetMgPerMl}
-                          overridden={prep.targetOverridden}
-                          computed={1}
-                          disabled={isCompleted}
-                          onCommit={v =>
-                            onUpdateItem(item.id, { prep_target_mg_ml: v })
-                          }
-                        />
-                      </td>
-                      <td className={`${TD} w-[92px] px-1 text-right`}>
-                        <PrepField
-                          bare
-                          label="Declared weight"
-                          unit="mg"
-                          value={prep.weightMg}
-                          overridden={prep.weightOverridden}
-                          computed={item.declared_weight_mg ?? null}
-                          disabled={isCompleted}
-                          onCommit={v =>
-                            onUpdateItem(item.id, { prep_weight_mg: v })
-                          }
-                        />
-                      </td>
-                      <td className={`${TD} w-[92px] px-1 text-right`}>
-                        <PrepField
-                          bare
-                          label="Volume to add"
-                          unit="mL"
-                          value={prep.volumeMl}
-                          overridden={prep.volumeOverridden}
-                          computed={prep.autoVolumeMl}
-                          disabled={isCompleted}
-                          onCommit={v =>
-                            onUpdateItem(item.id, { prep_volume_ml: v })
-                          }
-                        />
+                      {prep.isWater ? (
+                        <>
+                          <td
+                            className={`${TD} text-right text-muted-foreground`}
+                          />
+                          <td
+                            className={`${TD} text-right text-muted-foreground`}
+                          />
+                          <td className={`${TD} w-[92px] px-1`}>
+                            <PrepField
+                              bare
+                              label="Dilution factor"
+                              unit="×"
+                              value={prep.dilution}
+                              overridden={item.prep_dilution_factor != null}
+                              computed={20}
+                              disabled={isCompleted}
+                              onCommit={v =>
+                                onUpdateItem(item.id, {
+                                  prep_dilution_factor: v,
+                                })
+                              }
+                            />
+                          </td>
+                        </>
+                      ) : (
+                        <>
+                          <td className={`${TD} w-[72px] px-1 text-right`}>
+                            <PrepField
+                              bare
+                              label="Target concentration"
+                              unit="mg/mL"
+                              value={prep.targetMgPerMl}
+                              overridden={prep.targetOverridden}
+                              computed={1}
+                              disabled={isCompleted}
+                              onCommit={v =>
+                                onUpdateItem(item.id, { prep_target_mg_ml: v })
+                              }
+                            />
+                          </td>
+                          <td className={`${TD} w-[92px] px-1 text-right`}>
+                            <PrepField
+                              bare
+                              label="Declared weight"
+                              unit="mg"
+                              value={prep.weightMg}
+                              overridden={prep.weightOverridden}
+                              computed={item.declared_weight_mg ?? null}
+                              disabled={isCompleted}
+                              onCommit={v =>
+                                onUpdateItem(item.id, { prep_weight_mg: v })
+                              }
+                            />
+                          </td>
+                          <td className={`${TD} w-[92px] px-1 text-right`}>
+                            <PrepField
+                              bare
+                              label="Volume to add"
+                              unit="mL"
+                              value={prep.volumeMl}
+                              overridden={prep.volumeOverridden}
+                              computed={prep.autoVolumeMl}
+                              disabled={isCompleted}
+                              onCommit={v =>
+                                onUpdateItem(item.id, { prep_volume_ml: v })
+                              }
+                            />
+                          </td>
+                        </>
+                      )}
+                      <td className={TD_CALC}>{fmtUl(prep.sampleUl)}</td>
+                      <td className={TD_CALC}>{fmtUl(prep.lalUl)}</td>
+                      <td className={TD_CALC}>
+                        {prep.isWater ? (
+                          <span
+                            className="inline-block rounded-[3px] bg-amber-500/15 px-1.5 py-px font-mono text-[10px] font-medium text-amber-700 dark:text-amber-300"
+                            title={`Bacteriostatic water: ${fmtUl(prep.sampleUl)} µL of sample made up to 1000 µL with LAL water`}
+                          >
+                            {fmt(prep.dilution)}× dilution
+                          </span>
+                        ) : (
+                          fmt(prep.vialConc)
+                        )}
                       </td>
                     </>
                   )}
-                  <td className={TD_CALC}>{fmtUl(prep.sampleUl)}</td>
-                  <td className={TD_CALC}>{fmtUl(prep.lalUl)}</td>
-                  <td className={TD_CALC}>
-                    {prep.isWater ? (
-                      <span
-                        className="inline-block rounded-[3px] bg-amber-500/15 px-1.5 py-px font-mono text-[10px] font-medium text-amber-700 dark:text-amber-300"
-                        title={`Bacteriostatic water: ${fmtUl(prep.sampleUl)} µL of sample made up to 1000 µL with LAL water`}
-                      >
-                        {fmt(prep.dilution)}× dilution
-                      </span>
-                    ) : (
-                      fmt(prep.vialConc)
-                    )}
-                  </td>
                   <td className={TD}>
                     <span
                       className={`inline-block whitespace-nowrap rounded-[3px] border px-1.5 py-0.5 text-[11px] font-medium ${statusClass}`}
@@ -449,8 +616,12 @@ export function EndoWorksheetTable({
 
       <div className="flex flex-wrap items-center gap-x-6 gap-y-3 border-t bg-muted/60 px-3.5 py-2.5">
         <Total label="Samples" value={String(rows.length)} />
-        <Total label="Sample volume" value={fmtUl(sumSample)} unit="µL" />
-        <Total label="LAL volume" value={fmtUl(sumLal)} unit="µL" />
+        {!two && (
+          <>
+            <Total label="Sample volume" value={fmtUl(sumSample)} unit="µL" />
+            <Total label="LAL volume" value={fmtUl(sumLal)} unit="µL" />
+          </>
+        )}
         <span className="flex-1" />
         <Total label="Made" value={`${nMade}/${rows.length}`} />
         <Total label="MCS" value={`${nRan}/${rows.length}`} />
@@ -459,26 +630,65 @@ export function EndoWorksheetTable({
   )
 }
 
-/** The formulas behind the sheet, as Dennis prints them under his table. */
-export function EndoCalculations() {
-  const cells: [string, string][] = [
-    [
-      'Due date',
-      '= the SLA clock: received + the turnaround in business time, skipping lab holidays',
-    ],
-    ['Volume to add', '= MIN(10, 1 + FLOOR(wt ÷ 50))'],
-    ['Vial concentration', '= declared wt ÷ volume to add'],
-    ['Sample needed', '= target ÷ vial conc. × 1000'],
-    ['LAL needed', '= 1000 − sample needed'],
-    ['Bacteriostatic water', '20× dilution: 50 µL made to 1000 µL with LAL'],
+type LegendCell = [term: string, value: string, note?: string]
+
+/**
+ * The formulas behind the sheet, as Dennis prints them under his table. On a
+ * 2 mL run (`ctx` given), his 2 mL legend with the run's own numbers: the
+ * method's water and total and the standard steps they give.
+ */
+export function EndoCalculations({ ctx }: { ctx?: EndoCtx }) {
+  const due: LegendCell = [
+    'Due date',
+    '= the SLA clock: received + the turnaround in business time, skipping lab holidays',
   ]
+  const std = ctx ? standardSteps(ctx) : []
+  const step = (i: number) => {
+    const s = std[i]
+    return s
+      ? `${fmtUl(s.sampleUl)} + ${fmtUl(s.diluentUl)} µL · 1:${fmt(s.ratio)}`
+      : '-'
+  }
+  const cells: LegendCell[] = ctx
+    ? [
+        due,
+        [
+          'Reconstitution water',
+          `${fmt(ctx.params.reconWaterMl)} mL`,
+          'underlined on the printed sheet, dotted on screen, where a row has its own',
+        ],
+        ['Step 1 · Tris', step(0), '0.1 M Tris (BT103), first, per its insert'],
+        ['Step 2 · LAL water', step(1), 'ratio = total ÷ (step 1 × 2)'],
+        ['Step 3 · BG600', step(2), 'always 1:2: BG600 is half the final prep'],
+        [
+          'Total · MCS',
+          `1:${fmt(ctx.params.stdTotalDilution)}, factor 1 on the MCS`,
+          `the sheet multiplies the reading by the total and the ${fmt(ctx.params.reconWaterMl)} mL`,
+        ],
+        [
+          'Bacteriostatic water',
+          `${fmt(BW_DILUTION)}× dilution: ${fmtUl(BW_SAMPLE_UL)} µL`,
+          `made to ${fmtUl(BW_SAMPLE_UL + BW_LAL_UL)} µL with LAL water`,
+        ],
+      ]
+    : [
+        due,
+        ['Volume to add', '= MIN(10, 1 + FLOOR(wt ÷ 50))'],
+        ['Vial concentration', '= declared wt ÷ volume to add'],
+        ['Sample needed', '= target ÷ vial conc. × 1000'],
+        ['LAL needed', '= 1000 − sample needed'],
+        [
+          'Bacteriostatic water',
+          '20× dilution: 50 µL made to 1000 µL with LAL',
+        ],
+      ]
   return (
     <section>
       <h3 className="pb-2 text-[9.5px] font-semibold uppercase tracking-[0.13em] text-muted-foreground">
         Calculations
       </h3>
       <dl className="grid grid-cols-[repeat(auto-fit,minmax(210px,1fr))] overflow-hidden rounded-[5px] border">
-        {cells.map(([term, formula]) => (
+        {cells.map(([term, formula, note]) => (
           <div
             key={term}
             className="border-r bg-card px-3.5 py-2.5 last:border-r-0"
@@ -486,7 +696,14 @@ export function EndoCalculations() {
             <dt className="mb-1 text-[9.5px] font-semibold uppercase tracking-[0.12em] text-muted-foreground">
               {term}
             </dt>
-            <dd className="font-mono text-xs text-foreground/80">{formula}</dd>
+            <dd className="font-mono text-xs text-foreground/80">
+              {formula}
+              {note && (
+                <i className="mt-0.5 block font-sans text-[11px] text-muted-foreground">
+                  {note}
+                </i>
+              )}
+            </dd>
           </div>
         ))}
       </dl>
@@ -494,7 +711,7 @@ export function EndoCalculations() {
   )
 }
 
-function Meta({
+export function Meta({
   label,
   title,
   children,
@@ -669,6 +886,178 @@ export function FlagCell({ item }: { item: WorksheetItemRow }) {
     >
       <Flag className="h-3 w-3" fill="currentColor" />
     </button>
+  )
+}
+
+// Dennis's select.form / select.cart (12.5px, padding 3px 6px, radius 6px)
+// as a compact trigger of the app's Select, so the cell keeps its size.
+const CELL_TRIGGER =
+  'gap-1 rounded-md border bg-card px-1.5 py-[3px] text-[12.5px] text-foreground shadow-none data-[size=default]:h-auto focus-visible:border-teal-500 focus-visible:ring-2 focus-visible:ring-teal-500/20 dark:bg-card dark:focus-visible:border-teal-400 dark:focus-visible:ring-teal-400/25 disabled:cursor-default disabled:opacity-70 [&>svg]:size-3'
+// Radix Select holds no empty value: the inherited cartridge rides on this.
+const INHERIT = '__inherit__'
+
+/**
+ * Box 1's 2 mL cells (spec 2026-10-10 6.1, Dennis's 2 mL sheet): the
+ * declared weight, how the vial arrived, the water in it, the vial
+ * concentration, and the cartridge with its MVD and MVC under it and, when
+ * the prep cannot read the limit, why. Bacteriostatic water has no weight or
+ * water of its own: it is its own 20x prep.
+ */
+function TwoMlPrepCells({
+  row,
+  check,
+  note,
+  ctx,
+  cartridges,
+  isCompleted,
+  onUpdateItem,
+}: {
+  row: EndoRow
+  check: EndoCheck
+  note: { text: string; tone: 'warn' | 'crit' } | null
+  ctx: EndoCtx
+  cartridges: EndoCartridgeOption[]
+  isCompleted: boolean
+  onUpdateItem: (itemId: number, data: WorksheetItemPatch) => void
+}) {
+  const { item, sample } = row
+  const form = formOf(sample)
+  const bac = form === 'bac'
+  const water = waterOf(sample, ctx)
+  const own = item.cartridge_type_id ?? null
+  const unlisted = own != null && !cartridges.some(c => c.id === own)
+  return (
+    <>
+      <td className={`${TD} w-[92px] px-1 text-right`}>
+        {!bac && (
+          <PrepField
+            bare
+            label="Declared weight"
+            unit="mg"
+            value={sample.weightMg}
+            overridden={item.prep_weight_mg != null}
+            computed={item.declared_weight_mg ?? null}
+            disabled={isCompleted}
+            onCommit={v => onUpdateItem(item.id, { prep_weight_mg: v })}
+          />
+        )}
+      </td>
+      <td className={TD}>
+        <Select
+          value={form}
+          disabled={isCompleted}
+          onValueChange={v => {
+            const next = v as EndoForm
+            // A water volume typed under one form is never carried into the
+            // other; only the liquid-ness matters. See EndoPrepLine.
+            onUpdateItem(
+              item.id,
+              (form === 'liquid') !== (next === 'liquid') &&
+                item.prep_water_ml != null
+                ? { prep_form: next, prep_water_ml: null }
+                : { prep_form: next }
+            )
+          }}
+        >
+          <SelectTrigger
+            aria-label="Form the vial arrived in"
+            title="How the vial arrived. Lyophilized: the standard water is added here. Liquid: the customer already added water; type theirs under Reconstitution water. Bacteriostatic water: its own 20x prep."
+            className={`${CELL_TRIGGER} ${form === 'liquid' ? 'border-teal-500/45 font-semibold text-teal-700 dark:border-teal-400/50 dark:text-teal-300' : ''}`}
+          >
+            <SelectValue />
+          </SelectTrigger>
+          <SelectContent>
+            {FORMS.map(([value, label]) => (
+              <SelectItem key={value} value={value}>
+                {label}
+              </SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
+      </td>
+      <td
+        className={`${TD} w-[92px] px-1 text-right ${form === 'liquid' && water == null ? 'bg-amber-500/10 dark:bg-amber-400/15' : ''}`}
+        title={
+          form === 'liquid'
+            ? 'Arrived reconstituted: type the water the customer used, in mL. Nothing is added here.'
+            : undefined
+        }
+      >
+        {!bac && (
+          <PrepField
+            bare
+            label="Water"
+            unit="mL"
+            value={water}
+            overridden={item.prep_water_ml != null}
+            // What the row would use if nothing were typed: its rule's water
+            // when a line sets one, else the method's standard. Not the
+            // standard flat, or an overridden ruled row is told the wrong
+            // figure to clear back to.
+            computed={waterOf({ ...sample, waterMl: null }, ctx)}
+            disabled={isCompleted}
+            onCommit={v => onUpdateItem(item.id, { prep_water_ml: v })}
+          />
+        )}
+      </td>
+      <td className={TD_CALC}>
+        {bac ? (
+          <span className="inline-block rounded-[3px] bg-amber-500/15 px-1.5 py-px font-mono text-[10px] font-medium text-amber-700 dark:text-amber-300">
+            {`${BW_DILUTION}× dilution`}
+          </span>
+        ) : (
+          fmt(sample.weightMg != null && water ? sample.weightMg / water : null)
+        )}
+      </td>
+      <td
+        className={`${TD} whitespace-nowrap`}
+        title={cartridgeTitle(check, bac) || undefined}
+      >
+        <Select
+          value={own == null ? INHERIT : String(own)}
+          disabled={isCompleted}
+          onValueChange={v =>
+            onUpdateItem(item.id, {
+              cartridge_type_id: v === INHERIT ? null : Number(v),
+            })
+          }
+        >
+          <SelectTrigger
+            aria-label="Cartridge for this sample"
+            className={`${CELL_TRIGGER} font-mono ${own == null ? 'text-muted-foreground' : ''}`}
+          >
+            <SelectValue />
+          </SelectTrigger>
+          <SelectContent>
+            <SelectItem value={INHERIT}>
+              {`${bac ? 'bac water' : row.ruleCartridge ? 'rule' : 'run'} (${row.inherited ? fmt(row.inherited.sensitivity) : '-'})`}
+            </SelectItem>
+            {unlisted && (
+              <SelectItem value={String(own)}>
+                {`${fmt(item.cartridge_sensitivity_eu_ml)} (not in the list)`}
+              </SelectItem>
+            )}
+            {cartridges.map(c => (
+              <SelectItem key={c.id} value={String(c.id)} title={c.name}>
+                {fmt(c.sensitivity_eu_ml)}
+              </SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
+        {check.mvd != null && (
+          <span className={SUBTIME}>
+            {`MVD ${fmt(check.mvd)}× · MVC ${fmtConc(check.mvc)}`}
+          </span>
+        )}
+        {note && (
+          <span
+            className={`mt-[3px] block max-w-[13em] whitespace-normal text-[11px] font-semibold leading-[1.3] ${note.tone === 'warn' ? 'text-amber-600 dark:text-amber-400' : 'text-red-600 dark:text-red-400'}`}
+          >
+            {note.text}
+          </span>
+        )}
+      </td>
+    </>
   )
 }
 

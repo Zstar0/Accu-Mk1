@@ -90,3 +90,26 @@ def test_one_poison_watch_does_not_stall_the_rest(db):
     assert watches.run_watch_poll(db) == 1             # W4 still fires
     from flags.models import FlagEntityWatch
     assert db.get(FlagEntityWatch, good.id).status == "fired"
+
+
+def test_generic_action_error_still_isolates_and_leaves_the_watch_armed(db):
+    """Fix round 1 item 5: only NotFoundError/PermissionDeniedError get cancelled.
+    A malformed action that raises some OTHER exception (here a KeyError from a
+    missing required "title") must keep today's poison behavior: isolated, other
+    watches still fire, and the poisoned watch stays armed for the next tick
+    rather than being cancelled."""
+    from flags import watches
+    from flags.models import FlagEntityWatch
+    poison = FlagEntityWatch(entity_type="widget", entity_id="W5",
+                             condition={"field": "state", "equals": "x"},
+                             action={"kind": "create_flag"},   # missing required "title"
+                             created_by=1, status="armed")
+    db.add(poison)
+    good = watches.arm_watch(db, user=_user(1), entity_type="widget", entity_id="W6",
+                             condition={"field": "state", "equals": "x"},
+                             action={"kind": "create_flag", "type": "blocker", "title": "ok"})
+    db.commit(); db.refresh(poison)
+    _STATE["W5"] = "x"; _STATE["W6"] = "x"
+    assert watches.run_watch_poll(db) == 1              # only the good one fires
+    assert db.get(FlagEntityWatch, poison.id).status == "armed"     # left for retry
+    assert db.get(FlagEntityWatch, good.id).status == "fired"

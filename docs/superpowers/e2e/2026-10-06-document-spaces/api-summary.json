@@ -1,0 +1,77 @@
+{
+  "run": "n743",
+  "1_setup": {
+    "create_users": [
+      200,
+      200
+    ],
+    "create_group": 201,
+    "add_member": 200
+  },
+  "2_space": {
+    "create_space": 201,
+    "put_grants": 200,
+    "publish": [
+      201,
+      201
+    ],
+    "doc_code": "ART-0010"
+  },
+  "3_admin_ui": {
+    "grid": [
+      "General",
+      "Leadership n743"
+    ],
+    "list_has_doc": true
+  },
+  "4_member": {
+    "grid_has_space": true,
+    "get_document": 200
+  },
+  "5_outsider": {
+    "get_document": 404,
+    "get_content": 404,
+    "missing_document": 404,
+    "detail_matches_missing": true,
+    "comment_routes": {
+      "comments": 404,
+      "export": 404,
+      "comment": 404,
+      "attachment": 404
+    },
+    "comment_index_has_doc": false,
+    "list_space_total": 0,
+    "spaces_include_restricted": false,
+    "deep_link": "not found state"
+  },
+  "6_flags": {
+    "raise_by_member": 201,
+    "outsider_point_read": 404,
+    "member_point_read": 200,
+    "outsider_all_open_has_flag": false,
+    "member_all_open_has_flag": true
+  },
+  "7_move": {
+    "patch_from_dialog": 200,
+    "outsider_get_document": 200,
+    "outsider_flag_point_read": 200
+  },
+  "8_revocation": {
+    "before": 200,
+    "remove_member": 200,
+    "after": 404
+  },
+  "9_agent": {
+    "restricted_space_exit": 1,
+    "restricted_space_http": 400,
+    "general_exit": 0
+  },
+  "10_board_mask": {
+    "create_board": 201,
+    "pin": 201,
+    "outsider_read": 200,
+    "outsider_label_is_code": true,
+    "stale_patch": 409,
+    "stale_body_has_title": false
+  }
+}

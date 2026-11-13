@@ -378,7 +378,11 @@ def test_get_worksheet_by_id_matches_list_shape(client, db):
     list_entry = next(w for w in client.get("/worksheets").json() if w["id"] == ws.id)
     single = client.get(f"/worksheets/{ws.id}")
     assert single.status_code == 200
-    assert single.json() == list_entry
+    body = single.json()
+    # Endo v2 (spec 4.1): the single GET alone adds the worksheet's endo method;
+    # every other key stays the exact list shape.
+    assert body.pop("endo_method") is None
+    assert body == list_entry
     # spot-check the enrichment actually resolved (not all-None parity)
     assert list_entry["assigned_analyst_email"] == "tech@accumark.test"
     assert list_entry["items"][0]["group_name"] == "Group 1"

@@ -1,0 +1,62 @@
+[
+  {
+    "name": "helper created a draft with reported source provenance",
+    "ok": true,
+    "detail": "exit=0 ART-0001 r1"
+  },
+  {
+    "name": "paperclip reference carries no provenance keys",
+    "ok": true,
+    "detail": ""
+  },
+  {
+    "name": "embed reached ready for the pinned revision",
+    "ok": true,
+    "detail": ""
+  },
+  {
+    "name": "draft badge is shown",
+    "ok": true,
+    "detail": ""
+  },
+  {
+    "name": "provenance shows \"Acceptance Requester [supplied, not verified]\"",
+    "ok": true,
+    "detail": ""
+  },
+  {
+    "name": "provenance shows \"jarvis [authenticated agent]\"",
+    "ok": true,
+    "detail": ""
+  },
+  {
+    "name": "provenance shows \"Paperclip [reported, not verified]\"",
+    "ok": true,
+    "detail": ""
+  },
+  {
+    "name": "provenance shows \"issue · ACC-999 · 6f1c2a9e-0b7d-4c1e-9a55-3f2d8e7b1c00\"",
+    "ok": true,
+    "detail": ""
+  },
+  {
+    "name": "provenance shows \"run-accept-1\"",
+    "ok": true,
+    "detail": ""
+  },
+  {
+    "name": "provenance has no links",
+    "ok": true,
+    "detail": ""
+  },
+  {
+    "name": "document frame renders below the provenance block",
+    "ok": true,
+    "detail": "h1=\"Synthetic report\" frame=1100x590"
+  },
+  {
+    "name": "full viewer shows the same revision provenance",
+    "ok": true,
+    "detail": ""
+  }
+]

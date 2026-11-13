@@ -39,21 +39,33 @@ import {
   type ServiceSpecPayload,
   type PeptideRecord,
 } from '@/lib/api'
+import { listSampleForms, type SampleForm } from '@/lib/api-sample-forms'
+import { SampleFormIcon } from '@/components/common/SampleFormIcon'
+import { queryClient } from '@/lib/query-client'
 
 /** Mirrors backend/main.py `_SPEC_MATRICES` — extend both in lockstep. */
 const SPEC_MATRICES = ['Peptide', 'Bacteriostatic Water'] as const
 
-type Tier = 'all' | 'matrix' | 'peptide'
+type Tier = 'all' | 'matrix' | 'form' | 'peptide'
 
 /** Readable rule text: "≤ 0.5 µg/g", "1 – 5 µg/g", "≥ 0.5 µg/g", "= Not Detected".
- *  A range rule with an LOQ filed appends " · LOQ {loq}" — equals-kind specs
- *  are never censored (backend never reads loq off them), so the equals
- *  branch stays untouched. */
+ *  A range or report-only rule with an LOQ filed appends " · LOQ {loq}" —
+ *  equals-kind specs are never censored (backend never reads loq off them),
+ *  so the equals branch stays untouched. */
 export function ruleLabel(spec: AnalysisServiceSpecRecord): string {
   // Report-only rows carry no bounds by construction — the admin list says
-  // "As measured"; the COA's spec cell renders display_override or empty (R1).
+  // "As measured" (+ the LOQ if filed); the COA's spec cell renders
+  // display_override or empty (R1). The unit rides in brackets: a sample's
+  // result is judged only by a row in its own unit, so the lab must see which
+  // unit a report-only row is filed in.
   if (spec.rule_kind === 'informational')
-    return spec.display_override ? `As measured · ${spec.display_override}` : 'As measured'
+    return [
+      spec.unit ? `As measured (${spec.unit})` : 'As measured',
+      spec.loq != null && `LOQ ${spec.loq}`,
+      spec.display_override,
+    ]
+      .filter(Boolean)
+      .join(' · ')
   if (spec.rule_kind === 'equals') return `= ${spec.equals_value ?? '—'}`
   const unit = spec.unit ? ` ${spec.unit}` : ''
   const { min_value, max_value, loq } = spec
@@ -66,11 +78,12 @@ export function ruleLabel(spec: AnalysisServiceSpecRecord): string {
 }
 
 export const tierChip = (spec: AnalysisServiceSpecRecord): string =>
-  spec.peptide_code ?? spec.matrix ?? 'All'
+  spec.peptide_code ?? spec.sample_form_name ?? spec.matrix ?? 'All'
 
 interface AddFormState {
   tier: Tier
   matrix: string
+  sampleFormId: number | null
   peptideId: number | null
   peptideQuery: string
   ruleKind: 'range' | 'equals' | 'informational'
@@ -85,6 +98,7 @@ interface AddFormState {
 const EMPTY_FORM: AddFormState = {
   tier: 'all',
   matrix: '',
+  sampleFormId: null,
   peptideId: null,
   peptideQuery: '',
   ruleKind: 'range',
@@ -100,6 +114,7 @@ const EMPTY_FORM: AddFormState = {
  *  no client-side numeric checks the server doesn't also enforce. */
 function isFormValid(f: AddFormState): boolean {
   if (f.tier === 'matrix' && !f.matrix) return false
+  if (f.tier === 'form' && f.sampleFormId == null) return false
   if (f.tier === 'peptide' && f.peptideId == null) return false
   if (f.ruleKind === 'informational') return true // no bounds by design
   if (f.ruleKind === 'range')
@@ -110,16 +125,20 @@ function isFormValid(f: AddFormState): boolean {
 function buildPayload(f: AddFormState): ServiceSpecPayload {
   return {
     matrix: f.tier === 'matrix' ? f.matrix : null,
+    sample_form_id: f.tier === 'form' ? f.sampleFormId : null,
     peptide_id: f.tier === 'peptide' ? f.peptideId : null,
     rule_kind: f.ruleKind,
     min_value: f.ruleKind === 'range' ? f.minValue.trim() || null : null,
     max_value: f.ruleKind === 'range' ? f.maxValue.trim() || null : null,
     equals_value: f.ruleKind === 'equals' ? f.equalsValue.trim() : null,
-    // informational sends no bounds/equals/loq — the backend 422s them
-    // loudly (R3), so the payload never even offers the temptation.
+    // informational sends no bounds/equals (the backend 422s them loudly, R3)
+    // but may carry an LOQ; equals never does.
     unit: f.unit.trim() || null,
     display_override: f.displayOverride.trim() || null,
-    loq: f.ruleKind === 'range' ? f.loq.trim() || null : null,
+    loq:
+      f.ruleKind === 'range' || f.ruleKind === 'informational'
+        ? f.loq.trim() || null
+        : null,
   }
 }
 
@@ -185,9 +204,9 @@ function InputField({
 }
 
 /**
- * Lab-owned pass/fail spec rules for one analysis service. Peptide-tier and
+ * Lab-owned pass/fail spec rules for one analysis service. Peptide-, form- and
  * matrix-tier specs are mutually exclusive per row (backend-enforced); "All"
- * means neither is set. Rows are deactivated, never deleted — no delete
+ * means none is set. Rows are deactivated, never deleted — no delete
  * affordance here on purpose.
  */
 export function ServiceSpecsSection({
@@ -198,6 +217,7 @@ export function ServiceSpecsSection({
   peptides: PeptideRecord[]
 }) {
   const [specs, setSpecs] = useState<AnalysisServiceSpecRecord[]>([])
+  const [forms, setForms] = useState<SampleForm[]>([])
   const [loading, setLoading] = useState(true)
   const [form, setForm] = useState<AddFormState>(EMPTY_FORM)
   const [submitting, setSubmitting] = useState(false)
@@ -206,7 +226,19 @@ export function ServiceSpecsSection({
   const load = useCallback(async () => {
     setLoading(true)
     try {
-      setSpecs(await listServiceSpecs(serviceId))
+      // A forms failure must not hide the specs table: only the Form tier
+      // picker depends on it.
+      const [rows, sampleForms] = await Promise.all([
+        listServiceSpecs(serviceId),
+        listSampleForms().catch(err => {
+          toast.error(
+            err instanceof Error ? err.message : 'Failed to load sample forms'
+          )
+          return [] as SampleForm[]
+        }),
+      ])
+      setSpecs(rows)
+      setForms(sampleForms)
     } catch (err) {
       toast.error(err instanceof Error ? err.message : 'Failed to load specs')
     } finally {
@@ -217,6 +249,13 @@ export function ServiceSpecsSection({
   useEffect(() => {
     load()
   }, [load])
+
+  // After a save: other readers of this service's specs share this key (the
+  // endo "How results are judged" panel on the same page).
+  const invalidateSpecs = () =>
+    void queryClient.invalidateQueries({
+      queryKey: ['analysis-services', serviceId, 'specs'],
+    })
 
   const filteredPeptides = useMemo(() => {
     const q = form.peptideQuery.trim().toLowerCase()
@@ -242,6 +281,7 @@ export function ServiceSpecsSection({
       return
     try {
       await patchServiceSpec(spec.id, { active: false })
+      invalidateSpecs()
       await load()
     } catch (err) {
       toast.error(
@@ -256,6 +296,7 @@ export function ServiceSpecsSection({
     setAddError(null)
     try {
       await createServiceSpec(serviceId, buildPayload(form))
+      invalidateSpecs()
       setForm(EMPTY_FORM)
       await load()
     } catch (err) {
@@ -281,7 +322,10 @@ export function ServiceSpecsSection({
                 <div className="font-semibold border-b border-primary-foreground/20 pb-1">
                   Tier precedence
                 </div>
-                <div>Peptide-specific overrides Matrix overrides All.</div>
+                <div>
+                  Peptide-specific overrides Form overrides Matrix overrides
+                  All.
+                </div>
                 <div>COA generation fails closed if no tier matches.</div>
               </div>
             </TooltipContent>
@@ -307,7 +351,15 @@ export function ServiceSpecsSection({
             {specs.map(spec => (
               <TableRow key={spec.id}>
                 <TableCell className="py-1.5 text-sm">
-                  <Badge variant="outline" className="text-xs">
+                  <Badge variant="outline" className="gap-1 text-xs">
+                    {spec.sample_form_id != null && (
+                      <SampleFormIcon
+                        icon={
+                          forms.find(f => f.id === spec.sample_form_id)?.icon
+                        }
+                        className="size-3.5"
+                      />
+                    )}
                     {tierChip(spec)}
                   </Badge>
                 </TableCell>
@@ -344,6 +396,7 @@ export function ServiceSpecsSection({
                   ...f,
                   tier: v as Tier,
                   matrix: '',
+                  sampleFormId: null,
                   peptideId: null,
                   peptideQuery: '',
                 }))
@@ -355,6 +408,7 @@ export function ServiceSpecsSection({
               <SelectContent>
                 <SelectItem value="all">All</SelectItem>
                 <SelectItem value="matrix">Matrix</SelectItem>
+                <SelectItem value="form">Form</SelectItem>
                 <SelectItem value="peptide">Peptide</SelectItem>
               </SelectContent>
             </Select>
@@ -381,6 +435,30 @@ export function ServiceSpecsSection({
               </Select>
             </Field>
           )}
+          {form.tier === 'form' && (
+            <Field label="Form" className="w-56">
+              <Select
+                value={
+                  form.sampleFormId == null ? '' : String(form.sampleFormId)
+                }
+                onValueChange={v =>
+                  setForm(f => ({ ...f, sampleFormId: Number(v) }))
+                }
+              >
+                <SelectTrigger aria-label="Form" className="h-8 w-full text-sm">
+                  <SelectValue placeholder="Select form…" />
+                </SelectTrigger>
+                <SelectContent>
+                  {forms.map(sf => (
+                    <SelectItem key={sf.id} value={String(sf.id)}>
+                      <SampleFormIcon icon={sf.icon} />
+                      {sf.active ? sf.name : `${sf.name} (inactive)`}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </Field>
+          )}
           <Field label="Rule" className="w-28">
             <Select
               value={form.ruleKind}
@@ -397,18 +475,13 @@ export function ServiceSpecsSection({
               <SelectContent>
                 <SelectItem value="range">Range</SelectItem>
                 <SelectItem value="equals">Equals</SelectItem>
-                <SelectItem value="informational">Report as measured</SelectItem>
+                <SelectItem value="informational">
+                  Report as measured
+                </SelectItem>
               </SelectContent>
             </Select>
           </Field>
-          {form.ruleKind === 'informational' ? (
-            <Field label="" className="flex-1 min-w-40">
-              <p className="text-xs text-muted-foreground pt-1.5">
-                No verdict — the measured value prints as-is with a neutral
-                status. Use Display override below for optional spec-cell text.
-              </p>
-            </Field>
-          ) : form.ruleKind === 'range' ? (
+          {form.ruleKind === 'range' && (
             <>
               <InputField
                 label="Min"
@@ -420,23 +493,37 @@ export function ServiceSpecsSection({
                 value={form.maxValue}
                 onChange={v => setForm(f => ({ ...f, maxValue: v }))}
               />
-              <InputField
-                label="LOQ"
-                value={form.loq}
-                onChange={v => setForm(f => ({ ...f, loq: v }))}
-                placeholder="e.g. 0.5"
-                tooltip={
-                  'Limit of quantitation in the spec\'s unit. Results below it print as "< LOQ" on the COA; the pass/fail verdict still uses the raw number.'
-                }
-              />
             </>
-          ) : (
+          )}
+          {form.ruleKind === 'equals' && (
             <InputField
               label="Equals"
               value={form.equalsValue}
               onChange={v => setForm(f => ({ ...f, equalsValue: v }))}
               className="w-32"
             />
+          )}
+          {form.ruleKind !== 'equals' && (
+            <InputField
+              label="LOQ"
+              value={form.loq}
+              onChange={v => setForm(f => ({ ...f, loq: v }))}
+              placeholder="e.g. 0.5"
+              tooltip={
+                'Limit of quantitation in the spec\'s unit. Results at or below it print as "<" and the LOQ on the COA (for example "< 0.5")' +
+                (form.ruleKind === 'range'
+                  ? '; the pass/fail verdict still uses the raw number.'
+                  : '.')
+              }
+            />
+          )}
+          {form.ruleKind === 'informational' && (
+            <Field label="" className="flex-1 min-w-40">
+              <p className="text-xs text-muted-foreground pt-1.5">
+                No verdict. The measured value prints with a neutral status; at
+                or below the LOQ it prints as below the LOQ.
+              </p>
+            </Field>
           )}
           <InputField
             label="Unit"

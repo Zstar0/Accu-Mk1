@@ -50,15 +50,33 @@ export const flagKeys = {
   lists: () => ['flags', 'list'] as const,
   list: (tab: FlagTab, params?: ListFlagsParams) =>
     ['flags', 'list', tab, params ?? {}] as const,
-  // Entity-scoped open flags. Under ['flags', …] so the SSE glue's blanket
-  // invalidate(['flags']) refreshes every EntityFlagButton on any flag event.
-  entity: (entityType: string, entityId: string, includeDescendants: boolean) =>
-    ['flags', 'entity', entityType, entityId, includeDescendants] as const,
-  // Prefix over BOTH includeDescendants variants of ONE entity's flags. The SSE
+  // Entity-scoped flags (open only, or every status with includePast). Under
+  // ['flags', …] so the SSE glue's blanket invalidate(['flags']) refreshes every
+  // EntityFlagButton on any flag event. includePast stays LAST: the glue's
+  // rollup predicate reads includeDescendants at index 4.
+  entity: (
+    entityType: string,
+    entityId: string,
+    includeDescendants: boolean,
+    includePast = false
+  ) =>
+    [
+      'flags',
+      'entity',
+      entityType,
+      entityId,
+      includeDescendants,
+      includePast,
+    ] as const,
+  // Prefix over EVERY variant (descendants, past) of ONE entity's flags. The SSE
   // glue invalidates this to refetch just the affected entity's button(s) —
   // scoping away the per-vial EntityFlagButton refetch storm.
   entityScope: (entityType: string, entityId: string) =>
     ['flags', 'entity', entityType, entityId] as const,
+  // Open flags of every anchor on one board (planning boards slice 4). Under
+  // ['flags', 'board'] so the stream glue refreshes mounted boards with its standard set.
+  boards: () => ['flags', 'board'] as const,
+  board: (slug: string) => ['flags', 'board', slug] as const,
   activity: () => ['flags', 'activity'] as const,
   unread: () => ['flags', 'unread'] as const,
   search: (q: string) => ['flags', 'search', q] as const,
@@ -88,25 +106,29 @@ export function useFlagsList(tab: FlagTab, params?: ListFlagsParams) {
   })
 }
 
-/** Open flags on one entity (optionally rolling up its descendants). Drives the
- *  stateful EntityFlagButton; disabled until both ids are present. */
+/** Open flags on one entity (optionally rolling up its descendants; with
+ *  `includePast`, resolved/closed ones too). Drives the stateful
+ *  EntityFlagButton; disabled until both ids are present. */
 export function useEntityFlags(
   entityType: string | null | undefined,
   entityId: string | null | undefined,
-  opts?: { includeDescendants?: boolean }
+  opts?: { includeDescendants?: boolean; includePast?: boolean }
 ) {
   const includeDescendants = opts?.includeDescendants ?? false
+  const includePast = opts?.includePast ?? false
   return useQuery({
     queryKey: flagKeys.entity(
       entityType ?? '',
       entityId ?? '',
-      includeDescendants
+      includeDescendants,
+      includePast
     ),
     queryFn: () =>
       listEntityFlags(
         entityType as string,
         entityId as string,
-        includeDescendants
+        includeDescendants,
+        includePast
       ),
     enabled: !!entityType && !!entityId,
     staleTime: 5_000,

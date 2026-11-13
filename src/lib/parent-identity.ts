@@ -13,3 +13,20 @@ export function hasParentIdentity(
   if (!data?.sample_id) return false
   return !!data.sample_uid || data.external_lims_system === 'mk1'
 }
+
+/**
+ * The key the inline field editors post to
+ * `/wizard/senaite/samples/{key}/update`.
+ *
+ * Legacy parents: the SENAITE uid. Native-born parents have none, so the
+ * sample_id goes in its place and the backend writes the registry row
+ * (`update_senaite_sample_fields` native branch). Sending '' made every
+ * Client Lot / Declared Qty edit on a native sample 404 (P-5178, 2026-09-28).
+ */
+export function fieldEditKey(
+  data: { sample_id?: string | null; sample_uid?: string | null; external_lims_system?: string | null } | null | undefined,
+): string {
+  if (data?.sample_uid) return data.sample_uid
+  if (data?.external_lims_system === 'mk1' && data.sample_id) return data.sample_id
+  return ''
+}

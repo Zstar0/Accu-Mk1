@@ -173,3 +173,12 @@ def test_unknown_analyst_leaves_the_worksheet_unassigned(db_session):
     assert ws.assigned_analyst_id is None
     db_session.refresh(s["a1"])
     assert s["a1"].analyst_user_id is None
+
+
+def test_backfilled_worksheets_are_stock(db_session):
+    # Spec 2026-10-10 section 3.8: these runs were prepped the old way, and the
+    # endo_prep column default ('2ml') would otherwise give them 2 mL maths.
+    _seed(db_session)
+    run_backfill(db_session, [_run()], apply=True, today=date(2026, 9, 18))
+    ws = db_session.execute(select(Worksheet).where(Worksheet.title == "Endo 09/11/2026 #3")).scalar_one()
+    assert ws.endo_prep == "stock"

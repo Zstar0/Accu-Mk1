@@ -5,6 +5,7 @@ import { useUIStore } from '@/store/ui-store'
 import { parseReceivedAtMs, formatAge } from '@/components/hplc/AgingTimer'
 import type { BoardVial } from '@/lib/api'
 import { PriorityGlyph } from '@/components/common/PriorityGlyph'
+import { SampleFormMark } from '@/components/common/SampleFormIcon'
 import { legacyEffectivePriority } from '@/lib/inbox-sla'
 import {
   VIAL_STAGE_COLUMNS,
@@ -119,6 +120,10 @@ export function VialBoardKanban({
                 <span className="font-mono text-sm font-semibold">
                   {parentSampleId}
                 </span>
+                <SampleFormMark
+                  formId={parent?.sample_form_id}
+                  className="size-4"
+                />
                 {parent?.label && (
                   <span className="text-xs text-muted-foreground">
                     {parent.label}
@@ -285,6 +290,10 @@ function VialCard({
         <span className="font-mono text-[11px] font-semibold truncate">
           {vial.sample_id}
         </span>
+        <SampleFormMark
+          formId={vial.parent.sample_form_id}
+          className="size-3"
+        />
         <span
           className={cn(
             'text-[9px] px-1.5 py-0.5 rounded uppercase tracking-wide shrink-0',

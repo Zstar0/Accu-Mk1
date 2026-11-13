@@ -31,6 +31,24 @@ vi.mock('@/lib/api', () => ({
   getWorksheetUsers: vi.fn().mockResolvedValue([]),
 }))
 
+// The form mark reads the cached form list; serve one form without a fetch.
+vi.mock('@/services/sample-forms', () => ({
+  useSampleForms: () => ({
+    data: [
+      {
+        id: 4,
+        name: 'Nasal Spray',
+        route: 'nasal_inhaled',
+        is_default: false,
+        active: true,
+        sort_order: 40,
+        icon: 'nasal_spray',
+        sample_count: 1,
+      },
+    ],
+  }),
+}))
+
 const { SampleCard } = await import('@/components/explorer/SampleCard')
 
 function wrapper({ children }: { children: React.ReactNode }) {
@@ -126,6 +144,32 @@ describe('SampleCard', () => {
       '.lucide-triangle-alert, .lucide-alert-triangle'
     )
     expect(alertIcon).not.toBeNull()
+  })
+
+  it('shows_the_form_icon_beside_the_sample_id_only_when_the_sample_has_a_form', () => {
+    const { rerender } = render(
+      <SampleCard
+        sampleId="SAMP-005"
+        lookup={makeLookup({ sample_form_id: 4 })}
+        isLoading={false}
+        isError={false}
+      />,
+      { wrapper }
+    )
+    expect(
+      screen.getByRole('img', { name: 'Form: Nasal Spray' })
+    ).toBeInTheDocument()
+    rerender(
+      <SampleCard
+        sampleId="SAMP-005"
+        lookup={makeLookup({ sample_form_id: null })}
+        isLoading={false}
+        isError={false}
+      />
+    )
+    expect(
+      screen.queryByRole('img', { name: /^Form:/ })
+    ).not.toBeInTheDocument()
   })
 
   it('calls_navigateToSample_when_sample_id_button_clicked', () => {

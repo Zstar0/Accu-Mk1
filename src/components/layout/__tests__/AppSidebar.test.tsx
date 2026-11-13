@@ -71,6 +71,10 @@ vi.mock('@/lib/auth-api', () => ({
   logout: vi.fn(),
 }))
 
+vi.mock('@/services/boards', () => ({
+  useBoardsNavVisible: () => true,
+}))
+
 vi.mock('@tauri-apps/plugin-process', () => ({
   relaunch: vi.fn(),
 }))
@@ -125,7 +129,18 @@ describe('AppSidebar — Customers entry (Phase 29-03)', () => {
     expect(customersBtn).toBeInTheDocument()
   })
 
-  it('orders AccuMark Tools sub-items as Overview → Order Explorer → Order Status → Vial Status → Customers → COA Explorer → Digital COA → Chromatographs', () => {
+  it('renders the Boards top-level item when useBoardsNavVisible() is true', () => {
+    renderSidebar()
+    expect(screen.getByRole('button', { name: 'Boards' })).toBeInTheDocument()
+  })
+
+  it('Tasks is a top-level item for every user and opens tasks/overview', () => {
+    renderSidebar()
+    fireEvent.click(screen.getByRole('button', { name: 'Tasks' }))
+    expect(uiState.navigateTo).toHaveBeenCalledWith('tasks', 'overview')
+  })
+
+  it('orders AccuMark Tools sub-items as Overview → Order Explorer → Order Status → Vial Status → Customers → Customer Insights → COA Explorer → Digital COA → Chromatographs', () => {
     renderSidebar()
     // Scope to the AccuMark Tools group: walk up from a uniquely-named
     // sibling (Order Explorer is only present under accumark-tools) to find
@@ -143,6 +158,7 @@ describe('AppSidebar — Customers entry (Phase 29-03)', () => {
       'Order Status',
       'Vial Status',
       'Customers',
+      'Customer Insights',
       'COA Explorer',
       'Digital COA',
       'Chromatographs',
@@ -203,7 +219,7 @@ describe('AppSidebar — Customers entry (Phase 29-03)', () => {
       subMenu.querySelectorAll('[data-sidebar="menu-sub-button"]')
     ).map(el => el.textContent?.replace(/\d+/g, '').trim() ?? '')
     expect(labels).toEqual([
-      'Dashboard',
+      'Analyte Trends',
       'Check-In Times',
       'Ready to Publish',
       'Scheduled Publishes',

@@ -1,0 +1,64 @@
+Master merge re-check, 2026-10-28
+Merge commit cf29c737 (feat/sample-forms bfd2642a + master 279b9eb1, v1.54.0),
+checked out in the devbox worktree mounted into stack sforms. The worktree also
+carries the separate #346 NativeSelect fix, uncommitted, as before.
+
+Conflicts (5 files, one hunk each), resolved as:
+- coa/native_sections._result_display: master's floor (">", range rows only)
+  and "< {loq:g}" format, plus the branch's LOQ censoring on report-only rows.
+- coa/spec_rules.display_spec_fields: sample_form_id and floor.
+- lims_analyses listing: the branch's spec call (in the unit shown) passes
+  floor=bool(r.result_floor).
+- SenaiteShapeAnalysisResponse: unit_options, default_unit, result_floor.
+- ServiceSpecsSection: the branch's LOQ field with master's "< 0.5" tooltip.
+Three report-only test expectations moved from "< LOQ" to the number.
+
+Gates
+- Backend, in the stack container: spec rules + native sections 112 passed;
+  every backend test file either side touched (20 files) 579 passed, 5 skipped;
+  the 5 skipped (test_spec_unit_indexes_pg) then 5 passed against the stack's
+  live Postgres.
+- Live-Postgres boot after the reload: result_floor, recon_water_ml and
+  sample_form_id present; one migration_skipped, the lims_analyses
+  review_state CHECK, which every earlier boot of this stack also logs.
+- Frontend: typecheck clean. Vitest on the 30 test files either side touched:
+  442 passed, 1 failed (EndoReaderImportDialog, master's file, not touched by
+  the branch); it passes alone, 17 of 17.
+- Frontend Docker build (--platform linux/amd64, .env.production): exit 0,
+  tsc && vite build inside the image. Image removed.
+
+Certificate sections (build_native_sections on the merged code, then COA
+Builder 2.35.6, coab #35)
+  P-0148 nasal 0.3 ug/mL   "< 0.5", report-only, LOQ 0.5, no verdict, no basis note
+                           (was "< LOQ" before the merge)
+  P-0151 nasal 2.4 ug/mL   "2.4", LOQ 0.5, no verdict, no basis note
+  P-0152 nasal 3.2 ppm     rule-5 abort, tiers peptide/form/matrix/wildcard (F-1)
+  P-0149 powder 3.2 ppm    <= 10 ppm, Conforms, basis note
+  BW-0015, BW-0016         <= 10 ppm, Conforms, basis note (BW-0016's leftover
+                           Nasal Spray form ignored, F-2)
+  COA Builder: PDF row "Lead | Measured | < 0.5 | 0.5 | Measured"; the digital
+  (AccuVerify) payload carries result_display "< 0.5" and loq 0.5. Same rows
+  as the 10-27 rehearsal apart from the "< 0.5".
+
+Bench listing (native-analyses?as=senaite_shape): P-0148 presets ug/mL, options
+[ppm, ug/mL], report-only LOQ 0.5; P-0152 (ppm) has no spec; P-0149 keeps
+<= 10 ppm Conforms. result_floor rides on every row.
+
+Browser (headless Playwright, 1690px dark): the sample page Spec cell reads
+"As measured / Report only" on P-0148, blank on P-0152, "<= 10 ppm Conforms" on
+P-0149; the HM-PB spec editor lists "Nasal Spray: As measured (ug/mL) . LOQ 0.5"
+and "All: <= 10 ppm". Form marks on Order Status (table and kanban), the
+customer status page, the vial board (cards, grouped, table) and the COA
+Explorer match the pre-merge run. No page errors beyond the dev-server
+websocket, the Tauri listener and the stack's 404s for ordered-products and
+vial photos (no IS order or photo behind golden samples).
+
+Screenshots
+  01-coa-page2-nasal-below-loq-P-0148.png  COA Builder page 2, "< 0.5"
+  02-bench-nasal-as-measured-P-0148.png    sample page analyses table
+  03-bench-powder-range-P-0149.png         powder sample, range verdict
+
+Not covered: a floor (">") result on a sample with a form. The stack has no
+endo floor rows, and no test combines the two (floor tests run without a
+form, form tests without a floor). A floor only meets the form tier if a Form
+rule is filed on the endotoxin test.

@@ -394,3 +394,66 @@ def test_put_ride_hosts_rejects_kind_dim_profile(client, db_session):
     r = client.put(f"/analysis-profiles/{kind_profile.id}/ride-hosts",
                     json={"host_role_codes": ["hplc"]})
     assert r.status_code == 400
+
+
+# ─── a la carte: fentanyl, pH and vacuum share one sample vial ─────────────
+
+def test_a_la_carte_riders_share_one_sample_vial(db_session):
+    """A la carte plan, Task 7 (catalog data, no code). With no HPLC vial on
+    the order, the three riders (stand-ins for fentanyl, ph-profile and
+    vial-vacuum-test) each ride [thplc, <the other two roles>], so whichever
+    one resolves first self-mints and the rest attach to it: ONE sample vial
+    for any non-empty subset, in any service order, live and from a frozen
+    snapshot. With the HPLC anchor ordered they all ride it and mint
+    nothing. An unrelated anchor (endotoxin stand-in) still adds its own."""
+    from sub_samples.catalog_demand import (
+        _resolve_from_snapshot, resolve_catalog_fulfillment)
+    from catalog.snapshot import compute_catalog_snapshot
+
+    hplc = _mk(db_session, "t_hplc_fam", "thplc", vials=1)
+    _mk(db_session, "t_endo", "tendo", vials=1)
+    # Role sort order (call order) deliberately differs from key order, so
+    # the minting assertion below pins sort_order, not the profile key.
+    rider_roles = {"t_vac": "tvac", "t_fent": "tfent", "t_ph": "tph"}
+    riders = {
+        key: _mk(db_session, key, role, vials=0,
+                 rides=["thplc"] + [r for r in rider_roles.values() if r != role])
+        for key, role in rider_roles.items()
+    }
+    roles = tuple(rider_roles.values())
+    sort_order = {vr.code: vr.sort_order for vr in db_session.query(VialRole)}
+
+    def _check_one_shared_vial(result, subset, perm):
+        assert sum(result[r].demand for r in roles if r in result) == 1, perm
+        minted = [r for r in roles if r in result and result[r].demand]
+        assert len(minted) == 1, perm
+        # The ordered rider whose role sorts first mints; service order never decides.
+        assert minted[0] == min((rider_roles[k] for k in subset), key=sort_order.get), perm
+        vial = result[minted[0]]
+        assert sorted(vial.host_profile_ids + vial.rider_profile_ids) == sorted(
+            riders[k].id for k in subset), perm
+
+    for n in range(1, 4):
+        for subset in itertools.combinations(rider_roles, n):
+            for perm in itertools.permutations(subset):
+                services = {k: True for k in perm}
+                _check_one_shared_vial(
+                    resolve_catalog_fulfillment(db_session, services), subset, perm)
+                snapshot = compute_catalog_snapshot(db_session, services, None)
+                _check_one_shared_vial(_resolve_from_snapshot(snapshot), subset, perm)
+
+    # HPLC anchor ordered: every rider rides the HPLC vial, none mints.
+    with_hplc = resolve_catalog_fulfillment(
+        db_session, {"t_fent": True, "t_ph": True, "t_vac": True, "t_hplc_fam": True})
+    assert with_hplc["thplc"].demand == 1
+    assert with_hplc["thplc"].host_profile_ids == [hplc.id]
+    assert sorted(with_hplc["thplc"].rider_profile_ids) == sorted(r.id for r in riders.values())
+    assert not any(r in with_hplc for r in roles)
+
+    # An unrelated anchor keeps its own vial: endotoxin + fentanyl = 2.
+    with_endo = resolve_catalog_fulfillment(db_session, {"t_endo": True, "t_fent": True})
+    assert sum(rf.demand for rf in with_endo.values()) == 2
+    assert with_endo["tendo"].demand == 1
+    assert with_endo["tfent"].demand == 1
+    assert with_endo["tfent"].host_profile_ids == [riders["t_fent"].id]
+    assert with_endo["tfent"].rider_profile_ids == []

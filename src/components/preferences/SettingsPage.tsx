@@ -1,7 +1,8 @@
 import { useTranslation } from 'react-i18next'
 import { useUIStore } from '@/store/ui-store'
 import { cn } from '@/lib/utils'
-import { navigationItems, PANE_COMPONENTS, isPreferencePane } from './panes'
+import { visibleNavItems, PANE_COMPONENTS, isPreferencePane } from './panes'
+import { useAuthStore } from '@/store/auth-store'
 
 /**
  * Full-page Settings (#settings/<pane>), replacing the retired
@@ -13,6 +14,7 @@ export function SettingsPage() {
   const { t } = useTranslation()
   const activeSubSection = useUIStore(state => state.activeSubSection)
   const navigateTo = useUIStore(state => state.navigateTo)
+  const isAdmin = useAuthStore(state => state.user?.role === 'admin')
 
   // The pane is the current subsection; anything else (e.g. a stale 'overview')
   // falls back to the general pane so the page never renders blank.
@@ -26,7 +28,7 @@ export function SettingsPage() {
           {t('preferences.title')}
         </p>
         <ul className="space-y-0.5">
-          {navigationItems.map(item => {
+          {visibleNavItems(isAdmin).map(item => {
             const isActive = pane === item.id
             return (
               <li key={item.id}>

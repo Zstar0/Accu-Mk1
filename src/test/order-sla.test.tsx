@@ -466,3 +466,43 @@ describe('useOrderSlaStatuses', () => {
     )
   })
 })
+
+describe('useOrderSlaStatuses: native-born and withdrawn samples', () => {
+  it('a received native-born sample (no UID) gets a real verdict, keyed by sample id', async () => {
+    fetchSlaStatusesMock.mockResolvedValue([
+      {
+        key: 'P-5028|no-group',
+        status: { target_minutes: 1440, elapsed_minutes: 100, remaining_minutes: 1340, breached: false },
+      },
+    ])
+    const native = { ...makeLookup('P-5028', '2026-09-29T16:46:00', 'sample_received'), sample_uid: null }
+    const orders = [
+      makeOrder({ order_id: 'O8331', sample_results: { '1': { senaite_id: 'P-5028', status: 'ok' } } as never }),
+    ]
+    const lookupMap = new Map([['P-5028', { data: native as SenaiteLookupResult, isLoading: false, isError: false }]])
+    const { result } = renderHook(() => useOrderSlaStatuses(orders, lookupMap), { wrapper })
+    await waitFor(() => expect(result.current.verdictByOrderId.get('O8331')?.color).toBe('green'))
+    expect(fetchSlaStatusesMock.mock.calls[0]?.[0]?.[0]?.key).toBe('P-5028|no-group')
+    expect(result.current.sampleStatusesBySampleId.get('P-5028')).toHaveLength(1)
+  })
+
+  it('all published plus a cancelled sample reads met, and the cancelled one is not sent', async () => {
+    fetchSlaStatusesMock.mockResolvedValue([])
+    const orders = [
+      makeOrder({
+        order_id: 'O5984',
+        sample_results: {
+          '1': { senaite_id: 'P-2298', status: 'ok' },
+          '2': { senaite_id: 'PB-0435', status: 'ok' },
+        } as never,
+      }),
+    ]
+    const lookupMap = new Map([
+      ['P-2298', { data: makeLookup('uid-2298', '2026-08-20T09:00:00', 'published'), isLoading: false, isError: false }],
+      ['PB-0435', { data: makeLookup('uid-0435', '2026-08-20T09:00:00', 'cancelled'), isLoading: false, isError: false }],
+    ])
+    const { result } = renderHook(() => useOrderSlaStatuses(orders, lookupMap), { wrapper })
+    await waitFor(() => expect(result.current.verdictByOrderId.get('O5984')?.color).toBe('met'))
+    expect(fetchSlaStatusesMock).not.toHaveBeenCalled()
+  })
+})

@@ -14,7 +14,9 @@ import {
   type SampleRegistryDebug as DebugData, type RegistryFieldStatus,
   type AnalysisSyncStatus, type SampleRegistryLog, type SampleParityResult,
 } from '@/lib/api'
-import { useReadSourceOverride } from '@/lib/read-source'
+import type { ReadSource } from '@/lib/read-source'
+import { ReadSourceIndicator } from '@/components/senaite/ReadSourceIndicator'
+import { ReadSourceBanner } from '@/components/senaite/ReadSourceBanner'
 
 const statusGlyph: Record<RegistryFieldStatus, string> = {
   agree: '✔', drift: '⚠', registry_null: '○', senaite_null: '—',
@@ -48,14 +50,25 @@ function val(v: unknown): string {
   return String(v)
 }
 
-interface Props { open: boolean; onClose: () => void; sampleId: string }
+/** The sample page's read-source badge, override and provenance line, moved
+ *  here from the page header. Parent pages only: the override does nothing
+ *  on a vial page, so SampleDetails passes nothing there. */
+export interface PanelReadSource {
+  effective: ReadSource
+  override: ReadSource | null
+  setOverride: (source: ReadSource | null) => void
+  readSource: 'mk1' | undefined
+  registryMissing: boolean | undefined
+  fieldSources: Record<string, 'mk1' | 'senaite'> | undefined
+}
 
-export function SampleRegistryDebug({ open, onClose, sampleId }: Props) {
+interface Props { open: boolean; onClose: () => void; sampleId: string; readSource?: PanelReadSource }
+
+export function SampleRegistryDebug({ open, onClose, sampleId, readSource }: Props) {
   const [data, setData] = useState<DebugData | null>(null)
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [showRaw, setShowRaw] = useState(false)
-  const { override: source, setOverride: setSource } = useReadSourceOverride('sample_details')
   const [tab, setTab] = useState<'overview' | 'log' | 'parity'>('overview')
   const [logData, setLogData] = useState<SampleRegistryLog | null>(null)
   const [logLoading, setLogLoading] = useState(false)
@@ -163,15 +176,23 @@ export function SampleRegistryDebug({ open, onClose, sampleId }: Props) {
               </span>
             </div>
             <div className="flex items-center gap-1.5 shrink-0">
-              <div className="flex items-center gap-0.5 rounded border border-zinc-800 p-0.5 mr-1">
-                {(['senaite', 'mk1'] as const).map((s) => (
-                  <button key={s} onClick={() => setSource(s)}
-                    className={cn('px-1.5 py-0.5 text-[10px] font-mono rounded transition-colors',
-                      source === s ? 'bg-emerald-600/30 text-emerald-300' : 'text-zinc-600 hover:text-zinc-300')}>
-                    {s === 'senaite' ? 'SENAITE' : 'Accu-Mk1'}
-                  </button>
-                ))}
-              </div>
+              {readSource && (
+                <>
+                  <ReadSourceIndicator
+                    source={readSource.effective}
+                    className={readSource.effective === 'senaite' ? 'bg-zinc-800 text-zinc-400' : undefined}
+                  />
+                  <div className="flex items-center gap-0.5 rounded border border-zinc-800 p-0.5 mr-1">
+                    {([['follow', null], ['senaite', 'senaite'], ['mk1', 'mk1']] as const).map(([key, s]) => (
+                      <button key={key} type="button" onClick={() => readSource.setOverride(s)}
+                        className={cn('px-1.5 py-0.5 text-[10px] font-mono rounded transition-colors',
+                          readSource.override === s ? 'bg-emerald-600/30 text-emerald-300' : 'text-zinc-600 hover:text-zinc-300')}>
+                        {key === 'follow' ? 'Follow default' : key === 'senaite' ? 'SENAITE' : 'Accu-Mk1'}
+                      </button>
+                    ))}
+                  </div>
+                </>
+              )}
               <button onClick={reconcile} disabled={loading} title="force reconcile"
                 className="text-amber-600/70 hover:text-amber-400 transition-colors disabled:opacity-30">
                 <RotateCw size={12} />
@@ -189,14 +210,24 @@ export function SampleRegistryDebug({ open, onClose, sampleId }: Props) {
           </div>
 
           <div className="bg-[#0d0d0d] px-3 py-3 flex-1 min-h-0 flex flex-col overflow-hidden">
-            <div className="flex items-center gap-0.5 rounded border border-zinc-800 p-0.5 w-fit mb-2 shrink-0">
-              {(['overview', 'log', 'parity'] as const).map(t => (
-                <button key={t} onClick={() => selectTab(t)}
-                  className={cn('px-1.5 py-0.5 text-[10px] font-mono rounded transition-colors',
-                    tab === t ? 'bg-emerald-600/30 text-emerald-300' : 'text-zinc-600 hover:text-zinc-300')}>
-                  {t}
-                </button>
-              ))}
+            <div className="flex items-center gap-3 mb-2 shrink-0">
+              <div className="flex items-center gap-0.5 rounded border border-zinc-800 p-0.5 w-fit">
+                {(['overview', 'log', 'parity'] as const).map(t => (
+                  <button key={t} onClick={() => selectTab(t)}
+                    className={cn('px-1.5 py-0.5 text-[10px] font-mono rounded transition-colors',
+                      tab === t ? 'bg-emerald-600/30 text-emerald-300' : 'text-zinc-600 hover:text-zinc-300')}>
+                    {t}
+                  </button>
+                ))}
+              </div>
+              {readSource && (
+                <ReadSourceBanner
+                  readSource={readSource.readSource}
+                  registryMissing={readSource.registryMissing}
+                  fieldSources={readSource.fieldSources}
+                  className="text-zinc-500"
+                />
+              )}
             </div>
 
             {loading && !data && (

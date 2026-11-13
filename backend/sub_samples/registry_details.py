@@ -55,6 +55,8 @@ from sqlalchemy.orm import Session
 
 from models import LimsParentAttachment, LimsSample, LimsSampleRemark, User
 from priority.service import load_effective_safe
+from coa.iu_display import declared_payload
+from sample_forms.service import form_payload
 from sub_samples.lookup_models import (
     RegistrySampleReadResult,
     SenaiteAnalysis,
@@ -63,7 +65,7 @@ from sub_samples.lookup_models import (
     SenaiteCOAInfo,
     SenaiteRemark,
 )
-from sub_samples.registry_read import registry_row_to_display
+from sub_samples.registry_read import _iso_utc, registry_row_to_display
 
 log = logging.getLogger(__name__)
 
@@ -100,6 +102,11 @@ _MK1_FIELD_SOURCES: dict[str, str] = {
     "registry_pk": "mk1",
     "explicit_priority_key": "mk1",
     "priority": "mk1",
+    "sample_form_id": "mk1",
+    "sample_form_name": "mk1",
+    "sample_form_eligible": "mk1",
+    "declared_unit": "mk1",
+    "declared_prep_mg": "mk1",
 }
 
 
@@ -131,8 +138,7 @@ def native_sample_remarks(db: Session, sample_id: str) -> list[SenaiteRemark]:
         out.append(SenaiteRemark(
             content=remark.content,
             user_id=label,
-            created=(remark.created_at.isoformat()
-                     if remark.created_at else None),
+            created=_iso_utc(remark.created_at),
         ))
     return out
 
@@ -363,4 +369,6 @@ def build_native_details(db: Session, sample_id: str) -> RegistrySampleReadResul
         explicit_priority_key=row.priority_key,
         priority=(lambda e: e.as_dict() if e else None)(
             load_effective_safe(db, sample_pks=[row.id])[0].get(row.id)),
+        **form_payload(db, row),
+        **declared_payload(db, row),
     )

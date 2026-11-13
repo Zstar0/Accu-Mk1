@@ -35,6 +35,95 @@ class CategoryUpdate(BaseModel):
     active: Optional[bool] = None
 
 
+class SpaceOut(BaseModel):
+    id: int
+    slug: str
+    name: str
+    description: Optional[str] = None
+    visibility: str
+    is_active: bool
+    sort_order: int
+    document_count: int = 0
+    can_write: bool = False
+    created_at: datetime
+    updated_at: datetime
+    model_config = ConfigDict(from_attributes=True)
+
+
+class SpaceCreate(BaseModel):
+    slug: str
+    name: str
+    description: Optional[str] = None
+    visibility: str = "company"
+    sort_order: int = 0
+
+
+class SpaceUpdate(BaseModel):
+    """Partial. No slug: immutable."""
+    model_config = ConfigDict(extra="forbid")
+    name: Optional[str] = None
+    description: Optional[str] = None
+    visibility: Optional[str] = None
+    is_active: Optional[bool] = None
+    sort_order: Optional[int] = None
+
+
+class SpaceGrantsReplace(BaseModel):
+    group_ids: List[int]
+
+
+class SpaceGrantsOut(BaseModel):
+    space_id: int
+    group_ids: List[int]
+
+
+class ProvenanceCreator(BaseModel):
+    kind: str                 # user | agent | service | unknown
+    id: Optional[str] = None  # user id, agent name or service id; None when unknown
+    label: str
+    verified: bool            # resolved from the credential (False only for unknown)
+
+
+class ProvenanceRequester(BaseModel):
+    label: str
+    user_id: Optional[int] = None
+    verified: bool            # True only when Mk1 resolved the login itself
+
+
+class ProvenanceSource(BaseModel):
+    system: str
+    system_label: str
+    verified: bool            # False = reported by the caller
+    record_type: Optional[str] = None
+    record_id: Optional[str] = None
+    record_label: Optional[str] = None
+    run_id: Optional[str] = None
+
+
+class ProvenanceContentEdit(BaseModel):
+    by: str
+    at: datetime
+
+
+class DocumentProvenance(BaseModel):
+    version: int = 1
+    creator: ProvenanceCreator
+    requested_by: Optional[ProvenanceRequester] = None
+    source: Optional[ProvenanceSource] = None
+    content_edited: Optional[ProvenanceContentEdit] = None
+
+
+class ProvenanceIn(BaseModel):
+    """Caller-ASSERTED origin of a new revision. Identity and verification are
+    server-owned and are not fields here; any other key is a 422."""
+    model_config = ConfigDict(extra="forbid")
+    source_system: Optional[str] = None
+    source_record_type: Optional[str] = None
+    source_record_id: Optional[str] = None
+    source_record_label: Optional[str] = None
+    source_run_id: Optional[str] = None
+
+
 class DocumentOut(BaseModel):
     id: int
     code: str
@@ -44,6 +133,9 @@ class DocumentOut(BaseModel):
     category_id: int
     category_name: str
     category_prefix: str
+    space_id: Optional[int] = None
+    space_slug: str = "general"
+    space_name: str = "General"
     status: str
     effective_date: Optional[date] = None
     activated_at: Optional[datetime] = None
@@ -60,6 +152,8 @@ class DocumentOut(BaseModel):
     created_at: datetime
     updated_at: datetime
     revision_count: int = 1
+    open_comment_count: int = 0
+    provenance: DocumentProvenance  # of THIS revision; each revision carries its own
 
 
 class DocumentDetail(DocumentOut):
@@ -78,10 +172,13 @@ class DocumentCreate(BaseModel):
     html: str
     category: Optional[str] = None       # code prefix or name
     category_id: Optional[int] = None
+    space: Optional[str] = None  # slug; default General
+    space_id: Optional[int] = None
     description: Optional[str] = None
     code: Optional[str] = None           # existing code => next revision
     author: Optional[str] = None
     source_session: Optional[str] = None
+    provenance: Optional[ProvenanceIn] = None
     effective_date: Optional[date] = None
     activate: bool = True
 
@@ -90,5 +187,97 @@ class DocumentPatch(BaseModel):
     title: Optional[str] = None
     description: Optional[str] = None
     category_id: Optional[int] = None
+    space_id: Optional[int] = None  # admin bearer only; moves every revision
     effective_date: Optional[date] = None
     updated_by: Optional[str] = None
+
+
+class CommentLabelOut(BaseModel):
+    id: str
+    emoji: str
+    text: str
+    color: str
+    tip: Optional[str] = None
+
+
+class CommentCreate(BaseModel):
+    parent_id: Optional[int] = None
+    kind: str = "comment"                 # comment | suggestion
+    anchor: Optional[dict] = None         # PersistedHtmlAnchor or null (document-level)
+    label: Optional[str] = None
+    body: str = ""
+    suggested_text: Optional[str] = None
+
+
+class CommentPatch(BaseModel):
+    body: Optional[str] = None
+    suggested_text: Optional[str] = None
+
+
+class CommentAttachmentOut(BaseModel):
+    id: int
+    filename: str
+    content_type: str
+    size_bytes: int
+    created_at: datetime
+    model_config = ConfigDict(from_attributes=True)
+
+
+class CommentOut(BaseModel):
+    id: int
+    code: str
+    document_id: int
+    revision: int
+    parent_id: Optional[int] = None
+    number: Optional[int] = None          # top-level only; replies carry None
+    kind: str
+    anchor: Optional[dict] = None
+    label: Optional[str] = None
+    body: str
+    suggested_text: Optional[str] = None
+    author: str
+    author_user_id: Optional[int] = None
+    author_agent: Optional[str] = None
+    status: str
+    resolved_at: Optional[datetime] = None
+    resolved_by: Optional[str] = None
+    created_at: datetime
+    updated_at: datetime
+    edited_at: Optional[datetime] = None
+    attachments: List[CommentAttachmentOut] = Field(default_factory=list)
+    replies: List["CommentOut"] = Field(default_factory=list)
+
+
+CommentOut.model_rebuild()
+
+
+class CommentListOut(BaseModel):
+    items: List[CommentOut]
+    code: str
+    latest_revision: int
+    open_count: int
+
+
+class CommentIndexRow(BaseModel):
+    id: int
+    code: str
+    title: str
+    document_id: int
+    revision: int
+    number: Optional[int] = None
+    kind: str
+    label: Optional[str] = None
+    author: str
+    status: str
+    created_at: datetime
+    body_excerpt: str
+
+
+class CommentIndexOut(BaseModel):
+    items: List[CommentIndexRow]
+
+
+class DocumentContentReplace(BaseModel):
+    html: str
+    # Optimistic concurrency: the content_sha256 the editor opened; a mismatch is 409.
+    expected_sha256: Optional[str] = None

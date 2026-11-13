@@ -371,6 +371,22 @@ export function classifySampleColor(
   return 'green'
 }
 
+/** The `/sla/status` batch key for a sample: its SENAITE UID, or its sample id
+ *  for a native-born sample, which has no UID. The backend only echoes the key
+ *  back, so any per-sample-unique string works. */
+export function slaSampleKey(
+  lookup: Pick<SenaiteLookupResult, 'sample_uid' | 'sample_id'>
+): string | null {
+  return lookup.sample_uid || lookup.sample_id || null
+}
+
+/** Withdrawn samples run no SLA clock and do not count toward the order verdict. */
+const SLA_WITHDRAWN_STATES = new Set(['cancelled', 'invalid', 'rejected'])
+
+export function isSlaWithdrawn(reviewState: string | null | undefined): boolean {
+  return reviewState != null && SLA_WITHDRAWN_STATES.has(reviewState)
+}
+
 type ActiveSample = SampleSlaCellState & {
   tier: SlaTier
   status: SlaStatus
@@ -408,13 +424,15 @@ function compareActive(a: ActiveSample, b: ActiveSample): number {
 /**
  * Aggregate per-sample cell state into a single order verdict.
  * Worst-active sample drives the verdict (red > amber > green), with ties broken
- * by most-over for red and least-percent-remaining for amber. Published samples
- * are excluded; an order with all-published becomes 'met'; an order with no
+ * by most-over for red and least-percent-remaining for amber. Withdrawn
+ * (cancelled/invalid/rejected) samples are ignored and published samples are
+ * excluded; an order with all-published becomes 'met'; an order with no
  * received samples becomes 'awaiting'.
  */
 export function aggregateOrderSlaVerdict(
-  samples: SampleSlaCellState[]
+  allSamples: SampleSlaCellState[]
 ): OrderSlaVerdict {
+  const samples = allSamples.filter(s => !isSlaWithdrawn(s.lookup.review_state))
   if (samples.length === 0) return { color: 'awaiting' }
   const active = samples.filter(isActive)
   if (active.length === 0) {

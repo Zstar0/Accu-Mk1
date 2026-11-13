@@ -1,9 +1,11 @@
 import { useEffect, useRef, useState } from 'react'
 import { useQueryClient } from '@tanstack/react-query'
+import { toast } from 'sonner'
 import {
   ArrowLeft,
   ArrowUpRight,
   Check,
+  Link2,
   Send,
   Bold,
   Italic,
@@ -24,7 +26,14 @@ import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Textarea } from '@/components/ui/textarea'
 import { Skeleton } from '@/components/ui/skeleton'
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipProvider,
+  TooltipTrigger,
+} from '@/components/ui/tooltip'
 import { cn } from '@/lib/utils'
+import { getServerUrl } from '@/lib/api-profiles'
 import { useAuthStore } from '@/store/auth-store'
 import { useUIStore } from '@/store/ui-store'
 import {
@@ -47,7 +56,7 @@ import { useItemKindLabels } from '@/services/item-kinds'
 import {
   entityMeta,
   entityDisplayLabel,
-  navigateToEntity,
+  navigateForFlag,
 } from '@/components/flags/flag-entity'
 import {
   useFlagUsers,
@@ -62,11 +71,7 @@ import {
   activeMentionQuery,
   mentionIdsInBody,
 } from '@/components/flags/mention-parse'
-import {
-  formatClock,
-  formatDateTime,
-  dueLabel,
-} from '@/components/flags/flag-format'
+import { formatDateTime, dueLabel } from '@/components/flags/flag-format'
 import { STATUS_LABELS, STATUS_DOT } from '@/components/flags/flag-status'
 import { FlagAvatar } from '@/components/flags/FlagAvatar'
 import { FlagWatchers } from '@/components/flags/FlagWatchers'
@@ -175,8 +180,11 @@ export function FlagThread({
     try {
       const att = await addFlagAttachment(flagId, file)
       insertAtCaret(`{attachment:${att.id}}`)
-    } catch {
-      /* surfaced by the failing send if the token dangles; no toast in v1 */
+    } catch (e) {
+      // No token was inserted, so without this a failed paste/drop is silent.
+      toast.error(
+        `Image didn't attach: ${e instanceof Error ? e.message : String(e)}`
+      )
     }
   }
 
@@ -314,9 +322,7 @@ export function FlagThread({
               <button
                 type="button"
                 aria-label="Open item"
-                onClick={() =>
-                  navigateToEntity(flag.entity_type, flag.entity_id)
-                }
+                onClick={() => navigateForFlag(flag)}
                 className="opacity-70 hover:opacity-100"
               >
                 <ArrowUpRight className="h-3.5 w-3.5" />
@@ -324,6 +330,23 @@ export function FlagThread({
             )}
           </span>
           <div className="flex items-center gap-2">
+            <TooltipProvider delayDuration={200}>
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="icon"
+                    className="h-7 w-7"
+                    aria-label="Copy link to this flag"
+                    onClick={() => copyFlagLink(flagId)}
+                  >
+                    <Link2 className="h-3.5 w-3.5" />
+                  </Button>
+                </TooltipTrigger>
+                <TooltipContent>Copy link to this flag</TooltipContent>
+              </Tooltip>
+            </TooltipProvider>
             <ThreadViewToggle mode={threadView} onChange={setThreadView} />
             {status !== 'resolved' && status !== 'closed' && (
               <Button
@@ -466,7 +489,7 @@ export function FlagThread({
             >
               <span className="h-px flex-1 bg-border" />
               <span className="text-center">
-                {eventText(entry.event)} · {formatClock(entry.at)}
+                {eventText(entry.event)} · {formatDateTime(entry.at)}
               </span>
               <span className="h-px flex-1 bg-border" />
             </div>
@@ -672,6 +695,31 @@ export function FlagThread({
   )
 }
 
+/** Shareable URL for one flag: the Tasks page with that flag's thread open.
+ *  `?flag=` is parsed by hash-navigation, same as the Slack DM link. */
+function flagLinkUrl(flagId: number): string {
+  // The desktop webview's origin (tauri://localhost) opens nothing for a
+  // teammate; the API server shares the web app's origin, so use that.
+  const origin =
+    '__TAURI_INTERNALS__' in window
+      ? new URL(getServerUrl()).origin
+      : window.location.origin
+  return `${origin}/#tasks/overview?flag=${flagId}`
+}
+
+function copyFlagLink(flagId: number) {
+  const url = flagLinkUrl(flagId)
+  // Clipboard needs a secure context; show the URL so it can still be copied.
+  if (!navigator.clipboard) {
+    toast.error(`Couldn't copy. Link: ${url}`)
+    return
+  }
+  navigator.clipboard.writeText(url).then(
+    () => toast.success('Link copied'),
+    () => toast.error(`Couldn't copy. Link: ${url}`)
+  )
+}
+
 const THREAD_VIEW_OPTIONS = [
   { mode: 'bubbles' as const, Icon: MessageSquare, label: 'Bubble view' },
   { mode: 'compact' as const, Icon: AlignLeft, label: 'Compact view' },
@@ -774,7 +822,7 @@ function CommentRow({
           <div className="flex items-baseline gap-2">
             <b className="text-xs text-foreground">{isMe ? 'You' : name}</b>
             <span className="text-[10.5px] text-muted-foreground">
-              {formatClock(comment.created_at)}
+              {formatDateTime(comment.created_at)}
             </span>
           </div>
           {content}
@@ -804,7 +852,7 @@ function CommentRow({
         <div className="mb-0.5 flex items-center gap-2">
           <b className="text-xs text-foreground">{isMe ? 'You' : name}</b>
           <span className="text-[10.5px] text-muted-foreground">
-            {formatClock(comment.created_at)}
+            {formatDateTime(comment.created_at)}
           </span>
         </div>
         {content}

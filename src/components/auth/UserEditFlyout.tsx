@@ -31,6 +31,7 @@ export function UserEditFlyout({
 }: UserEditFlyoutProps) {
   const [firstName, setFirstName] = useState(user.first_name ?? '')
   const [lastName, setLastName] = useState(user.last_name ?? '')
+  const [title, setTitle] = useState(user.title ?? '')
   const [email, setEmail] = useState(user.email)
   const [role, setRole] = useState(user.role)
   const [isActive, setIsActive] = useState(user.is_active)
@@ -44,6 +45,8 @@ export function UserEditFlyout({
     patch.first_name = firstName.trim() || null
   if (lastName.trim() !== (user.last_name ?? ''))
     patch.last_name = lastName.trim() || null
+  // '' clears it: the route treats null as "not sent".
+  if (title.trim() !== (user.title ?? '')) patch.title = title.trim()
   if (emailTrim !== user.email) patch.email = emailTrim
   if (!isSelf && role !== user.role) patch.role = role
   if (!isSelf && isActive !== user.is_active) patch.is_active = isActive
@@ -106,6 +109,16 @@ export function UserEditFlyout({
                 id="edit-last-name"
                 value={lastName}
                 onChange={e => setLastName(e.target.value)}
+              />
+            </div>
+            <div className="flex flex-col gap-2">
+              <Label htmlFor="edit-title">Title</Label>
+              <Input
+                id="edit-title"
+                value={title}
+                maxLength={100}
+                onChange={e => setTitle(e.target.value)}
+                placeholder="Lab Director"
               />
             </div>
             <div className="flex flex-col gap-2">

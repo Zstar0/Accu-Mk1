@@ -89,3 +89,24 @@ describe('filterNewEvents', () => {
     expect(fresh2.map(e => e.event_id)).toEqual([3])
   })
 })
+
+describe('board_changed frame', () => {
+  it('parses a board_changed frame that carries no flag', () => {
+    const data = {
+      event_type: 'board_changed',
+      board_slug: 'org',
+      board_id: 1,
+      actor_id: 2,
+      event_id: null,
+    }
+    const { events } = parseFrames(
+      `event: board_changed
+data: ${JSON.stringify(data)}
+
+`
+    )
+    expect(events).toHaveLength(1)
+    expect(events[0]?.event_type).toBe('board_changed')
+    expect(events[0]?.board_slug).toBe('org')
+  })
+})

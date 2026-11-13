@@ -21,8 +21,10 @@ from typing import Optional
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
+from coa.bw_shim import BW_NATIVE_KEYWORDS, bw_wire_keyword
 from coa.hplc_shim import slot_wires, wire_keyword
-from lims_analyses.hplc_native import AGGREGATES, TRIO, native_category
+from coa.iu_display import iu_factor_for_sample, iu_factors, to_iu
+from lims_analyses.hplc_native import AGGREGATES, TRIO, is_native_born, native_category
 from models import AnalysisService, LimsAnalysis, LimsSubSample, Peptide
 
 _NATIVE_KWS = frozenset(TRIO + AGGREGATES)
@@ -66,13 +68,14 @@ def _category(keyword: Optional[str]) -> Optional[str]:
     return None
 
 
-def _fmt(category: str, value: str, unit: Optional[str], default_unit: str = "mg") -> str:
+def _fmt(category: str, value: str, unit: Optional[str], default_unit: str = "mg", iu_factor=None) -> str:
     """Format a replicate value to match the single-cell COA convention."""
     v = (value or "").strip()
     if category == "purity":
         return v if v.endswith("%") else f"{v}%"
     if category == "quantity":
-        u = (unit or default_unit or "").strip()
+        v, unit = to_iu(v, unit or default_unit, iu_factor)
+        u = (unit or "").strip()
         return f"{v} {u}" if u and not v.endswith(u) else v
     return v  # identity: raw
 
@@ -169,6 +172,7 @@ def build_variance_replicates(db: Session, parent) -> dict:
     vial) return {} — the variance path must never fire for standard certs.
     """
     qty_unit = _parent_quantity_unit(db, parent) or "mg"
+    iu_factor = iu_factor_for_sample(db, parent)
     # Variance sample = has >=1 in-set variance vial. Then list ALL in-set subs
     # (core + variance) so each physical vial is its own row; the parent record
     # is never a row (its figure is a promoted copy of one of these vials).
@@ -228,7 +232,7 @@ def build_variance_replicates(db: Session, parent) -> dict:
             if pname is None:
                 continue
             rec = per_peptide.setdefault(pname, {"vial_sequence": sub.vial_sequence})
-            rec[key] = _fmt(category, la.result_value, la.result_unit, default_unit=qty_unit)
+            rec[key] = _fmt(category, la.result_value, la.result_unit, default_unit=qty_unit, iu_factor=iu_factor)
         for pname, rec in per_peptide.items():
             # Only records that carry at least one analyte value.
             if len(rec) > 1:
@@ -237,7 +241,7 @@ def build_variance_replicates(db: Session, parent) -> dict:
     return {k: v for k, v in out.items() if v}
 
 
-def build_vial_figures(db: Session, sub: LimsSubSample, qty_unit: str = "mg") -> dict:
+def build_vial_figures(db: Session, sub: LimsSubSample, qty_unit: str = "mg", iu_factor=None) -> dict:
     """{peptide_name: {PURITY?, QUANTITY?, IDENTITY?}} for ONE HPLC vial.
 
     The per-vial COA shape COABuilder's engine consumes as `vial_figures`: a
@@ -274,7 +278,7 @@ def build_vial_figures(db: Session, sub: LimsSubSample, qty_unit: str = "mg") ->
         if pname is None:
             continue
         rec = per_peptide.setdefault(pname, {})
-        rec[key] = _fmt(category, la.result_value, la.result_unit, default_unit=qty_unit)
+        rec[key] = _fmt(category, la.result_value, la.result_unit, default_unit=qty_unit, iu_factor=iu_factor)
     return {k: v for k, v in per_peptide.items() if v}
 
 
@@ -286,6 +290,7 @@ def list_hplc_vials_with_figures(db: Session, parent) -> list[tuple[int, dict]]:
     HPLC vial can be spun off into its own honest-verdict COA.
     """
     qty_unit = _parent_quantity_unit(db, parent) or "mg"
+    iu_factor = iu_factor_for_sample(db, parent)
     subs = db.execute(
         select(LimsSubSample).where(
             LimsSubSample.parent_sample_pk == parent.id,
@@ -294,9 +299,68 @@ def list_hplc_vials_with_figures(db: Session, parent) -> list[tuple[int, dict]]:
     ).scalars().all()
     out: list[tuple[int, dict]] = []
     for sub in subs:
-        figs = build_vial_figures(db, sub, qty_unit)
+        figs = build_vial_figures(db, sub, qty_unit, iu_factor)
         if figs:
             out.append((sub.vial_sequence, figs))
+    return out
+
+
+# Promotion links that make a parent result this vial's own (2026-10-20).
+# 'reference' means looked at, not used; 'carried' points at another sample.
+_VIAL_LINEAGE_KINDS = ("chosen", "aggregated_in")
+# Certified parent-tier states, same set native_sections.ELIGIBLE_STATES uses.
+_CERTIFIED_STATES = ("verified", "published")
+
+
+def vial_parent_row_ids(db: Session, sub: LimsSubSample) -> set[int]:
+    """Ids of the certified parent-tier rows promoted from vial `sub`: the
+    results that print on that vial's own certificate. Verify is a parent-tier
+    verb, so a vial row reaches its certified value only through its
+    promotion link; a vial result never promoted for the lot has no verdict
+    and is not counted."""
+    from models import LimsAnalysisPromotion
+    source = LimsAnalysis.__table__.alias("src")
+    target = LimsAnalysis.__table__.alias("tgt")
+    rows = db.execute(
+        select(LimsAnalysisPromotion.parent_analysis_id, target.c.keyword)
+        .join(source, source.c.id == LimsAnalysisPromotion.source_analysis_id)
+        .join(target, target.c.id == LimsAnalysisPromotion.parent_analysis_id)
+        .where(
+            source.c.lims_sub_sample_pk == sub.id,
+            LimsAnalysisPromotion.contribution_kind.in_(_VIAL_LINEAGE_KINDS),
+            target.c.lims_sub_sample_pk.is_(None),
+            target.c.review_state.in_(_CERTIFIED_STATES),
+        )
+    ).all()
+    # HPLC is the vial's own figure (build_vial_figures), never the parent's
+    # aggregate: a parent HPLC row stays off the vial's native sections even
+    # when it was aggregated in from this vial.
+    return {
+        pid for pid, kw in rows
+        if _category(kw) is None and (kw or "").upper() not in AGGREGATES
+    }
+
+
+def list_vials_for_certificates(db: Session, parent) -> list[tuple[int, dict, set[int]]]:
+    """[(vial_sequence, vial_figures, parent_row_ids), ...] for every USED vial
+    of the parent (any assignment role), in vial_sequence order: the source
+    set for per-vial COAs (Handler ruling 2026-10-20). Walks the sub-samples,
+    so no vial is missed. A vial is used when it has its own HPLC figures or
+    at least one certified parent result promoted from it; an unused vial
+    gets no certificate. vial_figures is {} for a vial without HPLC."""
+    qty_unit = _parent_quantity_unit(db, parent) or "mg"
+    iu_factor = iu_factor_for_sample(db, parent)
+    subs = db.execute(
+        select(LimsSubSample)
+        .where(LimsSubSample.parent_sample_pk == parent.id)
+        .order_by(LimsSubSample.vial_sequence, LimsSubSample.id)
+    ).scalars().all()
+    out: list[tuple[int, dict, set[int]]] = []
+    for sub in subs:
+        figs = build_vial_figures(db, sub, qty_unit, iu_factor) if sub.assignment_role == "hplc" else {}
+        ids = vial_parent_row_ids(db, sub)
+        if figs or ids:
+            out.append((sub.vial_sequence, figs, ids))
     return out
 
 
@@ -356,6 +420,7 @@ def build_variance_analyte_series(db: Session, parent) -> dict:
     if not subs:
         return {}
     n_slots = len(slot_wires(db, parent))
+    iu_factor = iu_factor_for_sample(db, parent)
     out: dict[str, dict] = {}
     for sub in subs:
         rows = db.execute(
@@ -381,6 +446,10 @@ def build_variance_analyte_series(db: Session, parent) -> dict:
             raw_kw = (la.keyword or "").strip()
             if svc.origin == "mk1" and raw_kw.upper() in _NATIVE_KWS:
                 kw = wire_keyword(raw_kw, la.slot, n_slots)
+            elif (svc.origin == "mk1" and raw_kw.upper() in BW_NATIVE_KEYWORDS
+                  and is_native_born(parent)):
+                # MB5: same legacy vocabulary legacy_rows puts on the wire.
+                kw = bw_wire_keyword(raw_kw)
             else:
                 kw = raw_kw or (svc.keyword or "").strip()
             if not kw:
@@ -389,8 +458,13 @@ def build_variance_analyte_series(db: Session, parent) -> dict:
             # (la.result_unit, else the lab-configured svc.unit). A keyword maps
             # to one physical measurement, so vials share a unit; divergence
             # isn't detected.
-            entry = out.setdefault(
-                kw, {"unit": (la.result_unit or svc.unit or "").strip(), "values": []}
-            )
-            entry["values"].append(str(la.result_value).strip())
+            value, unit = str(la.result_value).strip(), (la.result_unit or svc.unit or "").strip()
+            if _category(kw) == "quantity":
+                value, unit = to_iu(value, unit, iu_factor)
+            entry = out.setdefault(kw, {"unit": unit, "values": []})
+            # A vial to_iu could not read keeps its unit, so it must not label
+            # the converted ones just by coming first.
+            if iu_factor is not None and unit == "IU":
+                entry["unit"] = unit
+            entry["values"].append(value)
     return {k: v for k, v in out.items() if v["values"]}

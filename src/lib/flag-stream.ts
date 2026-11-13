@@ -26,6 +26,7 @@ export type FlagEventType =
   | 'watcher_added'
   | 'watcher_removed'
   | 'comment_reaction'
+  | 'board_changed'
 
 /** Post-mutation flag snapshot embedded in every event — enough to render a
  *  toast / update a card without a refetch. */
@@ -55,6 +56,9 @@ export interface FlagStreamEvent {
   comment_id?: number
   emoji?: string
   action?: 'added' | 'removed'
+  /** `board_changed` only (planning boards slice 4): the board another editor just wrote to. */
+  board_slug?: string
+  board_id?: number
 }
 
 /**
@@ -63,22 +67,24 @@ export interface FlagStreamEvent {
  * `rest` to be prepended to the next chunk. Comment/heartbeat frames (only
  * `:`-lines) and frames without a `data:` line yield nothing.
  */
-export function parseFrames(buffer: string): {
-  events: FlagStreamEvent[]
+export function parseFrames<T = FlagStreamEvent>(
+  buffer: string
+): {
+  events: T[]
   rest: string
 } {
   const segments = buffer.split('\n\n')
   // The final segment is the (possibly incomplete) leftover — carry it forward.
   const rest = segments.pop() ?? ''
-  const events: FlagStreamEvent[] = []
+  const events: T[] = []
   for (const seg of segments) {
-    const parsed = parseFrame(seg)
+    const parsed = parseFrame<T>(seg)
     if (parsed) events.push(parsed)
   }
   return { events, rest }
 }
 
-function parseFrame(segment: string): FlagStreamEvent | null {
+function parseFrame<T>(segment: string): T | null {
   const dataLines: string[] = []
   for (const raw of segment.split('\n')) {
     const line = raw.replace(/\r$/, '')
@@ -90,7 +96,7 @@ function parseFrame(segment: string): FlagStreamEvent | null {
   }
   if (dataLines.length === 0) return null
   try {
-    return JSON.parse(dataLines.join('\n')) as FlagStreamEvent
+    return JSON.parse(dataLines.join('\n')) as T
   } catch {
     return null // malformed — skip rather than tear down the stream
   }

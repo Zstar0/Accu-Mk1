@@ -2,6 +2,8 @@
 origin=mk1 services, ONE profile `hplc-purity-identity` with the five as
 ordered members, and the parity spec rows. Idempotent; admin edits survive.
 """
+from decimal import Decimal
+
 import pytest
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
@@ -214,6 +216,8 @@ def test_init_db_calls_hplc_native_seed_between_vial_roles_and_specs(monkeypatch
     monkeypatch.setattr(database, "_run_migrations", _rec("migrations"))
     monkeypatch.setattr(database.Base.metadata, "create_all", _rec("create_all"))
     monkeypatch.setattr(database, "_seed_federal_holidays_window", _rec("holidays"))
+    monkeypatch.setattr(database, "_ensure_documents_space_column", _rec("documents_space_column"))
+    monkeypatch.setattr(database, "_run_endo_v2_migrations", _rec("endo_v2"))
     # init_db also opens a fresh SessionLocal() around every seeder call; stub
     # it too so no stubbed seeder (or the try/except plumbing around it) ever
     # touches a real database connection.
@@ -240,6 +244,15 @@ def test_init_db_calls_hplc_native_seed_between_vial_roles_and_specs(monkeypatch
     database.init_db()
 
     assert calls.index("vial_roles") < calls.index("hplc_native") < calls.index("service_specs")
+    # Document spaces: the space_id FK column needs document_spaces, so it runs after
+    # create_all and before the first seeder.
+    assert (calls.index("migrations") < calls.index("create_all")
+            < calls.index("documents_space_column") < calls.index("reconcile_per_substance")
+            < calls.index("vial_roles"))
+    # Endo worksheet v2: its columns and one-time switch run after create_all (the new FK
+    # columns reference consumable_types) and before any seeder reads these tables.
+    assert (calls.index("create_all") < calls.index("documents_space_column")
+            < calls.index("endo_v2") < calls.index("reconcile_per_substance"))
 
 
 def test_seeded_services_match_admin_create_contract(db_session):
@@ -331,3 +344,31 @@ def test_keyword_collision_skips_service_and_aborts_profile(db_session, caplog):
     assert report2["services"] == 1 and report2["profile"] == 1 and report2["members"] == 5
     prof = db_session.query(AnalysisProfile).filter_by(key=HPLC_NATIVE_PROFILE_KEY).one()
     assert [s.keyword for s in prof.analysis_services] == list(KEYWORDS)
+
+
+def test_seed_ignores_a_form_tier_spec_row_when_probing_the_wildcard_slot(db_session):
+    """A sample-form row (matrix and peptide_id NULL, sample_form_id set) must
+    not read as the wildcard slot: the seed still mints the wildcard row."""
+    from catalog.hplc_native_seed import seed_hplc_native_catalog
+    from models import AnalysisService, AnalysisServiceSpec, LimsSampleForm
+    seed_hplc_native_catalog(db_session)
+    svc = db_session.query(AnalysisService).filter_by(keyword="HPLC-PURITY").one()
+    wild = (db_session.query(AnalysisServiceSpec)
+            .filter_by(analysis_service_id=svc.id, matrix=None, peptide_id=None).one())
+    db_session.delete(wild)
+    nasal = LimsSampleForm(name="Nasal Spray", route="nasal_inhaled")
+    db_session.add(nasal)
+    db_session.flush()
+    db_session.add(AnalysisServiceSpec(
+        analysis_service_id=svc.id, sample_form_id=nasal.id, rule_kind="range",
+        min_value=Decimal("90"), unit="%"))
+    db_session.flush()
+
+    seed_hplc_native_catalog(db_session)
+
+    assert (db_session.query(AnalysisServiceSpec)
+            .filter(AnalysisServiceSpec.analysis_service_id == svc.id,
+                    AnalysisServiceSpec.matrix.is_(None),
+                    AnalysisServiceSpec.peptide_id.is_(None),
+                    AnalysisServiceSpec.sample_form_id.is_(None))
+            .count()) == 1

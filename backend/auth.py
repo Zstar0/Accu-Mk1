@@ -12,10 +12,10 @@ from datetime import datetime, timedelta, timezone
 from typing import Optional
 
 import bcrypt
-from fastapi import Depends, Header, HTTPException, status
+from fastapi import Depends, Header, HTTPException, Request, status
 from fastapi.security import OAuth2PasswordBearer
 from jose import JWTError, jwt
-from pydantic import BaseModel, EmailStr
+from pydantic import BaseModel, EmailStr, Field
 from sqlalchemy.orm import Session
 
 from database import get_db
@@ -66,6 +66,7 @@ class UserRead(BaseModel):
     senaite_configured: bool = False
     first_name: Optional[str] = None
     last_name: Optional[str] = None
+    title: Optional[str] = None
 
     class Config:
         from_attributes = True
@@ -76,10 +77,12 @@ class UserUpdate(BaseModel):
     is_active: Optional[bool] = None
     first_name: Optional[str] = None
     last_name: Optional[str] = None
+    title: Optional[str] = Field(None, max_length=100)
 
 class MeUpdate(BaseModel):
     first_name: Optional[str] = None
     last_name: Optional[str] = None
+    title: Optional[str] = Field(None, max_length=100)
 
 class PasswordChange(BaseModel):
     current_password: str
@@ -96,11 +99,19 @@ class TokenResponse(BaseModel):
 # ── Dependencies ──────────────────────────────────────────────
 
 def get_current_user(
+    request: Request = None,  # type: ignore[assignment]  # FastAPI injects it; direct calls pass none
     token: str = Depends(oauth2_scheme),
     db: Session = Depends(get_db),
 ):
-    """Dependency: extract and validate current user from JWT token."""
+    """Dependency: the current user from a JWT, or an agent from an mk1a. key. An agent is
+    accepted only on routes its switches allow (agents/access.py); with no matched route (a direct
+    call) it is refused, so no caller can bypass the allow-list."""
     from models import User
+    from agents.keys import is_agent_key
+
+    if is_agent_key(token):
+        from agents.auth import agent_for_route
+        return agent_for_route(db, token, request)
 
     credentials_exception = HTTPException(
         status_code=status.HTTP_401_UNAUTHORIZED,
@@ -118,7 +129,8 @@ def get_current_user(
         raise credentials_exception
 
     user = db.query(User).filter(User.id == user_id).first()
-    if user is None or not user.is_active:
+    # Agents never hold a JWT; refuse one that names an agent row (defence in depth).
+    if user is None or not user.is_active or user.role == "agent":
         raise credentials_exception
 
     return user

@@ -16,7 +16,13 @@
  */
 
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
-import { render, screen, fireEvent, waitFor, within } from '@testing-library/react'
+import {
+  render,
+  screen,
+  fireEvent,
+  waitFor,
+  within,
+} from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import React from 'react'
@@ -28,11 +34,9 @@ import type { ExplorerCustomer, ExplorerOrder } from '@/lib/api'
 // resetState() in beforeEach and per-test via direct assignment.
 vi.mock('@/store/ui-store', () => {
   const state = {
-    activeSubSection: 'customers' as
-      | 'customers'
-      | 'customer-detail'
-      | string,
+    activeSubSection: 'customers' as 'customers' | 'customer-detail' | string,
     customerDetailTargetId: null as number | null,
+    customerDetailKey: null as string | null,
     customerListPage: 0,
     customerSearchTerm: '',
     hideTestAccounts: true,
@@ -47,7 +51,9 @@ vi.mock('@/store/ui-store', () => {
       lot: '',
     },
     navigateToCustomer: vi.fn(),
+    navigateToCustomerKey: vi.fn(),
     navigateToCustomers: vi.fn(),
+    navigateBackFromCustomer: vi.fn(),
     setCustomerListPage: vi.fn(),
     setHideTestAccounts: vi.fn(),
     setSearchAndResetPage: vi.fn(),
@@ -60,7 +66,8 @@ vi.mock('@/store/ui-store', () => {
     // mount the placeholder which doesn't touch it):
     navigateToSample: vi.fn(),
   }
-  const useUIStore = <T,>(selector: (s: typeof state) => T): T => selector(state)
+  const useUIStore = <T,>(selector: (s: typeof state) => T): T =>
+    selector(state)
   useUIStore.getState = () => state
   // Expose the raw state object for tests to mutate.
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -75,11 +82,26 @@ vi.mock('@/lib/api', async () => {
     ...actual,
     getExplorerStatus: vi.fn(),
     getExplorerCustomers: vi.fn(),
+    getCustomerList: vi.fn().mockResolvedValue({
+      tz: 'UTC',
+      synced_at: null,
+      rows: [],
+      total: 0,
+      page: 1,
+      page_size: 200,
+    }),
     getExplorerOrdersByCustomer: vi.fn(),
+    getCustomerDossier: vi.fn(),
   }
 })
 
 // --- Mock api-profiles so envName has a deterministic value (RESEARCH Risks #9) ---
+vi.mock('@/lib/api-ai-review', () => ({
+  getReviews: vi.fn().mockResolvedValue({ latest: null, history: [] }),
+  getReviewRun: vi.fn(),
+  startReview: vi.fn(),
+}))
+
 vi.mock('@/lib/api-profiles', () => ({
   getActiveEnvironmentName: vi.fn().mockReturnValue('test-env'),
   API_PROFILE_CHANGED_EVENT: 'api-profile-changed',
@@ -96,9 +118,11 @@ vi.mock('@/components/explorer/OrderRow', () => ({
       order: { id: string; order_id: string }
       defaultExpanded?: boolean
       highlightSampleId?: string
+      money?: { net: string }
     }) => (
       <tr
         data-testid="order-row"
+        data-money-net={props.money?.net ?? ''}
         data-order-id={props.order.id}
         data-order-number={props.order.order_id}
         data-expanded={props.defaultExpanded ? 'true' : 'false'}
@@ -134,11 +158,15 @@ vi.mock('@/components/explorer/senaite-queue', () => ({
   }),
 }))
 
-const { getExplorerStatus, getExplorerCustomers, getExplorerOrdersByCustomer } =
-  await import('@/lib/api')
-const { enqueueSenaiteLookup } = await import(
-  '@/components/explorer/senaite-queue'
-)
+const {
+  getCustomerDossier,
+  getCustomerList,
+  getExplorerStatus,
+  getExplorerCustomers,
+  getExplorerOrdersByCustomer,
+} = await import('@/lib/api')
+const { enqueueSenaiteLookup } =
+  await import('@/components/explorer/senaite-queue')
 const { useUIStore } = await import('@/store/ui-store')
 const { CustomerStatusPage } = await import('@/components/CustomerStatusPage')
 
@@ -146,6 +174,7 @@ const { CustomerStatusPage } = await import('@/components/CustomerStatusPage')
 const mockState = (useUIStore as any).__state as {
   activeSubSection: string
   customerDetailTargetId: number | null
+  customerDetailKey: string | null
   customerListPage: number
   customerSearchTerm: string
   hideTestAccounts: boolean
@@ -157,7 +186,9 @@ const mockState = (useUIStore as any).__state as {
     lot: string
   }
   navigateToCustomer: ReturnType<typeof vi.fn>
+  navigateToCustomerKey: ReturnType<typeof vi.fn>
   navigateToCustomers: ReturnType<typeof vi.fn>
+  navigateBackFromCustomer: ReturnType<typeof vi.fn>
   setCustomerListPage: ReturnType<typeof vi.fn>
   setHideTestAccounts: ReturnType<typeof vi.fn>
   setSearchAndResetPage: ReturnType<typeof vi.fn>
@@ -175,7 +206,9 @@ function wrapper({ children }: { children: React.ReactNode }) {
   return <QueryClientProvider client={qc}>{children}</QueryClientProvider>
 }
 
-function makeCustomer(overrides: Partial<ExplorerCustomer> = {}): ExplorerCustomer {
+function makeCustomer(
+  overrides: Partial<ExplorerCustomer> = {}
+): ExplorerCustomer {
   return {
     customer_id: 42,
     email: 'alice@example.com',
@@ -190,11 +223,32 @@ function makeCustomer(overrides: Partial<ExplorerCustomer> = {}): ExplorerCustom
 }
 
 const FIVE_CUSTOMERS_PLUS_GUEST: ExplorerCustomer[] = [
-  makeCustomer({ customer_id: 1, email: 'a@example.com', display_name: 'Alice A' }),
-  makeCustomer({ customer_id: 2, email: 'b@example.com', display_name: 'Bob B' }),
-  makeCustomer({ customer_id: 3, email: 'c@example.com', display_name: 'Carol C' }),
-  makeCustomer({ customer_id: 4, email: 'd@example.com', display_name: 'Dan D', outstanding_orders: 0 }),
-  makeCustomer({ customer_id: 5, email: 'e@example.com', display_name: 'Eve E' }),
+  makeCustomer({
+    customer_id: 1,
+    email: 'a@example.com',
+    display_name: 'Alice A',
+  }),
+  makeCustomer({
+    customer_id: 2,
+    email: 'b@example.com',
+    display_name: 'Bob B',
+  }),
+  makeCustomer({
+    customer_id: 3,
+    email: 'c@example.com',
+    display_name: 'Carol C',
+  }),
+  makeCustomer({
+    customer_id: 4,
+    email: 'd@example.com',
+    display_name: 'Dan D',
+    outstanding_orders: 0,
+  }),
+  makeCustomer({
+    customer_id: 5,
+    email: 'e@example.com',
+    display_name: 'Eve E',
+  }),
   makeCustomer({
     customer_id: null,
     email: 'guest@example.com',
@@ -210,13 +264,21 @@ const FIVE_CUSTOMERS_PLUS_GUEST: ExplorerCustomer[] = [
 function resetState() {
   mockState.activeSubSection = 'customers'
   mockState.customerDetailTargetId = null
+  mockState.customerDetailKey = null
   mockState.customerListPage = 0
   mockState.customerSearchTerm = ''
   mockState.hideTestAccounts = true
   mockState.customerDetailTab = 'orders'
-  mockState.customerOrderSearch = { order_number: '', sample_id: '', analyte: '', lot: '' }
+  mockState.customerOrderSearch = {
+    order_number: '',
+    sample_id: '',
+    analyte: '',
+    lot: '',
+  }
   mockState.navigateToCustomer.mockReset()
+  mockState.navigateToCustomerKey.mockReset()
   mockState.navigateToCustomers.mockReset()
+  mockState.navigateBackFromCustomer.mockReset()
   mockState.setCustomerListPage.mockReset()
   mockState.setHideTestAccounts.mockReset()
   mockState.setSearchAndResetPage.mockReset()
@@ -225,6 +287,10 @@ function resetState() {
   mockState.setCustomerOrderSearchReset.mockReset()
   mockState.navigateTo.mockReset()
   mockState.navigateToSample.mockReset()
+  // Dossier stays pending unless a test resolves it (Dashboard loading state).
+  vi.mocked(getCustomerDossier)
+    .mockReset()
+    .mockImplementation(() => new Promise(() => undefined))
 }
 
 // findCustomersTable returns the table whose first row contains "Display Name".
@@ -244,6 +310,15 @@ describe('CustomerStatusPage — list view', () => {
     resetState()
     vi.mocked(getExplorerStatus).mockReset()
     vi.mocked(getExplorerCustomers).mockReset()
+    vi.mocked(getCustomerList).mockReset()
+    vi.mocked(getCustomerList).mockResolvedValue({
+      tz: 'UTC',
+      synced_at: null,
+      rows: [],
+      total: 0,
+      page: 1,
+      page_size: 200,
+    })
     vi.mocked(getExplorerStatus).mockResolvedValue({ connected: true })
     vi.mocked(getExplorerCustomers).mockResolvedValue({
       customers: FIVE_CUSTOMERS_PLUS_GUEST,
@@ -256,7 +331,7 @@ describe('CustomerStatusPage — list view', () => {
     vi.unstubAllEnvs()
   })
 
-  it('renders 6-column header with exact UI-SPEC copy', async () => {
+  it('renders the 6 original columns plus the 7 Customer Insights columns', async () => {
     render(<CustomerStatusPage />, { wrapper })
 
     // Wait for query to settle; thead is in DOM unconditionally so we can poll.
@@ -272,7 +347,126 @@ describe('CustomerStatusPage — list view', () => {
       'Outstanding',
       'Total COAs',
       'Most Recent',
+      // Customer Insights columns (additive).
+      'Spend (90d)',
+      'Δ',
+      'Lifetime',
+      'Samples',
+      'Usual gap',
+      'Top tests',
+      'Rep',
+      'Status',
     ])
+  })
+
+  it('joins insight cells by wc:<id> key across paged results', async () => {
+    const row = {
+      key: 'wc:1',
+      name: 'Alice A',
+      email: 'a@example.com',
+      company: null,
+      rep: 'Scott',
+      period_spend: '4321.00',
+      prior_spend: '1000.00',
+      delta_pct: 3.3,
+      lifetime: '9000.00',
+      orders: 3,
+      samples: 7,
+      usual_gap_days: 12,
+      last_order_at: null,
+      first_order_at: null,
+      testing_orders: 0,
+      spend_12m: '0.00',
+      testing_orders_12m: 0,
+      samples_12m: 0,
+      segment: null,
+      top_tests: ['HPLC'],
+      status: 'growing',
+      monthly: [],
+    }
+    vi.mocked(getCustomerList).mockResolvedValue({
+      tz: 'UTC',
+      synced_at: null,
+      rows: [row],
+      total: 1,
+      page: 1,
+      page_size: 200,
+    })
+    render(<CustomerStatusPage />, { wrapper })
+    expect(await screen.findByText('$4,321')).toBeInTheDocument()
+    // Scope to the row: 'Growing' / 'Scott' are also filter <option>s now.
+    const alice = screen.getByText('Alice A').closest('tr')
+    expect(alice).toHaveTextContent('Growing')
+    expect(alice).toHaveTextContent('Scott')
+  })
+
+  it('filters by rep and status, sorts by a header click, across all rows', async () => {
+    const insight = (
+      key: string,
+      spend: string,
+      status: string,
+      rep: string | null
+    ) => ({
+      key,
+      name: key,
+      email: null,
+      company: null,
+      rep,
+      period_spend: spend,
+      prior_spend: '0.00',
+      delta_pct: null,
+      lifetime: spend,
+      orders: 1,
+      samples: 1,
+      usual_gap_days: null,
+      last_order_at: null,
+      first_order_at: null,
+      testing_orders: 0,
+      spend_12m: '0.00',
+      testing_orders_12m: 0,
+      samples_12m: 0,
+      segment: null,
+      top_tests: [],
+      status,
+      monthly: [],
+    })
+    vi.mocked(getCustomerList).mockResolvedValue({
+      tz: 'UTC',
+      synced_at: null,
+      rows: [
+        insight('wc:1', '100.00', 'growing', 'Scott'),
+        insight('wc:2', '900.00', 'at_risk', 'Scott'),
+      ],
+      total: 2,
+      page: 1,
+      page_size: 200,
+    })
+    render(<CustomerStatusPage />, { wrapper })
+    await screen.findByText('Alice A')
+    fireEvent.change(screen.getByLabelText('Filter by rep'), {
+      target: { value: 'Scott' },
+    })
+    const bodyRows = () =>
+      within(findCustomersTable()).getAllByRole('row').slice(1)
+    expect(bodyRows()).toHaveLength(2)
+    fireEvent.click(screen.getByRole('button', { name: /Spend \(90d\)/ }))
+    expect(bodyRows()[0]).toHaveTextContent('$900')
+    fireEvent.change(screen.getByLabelText('Filter by status'), {
+      target: { value: 'growing' },
+    })
+    expect(bodyRows()).toHaveLength(1)
+    expect(bodyRows()[0]).toHaveTextContent('$100')
+    expect(
+      screen.getByText(/1 of \d+ customers match the filters/)
+    ).toBeInTheDocument()
+  })
+
+  it('shows a muted note when the insight query fails', async () => {
+    vi.mocked(getCustomerList).mockRejectedValue(new Error('boom'))
+    render(<CustomerStatusPage />, { wrapper })
+    expect(
+      await screen.findByText('Spend insights unavailable')
+    ).toBeInTheDocument()
   })
 
   it('renders one row per customer plus header (5 registered + 1 guest + header = 7 rows)', async () => {
@@ -305,7 +499,7 @@ describe('CustomerStatusPage — list view', () => {
     expect(mockState.navigateToCustomer).toHaveBeenCalledWith(1)
   })
 
-  it('guest rows are tabIndex=-1, non-clickable, and show "— (Guest)"', async () => {
+  it('guest rows open the email: key detail on click', async () => {
     render(<CustomerStatusPage />, { wrapper })
 
     // Wait for the guest row's display value
@@ -313,9 +507,11 @@ describe('CustomerStatusPage — list view', () => {
     expect(guestCell).toBeInTheDocument()
     const row = guestCell.closest('tr')
     if (!row) throw new Error('Guest row not found')
-    expect(row.getAttribute('tabindex')).toBe('-1')
+    expect(row.getAttribute('tabindex')).toBe('0')
     fireEvent.click(row)
-    // Guest customers don't dispatch navigation
+    expect(mockState.navigateToCustomerKey).toHaveBeenCalledWith(
+      'email:guest@example.com'
+    )
     expect(mockState.navigateToCustomer).not.toHaveBeenCalled()
   })
 
@@ -430,8 +626,12 @@ describe('CustomerStatusPage — list view', () => {
 
     const errorTitle = await screen.findByText('Could not load customers')
     expect(errorTitle).toBeInTheDocument()
-    expect(screen.getByText(/Check your connection and try again/)).toBeInTheDocument()
-    expect(screen.queryByText(/secret-internal-db-detail/)).not.toBeInTheDocument()
+    expect(
+      screen.getByText(/Check your connection and try again/)
+    ).toBeInTheDocument()
+    expect(
+      screen.queryByText(/secret-internal-db-detail/)
+    ).not.toBeInTheDocument()
     expect(screen.queryByText(/leaked-PII-12345/)).not.toBeInTheDocument()
   })
 
@@ -452,16 +652,24 @@ describe('CustomerStatusPage — list view', () => {
   })
 
   it('renders "No customers found" + no-search body when empty (UI-07)', async () => {
-    vi.mocked(getExplorerCustomers).mockResolvedValue({ customers: [], total_count: 0 })
+    vi.mocked(getExplorerCustomers).mockResolvedValue({
+      customers: [],
+      total_count: 0,
+    })
     render(<CustomerStatusPage />, { wrapper })
 
     await screen.findByText('No customers found')
-    expect(screen.getByText('No customer records available yet.')).toBeInTheDocument()
+    expect(
+      screen.getByText('No customer records available yet.')
+    ).toBeInTheDocument()
   })
 
   it('renders search-empty body with the literal search term (UI-07)', async () => {
     mockState.customerSearchTerm = 'foo'
-    vi.mocked(getExplorerCustomers).mockResolvedValue({ customers: [], total_count: 0 })
+    vi.mocked(getExplorerCustomers).mockResolvedValue({
+      customers: [],
+      total_count: 0,
+    })
     render(<CustomerStatusPage />, { wrapper })
 
     await screen.findByText('No customers found')
@@ -475,22 +683,31 @@ describe('CustomerStatusPage — list view', () => {
     render(<CustomerStatusPage />, { wrapper })
 
     await screen.findByText('Could not load customers')
-    const retry = screen.getByRole('button', { name: 'Retry loading customers' })
+    const retry = screen.getByRole('button', {
+      name: 'Retry loading customers',
+    })
     expect(retry).toBeInTheDocument()
     fireEvent.click(retry)
     // Refetch should re-invoke the query function.
     // We assert it via call count: 1 from initial mount + 1 from retry = 2.
     // (initial may have one or two depending on React-Query retry settings; we use
     // retry:false in the QueryClient so it's exactly 1 then +1.)
-    expect(vi.mocked(getExplorerCustomers).mock.calls.length).toBeGreaterThanOrEqual(2)
+    expect(
+      vi.mocked(getExplorerCustomers).mock.calls.length
+    ).toBeGreaterThanOrEqual(2)
   })
 
   it('disconnected: renders banner, no skeletons, does NOT call getExplorerCustomers (D-17)', async () => {
-    vi.mocked(getExplorerStatus).mockResolvedValue({ connected: false, error: 'down' })
+    vi.mocked(getExplorerStatus).mockResolvedValue({
+      connected: false,
+      error: 'down',
+    })
     render(<CustomerStatusPage />, { wrapper })
 
     await screen.findByText(/Failed to connect to database: down/)
-    expect(screen.queryByTestId('customer-row-skeleton')).not.toBeInTheDocument()
+    expect(
+      screen.queryByTestId('customer-row-skeleton')
+    ).not.toBeInTheDocument()
     // getExplorerCustomers must not be called when disconnected (gated by enabled).
     expect(getExplorerCustomers).not.toHaveBeenCalled()
   })
@@ -579,10 +796,10 @@ function renderDetailWithCache(
   if (customer) {
     // Seed under the SAME key shape the list view uses
     // (CustomerListView's queryKey is ['explorer','customers',search,page,hideTest,envName]).
-    qc.setQueryData(
-      ['explorer', 'customers', '', 0, true, 'test-env'],
-      { customers: [customer], total_count: 1 }
-    )
+    qc.setQueryData(['explorer', 'customers', '', 0, true, 'test-env'], {
+      customers: [customer],
+      total_count: 1,
+    })
   }
   const result = render(
     <QueryClientProvider client={qc}>
@@ -630,14 +847,93 @@ describe('CustomerStatusPage — detail view', () => {
     expect(vi.mocked(getExplorerOrdersByCustomer).mock.calls[0]?.[0]).toBe(42)
   })
 
-  it('does NOT call getExplorerOrdersByCustomer when targetId is null', async () => {
+  it('shows the CRM and Support tabs to admins only', async () => {
+    const { useAuthStore } = await import('@/store/auth-store')
+    const before = useAuthStore.getState().user
+    try {
+      useAuthStore.setState({
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        user: { id: 1, email: 's@x', role: 'standard' } as any,
+      })
+      renderDetailWithCache(makeCustomer({ customer_id: 42 }))
+      await screen.findByText('No orders for this customer')
+      expect(screen.queryByRole('tab', { name: 'CRM' })).toBeNull()
+      expect(screen.queryByRole('tab', { name: 'Support' })).toBeNull()
+      expect(screen.queryByRole('tab', { name: 'AI review' })).toBeNull()
+      ;(await import('@testing-library/react')).cleanup()
+      useAuthStore.setState({
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        user: { id: 1, email: 'a@x', role: 'admin' } as any,
+      })
+      renderDetailWithCache(makeCustomer({ customer_id: 42 }))
+      expect(
+        await screen.findByRole('tab', { name: 'CRM' })
+      ).toBeInTheDocument()
+      expect(screen.getByRole('tab', { name: 'Support' })).toBeInTheDocument()
+      expect(screen.getByRole('tab', { name: 'AI review' })).toBeInTheDocument()
+    } finally {
+      useAuthStore.setState({ user: before })
+    }
+  })
+
+  it('with neither a target id nor a key, falls back to the list and never fetches orders', async () => {
     mockState.customerDetailTargetId = null
     renderDetailWithCache(null)
 
-    // Wait for status to settle so the enabled gate has had a chance to fire
-    await screen.findByText('← Back to Customers')
+    // Wait for the list's empty state so any enabled gate has had a chance to fire
+    await screen.findByText('No customers found')
 
+    expect(screen.queryByText('← Back to Customers')).not.toBeInTheDocument()
     expect(getExplorerOrdersByCustomer).not.toHaveBeenCalled()
+  })
+
+  it('guest key detail: dossier header, Dashboard only, no explorer orders fetch', async () => {
+    mockState.customerDetailTargetId = null
+    mockState.customerDetailKey = 'email:guest@example.com'
+    vi.mocked(getCustomerDossier).mockResolvedValue(null)
+    renderDetailWithCache(null)
+
+    expect(await screen.findByText('Guest checkout')).toBeInTheDocument()
+    expect(
+      await screen.findByText('No paid orders for this customer yet')
+    ).toBeInTheDocument()
+    expect(screen.queryByRole('tablist')).not.toBeInTheDocument()
+    expect(getCustomerDossier).toHaveBeenCalledWith('email:guest@example.com')
+    expect(getExplorerOrdersByCustomer).not.toHaveBeenCalled()
+  })
+
+  it('Orders tab: Total/Discount/Coupon headers, money joined on the WC order id', async () => {
+    vi.mocked(getExplorerOrdersByCustomer).mockResolvedValue([
+      makeOrder({ order_id: '3001', order_number: 'WP-3001' }),
+    ])
+    vi.mocked(getCustomerDossier).mockResolvedValue({
+      orders: [
+        {
+          customer_key: 'wc:42',
+          order_id: 3001,
+          order_number: '3001',
+          paid_at: '2026-05-03T10:00:00Z',
+          net: '125.00',
+          discount: '0.00',
+          coupons: [],
+          categories: ['testing'],
+          samples: 2,
+          tests: ['HPLC'],
+        },
+      ],
+    } as unknown as Awaited<ReturnType<typeof getCustomerDossier>>)
+    renderDetailWithCache(makeCustomer({ customer_id: 42 }))
+
+    expect(await screen.findByText('Total')).toBeInTheDocument()
+    expect(screen.getByText('Discount')).toBeInTheDocument()
+    expect(screen.getByText('Coupon')).toBeInTheDocument()
+    await waitFor(() =>
+      expect(screen.getByTestId('order-row')).toHaveAttribute(
+        'data-money-net',
+        '125.00'
+      )
+    )
+    expect(getCustomerDossier).toHaveBeenCalledWith('wc:42')
   })
 
   // --- Header card rendering (cache-read data source) ---
@@ -729,12 +1025,12 @@ describe('CustomerStatusPage — detail view', () => {
 
   // --- Back navigation (D-11) ---
 
-  it('clicking ← Back to Customers calls navigateToCustomers', async () => {
+  it('clicking ← Back to Customers calls navigateBackFromCustomer', async () => {
     renderDetailWithCache(makeCustomer({ customer_id: 42 }))
 
     const back = await screen.findByText('← Back to Customers')
     fireEvent.click(back)
-    expect(mockState.navigateToCustomers).toHaveBeenCalled()
+    expect(mockState.navigateBackFromCustomer).toHaveBeenCalled()
   })
 
   // --- Empty state ---
@@ -782,7 +1078,9 @@ describe('CustomerStatusPage — detail view', () => {
       await screen.findByText('No orders for this customer')
     ).toBeInTheDocument()
     expect(
-      screen.getByText('Orders will appear here when this customer places them.')
+      screen.getByText(
+        'Orders will appear here when this customer places them.'
+      )
     ).toBeInTheDocument()
   })
 
@@ -792,16 +1090,18 @@ describe('CustomerStatusPage — detail view', () => {
     vi.mocked(getExplorerOrdersByCustomer).mockRejectedValue(new Error('boom'))
     renderDetailWithCache(makeCustomer({ customer_id: 42 }))
 
-    expect(await screen.findByText('Could not load customer')).toBeInTheDocument()
+    expect(
+      await screen.findByText('Could not load customer')
+    ).toBeInTheDocument()
     const retry = screen.getByRole('button', { name: 'Retry loading customer' })
     expect(retry).toBeInTheDocument()
 
     const callsBefore = vi.mocked(getExplorerOrdersByCustomer).mock.calls.length
     fireEvent.click(retry)
     // Refetch invokes the queryFn again
-    expect(vi.mocked(getExplorerOrdersByCustomer).mock.calls.length).toBeGreaterThan(
-      callsBefore
-    )
+    expect(
+      vi.mocked(getExplorerOrdersByCustomer).mock.calls.length
+    ).toBeGreaterThan(callsBefore)
   })
 
   // --- Loading state ---
@@ -870,8 +1170,8 @@ describe('CustomerStatusPage — detail view', () => {
         completed_at: null,
         created_at: '2026-05-05T00:00:00Z',
         sample_results: {
-          's1': { senaite_id: 'AS-200', status: 'received' },
-          's2': { senaite_id: 'AS-201', status: 'received' },
+          s1: { senaite_id: 'AS-200', status: 'received' },
+          s2: { senaite_id: 'AS-201', status: 'received' },
         },
       }),
     ]
@@ -883,7 +1183,8 @@ describe('CustomerStatusPage — detail view', () => {
     await screen.findAllByTestId('order-row')
     await new Promise(r => setTimeout(r, 0))
 
-    const callsBeforeReRender = vi.mocked(enqueueSenaiteLookup).mock.calls.length
+    const callsBeforeReRender =
+      vi.mocked(enqueueSenaiteLookup).mock.calls.length
     expect(callsBeforeReRender).toBeGreaterThan(0)
 
     // Re-render the SAME tree under the SAME QueryClient so the cache hit
@@ -1024,15 +1325,15 @@ describe('CustomerStatusPage — accessibility contract', () => {
     expect(carolRow.getAttribute('tabindex')).toBe('0')
   })
 
-  // --- Keyboard contract: tabIndex={-1} on guest rows ---
-  it('guest customer rows carry tabIndex="-1"', async () => {
+  // --- Keyboard contract: guest rows are focusable too (Task 8 key detail) ---
+  it('guest customer rows carry tabIndex="0"', async () => {
     render(<CustomerStatusPage />, { wrapper })
 
     const guestCell = await screen.findByText('— (Guest)')
     const guestRow = guestCell.closest('tr')
     if (!guestRow) throw new Error('guest row not found')
 
-    expect(guestRow.getAttribute('tabindex')).toBe('-1')
+    expect(guestRow.getAttribute('tabindex')).toBe('0')
   })
 
   // --- Keyboard contract: Enter activates navigation on registered rows ---
@@ -1059,8 +1360,8 @@ describe('CustomerStatusPage — accessibility contract', () => {
     expect(mockState.navigateToCustomer).toHaveBeenCalledWith(1)
   })
 
-  // --- Keyboard contract: guest rows have no Enter/Space handler ---
-  it('pressing Enter on a guest row does NOT dispatch navigateToCustomer', async () => {
+  // --- Keyboard contract: Enter/Space on a guest row opens the key detail ---
+  it('pressing Enter/Space on a guest row dispatches navigateToCustomerKey, not navigateToCustomer', async () => {
     render(<CustomerStatusPage />, { wrapper })
 
     const guestCell = await screen.findByText('— (Guest)')
@@ -1069,6 +1370,10 @@ describe('CustomerStatusPage — accessibility contract', () => {
 
     fireEvent.keyDown(guestRow, { key: 'Enter' })
     fireEvent.keyDown(guestRow, { key: ' ' })
+    expect(mockState.navigateToCustomerKey).toHaveBeenCalledTimes(2)
+    expect(mockState.navigateToCustomerKey).toHaveBeenCalledWith(
+      'email:guest@example.com'
+    )
     expect(mockState.navigateToCustomer).not.toHaveBeenCalled()
   })
 
@@ -1087,8 +1392,8 @@ describe('CustomerStatusPage — accessibility contract', () => {
     expect(cls).toContain('focus-visible:outline-none')
   })
 
-  // --- Focus-ring contract: guest rows do NOT carry focus-ring tokens ---
-  it('guest customer rows do NOT carry focus-ring tokens (non-focusable)', async () => {
+  // --- Focus-ring contract: guest rows are focusable, so they carry the ring ---
+  it('guest customer rows carry the focus-ring tokens', async () => {
     render(<CustomerStatusPage />, { wrapper })
 
     const guestCell = await screen.findByText('— (Guest)')
@@ -1096,9 +1401,8 @@ describe('CustomerStatusPage — accessibility contract', () => {
     if (!guestRow) throw new Error('guest row not found')
 
     const cls = guestRow.className
-    // Guest rows get `cursor-default` — no focus-ring tokens.
-    expect(cls).not.toContain('focus-visible:ring-2')
-    expect(cls).not.toContain('focus-visible:ring-primary')
+    expect(cls).toContain('focus-visible:ring-2')
+    expect(cls).toContain('focus-visible:ring-primary')
   })
 })
 
@@ -1109,7 +1413,7 @@ describe('CustomerStatusPage — accessibility contract', () => {
 //   - Header card stays persistent (rendered before the tab list)
 //   - Two tabs: "Customer Orders" (default-active) and "Dashboard"
 //   - Clicking the Dashboard trigger dispatches setCustomerDetailTab('dashboard')
-//   - Dashboard tab body renders the Coming Soon placeholder card
+//   - Dashboard tab body renders CustomerDashboard (dossier-driven)
 // No behavior change to orders rendering (Phase 29 detail-view tests still pass).
 describe('CustomerStatusPage — detail view tabs (Phase 30)', () => {
   beforeEach(() => {
@@ -1127,7 +1431,12 @@ describe('CustomerStatusPage — detail view tabs (Phase 30)', () => {
     mockState.activeSubSection = 'customer-detail'
     mockState.customerDetailTargetId = 42
     mockState.customerDetailTab = 'orders'
-    mockState.customerOrderSearch = { order_number: '', sample_id: '', analyte: '', lot: '' }
+    mockState.customerOrderSearch = {
+      order_number: '',
+      sample_id: '',
+      analyte: '',
+      lot: '',
+    }
   })
 
   afterEach(() => {
@@ -1181,11 +1490,14 @@ describe('CustomerStatusPage — detail view tabs (Phase 30)', () => {
     expect(mockState.setCustomerDetailTab).toHaveBeenCalledWith('dashboard')
   })
 
-  it('Dashboard tab renders Coming Soon placeholder', async () => {
+  it('Dashboard tab renders the customer dashboard (loading while the dossier is pending)', async () => {
     mockState.customerDetailTab = 'dashboard'
     renderDetailWithCache(makeCustomer({ customer_id: 42 }))
 
-    expect(await screen.findByText(/Coming soon/i)).toBeInTheDocument()
+    expect(
+      await screen.findByText('Loading customer dashboard')
+    ).toBeInTheDocument()
+    expect(getCustomerDossier).toHaveBeenCalledWith('wc:42')
   })
 })
 

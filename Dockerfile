@@ -33,8 +33,13 @@ FROM nginx:alpine
 # Remove default nginx config
 RUN rm /etc/nginx/conf.d/default.conf
 
-# Copy our custom nginx config
-COPY nginx.conf /etc/nginx/conf.d/default.conf
+# Copy our custom nginx config as a template: the image entrypoint envsubsts
+# defined env vars into conf.d/default.conf at start (only MK1_EMBED_FRAME_ANCESTORS
+# is meant to match; nginx's own $vars are not env vars and pass through).
+COPY nginx.conf /etc/nginx/templates/default.conf.template
+
+# Origins allowed to frame /embed.html. Fail closed; compose sets the real one.
+ENV MK1_EMBED_FRAME_ANCESTORS="'none'"
 
 # Copy built assets from stage 1
 COPY --from=build /app/dist /usr/share/nginx/html

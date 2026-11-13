@@ -152,11 +152,18 @@ export function patchAnalysisInList(
   list: SenaiteAnalysis[],
   uid: string,
   newResult: string,
-  newReviewState: string | null | undefined
+  newReviewState: string | null | undefined,
+  /** The unit the save stored; patched only when the save sent one. */
+  newUnit?: string | null
 ): SenaiteAnalysis[] {
   return list.map(a =>
     a.uid === uid
-      ? { ...a, result: newResult, review_state: newReviewState ?? a.review_state }
+      ? {
+          ...a,
+          result: newResult,
+          review_state: newReviewState ?? a.review_state,
+          ...(newUnit ? { unit: newUnit } : {}),
+        }
       : a
   )
 }

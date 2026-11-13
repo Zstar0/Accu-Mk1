@@ -1,0 +1,7 @@
+﻿Product Family,Sample Name,Sample ID,Max. Dosage,Units,Dil./Conc.,Endotoxin Limit,EU Criteria,Alert Limit,Auto Spike,Spike Conc.,Performed With,Comments
+Peptides,P-0001-S02,Retatrutide,0,mL/mL,1:1,0.7,≤,,Yes,,LAL,1:250 in 2 mL
+Peptides,P-0002-S02,Semaglutide,0,mL/mL,1:1,0.7,≤,,Yes,,LAL,1:250 in 2 mL
+Peptides,P-0003-S02,GLOW,0,mL/mL,1:1,0.7,≤,,Yes,,LAL,1:250 in 2 mL
+Peptides,P-0004-S02,NAD+,0,mL/mL,1:1,0.28,≤,,Yes,,LAL,1:250 in 5 mL
+Bacteriostatic Water,P-0005-S02,Bacteriostatic Water,0,mL/mL,1:20,0.25,≤,,Yes,,LAL,50 + 950 uL LAL water
+Peptides,P-0006-S02,Tirzepatide,0,mL/mL,1:1,0.583,≤,,Yes,,LAL,1:300 in 2 mL

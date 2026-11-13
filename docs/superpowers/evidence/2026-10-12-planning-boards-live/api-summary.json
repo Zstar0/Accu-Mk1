@@ -1,0 +1,79 @@
+{
+  "run": "k4j4",
+  "seed": {
+    "slug": "live-k4j4",
+    "board_id": 17,
+    "frame_id": 30,
+    "note_id": 31,
+    "person_user_id": 166,
+    "entity_id": null,
+    "document_code": null,
+    "flags": {
+      "blocker": 51,
+      "overdue": 52,
+      "board": 53,
+      "resolved": 54
+    }
+  },
+  "endpoint": {
+    "flag_ids": [
+      51,
+      52,
+      53
+    ],
+    "open_flag_count": 3
+  },
+  "pills": {
+    "blocking": "1 blocking",
+    "open": "1 open"
+  },
+  "dock": {
+    "overdue_y": 258.984375,
+    "blocker_y": 416.375
+  },
+  "raise_on_board": {
+    "restricted_slug": "live-restricted-k4j4",
+    "outsider_status": 403,
+    "missing_board_status": 403,
+    "editor_status": 201
+  },
+  "board_card": {
+    "text": "Live flags (k4j4)\nmap\ncompany\n3 items\n3 open flags\neditor\nOpen\nShare\nDelete"
+  },
+  "compact": {
+    "zoom_0_3_compact": true,
+    "zoom_1_body_visible": true
+  },
+  "cmd_k": {
+    "selected": 30
+  },
+  "remove_from_frame": {
+    "before": {
+      "parent_id": 30,
+      "x": 200,
+      "y": 60
+    },
+    "frame": {
+      "x": 40,
+      "y": 80
+    },
+    "after": {
+      "parent_id": null,
+      "x": 240,
+      "y": 140
+    }
+  },
+  "note_resize": {
+    "w": 300,
+    "h": 99
+  },
+  "live": {
+    "text_node_id": 33,
+    "stream_responses": [
+      {
+        "status": 200,
+        "url": "/api/api/flags/stream"
+      }
+    ]
+  }
+}

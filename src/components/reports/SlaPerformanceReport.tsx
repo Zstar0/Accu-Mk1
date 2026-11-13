@@ -16,6 +16,8 @@ import {
 } from 'recharts'
 import { cn } from '@/lib/utils'
 import { getSlaPerformance } from '@/lib/api'
+import { ReceivedWindowPicker } from './ReceivedWindowPicker'
+import { windowRange } from './received-window'
 import type { SlaPerfQuery, SlaPerfReport as Report } from '@/lib/api'
 import { Input } from '@/components/ui/input'
 import {
@@ -191,6 +193,7 @@ export function SlaPerformanceReport() {
   const [family, setFamily] = useState('')
   const [client, setClient] = useState('')
   const [orderInput, setOrderInput] = useState('')
+  const [win, setWin] = useState('all')
   const order = useDebounced(orderInput.trim(), 400)
 
   const query: SlaPerfQuery = {
@@ -199,6 +202,7 @@ export function SlaPerformanceReport() {
     order,
     departments: department ? [department] : [],
     families: family ? [family] : [],
+    ...windowRange(win),
   }
   const { data, isLoading, isFetching, error } = useQuery({
     queryKey: ['reports', 'sla-performance', query],
@@ -212,7 +216,9 @@ export function SlaPerformanceReport() {
     department && facets
       ? facets.families.filter(f => f.department === department)
       : []
-  const scoped = Boolean(client || order || department || family)
+  const scoped = Boolean(
+    client || order || department || family || win !== 'all'
+  )
 
   return (
     <div className="flex flex-col gap-4 p-4 h-full overflow-auto">
@@ -226,6 +232,7 @@ export function SlaPerformanceReport() {
             {isFetching && data && ' · updating…'}
           </p>
         </div>
+        <ReceivedWindowPicker value={win} onChange={setWin} />
       </div>
 
       {/* Filter block — same shape as the Lab Throughput board. */}
@@ -329,6 +336,7 @@ export function SlaPerformanceReport() {
                 setFamily('')
                 setClient('')
                 setOrderInput('')
+                setWin('all')
               }}
               className="rounded-md px-2.5 py-1 text-xs font-medium text-muted-foreground hover:text-foreground"
             >

@@ -1,0 +1,35 @@
+name: pr-evidence
+
+on:
+  pull_request:
+    types: [opened, edited, synchronize, reopened]
+
+jobs:
+  evidence:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Require a Verified block with stack, tests and evidence
+        env:
+          BODY: ${{ github.event.pull_request.body }}
+        run: |
+          set -u
+          fail() { echo "::error::$1"; exit 1; }
+          printf '%s\n' "$BODY" > body.md
+          # Only the Verified section counts: prose elsewhere must not satisfy the check.
+          awk 'BEGIN{p=0} /^##+ *Verified/{p=1; next} /^##+ /{if(p) exit} p' body.md > verified.md
+          [ -s verified.md ] || fail "PR body needs a '## Verified' section with content (see the PR template)."
+          # Template placeholders left in place do not count as evidence.
+          if grep -qE '<(stack name|sha|date|feature|step)>' verified.md; then
+            fail "Verified still contains template placeholders (<stack name>, <sha>, <date>, <feature>, <step>). Fill them in or remove the line."
+          fi
+          grep -qiE '[0-9]+ (passed|tests)|OK \([0-9]+ tests|Tests: [0-9]+' verified.md \
+            || fail "Verified needs a pasted test result line with a count (e.g. 'vitest 20 passed', 'phpunit OK (1129 tests, 0 failures)')."
+          if grep -qiE '^\s*- \[x\] No user-visible change' verified.md; then
+            echo "No user-visible change declared; screenshot and stack not required."
+            exit 0
+          fi
+          grep -qiE 'stack:? *`[a-z0-9][a-z0-9-]*`' verified.md \
+            || fail "Verified needs the stack name in backticks (e.g. 'Stack: \`retest\` at commit \`abc1234\`') or tick 'No user-visible change'."
+          grep -qE '!\[[^]]*\]\([^)]*docs/superpowers/e2e/[^)]+\.(png|jpg|jpeg|gif|webp)\)|!\[[^]]*\]\(https?://[^)]+\)' verified.md \
+            || fail "Verified needs an embedded screenshot: ![...](docs/superpowers/e2e/<...>.png) or an https image, or tick 'No user-visible change'."
+          echo "Evidence present."

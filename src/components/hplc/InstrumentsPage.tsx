@@ -79,6 +79,7 @@ export function InstrumentsPage() {
       i.name.toLowerCase().includes(q) ||
       (i.senaite_id?.toLowerCase().includes(q) ?? false) ||
       (i.model?.toLowerCase().includes(q) ?? false) ||
+      (i.serial_number?.toLowerCase().includes(q) ?? false) ||
       (i.brand?.toLowerCase().includes(q) ?? false) ||
       (i.instrument_type?.toLowerCase().includes(q) ?? false)
     )
@@ -149,6 +150,7 @@ export function InstrumentsPage() {
               <TableHead>Type</TableHead>
               <TableHead>Brand</TableHead>
               <TableHead>Model</TableHead>
+              <TableHead>Serial</TableHead>
               <TableHead>Methods</TableHead>
               <TableHead>Status</TableHead>
               <TableHead className="w-12.5"></TableHead>
@@ -157,13 +159,13 @@ export function InstrumentsPage() {
           <TableBody>
             {loading ? (
               <TableRow>
-                <TableCell colSpan={7} className="py-8 text-center">
+                <TableCell colSpan={8} className="py-8 text-center">
                   <Loader2 className="mx-auto h-5 w-5 animate-spin text-muted-foreground" />
                 </TableCell>
               </TableRow>
             ) : filtered.length === 0 ? (
               <TableRow>
-                <TableCell colSpan={7} className="py-8 text-center text-muted-foreground">
+                <TableCell colSpan={8} className="py-8 text-center text-muted-foreground">
                   {instruments.length === 0
                     ? 'No instruments yet. Click “Add Instrument” to register one.'
                     : 'No instruments match your search.'}
@@ -189,6 +191,9 @@ export function InstrumentsPage() {
                   <TableCell>{inst.instrument_type ?? '—'}</TableCell>
                   <TableCell>{inst.brand ?? '—'}</TableCell>
                   <TableCell>{inst.model ?? '—'}</TableCell>
+                  <TableCell className="font-mono text-xs">
+                    {inst.serial_number ?? '-'}
+                  </TableCell>
                   <TableCell>
                     <Badge variant="secondary">{methodCountFor(inst.id)}</Badge>
                   </TableCell>
@@ -283,6 +288,9 @@ function InstrumentPanel({
   const [instrumentType, setInstrumentType] = useState(instrument.instrument_type ?? '')
   const [brand, setBrand] = useState(instrument.brand ?? '')
   const [model, setModel] = useState(instrument.model ?? '')
+  const [serialNumber, setSerialNumber] = useState(
+    instrument.serial_number ?? ''
+  )
   const [departmentId, setDepartmentId] = useState<number | null>(instrument.department_id ?? null)
   const [active, setActive] = useState(instrument.active)
 
@@ -291,6 +299,7 @@ function InstrumentPanel({
     setInstrumentType(instrument.instrument_type ?? '')
     setBrand(instrument.brand ?? '')
     setModel(instrument.model ?? '')
+    setSerialNumber(instrument.serial_number ?? '')
     setDepartmentId(instrument.department_id ?? null)
     setActive(instrument.active)
     setError(null)
@@ -309,6 +318,7 @@ function InstrumentPanel({
         instrument_type: instrumentType.trim() || null,
         brand: brand.trim() || null,
         model: model.trim() || null,
+        serial_number: serialNumber.trim() || null,
         department_id: departmentId,
         active,
       })
@@ -422,6 +432,17 @@ function InstrumentPanel({
               />
             </div>
           </div>
+          <div className="space-y-2">
+            <Label htmlFor="inst-edit-serial">Serial number</Label>
+            <Input
+              id="inst-edit-serial"
+              value={serialNumber}
+              onChange={e => setSerialNumber(e.target.value)}
+              placeholder="As the instrument and its exports show it"
+              maxLength={100}
+              className="font-mono"
+            />
+          </div>
           <label className="flex items-center gap-2 text-sm cursor-pointer">
             <Checkbox
               checked={active}
@@ -436,6 +457,10 @@ function InstrumentPanel({
             <DetailRow label="Type" value={instrument.instrument_type} />
             <DetailRow label="Brand" value={instrument.brand} />
             <DetailRow label="Model" value={instrument.model} />
+            <DetailRow
+              label="Serial number"
+              value={instrument.serial_number ?? null}
+            />
             <DetailRow
               label="Department"
               value={departments.find(d => d.id === instrument.department_id)?.name ?? null}
@@ -528,6 +553,7 @@ function AddInstrumentForm({
   const [instrumentType, setInstrumentType] = useState('')
   const [brand, setBrand] = useState('')
   const [model, setModel] = useState('')
+  const [serialNumber, setSerialNumber] = useState('')
   const [departmentId, setDepartmentId] = useState<number | null>(null)
   const [departments, setDepartments] = useState<Department[]>([])
   const [saving, setSaving] = useState(false)
@@ -548,6 +574,7 @@ function AddInstrumentForm({
         instrument_type: instrumentType.trim() || null,
         brand: brand.trim() || null,
         model: model.trim() || null,
+        serial_number: serialNumber.trim() || null,
         department_id: departmentId,
       })
       onSaved()
@@ -601,6 +628,16 @@ function AddInstrumentForm({
                 value={model}
                 onChange={e => setModel(e.target.value)}
                 placeholder="1260 Infinity"
+              />
+            </div>
+            <div className="space-y-2">
+              <Label htmlFor="new-instrument-serial">Serial number</Label>
+              <Input
+                id="new-instrument-serial"
+                value={serialNumber}
+                onChange={e => setSerialNumber(e.target.value)}
+                maxLength={100}
+                className="font-mono"
               />
             </div>
             <div className="space-y-2">

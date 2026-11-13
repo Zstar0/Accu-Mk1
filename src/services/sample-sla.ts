@@ -16,6 +16,7 @@ import {
   buildServiceToProfileTierMap,
   classifySampleColor,
   resolveSampleTiersByGroup,
+  slaSampleKey,
   NO_GROUP_KEY,
   type GroupKey,
   type SampleSlaReason,
@@ -81,9 +82,9 @@ export function useSampleSla(
   // sample. Drives query enablement so we don't hammer `/sla/status` for
   // unreceived samples. Published samples DO flow through — they get
   // historical snapshots driven by published_date (see batchItems below).
-  const applicable = Boolean(
-    lookup && lookup.date_received && lookup.sample_uid
-  )
+  // Native-born samples have no SENAITE UID, so key them by sample id.
+  const sampleKey = lookup ? slaSampleKey(lookup) : null
+  const applicable = Boolean(lookup && lookup.date_received && sampleKey)
   const isPublished = Boolean(
     lookup?.review_state === 'published' && lookup?.published_coa?.published_date
   )
@@ -181,12 +182,12 @@ export function useSampleSla(
   // cache reuse. Published samples include now_override per item so the
   // server returns a frozen-in-time elapsed = (published_date - received_at).
   const batchItems: SlaStatusRequestItem[] = useMemo(() => {
-    if (!applicable || !lookup || !lookup.sample_uid) return []
+    if (!applicable || !lookup || !sampleKey) return []
     const out: SlaStatusRequestItem[] = []
     for (const g of perGroup) {
       if (!g.tier) continue
       const item: SlaStatusRequestItem = {
-        key: batchKey(lookup.sample_uid, g.groupKey),
+        key: batchKey(sampleKey, g.groupKey),
         received_at: lookup.date_received,
         target_minutes: g.tier.target_minutes,
         business_hours_only: g.tier.business_hours_only,
@@ -197,7 +198,7 @@ export function useSampleSla(
       out.push(item)
     }
     return out
-  }, [applicable, lookup, perGroup, isPublished, publishedDate])
+  }, [applicable, lookup, sampleKey, perGroup, isPublished, publishedDate])
 
   const batchItemsHash = useMemo(
     () =>
@@ -247,10 +248,10 @@ export function useSampleSla(
       if (item.status) statusByKey.set(item.key, item.status)
     }
     const snapshots: SampleSlaSnapshot[] = []
-    if (lookup?.sample_uid) {
+    if (sampleKey) {
       for (const g of perGroup) {
         if (!g.tier) continue
-        const status = statusByKey.get(batchKey(lookup.sample_uid, g.groupKey))
+        const status = statusByKey.get(batchKey(sampleKey, g.groupKey))
         if (!status) continue
         const color = classifySampleColor(status, g.tier)
         if (!color) continue
@@ -275,6 +276,7 @@ export function useSampleSla(
     }
   }, [
     applicable,
+    sampleKey,
     isPublished,
     lookup,
     perGroup,

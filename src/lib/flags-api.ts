@@ -288,14 +288,16 @@ export const listFlags = (tab: FlagTab, params?: ListFlagsParams) => {
 
 /** `GET /api/flags?entity_type&entity_id[&include_descendants=true]` — the open
  *  flags on one entity (optionally rolling up its descendants, e.g. a sample's
- *  vials). Drives the stateful `EntityFlagButton`. */
+ *  vials). `includePast` asks for every status (tab `all`), so resolved/closed
+ *  flags come back too. Drives the stateful `EntityFlagButton`. */
 export const listEntityFlags = (
   entityType: string,
   entityId: string,
-  includeDescendants = false
+  includeDescendants = false,
+  includePast = false
 ) => {
   const qs = new URLSearchParams({
-    tab: 'all_open',
+    tab: includePast ? 'all' : 'all_open',
     entity_type: entityType,
     entity_id: entityId,
   })
@@ -515,7 +517,17 @@ export async function addFlagAttachment(
       body: form,
     }
   )
-  if (!res.ok) throw new Error(`attachment upload failed: ${res.status}`)
+  if (!res.ok) {
+    // A proxy 413 has an HTML body, so name it here; backend errors carry detail.
+    const payload = await res.json().catch(() => null)
+    throw new Error(
+      typeof payload?.detail === 'string'
+        ? payload.detail
+        : res.status === 413
+          ? 'image is too large for the server (413)'
+          : `attachment upload failed: ${res.status}`
+    )
+  }
   return res.json() as Promise<FlagAttachment>
 }
 

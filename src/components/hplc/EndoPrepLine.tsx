@@ -1,21 +1,62 @@
 import { useState } from 'react'
+import { useQuery } from '@tanstack/react-query'
 import { X } from 'lucide-react'
 import { Input } from '@/components/ui/input'
-import type { WorksheetItemPatch } from '@/lib/api'
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from '@/components/ui/select'
+import {
+  getWorksheet,
+  listConsumables,
+  type ConsumableType,
+  type WorksheetItemPatch,
+  type WorksheetListItem,
+} from '@/lib/api'
 import { fmt, fmtUl, holidaysBetween, labDate } from '@/lib/endo-prep'
+import {
+  FORMS,
+  dilutionPlan,
+  fmtConc,
+  formOf,
+  prep2Check,
+  targetDilutionOf,
+  waterOf,
+  type EndoForm,
+} from '@/lib/endo-prep-2ml'
+import type { EndoPrepRule } from '@/lib/endo-prep-rules'
 import {
   endoPrepFor,
   shortLabDate,
   type WorksheetItemRow,
 } from '@/lib/endo-worksheet'
+import {
+  allowedCartridges,
+  endoCtxFor,
+  endoRowsFor,
+} from '@/lib/endo-worksheet-2ml'
 import { useLabCalendar } from '@/hooks/use-lab-calendar'
+import { worksheetPageKey } from '@/hooks/use-worksheet-drawer'
+import { useEndoPrepRules } from '@/services/endo-prep-rules'
+
+// Radix Select holds no empty value: Form Auto and the inherited cartridge
+// ride on these and go out as null, as the blank option did.
+const AUTO = '__auto__'
+const INHERIT = '__inherit__'
+// The line's bare look (borderless until hovered) on the app's Select.
+const LINE_TRIGGER =
+  'gap-1 rounded border-transparent bg-transparent px-1 py-0 text-[11px] text-foreground shadow-none data-[size=default]:h-6 hover:border-border focus-visible:border-teal-500 focus-visible:ring-0 dark:bg-transparent dark:hover:bg-transparent dark:focus-visible:border-teal-400 disabled:cursor-default disabled:opacity-100 [&>svg]:size-3'
 
 /**
  * The endotoxin bench line under a worksheet item on a MIXED worksheet (an
  * endo vial sharing a Microbiology worksheet with PCR or sterility work).
- * Endo-only worksheets render EndoWorksheetTable instead. Everything derived
- * comes from src/lib/endo-prep.ts, the same code the printed bench sheet
- * uses, so screen and paper always agree; the due date is the SLA engine's.
+ * Endo-only worksheets are worked in EndoWorksheetTable on their own page.
+ * Everything derived comes from the same code the printed bench sheets use,
+ * so screen and paper always agree: src/lib/endo-prep.ts on a stock run,
+ * src/lib/endo-prep-2ml.ts on a 2 mL run. The due date is the SLA engine's.
  */
 interface EndoPrepLineProps {
   item: WorksheetItemRow
@@ -23,6 +64,9 @@ interface EndoPrepLineProps {
   /** SLA `due_at` for this item, or null. */
   dueAt: string | null
   onUpdate: (data: WorksheetItemPatch) => void
+  /** The worksheet the item is on. On a 2 mL worksheet the line shows the
+   *  2 mL prep (spec 6.3); without it, or on stock, the stock line. */
+  worksheet?: WorksheetListItem
 }
 
 export function EndoPrepLine({
@@ -30,12 +74,62 @@ export function EndoPrepLine({
   isCompleted,
   dueAt,
   onUpdate,
+  worksheet,
 }: EndoPrepLineProps) {
   const { calendar } = useLabCalendar()
+  const twoMl = worksheet?.endo_prep === '2ml'
+  // The list payload has no endo_method; the 2 mL figures need the run's
+  // method and cartridges, which only GET /worksheets/{id} carries.
+  const { data: full } = useQuery({
+    queryKey: worksheetPageKey(worksheet?.id ?? 0),
+    queryFn: () => getWorksheet(worksheet?.id ?? 0),
+    enabled: twoMl && worksheet?.endo_method === undefined,
+    staleTime: 30_000,
+  })
+  const runWs = full ?? worksheet
+  // Handed the list payload: nothing is typed until the method lands, so a
+  // standard is never judged against Dennis's defaults by mistake.
+  const pending = worksheet?.endo_method === undefined && full === undefined
+  // The allowed list when no method resolves, or the method links no
+  // cartridges (4.3), as the page reads it.
+  const { data: catalog = [] } = useQuery({
+    queryKey: ['consumables', 'endo_cartridge'],
+    queryFn: () => listConsumables({ kind: 'endo_cartridge' }),
+    enabled: twoMl,
+    staleTime: 5 * 60_000,
+  })
+  // A row that is not locked follows the live rules (slice 5), as on the page.
+  const { data: rules = [] } = useEndoPrepRules(twoMl)
   const prep = endoPrepFor(item)
   const received = calendar ? labDate(item.date_received, calendar) : null
   const due = calendar ? labDate(dueAt, calendar) : null
   const skipped = calendar ? holidaysBetween(received, due, calendar) : []
+
+  if (twoMl && runWs) {
+    return (
+      <div className="flex flex-wrap items-center gap-x-4 gap-y-1 px-4 pb-2 pl-[52px] text-[11px] text-muted-foreground">
+        <Stat label="Received" value={shortLabDate(received)} />
+        <Stat
+          label="Due"
+          value={`${shortLabDate(due)}${skipped.length ? '*' : ''}`}
+          title={
+            skipped.length
+              ? `Pushed past ${skipped.map(h => h.name).join(', ')}`
+              : undefined
+          }
+          strong
+        />
+        <EndoPrep2mlFields
+          item={item}
+          worksheet={runWs}
+          catalog={catalog}
+          rules={rules}
+          disabled={isCompleted || pending}
+          onUpdate={onUpdate}
+        />
+      </div>
+    )
+  }
 
   return (
     <div className="flex flex-wrap items-center gap-x-4 gap-y-1 px-4 pb-2 pl-[52px] text-[11px] text-muted-foreground">
@@ -116,6 +210,188 @@ export function EndoPrepFields({
         disabled={isCompleted}
         onCommit={v => onUpdate({ prep_volume_ml: v })}
       />
+    </>
+  )
+}
+
+/**
+ * The 2 mL prep on a mixed worksheet's endo line (spec 6.3, the same prep
+ * inputs as Box 1): Weight, Form, Water and the row's cartridge as Box 1 has
+ * them, Box 2's Total, and what they give, with the tube and cartridge
+ * warnings. A mixed worksheet has no page, so this line is the only place to
+ * set them. The figures come from src/lib/endo-prep-2ml.ts, as on the
+ * worksheet page and the 2 mL sheet.
+ */
+export function EndoPrep2mlFields({
+  item,
+  worksheet,
+  catalog,
+  rules,
+  disabled,
+  onUpdate,
+}: {
+  item: WorksheetItemRow
+  worksheet: WorksheetListItem
+  catalog: ConsumableType[]
+  /** The live rule lines (slice 5). */
+  rules: EndoPrepRule[]
+  /** A completed worksheet, or the run settings still loading. */
+  disabled: boolean
+  onUpdate: (data: WorksheetItemPatch) => void
+}) {
+  const ctx = endoCtxFor(worksheet, catalog)
+  const [row] = endoRowsFor([item], worksheet, catalog, rules)
+  if (!row) return null
+  const s = row.sample
+  const form = formOf(s)
+  // What Auto resolves to: the form with no hand-set pick, not the pick.
+  const autoForm = formOf({ ...s, form: null })
+  const bac = form === 'bac'
+  const k = prep2Check(s, ctx)
+  const plan = dilutionPlan(s, ctx)
+  // The row's total without one of its own: its rule's, else the method's.
+  const defaultTotal =
+    targetDilutionOf({ ...s, totalDilution: null }, ctx) ??
+    ctx.params.stdTotalDilution
+  const cartridges = allowedCartridges(worksheet, catalog)
+  const own = item.cartridge_type_id ?? null
+  const unlisted = own != null && !cartridges.some(c => c.id === own)
+
+  // Box 2's rule: the row's default total is stored as null, and a total
+  // already stored is not sent again. On a ruled row the method's standard
+  // is a value of its own, which beats the rule.
+  function commitTotal(v: number | null) {
+    const next = v === defaultTotal ? null : v
+    if (next === (item.prep_total_dilution ?? null)) return
+    onUpdate({ prep_total_dilution: next })
+  }
+
+  return (
+    <>
+      {!bac && (
+        <PrepField
+          label="Weight"
+          unit="mg"
+          value={s.weightMg}
+          overridden={item.prep_weight_mg != null}
+          computed={item.declared_weight_mg ?? null}
+          disabled={disabled}
+          onCommit={v => onUpdate({ prep_weight_mg: v })}
+        />
+      )}
+      <span className="inline-flex items-center gap-1">
+        <span className="uppercase tracking-wider text-[9px] font-semibold">
+          Form
+        </span>
+        <Select
+          disabled={disabled}
+          value={item.prep_form ?? AUTO}
+          onValueChange={v => {
+            const next = v === AUTO ? null : (v as EndoForm)
+            // The water cell means a different thing per form: a bench
+            // override for a lyophilized vial, the customer's own volume for
+            // a liquid. A value typed under one is never carried into the
+            // other (Dennis, 2026-10-19). Only the liquid-ness matters, so
+            // naming the form the row already resolved to leaves it alone.
+            const nowLiquid = (next ?? autoForm) === 'liquid'
+            onUpdate(
+              (form === 'liquid') !== nowLiquid && item.prep_water_ml != null
+                ? { prep_form: next, prep_water_ml: null }
+                : { prep_form: next }
+            )
+          }}
+        >
+          <SelectTrigger aria-label="Form" className={LINE_TRIGGER}>
+            <SelectValue />
+          </SelectTrigger>
+          <SelectContent>
+            <SelectItem value={AUTO}>
+              {`Auto (${FORMS.find(f => f[0] === autoForm)?.[1] ?? autoForm})`}
+            </SelectItem>
+            {FORMS.map(([key, label]) => (
+              <SelectItem key={key} value={key}>
+                {label}
+              </SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
+      </span>
+      {!bac && (
+        <PrepField
+          label="Water"
+          unit="mL"
+          value={waterOf(s, ctx)}
+          overridden={item.prep_water_ml != null}
+          // The row's own figure (its rule's water, else the standard), never
+          // the standard flat: see EndoWorksheetTable.
+          computed={waterOf({ ...s, waterMl: null }, ctx)}
+          disabled={disabled}
+          onCommit={v => onUpdate({ prep_water_ml: v })}
+        />
+      )}
+      {!bac && (
+        <PrepField
+          label="Total"
+          unit="1:N"
+          value={item.prep_total_dilution ?? null}
+          overridden={item.prep_total_dilution != null}
+          computed={defaultTotal}
+          disabled={disabled}
+          onCommit={commitTotal}
+        />
+      )}
+      <span className="inline-flex items-center gap-1">
+        <span className="uppercase tracking-wider text-[9px] font-semibold">
+          Cartridge
+        </span>
+        <Select
+          value={own == null ? INHERIT : String(own)}
+          disabled={disabled}
+          onValueChange={v =>
+            onUpdate({ cartridge_type_id: v === INHERIT ? null : Number(v) })
+          }
+        >
+          <SelectTrigger
+            aria-label="Cartridge for this sample"
+            className={`${LINE_TRIGGER} font-mono ${own == null ? 'text-muted-foreground' : ''}`}
+          >
+            <SelectValue />
+          </SelectTrigger>
+          <SelectContent>
+            <SelectItem value={INHERIT}>
+              {`${bac ? 'bac water' : row.ruleCartridge ? 'rule' : 'run'} (${row.inherited ? fmt(row.inherited.sensitivity) : '-'})`}
+            </SelectItem>
+            {unlisted && (
+              <SelectItem value={String(own)}>
+                {`${fmt(item.cartridge_sensitivity_eu_ml)} (not in the list)`}
+              </SelectItem>
+            )}
+            {cartridges.map(c => (
+              <SelectItem key={c.id} value={String(c.id)} title={c.name}>
+                {fmt(c.sensitivity_eu_ml)}
+              </SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
+        <span className="text-[9px]">EU/mL</span>
+      </span>
+      {bac ? (
+        <Stat label="Dilution" value={`1:${fmt(plan.total)}`} />
+      ) : (
+        <Stat label="Loaded" value={fmtConc(k.loaded) || '-'} unit="mg/mL" />
+      )}
+      {!plan.fits && (
+        <span className="rounded border border-red-500/40 bg-red-500/10 px-1.5 py-0.5 text-[10px] font-semibold text-red-600 dark:border-red-400/45 dark:bg-red-400/15 dark:text-red-400">
+          Over the 1.5 mL tube
+        </span>
+      )}
+      {k.valid === false && (
+        <span className="rounded border border-amber-500/40 bg-amber-500/10 px-1.5 py-0.5 text-[10px] font-semibold text-amber-600 dark:border-amber-400/45 dark:bg-amber-400/15 dark:text-amber-400">
+          {k.needs !== null
+            ? `Needs the ${fmt(k.needs)} cartridge`
+            : 'No cartridge holds this'}
+        </span>
+      )}
     </>
   )
 }

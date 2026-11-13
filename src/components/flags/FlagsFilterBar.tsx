@@ -24,7 +24,14 @@ import type { FlagFilterState } from '@/components/flags/flag-filter'
 
 /** Entity types offered in the filter, in display order. Labels resolve via
  *  ENTITY_META so they stay in sync with the chips (sub_sample → "Vial"). */
-const ENTITY_TYPES = ['sample', 'sub_sample', 'worksheet', 'document']
+const ENTITY_TYPES = [
+  'sample',
+  'sub_sample',
+  'worksheet',
+  'document',
+  'support_ticket',
+  'crm_item',
+]
 
 /** A small colored dot, used for status options. */
 function Dot({ color }: { color: string }) {

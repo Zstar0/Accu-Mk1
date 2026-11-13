@@ -251,6 +251,36 @@ describe('FlagsFlyout', () => {
     expect(useUIStore.getState().flagsEntityFilter).toBeNull()
   })
 
+  it('entity-filter mode is the item history: asks for past flags and shows resolved ones', async () => {
+    const done = flag(3, 'Resolved last week')
+    done.status = 'resolved'
+    useEntityFlags.mockReturnValue({
+      data: [done],
+      isLoading: false,
+      isError: false,
+      refetch: vi.fn(),
+    })
+    useUIStore.setState({
+      flagsFlyoutOpen: true,
+      flagsThreadId: null,
+      flagsEntityFilter: {
+        type: 'sample',
+        id: 'P-0071',
+        includeDescendants: false,
+      },
+    })
+
+    const { FlagsFlyout } = await import('@/components/flags/FlagsFlyout')
+    render(<FlagsFlyout />)
+
+    expect(useEntityFlags).toHaveBeenCalledWith('sample', 'P-0071', {
+      includeDescendants: false,
+      includePast: true,
+    })
+    // The default Assigned tab's All-Open filter must not hide it here.
+    expect(await screen.findByText('Resolved last week')).toBeInTheDocument()
+  })
+
   it('shows a link to the Flags guide in the header', async () => {
     useUIStore.setState({
       flagsFlyoutOpen: true,

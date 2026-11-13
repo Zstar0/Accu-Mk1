@@ -21,6 +21,7 @@ from sqlalchemy.orm import Session
 from models import (LimsAnalysis, LimsSample, LimsSampleRemark, LimsSubSample,
                     LimsSubSampleEvent, SamplePriority, User, Worksheet,
                     WorksheetItem)
+from sample_forms.service import apply_default_form, copy_form_from_original, is_form_eligible
 from sub_samples import native
 from sub_samples import senaite
 from sub_samples.native_id import mint_native_id
@@ -166,6 +167,10 @@ def _create_sample_row(db: Session, parent_sample_id: str, meta: dict) -> LimsSa
         container_mode=meta.get("review_state") in _PRE_RECEIVED_STATES,
     )
     _populate_basic_info(row, meta)
+    # Birth-time form default. Deliberately NOT in _populate_basic_info: that
+    # runs on every refresh/replay (and on the transient row in registry_debug)
+    # and would clobber a PATCHed form.
+    apply_default_form(db, row)
     db.add(row)
     db.flush()
     return row
@@ -394,11 +399,17 @@ def upsert_sample_from_signal(db: Session, sample_id: Optional[str],
     born_native = not sample_id
     if born_native:
         from sub_samples.native_id import mint_customer_sample_id
-        sample_id = mint_customer_sample_id(db, sample_type_title)
+        sample_id = mint_customer_sample_id(
+            db, sample_type_title,
+            ordered_service_keys=meta.get("OrderedServiceKeys"),
+            retest_of_sample_id=meta.get("RetestOfSampleId"))
     native_id_value = mint_native_id(
         db, senaite_sample_id=sample_id, sample_type_title=sample_type_title,
     )
     row = _create_sample_row(db, sample_id, meta)
+    # A retest inherits its original's form (signal time only, so it is set
+    # before native auto check-in runs and never re-applied on a replay).
+    copy_form_from_original(db, row)
     if meta.get("VendorName"):
         row.vendor_name = str(meta["VendorName"])[:200]
     row.native_id = native_id_value
@@ -1541,11 +1552,12 @@ def derive_variance_demand(services: dict) -> dict:
 
     The hplc bucket is BW-aware — it reads either HPLC primary key (legacy
     `hplcpurity_identity` or native `hplc-purity-identity`, see catalog/hplc_keys.py)
-    OR bac_water_panel (mirroring derive_base_demand), since both produce chromatography vials and
+    OR either BW primary key (BW_PRIMARY_KEYS, mirroring derive_base_demand), since both produce chromatography vials and
     are mutually exclusive per order. (Handler decision 2026-06-17.)"""
+    from catalog.bw_keys import bw_primary_count
     from catalog.hplc_keys import hplc_primary_count
     entitlement = normalize_variance_entitlement({"variance": (services or {}).get("variance")})
-    hplc_total = max(hplc_primary_count(entitlement), entitlement.get("bac_water_panel", 0))
+    hplc_total = max(hplc_primary_count(entitlement), bw_primary_count(entitlement))
     return {
         "hplc": max(0, hplc_total - 1),
         "endo": max(0, entitlement.get("endotoxin", 0) - 1),
@@ -1586,8 +1598,9 @@ def derive_base_demand(services: dict, db=None, snapshot: Optional[dict] = None)
     not as the expected steady-state noise it would otherwise be for every
     post-registration legacy-bucket purchase.
     """
+    from catalog.bw_keys import bw_primary_selected
     from catalog.hplc_keys import hplc_primary_selected
-    hplc = hplc_primary_selected(services) or bool(services.get("bac_water_panel"))
+    hplc = hplc_primary_selected(services) or bw_primary_selected(services)
     endo = bool(services.get("endotoxin"))
     ster = bool(services.get("sterility_pcr"))
     legacy = {
@@ -1634,7 +1647,7 @@ def derive_demand(services: dict, db=None, snapshot: Optional[dict] = None) -> d
     """Translate WP services dict to CORE vial demand per bucket.
 
     HPLC is satisfied by either HPLC primary key (legacy `hplcpurity_identity`
-    or native `hplc-purity-identity`, see catalog/hplc_keys.py) OR `bac_water_panel` —
+    or native `hplc-purity-identity`, see catalog/hplc_keys.py) OR either BW primary key (`BW_PRIMARY_KEYS`):
     both result in chromatography vials. No legacy bucket needs more than
     one vial (ruling 2026-08-05: PCR and USP<71> are separately sold
     products, one vial each).
@@ -2466,13 +2479,41 @@ def aggregate_by_parent(db: Session, parent_sample_ids: list[str]) -> dict[str, 
             LimsSample.variance_override,
         )
     ).all()
+    # A container-mode parent is a report depository, never a vial, and nothing
+    # sets its assignment_role: it keeps the column default 'hplc'. Collect the
+    # roles its vials really carry (distinct, in vial order) so the list does
+    # not print a role no vial has (an a la carte order has no HPLC vial).
+    container_vial_roles: dict[str, list[str]] = {}
+    for sample_id, vial_role in db.execute(
+        select(LimsSample.sample_id, LimsSubSample.assignment_role)
+        .join(LimsSubSample, LimsSubSample.parent_sample_pk == LimsSample.id)
+        .where(
+            LimsSample.sample_id.in_(parent_sample_ids),
+            LimsSample.container_mode.is_(True),
+            LimsSubSample.assignment_role.isnot(None),
+        )
+        .order_by(LimsSample.sample_id, LimsSubSample.vial_sequence)
+    ).all():
+        roles = container_vial_roles.setdefault(sample_id, [])
+        if vial_role not in roles:
+            roles.append(vial_role)
+
     for sample_id, parent_role, variance_override, sub_count, variance_sub_count in parent_rows:
         if sub_count == 0:
             continue
+        stored_role = parent_role or "hplc"
+        vial_roles = container_vial_roles.get(sample_id, [])
         result[sample_id] = {
             # Sub-sample vials only — the parent is not a physical vial.
             "vial_count": sub_count,
-            "parent_role": parent_role or "hplc",
+            "parent_role": stored_role,
+            # What the list's Assigned column shows: the stored parent role,
+            # unless this is a container parent whose vials carry roles and
+            # none of them is the stored one.
+            "assigned_roles": (
+                vial_roles if vial_roles and stored_role not in vial_roles
+                else [stored_role]
+            ),
             "variance": _variance_buckets_from_override(variance_override),
             "has_variance_subs": (variance_sub_count or 0) > 0,
         }
@@ -2489,6 +2530,7 @@ def aggregate_by_parent(db: Session, parent_sample_ids: list[str]) -> dict[str, 
             result[sample_id] = {
                 "vial_count": 0,
                 "parent_role": role or "unassigned",
+                "assigned_roles": [role or "unassigned"],
                 # _LEGACY_BUCKETS zero-floor contract (catalog_demand.py) —
                 # sub-sample rows carry no override of their own; AR-list hint only.
                 "variance": {"hplc": 0, "endo": 0, "ster": 0},
@@ -2597,11 +2639,13 @@ def _fetch_mk1_results_for_host(
     peptide_by_analysis = {t[0].id: t[2] for t in triples}
 
     # Bulk-load promotion links for these rows
+    from lims_analyses.service import own_promotion_clause
     row_ids = [r.id for r in rows]
     promo_by_source: dict[int, int] = {}
     for p in db.execute(
         select(LimsAnalysisPromotion).where(
-            LimsAnalysisPromotion.source_analysis_id.in_(row_ids)
+            LimsAnalysisPromotion.source_analysis_id.in_(row_ids),
+            own_promotion_clause(),  # a carried link's parent is on the retest
         )
     ).scalars().all():
         promo_by_source[p.source_analysis_id] = p.parent_analysis_id
@@ -3012,6 +3056,8 @@ def board_vials(
                     client_sample_id=par.client_sample_id,
                     priority=priority_by_uid.get(par.external_lims_uid or "", "normal"),
                     is_test_order=par.sample_id in test_ids,
+                    sample_form_id=(par.sample_form_id
+                                    if is_form_eligible(par.sample_type_title) else None),
                 ),
                 analyses=[
                     BoardAnalysisOut(

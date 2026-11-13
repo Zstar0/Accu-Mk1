@@ -20,7 +20,7 @@ vi.mock('react-i18next', () => ({
 }))
 
 vi.mock('@/components/preferences/panes', () => ({
-  navigationItems: [
+  visibleNavItems: () => [
     { id: 'general', labelKey: 'preferences.general', icon: () => null },
     { id: 'flags', labelKey: 'preferences.flags', icon: () => null },
   ],

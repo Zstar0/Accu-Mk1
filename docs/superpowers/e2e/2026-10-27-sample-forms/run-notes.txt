@@ -1,0 +1,18 @@
+Sample Forms evidence, 2026-10-27 (Zstar0/Accu-Mk1#341, with ValenceAnalytical/coabuilder#35)
+
+Stack: sforms (devbox, golden-20260911-233650), Mk1 feat/sample-forms and coab feat/informational-loq mounted.
+Seeded on the stack only: an HM-PB "Lead" service (ppm) and a "Heavy Metals" limit_table profile through the
+Mk1 APIs, sample types by SQL. Specs on Lead: All tier "<= 10 ppm"; Nasal Spray tier report-only in ug/mL, LOQ 0.5.
+
+01  Spec editor: the Nasal Spray report-only row names its unit, "As measured (ug/mL) · LOQ 0.5".
+02  P-0153 (Nasal Spray), parent bench: Lead saved as 0.4 ppm. The Spec cell clears straight away, no reload
+    (no Nasal Spray row covers ppm, F-1).
+03  Same row switched back to ug/mL: the Spec cell returns to "As measured · Report only", no reload.
+04  Vials Quick Look under Nasal Spray: the vial's Lead row presets ug/mL.
+05  Form switched to Lyophilized Powder, Quick Look reopened at once: the row now presets ppm against <= 10 ppm.
+06  COA Builder 2.35.6 render of a nasal section at 0.3 ug/mL: "< LOQ", LOQ column lit, "Measured", no basis note.
+07  Bench unit dropdown open with a typed value still unsaved.
+08  Settings, Sample Forms pane.
+
+01-05 were taken headless (Playwright, 1440x900) after the UI fixes. 06-08 come from the first rehearsal run
+the same evening. Full results: sample-forms-release/rehearsal/RESULTS.md in the workspace.

@@ -5,6 +5,7 @@ import { SampleIdBadge } from '@/components/samples/SampleIdBadge'
 import { SlaAgeIndicator } from '@/components/hplc/SlaAgeIndicator'
 import {
   FlagCell,
+  OrderLink,
   PriorityChip,
   Tick,
 } from '@/components/hplc/EndoWorksheetTable'
@@ -234,7 +235,9 @@ export function PcrSampleList({
                   >
                     {i + 1}
                   </td>
-                  <td className={`${TD} ${MONO}`}>{s?.order || '-'}</td>
+                  <td className={`${TD} ${MONO}`}>
+                    <OrderLink order={s?.order} />
+                  </td>
                   <td className={TD}>
                     {s && item ? (
                       // Not a <button>: the stacked badge carries its own

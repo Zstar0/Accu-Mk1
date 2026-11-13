@@ -3,6 +3,7 @@
 // Accu-Mk1. See docs/superpowers/specs/2026-06-08-parent-analyses-vial-assignment-design.md.
 import type { QueryClient } from '@tanstack/react-query'
 import type { SenaiteAnalysis } from '@/lib/api'
+import { NATIVE_PARENT_ANALYSES_QUERY_KEY } from '@/lib/native-parent-analyses'
 
 // Query-key roots that render vial-assignment state. The per-vial overlay (the
 // parent AR table's "assigned vial" column) and the quicklook dialog's analyses
@@ -57,6 +58,22 @@ export function invalidateVialAssignmentCaches(
   void queryClient.invalidateQueries({ queryKey: [PARENT_OVERLAY_QUERY_KEY] })
   void queryClient.invalidateQueries({ queryKey: [QUICKLOOK_VIAL_ANALYSES_QUERY_KEY] })
   void queryClient.invalidateQueries({ queryKey: ['order-vials'] })
+}
+
+/**
+ * Refetch every cached analyses listing after a change that moves a row's
+ * unit or spec without touching the row itself (sample forms): the sample's
+ * form changed (unit options, the preset unit and the spec all follow the
+ * form), or a result was saved in a different unit (the spec is resolved per
+ * unit). The overlay and quicklook caches are keyed by vial pk and the native
+ * card by sample, so all three go by key prefix. Only active queries refetch;
+ * the rest are marked stale, so a closed Vials Quick Look refetches on reopen
+ * instead of serving the old unit for its staleTime.
+ */
+export function invalidateAnalysisListings(queryClient: QueryClient): void {
+  void queryClient.invalidateQueries({ queryKey: [PARENT_OVERLAY_QUERY_KEY] })
+  void queryClient.invalidateQueries({ queryKey: [QUICKLOOK_VIAL_ANALYSES_QUERY_KEY] })
+  void queryClient.invalidateQueries({ queryKey: [NATIVE_PARENT_ANALYSES_QUERY_KEY] })
 }
 
 export interface VialMatch {

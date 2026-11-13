@@ -83,7 +83,7 @@ def test_helper_maps_rows_to_senaite_remark_shape(db):
     assert out[0].user_id == "Rem Marker"
     assert out[0].content == "<p>first remark</p>"
     assert out[1].user_id == "legacy.senaite.login"
-    assert out[1].created == "2026-01-02T03:04:05"
+    assert out[1].created == "2026-01-02T03:04:05Z"
     assert out[1].content == "<p>legacy remark</p>"
 
 

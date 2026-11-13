@@ -14,11 +14,43 @@ from __future__ import annotations
 import json
 from typing import Any
 
-from sqlalchemy import select
+from sqlalchemy import exists, select
 from sqlalchemy.orm import Session
 
 from lims_analyses.parent_placeholders import PROVENANCE_ORDERED
-from models import HplcMethod, LimsAnalysis, LimsSample
+from models import HplcMethod, LimsAnalysis, LimsSample, LimsSubSample
+
+# Primary COA published while an add-on line is still open ("Partially
+# Published"). Such a parent contributes its open native vials to the inbox,
+# never its own row (get_worksheets_inbox suppresses it).
+WAITING_FOR_ADDON_RESULTS = "waiting_for_addon_results"
+
+
+def _waiting_parents_with_open_native_vials(
+    db: Session, limit: int
+) -> list[LimsSample]:
+    """Parents in 'waiting_for_addon_results' that own at least one native
+    (mk1://) vial whose live analysis (retested=False) is still 'unassigned'.
+
+    Its own bounded query, so these parents can never push a received parent
+    out of the received query's limit. Vial-tier analysis rows carry
+    lims_sample_pk = NULL, so the join runs through the vial's
+    parent_sample_pk. Published parents are never loaded."""
+    open_native_vial = exists().where(
+        LimsSubSample.parent_sample_pk == LimsSample.id,
+        LimsSubSample.external_lims_uid.like("mk1://%"),
+        LimsAnalysis.lims_sub_sample_pk == LimsSubSample.id,
+        LimsAnalysis.retested.is_(False),
+        LimsAnalysis.review_state == "unassigned",
+    )
+    return list(db.execute(
+        select(LimsSample)
+        .where(LimsSample.status == WAITING_FOR_ADDON_RESULTS, open_native_vial)
+        .order_by(
+            LimsSample.date_created.desc().nulls_last(), LimsSample.id.desc()
+        )
+        .limit(limit)
+    ).scalars().all())
 
 
 def _analyte_slot_fields(analytes_json: str | None) -> dict[str, str]:
@@ -49,10 +81,13 @@ def inbox_candidates_from_registry(
 
     items: senaite-brain-shaped dicts for every registry parent currently in
     'sample_received' (the same review_state filter + created-desc ordering +
-    limit as the SENAITE query it replaces).
+    limit as the SENAITE query it replaces), then the 'waiting_for_addon_results'
+    parents that still own an open native vial (a second query with its own
+    limit; their review_state tells the endpoint to emit their vials only).
 
     analyses_by_sample: sample_id -> analysis-brain-shaped dicts from the
-    parent-scope lims_analyses rows. Mirror rows (review_state
+    parent-scope lims_analyses rows of the received parents (waiting parents
+    get none: their own row is never emitted). Mirror rows (review_state
     'senaite_mirror') emit their mirror_review_state — the SENAITE-side truth
     the endpoint's state filters expect.
     """
@@ -64,9 +99,10 @@ def inbox_candidates_from_registry(
         )
         .limit(limit)
     ).scalars().all()
+    waiting = _waiting_parents_with_open_native_vials(db, limit)
 
     items: list[dict[str, Any]] = []
-    for r in rows:
+    for r in [*rows, *waiting]:
         item: dict[str, Any] = {
             # Native-born parents have no SENAITE uid; their inbox identity is
             # the sample_id (registry_list.py convention). An empty uid used to

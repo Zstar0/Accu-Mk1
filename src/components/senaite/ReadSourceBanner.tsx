@@ -7,22 +7,31 @@
  * `SampleDetails` feeds it `read_source`/`registry_missing`/`field_sources`
  * straight off the resolved sample data (see Task 4's `SenaiteLookupResult`).
  */
+import { cn } from '@/lib/utils'
+
 interface Props {
   readSource: 'mk1' | undefined
   registryMissing: boolean | undefined
   fieldSources: Record<string, 'mk1' | 'senaite'> | undefined
+  className?: string
 }
 
 export function ReadSourceBanner({
   readSource,
   registryMissing,
   fieldSources,
+  className,
 }: Props) {
   if (readSource !== 'mk1') return null
 
   if (registryMissing) {
     return (
-      <p className="font-mono text-[10px] text-muted-foreground/70">
+      <p
+        className={cn(
+          'font-mono text-[10px] text-muted-foreground/70',
+          className
+        )}
+      >
         reading from Accu-Mk1 — no registry row, showing SENAITE
       </p>
     )
@@ -33,7 +42,12 @@ export function ReadSourceBanner({
   const fromMk1 = Object.values(sources).filter(s => s === 'mk1').length
 
   return (
-    <p className="font-mono text-[10px] text-muted-foreground/70">
+    <p
+      className={cn(
+        'font-mono text-[10px] text-muted-foreground/70',
+        className
+      )}
+    >
       reading basic-info from Accu-Mk1 — {fromMk1}/{total} fields
     </p>
   )

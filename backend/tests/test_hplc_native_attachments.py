@@ -420,3 +420,42 @@ def test_chromatogram_native_vial_label_resolves_to_parent(
         LimsParentAttachment.lims_sample_pk == native_parent.id,
         LimsParentAttachment.kind == "chromatogram")).scalars().all()
     assert len(rows) == 1
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# Lineage (P-5324, 2026-10-19): the native route stamps the source vial the
+# same way the SENAITE twin does, so `select_chromatogram_row(vial=...)` can
+# find the vial's own trace and the per-vial COA no longer aborts.
+# ═══════════════════════════════════════════════════════════════════════════
+
+def test_chromatogram_native_vial_label_stamps_source_vial(
+    db, native_parent, native_hplc_analysis, fake_storage,
+):
+    """A vial-labelled analysis (P-5008-S01 shape) writes a row stamped with
+    that vial's pk."""
+    vial = db.execute(select(LimsSubSample).where(
+        LimsSubSample.parent_sample_pk == native_parent.id)).scalars().first()
+    assert vial is not None
+    native_hplc_analysis.sample_id_label = vial.sample_id
+    db.commit()
+    r = _client_as_user().post(
+        f"/hplc/analyses/{native_hplc_analysis.id}/chromatogram-native")
+    assert r.status_code == 200, r.text
+    row = db.execute(select(LimsParentAttachment).where(
+        LimsParentAttachment.lims_sample_pk == native_parent.id,
+        LimsParentAttachment.kind == "chromatogram")).scalar_one()
+    assert row.filename == f"chromatogram_{vial.sample_id}.csv"
+    assert row.source_sub_sample_pk == vial.id
+
+
+def test_chromatogram_native_parent_label_leaves_source_null(
+    db, native_parent, native_hplc_analysis, fake_storage,
+):
+    """A bare parent label is not a vial: the row stays unstamped, as before."""
+    r = _client_as_user().post(
+        f"/hplc/analyses/{native_hplc_analysis.id}/chromatogram-native")
+    assert r.status_code == 200, r.text
+    row = db.execute(select(LimsParentAttachment).where(
+        LimsParentAttachment.lims_sample_pk == native_parent.id,
+        LimsParentAttachment.kind == "chromatogram")).scalar_one()
+    assert row.source_sub_sample_pk is None

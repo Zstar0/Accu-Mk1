@@ -1,0 +1,82 @@
+[
+  {
+    "name": "admin signed in and Settings > Agents is open",
+    "ok": true,
+    "detail": ""
+  },
+  {
+    "name": "create returned 201 with a devon key",
+    "ok": true,
+    "detail": "status=201"
+  },
+  {
+    "name": "one-time panel shows LABMGR_MK1_AGENT_NAME=devon",
+    "ok": true,
+    "detail": ""
+  },
+  {
+    "name": "one-time panel shows the issued key (matched in the page, not read out)",
+    "ok": true,
+    "detail": ""
+  },
+  {
+    "name": "create key authenticates GET /api/documents",
+    "ok": true,
+    "detail": ""
+  },
+  {
+    "name": "create key is refused on GET /auth/me",
+    "ok": true,
+    "detail": "status=403"
+  },
+  {
+    "name": "Done closes the panel and no mk1a. text remains",
+    "ok": true,
+    "detail": ""
+  },
+  {
+    "name": "COA publishing starts disabled",
+    "ok": true,
+    "detail": ""
+  },
+  {
+    "name": "Lab tools turns on (PATCH 200)",
+    "ok": true,
+    "detail": "status=200"
+  },
+  {
+    "name": "COA publishing becomes enabled",
+    "ok": true,
+    "detail": ""
+  },
+  {
+    "name": "rotate asked to confirm and returned a new key",
+    "ok": true,
+    "detail": "status=200"
+  },
+  {
+    "name": "panel reopens with the rotated key only",
+    "ok": true,
+    "detail": ""
+  },
+  {
+    "name": "old key stops on the next request",
+    "ok": true,
+    "detail": "status=401"
+  },
+  {
+    "name": "rotated key authenticates GET /api/documents",
+    "ok": true,
+    "detail": ""
+  },
+  {
+    "name": "Done closes the rotated panel and no mk1a. text remains",
+    "ok": true,
+    "detail": ""
+  },
+  {
+    "name": "two screenshots written with the panel closed",
+    "ok": true,
+    "detail": ""
+  }
+]

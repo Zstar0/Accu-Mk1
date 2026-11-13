@@ -1,0 +1,106 @@
+diff --git a/.claude/skills/mk1-publish-document/scripts/publish_document.py b/.claude/skills/mk1-publish-document/scripts/publish_document.py
+index dd1224ff..88fdc3ff 100644
+--- a/.claude/skills/mk1-publish-document/scripts/publish_document.py
++++ b/.claude/skills/mk1-publish-document/scripts/publish_document.py
+@@ -9,7 +9,8 @@ Usage:
+   publish_document.py --self-test
+ 
+ Env: MK1_API_BASE_URL (e.g. http://100.73.137.3:5892), ACCUMK1_INTERNAL_SERVICE_TOKEN.
+-Exit: 0 ok · 1 HTTP/transport error · 2 secret-shaped content found · 3 usage/env error.
++Exit: 0 ok · 1 HTTP/transport error · 2 secret-shaped content found · 3 usage/env error
++      · 4 content already published (first attempt) · 5 outcome unknown after a lost response.
+ Stdlib only, on purpose: it must run from any checkout with no venv.
+ """
+ from __future__ import annotations
+@@ -111,7 +112,42 @@ def build_parser() -> argparse.ArgumentParser:
+     return p
+ 
+ 
+-ALREADY_RE = re.compile(r"already published as ([A-Z][A-Z0-9]*-\d+) r(\d+)")
++# Code grammar mirrors backend documents.service.CODE_RE (^[A-Z0-9]+-[A-Z0-9-]+$, <= 30).
++ALREADY_RE = re.compile(r"already published as ([A-Z0-9]+-[A-Z0-9-]+) r(\d+)")
++SHA_RE = re.compile(r"^[0-9a-f]{64}$")
++
++
++class UncertainCreate(Exception):
++    """The first POST's response was lost and the identical retry got a 409."""
++
++    def __init__(self, body: str):
++        super().__init__("HTTP 409 after a lost response")
++        self.body = body
++
++
++def reconcile(existing, args) -> str | None:
++    """Why the 409's `existing` row is NOT provably the document our lost POST created,
++    or None when it is. Its content_sha256 equalling ours is server-attested by the
++    dedupe (it hashes the themed bytes, which this script cannot recompute); the rest
++    must match exactly. No session id = no provenance = never reconciled."""
++    if not isinstance(existing, dict):
++        return "Mk1 returned no readable existing-document fields"
++    if not args.session:
++        return "no --session/MK1_DOC_SESSION, so provenance cannot be matched"
++    want = {"title": args.title, "space_slug": args.space, "author": args.author,
++            "source_session": args.session, "status": "draft" if args.draft else "active"}
++    for key, value in want.items():
++        if existing.get(key) != value:
++            return f"existing {key} does not match this publish"
++    if os.environ.get("MK1_DOCUMENT_AGENT_TOKEN") and not existing.get("co_author"):
++        return "existing document has no server-attested agent co-author"
++    code, rev = existing.get("code"), existing.get("revision")
++    if not (isinstance(existing.get("id"), int) and isinstance(rev, int)
++            and isinstance(code, str) and len(code) <= 30
++            and ALREADY_RE.fullmatch(f"already published as {code} r{rev}")
++            and SHA_RE.match(str(existing.get("content_sha256", "")))):
++        return "existing document identity is malformed"
++    return None
+ 
+ 
+ def paperclip_ref(doc: dict) -> dict:
+@@ -127,13 +163,20 @@ def paperclip_ref(doc: dict) -> dict:
+ def post_with_reconcile(base_url: str, token: str, payload: dict) -> dict:
+     """POST once; on a transport failure (response unknown) POST the identical payload
+     once more. Safe by server design: identical bytes never mint a second document
+-    (new code -> 409 naming the existing one; existing code -> 200, no new row)."""
++    (new code -> 409 naming the existing one; existing code -> 200, no new row).
++    A 409 on the retry means the first POST may have succeeded: UncertainCreate."""
+     try:
+         return post_document(base_url, token, payload)
+     except urllib.error.HTTPError:
+         raise
+     except (urllib.error.URLError, TimeoutError, OSError):
++        pass
++    try:
+         return post_document(base_url, token, payload)
++    except urllib.error.HTTPError as e:
++        if e.code != 409:
++            raise
++        raise UncertainCreate(e.read().decode("utf-8", errors="replace")) from e
+ 
+ 
+ def main(argv=None) -> int:
+@@ -188,6 +231,25 @@ def main(argv=None) -> int:
+         return 3
+     try:
+         doc = post_with_reconcile(args.base_url, token, payload)
++    except UncertainCreate as u:
++        try:
++            existing = json.loads(u.body).get("existing")
++        except (ValueError, AttributeError):
++            existing = None
++        why = reconcile(existing, args)
++        if why is not None:
++            m = ALREADY_RE.search(u.body)
++            print(json.dumps({"outcome": "unknown", "reason": why,
++                              "candidate": ({"code": m.group(1), "revision": int(m.group(2))}
++                                            if m else None),
++                              "reconcile": "This run created no new document. A person "
++                              "signed in to Mk1 opens Reports > Documents, checks the candidate's "
++                              "title, space, author and session against this publish, and posts "
++                              "its reference by hand. Re-running this exact command is safe: "
++                              "identical content never mints a second document."}))
++            return 5
++        doc = existing
++        print("reconciled: the lost first response had created this document", file=sys.stderr)
+     except urllib.error.HTTPError as e:
+         body = e.read().decode("utf-8", errors="replace")[:500]
+         m = ALREADY_RE.search(body) if e.code == 409 else None

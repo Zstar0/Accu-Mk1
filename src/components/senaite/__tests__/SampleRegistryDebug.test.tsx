@@ -358,4 +358,23 @@ describe('parity tab', () => {
     await waitFor(() => screen.getByText(/gateway timeout/i))
     expect(screen.queryByText(/PASS/i)).not.toBeInTheDocument()
   })
+
+  it('carries the sample page read-source controls only when given them', async () => {
+    vi.spyOn(api, 'getSampleRegistryDebug').mockResolvedValue(base)
+    const setOverride = vi.fn()
+    const { rerender } = render(<SampleRegistryDebug open onClose={() => {}} sampleId="P-1" />)
+    await waitFor(() => expect(screen.getByRole('dialog')).toBeInTheDocument())
+    expect(screen.queryByText('Follow default')).not.toBeInTheDocument()
+
+    rerender(
+      <SampleRegistryDebug open onClose={() => {}} sampleId="P-1" readSource={{
+        effective: 'mk1', override: 'senaite', setOverride,
+        readSource: 'mk1', registryMissing: false, fieldSources: { a: 'mk1', b: 'senaite' },
+      }} />
+    )
+    expect(screen.getByText('Read from Accu-Mk1')).toBeInTheDocument()
+    expect(screen.getByText(/reading basic-info from Accu-Mk1 — 1\/2 fields/)).toBeInTheDocument()
+    screen.getByText('Follow default').click()
+    expect(setOverride).toHaveBeenCalledWith(null)
+  })
 })

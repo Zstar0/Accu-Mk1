@@ -6,6 +6,7 @@ import { ProductChip } from '@/components/senaite/ProductChip'
 import { computeProductCompletionFromStates } from '@/lib/product-completion'
 import { FlagIndicator } from '@/components/flags/FlagIndicator'
 import { PriorityGlyph } from '@/components/common/PriorityGlyph'
+import { SampleFormMark } from '@/components/common/SampleFormIcon'
 import type { SenaiteLookupResult, OrderedProduct } from '@/lib/api'
 import type { SampleSlaSnapshot } from '@/services/order-sla'
 import {
@@ -193,6 +194,7 @@ export function SampleCard({
         >
           {sampleId}
         </button>
+        <SampleFormMark formId={lookup.sample_form_id} />
         <SampleStateBadge state={lookup.review_state} />
         {needsAttention && (
           <AlertTriangle className="h-3.5 w-3.5 text-amber-500 shrink-0" />

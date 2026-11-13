@@ -85,6 +85,8 @@ interface WorksheetDrawerItemsProps {
   instruments: Instrument[]
   onUpdateItem: (itemId: number, data: WorksheetItemPatch) => void
   onReorder: (itemIds: number[]) => void
+  /** The worksheet the items belong to: the endo line reads its prep (2 mL or stock). */
+  worksheet?: WorksheetListItem
 }
 
 export function WorksheetDrawerItems({
@@ -100,6 +102,7 @@ export function WorksheetDrawerItems({
   instruments,
   onUpdateItem,
   onReorder,
+  worksheet,
 }: WorksheetDrawerItemsProps) {
   const otherWorksheets = openWorksheets.filter(ws => ws.id !== worksheetId)
 
@@ -202,6 +205,7 @@ export function WorksheetDrawerItems({
                     onReassign={onReassign}
                     onStartPrep={onStartPrep}
                     onUpdateItem={onUpdateItem}
+                    worksheet={worksheet}
                   />
                 ))}
               </div>
@@ -234,6 +238,7 @@ interface SortableItemRowProps {
     limsSubSamplePk: number | null
   }) => void
   onUpdateItem: (itemId: number, data: WorksheetItemPatch) => void
+  worksheet?: WorksheetListItem
 }
 
 function SortableItemRow({
@@ -249,6 +254,7 @@ function SortableItemRow({
   onReassign,
   onStartPrep,
   onUpdateItem,
+  worksheet,
 }: SortableItemRowProps) {
   const {
     attributes,
@@ -500,6 +506,7 @@ function SortableItemRow({
         <div className="basis-full">
           <EndoPrepLine
             item={item}
+            worksheet={worksheet}
             dueAt={slaSnapshot?.status.due_at ?? null}
             isCompleted={isCompleted}
             onUpdate={data => onUpdateItem(item.id, data)}

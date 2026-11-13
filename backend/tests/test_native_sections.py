@@ -772,7 +772,7 @@ def test_rule5_abort_message_names_tiers_consulted(db_session, monkeypatch):
 def test_wire_carries_loq_and_display_fields(db_session, monkeypatch):
     """A spec with loq filed + a profile with all four display fields: the
     section carries the display chrome, the row's specification.loq is on
-    the wire, and a result below the LOQ prints "< LOQ" while the VERDICT
+    the wire, and a result below the LOQ prints "< 0.5" while the VERDICT
     (conforms) still judges the raw number."""
     from decimal import Decimal
     from models import AnalysisServiceSpec
@@ -796,12 +796,12 @@ def test_wire_carries_loq_and_display_fields(db_session, monkeypatch):
     assert sec["footnotes"][0]["label"] == "1"
     row = sec["rows"][0]
     assert row["specification"]["loq"] == 0.5
-    assert row["result_display"] == "< LOQ"
+    assert row["result_display"] == "< 0.5"
     assert row["conforms"] is True          # verdict on the RAW number (0.2 <= 100)
 
 
 def test_censoring_boundary(db_session, monkeypatch):
-    """result == loq IS censored (at-or-below the LOQ prints "< LOQ",
+    """result == loq IS censored (at-or-below the LOQ prints "< 0.5",
     ruling 2026-09-14); below is; above is not."""
     from decimal import Decimal
     from models import AnalysisServiceSpec, LimsAnalysis, LimsSample
@@ -827,13 +827,13 @@ def test_censoring_boundary(db_session, monkeypatch):
         return p
 
     doc = build_native_sections(db_session, _parent("P-8001", "0.5"))
-    assert doc["sections"][0]["rows"][0]["result_display"] == "< LOQ"
+    assert doc["sections"][0]["rows"][0]["result_display"] == "< 0.5"
 
     doc = build_native_sections(db_session, _parent("P-8002", "0.51"))
     assert doc["sections"][0]["rows"][0]["result_display"] is None
 
     doc = build_native_sections(db_session, _parent("P-8003", "0.49"))
-    assert doc["sections"][0]["rows"][0]["result_display"] == "< LOQ"
+    assert doc["sections"][0]["rows"][0]["result_display"] == "< 0.5"
 
 
 def test_censored_result_can_still_be_non_conforming(db_session, monkeypatch):
@@ -852,7 +852,7 @@ def test_censored_result_can_still_be_non_conforming(db_session, monkeypatch):
     _order_lookup(monkeypatch)
     doc = build_native_sections(db_session, parent)
     row = doc["sections"][0]["rows"][0]
-    assert row["result_display"] == "< LOQ"
+    assert row["result_display"] == "< 0.5"
     assert row["conforms"] is False          # 0.2 < min_value 1, raw-number verdict
 
 
@@ -910,3 +910,289 @@ def test_unset_fields_wire_shape(db_session, monkeypatch):
     assert sec["footnotes"] == []
     assert sec["rows"][0]["specification"]["loq"] is None
     assert sec["rows"][0]["result_display"] is None
+
+
+# ── sample forms: the parent's dosage form is a spec tier (task 5) ───────────
+
+def _form_specs(db, svcs, *, form_max="1"):
+    """A wildcard (max 100 ppm) + a Nasal Spray form spec (max `form_max` ppm)
+    for each service, and the Nasal Spray form."""
+    from decimal import Decimal
+    from models import AnalysisServiceSpec, LimsSampleForm
+    nasal = LimsSampleForm(name="Nasal Spray", route="nasal_inhaled")
+    db.add(nasal); db.flush()
+    for svc in svcs:
+        db.add(AnalysisServiceSpec(analysis_service_id=svc.id, rule_kind="range",
+                                   max_value=Decimal("100"), unit="ppm"))
+        db.add(AnalysisServiceSpec(analysis_service_id=svc.id, sample_form_id=nasal.id,
+                                   rule_kind="range", max_value=Decimal(form_max), unit="ppm"))
+    db.flush()
+    return nasal
+
+
+def test_native_sections_uses_parent_form_tier(db_session, monkeypatch):
+    prof, svcs = _mk_native_profile(db_session, key="heavy_metals",
+                                    services=[("HM-PB", "mk1")], specs=False)
+    nasal = _form_specs(db_session, svcs)
+    parent = _mk_parent_with_rows(db_session, svcs, result="5")
+    parent.sample_type_title = "Peptide"       # the form tier is peptide-family only
+    parent.sample_form_id = nasal.id
+    db_session.flush()
+    _order_lookup(monkeypatch)
+    row = build_native_sections(db_session, parent)["sections"][0]["rows"][0]
+    assert row["conforms"] is False
+    assert row["specification"]["max"] == 1.0
+
+
+def test_native_sections_without_a_form_keeps_the_wildcard(db_session, monkeypatch):
+    prof, svcs = _mk_native_profile(db_session, key="heavy_metals",
+                                    services=[("HM-PB", "mk1")], specs=False)
+    _form_specs(db_session, svcs)
+    parent = _mk_parent_with_rows(db_session, svcs, result="5")  # sample_form_id None
+    _order_lookup(monkeypatch)
+    row = build_native_sections(db_session, parent)["sections"][0]["rows"][0]
+    assert row["conforms"] is True
+    assert row["specification"]["max"] == 100.0
+
+
+def test_rule5_abort_message_names_the_form_tier(db_session, monkeypatch):
+    prof, svcs = _mk_native_profile(db_session, key="heavy_metals",
+                                    services=[("HM-PB", "mk1")], specs=False)
+    from models import LimsSampleForm
+    nasal = LimsSampleForm(name="Nasal Spray", route="nasal_inhaled")
+    db_session.add(nasal); db_session.flush()
+    parent = _mk_parent_with_rows(db_session, svcs)
+    parent.sample_form_id = nasal.id
+    db_session.flush()
+    _order_lookup(monkeypatch)
+    # Not a peptide-family sample: the form tier is not consulted, so the abort
+    # message must not name it.
+    with pytest.raises(NativeSectionsError, match=r"tiers consulted: peptide=None, matrix=None, wildcard"):
+        build_native_sections(db_session, parent)
+    parent.sample_type_title = "Peptide"
+    db_session.flush()
+    with pytest.raises(NativeSectionsError,
+                       match=rf"tiers consulted: peptide=None, form={nasal.id}, matrix='Peptide', wildcard"):
+        build_native_sections(db_session, parent)
+
+
+def _nasal_ug_ml_only(db, svcs):
+    """A Nasal Spray form whose only row is a report-only one in µg/mL (no
+    wildcard, so an unmatched unit has nothing to fall back on)."""
+    from decimal import Decimal
+    from models import AnalysisServiceSpec, LimsSampleForm
+    nasal = LimsSampleForm(name="Nasal Spray", route="nasal_inhaled")
+    db.add(nasal); db.flush()
+    for svc in svcs:
+        db.add(AnalysisServiceSpec(analysis_service_id=svc.id, sample_form_id=nasal.id,
+                                   rule_kind="informational", unit="µg/mL",
+                                   loq=Decimal("0.1")))
+    db.flush()
+    return nasal
+
+
+def test_nasal_result_in_a_unit_the_form_rows_do_not_cover_aborts(db_session, monkeypatch):
+    """Final review C1 (Ruling F-1): a ppm result on a nasal sample whose
+    Nasal Spray row is µg/mL only stops the certificate (rule 5) instead of
+    printing a verdict or censoring a ppm number against a µg/mL LOQ."""
+    prof, svcs = _mk_native_profile(db_session, key="heavy_metals",
+                                    services=[("HM-PB", "mk1")], specs=False)
+    nasal = _nasal_ug_ml_only(db_session, svcs)
+    parent = _mk_parent_with_rows(db_session, svcs, result="0.05")   # result_unit ppm
+    parent.sample_type_title = "Peptide"
+    parent.sample_form_id = nasal.id
+    db_session.flush()
+    _order_lookup(monkeypatch)
+    with pytest.raises(NativeSectionsError, match="has no active spec"):
+        build_native_sections(db_session, parent)
+
+
+def test_nasal_result_in_the_form_row_unit_still_builds(db_session, monkeypatch):
+    prof, svcs = _mk_native_profile(db_session, key="heavy_metals",
+                                    services=[("HM-PB", "mk1")], specs=False)
+    nasal = _nasal_ug_ml_only(db_session, svcs)
+    parent = _mk_parent_with_rows(db_session, svcs, result="0.05")
+    parent.sample_type_title = "Peptide"
+    parent.sample_form_id = nasal.id
+    from sqlalchemy import update
+    from models import LimsAnalysis
+    db_session.execute(update(LimsAnalysis).where(LimsAnalysis.lims_sample_pk == parent.id)
+                       .values(result_unit="µg/mL"))
+    db_session.flush()
+    _order_lookup(monkeypatch)
+    row = build_native_sections(db_session, parent)["sections"][0]["rows"][0]
+    assert row["conforms"] is None
+    assert row["result_display"] == "< 0.1"
+
+
+# ── report-only rows carry an LOQ; basis note hides on all-report-only (task 7) ─
+
+def _info_spec(db, svc, *, loq="3.2"):
+    from decimal import Decimal
+    from models import AnalysisServiceSpec
+    db.add(AnalysisServiceSpec(analysis_service_id=svc.id, matrix=None,
+                               rule_kind="informational", unit="ppm",
+                               loq=Decimal(loq) if loq is not None else None))
+    db.flush()
+
+
+def test_informational_row_with_loq_censors_and_has_no_verdict(db_session, monkeypatch):
+    prof, svcs = _mk_native_profile(db_session, key="heavy_metals",
+                                    services=[("HM-PB", "mk1")], specs=False)
+    _info_spec(db_session, svcs[0])
+    _order_lookup(monkeypatch)
+    below = build_native_sections(
+        db_session, _mk_parent_with_rows(db_session, svcs, result="2.0"))
+    row = below["sections"][0]["rows"][0]
+    assert row["conforms"] is None
+    assert row["specification"]["rule_kind"] == "informational"
+    assert row["specification"]["loq"] == 3.2
+    assert row["result_display"] == "< 3.2"
+
+
+def test_informational_row_above_loq_prints_as_measured(db_session, monkeypatch):
+    prof, svcs = _mk_native_profile(db_session, key="heavy_metals",
+                                    services=[("HM-PB", "mk1")], specs=False)
+    _info_spec(db_session, svcs[0])
+    _order_lookup(monkeypatch)
+    row = build_native_sections(
+        db_session, _mk_parent_with_rows(db_session, svcs, result="4.0")
+    )["sections"][0]["rows"][0]
+    assert row["conforms"] is None
+    assert row["specification"]["loq"] == 3.2
+    assert row["result_display"] is None
+
+
+def test_informational_row_without_loq_is_unchanged(db_session, monkeypatch):
+    prof, svcs = _mk_native_profile(db_session, key="heavy_metals",
+                                    services=[("HM-PB", "mk1")], specs=False)
+    _info_spec(db_session, svcs[0], loq=None)
+    _order_lookup(monkeypatch)
+    row = build_native_sections(
+        db_session, _mk_parent_with_rows(db_session, svcs, result="2.0")
+    )["sections"][0]["rows"][0]
+    assert row["specification"]["loq"] is None
+    assert row["result_display"] is None
+
+
+def test_equals_row_still_publishes_no_loq(db_session, monkeypatch):
+    from decimal import Decimal
+    from models import AnalysisServiceSpec
+    prof, svcs = _mk_native_profile(db_session, key="heavy_metals",
+                                    services=[("HM-PB", "mk1")], specs=False)
+    db_session.add(AnalysisServiceSpec(analysis_service_id=svcs[0].id, rule_kind="equals",
+                                       equals_value="2.0", unit="ppm", loq=Decimal("3.2")))
+    db_session.flush()
+    _order_lookup(monkeypatch)
+    row = build_native_sections(
+        db_session, _mk_parent_with_rows(db_session, svcs, result="2.0")
+    )["sections"][0]["rows"][0]
+    assert row["specification"]["loq"] is None
+    assert row["result_display"] is None
+
+
+def _nasal_parent(db, svcs, *, form_row_svcs):
+    """A Peptide sample with the Nasal Spray form, and a report-only ppm row
+    filed for that form on each of form_row_svcs."""
+    from decimal import Decimal
+    from models import AnalysisServiceSpec, LimsSampleForm
+    nasal = LimsSampleForm(name="Nasal Spray", route="nasal_inhaled")
+    db.add(nasal); db.flush()
+    for svc in form_row_svcs:
+        db.add(AnalysisServiceSpec(analysis_service_id=svc.id, sample_form_id=nasal.id,
+                                   rule_kind="informational", unit="ppm",
+                                   loq=Decimal("3.2")))
+    parent = _mk_parent_with_rows(db, svcs)
+    parent.sample_type_title = "Peptide"
+    parent.sample_form_id = nasal.id
+    db.flush()
+    return parent
+
+
+def test_all_form_report_only_section_omits_basis_note(db_session, monkeypatch):
+    prof, svcs = _mk_native_profile(db_session, key="heavy_metals",
+                                    services=[("HM-PB", "mk1"), ("HM-AS", "mk1")],
+                                    specs=False)
+    prof.coa_basis_note = "Limits scale with dose"
+    parent = _nasal_parent(db_session, svcs, form_row_svcs=svcs)
+    _order_lookup(monkeypatch)
+    sec = build_native_sections(db_session, parent)["sections"][0]
+    assert "basis_note" in sec          # key stays: section key order is pinned
+    assert sec["basis_note"] is None
+
+
+def test_report_only_section_without_form_rows_keeps_basis_note(db_session, monkeypatch):
+    """Prod pre-check 2026-10-28: the vial vacuum test is report-only for every
+    sample (one all-samples report-only row) and its basis note describes the
+    method, so it must keep printing. Only form rows hide the note."""
+    prof, svcs = _mk_native_profile(db_session, key="vial-vacuum-test",
+                                    services=[("PRESSURE-VC", "mk1")], specs=False)
+    prof.coa_basis_note = "Basis: Quantitative headspace pressure, needle puncture"
+    _info_spec(db_session, svcs[0], loq=None)
+    _order_lookup(monkeypatch, key="vial-vacuum-test")
+    sec = build_native_sections(
+        db_session, _mk_parent_with_rows(db_session, svcs))["sections"][0]
+    assert sec["basis_note"] == "Basis: Quantitative headspace pressure, needle puncture"
+
+
+def test_report_only_section_mixing_form_and_all_samples_rows_keeps_basis_note(
+        db_session, monkeypatch):
+    """Every printed row has to come from a form rule: one all-samples
+    report-only row keeps the note."""
+    prof, svcs = _mk_native_profile(db_session, key="heavy_metals",
+                                    services=[("HM-PB", "mk1"), ("HM-AS", "mk1")],
+                                    specs=False)
+    prof.coa_basis_note = "Limits scale with dose"
+    _info_spec(db_session, svcs[1])
+    parent = _nasal_parent(db_session, svcs, form_row_svcs=svcs[:1])
+    _order_lookup(monkeypatch)
+    sec = build_native_sections(db_session, parent)["sections"][0]
+    assert [r["specification"]["rule_kind"] for r in sec["rows"]] == [
+        "informational", "informational"]
+    assert sec["basis_note"] == "Limits scale with dose"
+
+
+def test_mixed_section_keeps_basis_note(db_session, monkeypatch):
+    from decimal import Decimal
+    from models import AnalysisServiceSpec
+    prof, svcs = _mk_native_profile(db_session, key="heavy_metals",
+                                    services=[("HM-PB", "mk1"), ("HM-AS", "mk1")],
+                                    specs=False)
+    prof.coa_basis_note = "Limits scale with dose"
+    db_session.add(AnalysisServiceSpec(analysis_service_id=svcs[0].id, rule_kind="range",
+                                       max_value=Decimal("100"), unit="ppm"))
+    _info_spec(db_session, svcs[1])
+    _order_lookup(monkeypatch)
+    sec = build_native_sections(
+        db_session, _mk_parent_with_rows(db_session, svcs))["sections"][0]
+    assert sec["basis_note"] == "Limits scale with dose"
+
+
+def test_all_range_section_keeps_basis_note(db_session, monkeypatch):
+    prof, svcs = _mk_native_profile(db_session, key="heavy_metals",
+                                    services=[("HM-PB", "mk1")])
+    prof.coa_basis_note = "Limits scale with dose"
+    db_session.flush()
+    _order_lookup(monkeypatch)
+    sec = build_native_sections(
+        db_session, _mk_parent_with_rows(db_session, svcs))["sections"][0]
+    assert sec["basis_note"] == "Limits scale with dose"
+
+
+def test_informational_row_uses_the_results_own_loq_when_spec_has_none(db_session, monkeypatch):
+    """effective_loq prefers lims_analyses.loq over the spec's, and now applies
+    to report-only rows too: a result carrying its own LOQ censors against it
+    even though nobody filed one on the spec. Pinned so it is deliberate."""
+    prof, svcs = _mk_native_profile(db_session, key="heavy_metals",
+                                    services=[("HM-PB", "mk1")], specs=False)
+    _info_spec(db_session, svcs[0], loq=None)
+    parent = _mk_parent_with_rows(db_session, svcs, result="2.0")
+    from models import LimsAnalysis
+    row_loq = db_session.query(LimsAnalysis).filter_by(lims_sample_pk=parent.id).one()
+    row_loq.loq = 2.5
+    db_session.flush()
+    _order_lookup(monkeypatch)
+    row = build_native_sections(db_session, parent)["sections"][0]["rows"][0]
+    assert row["conforms"] is None
+    assert row["specification"]["loq"] == 2.5
+    assert row["result_display"] == "< 2.5"

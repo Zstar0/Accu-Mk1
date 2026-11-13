@@ -29,3 +29,25 @@ describe('ui-store documents viewer target', () => {
     expect(s.navigationKey).toBe(key)
   })
 })
+
+describe('ui-store open-in-edit request', () => {
+  it('openDocumentForEditing targets the viewer with a one-shot edit request', () => {
+    useUIStore.getState().openDocumentForEditing(9)
+    const s = useUIStore.getState()
+    expect(s.activeSubSection).toBe('documents')
+    expect(s.documentViewerTargetId).toBe(9)
+    expect(s.documentViewerEditRequested).toBe(true)
+    useUIStore.getState().consumeDocumentEditRequest()
+    expect(useUIStore.getState().documentViewerEditRequested).toBe(false)
+    expect(useUIStore.getState().documentViewerTargetId).toBe(9)
+  })
+
+  it('a plain navigation drops a stale edit request', () => {
+    useUIStore.getState().openDocumentForEditing(9)
+    useUIStore.getState().navigateToDocument(10)
+    expect(useUIStore.getState().documentViewerEditRequested).toBe(false)
+    useUIStore.getState().openDocumentForEditing(9)
+    useUIStore.getState().clearDocumentViewer()
+    expect(useUIStore.getState().documentViewerEditRequested).toBe(false)
+  })
+})

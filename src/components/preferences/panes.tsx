@@ -17,8 +17,13 @@ import {
   CalendarClock,
   Flag,
   ClipboardCheck,
+  Pill,
   GitBranch,
   FileText,
+  Users,
+  KeyRound,
+  Bot,
+  MessagesSquare,
 } from 'lucide-react'
 import type { ComponentType } from 'react'
 import type { LucideIcon } from 'lucide-react'
@@ -27,12 +32,17 @@ import { AppearancePane } from './panes/AppearancePane'
 import { DataPipelinePane } from './panes/DataPipelinePane'
 import { DataSourcePane } from './panes/DataSourcePane'
 import { AdvancedPane } from './panes/AdvancedPane'
+import { IntegrationsPane } from './panes/IntegrationsPane'
+import { AgentsPane } from './panes/AgentsPane'
+import { AcpProvidersPane } from './panes/AcpProvidersPane'
 import { SlaPane } from './panes/SlaPane'
 import { PrioritiesPane } from './panes/PrioritiesPane'
 import { BusinessHoursPane } from './panes/BusinessHoursPane'
 import { FlagsPane } from './panes/FlagsPane'
+import { GroupsPane } from './panes/GroupsPane'
 import { DocumentsPane } from './panes/DocumentsPane'
 import { CheckInPane } from './panes/CheckInPane'
+import { SampleFormsPane } from './panes/SampleFormsPane'
 import { WorkflowPane } from './panes/WorkflowPane'
 
 export type PreferencePane =
@@ -44,15 +54,21 @@ export type PreferencePane =
   | 'priorities'
   | 'businessHours'
   | 'flags'
+  | 'groups'
   | 'documents'
   | 'checkIn'
+  | 'sampleForms'
   | 'workflow'
+  | 'integrations'
+  | 'agents'
+  | 'acpProviders'
   | 'advanced'
 
 interface NavigationItem {
   id: PreferencePane
   labelKey: string
   icon: LucideIcon
+  adminOnly?: boolean
 }
 
 export const navigationItems: readonly NavigationItem[] = [
@@ -72,9 +88,24 @@ export const navigationItems: readonly NavigationItem[] = [
     icon: CalendarClock,
   },
   { id: 'flags', labelKey: 'preferences.flags', icon: Flag },
+  { id: 'groups', labelKey: 'preferences.groups', icon: Users },
   { id: 'documents', labelKey: 'preferences.documents', icon: FileText },
   { id: 'checkIn', labelKey: 'preferences.checkIn', icon: ClipboardCheck },
+  { id: 'sampleForms', labelKey: 'preferences.sampleForms', icon: Pill },
   { id: 'workflow', labelKey: 'preferences.workflow', icon: GitBranch },
+  {
+    id: 'integrations',
+    labelKey: 'preferences.integrations',
+    icon: KeyRound,
+    adminOnly: true,
+  },
+  { id: 'agents', labelKey: 'preferences.agents', icon: Bot, adminOnly: true },
+  {
+    id: 'acpProviders',
+    labelKey: 'preferences.acpProviders',
+    icon: MessagesSquare,
+    adminOnly: true,
+  },
   { id: 'advanced', labelKey: 'preferences.advanced', icon: Zap },
 ] as const
 
@@ -87,13 +118,23 @@ export const PANE_COMPONENTS: Record<PreferencePane, ComponentType> = {
   priorities: PrioritiesPane,
   businessHours: BusinessHoursPane,
   flags: FlagsPane,
+  groups: GroupsPane,
   documents: DocumentsPane,
   checkIn: CheckInPane,
+  sampleForms: SampleFormsPane,
   workflow: WorkflowPane,
+  integrations: IntegrationsPane,
+  agents: AgentsPane,
+  acpProviders: AcpProvidersPane,
   advanced: AdvancedPane,
 }
 
 /** Whether a subsection slug names a real settings pane. */
 export function isPreferencePane(id: string): id is PreferencePane {
   return id in PANE_COMPONENTS
+}
+
+/** The nav items this user may see: admin-only panes are hidden from everyone else. */
+export function visibleNavItems(isAdmin: boolean): readonly NavigationItem[] {
+  return navigationItems.filter(item => !item.adminOnly || isAdmin)
 }

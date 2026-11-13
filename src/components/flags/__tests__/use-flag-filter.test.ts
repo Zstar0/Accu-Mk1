@@ -52,4 +52,14 @@ describe('useFlagFilter', () => {
     expect(result.current[0].text).toBe('abc')
     expect(localStorage.getItem('flags:filter:raised')).not.toContain('abc')
   })
+
+  it('scope keeps a separate storage key with the same defaults', () => {
+    const { result } = renderHook(() => useFlagFilter('assigned', 'tasks'))
+    expect(result.current[0].status).toBe('all_open')
+    act(() => result.current[1]({ ...result.current[0], status: 'all' }))
+    expect(localStorage.getItem('tasks:filter:assigned')).toContain(
+      '"status":"all"'
+    )
+    expect(localStorage.getItem('flags:filter:assigned')).toBeNull()
+  })
 })

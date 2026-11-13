@@ -389,3 +389,19 @@ def test_the_thin_flag_and_its_floor_survive_the_response_model(monkeypatch):
         assert "thin" in fam, f"{fam['k']} lost its thin flag"
     # One timed sample is far under the floor, so it must read as thin.
     assert all(f["thin"] is True for f in gating["families"])
+
+
+def test_received_window_scopes_to_one_month_and_is_echoed(monkeypatch):
+    _use(
+        monkeypatch,
+        _inputs(samples=[_sample(1, "P-1", datetime(2026, 8, 31, 16, 0)),    # Aug 31 lab
+                         _sample(2, "P-2", datetime(2026, 9, 1, 16, 0)),     # Sep 1 lab
+                         _sample(3, "P-3", datetime(2026, 9, 30, 16, 0)),    # Sep 30 lab
+                         _sample(4, "P-4", datetime(2026, 10, 1, 16, 0))],   # Oct 1 lab
+                analyses=[_hplc(1), _hplc(2), _hplc(3), _hplc(4)]),
+    )
+    body = client.get("/reports/sla-performance?from=2026-09-01&to=2026-09-30").json()
+    assert body["totals"]["samples"] == 2
+    assert (body["filters"]["received_from"], body["filters"]["received_to"]) == ("2026-09-01", "2026-09-30")
+    monkeypatch.setattr(main_module, "_sla_perf_rows_cache", {})
+    assert client.get("/reports/sla-performance").json()["totals"]["samples"] == 4

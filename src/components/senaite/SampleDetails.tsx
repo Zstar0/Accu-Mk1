@@ -150,7 +150,7 @@ import {
 } from '@/lib/native-parent-analyses'
 import { NativeManageAnalysesBlock } from '@/components/senaite/NativeManageAnalysesBlock'
 import { pickerSourceFor } from '@/lib/manage-analyses-picker'
-import { hasParentIdentity } from '@/lib/parent-identity'
+import { fieldEditKey, hasParentIdentity } from '@/lib/parent-identity'
 import { ParentRetestConfirmDialog } from '@/components/senaite/ParentRetestConfirmDialog'
 import { useParentRetestFlow } from '@/hooks/use-parent-retest-flow'
 import {
@@ -195,12 +195,14 @@ import { ReplaceAnalyteDialog } from '@/components/senaite/ReplaceAnalyteDialog'
 import { RelabelNativeSlotDialog } from '@/components/senaite/RelabelNativeSlotDialog'
 import { ClearAnalyteDialog } from '@/components/senaite/ClearAnalyteDialog'
 import { CancelSampleDialog } from './CancelSampleDialog'
+import { RetestDialog } from './RetestDialog'
 import {
   SchedulePublishDialog,
   ScheduledPublishBadge,
 } from '@/components/senaite/SchedulePublishDialog'
-import type { ScheduledPublishState } from '@/lib/api'
+import type { ScheduledPublishState, SampleRetestInfo } from '@/lib/api'
 import { fmtWhen } from '@/lib/scheduled-publish'
+import { formatLabDateTime } from '@/lib/lab-time'
 import { isHplcAnalyteService } from '@/lib/hplc-analyte-services'
 import { needsMk1AnalysesSwap } from '@/lib/mk1-analyses-swap'
 import { buildNativeSubSampleLookup } from '@/lib/native-sub-sample'
@@ -210,7 +212,6 @@ import {
   useCoaGenerationSource,
   coaSourceBadgeLabel,
   useSampleStatusAuthority,
-  type ReadSource,
 } from '@/lib/read-source'
 import { FieldSourceGlyph } from '@/components/senaite/FieldSourceGlyph'
 import {
@@ -222,14 +223,18 @@ import type { VialAssignment } from '@/lib/vial-assignment'
 import { vialLabel, vialPosition, vialTotal } from '@/lib/vial-label'
 import { SampleHeaderSla } from '@/components/senaite/SampleHeaderSla'
 import { PrioritySelect } from '@/components/common/PrioritySelect'
+import { SampleFormSelect } from '@/components/common/SampleFormSelect'
 import { useVialRoles } from '@/services/vial-roles'
 import { useDepartments } from '@/services/departments'
 import { ROLE_COLOR_TEXT, roleColorForCode } from '@/lib/role-display'
 import { SamplePrepHplcFlyout } from '@/components/hplc/SamplePrepHplcFlyout'
 import { SampleActivityLog } from '@/components/senaite/SampleActivityLog'
 import { SampleRegistryDebug } from '@/components/senaite/SampleRegistryDebug'
-import { ReadSourceBanner } from '@/components/senaite/ReadSourceBanner'
-import { ReadSourceControls } from '@/components/senaite/ReadSourceControls'
+import {
+  generateSteps,
+  publishSteps,
+  type StepDef,
+} from '@/components/senaite/coa-console-steps'
 import { SamplePriorityRow } from '@/components/senaite/SamplePriorityRow'
 import { PriorityGlyph } from '@/components/common/PriorityGlyph'
 import {
@@ -313,13 +318,6 @@ interface COAConsoleState {
   errorDetail?: string
 }
 
-interface StepDef {
-  id: string
-  label: string
-  /** ms from operation start when this step begins "running" */
-  delay: number
-}
-
 /**
  * Map a backend error message to the step ID that most likely caused it.
  * Returns the step index, or -1 if no match (fall through to running-step logic).
@@ -378,37 +376,6 @@ function inferErrorStepIdx(
 
   return -1
 }
-
-// Step labels mirror what the backend actually does per COA source: with
-// coa_generation=mk1 the wire document is assembled from the native
-// registry (zero SENAITE reads — read-independence), while the PDF attach
-// (and publish's transition) still WRITE to SENAITE in both modes. Step ids
-// are load-bearing (errorStepFor maps failure text onto them) — only the
-// label varies. Sub-sample (-SXX) COAs stay SENAITE-sourced regardless of
-// the toggle, so callers pass 'senaite' for non-parents (same rule as
-// coaSourceBadgeLabel).
-export function generateSteps(source: ReadSource): StepDef[] {
-  return [
-    {
-      id: 'senaite',
-      label:
-        source === 'mk1' ? 'Reading sample registry' : 'Connecting to SENAITE',
-      delay: 0,
-    },
-    { id: 'coabuilder', label: 'Running COABuilder', delay: 700 },
-    { id: 'verification', label: 'Reserving verification code', delay: 3800 },
-    { id: 's3', label: 'Uploading PDF to S3', delay: 4800 },
-    { id: 'attach', label: 'Attaching to SENAITE', delay: 6200 },
-  ]
-}
-
-const PUBLISH_STEPS: StepDef[] = [
-  { id: 'draft', label: 'Locating draft generation', delay: 0 },
-  { id: 'primary', label: 'Publishing primary COA', delay: 500 },
-  { id: 'additional', label: 'Publishing additional COAs', delay: 1600 },
-  { id: 'wordpress', label: 'Notifying WordPress', delay: 2700 },
-  { id: 'senaite_tx', label: 'SENAITE transition', delay: 3700 },
-]
 
 function COAConsole({
   state,
@@ -923,12 +890,16 @@ export function GeneratedCOAFallbackList({
 /**
  * List of per-vial COA children for the "Per-Vial COAs" card. Each row reports
  * one HPLC vial's own figure ("Vial N"), with its own verification code and
- * release status. Mirrors GeneratedCOAFallbackList's visual language.
+ * release status. Mirrors GeneratedCOAFallbackList's visual language. The PDF
+ * button (2026-10-20) opens that vial generation's signed PDF, the same call
+ * the sample COA cards make, so a draft can be checked before Publish.
  */
-function VialCOAList({
+export function VialCOAList({
   generations,
+  sampleId,
 }: {
   generations: ExplorerCOAGeneration[]
+  sampleId: string
 }) {
   return (
     <div className="space-y-2">
@@ -968,6 +939,12 @@ function VialCOAList({
                 >
                   {release.label}
                 </span>
+                <div className="ml-auto shrink-0">
+                  <GeneratedCOAPdfButton
+                    sampleId={sampleId}
+                    generationNumber={gen.generation_number}
+                  />
+                </div>
               </div>
               <div className="grid grid-cols-2 gap-x-3 gap-y-1">
                 <div className="flex flex-col">
@@ -2675,6 +2652,29 @@ function SelectVialChromatogramDialog({
   )
 }
 
+/** A Sample Info row whose value is a control (a select), laid out like
+ *  DataRow so labels and right edges line up down the card. */
+function ControlRow({
+  label,
+  children,
+}: {
+  label: string
+  children: React.ReactNode
+}) {
+  return (
+    <div className="flex items-center justify-between py-1 border-b border-border/50 last:border-0">
+      <span className="text-xs text-muted-foreground shrink-0 min-w-28 mr-3">
+        {label}
+      </span>
+      <div className="flex items-center gap-2">
+        {children}
+        {/* Spacer matching the EditableField pencil icon size for column alignment */}
+        <span className="inline-block w-[11px] shrink-0" aria-hidden="true" />
+      </div>
+    </div>
+  )
+}
+
 function DataRow({
   label,
   value,
@@ -2809,13 +2809,7 @@ function formatDate(dateStr: string | null | undefined): string {
   if (!dateStr) return '—'
   const d = new Date(dateStr)
   if (isNaN(d.getTime())) return dateStr
-  return d.toLocaleString('en-US', {
-    month: 'short',
-    day: 'numeric',
-    year: '2-digit',
-    hour: 'numeric',
-    minute: '2-digit',
-  })
+  return formatLabDateTime(d)
 }
 
 // --- Customer Remarks (delivered with the published COA) ---
@@ -3540,12 +3534,14 @@ export function NativeParentAnalysesCard({
   promotions,
   vialAssignmentByKeyword,
   onParentDataStale,
+  retestInfo,
 }: {
   sampleId: string | null | undefined
   isParentPage: boolean
   promotions: PromotionIndex
   vialAssignmentByKeyword?: Map<string, VialAssignment>
   onParentDataStale?: () => void
+  retestInfo?: SampleRetestInfo | null
 }) {
   const queryClient = useQueryClient()
   const { data: rows } = useQuery({
@@ -3613,6 +3609,7 @@ export function NativeParentAnalysesCard({
         headerContent={header}
         hideProgress
         resultsReadOnly
+        retestInfo={retestInfo}
         verbPolicy="parent-native"
         onParentRetest={a => requestRetest([a])}
         onParentBulkRetest={requestRetest}
@@ -3811,6 +3808,8 @@ export function SampleDetails() {
   } | null>(null)
   // Cancel-sample dialog (customer withdrew) — header action.
   const [cancelOpen, setCancelOpen] = useState(false)
+  // Retest / add-services dialog (parent-only), a header action.
+  const [retestOpen, setRetestOpen] = useState(false)
   // Task 10: promoted-source (vial-side) retest warning — sub-sample pages
   // only. Carries the target row's uid alongside the dialog's own state
   // shape (superset — PromotedSourceRetestDialog only reads its 3 fields).
@@ -3885,6 +3884,10 @@ export function SampleDetails() {
   // in -SNN). Sub-samples don't have sub-sub-samples, so we hide the section
   // entirely on sub-sample detail pages.
   const isParent = !!sampleId && !/-S\d{2,}$/.test(sampleId)
+  // Native-born samples have no SENAITE AR: the console labels say so.
+  const consoleStepOptions = {
+    nativeBorn: data?.external_lims_system === 'mk1',
+  }
   const [wizardParent, setWizardParent] = useState<ParentInfo | null>(null)
   const { data: subData, refetch: refetchSubs } = useQuery({
     queryKey: ['sub-samples', sampleId],
@@ -4681,16 +4684,14 @@ export function SampleDetails() {
     refreshSchedule()
   }, [refreshSchedule])
 
-  // Fetch retest relationship metadata (drives the retest banner + chain pills)
-  useEffect(() => {
-    if (!sampleId) {
-      setRetestInfo(null)
-      return
-    }
+  // Fetch retest relationship metadata (drives the retest banner + chain
+  // pills). Extracted so RetestDialog's onCreated can re-run it after a
+  // retest is created, without waiting on a sampleId change.
+  const loadRetestInfo = useCallback((id: string) => {
     let cancelled = false
 
     import('@/lib/api')
-      .then(({ getSampleRetestInfo }) => getSampleRetestInfo(sampleId))
+      .then(({ getSampleRetestInfo }) => getSampleRetestInfo(id))
       .then(info => {
         if (!cancelled) setRetestInfo(info)
       })
@@ -4701,7 +4702,15 @@ export function SampleDetails() {
     return () => {
       cancelled = true
     }
-  }, [sampleId])
+  }, [])
+
+  useEffect(() => {
+    if (!sampleId) {
+      setRetestInfo(null)
+      return
+    }
+    return loadRetestInfo(sampleId)
+  }, [sampleId, loadRetestInfo])
 
   if (!sampleId) {
     return (
@@ -4858,7 +4867,7 @@ export function SampleDetails() {
     setIsGeneratingCOA(true)
     const settle = startCOAConsole(
       `generate-coa ${sampleId}`,
-      generateSteps(isParent ? coaGenSource : 'senaite')
+      generateSteps(isParent ? coaGenSource : 'senaite', consoleStepOptions)
     )
     try {
       const result = await generateSenaiteCOA(sampleId)
@@ -4911,7 +4920,7 @@ export function SampleDetails() {
     setIsGeneratingVialCOAs(true)
     const settle = startCOAConsole(
       `generate-vial-coas ${sampleId}`,
-      generateSteps(isParent ? coaGenSource : 'senaite')
+      generateSteps(isParent ? coaGenSource : 'senaite', consoleStepOptions)
     )
     try {
       const result = await generateVialCOAs(sampleId)
@@ -4957,7 +4966,7 @@ export function SampleDetails() {
       setIsPublishingCOA(true)
       const settleCancel = startCOAConsole(
         `cancel-schedule ${sampleId}`,
-        generateSteps(isParent ? coaGenSource : 'senaite')
+        generateSteps(isParent ? coaGenSource : 'senaite', consoleStepOptions)
       )
       try {
         const cancelled = await cancelScheduledPublish(sampleId)
@@ -4979,7 +4988,10 @@ export function SampleDetails() {
       }
     }
     setIsPublishingCOA(true)
-    const settle = startCOAConsole(`publish-coa ${sampleId}`, PUBLISH_STEPS)
+    const settle = startCOAConsole(
+      `publish-coa ${sampleId}`,
+      publishSteps(consoleStepOptions)
+    )
     try {
       const result = await publishSenaiteCOA(sampleId)
       if (result.success) {
@@ -5013,7 +5025,7 @@ export function SampleDetails() {
     setIsSchedulingCOA(true)
     const settle = startCOAConsole(
       `schedule-publish ${sampleId}`,
-      generateSteps(isParent ? coaGenSource : 'senaite')
+      generateSteps(isParent ? coaGenSource : 'senaite', consoleStepOptions)
     )
     try {
       const result = await schedulePublish(sampleId, iso)
@@ -5065,7 +5077,7 @@ export function SampleDetails() {
     const settle = pending
       ? startCOAConsole(
           `cancel-schedule ${sampleId}`,
-          generateSteps(isParent ? coaGenSource : 'senaite')
+          generateSteps(isParent ? coaGenSource : 'senaite', consoleStepOptions)
         )
       : null
     try {
@@ -5171,8 +5183,10 @@ export function SampleDetails() {
           </div>
         )}
 
-        {/* Sample ID + counters + progress */}
-        <div className="flex items-start justify-between gap-x-4 gap-y-2 flex-wrap">
+        {/* Sample ID + counters + progress. The vial photo (below) is pinned
+            to the right edge and spans every row; the right padding only
+            applies while it renders, so photo-less samples keep the width. */}
+        <div className="relative flex items-start justify-between gap-x-4 gap-y-2 flex-wrap has-[>.header-vial-photo]:pr-28">
           <div className="flex items-center gap-4">
             <div className="flex items-center justify-center w-11 h-11 rounded-xl bg-gradient-to-br from-violet-600/20 to-violet-500/5 border border-violet-500/30 dark:border-violet-500/20">
               <FlaskConical
@@ -5231,24 +5245,9 @@ export function SampleDetails() {
                     onCancel={handleCancelSchedule}
                   />
                 )}
-                {/* Read-source indicator + tri-state override — parent-only.
-                    The override only affects parent basic-info reads (see
-                    resolveSampleData: sub-sample fetches are hardcoded to
-                    'senaite' regardless of readSource), so on a sub-sample/
-                    vial page there is nothing to indicate or control; showing
-                    either there would misstate data provenance. Visible to
-                    everyone, not just admins (that's the point of widening
-                    the details endpoint). Precedence: override > org default
-                    > 'senaite'; see useEffectiveReadSource. The control itself
-                    is shared with the samples-list page (ReadSourceControls);
-                    this isParent gate stays local to sample-details. */}
-                {isParent && (
-                  <ReadSourceControls
-                    effective={effectiveReadSource}
-                    override={readSourceOverride}
-                    setOverride={setReadSourceOverride}
-                  />
-                )}
+                {/* The read-source badge, override and provenance line live
+                    in the registry debug panel (admin), to keep this header
+                    short. */}
               </div>
               {!isParent && parentSampleId && (
                 <div className="flex items-center gap-2 text-sm text-muted-foreground mt-1 flex-wrap">
@@ -5369,31 +5368,51 @@ export function SampleDetails() {
                         <span className="text-violet-700 dark:text-violet-300">
                           ↳ Retested as:
                         </span>{' '}
-                        {retestInfo.retested_as.map((r, i) => (
-                          <span key={r.sample_id}>
-                            {i > 0 && ', '}
-                            <button
-                              type="button"
-                              onClick={() => navigateToSample(r.sample_id)}
-                              className="font-mono font-semibold text-violet-700 dark:text-violet-300 hover:underline underline-offset-2"
-                              title={
-                                r.created_at
-                                  ? `Created ${formatDate(r.created_at)}`
-                                  : undefined
-                              }
-                            >
-                              {r.sample_id}
-                            </button>
-                          </span>
-                        ))}
+                        {retestInfo.retested_as.map((r, i) => {
+                          const status = r.status
+                          // Hand-format: each detail is independent, so the
+                          // tooltip still shows retest/carry/add info even
+                          // when created_at is missing (previously the
+                          // whole title was gated on created_at).
+                          const titleParts: string[] = []
+                          if (r.created_at) {
+                            titleParts.push(`Created ${formatDate(r.created_at)}`)
+                          }
+                          if (r.retest?.length) {
+                            titleParts.push(`retesting ${r.retest.join(', ')}`)
+                          }
+                          if (r.carry?.length) {
+                            titleParts.push(`carrying ${r.carry.join(', ')}`)
+                          }
+                          if (r.add?.length) {
+                            titleParts.push(`added ${r.add.join(', ')}`)
+                          }
+                          const title =
+                            titleParts.length > 0
+                              ? titleParts.join(' · ')
+                              : undefined
+                          return (
+                            <span key={r.sample_id}>
+                              {i > 0 && ', '}
+                              <button
+                                type="button"
+                                onClick={() => navigateToSample(r.sample_id)}
+                                className="font-mono font-semibold text-violet-700 dark:text-violet-300 hover:underline underline-offset-2"
+                                title={title}
+                              >
+                                {r.sample_id}
+                              </button>
+                              {status && (
+                                <span className="text-[10px] text-muted-foreground">
+                                  {` (${status.replace(/_/g, ' ')})`}
+                                </span>
+                              )}
+                            </span>
+                          )
+                        })}
                       </>
                     )}
                 </p>
-                <ReadSourceBanner
-                  readSource={data.read_source}
-                  registryMissing={data.registry_missing}
-                  fieldSources={data.field_sources}
-                />
               </div>
             </div>
           </div>
@@ -5449,21 +5468,14 @@ export function SampleDetails() {
             </div>
           )}
 
-          {/* Flag System (Plan 4): stateful flag button, right-aligned (ml-auto)
-              so it sits next to the thumbnail in the justify-between row. Parent
-              pages aggregate their vials' flags; vial pages flag just this vial. */}
-          {flagEntityId && (
-            <div className="flex items-start ml-auto">
-              <EntityFlagButton
-                entityType={flagEntityType}
-                entityId={flagEntityId}
-                includeDescendants={isParent}
-                size="lg"
-              />
-            </div>
-          )}
+          {/* SLA — top right, one indicator per line so multi-tier samples
+              don't run a long inline string. empty:hidden drops the slot when
+              there's no SLA to show. */}
+          <div className="text-xs text-muted-foreground empty:hidden">
+            <SampleHeaderSla lookup={data} />
+          </div>
 
-          {/* Vial photo — far right of the top row, hover to enlarge.
+          {/* Vial photo — pinned right, spanning the whole header, hover to enlarge.
               Vial pages: photo presence comes from the parent summary's vial
               record. Parent pages: the parent IS vial 1, and the photo endpoint
               falls back to the parent AR's last attachment for non-sub-sample
@@ -5488,8 +5500,10 @@ export function SampleDetails() {
                   key={vialPhotoVersion}
                   sampleId={data.sample_id}
                   hasPhoto={hasPhoto}
-                  // self-stretch: span the full height of the header's top row
-                  sizeClass="self-stretch w-24 min-h-16"
+                  // Absolute: fills the header's full height without its own
+                  // aspect ratio ever setting that height. The marker class
+                  // turns on the container's right padding (has-[]).
+                  sizeClass="header-vial-photo absolute inset-y-0 right-0 w-24"
                   hoverZoom
                   hideWhenEmpty
                 />
@@ -5517,42 +5531,12 @@ export function SampleDetails() {
             </div>
           )}
 
-          {/* SLA + actions row — w-full wraps below the top row. The SLA
-              lines (moved out of the left block) sit on the left, indented
-              to align under the header text; the action buttons take the
-              remaining width, which is enough for a single line. Stays in
-              the sticky band so the actions are available while scrolling. */}
-          <div className="w-full flex items-end justify-between gap-3">
-            <div className="text-xs text-muted-foreground pl-[3.75rem] shrink-0">
-              {/* Priority — editable in every lifecycle state (2026-09-10);
-                  it used to be reachable only from the received-samples
-                  inbox. Sits above the SLA lines, which need a receipt. */}
-              <div className="flex items-center gap-2 mb-0.5">
-                <span className="text-[11px] uppercase tracking-wide text-muted-foreground/70">
-                  Priority
-                </span>
-                <PriorityGlyph priority={data.priority} size="row" />
-                {data.registry_pk ? (
-                  <PrioritySelect
-                    level="sample"
-                    id={String(data.registry_pk)}
-                    explicitKey={data.explicit_priority_key ?? null}
-                    effective={data.priority}
-                    compact
-                    className="w-56"
-                    ariaLabel={`Priority for ${sampleId}`}
-                    onAssigned={() => refreshSample(sampleId)}
-                  />
-                ) : (
-                  <span className="text-[11px] text-muted-foreground">
-                    No registry record for this sample yet
-                  </span>
-                )}
-              </div>
-              {/* SLA — stacked one indicator per line so multi-tier samples
-                don't run a long inline string. */}
-              <SampleHeaderSla lookup={data} />
-            </div>
+          {/* Actions row — w-full wraps below the top row; Flag/Watch close it
+              on the right. Stays in the sticky band so the actions are
+              available while scrolling. Header clean-up 2026-10-28: the SLA
+              lines moved to the top row, Priority and Form to the Sample
+              Info card (vial pages keep their vial-level priority above). */}
+          <div className="w-full flex justify-end">
             <div className="flex items-center justify-end gap-1 flex-wrap">
               <Button
                 variant="outline"
@@ -5615,7 +5599,7 @@ export function SampleDetails() {
                 disabled={isParent ? !hasParentIdentity(data) : !parentSampleId}
               >
                 <Plus size={12} />
-                Manage Sub-Samples
+                Sub-Samples
               </Button>
               <Button
                 variant="outline"
@@ -5640,7 +5624,7 @@ export function SampleDetails() {
                   onClick={() => setVarianceSummaryOpen(true)}
                 >
                   <Sigma size={12} />
-                  Variance Summary
+                  Variance
                 </Button>
               )}
               {/* COA actions (Generate / Publish) are parent-level — the certified
@@ -5728,6 +5712,16 @@ export function SampleDetails() {
                               : 'Schedule publish…'}
                           </DropdownMenuItem>
                         )}
+                        {isParent && (
+                          <DropdownMenuItem
+                            onClick={() => setRetestOpen(true)}
+                            className="cursor-pointer"
+                            data-testid="retest-menu"
+                          >
+                            <RefreshCw className="h-4 w-4 mr-2" />
+                            Retest / add services…
+                          </DropdownMenuItem>
+                        )}
                         {data.review_state !== 'cancelled' && (
                           <DropdownMenuItem
                             onClick={() => setCancelOpen(true)}
@@ -5765,9 +5759,18 @@ export function SampleDetails() {
                   )}
                 </>
               )}
+              {/* Flag System (Plan 4): stateful flag button. Parent pages
+                  aggregate their vials' flags; vial pages flag just this vial. */}
+              {flagEntityId && (
+                <EntityFlagButton
+                  entityType={flagEntityType}
+                  entityId={flagEntityId}
+                  includeDescendants={isParent}
+                />
+              )}
             </div>
           </div>
-          {/* end: SLA + actions row */}
+          {/* end: actions row */}
 
           {/* Progress bar + legend — w-full forces wrap to bottom row */}
           {countableTotal > 0 && (
@@ -5843,11 +5846,47 @@ export function SampleDetails() {
                     emphasis
                     sourceGlyph={fieldGlyph('sample_type', 'Sample Type')}
                   />
+                  {/* Form: dosage form (sample-forms spec). Only Peptide-matrix
+                      samples take one (and only a registry row can be eligible);
+                      Bacteriostatic Water and the like get no row at all. */}
+                  {data.sample_form_eligible && (
+                    <ControlRow label="Form">
+                      <SampleFormSelect
+                        sampleId={data.sample_id}
+                        valueId={data.sample_form_id ?? null}
+                        valueName={data.sample_form_name ?? null}
+                        onChanged={() => refreshSample(data.sample_id)}
+                        compact
+                        className="w-56"
+                        ariaLabel={`Form for ${data.sample_id}`}
+                      />
+                    </ControlRow>
+                  )}
+                  {/* Priority — editable in every lifecycle state (2026-09-10). */}
+                  <ControlRow label="Priority">
+                    <PriorityGlyph priority={data.priority} size="row" />
+                    {data.registry_pk ? (
+                      <PrioritySelect
+                        level="sample"
+                        id={String(data.registry_pk)}
+                        explicitKey={data.explicit_priority_key ?? null}
+                        effective={data.priority}
+                        compact
+                        className="w-56"
+                        ariaLabel={`Priority for ${sampleId}`}
+                        onAssigned={() => refreshSample(sampleId)}
+                      />
+                    ) : (
+                      <span className="text-[11px] text-muted-foreground">
+                        No registry record for this sample yet
+                      </span>
+                    )}
+                  </ControlRow>
                   <EditableDataRow
                     label="Date Sampled"
                     value={data.date_sampled}
                     senaiteField="DateSampled"
-                    sampleUid={data.sample_uid ?? ''}
+                    sampleUid={fieldEditKey(data)}
                     formatDisplay={v => formatDate(v as string)}
                     onSaved={v =>
                       setData(prev =>
@@ -5876,7 +5915,7 @@ export function SampleDetails() {
                         label="Order #"
                         value={data.client_order_number}
                         senaiteField="ClientOrderNumber"
-                        sampleUid={data.sample_uid ?? ''}
+                        sampleUid={fieldEditKey(data)}
                         mono
                         emphasis
                         onSaved={v =>
@@ -5922,7 +5961,7 @@ export function SampleDetails() {
                     label="Client Sample ID"
                     value={data.client_sample_id}
                     senaiteField="ClientSampleID"
-                    sampleUid={data.sample_uid ?? ''}
+                    sampleUid={fieldEditKey(data)}
                     mono
                     onSaved={v =>
                       setData(prev =>
@@ -5940,7 +5979,7 @@ export function SampleDetails() {
                     label="Client Lot"
                     value={data.client_lot}
                     senaiteField="ClientLot"
-                    sampleUid={data.sample_uid ?? ''}
+                    sampleUid={fieldEditKey(data)}
                     mono
                     onSaved={v =>
                       setData(prev =>
@@ -6014,7 +6053,7 @@ export function SampleDetails() {
                     label="Company"
                     value={data.coa.company_name}
                     senaiteField="CoaCompanyName"
-                    sampleUid={data.sample_uid ?? ''}
+                    sampleUid={fieldEditKey(data)}
                     onSaved={v =>
                       setData(prev =>
                         prev
@@ -6033,7 +6072,7 @@ export function SampleDetails() {
                     label="Website"
                     value={data.coa.website}
                     senaiteField="CoaWebsite"
-                    sampleUid={data.sample_uid ?? ''}
+                    sampleUid={fieldEditKey(data)}
                     onSaved={v =>
                       setData(prev =>
                         prev
@@ -6049,7 +6088,7 @@ export function SampleDetails() {
                     label="Email"
                     value={data.coa.email}
                     senaiteField="CoaEmail"
-                    sampleUid={data.sample_uid ?? ''}
+                    sampleUid={fieldEditKey(data)}
                     onSaved={v =>
                       setData(prev =>
                         prev
@@ -6065,7 +6104,7 @@ export function SampleDetails() {
                     label="Verification Code"
                     value={data.coa.verification_code}
                     senaiteField="VerificationCode"
-                    sampleUid={data.sample_uid ?? ''}
+                    sampleUid={fieldEditKey(data)}
                     mono
                     formatDisplay={v =>
                       v ? (
@@ -6099,7 +6138,7 @@ export function SampleDetails() {
                     label="Address"
                     value={data.coa.address}
                     senaiteField="CoaAddress"
-                    sampleUid={data.sample_uid ?? ''}
+                    sampleUid={fieldEditKey(data)}
                     onSaved={v =>
                       setData(prev =>
                         prev
@@ -6115,7 +6154,7 @@ export function SampleDetails() {
                     label="Logo URL"
                     value={data.coa.company_logo_url}
                     senaiteField="CompanyLogoUrl"
-                    sampleUid={data.sample_uid ?? ''}
+                    sampleUid={fieldEditKey(data)}
                     truncateStart
                     onSaved={v =>
                       setData(prev =>
@@ -6135,7 +6174,7 @@ export function SampleDetails() {
                     label="Chromatograph BG"
                     value={data.coa.chromatograph_background_url}
                     senaiteField="ChromatographBackgroundUrl"
-                    sampleUid={data.sample_uid ?? ''}
+                    sampleUid={fieldEditKey(data)}
                     truncateStart
                     onSaved={v =>
                       setData(prev =>
@@ -6256,7 +6295,7 @@ export function SampleDetails() {
                     icon={FileText}
                     title={`Per-Vial COAs (${vialGens.length})`}
                   >
-                    <VialCOAList generations={vialGens} />
+                    <VialCOAList generations={vialGens} sampleId={sampleId} />
                   </SectionHeader>
                 </Card>
               ) : null
@@ -6515,7 +6554,7 @@ export function SampleDetails() {
                                 readOnly={subSamples.length > 0}
                                 readOnlyHint="Locked once vials exist — use Replace or Clear so vial rows and the identity service follow the change"
                                 senaiteField={`Analyte${slot}Peptide`}
-                                sampleUid={data.sample_uid ?? ''}
+                                sampleUid={fieldEditKey(data)}
                                 onSaved={v =>
                                   setData(prev => {
                                     if (!prev) return prev
@@ -6540,10 +6579,10 @@ export function SampleDetails() {
                               readOnly={subSamples.length > 0}
                               readOnlyHint="Locked once vials exist — Replace or Clear the slot instead"
                               senaiteField={`Analyte${slot}DeclaredQuantity`}
-                              sampleUid={data.sample_uid ?? ''}
+                              sampleUid={fieldEditKey(data)}
                               type="number"
                               mono
-                              suffix="mg"
+                              suffix={data.declared_unit ?? 'mg'}
                               onSaved={v =>
                                 setData(prev => {
                                   if (!prev) return prev
@@ -6603,14 +6642,14 @@ export function SampleDetails() {
                     label="Total Declared Qty"
                     value={data.declared_weight_mg}
                     senaiteField="DeclaredTotalQuantity"
-                    sampleUid={data.sample_uid ?? ''}
+                    sampleUid={fieldEditKey(data)}
                     type="number"
                     mono
-                    suffix="mg"
+                    suffix={data.declared_unit ?? 'mg'}
                     formatDisplay={v =>
                       v != null && v !== '' ? (
                         <span className="font-mono text-amber-600 dark:text-amber-400 font-semibold">
-                          {v} mg
+                          {v} {data.declared_unit ?? 'mg'}
                         </span>
                       ) : (
                         '—'
@@ -7278,6 +7317,14 @@ export function SampleDetails() {
         onCancelled={() => refreshSample(data.sample_id)}
       />
       {isParent && (
+        <RetestDialog
+          open={retestOpen}
+          sampleId={data.sample_id}
+          onClose={() => setRetestOpen(false)}
+          onCreated={() => loadRetestInfo(data.sample_id)}
+        />
+      )}
+      {isParent && (
         <SchedulePublishDialog
           open={scheduleOpen}
           onOpenChange={setScheduleOpen}
@@ -7322,7 +7369,11 @@ export function SampleDetails() {
           parentSampleId !== null ? handlePromotedNativeRetest : undefined
         }
         resultsReadOnly={parentSampleId === null && !showParentResultEditing}
-        onResultSaved={(uid, newResult, newReviewState) => {
+        onResultSaved={(uid, newResult, newReviewState, newUnit) => {
+          // A save in a different unit moves the row's spec (resolved per
+          // unit), which the local patch below cannot recompute: reload.
+          const prevUnit = data.analyses.find(a => a.uid === uid)?.unit
+          if (newUnit && newUnit !== prevUnit) refreshSample(data.sample_id)
           setData(prev => {
             if (!prev) return prev
             return {
@@ -7333,6 +7384,7 @@ export function SampleDetails() {
                       ...a,
                       result: newResult,
                       review_state: newReviewState ?? a.review_state,
+                      ...(newUnit ? { unit: newUnit } : {}),
                     }
                   : a
               ),
@@ -7356,6 +7408,7 @@ export function SampleDetails() {
         }}
         onTransitionComplete={() => refreshSample(data.sample_id)}
         vialKind={currentVialKind}
+        retestInfo={retestInfo}
       />
 
       {/* Registry retest seam: destructive confirm for parent-tier retests
@@ -7401,6 +7454,10 @@ export function SampleDetails() {
             promotions={promotions}
             vialAssignmentByKeyword={nativeVialAssignmentByKeyword}
             onParentDataStale={() => refreshSample(data.sample_id)}
+            // Inert here: listNativeParentAnalysesShaped (this card's data
+            // source) doesn't annotate rows with retest info, so chips never
+            // render from this prop. Kept for signature parity / future wiring.
+            retestInfo={retestInfo}
           />
         )}
 
@@ -7524,6 +7581,20 @@ export function SampleDetails() {
         open={registryDebugOpen}
         onClose={() => setRegistryDebugOpen(false)}
         sampleId={sampleId ?? ''}
+        readSource={
+          // Parent pages only: sub-sample reads are always SENAITE, so the
+          // override has nothing to act on there (see resolveSampleData).
+          isParent
+            ? {
+                effective: effectiveReadSource,
+                override: readSourceOverride,
+                setOverride: setReadSourceOverride,
+                readSource: data.read_source,
+                registryMissing: data.registry_missing,
+                fieldSources: data.field_sources,
+              }
+            : undefined
+        }
       />
 
       {/* Single-label print portal — off-screen DOM the print CSS reveals */}

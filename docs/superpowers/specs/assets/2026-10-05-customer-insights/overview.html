@@ -1,0 +1,132 @@
+<!DOCTYPE html>
+<html><head><meta charset="utf-8"><title>Customer Insights: overview comp</title>
+<style>
+:root{--bg:#0a0a0a;--card:#111113;--line:#27272a;--muted:#a1a1aa;--dim:#71717a;--fg:#fafafa;--em:#34d399;--red:#f87171;--amb:#fbbf24;--blue:#60a5fa;--vio:#a78bfa}
+*{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--fg);font:13px/1.45 ui-sans-serif,system-ui,Segoe UI,sans-serif}
+.app{display:flex;min-height:100vh}.side{width:220px;border-right:1px solid var(--line);padding:14px 10px;color:var(--muted);flex:none}
+.side .brand{color:var(--fg);font-weight:600;margin:0 6px 18px}.side .grp{font-size:11px;text-transform:uppercase;letter-spacing:.06em;color:var(--dim);margin:14px 6px 6px}
+.side a{display:block;padding:5px 10px;border-radius:6px;color:var(--muted);text-decoration:none}.side a.on{background:#18181b;color:var(--fg)}
+main{flex:1;padding:22px 26px;min-width:0}
+h1{font-size:19px;margin:0}.sub{color:var(--muted);font-size:12px;margin-top:2px}
+.top{display:flex;justify-content:space-between;align-items:flex-start;gap:16px;margin-bottom:16px}
+.seg{display:flex;border:1px solid var(--line);border-radius:7px;overflow:hidden}.seg span{padding:5px 11px;font-size:12px;color:var(--muted)}.seg span.on{background:var(--fg);color:#000;font-weight:600}
+.tabs{display:flex;gap:4px;margin:0 0 16px;border-bottom:1px solid var(--line)}.tabs span{padding:8px 12px;color:var(--muted)}.tabs span.on{color:var(--fg);border-bottom:2px solid var(--fg)}
+.kpis{display:grid;grid-template-columns:repeat(6,1fr);gap:10px;margin-bottom:14px}
+.kpi{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:11px 13px}.kpi .v{font-size:21px;font-weight:700;font-variant-numeric:tabular-nums}.kpi .l{font-size:10.5px;text-transform:uppercase;letter-spacing:.06em;color:var(--muted)}
+.d{font-size:11.5px;margin-top:3px;font-variant-numeric:tabular-nums}.up{color:var(--em)}.dn{color:var(--red)}.fl{color:var(--dim)}
+.grid2{display:grid;grid-template-columns:1.45fr 1fr;gap:12px;margin-bottom:12px}.grid3{display:grid;grid-template-columns:repeat(3,1fr);gap:12px;margin-bottom:12px}
+.card{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:13px 14px;min-width:0}
+.card h3{font-size:13px;margin:0 0 2px;font-weight:600}.card .hint{color:var(--dim);font-size:11.5px;margin-bottom:8px}
+.legend{display:flex;gap:14px;font-size:11px;color:var(--muted);margin-top:4px}.dot{display:inline-block;width:8px;height:8px;border-radius:2px;margin-right:5px;vertical-align:middle}
+table{width:100%;border-collapse:collapse;font-variant-numeric:tabular-nums}th{font-size:10.5px;text-transform:uppercase;letter-spacing:.05em;color:var(--muted);font-weight:500;text-align:right;padding:6px 8px;border-bottom:1px solid var(--line);white-space:nowrap}
+th:first-child,td:first-child{text-align:left}td{padding:7px 8px;border-bottom:1px solid #1c1c1f;text-align:right;white-space:nowrap}tr:hover td{background:#16161a}
+.coh td{padding:4px 3px;font-size:11px;text-align:center;border:0}.coh td.c{border-radius:4px}.coh th{text-align:center;padding:4px 3px}
+.chip{display:inline-block;padding:1px 7px;border-radius:999px;font-size:11px;font-weight:600}.chip.r{background:rgba(248,113,113,.15);color:var(--red)}.chip.a{background:rgba(251,191,36,.13);color:var(--amb)}.chip.g{background:rgba(52,211,153,.13);color:var(--em)}
+.note{position:relative;border:1px dashed #3f3f46;border-radius:8px;padding:6px 9px;color:#c4b5fd;font-size:11.5px;margin-top:8px;background:rgba(167,139,250,.05)}
+.bar{height:7px;border-radius:4px;background:#27272a;overflow:hidden}.bar i{display:block;height:100%}
+.big{font-size:26px;font-weight:700}.row{display:flex;justify-content:space-between;align-items:baseline;margin:3px 0}
+.search{border:1px solid var(--line);border-radius:7px;padding:6px 10px;color:var(--dim);width:240px;font-size:12px}
+.banner{background:#7c3aed;color:#fff;font-size:11.5px;text-align:center;padding:4px}
+</style></head><body>
+<div class="banner">COMP · illustrative numbers and fictional customer names · not live data</div>
+<div class="app">
+<nav class="side"><div class="brand">Accu-Mk1</div>
+<div class="grp">AccuMark Tools</div><a>Overview</a><a>Order Explorer</a><a>Order Status</a>
+<a class="on">Customers</a><a style="padding-left:22px" class="on">↳ Insights</a><a style="padding-left:22px">↳ All customers</a>
+<div class="grp">Reports</div><a>Analyte Trends</a><a>Lab Throughput</a><a>SLA Performance</a></nav>
+<main>
+<div class="top"><div><h1>Customer Insights</h1><div class="sub">Paid WooCommerce orders, net of refunds · new vs returning · lab time (America/Los_Angeles) · internal &amp; test accounts excluded</div></div>
+<div class="seg"><span>30D</span><span class="on">90D</span><span>6M</span><span>1Y</span><span>All</span></div></div>
+
+<div class="kpis">
+<div class="kpi"><div class="v">412</div><div class="l">Active customers</div><div class="d up">▲ 9% vs prior 90d</div></div>
+<div class="kpi"><div class="v">$1.07M</div><div class="l">Revenue</div><div class="d up">▲ 6%</div></div>
+<div class="kpi"><div class="v">1,893</div><div class="l">Paid orders</div><div class="d up">▲ 11%</div></div>
+<div class="kpi"><div class="v">$566</div><div class="l">Avg order value</div><div class="d dn">▼ 4%</div></div>
+<div class="kpi"><div class="v">24.0%</div><div class="l">Repeat rate</div><div class="d dn">▼ 3.1 pts</div></div>
+<div class="kpi"><div class="v">10 d</div><div class="l">Median to 2nd order</div><div class="d fl">no change</div></div>
+</div>
+
+<div class="grid2">
+<div class="card"><h3>Revenue by month: new vs returning customers</h3><div class="hint">Is growth coming from acquisition or retention? Click a bar to see that month's customers.</div>
+<svg viewBox="0 0 560 210" width="100%">
+<g stroke="#27272a"><line x1="40" y1="20" x2="555" y2="20"/><line x1="40" y1="70" x2="555" y2="70"/><line x1="40" y1="120" x2="555" y2="120"/><line x1="40" y1="170" x2="555" y2="170"/></g>
+<g fill="#71717a" font-size="10" text-anchor="end"><text x="34" y="24">$400K</text><text x="34" y="74">$300K</text><text x="34" y="124">$200K</text><text x="34" y="174">$100K</text></g>
+<!-- months Feb..Sep, base y=195 (0), 1px = 2K -->
+<g>
+<rect x="58" y="76" width="40" height="91" fill="#60a5fa"/><rect x="58" y="167" width="40" height="28" fill="#34d399"/>
+<rect x="122" y="128" width="40" height="34" fill="#60a5fa"/><rect x="122" y="162" width="40" height="33" fill="#34d399"/>
+<rect x="186" y="104" width="40" height="44" fill="#60a5fa"/><rect x="186" y="148" width="40" height="47" fill="#34d399"/>
+<rect x="250" y="88" width="40" height="49" fill="#60a5fa"/><rect x="250" y="137" width="40" height="58" fill="#34d399"/>
+<rect x="314" y="72" width="40" height="52" fill="#60a5fa"/><rect x="314" y="124" width="40" height="71" fill="#34d399"/>
+<rect x="378" y="58" width="40" height="49" fill="#60a5fa"/><rect x="378" y="107" width="40" height="88" fill="#34d399"/>
+<rect x="442" y="46" width="40" height="57" fill="#60a5fa"/><rect x="442" y="103" width="40" height="92" fill="#34d399"/>
+<rect x="506" y="49" width="40" height="66" fill="#60a5fa"/><rect x="506" y="115" width="40" height="80" fill="#34d399"/>
+</g>
+<g fill="#a1a1aa" font-size="10" text-anchor="middle"><text x="78" y="208">Feb</text><text x="142" y="208">Mar</text><text x="206" y="208">Apr</text><text x="270" y="208">May</text><text x="334" y="208">Jun</text><text x="398" y="208">Jul</text><text x="462" y="208">Aug</text><text x="526" y="208">Sep</text></g>
+</svg>
+<div class="legend"><span><i class="dot" style="background:#34d399"></i>Returning customers</span><span><i class="dot" style="background:#60a5fa"></i>New customers (first paid order that month)</span></div>
+<div class="note">Feb is skewed by 5 launch accounts; they get a toggle to exclude, like the 10-02 analysis did.</div>
+</div>
+
+<div class="card"><h3>Re-order cohorts</h3><div class="hint">Share of each first-order month's customers who ordered again N months later</div>
+<table class="coh"><tr><th style="text-align:left">Cohort</th><th>n</th><th>M1</th><th>M2</th><th>M3</th><th>M4</th><th>M5</th><th>M6</th></tr>
+<tr><td style="text-align:left">Mar</td><td>61</td><td class="c" style="background:rgba(52,211,153,.55)">39%</td><td class="c" style="background:rgba(52,211,153,.45)">31%</td><td class="c" style="background:rgba(52,211,153,.38)">26%</td><td class="c" style="background:rgba(52,211,153,.33)">23%</td><td class="c" style="background:rgba(52,211,153,.30)">21%</td><td class="c" style="background:rgba(52,211,153,.26)">18%</td></tr>
+<tr><td style="text-align:left">Apr</td><td>88</td><td class="c" style="background:rgba(52,211,153,.48)">33%</td><td class="c" style="background:rgba(52,211,153,.40)">27%</td><td class="c" style="background:rgba(52,211,153,.35)">24%</td><td class="c" style="background:rgba(52,211,153,.30)">20%</td><td class="c" style="background:rgba(52,211,153,.27)">19%</td><td></td></tr>
+<tr><td style="text-align:left">May</td><td>104</td><td class="c" style="background:rgba(52,211,153,.43)">30%</td><td class="c" style="background:rgba(52,211,153,.36)">25%</td><td class="c" style="background:rgba(52,211,153,.30)">21%</td><td class="c" style="background:rgba(52,211,153,.27)">19%</td><td></td><td></td></tr>
+<tr><td style="text-align:left">Jun</td><td>119</td><td class="c" style="background:rgba(52,211,153,.40)">28%</td><td class="c" style="background:rgba(52,211,153,.32)">22%</td><td class="c" style="background:rgba(52,211,153,.27)">19%</td><td></td><td></td><td></td></tr>
+<tr><td style="text-align:left">Jul</td><td>142</td><td class="c" style="background:rgba(52,211,153,.35)">24.6%</td><td class="c" style="background:rgba(52,211,153,.26)">18%</td><td></td><td></td><td></td><td></td></tr>
+<tr><td style="text-align:left">Aug</td><td>163</td><td class="c" style="background:rgba(248,113,113,.35)">12.9%</td><td></td><td></td><td></td><td></td><td></td></tr>
+</table>
+<div class="note">Reads top to bottom: M1 return has fallen from 39% (Mar) to 12.9% (Aug). Each newer cohort comes back less often.</div>
+</div>
+</div>
+
+<div class="grid2">
+<div class="card"><h3>At-risk customers <span class="chip r" style="margin-left:6px">23 overdue</span></h3><div class="hint">Overdue against their OWN usual re-order gap, ranked by 12-month spend: the call list</div>
+<table><tr><th>Customer</th><th>12-mo spend</th><th>Orders</th><th>Usual gap</th><th>Last order</th><th>Overdue</th><th>Trend</th></tr>
+<tr><td><b>Halcyon Research Supply</b></td><td>$84,210</td><td>31</td><td>9 d</td><td>Aug 21</td><td><span class="chip r">5.2× gap</span></td><td><svg width="60" height="16"><polyline fill="none" stroke="#f87171" stroke-width="1.5" points="0,4 10,3 20,5 30,4 40,8 50,12 60,15"/></svg></td></tr>
+<tr><td><b>Meridian Compounds</b></td><td>$41,980</td><td>14</td><td>16 d</td><td>Aug 2</td><td><span class="chip r">3.9× gap</span></td><td><svg width="60" height="16"><polyline fill="none" stroke="#f87171" stroke-width="1.5" points="0,8 10,6 20,7 30,5 40,6 50,12 60,15"/></svg></td></tr>
+<tr><td><b>Blue Pine Peptides</b></td><td>$22,450</td><td>9</td><td>21 d</td><td>Aug 9</td><td><span class="chip a">2.7× gap</span></td><td><svg width="60" height="16"><polyline fill="none" stroke="#fbbf24" stroke-width="1.5" points="0,10 10,8 20,9 30,6 40,7 50,9 60,13"/></svg></td></tr>
+<tr><td><b>Orion BioLabs</b></td><td>$18,300</td><td>6</td><td>28 d</td><td>Jul 30</td><td><span class="chip a">2.4× gap</span></td><td><svg width="60" height="16"><polyline fill="none" stroke="#fbbf24" stroke-width="1.5" points="0,12 10,9 20,10 30,8 40,9 50,11 60,13"/></svg></td></tr>
+<tr><td><b>Kestrel Health</b></td><td>$9,870</td><td>4</td><td>35 d</td><td>Jul 17</td><td><span class="chip a">2.3× gap</span></td><td><svg width="60" height="16"><polyline fill="none" stroke="#fbbf24" stroke-width="1.5" points="0,9 20,7 40,9 60,12"/></svg></td></tr>
+</table>
+<div class="note">Hover a row for a rich card (email, phone, top analytes, last COA verdict). Click opens the customer page.</div>
+</div>
+
+<div class="card"><h3>Why do customers stop? <span class="chip g" style="margin-left:6px">new signal</span></h3><div class="hint">Repeat rate within 60 days of an order, by what happened on that order (Mk1 data)</div>
+<div class="row"><span>COA on time</span><b>31%</b></div><div class="bar"><i style="width:62%;background:var(--em)"></i></div>
+<div class="row" style="margin-top:9px"><span>COA late (SLA missed)</span><b class="dn">19%</b></div><div class="bar"><i style="width:38%;background:var(--red)"></i></div>
+<div class="row" style="margin-top:12px"><span>All COAs conforming</span><b>29%</b></div><div class="bar"><i style="width:58%;background:var(--em)"></i></div>
+<div class="row" style="margin-top:9px"><span>Got a non-conforming COA</span><b class="dn">22%</b></div><div class="bar"><i style="width:44%;background:var(--red)"></i></div>
+<div class="row" style="margin-top:12px"><span>Needed a retest</span><b class="dn">17%</b></div><div class="bar"><i style="width:34%;background:var(--red)"></i></div>
+<div class="note">Joins IS orders to Mk1 SLA + COA verdicts. Correlation, not proof: shown with n per bar.</div>
+</div>
+</div>
+
+<div class="grid3">
+<div class="card"><h3>First order → comes back?</h3><div class="hint">Repeat rate by how the first order was bought</div>
+<table><tr><th>First order</th><th>Customers</th><th>Repeat</th></tr>
+<tr><td>accutry50 coupon</td><td>273</td><td><span class="chip a">14%</span></td></tr>
+<tr><td>Other coupon</td><td>96</td><td>22%</td></tr>
+<tr><td>Full price</td><td>413</td><td><span class="chip g">31%</span></td></tr>
+<tr><td>With an add-on</td><td>88</td><td><span class="chip g">38%</span></td></tr></table></div>
+<div class="card"><h3>Add-on attach rate</h3><div class="hint">Share of orders with each add-on</div>
+<table><tr><th>Add-on</th><th>New</th><th>Returning</th></tr>
+<tr><td>Endotoxin</td><td>12%</td><td>68%</td></tr><tr><td>Sterility</td><td>6%</td><td>58%</td></tr><tr><td>Heavy metals</td><td>1%</td><td>9%</td></tr><tr><td>Variance</td><td>2%</td><td>14%</td></tr><tr><td>Additional COAs</td><td>4%</td><td>27%</td></tr></table></div>
+<div class="card"><h3>Revenue concentration</h3><div class="hint">How dependent we are on a few accounts</div>
+<div class="row"><span>Top 10 customers</span><b>41%</b></div><div class="bar"><i style="width:41%;background:var(--vio)"></i></div>
+<div class="row" style="margin-top:9px"><span>Top 10% (78)</span><b>85.8%</b></div><div class="bar"><i style="width:86%;background:var(--vio)"></i></div>
+<div class="row" style="margin-top:9px"><span>Repeat customers' share</span><b>88.2%</b></div><div class="bar"><i style="width:88%;background:var(--blue)"></i></div>
+<div class="row" style="margin-top:9px"><span>Median LTV / average LTV</span><b>$125 / $1,861</b></div></div>
+</div>
+
+<div class="card"><div class="top" style="margin:0 0 8px"><div><h3>All customers</h3><div class="hint" style="margin:0">Sortable; replaces today's Customers list (search kept)</div></div><div class="search">Search name, email, company…</div></div>
+<table><tr><th>Customer</th><th>Spend (90d)</th><th>Δ vs prior 90d</th><th>Lifetime</th><th>Orders</th><th>Samples</th><th>Re-order gap</th><th>Last order</th><th>Top tests</th><th>Status</th></tr>
+<tr><td><b>Halcyon Research Supply</b><div class="sub">ops@halcyon.example</div></td><td>$12,400</td><td class="dn">▼ 71%</td><td>$96,110</td><td>31</td><td>142</td><td>9 d</td><td>Aug 21</td><td>HPLC · Endo · Ster</td><td><span class="chip r">At risk</span></td></tr>
+<tr><td><b>Sable &amp; Finch Labs</b><div class="sub">lab@sablefinch.example</div></td><td>$38,950</td><td class="up">▲ 22%</td><td>$71,300</td><td>24</td><td>98</td><td>7 d</td><td>Oct 3</td><td>HPLC · Variance</td><td><span class="chip g">Growing</span></td></tr>
+<tr><td><b>Meridian Compounds</b><div class="sub">qa@meridian.example</div></td><td>$6,820</td><td class="dn">▼ 58%</td><td>$48,800</td><td>14</td><td>63</td><td>16 d</td><td>Aug 2</td><td>HPLC · Endo</td><td><span class="chip r">At risk</span></td></tr>
+<tr><td><b>Northwind Peptides</b><div class="sub">hello@northwind.example</div></td><td>$21,300</td><td class="fl">▲ 2%</td><td>$44,120</td><td>19</td><td>77</td><td>12 d</td><td>Sep 29</td><td>HPLC · Ster · HM</td><td><span class="chip g">Steady</span></td></tr>
+<tr><td><b>J. Alvarez (guest)</b><div class="sub">j.alvarez@example.com</div></td><td>$125</td><td class="fl">n/a</td><td>$125</td><td>1</td><td>1</td><td>n/a</td><td>Sep 14</td><td>HPLC</td><td><span class="chip a">One-time</span></td></tr>
+</table></div>
+</main></div></body></html>

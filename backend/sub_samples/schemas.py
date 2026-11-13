@@ -177,6 +177,15 @@ class ParentAggregate(BaseModel):
                     "this badge on the parent row; sub-sample roles are shown "
                     "on expansion. Defaults to 'hplc' if NULL in the DB."
     )
+    assigned_roles: list[str] = Field(
+        default_factory=list,
+        description="What the list page's Assigned column shows. Normally just "
+                    "[parent_role]. For a container-mode parent (never a vial "
+                    "itself) whose vials carry roles and none of them is the "
+                    "stored parent role, it is the vials' distinct roles in "
+                    "vial order, so an a la carte order with no HPLC vial does "
+                    "not read HPLC. Empty only from an older server.",
+    )
     # _LEGACY_BUCKETS zero-floor contract (catalog_demand.py) — AR-list
     # display hint stays 3-bucket; not part of the sections/catalog surface.
     variance: dict[str, int] = Field(
@@ -327,6 +336,9 @@ class BoardParentOut(BaseModel):
     client_sample_id: Optional[str] = None
     priority: str = "normal"
     is_test_order: bool = False
+    # Dosage form (sample forms), for the board's form icon. None for a
+    # sample that takes no form (Bac Water), even if it still holds one.
+    sample_form_id: Optional[int] = None
 
 
 class BoardVialOut(BaseModel):

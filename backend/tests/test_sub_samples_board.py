@@ -374,3 +374,20 @@ def test_hide_test_orders_gating(client, db, monkeypatch):
     flags = {v["parent"]["sample_id"]: v["parent"]["is_test_order"]
              for v in body["vials"]}
     assert flags == {"PB-9106": True, "PB-9107": False}
+
+
+def test_parent_carries_its_form_only_when_the_type_takes_one(client, db):
+    from models import LimsSampleForm
+    nasal = LimsSampleForm(name="Nasal Spray", route="nasal_inhaled", sort_order=10)
+    db.add(nasal)
+    db.flush()
+    pep = _parent(db, sid="P-9101")
+    pep.sample_type_title, pep.sample_form_id = "Peptide", nasal.id
+    bw = _parent(db, sid="PB-9102")
+    bw.sample_type_title, bw.sample_form_id = "Bacteriostatic Water", nasal.id
+    for p in (pep, bw):
+        _analysis(db, vial=_vial(db, parent=p), state="assigned")
+    db.commit()
+    by_parent = {v["parent"]["sample_id"]: v["parent"] for v in _get_board(client)["vials"]}
+    assert by_parent["P-9101"]["sample_form_id"] == nasal.id
+    assert by_parent["PB-9102"]["sample_form_id"] is None

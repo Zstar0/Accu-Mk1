@@ -122,6 +122,29 @@ def test_signal_senaite_free_form(db):
     assert row.external_lims_system == "mk1"
 
 
+def test_signal_native_born_bw_keys_on_ordered_service_keys(db):
+    from catalog.bw_keys import NATIVE_BW_KEY
+    _seed_customer_counters(db)
+    meta = _signal_meta(uid=None, getSampleTypeTitle="Peptide",
+                        OrderedServiceKeys=["endotoxin-usp85-lal", NATIVE_BW_KEY])
+    row = upsert_sample_from_signal(db, sample_id=None, senaite_uid=None, meta=meta)
+    assert row.sample_id == "BW-1000"
+    assert row.native_id == "aBW-0001"
+    assert row.external_lims_system == "mk1"
+
+
+def test_signal_bw_retest_without_panel_key_mints_bw(db):
+    """Retest of USP-71 only, panel carried: IS sends no BW key in
+    OrderedServiceKeys, only the original's id."""
+    _seed_customer_counters(db)
+    meta = _signal_meta(uid=None, getSampleTypeTitle="Bacteriostatic Water",
+                        OrderedServiceKeys=["sterility-usp71"],
+                        RetestOfSampleId="BW-1009")
+    row = upsert_sample_from_signal(db, sample_id=None, senaite_uid=None, meta=meta)
+    assert row.sample_id == "BW-1000"
+    assert row.external_lims_system == "mk1"
+
+
 def test_senaite_free_retry_with_echoed_id_stays_native(db):
     _seed_customer_counters(db)
     first = upsert_sample_from_signal(db, sample_id=None, senaite_uid=None,
@@ -323,6 +346,7 @@ def test_customer_note_falls_back_when_the_order_number_is_missing(db):
 def _seed_customer_counters(db):
     db.add(LimsNativeIdSequence(prefix="P", next_value=5000))
     db.add(LimsNativeIdSequence(prefix="PB", next_value=1000))
+    db.add(LimsNativeIdSequence(prefix="BW", next_value=1000))
     db.commit()
 
 

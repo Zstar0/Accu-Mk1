@@ -295,3 +295,88 @@ def test_a_retry_that_also_fails_is_still_reported_as_a_failure(client, db_sessi
     assert "order_upsert_seed_failed sample_id=P-8001" in msgs
     assert "already_present" not in msgs
 
+
+
+def test_stamp_with_retest_spec_routes_through_apply_retest_spec(client, db_session):
+    """A stamp carrying retest_spec must NOT go through the plain seed: the
+    retest path filters demand, carries results and stamps lineage."""
+    db_session.add(LimsSample(sample_id="P-8002", external_lims_system="mk1", status="sample_due"))
+    db_session.commit()
+    body = _order_with_services(sample_id="P-8002", services={"hplcpurity_identity": True, "heavy_metals": True})
+    spec = {"retest_of_sample_id": "P-2799", "retest": ["hplcpurity_identity"], "carry": ["heavy_metals"],
+            "add": None, "auto_checkin": False, "fee": "free", "reason": "t"}
+    body["orders"][0]["samples"][0]["retest_spec"] = spec
+    with patch.dict(os.environ, {"ACCUMK1_INTERNAL_SERVICE_TOKEN": SVC_TOKEN}), \
+            patch("main.apply_retest_spec", return_value={"applied": True, "carried": 0,
+                                                          "missing": [], "demand_keys": []}) as ap, \
+            patch("main.seed_parent_from_services") as plain:
+        r = client.post(URL, json=body, headers=HDR)
+    assert r.status_code == 200, r.text
+    ap.assert_called_once()
+    assert ap.call_args.kwargs["raw_spec"] == spec
+    assert ap.call_args.kwargs["parent"].sample_id == "P-8002"
+    assert ap.call_args.kwargs["source"] == "order_upsert"
+    plain.assert_not_called()
+
+
+def test_stamp_without_retest_spec_uses_the_plain_seed(client, db_session):
+    db_session.add(LimsSample(sample_id="P-8003", external_lims_system="mk1", status="sample_due"))
+    db_session.commit()
+    body = _order_with_services(sample_id="P-8003", services={"heavy_metals": True})
+    with patch.dict(os.environ, {"ACCUMK1_INTERNAL_SERVICE_TOKEN": SVC_TOKEN}), \
+            patch("main.apply_retest_spec") as ap, \
+            patch("main.seed_parent_from_services", return_value={"created": 0, "existing": 0, "skipped": 0}) as plain:
+        r = client.post(URL, json=body, headers=HDR)
+    assert r.status_code == 200, r.text
+    ap.assert_not_called()
+    plain.assert_called_once()
+    assert plain.call_args.kwargs["source"] == "order_upsert"
+
+
+def test_retest_spec_retry_branch_uses_order_upsert_retry_source(client, db_session):
+    """Mirrors test_retry_creates_what_the_winner_did_not's race trigger: the
+    first apply_retest_spec call raises the unique-violation IntegrityError,
+    forcing the retry branch, which must tag its call source="order_upsert_retry"
+    (not the first attempt's "order_upsert") so prod log greps for the retry
+    tag keep working now that both branches share the _seed helper."""
+    db_session.add(LimsSample(sample_id="P-8004", external_lims_system="mk1", status="sample_due"))
+    db_session.commit()
+    body = _order_with_services(sample_id="P-8004", services={"hplcpurity_identity": True, "heavy_metals": True})
+    spec = {"retest_of_sample_id": "P-2799", "retest": ["hplcpurity_identity"], "carry": ["heavy_metals"],
+            "add": None, "auto_checkin": False, "fee": "free", "reason": "t"}
+    body["orders"][0]["samples"][0]["retest_spec"] = spec
+
+    calls = {"n": 0}
+
+    def fake(db, *, parent, raw_spec, services, package, source):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            raise IntegrityError("INSERT", {}, Exception(
+                'duplicate key value violates unique constraint '
+                '"uq_lims_analyses_parent_service_ordered"'))
+        return {"applied": True, "carried": 0, "missing": [], "demand_keys": [],
+                "source_seen": source}
+
+    with patch.dict(os.environ, {"ACCUMK1_INTERNAL_SERVICE_TOKEN": SVC_TOKEN}), \
+            patch("main.apply_retest_spec", side_effect=fake) as ap, \
+            patch("main.seed_parent_from_services") as plain:
+        r = client.post(URL, json=body, headers=HDR)
+    assert r.status_code == 200, r.text
+    assert calls["n"] == 2
+    assert ap.call_args_list[0].kwargs["source"] == "order_upsert"
+    assert ap.call_args_list[1].kwargs["source"] == "order_upsert_retry"
+    plain.assert_not_called()
+
+
+def test_carried_rows_do_not_count_as_placeholders_created(client, db_session):
+    # M2: the retest path contributes 0; only the plain seed's `created` counts.
+    db_session.add(LimsSample(sample_id="P-8004", external_lims_system="mk1", status="sample_due"))
+    db_session.commit()
+    body = _order_with_services(sample_id="P-8004", services={"hplcpurity_identity": True})
+    body["orders"][0]["samples"][0]["retest_spec"] = {"retest_of_sample_id": "P-2799"}
+    with patch.dict(os.environ, {"ACCUMK1_INTERNAL_SERVICE_TOKEN": SVC_TOKEN}), \
+            patch("main.apply_retest_spec", return_value={"applied": True, "carried": 3,
+                                                          "missing": [], "demand_keys": []}):
+        r = client.post(URL, json=body, headers=HDR)
+    assert r.status_code == 200, r.text
+    assert r.json()["placeholders_created"] == 0
