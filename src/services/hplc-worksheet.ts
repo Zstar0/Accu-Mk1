@@ -77,30 +77,65 @@ const sameFailure = (a: HplcFailure, b: Omit<HplcFailure, 'n'>) =>
   a.keys.length === b.keys.length &&
   a.keys.every(k => b.keys.includes(k))
 
-/** The stored server failures of one sheet; none when storage is off,
- *  empty or not what was written. */
-function readStored(id: number): HplcFailure[] {
+/** The stored server failures of one sheet (empty when none or not what was
+ *  written); null when storage cannot be read. A stored failure already in
+ *  memory keeps its number, so a Dismiss by number still finds it. */
+function readStored(id: number): HplcFailure[] | null {
+  let list: unknown
   try {
     const raw = window.localStorage.getItem(STORE_PREFIX + id)
-    const list: unknown = raw ? JSON.parse(raw) : []
-    if (!Array.isArray(list)) return []
-    const out: HplcFailure[] = []
-    for (const x of list)
-      if (
-        isPlain(x) &&
-        typeof x.text === 'string' &&
-        Array.isArray(x.keys) &&
-        x.keys.every(k => typeof k === 'string')
-      ) {
-        const f = { text: x.text, keys: x.keys as string[] }
-        if (!out.some(o => sameFailure(o, f)))
-          out.push({ ...f, n: ++failureSeq })
-      }
-    return out
+    list = raw ? JSON.parse(raw) : []
   } catch {
-    return []
+    return null
   }
+  if (!Array.isArray(list)) return []
+  const mine = failureLists.get(id) ?? NO_FAILURES
+  const out: HplcFailure[] = []
+  for (const x of list)
+    if (
+      isPlain(x) &&
+      typeof x.text === 'string' &&
+      Array.isArray(x.keys) &&
+      x.keys.every(k => typeof k === 'string')
+    ) {
+      const f = { text: x.text, keys: x.keys as string[] }
+      if (out.some(o => sameFailure(o, f))) continue
+      out.push(mine.find(m => sameFailure(m, f)) ?? { ...f, n: ++failureSeq })
+    }
+  return out
 }
+
+/** This sheet's list as storage holds it now (every tab's server
+ *  failures) plus this tab's own refused values; this tab's memory when
+ *  storage cannot be read. */
+function current(id: number): HplcFailure[] {
+  const mine = failureLists.get(id) ?? NO_FAILURES
+  const stored = readStored(id)
+  if (stored === null) return mine
+  return [...stored, ...mine.filter(f => f.refused)]
+}
+
+function setMemory(id: number, list: HplcFailure[]) {
+  if (list.length) failureLists.set(id, list)
+  else failureLists.delete(id)
+}
+
+/** Memory takes this list, and the watchers hear of it, only when it
+ *  differs (the same entries keep their objects through readStored). */
+function sync(id: number, list: HplcFailure[]) {
+  const mine = failureLists.get(id) ?? NO_FAILURES
+  if (list.length === mine.length && list.every((f, i) => f === mine[i])) return
+  setMemory(id, list)
+  failureWatchers.forEach(w => w())
+}
+
+// Another tab wrote a sheet's failures: take them, so a failure there marks
+// and blocks here too, and a dismiss there clears it here.
+if (typeof window !== 'undefined')
+  window.addEventListener('storage', e => {
+    if (e.key !== null && !e.key.startsWith(STORE_PREFIX)) return
+    for (const id of loaded) sync(id, current(id))
+  })
 
 function writeStored(id: number, list: HplcFailure[]) {
   try {
@@ -115,21 +150,29 @@ function writeStored(id: number, list: HplcFailure[]) {
   }
 }
 
-/** The failure lists. Every write reads the list as it is now, so a save
- *  started on an earlier mount of the page writes into the same list. */
+/** The failure lists. Every write starts from the list as it is now, in
+ *  storage too (R1): a write never drops another tab's server failure, and
+ *  a save started on an earlier mount of the page writes into the same
+ *  list. A change that changes nothing (`fn` returns its list) writes
+ *  nothing. */
 export const hplcFailures = {
   get(id: number): HplcFailure[] {
     if (!loaded.has(id)) {
       loaded.add(id)
-      const stored = readStored(id)
-      if (stored.length) failureLists.set(id, stored)
+      setMemory(id, current(id))
     }
     return failureLists.get(id) ?? NO_FAILURES
   },
   update(id: number, fn: (list: HplcFailure[]) => HplcFailure[]) {
-    const next = fn(hplcFailures.get(id))
-    if (next.length) failureLists.set(id, next)
-    else failureLists.delete(id)
+    hplcFailures.get(id)
+    const base = current(id)
+    const next = fn(base)
+    if (next === base) {
+      // nothing changed here; memory still takes what storage holds
+      sync(id, base)
+      return
+    }
+    setMemory(id, next)
     writeStored(id, next)
     failureWatchers.forEach(w => w())
   },
@@ -143,32 +186,34 @@ export const hplcFailures = {
       (x.keys.length === 0
         ? f.keys.length === 0
         : x.keys.some(k => f.keys.includes(k)))
-    const list = hplcFailures.get(id)
-    const hit = list.find(same)
-    if (hit && f.keys.every(k => hit.keys.includes(k))) return
-    hplcFailures.update(id, now =>
-      hit
-        ? now.map(x =>
-            x.n === hit.n
-              ? { ...x, keys: [...new Set([...x.keys, ...f.keys])] }
-              : x
-          )
-        : [...now, { ...f, n: ++failureSeq }]
-    )
+    hplcFailures.update(id, list => {
+      const hit = list.find(same)
+      if (!hit) return [...list, { ...f, n: ++failureSeq }]
+      if (f.keys.every(k => hit.keys.includes(k))) return list
+      return list.map(x =>
+        x === hit ? { ...x, keys: [...new Set([...x.keys, ...f.keys])] } : x
+      )
+    })
   },
   /** A save of these keys landed: each failure loses those keys, and goes
    *  once it has none left. A failure holding other keys (a Form change that
-   *  also cleared the declared weight) stays for them. */
+   *  also cleared the declared weight) stays for them. A landed save of the
+   *  Form supersedes every earlier Form change, so a failure holding the
+   *  Form goes whole (R3). */
   landed(id: number, keys: string[]) {
-    const hit = (f: HplcFailure) => f.keys.some(k => keys.includes(k))
-    if (!hplcFailures.get(id).some(hit)) return
-    hplcFailures.update(id, list =>
-      list.flatMap(f => {
-        if (!hit(f)) return [f]
+    const form = keys.filter(k => k.endsWith(':prep_form'))
+    hplcFailures.update(id, list => {
+      if (!list.some(f => f.keys.some(k => keys.includes(k)))) return list
+      return list.flatMap(f => {
+        if (f.keys.some(k => form.includes(k))) return []
         const left = f.keys.filter(k => !keys.includes(k))
-        return left.length ? [{ ...f, keys: left }] : []
+        return left.length === f.keys.length
+          ? [f]
+          : left.length
+            ? [{ ...f, keys: left }]
+            : []
       })
-    )
+    })
   },
   /** The sheet as read: a failure of a row no longer on it, or now
    *  promoted, can never be saved again, so it goes. */
@@ -177,13 +222,15 @@ export const hplcFailures = {
     const dead = (f: HplcFailure) =>
       f.keys.length > 0 &&
       f.keys.every(k => !live.has(Number(k.slice(0, k.indexOf(':')))))
-    if (hplcFailures.get(id).some(dead))
-      hplcFailures.update(id, list => list.filter(f => !dead(f)))
+    hplcFailures.update(id, list =>
+      list.some(dead) ? list.filter(f => !dead(f)) : list
+    )
   },
   /** The page left: its refused values go (they were drafts). */
   dropRefused(id: number) {
-    if (hplcFailures.get(id).some(f => f.refused))
-      hplcFailures.update(id, list => list.filter(f => !f.refused))
+    hplcFailures.update(id, list =>
+      list.some(f => f.refused) ? list.filter(f => !f.refused) : list
+    )
   },
   subscribe(watch: () => void) {
     failureWatchers.add(watch)

@@ -26,7 +26,7 @@ const CONFIRM =
 const STILL_SAVING = 'Still saving. Press Promote again when it has finished.'
 
 const SAVED_DURING =
-  'A change was saved while Promote was checking. Press Promote again.'
+  'A change was sent while Promote was checking. Press Promote again.'
 
 const OTHERS_PRESSING = 'Another row is being promoted. Wait for it to finish.'
 

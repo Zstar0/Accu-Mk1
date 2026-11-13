@@ -79,6 +79,7 @@ function renderPage() {
 const S1 = 'P-0120-S01'
 const S2 = 'P-0121-S01'
 const VIAL = 'Wt Customer Sample vial and Septum (mg)'
+const VIAL_DIL = 'Wt Customer Sample vial and Septum + Diluent (mg)'
 const CONFIRM =
   'Promote this row? Its prep becomes final and can only be corrected by a retest.'
 
@@ -642,7 +643,7 @@ describe('Promote on the HPLC worksheet page', () => {
     )
     expect(
       within(step2()).getByText(
-        'A change was saved while Promote was checking. Press Promote again.'
+        'A change was sent while Promote was checking. Press Promote again.'
       )
     ).toBeInTheDocument()
   })
@@ -712,7 +713,7 @@ describe('Promote on the HPLC worksheet page', () => {
     // Z7: the save has ended, so not "still saving"
     expect(
       await within(step2()).findByText(
-        'A change was saved while Promote was checking. Press Promote again.'
+        'A change was sent while Promote was checking. Press Promote again.'
       )
     ).toBeInTheDocument()
     expect(within(step2()).queryByText(/^Still saving/)).toBeNull()
@@ -1086,6 +1087,102 @@ describe('Promote on the HPLC worksheet page', () => {
     expect(screen.getByRole('textbox', { name: DECLARED }).className).toContain(
       'border-red-500'
     )
+  })
+
+  it('R3: the Form saved to another form clears the whole earlier Form failure, and Promote goes ahead', async () => {
+    await failedFormChange()
+    fireEvent.change(screen.getByRole('combobox', { name: FORM }), {
+      target: { value: 'powder' },
+    })
+    await waitFor(() => expect(patchHplcRow).toHaveBeenCalledTimes(2))
+    await waitFor(() =>
+      expect(screen.queryByRole('alert')).not.toBeInTheDocument()
+    )
+    expect(hplcFailures.get(7)).toHaveLength(0)
+    expect(
+      screen.getByRole('combobox', { name: FORM }).className
+    ).not.toContain('border-red-500')
+    expect(
+      screen.getByRole('textbox', { name: DECLARED }).className
+    ).not.toContain('border-red-500')
+    await act(() => new Promise(r => setTimeout(r, 30)))
+    fireEvent.click(promoteButton())
+    expect(await screen.findByRole('dialog')).toHaveTextContent(CONFIRM)
+  })
+
+  const STORE_KEY = 'hplc-sheet-failures:7'
+  const OTHER_TAB = {
+    text: `${S1}, ${VIAL}: weighing out of range`,
+    keys: ['311:hplc_prep.stock_vial_mg'],
+  }
+  /** Another tab writes this worksheet's failures, as the browser tells it. */
+  const otherTabWrites = (list: unknown[] | null) =>
+    act(() => {
+      if (list) window.localStorage.setItem(STORE_KEY, JSON.stringify(list))
+      else window.localStorage.removeItem(STORE_KEY)
+      window.dispatchEvent(new StorageEvent('storage', { key: STORE_KEY }))
+    })
+
+  it("R1: a failure written by another tab is listed here, marks its box and blocks Promote; that tab's dismiss clears it", async () => {
+    vi.mocked(getHplcSheet).mockResolvedValue(makeSheet([ready()]))
+    renderPage()
+    const box = await screen.findByRole('textbox', { name: `${S1}, ${VIAL}` })
+    otherTabWrites([OTHER_TAB])
+    expect(await screen.findByRole('alert')).toHaveTextContent(OTHER_TAB.text)
+    expect(box.className).toContain('border-red-500')
+    fireEvent.click(promoteButton())
+    expect(await within(step2()).findByText(UNSAVED)).toBeInTheDocument()
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument()
+    otherTabWrites(null)
+    await waitFor(() =>
+      expect(screen.queryByRole('alert')).not.toBeInTheDocument()
+    )
+    expect(box.className).not.toContain('border-red-500')
+  })
+
+  it("R1: this tab's write starts from storage and keeps another tab's failure", async () => {
+    vi.mocked(getHplcSheet).mockResolvedValue(makeSheet([ready()]))
+    vi.mocked(patchHplcRow).mockRejectedValue(new Error('timed out'))
+    renderPage()
+    const other = await screen.findByRole('textbox', {
+      name: `${S1}, ${VIAL_DIL}`,
+    })
+    // the other tab's write, its event not yet here
+    window.localStorage.setItem(STORE_KEY, JSON.stringify([OTHER_TAB]))
+    typeAndLeave(other, '8000')
+    await waitFor(() => expect(screen.getAllByRole('alert')).toHaveLength(2))
+    const stored = window.localStorage.getItem(STORE_KEY) ?? ''
+    expect(stored).toContain(OTHER_TAB.text)
+    expect(stored).toContain('timed out')
+  })
+
+  it('R1: with storage unavailable the list still works in memory', async () => {
+    const spies = (['getItem', 'setItem', 'removeItem'] as const).map(m =>
+      vi.spyOn(Storage.prototype, m).mockImplementation(() => {
+        throw new Error('storage off')
+      })
+    )
+    try {
+      vi.mocked(getHplcSheet).mockResolvedValue(makeSheet([ready()]))
+      vi.mocked(patchHplcRow)
+        .mockRejectedValueOnce(new Error('weighing out of range'))
+        .mockResolvedValue(ready())
+      renderPage()
+      const box = await screen.findByRole('textbox', {
+        name: `${S1}, ${VIAL}`,
+      })
+      typeAndLeave(box, '6000')
+      expect(await screen.findByRole('alert')).toHaveTextContent(
+        'weighing out of range'
+      )
+      expect(box.className).toContain('border-red-500')
+      typeAndLeave(box, '6000')
+      await waitFor(() =>
+        expect(screen.queryByRole('alert')).not.toBeInTheDocument()
+      )
+    } finally {
+      spies.forEach(s => s.mockRestore())
+    }
   })
 
   it('Z1: saving the Form again clears its failure', async () => {
