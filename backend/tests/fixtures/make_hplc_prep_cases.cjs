@@ -49,6 +49,7 @@ const PEPTIDES = {
   2: 'NAD+', 3: 'GHK-Cu', 4: 'Ipamorelin', 10: 'BPC-157', 11: 'Tesamorelin', 12: 'Diluent Vial',
   20: 'BPC-157 + GHK-Cu', 21: 'Tesamorelin + Ipamorelin', 22: 'BPC-157 + Tesamorelin',
   23: 'NAD+ + Tesamorelin', 24: 'BPC-157 + Ipamorelin', 25: 'Tesamorelin + BPC-157',
+  26: 'BPC-157 + Tesamorelin + Ipamorelin',
 };
 const SOLO_IDS = [2, 3, 4, 10, 11, 12];
 const idOfName = name => {
@@ -137,6 +138,13 @@ const CASES = [
     int_vial_mg: 2400.0, int_vial_diluent_mg: 3836.2, int_vial_all_mg: 3881.0, vial_mg: 2500.1, vial_diluent_mg: 3933.2, vial_all_mg: 3992.8 } } }],
   ['powder, intermediate stock not above + diluent', solo(10, 500), { ...STOCK_3ML, vials: { 1: {
     int_vial_mg: 2400.0, int_vial_diluent_mg: 3836.2, int_vial_all_mg: 3836.2 } } }],
+  ['powder, intermediate + diluent lighter than empty', solo(10, 500), { ...STOCK_3ML, vials: { 1: {
+    int_vial_mg: 2400.0, int_vial_diluent_mg: 2300.0, int_vial_all_mg: 2345.0 } } }],
+  ['powder, typed intermediate target and volume', solo(10, 500), { ...STOCK_3ML, vials: { 1: { int_target_ug_ml: 4000, int_volume_ul: 1000 } } }],
+  ['powder, intermediate and final stock 20 % over plan', solo(10, 500), { ...STOCK_3ML, vials: { 1: {
+    int_vial_mg: 2400.0, int_vial_diluent_mg: 3836.2, int_vial_all_mg: 3890.0, vial_mg: 2500.1, vial_diluent_mg: 3935.9, vial_all_mg: 3995.7 } } }],
+  ['powder, two_step true with a stock already under the intermediate', solo(10, 10), { two_step: true, ...STOCK_3ML }],
+  ['powder, typed diluent', solo(10, 10), { diluent: ' Water + 0.1% TFA ' }],
   ['powder, declared 750 mg, two_step false', solo(10, 750), { two_step: false, ...STOCK_3ML }],
   ['powder, declared 100 mg, two_step true', solo(10, 100), { two_step: true, ...STOCK_3ML }],
   ['powder, pipetted volume 20 % off plan', solo(10, 10), { ...STOCK_3ML, vials: { 1: { vial_mg: 2500.1, vial_diluent_mg: 3888.1, vial_all_mg: 3995.8 } } }],
@@ -155,7 +163,9 @@ const CASES = [
   ['blend with a component exactly at 60', blend(22, [comp(10, 10), comp(11, 3)], 13), { ...STOCK_3ML }],
   ['blend, one component moved to vial 2', blend(23, [comp(2, 100), comp(11, 10)], 110), { ...STOCK_3ML, components: { 11: { vial: 2 } },
     vials: { 1: { vial_mg: 2500.1, vial_diluent_mg: 3988.6, vial_all_mg: 3995.4 }, 2: { vial_mg: 2490.0, vial_diluent_mg: 3902.0, vial_all_mg: 3991.0 } } }],
-  ['blend, typed lead', blend(24, [comp(10, 10), comp(4, 5)], 15), { ...STOCK_3ML, vials: { 1: { lead_id: 10 } } }],
+  ['blend of three, two in vial 2 by the catalog, typed lead and target there', blend(26, [comp(10, 20), comp(11, 10, 2), comp(4, 5, 2)], 35),
+    { ...STOCK_3ML, vials: { 2: { lead_id: 11, target_ug_ml: 180, vial_mg: 2490.0, vial_diluent_mg: 3904.9, vial_all_mg: 3985.7 } } }],
+  ['blend, typed lead',blend(24, [comp(10, 10), comp(4, 5)], 15), { ...STOCK_3ML, vials: { 1: { lead_id: 10 } } }],
   ['blend, typed component target', blend(25, [comp(11, 10), comp(10, 5)], 15), { ...STOCK_3ML, components: { 11: { target: 250 } } }],
   ['blend, weights that do not add up', blend(22, [comp(10, 5), comp(11, 5)], 10), { ...STOCK_3ML, components: { 10: { mg: 4 } } }],
 ];

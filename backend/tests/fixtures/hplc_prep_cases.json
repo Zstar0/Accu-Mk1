@@ -81,7 +81,8 @@
   "22": "BPC-157 + Tesamorelin",
   "23": "NAD+ + Tesamorelin",
   "24": "BPC-157 + Ipamorelin",
-  "25": "Tesamorelin + BPC-157"
+  "25": "Tesamorelin + BPC-157",
+  "26": "BPC-157 + Tesamorelin + Ipamorelin"
  },
  "cases": [
   {
@@ -1630,6 +1631,632 @@
       "peptide_id": null
      }
     ]
+   }
+  },
+  {
+   "name": "powder, intermediate + diluent lighter than empty",
+   "facts": {
+    "declared_mg": 500,
+    "form": "powder",
+    "peptide_id": 10,
+    "components": [
+     {
+      "peptide_id": 10,
+      "name": "BPC-157",
+      "abbreviation": "BPC-157",
+      "declared_mg": 500,
+      "vial": 1
+     }
+    ]
+   },
+   "inputs": {
+    "stock_vial_mg": 5012.31,
+    "stock_vial_diluent_mg": 8003.6,
+    "vials": {
+     "1": {
+      "int_vial_mg": 2400,
+      "int_vial_diluent_mg": 2300,
+      "int_vial_all_mg": 2345
+     }
+    }
+   },
+   "expect": {
+    "form": "powder",
+    "declared_total_mg": 500,
+    "diluent": {
+     "diluent": "Water",
+     "rule_id": null,
+     "typed": false
+    },
+    "stock": {
+     "total_diluent_ml": 2.9999899709156552,
+     "problem": null
+    },
+    "capsule_diluent_ul": null,
+    "floor_ug_ml": 60,
+    "components": [
+     {
+      "peptide_id": 10,
+      "declared_mg": 500,
+      "vial": 1,
+      "lead": true,
+      "target": {
+       "value": 200,
+       "source": "default",
+       "rule_id": null,
+       "typed": false
+      },
+      "stock_conc_ug_ml": 166667.2238398818,
+      "planned_final_ug_ml": 200,
+      "actual_final_ug_ml": null,
+      "below_floor": false
+     }
+    ],
+    "vials": [
+     {
+      "vial": 1,
+      "component_ids": [
+       10
+      ],
+      "lead": {
+       "peptide_id": 10,
+       "why": "heaviest"
+      },
+      "target": {
+       "value": 200,
+       "source": "default",
+       "typed": false
+      },
+      "target_volume_ul": 1500,
+      "stock_conc_ug_ml": 166667.2238398818,
+      "two_step": true,
+      "neat": false,
+      "intermediate": {
+       "target_ug_ml": 5000,
+       "volume_ul": 1500,
+       "target_defaulted": true,
+       "plan": {
+        "stock_vol_ul": 44.99984956373483,
+        "diluent_vol_ul": 1455.0001504362651,
+        "stock_half_ul": 22.499924781867414,
+        "diluent_half_ul": 727.5000752181326
+       },
+       "actual": {
+        "actual_diluent_ul": -100.29084344599337,
+        "actual_stock_ul": 45.130879550697024,
+        "actual_total_ul": null,
+        "actual_conc_ug_ml": null,
+        "dilution_factor": null,
+        "problem": "diluent"
+       },
+       "weighed": false,
+       "conc_for_final": 5000,
+       "off": {
+        "diluent": true,
+        "stock": false
+       }
+      },
+      "stock_for_final": 5000,
+      "plan": {
+       "stock_vol_ul": 60,
+       "diluent_vol_ul": 1440,
+       "stock_half_ul": 30,
+       "diluent_half_ul": 720
+      },
+      "actual": {
+       "actual_diluent_ul": null,
+       "actual_stock_ul": null,
+       "actual_total_ul": null,
+       "actual_conc_ug_ml": null,
+       "dilution_factor": null,
+       "problem": null
+      },
+      "dilution_factor_total": null,
+      "off": {
+       "diluent": false,
+       "stock": false
+      }
+     }
+    ],
+    "warnings": [
+     {
+      "code": "step3a_diluent",
+      "vial": 1,
+      "peptide_id": null
+     },
+     {
+      "code": "volume_off",
+      "vial": 1,
+      "peptide_id": null
+     }
+    ]
+   }
+  },
+  {
+   "name": "powder, typed intermediate target and volume",
+   "facts": {
+    "declared_mg": 500,
+    "form": "powder",
+    "peptide_id": 10,
+    "components": [
+     {
+      "peptide_id": 10,
+      "name": "BPC-157",
+      "abbreviation": "BPC-157",
+      "declared_mg": 500,
+      "vial": 1
+     }
+    ]
+   },
+   "inputs": {
+    "stock_vial_mg": 5012.31,
+    "stock_vial_diluent_mg": 8003.6,
+    "vials": {
+     "1": {
+      "int_target_ug_ml": 4000,
+      "int_volume_ul": 1000
+     }
+    }
+   },
+   "expect": {
+    "form": "powder",
+    "declared_total_mg": 500,
+    "diluent": {
+     "diluent": "Water",
+     "rule_id": null,
+     "typed": false
+    },
+    "stock": {
+     "total_diluent_ml": 2.9999899709156552,
+     "problem": null
+    },
+    "capsule_diluent_ul": null,
+    "floor_ug_ml": 60,
+    "components": [
+     {
+      "peptide_id": 10,
+      "declared_mg": 500,
+      "vial": 1,
+      "lead": true,
+      "target": {
+       "value": 200,
+       "source": "default",
+       "rule_id": null,
+       "typed": false
+      },
+      "stock_conc_ug_ml": 166667.2238398818,
+      "planned_final_ug_ml": 200,
+      "actual_final_ug_ml": null,
+      "below_floor": false
+     }
+    ],
+    "vials": [
+     {
+      "vial": 1,
+      "component_ids": [
+       10
+      ],
+      "lead": {
+       "peptide_id": 10,
+       "why": "heaviest"
+      },
+      "target": {
+       "value": 200,
+       "source": "default",
+       "typed": false
+      },
+      "target_volume_ul": 1500,
+      "stock_conc_ug_ml": 166667.2238398818,
+      "two_step": true,
+      "neat": false,
+      "intermediate": {
+       "target_ug_ml": 4000,
+       "volume_ul": 1000,
+       "target_defaulted": false,
+       "plan": {
+        "stock_vol_ul": 23.999919767325242,
+        "diluent_vol_ul": 976.0000802326748,
+        "stock_half_ul": 11.999959883662621,
+        "diluent_half_ul": 488.0000401163374
+       },
+       "actual": {
+        "actual_diluent_ul": null,
+        "actual_stock_ul": null,
+        "actual_total_ul": null,
+        "actual_conc_ug_ml": null,
+        "dilution_factor": null,
+        "problem": null
+       },
+       "weighed": false,
+       "conc_for_final": 4000,
+       "off": {
+        "diluent": false,
+        "stock": false
+       }
+      },
+      "stock_for_final": 4000,
+      "plan": {
+       "stock_vol_ul": 75,
+       "diluent_vol_ul": 1425,
+       "stock_half_ul": 37.5,
+       "diluent_half_ul": 712.5
+      },
+      "actual": {
+       "actual_diluent_ul": null,
+       "actual_stock_ul": null,
+       "actual_total_ul": null,
+       "actual_conc_ug_ml": null,
+       "dilution_factor": null,
+       "problem": null
+      },
+      "dilution_factor_total": null,
+      "off": {
+       "diluent": false,
+       "stock": false
+      }
+     }
+    ],
+    "warnings": []
+   }
+  },
+  {
+   "name": "powder, intermediate and final stock 20 % over plan",
+   "facts": {
+    "declared_mg": 500,
+    "form": "powder",
+    "peptide_id": 10,
+    "components": [
+     {
+      "peptide_id": 10,
+      "name": "BPC-157",
+      "abbreviation": "BPC-157",
+      "declared_mg": 500,
+      "vial": 1
+     }
+    ]
+   },
+   "inputs": {
+    "stock_vial_mg": 5012.31,
+    "stock_vial_diluent_mg": 8003.6,
+    "vials": {
+     "1": {
+      "int_vial_mg": 2400,
+      "int_vial_diluent_mg": 3836.2,
+      "int_vial_all_mg": 3890,
+      "vial_mg": 2500.1,
+      "vial_diluent_mg": 3935.9,
+      "vial_all_mg": 3995.7
+     }
+    }
+   },
+   "expect": {
+    "form": "powder",
+    "declared_total_mg": 500,
+    "diluent": {
+     "diluent": "Water",
+     "rule_id": null,
+     "typed": false
+    },
+    "stock": {
+     "total_diluent_ml": 2.9999899709156552,
+     "problem": null
+    },
+    "capsule_diluent_ul": null,
+    "floor_ug_ml": 60,
+    "components": [
+     {
+      "peptide_id": 10,
+      "declared_mg": 500,
+      "vial": 1,
+      "lead": true,
+      "target": {
+       "value": 200,
+       "source": "default",
+       "rule_id": null,
+       "typed": false
+      },
+      "stock_conc_ug_ml": 166667.2238398818,
+      "planned_final_ug_ml": 200,
+      "actual_final_ug_ml": 240.6201184443588,
+      "below_floor": false
+     }
+    ],
+    "vials": [
+     {
+      "vial": 1,
+      "component_ids": [
+       10
+      ],
+      "lead": {
+       "peptide_id": 10,
+       "why": "heaviest"
+      },
+      "target": {
+       "value": 200,
+       "source": "default",
+       "typed": false
+      },
+      "target_volume_ul": 1500,
+      "stock_conc_ug_ml": 166667.2238398818,
+      "two_step": true,
+      "neat": false,
+      "intermediate": {
+       "target_ug_ml": 5000,
+       "volume_ul": 1500,
+       "target_defaulted": true,
+       "plan": {
+        "stock_vol_ul": 44.99984956373483,
+        "diluent_vol_ul": 1455.0001504362651,
+        "stock_half_ul": 22.499924781867414,
+        "diluent_half_ul": 727.5000752181326
+       },
+       "actual": {
+        "actual_diluent_ul": 1440.3770935713567,
+        "actual_stock_ul": 53.95647377394462,
+        "actual_total_ul": 1494.3335673453014,
+        "actual_conc_ug_ml": 6017.917209789041,
+        "dilution_factor": 27.69516728624526,
+        "problem": null
+       },
+       "weighed": true,
+       "conc_for_final": 6017.917209789041,
+       "off": {
+        "diluent": false,
+        "stock": true
+       }
+      },
+      "stock_for_final": 6017.917209789041,
+      "plan": {
+       "stock_vol_ul": 49.85113446094027,
+       "diluent_vol_ul": 1450.1488655390597,
+       "stock_half_ul": 24.925567230470136,
+       "diluent_half_ul": 725.0744327695298
+      },
+      "actual": {
+       "actual_diluent_ul": 1439.9759301975732,
+       "actual_stock_ul": 59.973924380703764,
+       "actual_total_ul": 1499.949854578277,
+       "actual_conc_ug_ml": 240.6201184443588,
+       "dilution_factor": 25.01003344481617,
+       "problem": null
+      },
+      "dilution_factor_total": 692.6570600887726,
+      "off": {
+       "diluent": false,
+       "stock": true
+      }
+     }
+    ],
+    "warnings": [
+     {
+      "code": "volume_off",
+      "vial": 1,
+      "peptide_id": null
+     },
+     {
+      "code": "volume_off",
+      "vial": 1,
+      "peptide_id": null
+     }
+    ]
+   }
+  },
+  {
+   "name": "powder, two_step true with a stock already under the intermediate",
+   "facts": {
+    "declared_mg": 10,
+    "form": "powder",
+    "peptide_id": 10,
+    "components": [
+     {
+      "peptide_id": 10,
+      "name": "BPC-157",
+      "abbreviation": "BPC-157",
+      "declared_mg": 10,
+      "vial": 1
+     }
+    ]
+   },
+   "inputs": {
+    "two_step": true,
+    "stock_vial_mg": 5012.31,
+    "stock_vial_diluent_mg": 8003.6
+   },
+   "expect": {
+    "form": "powder",
+    "declared_total_mg": 10,
+    "diluent": {
+     "diluent": "Water",
+     "rule_id": null,
+     "typed": false
+    },
+    "stock": {
+     "total_diluent_ml": 2.9999899709156552,
+     "problem": null
+    },
+    "capsule_diluent_ul": null,
+    "floor_ug_ml": 60,
+    "components": [
+     {
+      "peptide_id": 10,
+      "declared_mg": 10,
+      "vial": 1,
+      "lead": true,
+      "target": {
+       "value": 200,
+       "source": "default",
+       "rule_id": null,
+       "typed": false
+      },
+      "stock_conc_ug_ml": 3333.344476797636,
+      "planned_final_ug_ml": 200,
+      "actual_final_ug_ml": null,
+      "below_floor": false
+     }
+    ],
+    "vials": [
+     {
+      "vial": 1,
+      "component_ids": [
+       10
+      ],
+      "lead": {
+       "peptide_id": 10,
+       "why": "heaviest"
+      },
+      "target": {
+       "value": 200,
+       "source": "default",
+       "typed": false
+      },
+      "target_volume_ul": 1500,
+      "stock_conc_ug_ml": 3333.344476797636,
+      "two_step": true,
+      "neat": false,
+      "intermediate": {
+       "target_ug_ml": null,
+       "volume_ul": 1500,
+       "target_defaulted": true,
+       "plan": {
+        "stock_vol_ul": null,
+        "diluent_vol_ul": null,
+        "stock_half_ul": null,
+        "diluent_half_ul": null
+       },
+       "actual": {
+        "actual_diluent_ul": null,
+        "actual_stock_ul": null,
+        "actual_total_ul": null,
+        "actual_conc_ug_ml": null,
+        "dilution_factor": null,
+        "problem": null
+       },
+       "weighed": false,
+       "conc_for_final": null,
+       "off": {
+        "diluent": false,
+        "stock": false
+       }
+      },
+      "stock_for_final": null,
+      "plan": {
+       "stock_vol_ul": null,
+       "diluent_vol_ul": null,
+       "stock_half_ul": null,
+       "diluent_half_ul": null
+      },
+      "actual": {
+       "actual_diluent_ul": null,
+       "actual_stock_ul": null,
+       "actual_total_ul": null,
+       "actual_conc_ug_ml": null,
+       "dilution_factor": null,
+       "problem": null
+      },
+      "dilution_factor_total": null,
+      "off": {
+       "diluent": false,
+       "stock": false
+      }
+     }
+    ],
+    "warnings": []
+   }
+  },
+  {
+   "name": "powder, typed diluent",
+   "facts": {
+    "declared_mg": 10,
+    "form": "powder",
+    "peptide_id": 10,
+    "components": [
+     {
+      "peptide_id": 10,
+      "name": "BPC-157",
+      "abbreviation": "BPC-157",
+      "declared_mg": 10,
+      "vial": 1
+     }
+    ]
+   },
+   "inputs": {
+    "diluent": " Water + 0.1% TFA "
+   },
+   "expect": {
+    "form": "powder",
+    "declared_total_mg": 10,
+    "diluent": {
+     "diluent": "Water + 0.1% TFA",
+     "rule_id": null,
+     "typed": true
+    },
+    "stock": {
+     "total_diluent_ml": null,
+     "problem": null
+    },
+    "capsule_diluent_ul": null,
+    "floor_ug_ml": 60,
+    "components": [
+     {
+      "peptide_id": 10,
+      "declared_mg": 10,
+      "vial": 1,
+      "lead": true,
+      "target": {
+       "value": 200,
+       "source": "default",
+       "rule_id": null,
+       "typed": false
+      },
+      "stock_conc_ug_ml": null,
+      "planned_final_ug_ml": null,
+      "actual_final_ug_ml": null,
+      "below_floor": false
+     }
+    ],
+    "vials": [
+     {
+      "vial": 1,
+      "component_ids": [
+       10
+      ],
+      "lead": {
+       "peptide_id": 10,
+       "why": "heaviest"
+      },
+      "target": {
+       "value": 200,
+       "source": "default",
+       "typed": false
+      },
+      "target_volume_ul": 1500,
+      "stock_conc_ug_ml": null,
+      "two_step": false,
+      "neat": false,
+      "intermediate": null,
+      "stock_for_final": null,
+      "plan": {
+       "stock_vol_ul": null,
+       "diluent_vol_ul": null,
+       "stock_half_ul": null,
+       "diluent_half_ul": null
+      },
+      "actual": {
+       "actual_diluent_ul": null,
+       "actual_stock_ul": null,
+       "actual_total_ul": null,
+       "actual_conc_ug_ml": null,
+       "dilution_factor": null,
+       "problem": null
+      },
+      "dilution_factor_total": null,
+      "off": {
+       "diluent": false,
+       "stock": false
+      }
+     }
+    ],
+    "warnings": []
    }
   },
   {
@@ -3246,6 +3873,199 @@
        "problem": null
       },
       "dilution_factor_total": 16.86516853932584,
+      "off": {
+       "diluent": false,
+       "stock": false
+      }
+     }
+    ],
+    "warnings": []
+   }
+  },
+  {
+   "name": "blend of three, two in vial 2 by the catalog, typed lead and target there",
+   "facts": {
+    "declared_mg": 35,
+    "form": "powder",
+    "peptide_id": 26,
+    "components": [
+     {
+      "peptide_id": 10,
+      "name": "BPC-157",
+      "abbreviation": "BPC-157",
+      "declared_mg": 20,
+      "vial": 1
+     },
+     {
+      "peptide_id": 11,
+      "name": "Tesamorelin",
+      "abbreviation": "Tesamorelin",
+      "declared_mg": 10,
+      "vial": 2
+     },
+     {
+      "peptide_id": 4,
+      "name": "Ipamorelin",
+      "abbreviation": "Ipamorelin",
+      "declared_mg": 5,
+      "vial": 2
+     }
+    ]
+   },
+   "inputs": {
+    "stock_vial_mg": 5012.31,
+    "stock_vial_diluent_mg": 8003.6,
+    "vials": {
+     "2": {
+      "lead_id": 11,
+      "target_ug_ml": 180,
+      "vial_mg": 2490,
+      "vial_diluent_mg": 3904.9,
+      "vial_all_mg": 3985.7
+     }
+    }
+   },
+   "expect": {
+    "form": "powder",
+    "declared_total_mg": 35,
+    "diluent": {
+     "diluent": "Water",
+     "rule_id": null,
+     "typed": false
+    },
+    "stock": {
+     "total_diluent_ml": 2.9999899709156552,
+     "problem": null
+    },
+    "capsule_diluent_ul": null,
+    "floor_ug_ml": 60,
+    "components": [
+     {
+      "peptide_id": 10,
+      "declared_mg": 20,
+      "vial": 1,
+      "lead": true,
+      "target": {
+       "value": 200,
+       "source": "default",
+       "rule_id": null,
+       "typed": false
+      },
+      "stock_conc_ug_ml": 6666.688953595272,
+      "planned_final_ug_ml": 200,
+      "actual_final_ug_ml": null,
+      "below_floor": false
+     },
+     {
+      "peptide_id": 11,
+      "declared_mg": 10,
+      "vial": 2,
+      "lead": true,
+      "target": {
+       "value": 200,
+       "source": "default",
+       "rule_id": null,
+       "typed": false
+      },
+      "stock_conc_ug_ml": 3333.344476797636,
+      "planned_final_ug_ml": 180,
+      "actual_final_ug_ml": 180.0723632581722,
+      "below_floor": false
+     },
+     {
+      "peptide_id": 4,
+      "declared_mg": 5,
+      "vial": 2,
+      "lead": false,
+      "target": {
+       "value": 175,
+       "source": "blend_rule",
+       "rule_id": 3,
+       "typed": false
+      },
+      "stock_conc_ug_ml": 1666.672238398818,
+      "planned_final_ug_ml": 90,
+      "actual_final_ug_ml": 90.0361816290861,
+      "below_floor": false
+     }
+    ],
+    "vials": [
+     {
+      "vial": 1,
+      "component_ids": [
+       10
+      ],
+      "lead": {
+       "peptide_id": 10,
+       "why": "heaviest"
+      },
+      "target": {
+       "value": 200,
+       "source": "default",
+       "typed": false
+      },
+      "target_volume_ul": 1500,
+      "stock_conc_ug_ml": 6666.688953595272,
+      "two_step": false,
+      "neat": false,
+      "intermediate": null,
+      "stock_for_final": 6666.688953595272,
+      "plan": {
+       "stock_vol_ul": 44.99984956373483,
+       "diluent_vol_ul": 1455.0001504362651,
+       "stock_half_ul": 22.499924781867414,
+       "diluent_half_ul": 727.5000752181326
+      },
+      "actual": {
+       "actual_diluent_ul": null,
+       "actual_stock_ul": null,
+       "actual_total_ul": null,
+       "actual_conc_ug_ml": null,
+       "dilution_factor": null,
+       "problem": null
+      },
+      "dilution_factor_total": null,
+      "off": {
+       "diluent": false,
+       "stock": false
+      }
+     },
+     {
+      "vial": 2,
+      "component_ids": [
+       11,
+       4
+      ],
+      "lead": {
+       "peptide_id": 11,
+       "why": "chosen"
+      },
+      "target": {
+       "value": 180,
+       "source": "typed",
+       "typed": true
+      },
+      "target_volume_ul": 1500,
+      "stock_conc_ug_ml": 3333.344476797636,
+      "two_step": false,
+      "neat": false,
+      "intermediate": null,
+      "stock_for_final": 3333.344476797636,
+      "plan": {
+       "stock_vol_ul": 80.99972921472269,
+       "diluent_vol_ul": 1419.0002707852773,
+       "stock_half_ul": 40.499864607361346,
+       "diluent_half_ul": 709.5001353926386
+      },
+      "actual": {
+       "actual_diluent_ul": 1419.0151439173603,
+       "actual_stock_ul": 81.03500150436238,
+       "actual_total_ul": 1500.0501454217226,
+       "actual_conc_ug_ml": 180.0723632581722,
+       "dilution_factor": 18.511138613861444,
+       "problem": null
+      },
+      "dilution_factor_total": 18.511138613861444,
       "off": {
        "diluent": false,
        "stock": false
