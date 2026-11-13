@@ -2,12 +2,19 @@ import { useState } from 'react'
 import { Loader2, Lock, Save } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
-import { updateMethod, type HplcMethod } from '@/lib/api'
+import {
+  updateMethod,
+  type EndoRunParamsWire,
+  type HplcMethod,
+} from '@/lib/api'
 import {
   ENDO_RUN_PARAM_DEFAULTS,
   type EndoRunParams,
 } from '@/lib/endo-prep-2ml'
-import { HPLC_RUN_PARAM_DEFAULTS } from '@/lib/hplc-run-params'
+import {
+  HPLC_RUN_PARAM_DEFAULTS,
+  type HplcRunParamsWire,
+} from '@/lib/hplc-run-params'
 
 type Block = 'endotoxin' | 'hplc'
 
@@ -20,7 +27,7 @@ interface Field {
 }
 
 const ENDO_FIELDS: {
-  key: string
+  key: keyof EndoRunParamsWire
   label: string
   unit: string
   standard: keyof EndoRunParams
@@ -57,7 +64,7 @@ const ENDO_FIELDS: {
   },
 ]
 
-const HPLC_FIELDS: [keyof typeof HPLC_RUN_PARAM_DEFAULTS, string, string][] = [
+const HPLC_FIELDS: [keyof HplcRunParamsWire, string, string][] = [
   ['default_target_ug_ml', 'Default target', 'ug/mL'],
   ['intermediate_target_ug_ml', 'Intermediate target', 'ug/mL'],
   ['intermediate_volume_ul', 'Intermediate volume', 'uL'],
