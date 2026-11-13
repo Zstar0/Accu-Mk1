@@ -76,6 +76,8 @@ def test_the_lock_taking_routes_run_in_the_threadpool(method, path):
     # Their writes take implicit row locks at flush (final re-review Observation 2).
     ("staging", "POST", "/worksheets/{ws}/printed", None, 404),
     ("completed", "POST", "/worksheets/{ws}/bench-ticks", {"made": True}, 409),
+    # HPLC fix wave B13: it takes the worksheet then item locks over HPLC rows
+    ("open", "POST", "/worksheets/{ws}/apply-method-instrument", {"method_id": 987654, "instrument_id": 1}, 400),
 ])
 def test_a_refusal_after_a_lock_leaves_no_transaction_open(client, db, status, method, path,
                                                           body, code):

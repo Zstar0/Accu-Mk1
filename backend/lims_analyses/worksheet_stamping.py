@@ -30,7 +30,7 @@ def apply_method_instrument_to_worksheet(db: Session, *, worksheet, method_id: i
         if it.id in promoted_item_ids:
             skipped_promoted.append({"item_id": it.id, "sample_id": it.sample_id})
             continue
-        vial =db.execute(select(LimsSubSample).where(
+        vial = db.execute(select(LimsSubSample).where(
             LimsSubSample.sample_id == it.sample_id)).scalar_one_or_none()
         if vial is None:
             continue  # parent-sample item (no vial) — nothing to stamp

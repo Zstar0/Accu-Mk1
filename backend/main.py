@@ -25676,15 +25676,18 @@ def _promoted_hplc_rows_locked(db: Session, worksheet_id: int, items) -> set[int
     query when none is an HPLC row. Taking them again in a request that holds them is a no-op.
     For every route that writes an item's instrument (HPLC fix round 2, A); the route goes
     under @_rollback_on_error."""
+    import worksheets_hplc
     from endo_prep_rules import lock_items_for_update
-    from worksheets_hplc import hplc_rows, promoted_hplc_item_ids
 
-    hplc = hplc_rows(db, items)
+    hplc = worksheets_hplc.hplc_rows(db, items)
     if not hplc:
         return set()
     ws = _worksheet_for_update(db, worksheet_id)
+    if ws is None:  # deleted since the caller's first read
+        raise HTTPException(404, "Worksheet not found")
     lock_items_for_update(db, ws, [it.id for it in hplc])
-    return promoted_hplc_item_ids(db, hplc)
+    # the bench kind is read once, above: the locked rows go straight to the prep lookup
+    return set(worksheets_hplc._preps_by_item({it.id for it in hplc}))
 
 
 def _rollback_on_error(endpoint):
@@ -26417,7 +26420,9 @@ def bulk_bench_ticks(
     _current_user=Depends(get_current_user),
 ):
     """Tick (or untick) Made / Ran down a whole worksheet in one request: the
-    bench sheet is worked on paper and keyed in afterwards, a run at a time."""
+    bench sheet is worked on paper and keyed in afterwards, a run at a time. A Ran tick over
+    HPLC rows reads sample_preps on the mk1_db connection, and answers 500 (writing nothing)
+    when that is down."""
     ws = db.execute(select(Worksheet).where(Worksheet.id == worksheet_id)).scalar_one_or_none()
     if not ws:
         raise HTTPException(404, "Worksheet not found")
@@ -27005,7 +27010,9 @@ def update_worksheet_item(
     db: Session = Depends(get_db),
     _current_user=Depends(get_current_user),
 ):
-    """Update a worksheet item's instrument assignment. Auto-resolves method when instrument changes."""
+    """Update a worksheet item's instrument assignment. Auto-resolves method when instrument changes.
+    On an HPLC row sent an instrument, a form or a Ran tick it reads sample_preps on the mk1_db
+    connection, and answers 500 (writing nothing) when that is down."""
     item = db.execute(
         select(WorksheetItem).where(
             WorksheetItem.id == item_id,
@@ -27075,8 +27082,10 @@ def update_worksheet_item(
     if data.instrument_uid is not None:
         item.instrument_uid = data.instrument_uid if data.instrument_uid else None
 
-        # Auto-resolve method: find instrument → get its hplc_method → match peptide
-        if data.instrument_uid and item.service_group_id:
+        # Auto-resolve method: find instrument → get its hplc_method → match peptide. Never on
+        # a promoted HPLC row: an instrument sent equal to the stored one passed the 409 above,
+        # and its analyses are final (HPLC fix wave B9).
+        if data.instrument_uid and item.service_group_id and not promoted_hplc:
             # Get peptide_id from service group's first analysis service
             svc_peptide = db.execute(
                 select(AnalysisService.peptide_id)
@@ -27259,7 +27268,8 @@ def apply_worksheet_method_instrument(
     analyses (R6/R7/R8, slice 2 bench-stamping). Coverage-scoped: only rows whose
     service the method covers are touched; only STAMPABLE_STATES rows are
     stamped; everything else comes back in skipped_state/skipped_uncovered
-    rather than being silently dropped."""
+    rather than being silently dropped. Over HPLC rows it reads sample_preps on the mk1_db
+    connection, and answers 500 (writing nothing) when that is down."""
     ws = db.execute(
         select(Worksheet).where(Worksheet.id == worksheet_id)
     ).scalar_one_or_none()

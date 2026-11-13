@@ -54,6 +54,16 @@ _MAP_KEY = re.compile(r"[1-9][0-9]*")  # "1", "36"; never "01", "+1", "1.0"
 # above 2**53 - 1 JavaScript rounds a whole number; no balance or pipette reads 1e12.
 _MAX_WHOLE = 2**53 - 1
 _MAX_NUMBER = 1e12
+# B4: a weighing (mg) and a volume in mL stop where POST /hplc/analyze stops (main.MAX_WEIGHING_MG,
+# main.MAX_DECLARED_VOLUME_ML; main imports this module, so they are restated here and a test
+# holds them equal), so no final prep carries a number the engine will refuse.
+MAX_WEIGHING_MG = 1e9
+MAX_DECLARED_VOLUME_ML = 1e6
+_CEILINGS = {key: MAX_WEIGHING_MG for key in (
+    "stock_vial_mg", "stock_vial_diluent_mg", "vial_mg", "vial_diluent_mg", "vial_all_mg",
+    "int_vial_mg", "int_vial_diluent_mg", "int_vial_all_mg")} | {"declared_volume_ml": MAX_DECLARED_VOLUME_ML}
+# B1: calc.js MAX_COMPONENTS; no more keys than this in one patch's components map
+MAX_COMPONENTS = 7
 # A declared quantity as stored ("10 mg", "10", "0.5mg"): its leading number.
 _LEADING_NUMBER = re.compile(r"\s*([0-9]*\.?[0-9]+)")
 
@@ -74,8 +84,9 @@ def _check_object(value, path: str, numbers=(), wholes=None, others=None) -> Non
         if v is None:
             continue
         if key in numbers:
-            if not (_number(v) and 0 <= v <= _MAX_NUMBER):
-                raise ValueError(f"{where} must be a number from 0 to {_MAX_NUMBER:.0f}")
+            top = _CEILINGS.get(key, _MAX_NUMBER)
+            if not (_number(v) and 0 <= v <= top):
+                raise ValueError(f"{where} must be a number from 0 to {top:.0f}")
         elif key in (wholes or {}):
             lo, hi = wholes[key]
             if not (_number(v) and isinstance(v, int) and lo <= v <= hi):
@@ -86,10 +97,12 @@ def _check_object(value, path: str, numbers=(), wholes=None, others=None) -> Non
             raise ValueError(f"{path} has an unknown key {ascii(key)}")
 
 
-def _check_map(entry_check, max_key=None):
+def _check_map(entry_check, max_key=None, max_count=None):
     def check(value, path: str) -> None:
         if not isinstance(value, dict):
             raise ValueError(f"{path} must be an object or null")
+        if max_count is not None and len(value) > max_count:
+            raise ValueError(f"{path} has {len(value)} keys; at most {max_count} are allowed")
         for key in sorted(value, key=str):
             if not (isinstance(key, str) and _MAP_KEY.fullmatch(key)):
                 raise ValueError(f"{path} key {ascii(key)} is not a positive whole number")
@@ -121,16 +134,18 @@ def _check_bool(value, path: str) -> None:
 def validate_hplc_prep_patch(patch) -> dict:
     """A merge patch in the hplc_prep shape, returned as is. Raises ValueError naming the key
     for an unknown key at any level, a number that is not finite (or a string, or a bool), a
-    weight, volume or target below zero or above 1e12, a capsules or lead_id that is not a
+    weight, volume or target below zero or above 1e12 (a weighing above 1e9 mg, a volume in mL
+    above 1e6: the analyze route's ceilings), a capsules or lead_id that is not a
     whole number from 1 to 2**53 - 1, a vial outside 1 to 7, a components key that is not a
-    positive whole number, a vials key outside 1 to 7, a two_step that is not a boolean, or a
-    diluent outside HPLC_DILUENTS. null is always allowed, and removes the key; the patch
-    itself must be an object."""
+    positive whole number, more than 7 components keys, a vials key outside 1 to 7, a two_step
+    that is not a boolean, or a diluent outside HPLC_DILUENTS. null is always allowed, and
+    removes the key; the patch itself must be an object. Whether a components key is one of
+    the row's own is apply_patch's check, which has the row."""
     if not isinstance(patch, dict):
         raise ValueError("hplc_prep must be an object")
     _check_object(patch, "hplc_prep", _ROW_NUMBERS, {"capsules": (1, _MAX_WHOLE)}, {
         "diluent": _check_diluent, "two_step": _check_bool,
-        "components": _check_map(_check_component),
+        "components": _check_map(_check_component, max_count=MAX_COMPONENTS),
         "vials": _check_map(_check_vial, max_key=MAX_VIALS)})
     return patch
 
@@ -177,7 +192,8 @@ def _hplc_items(db: Session, items) -> tuple[list, dict]:
 
     sample_ids = {it.sample_id for it in items if it.sample_id}
     vials = {r.sample_id: r for r in db.execute(
-        select(LimsSubSample.sample_id, LimsSubSample.parent_sample_pk, LimsSubSample.assignment_role)
+        select(LimsSubSample.sample_id, LimsSubSample.parent_sample_pk, LimsSubSample.assignment_role,
+               LimsSubSample.id)
         .where(LimsSubSample.sample_id.in_(sample_ids))).all()} if sample_ids else {}
     hplc = [it for it in items if _bench_kind_for_item(
         vials[it.sample_id].assignment_role if it.sample_id in vials else None,
@@ -189,19 +205,45 @@ def _preps_by_item(item_ids) -> dict[int, dict]:
     """item id -> {"id", "sample_id", "status"} of the sample_preps row promoted from it. The
     table lives behind mk1_db's own connection; ensure_sample_preps_table first, as every
     other reader does, so a deploy that has not run it yet still has worksheet_item_id."""
-    global _preps_table_ready
     if not item_ids:
         return {}
+    _ensure_preps_table()
+    return {p["worksheet_item_id"]: _slim(p)
+            for p in mk1_db.list_sample_preps_for_worksheet_items(sorted(item_ids))}
+
+
+def _slim(prep: dict) -> dict:
+    return {"id": prep["id"], "sample_id": prep["sample_id"], "status": prep["status"]}
+
+
+def _ensure_preps_table() -> None:
+    global _preps_table_ready
     if not _preps_table_ready:
         # once per process: its ALTERs take a strong lock even when there is nothing to add,
         # and the columns are never dropped
         mk1_db.ensure_sample_preps_table()
         _preps_table_ready = True
-    return {p["worksheet_item_id"]: {"id": p["id"], "sample_id": p["sample_id"], "status": p["status"]}
-            for p in mk1_db.list_sample_preps_for_worksheet_items(sorted(item_ids))}
 
 
 _preps_table_ready = False
+
+
+def _sheet_preps(items, vials: dict) -> tuple[dict, dict]:
+    """(item id -> its promoted prep, item id -> other_preps), in ONE mk1_db query for every
+    row (B8). other_preps: the sample_preps rows of the item's vial (lims_sub_sample_pk) NOT made
+    from this item (a wizard prep, or one promoted from another worksheet's row), each
+    {"id", "sample_id", "status"}, newest first. Information only: never a promote reason."""
+    ids = {it.id for it in items}
+    vial_pk = {it.id: vials[it.sample_id].id for it in items if it.sample_id in vials}
+    if not ids:
+        return {}, {}
+    _ensure_preps_table()
+    found = mk1_db.list_sample_preps_for_worksheet_items_or_vials(sorted(ids), sorted(set(vial_pk.values())))
+    mine = {p["worksheet_item_id"]: _slim(p) for p in found if p["worksheet_item_id"] in ids}
+    others = {i: [_slim(p) for p in found
+                  if i in vial_pk and p["lims_sub_sample_pk"] == vial_pk[i] and p["worksheet_item_id"] != i]
+              for i in ids}
+    return mine, others
 
 
 def _is_rider(vials: dict, item) -> bool:
@@ -386,7 +428,7 @@ def sheet_rows(db: Session, worksheet, items=None) -> list[dict]:
                        instrument_methods.c.instrument_id.in_({i for _, i in pairs}))
                 .order_by(HplcMethod.id)).all():
             run_params.setdefault((pid, iid), rp)
-    preps = _preps_by_item({it.id for it in items})
+    preps, other_preps = _sheet_preps(items, vials)
 
     rows = []
     for it in items:
@@ -445,6 +487,7 @@ def sheet_rows(db: Session, worksheet, items=None) -> list[dict]:
             "prep_form": it.prep_form, "hplc_prep": hplc_prep,
             "promoted": it.id in preps, "prep": preps.get(it.id),
             "problems": problems,
+            "other_preps": other_preps[it.id],
         })
     return rows
 
@@ -471,9 +514,18 @@ def apply_patch(db: Session, worksheet, item, *, prep_form=_UNSET, hplc_prep=_UN
         if _is_rider(vials, item):
             raise Refused(400, "this row has no prep")
         try:
-            prep_after = merge_hplc_prep(item.hplc_prep, validate_hplc_prep_patch(hplc_prep))
+            validate_hplc_prep_patch(hplc_prep)
         except ValueError as exc:
             raise Refused(400, str(exc))
+        # B1: a components key is one of the row's own components, so the stored map never
+        # outgrows the sample; a null for any key only removes, so it is let through
+        sent = {k for k, v in (hplc_prep.get("components") or {}).items() if v is not None}
+        if sent:
+            own = {str(c["peptide_id"]) for c in sheet_rows(db, worksheet, [item])[0]["components"]}
+            stray = sorted(sent - own)
+            if stray:
+                raise Refused(400, f"hplc_prep.components key {ascii(stray[0])} is not a component of this row")
+        prep_after = merge_hplc_prep(item.hplc_prep, hplc_prep)
     if (form_after, prep_after) != (item.prep_form, item.hplc_prep or None):
         if _preps_by_item([item.id]):
             raise Refused(409, PREP_FINAL)

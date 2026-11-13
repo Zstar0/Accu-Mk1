@@ -29,6 +29,7 @@ from database import Base, get_db
 from fastapi.testclient import TestClient
 from main import app
 from models import (
+    AnalysisService,
     HplcMethod,
     Instrument,
     LimsAnalysis,
@@ -36,12 +37,14 @@ from models import (
     LimsSampleForm,
     LimsSubSample,
     Peptide,
+    ServiceGroup,
     Settings,
     Worksheet,
     WorksheetItem,
     blend_components,
     instrument_methods,
     peptide_methods,
+    service_group_members,
 )
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
@@ -111,7 +114,7 @@ def test_validate_accepts_the_stored_shape_zero_and_null_everywhere():
     # the ceilings themselves are allowed (D1)
     tops = {"capsules": 2**53 - 1, "declared_mg": 1e12, "diluent_ul": 10**12,
             "components": {"36": {"mg": 1e12, "target": 1e12}},
-            "vials": {"1": {"lead_id": 2**53 - 1, "vial_all_mg": 1e12}}}
+            "vials": {"1": {"lead_id": 2**53 - 1, "vial_all_mg": 1e9}}}  # a weighing: B4
     assert worksheets_hplc.validate_hplc_prep_patch(tops) == tops
 
 
@@ -286,7 +289,8 @@ def _analysis(db, peptide, *, parent=None, item=None, state="assigned"):
 
 
 def _item(db, ws, parent, n=1, *, role="hplc", **columns):
-    vial = LimsSubSample(sample_id=f"{parent.sample_id}-S{n:02d}", parent_sample_pk=parent.id,
+    # the vial's id far above any real one too: other_preps reads sample_preps by vial (B8)
+    vial = LimsSubSample(id=next(_IDS), sample_id=f"{parent.sample_id}-S{n:02d}", parent_sample_pk=parent.id,
                          vial_sequence=n, external_lims_uid=f"mk1://hplc-{parent.sample_id}-{n}",
                          assignment_role=role)
     item = WorksheetItem(id=next(_IDS), worksheet_id=ws.id, sample_uid=vial.external_lims_uid,
@@ -309,7 +313,7 @@ _ROW_KEYS = {
     "item_id", "sample_id", "parent_sample_id", "order_number", "identity", "peptide_id",
     "peptide_name", "is_blend", "components", "components_source", "declared_mg", "sample_form", "sample_bac", "form",
     "rider_only", "instrument_id", "instrument_name", "params", "prep_form", "hplc_prep",
-    "promoted", "prep", "problems",
+    "promoted", "prep", "problems", "other_preps",
 }
 
 
@@ -346,6 +350,7 @@ def test_sheet_rows_serve_a_solo_peptide_row(db):
         "instrument_id": inst.id, "instrument_name": "HPLC 1290a",
         "params": {**HPLC_RUN_PARAM_DEFAULTS, "default_target_ug_ml": 150},
         "prep_form": None, "hplc_prep": {}, "promoted": False, "prep": None, "problems": [],
+        "other_preps": [],
     }]
 
 
@@ -405,6 +410,7 @@ def test_a_blend_row_carries_its_components_with_their_default_vials(db, decoy_f
         "sample_bac": False, "form": "powder", "rider_only": False,
         "instrument_id": None, "instrument_name": None, "params": HPLC_RUN_PARAM_DEFAULTS,
         "prep_form": None, "hplc_prep": {}, "promoted": False, "prep": None, "problems": [],
+        "other_preps": [],
     }]
 
 
@@ -528,6 +534,7 @@ def test_a_sample_without_analytes_takes_its_one_analysis_peptide(db):
         "sample_bac": False, "form": "powder", "rider_only": False,
         "instrument_id": None, "instrument_name": None, "params": HPLC_RUN_PARAM_DEFAULTS,
         "prep_form": None, "hplc_prep": {}, "promoted": False, "prep": None, "problems": [],
+        "other_preps": [],
     }]
 
 
@@ -558,6 +565,7 @@ def test_a_sample_without_analytes_takes_the_blend_its_analyses_name(db):
         "sample_bac": False, "form": "powder", "rider_only": False,
         "instrument_id": None, "instrument_name": None, "params": HPLC_RUN_PARAM_DEFAULTS,
         "prep_form": None, "hplc_prep": {}, "promoted": False, "prep": None, "problems": [],
+        "other_preps": [],
     }]
 
 
@@ -1019,3 +1027,279 @@ def test_the_item_route_locks_an_hplc_row_whenever_an_instrument_or_form_is_sent
         locked.clear()
         assert client.patch(f"/worksheets/{ws.id}/items/{row.id}", json=body).status_code == 200
         assert locked == [], body
+
+
+# --- fix wave (backend) ----------------------------------------------------------------------
+
+# B1: the components map cannot grow past the row's own components.
+
+
+def test_validate_refuses_more_than_seven_component_keys_in_one_patch():
+    seven = {str(n): {"mg": 1.0} for n in range(1, 8)}
+    assert worksheets_hplc.validate_hplc_prep_patch({"components": seven})
+    with pytest.raises(ValueError, match=r"hplc_prep\.components has 8 keys"):
+        worksheets_hplc.validate_hplc_prep_patch({"components": {**seven, "8": {"mg": 1.0}}})
+    assert worksheets_hplc.MAX_COMPONENTS == 7
+
+
+def test_patch_refuses_a_component_key_that_is_not_the_rows_and_stores_nothing(client, db):
+    ws, item = _world(db)
+    url = f"/worksheets/{ws.id}/items/{item.id}/hplc"
+    r = client.patch(url, json={"hplc_prep": {"declared_mg": 9.0, "components": {"987654": {"mg": 1.0}}}})
+    assert r.status_code == 400
+    assert r.json()["detail"] == "hplc_prep.components key '987654' is not a component of this row"
+    db.expire_all()
+    assert db.get(WorksheetItem, item.id).hplc_prep is None
+    # eight keys in one body: refused before the row is looked at
+    r = client.patch(url, json={"hplc_prep": {"components": {str(n): {"mg": 1.0} for n in range(1, 9)}}})
+    assert r.status_code == 400 and "components has 8 keys" in r.json()["detail"]
+    # the row's own component still saves, and a null for a stray key only removes
+    bpc = db.query(Peptide).filter_by(abbreviation="BPC-157").one()
+    r = client.patch(url, json={"hplc_prep": {"components": {str(bpc.id): {"target": 150}, "987654": None}}})
+    assert r.status_code == 200, r.text
+    assert r.json()["hplc_prep"] == {"components": {str(bpc.id): {"target": 150}}}
+
+
+# B4: the sheet refuses the weighings and volumes the engine would refuse.
+
+
+def test_the_ceilings_are_the_analyze_routes_own():
+    assert worksheets_hplc.MAX_WEIGHING_MG == main.MAX_WEIGHING_MG
+    assert worksheets_hplc.MAX_DECLARED_VOLUME_ML == main.MAX_DECLARED_VOLUME_ML
+
+
+@pytest.mark.parametrize("make, top", [
+    (lambda v: {"stock_vial_diluent_mg": v}, 1e9),
+    (lambda v: {"vials": {"1": {"vial_mg": v}}}, 1e9),
+    (lambda v: {"vials": {"2": {"int_vial_all_mg": v}}}, 1e9),
+    (lambda v: {"declared_volume_ml": v}, 1e6),
+])
+def test_a_weighing_or_a_volume_above_the_engines_ceiling_is_refused(make, top):
+    assert worksheets_hplc.validate_hplc_prep_patch(make(top)) == make(top)
+    with pytest.raises(ValueError, match=f"must be a number from 0 to {top:.0f}"):
+        worksheets_hplc.validate_hplc_prep_patch(make(top * (1 + 1e-9)))
+
+
+# B7: the branch's statements in ensure_sample_preps_table run once per process.
+
+
+class _FakeConn:
+    def __init__(self, log, fail_on=None):
+        self.log, self.fail_on = log, fail_on
+
+    def cursor(self, **_k):
+        conn = self
+
+        class _Cur:
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *a):
+                return False
+
+            def execute(self, sql, *a):
+                if conn.fail_on and conn.fail_on in sql:
+                    raise psycopg2.OperationalError("lock timeout")
+                conn.log.append(sql)
+        return _Cur()
+
+    def commit(self):
+        self.log.append("COMMIT")
+
+    def rollback(self):
+        pass
+
+    def close(self):
+        pass
+
+
+def test_the_hplc_statements_of_ensure_run_once_per_process_and_again_after_a_failure(monkeypatch):
+    import contextlib
+
+    log, fail = [], {"on": "uq_sample_preps_worksheet_item"}
+
+    @contextlib.contextmanager
+    def fake():
+        yield _FakeConn(log, fail["on"])
+
+    monkeypatch.setattr(mk1_db, "get_mk1_db", fake)
+    monkeypatch.setattr(mk1_db, "_hplc_columns_ready", False)
+    def new():  # the eight ADD COLUMNs and the unique index this branch added
+        return [s for s in log if any(f" {c} " in s for c in mk1_db._HPLC_PREP_COLUMNS)
+                or "uq_sample_preps_worksheet_item" in s]
+
+    with pytest.raises(psycopg2.OperationalError):
+        mk1_db.ensure_sample_preps_table()
+    assert mk1_db._hplc_columns_ready is False  # a failure leaves the flag unset
+    fail["on"] = None
+    log.clear()
+    mk1_db.ensure_sample_preps_table()
+    assert mk1_db._hplc_columns_ready is True and len(new()) == 9
+    old = [s for s in log if s.startswith("ALTER") and s not in new()]
+    log.clear()
+    mk1_db.ensure_sample_preps_table()
+    assert new() == []
+    # the statements from before this branch run every time, as they did
+    assert [s for s in log if s.startswith("ALTER")] == old and len(old) == 13
+
+
+# B8: a vial that already has a prep says so.
+
+
+def _prep_on(vial_pk, item_id=None):
+    return mk1_db.create_sample_prep({"peptide_id": 1, "status": "awaiting_hplc",
+                                      "lims_sub_sample_pk": vial_pk, "worksheet_item_id": item_id})
+
+
+def test_other_preps_lists_the_vials_preps_not_made_from_this_row_newest_first(db):
+    ws, item = _world(db)
+    parent = db.query(LimsSample).filter_by(sample_id="P-0200").one()
+    bare = _item(db, ws, parent, 2)
+    db.commit()
+    vial_pk = db.query(LimsSubSample.id).filter_by(sample_id=item.sample_id).scalar()
+    made = []
+    try:
+        made.append(_prep_on(vial_pk))                    # the old wizard's prep
+        made.append(_prep_on(vial_pk, next(_IDS)))        # promoted from another worksheet's row
+        made.append(_prep_on(vial_pk, item.id))           # this row's own promote
+        rows = {r["item_id"]: r for r in _rows(db, ws)}
+        slim = lambda p: {"id": p["id"], "sample_id": p["sample_id"], "status": p["status"]}  # noqa: E731
+        assert rows[item.id]["other_preps"] == [slim(made[1]), slim(made[0])]
+        assert rows[item.id]["prep"] == slim(made[2]) and rows[item.id]["promoted"] is True
+        assert rows[bare.id]["other_preps"] == [] and rows[bare.id]["promoted"] is False
+    finally:
+        for p in made:
+            mk1_db.delete_sample_prep(p["id"])
+
+
+def test_other_preps_is_one_mk1_db_query_whatever_the_row_count(db, monkeypatch):
+    ws, item = _world(db)
+    parent = db.query(LimsSample).filter_by(sample_id="P-0200").one()
+    for n in range(2, 6):
+        _item(db, ws, parent, n)
+    db.commit()
+    calls = []
+    real = mk1_db.list_sample_preps_for_worksheet_items_or_vials
+    monkeypatch.setattr(mk1_db, "list_sample_preps_for_worksheet_items_or_vials",
+                        lambda *a: (calls.append(a), real(*a))[1])
+    assert len(_rows(db, ws)) == 5 and len(calls) == 1
+
+
+# B9: a no-op instrument send leaves a promoted row's analyses alone.
+
+
+def test_a_no_op_instrument_uid_never_rewrites_a_promoted_rows_analyses(client, db, promote):
+    bpc = _peptide(db, "BPC-157")
+    inst = Instrument(name="HPLC 1290a", senaite_uid="uid-1")
+    db.add(inst)
+    db.flush()
+    _method(db, bpc, inst, {"hplc": {}})
+    svc = AnalysisService(title="BPC-157 purity", keyword="PUR_BPC157_SG", peptide_id=bpc.id)
+    group = ServiceGroup(name="HPLC group")
+    db.add_all([svc, group])
+    db.flush()
+    db.execute(service_group_members.insert().values(service_group_id=group.id, analysis_service_id=svc.id))
+    ws = _ws(db)
+    parent = _sample(db, "P-0210", [(bpc, "BPC-157", "10")], form=_form(db))
+    analyses = json.dumps([{"keyword": "PUR_BPC157_SG"}])
+    cols = dict(instrument_id=inst.id, instrument_uid="uid-1", service_group_id=group.id, analyses_json=analyses)
+    item, plain = _item(db, ws, parent, 1, **cols), _item(db, ws, parent, 2, **cols)
+    db.commit()
+    promote(item)
+    for row in (item, plain):
+        r = client.patch(f"/worksheets/{ws.id}/items/{row.id}", json={"instrument_uid": "uid-1"})
+        assert r.status_code == 200, r.text
+    db.expire_all()
+    assert db.get(WorksheetItem, item.id).analyses_json == analyses
+    assert json.loads(db.get(WorksheetItem, plain.id).analyses_json) == [
+        {"keyword": "PUR_BPC157_SG", "method": "HPLC M1"}]  # an unpromoted row still resolves
+
+
+# B12: a worksheet gone before the lock is a 404.
+
+
+def test_a_worksheet_deleted_before_the_lock_is_404(db, monkeypatch):
+    from fastapi import HTTPException
+
+    ws, item = _world(db)
+    monkeypatch.setattr(main, "_worksheet_for_update", lambda _db, _wid: None)
+    with pytest.raises(HTTPException) as caught:
+        main._promoted_hplc_rows_locked(db, ws.id, [item])
+    assert caught.value.status_code == 404
+
+
+# B13: the tests the reviews named.
+
+
+def test_with_both_matching_blends_retired_the_lowest_id_wins(db):
+    bpc, tb = _peptide(db, "BPC-157"), _peptide(db, "TB-500")
+    first = _peptide(db, "BPC/TB", blend_of=((bpc, 1), (tb, 2)))
+    second = _peptide(db, "BPC/TB 2", blend_of=((tb, 1), (bpc, 1)))
+    first.active = second.active = False
+    parent = _sample(db, "P-0134", [(bpc, "BPC-157", "5"), (tb, "TB-500", "5")], form=_form(db))
+    ws = _ws(db)
+    _item(db, ws, parent)
+    db.commit()
+    [row] = _rows(db, ws)
+    assert (row["peptide_id"], row["problems"]) == (min(first.id, second.id), [])
+
+
+def test_apply_method_instrument_leaves_a_promoted_rows_vial_analyses_unstamped(client, db, promote):
+    from models import method_services
+
+    one, two = Instrument(name="HPLC 1290a"), Instrument(name="HPLC 1290b")
+    db.add_all([one, two])
+    db.flush()
+    ws, item, plain = _promoted_and_plain(db, promote, instrument_id=one.id)
+    method = HplcMethod(name="HPLC M2")
+    svc = AnalysisService(title="BPC-157 purity", keyword="PUR_BPC157_AMI")
+    db.add_all([method, svc])
+    db.flush()
+    db.execute(instrument_methods.insert().values(instrument_id=two.id, method_id=method.id))
+    db.execute(method_services.insert().values(method_id=method.id, analysis_service_id=svc.id))
+    rows = []
+    for it in (item, plain):
+        vial = db.query(LimsSubSample).filter_by(sample_id=it.sample_id).one()
+        rows.append(LimsAnalysis(lims_sub_sample_pk=vial.id, analysis_service_id=svc.id, keyword=svc.keyword,
+                                 title=svc.title, review_state="unassigned"))
+    db.add_all(rows)
+    db.commit()
+    r = client.post(f"/worksheets/{ws.id}/apply-method-instrument",
+                    json={"method_id": method.id, "instrument_id": two.id})
+    assert r.status_code == 200 and r.json()["stamped"] == 1, r.text
+    db.expire_all()
+    assert [(db.get(LimsAnalysis, a.id).instrument_id, db.get(LimsAnalysis, a.id).method_id) for a in rows] == [
+        (None, None), (two.id, method.id)]
+
+
+def test_each_instrument_writer_fails_closed_when_mk1_db_is_down(db, promote, monkeypatch):
+    # an HPLC row's promoted state cannot be read: 500, and nothing is written
+    one, two = Instrument(name="HPLC 1290a"), Instrument(name="HPLC 1290b")
+    db.add_all([one, two])
+    db.flush()
+    ws, item = _world(db, instrument_id=one.id)
+    method = HplcMethod(name="HPLC M2")
+    db.add(method)
+    db.flush()
+    db.execute(instrument_methods.insert().values(instrument_id=two.id, method_id=method.id))
+    db.commit()
+
+    def down(_ids):
+        raise psycopg2.OperationalError("could not connect to server")
+
+    monkeypatch.setattr(worksheets_hplc, "_preps_by_item", down)
+    app.dependency_overrides[get_db] = lambda: db
+    app.dependency_overrides[get_current_user] = lambda: MagicMock(id=1, email="qa@accumark.test")
+    try:
+        client = TestClient(app, raise_server_exceptions=False)
+        for method_, url, body in (
+                ("PATCH", f"/worksheets/{ws.id}/items/{item.id}", {"instrument_id": two.id}),
+                ("POST", f"/worksheets/{ws.id}/bench-ticks", {"ran": True}),
+                ("POST", f"/worksheets/{ws.id}/apply-method-instrument",
+                 {"method_id": method.id, "instrument_id": two.id})):
+            assert client.request(method_, url, json=body).status_code == 500, url
+            db.expire_all()
+            stored = db.get(WorksheetItem, item.id)
+            assert (stored.instrument_id, stored.ran_at) == (one.id, None), url
+    finally:
+        app.dependency_overrides.clear()

@@ -108,11 +108,20 @@ CREATE INDEX IF NOT EXISTS idx_sample_preps_created_at   ON sample_preps (create
 """
 
 
+# Set once the HPLC prep worksheet's columns and index below are in: the inbox calls
+# ensure_sample_preps_table on every request, and each ALTER takes a strong lock on
+# sample_preps even when there is nothing to add. Columns are never dropped, so once per
+# process is enough; a failure leaves it unset and the next call tries again.
+_hplc_columns_ready = False
+
+
 def ensure_sample_preps_table() -> None:
     """
     Idempotently create the sample_preps table and its indexes in accumark_mk1.
     Safe to call on every startup — uses CREATE TABLE IF NOT EXISTS.
     """
+    global _hplc_columns_ready
+    adding = not _hplc_columns_ready
     with get_mk1_db() as conn:
         with conn.cursor() as cur:
             cur.execute(_SAMPLE_PREPS_DDL)
@@ -135,23 +144,26 @@ def ensure_sample_preps_table() -> None:
             cur.execute("ALTER TABLE sample_preps ADD COLUMN IF NOT EXISTS lims_sub_sample_pk INTEGER")
             # HPLC prep worksheet: the form, a liquid's declared volume, a capsule count, the
             # diluent, the intermediate vial of a two-step dilution, and the worksheet item a
-            # promoted row came from (at most one prep per item).
-            for col, ddl in (
-                ("prep_form", "VARCHAR(10)"),
-                ("declared_volume_ml", "DOUBLE PRECISION"),
-                ("capsules_used", "INTEGER"),
-                ("diluent", "VARCHAR(40)"),
-                ("int_vial_empty_mg", "DOUBLE PRECISION"),
-                ("int_vial_with_diluent_mg", "DOUBLE PRECISION"),
-                ("int_vial_final_mg", "DOUBLE PRECISION"),
-                ("worksheet_item_id", "INTEGER"),
-            ):
-                cur.execute(f"ALTER TABLE sample_preps ADD COLUMN IF NOT EXISTS {col} {ddl}")
-            cur.execute(
-                "CREATE UNIQUE INDEX IF NOT EXISTS uq_sample_preps_worksheet_item "
-                "ON sample_preps (worksheet_item_id) WHERE worksheet_item_id IS NOT NULL"
-            )
+            # promoted row came from (at most one prep per item). Once per process.
+            if adding:
+                for col, ddl in (
+                    ("prep_form", "VARCHAR(10)"),
+                    ("declared_volume_ml", "DOUBLE PRECISION"),
+                    ("capsules_used", "INTEGER"),
+                    ("diluent", "VARCHAR(40)"),
+                    ("int_vial_empty_mg", "DOUBLE PRECISION"),
+                    ("int_vial_with_diluent_mg", "DOUBLE PRECISION"),
+                    ("int_vial_final_mg", "DOUBLE PRECISION"),
+                    ("worksheet_item_id", "INTEGER"),
+                ):
+                    cur.execute(f"ALTER TABLE sample_preps ADD COLUMN IF NOT EXISTS {col} {ddl}")
+                cur.execute(
+                    "CREATE UNIQUE INDEX IF NOT EXISTS uq_sample_preps_worksheet_item "
+                    "ON sample_preps (worksheet_item_id) WHERE worksheet_item_id IS NOT NULL"
+                )
         conn.commit()
+    if adding:
+        _hplc_columns_ready = True
 
 
 # ─── peptide_requests DDL ──────────────────────────────────────────────────────
@@ -532,6 +544,22 @@ def list_sample_preps_for_worksheet_items(item_ids: list[int]) -> list[dict]:
             cur.execute(
                 "SELECT * FROM sample_preps WHERE worksheet_item_id = ANY(%s)",
                 [item_ids],
+            )
+            return [dict(r) for r in cur.fetchall()]
+
+
+def list_sample_preps_for_worksheet_items_or_vials(item_ids: list[int], sub_sample_pks: list[int]) -> list[dict]:
+    """Preps promoted from any of the given worksheet items OR tagged to any of the given vials,
+    newest first, in one query (the HPLC sheet's promoted rows and other_preps)."""
+    if not item_ids and not sub_sample_pks:
+        return []
+    with get_mk1_db() as conn:
+        with conn.cursor(cursor_factory=RealDictCursor) as cur:
+            cur.execute(
+                "SELECT id, sample_id, status, worksheet_item_id, lims_sub_sample_pk FROM sample_preps "
+                "WHERE worksheet_item_id = ANY(%s::int[]) OR lims_sub_sample_pk = ANY(%s::int[]) "
+                "ORDER BY created_at DESC, id DESC",
+                [list(item_ids), list(sub_sample_pks)],
             )
             return [dict(r) for r in cur.fetchall()]
 
