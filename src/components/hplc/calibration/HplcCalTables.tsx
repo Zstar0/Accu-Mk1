@@ -86,7 +86,7 @@ const WRAP = 'overflow-x-auto rounded-md border'
 /** What the keys do in the Step 3 and 4 tables (onSheetKey): the order goes
  *  down a column, as the lab tool's does (round 2 I-1). */
 const KEYS_HINT =
-  'Tab and Enter go down a column, then to the top of the next one; Shift+Tab and Shift+Enter go back up. The arrow keys move along a row (Left, Right) and between rows (Up, Down); while you edit a value, Left and Right first move through its text.'
+  'Tab and Enter go down a column, then to the top of the next one; Shift+Tab and Shift+Enter go back up. The arrow keys move along a row (Left, Right) and between rows (Up, Down). Moving into a box selects its value, so the next key you type replaces it.'
 const KeysHint = () => (
   <p className="mb-2 text-xs text-muted-foreground" data-testid="keys-hint">
     {KEYS_HINT}

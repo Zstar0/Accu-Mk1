@@ -715,7 +715,7 @@ const DUP_CHANGED =
 const NOT_TAKEN_LINE =
   'Not saved: the server did not answer or could not take the save. Your changes are still on this page.'
 const KEYS =
-  'Tab and Enter go down a column, then to the top of the next one; Shift+Tab and Shift+Enter go back up. The arrow keys move along a row (Left, Right) and between rows (Up, Down); while you edit a value, Left and Right first move through its text.'
+  'Tab and Enter go down a column, then to the top of the next one; Shift+Tab and Shift+Enter go back up. The arrow keys move along a row (Left, Right) and between rows (Up, Down). Moving into a box selects its value, so the next key you type replaces it.'
 const WORKED_OUT =
   'This sheet cannot be worked out as stored. Check the values below.'
 
