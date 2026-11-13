@@ -217,6 +217,10 @@ export interface HplcRowComputed {
 
 const MAX_VIALS = 7 // calc.js VIAL_LETTERS 'ABCDEFG'
 
+/** hplc_prep.vial_letter: a vial as the bench names it, 1 is A up to 7 is G.
+ *  Only words use it; vials stay keyed by number everywhere else. */
+export const vialLetter = (n: number): string => 'ABCDEFG'.charAt(n - 1)
+
 /** The edge: a missing key, null, NaN or a non-number all read as null. */
 function num(x: unknown): number | null {
   return typeof x === 'number' && Number.isFinite(x) ? x : null
@@ -810,7 +814,7 @@ function warnings(
       if (actual.problem !== null)
         warn(
           `${code}_${actual.problem}`,
-          `Vial ${v.vial}, Step ${label}: ${weighing[actual.problem]}. ` +
+          `Vial ${vialLetter(v.vial)}, Step ${label}: ${weighing[actual.problem]}. ` +
             'Check the weights; no concentration is worked out.',
           v.vial
         )
@@ -841,7 +845,7 @@ function warnings(
       if (planned !== null && got !== null && volumeOff(planned, got, params))
         warn(
           'volume_off',
-          `Vial ${v.vial}: the ${what} added to the ${where} is ${got.toFixed(2)} uL ` +
+          `Vial ${vialLetter(v.vial)}: the ${what} added to the ${where} is ${got.toFixed(2)} uL ` +
             `against ${planned.toFixed(2)} uL planned, more than ${g(tol)}% off. ` +
             'Remake the vial, or call it out.',
           v.vial
@@ -852,7 +856,7 @@ function warnings(
     if (c.below_floor && c.planned_final_ug_ml !== null)
       warn(
         'below_floor',
-        `This peptide lands at ${c.planned_final_ug_ml.toFixed(2)} ug/mL in vial ${c.vial}, ` +
+        `This peptide lands at ${c.planned_final_ug_ml.toFixed(2)} ug/mL in vial ${vialLetter(c.vial)}, ` +
           `under the ${g(floor)} ug/mL floor. Consider giving it its own vial.`,
         c.vial,
         c.peptide_id

@@ -153,7 +153,7 @@ describe('Step 3a, the intermediate dilution', () => {
       .filter(td => td.className.includes('bg-amber'))
     expect(marked).toHaveLength(1)
     expect(marked[0]?.title).toMatch(
-      /^Vial 1: the stock added to the intermediate is .* uL against .* uL planned/
+      /^Vial A: the stock added to the intermediate is .* uL against .* uL planned/
     )
   })
 
@@ -164,7 +164,7 @@ describe('Step 3a, the intermediate dilution', () => {
       .filter(td => td.className.includes('bg-amber'))
     expect(marked).toHaveLength(1)
     expect(marked[0]?.title).toMatch(
-      /^Vial 1: the stock added to the final vial is .* uL against .* uL planned/
+      /^Vial A: the stock added to the final vial is .* uL against .* uL planned/
     )
   })
 

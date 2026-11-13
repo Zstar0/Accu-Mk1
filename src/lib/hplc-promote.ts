@@ -9,7 +9,11 @@
  * hplc_promote_reason_cases.json pins both sides. Pure.
  */
 import type { HplcSheetRow } from '@/lib/api'
-import type { HplcRowComputed } from '@/lib/hplc-prep'
+import {
+  vialLetter,
+  type HplcRowComputed,
+  type HplcVialComputed,
+} from '@/lib/hplc-prep'
 
 // Process HPLC's own figures (backend/calculations/hplc_processor.py), not the
 // method's: the check below is that the method's agree with them.
@@ -42,6 +46,9 @@ const REASON_STOCK_BACKWARDS =
 const REASON_SOLO_BLEND =
   "the sample names a catalog blend as one peptide; record the blend's components " +
   'on the sample so each one is quantified on its own curve'
+const REASON_CAPSULE_BLEND =
+  'A blend in capsules cannot be promoted from the sheet yet: its component concentrations ' +
+  'are being corrected in the working-out. Prep this one in the wizard.'
 const FORM_PROBLEM = 'no HPLC prep for this sample form'
 const FLAGGED = {
   diluent: 'the vial + diluent weight is less than the empty vial',
@@ -80,6 +87,44 @@ const missing = (
 // up to 1e16.
 const g = (x: number) => String(x)
 
+// The server's two_places(): the float's exact value at two decimals, a tie
+// rounded up, which is toFixed(2).
+const two = (x: number) => x.toFixed(2)
+
+// _above: strictly above, past float noise, and by enough to print differently
+const above = (target: number | null, source: number | null) =>
+  target != null &&
+  source != null &&
+  target > source * (1 + 1e-9) &&
+  two(target) !== two(source)
+
+/** _above_the_stock: a target above what its step dilutes from. A capsule is
+ *  injected neat, so it is never a reason. */
+function aboveTheStock(v: HplcVialComputed): string[] {
+  if (v.neat) return []
+  const out: string[] = []
+  const letter = vialLetter(v.vial)
+  const inter = v.two_step ? v.intermediate : null
+  if (inter && above(inter.target_ug_ml, v.stock_conc_ug_ml))
+    out.push(
+      `Vial ${letter}, Step 3a: the intermediate target, ${two(inter.target_ug_ml as number)} ug/mL, ` +
+        `is above the stock it is diluted from, ${two(v.stock_conc_ug_ml as number)} ug/mL; lower it ` +
+        'or check Step 2'
+    )
+  if (above(v.target.value, v.stock_for_final)) {
+    const target = two(v.target.value)
+    const source = two(v.stock_for_final as number)
+    out.push(
+      inter
+        ? `Vial ${letter}, Step 3: the target, ${target} ug/mL, is above the intermediate it is ` +
+            `diluted from, ${source} ug/mL; lower the target or check Step 3a`
+        : `Vial ${letter}: the target, ${target} ug/mL, is above the stock it is diluted from, ` +
+            `${source} ug/mL; lower the target or check Step 2`
+    )
+  }
+  return out
+}
+
 /**
  * Every reason the row cannot be promoted, all at once, in the order the
  * sheet is worked (empty: it can be). `computed` is computeRow's answer, or
@@ -102,6 +147,7 @@ export function promoteReasons(
       `this blend has ${n} components and the cap is ${blendCap}; ` +
         'a partial blend is never filed'
     )
+  if (row.form === 'capsule' && row.is_blend) reasons.push(REASON_CAPSULE_BLEND)
   if (row.instrument_id == null) reasons.push(REASON_NO_INSTRUMENT)
   if (computed === null) return reasons
 
@@ -156,13 +202,16 @@ export function promoteReasons(
     for (const [label, names, skip, actual] of steps) {
       const gone = missing(weighed, names, skip)
       if (gone.length)
-        reasons.push(`Vial ${v.vial}, Step ${label}: weigh ${and(gone)}`)
+        reasons.push(
+          `Vial ${vialLetter(v.vial)}, Step ${label}: weigh ${and(gone)}`
+        )
       else if (actual.problem)
         reasons.push(
-          `Vial ${v.vial}, Step ${label}: ${FLAGGED[actual.problem]}; ` +
+          `Vial ${vialLetter(v.vial)}, Step ${label}: ${FLAGGED[actual.problem]}; ` +
             'check the weights'
         )
     }
+    reasons.push(...aboveTheStock(v))
   }
   if (row.is_blend) {
     const names = new Map(
@@ -185,7 +234,7 @@ export function promoteReasons(
     for (const v of computed.vials)
       if (v.dilution_factor_total == null || v.stock_conc_ug_ml == null)
         reasons.push(
-          `Vial ${v.vial} cannot be worked out from these numbers; check the row`
+          `Vial ${vialLetter(v.vial)} cannot be worked out from these numbers; check the row`
         )
   }
   return reasons
