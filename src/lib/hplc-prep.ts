@@ -893,10 +893,12 @@ function mergeObject(stored: Plain, patch: Plain): Plain {
   const out: Plain = {}
   for (const key of new Set([...Object.keys(stored), ...Object.keys(patch)])) {
     // sent = present and not undefined (JSON.stringify drops undefined, so the
-    // server never sees it); only an explicit null removes
+    // server never sees it); a null removes, and so does NaN or +/-Infinity,
+    // which JSON.stringify writes as null (a cleared number box is NaN)
     const sent = Object.hasOwn(patch, key) && patch[key] !== undefined
     const value = sent ? patch[key] : stored[key]
     if (value === null || value === undefined) continue
+    if (typeof value === 'number' && !Number.isFinite(value)) continue
     if (sent && isPlain(value)) {
       const base = stored[key]
       const merged = mergeObject(isPlain(base) ? base : {}, value)

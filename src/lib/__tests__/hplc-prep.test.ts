@@ -180,4 +180,47 @@ describe('mergeHplcPrep', () => {
     expect(merged.vials).not.toBe(stored.vials)
     expect(merged.vials?.['1']).not.toBe(stored.vials?.['1'])
   })
+
+  it('a NaN or Infinity leaf removes the key, as null does', () => {
+    expect(
+      mergeHplcPrep(
+        { stock_vial_mg: 5012.31, capsules: 4 },
+        { stock_vial_mg: NaN }
+      )
+    ).toEqual({ capsules: 4 })
+    expect(
+      mergeHplcPrep(
+        { declared_mg: 10, vials: { '1': { vial_mg: 2500.1 } } },
+        { vials: { '1': { vial_mg: Infinity } } }
+      )
+    ).toEqual({ declared_mg: 10 })
+  })
+
+  it('gives what the server stores: the same as the patch after a JSON round trip', () => {
+    const stored: HplcPrepInputs = {
+      declared_mg: 10,
+      stock_vial_mg: 5012.31,
+      two_step: true,
+      components: { '36': { mg: 5, vial: 2 } },
+      vials: {
+        '1': { vial_mg: 2500.1 },
+        '2': { lead_id: 36, target_ug_ml: 200 },
+      },
+    }
+    const patches: HplcPrepInputs[] = [
+      { stock_vial_mg: NaN },
+      { vials: { '1': { vial_mg: Infinity } } },
+      { declared_mg: -Infinity, two_step: false },
+      { components: { '36': { mg: NaN, vial: null } } },
+      { vials: { '2': { target_ug_ml: undefined, lead_id: 11 } } },
+      { declared_mg: 12, vials: { '3': { vial_mg: NaN } } },
+    ]
+    for (const patch of patches)
+      expect(mergeHplcPrep(stored, patch)).toEqual(
+        mergeHplcPrep(
+          stored,
+          JSON.parse(JSON.stringify(patch)) as HplcPrepInputs
+        )
+      )
+  })
 })
