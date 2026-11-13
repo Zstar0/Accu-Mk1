@@ -5,7 +5,12 @@ lims_sample_forms: does hplc_prep exist, is its CHECK there, and did the backfil
 built-in forms that have a prep kind (three since the HPLC prep worksheet plan added
 capsule, with hplc_analyses.capsules_used)? The HPLC prep rules plan (2026-11-12, Task 2)
 adds hplc_prep_rules: does the table exist with every column, nullable as its CREATE
-TABLE statement makes it?
+TABLE statement makes it? The HPLC prep worksheet plan (2026-11-12, Task 2) adds eight
+nullable sample_preps columns and the unique partial index uq_sample_preps_worksheet_item.
+sample_preps is not created by database.py or _run_migrations: mk1_db.ensure_sample_preps_table()
+creates and alters it, and the /sample-preps routes (and others) call it before they touch the
+table, so a fresh deploy gets the columns on the first such request. Run this check after one
+(open the Sample Preps page): a miss before that is expected, a miss after it is not.
 
 _run_migrations runs each ALTER on its own and LOGS a failure instead of raising, so a
 column can silently fail to exist in production, and a DROP NOT NULL that failed leaves
@@ -72,6 +77,17 @@ RULES_EXPECTED = {
         "lead_component_id", "lead_priority", "floor_ug_ml", "diluent",
         "default_instrument_id", "note", "created_at", "updated_at", "updated_by_id")},
 }
+# sample_preps (HPLC prep worksheet plan, Task 2): all eight nullable, and one prep per
+# worksheet item through a unique partial index.
+PREPS_EXPECTED = {
+    name: "YES"
+    for name in (
+        "prep_form", "declared_volume_ml", "capsules_used", "diluent",
+        "int_vial_empty_mg", "int_vial_with_diluent_mg", "int_vial_final_mg",
+        "worksheet_item_id",
+    )
+}
+PREPS_INDEX = "uq_sample_preps_worksheet_item"
 FORMS_CHECK = "ck_lims_sample_forms_hplc_prep"
 FORMS_PREP = {
     "lyophilized powder": "powder",
@@ -141,6 +157,16 @@ def evaluate_sample_forms(found, constraints, rows):
     return lines, bad, not_found
 
 
+def evaluate_sample_preps(found, indexdef):
+    """(report lines, number of problems) for the sample_preps columns and the worksheet-item
+    index, whose pg_indexes definition is `indexdef` (None when it is missing). Pure."""
+    lines, bad = evaluate(found, PREPS_EXPECTED)
+    ok = bool(indexdef) and "UNIQUE" in indexdef and "worksheet_item_id IS NOT NULL" in indexdef
+    bad += not ok
+    lines.append(f"{PREPS_INDEX:36} {'index':20} {'ok' if ok else 'MISSING' if not indexdef else 'WRONG ' + indexdef}")
+    return lines, bad
+
+
 def _columns(db, table, names):
     from sqlalchemy import text
 
@@ -166,6 +192,17 @@ def main():
         found = _columns(db, "hplc_analyses", EXPECTED)
         forms_found = _columns(db, "lims_sample_forms", FORMS_EXPECTED)
         rules_found = _columns(db, "hplc_prep_rules", RULES_EXPECTED)
+        preps_found = _columns(db, "sample_preps", PREPS_EXPECTED)
+        preps_index = next(
+            (
+                row[0]
+                for row in db.execute(
+                    text("SELECT indexdef FROM pg_indexes WHERE tablename = 'sample_preps' AND indexname = :name"),
+                    {"name": PREPS_INDEX},
+                )
+            ),
+            None,
+        )
         # to_regclass is NULL for a missing table, where a bare ::regclass cast would raise.
         constraints = {
             row[0]
@@ -187,8 +224,9 @@ def main():
     lines, bad = evaluate(found)
     forms_lines, forms_bad, not_found = evaluate_sample_forms(forms_found, constraints, rows)
     rules_lines, rules_bad = evaluate(rules_found, RULES_EXPECTED)
-    print("\n".join(lines + forms_lines + ["hplc_prep_rules:"] + rules_lines))
-    bad += forms_bad + rules_bad
+    preps_lines, preps_bad = evaluate_sample_preps(preps_found, preps_index)
+    print("\n".join(lines + forms_lines + ["hplc_prep_rules:"] + rules_lines + ["sample_preps:"] + preps_lines))
+    bad += forms_bad + rules_bad + preps_bad
     if bad:
         closing = f"{bad} PROBLEM(S): do not ship a liquid prep or read hplc_prep until fixed"
     elif not_found:

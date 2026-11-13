@@ -109,6 +109,8 @@ const PROBLEM_WORDING = {
     'The calibration curve has no usable diluent density. This is not a weighing problem: the density needs setting on the curve.',
   no_declared_volume:
     'This liquid sample has no usable declared volume. This is not a weighing problem: the volume declared with the sample needs recording (it is taken as declared, not measured).',
+  no_capsule_count:
+    'This capsule sample has no usable capsule count. This is not a weighing problem: the number of capsules that went into the stock vial needs entering on the prep (the quantity is reported per capsule).',
   quantity_not_finite:
     'A value is too large for the calculation to handle. Check the dilution and intermediate vial weighings, the stock volume, the peak areas and the calibration curve; if those look right, raise it with the lab manager.',
   quantity_below_precision:
@@ -425,7 +427,7 @@ const NON_FINITE_STOCK_ROW = {
 
 // What the dilution panel says it could not work out, per code. null: the code is only
 // ever the quantity panel's reason (dilution.problem is null on its row).
-const DILUTION_LABEL: [keyof typeof PROBLEM_WORDING, string | null][] = [
+const DILUTION_LABEL: [keyof typeof CAPTURED_ROWS, string | null][] = [
   ['stock_diluent', 'Stock volume'],
   ['diluent', 'Dilution factor'],
   ['stock', 'Dilution factor'],
@@ -480,6 +482,22 @@ describe('CalculationVisuals with a weighing problem', () => {
       }
     }
   )
+
+  // no_capsule_count is a missing input, not a weighing: process_hplc_analysis refuses the
+  // quantity before calculate_quantity runs. Its own row carries only quantity_mg and error,
+  // which the quantity panel's guard does not render, so this pins the wording on a quantity
+  // section of the full shape.
+  it('says no_capsule_count in full in the quantity panel', () => {
+    const trace = {
+      quantity: { ...PROBLEM_QUANTITY, error: 'no_capsule_count' },
+    }
+    render(<CalculationVisuals trace={trace} />)
+    expect(
+      screen.getByText(
+        `Mass not determined. ${PROBLEM_WORDING.no_capsule_count}`
+      )
+    ).toBeInTheDocument()
+  })
 
   // dilution_incomplete is unreachable on any dilution the engine builds and has no copy
   // on purpose: it is the quantity gate failing closed if an engine invariant is broken,

@@ -153,6 +153,8 @@ const PROBLEM_COPY: Record<string, string> = {
     'The calibration curve has no usable diluent density. This is not a weighing problem: the density needs setting on the curve.',
   no_declared_volume:
     'This liquid sample has no usable declared volume. This is not a weighing problem: the volume declared with the sample needs recording (it is taken as declared, not measured).',
+  no_capsule_count:
+    'This capsule sample has no usable capsule count. This is not a weighing problem: the number of capsules that went into the stock vial needs entering on the prep (the quantity is reported per capsule).',
   // These two codes are only ever the quantity panel's reason, never the dilution panel's.
   // A quantity can be refused on sound weighings: very small volumes work out to a mass with
   // no number left in it at the precision the result is carried onward in, which is coarser

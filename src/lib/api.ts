@@ -3561,12 +3561,34 @@ export interface HPLCWeightsInput {
   dil_vial_with_diluent_and_sample: number
 }
 
+/** The weights POST /hplc/analyze accepts (HPLCWeightsInput in backend/main.py): any may be
+ *  null (not weighed); which are required depends on prep_form. The three int_vial_* are the
+ *  intermediate vial of a two-step dilution: all three or none. */
+export interface HPLCAnalyzeWeights {
+  stock_vial_empty: number | null
+  stock_vial_with_diluent: number | null
+  dil_vial_empty: number | null
+  dil_vial_with_diluent: number | null
+  dil_vial_with_diluent_and_sample: number | null
+  int_vial_empty?: number | null
+  int_vial_with_diluent?: number | null
+  int_vial_with_diluent_and_sample?: number | null
+}
+
+export type HPLCPrepForm = 'powder' | 'liquid' | 'bac' | 'capsule'
+
 export interface HPLCAnalyzeRequest {
   sample_id_label: string
   peptide_id: number
   calibration_curve_id?: number
-  weights: HPLCWeightsInput
+  weights: HPLCAnalyzeWeights
   injections: Record<string, unknown>[]
+  // How the stock volume is obtained; the server defaults to powder when omitted.
+  prep_form?: HPLCPrepForm
+  // Required for a liquid prep.
+  declared_volume_ml?: number
+  // Required for a capsule prep, refused on any other form.
+  capsules_used?: number
   // Phase 10.5: provenance fields
   sample_prep_id?: number
   instrument_id?: number
@@ -4116,6 +4138,10 @@ export interface VialData {
   actual_stock_vol_ul: number | null
   actual_total_vol_ul: number | null
   analyte_data?: AnalyteData[]
+  // HPLC prep worksheet: this vial's intermediate vial of a two-step dilution.
+  int_vial_empty_mg?: number | null
+  int_vial_with_diluent_mg?: number | null
+  int_vial_final_mg?: number | null
 }
 
 export interface SamplePrep {
@@ -4160,6 +4186,16 @@ export interface SamplePrep {
   created_by_email: string | null
   updated_by_user_id: number | null
   updated_by_email: string | null
+  // HPLC prep worksheet (a promoted row). NULL on every wizard-born prep; optional
+  // because a backend that predates them does not send them.
+  prep_form?: HPLCPrepForm | null
+  declared_volume_ml?: number | null
+  capsules_used?: number | null
+  diluent?: string | null
+  int_vial_empty_mg?: number | null
+  int_vial_with_diluent_mg?: number | null
+  int_vial_final_mg?: number | null
+  worksheet_item_id?: number | null
   /** Additive SLA context (v1.11.1) — the linked sample's received date,
    *  priority, live analysis keywords, and owning department. Absent when
    *  the prep has no resolvable lims linkage (indicator shows the none

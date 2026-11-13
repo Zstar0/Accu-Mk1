@@ -704,10 +704,10 @@ def test_the_sample_forms_check_wants_the_column_the_constraint_and_the_two_back
 
 
 class _FakeSession:
-    """Canned stand-in for database.SessionLocal(): answers the four queries main() makes."""
+    """Canned stand-in for database.SessionLocal(): answers the five queries main() makes."""
 
-    def __init__(self, tables, constraints, rows):
-        self.tables, self.constraints, self.rows = tables, constraints, rows
+    def __init__(self, tables, constraints, rows, indexes=()):
+        self.tables, self.constraints, self.rows, self.indexes = tables, constraints, rows, indexes
 
     def __enter__(self):
         return self
@@ -724,6 +724,8 @@ class _FakeSession:
             return [(name, *table[name]) for name in params["names"] if name in table]
         if "pg_constraint" in sql:
             return [(name,) for name in self.constraints]
+        if "pg_indexes" in sql:
+            return [(self.indexes[params["name"]],)] if params["name"] in self.indexes else []
         if "FROM lims_sample_forms" in sql:
             if "hplc_prep" not in self.tables["lims_sample_forms"]:
                 raise RuntimeError("column hplc_prep does not exist")  # Postgres would abort the transaction
@@ -733,7 +735,7 @@ class _FakeSession:
 
 def _run_check_main(monkeypatch, capsys, *, stock_nullable="YES", forms_column=True,
                     constraints=("ck_lims_sample_forms_hplc_prep",), rows=_FORMS_ROWS,
-                    rules_table=True):
+                    rules_table=True, preps_table=True, preps_index=True):
     """(exit code, output lines) of check_hplc_columns.main() over canned query results."""
     from scripts import check_hplc_columns as check
 
@@ -746,8 +748,17 @@ def _run_check_main(monkeypatch, capsys, *, stock_nullable="YES", forms_column=T
         "hplc_prep_rules": (
             {name: ("integer", want) for name, want in check.RULES_EXPECTED.items()} if rules_table else {}
         ),
+        "sample_preps": {name: ("integer", "YES") for name in check.PREPS_EXPECTED} if preps_table else {},
     }
-    session = _FakeSession(tables, constraints, rows)
+    indexes = (
+        {check.PREPS_INDEX: (
+            "CREATE UNIQUE INDEX uq_sample_preps_worksheet_item ON public.sample_preps "
+            "USING btree (worksheet_item_id) WHERE (worksheet_item_id IS NOT NULL)"
+        )}
+        if preps_index
+        else {}
+    )
+    session = _FakeSession(tables, constraints, rows, indexes)
     monkeypatch.setattr(database, "SessionLocal", lambda: session)
     with pytest.raises(SystemExit) as exit_info:
         check.main()
@@ -767,8 +778,10 @@ def test_the_column_check_script_exits_zero_only_when_both_tables_are_right(monk
         {"constraints": ()},  # lims_sample_forms: the CHECK that never landed
         {"rows": [(1, "Lyophilized Powder", "injectable", None)] + _FORMS_ROWS[1:]},  # backfill missed a row
         {"rules_table": False},  # hplc_prep_rules: the CREATE TABLE that never ran
+        {"preps_table": False},  # sample_preps: ensure_sample_preps_table never ran on this image
+        {"preps_index": False},  # sample_preps: the worksheet-item unique index is missing
     ],
-    ids=["hplc_analyses", "no_column", "no_check", "backfill", "hplc_prep_rules"],
+    ids=["hplc_analyses", "no_column", "no_check", "backfill", "hplc_prep_rules", "sample_preps", "preps_index"],
 )
 def test_the_column_check_script_exits_one_for_a_failure_on_either_table(monkeypatch, capsys, broken):
     # The three lims_sample_forms cases are what pin main() adding that table's problems to
