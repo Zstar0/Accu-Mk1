@@ -27211,6 +27211,36 @@ def update_worksheet_item_hplc(
     return out
 
 
+@app.post("/worksheets/{worksheet_id}/items/{item_id}/hplc/promote")
+@_rollback_on_error
+def promote_worksheet_item_hplc(
+    worksheet_id: int,
+    item_id: int,
+    db: Session = Depends(get_db),
+    current_user=Depends(get_current_user),
+):
+    """A finished HPLC row becomes one sample_preps row (plan 2026-11-12, Task 6):
+    {"prep": {"id", "sample_id", "status"}, "already", "row"}. 409 with every reason at once
+    in {"detail": {"message", "reasons"}}. The worksheet row, then the row's vial analyses
+    and item, under row locks (the lock order, _worksheet_for_update), held until the prep
+    is written. A plain dict, no response_model, so no key is dropped."""
+    from endo_prep_rules import lock_items_for_update
+    from worksheets_hplc_promote import Refused, promote_row
+    ws = _worksheet_for_update(db, worksheet_id)
+    if not ws or ws.status == "staging":
+        raise HTTPException(404, "Worksheet not found")
+    item = db.execute(select(WorksheetItem).where(
+        WorksheetItem.id == item_id, WorksheetItem.worksheet_id == worksheet_id)).scalar_one_or_none()
+    if not item:
+        raise HTTPException(404, "Worksheet item not found")
+    lock_items_for_update(db, ws, [item.id])  # re-reads the item under its lock
+    try:
+        return promote_row(db, current_user, ws, item)
+    except Refused as exc:
+        raise HTTPException(exc.status, {"message": str(exc), "reasons": exc.reasons}
+                            if exc.reasons is not None else str(exc))
+
+
 class WorksheetApplyMethodInstrument(BaseModel):
     method_id: int
     instrument_id: int
