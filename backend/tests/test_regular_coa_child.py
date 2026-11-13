@@ -101,7 +101,7 @@ async def test_no_regular_child_when_primary_has_no_generation_id(db_session, mo
     assert captured == {}
 
 
-def _boom(db, parent):
+def _boom(db, parent, **kw):  # **kw: the wrapper always passes `trace`
     raise RuntimeError("db exploded")
 
 

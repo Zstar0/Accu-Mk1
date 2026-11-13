@@ -498,7 +498,9 @@ def _build_from_services(db: Session, parent, raw, services, *, vial_parent_ids,
     form_tier = f"form={sample_form_id!r}, " if sample_form_id is not None else ""
     # The word a Variance run row uses for one unit of this sample ("Vial",
     # "Pen"): the dosage form's, whatever the matrix (Handler, 2026-11-13).
-    unit_word = unit_words(db, parent)[0]
+    # Read once and only when a run row needs it, so a document with no
+    # Variance runs makes no extra query.
+    unit_word = None
     # Add-on test Variance: resolved once, from the merged services (they
     # carry `variance`), for the parent document only. None (no four-key
     # entry, every sample today) prints exactly today's rows; the per-vial
@@ -640,7 +642,12 @@ def _build_from_services(db: Session, parent, raw, services, *, vial_parent_ids,
                 )
             # A pooled run is a "Digest" whatever the form; any other run is
             # one unit of the sample, named by its form factor.
-            run_word = rv.run_label if rv.pooled else unit_word
+            if rv.pooled:
+                run_word = rv.run_label
+            else:
+                if unit_word is None:
+                    unit_word = unit_words(db, parent)[0]
+                run_word = unit_word
             for row_out, svc in zip(rows, printed):
                 row_out["name"] = f"{svc.title}, {run_word} 1"
             traced = [_trace_row(1, row, row_out) for row_out, row in zip(rows, printed_rows)]

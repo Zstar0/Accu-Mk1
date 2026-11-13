@@ -33,30 +33,46 @@ def build_coa_wire_document(db, parent, *, trace=None) -> dict:
     existing fail-closed handling. `trace` is build_native_sections' (the
     Variance fingerprint content; never on the wire).
     """
-    doc = (build_native_sections(db, parent) if trace is None
-           else build_native_sections(db, parent, trace=trace))
+    # Always traced: the unit block reads which Variance profiles printed
+    # their runs. A caller's own list is filled exactly as before.
+    runs = trace if trace is not None else []
+    doc = build_native_sections(db, parent, trace=runs)
     if coa_generation_source(db) == "mk1":
         doc["legacy_rows"] = _legacy_block(db, parent, doc["sections"])
         doc["sample_meta"] = build_sample_meta(db, parent)
-    _attach_sample_units(db, parent, doc)
+    _attach_sample_units(db, parent, doc, variance_keys=[
+        t.get("profile_key") for t in runs if isinstance(t, dict) and not t.get("deferred")])
     return doc
 
 
-def _attach_sample_units(db, parent, doc, *, single_vial: bool = False) -> None:
+def _attach_sample_units(db, parent, doc, *, single_vial: bool = False,
+                         variance_keys=()) -> None:
     """Add the header's unit block (form icon, word, count). Best-effort: it
     is cosmetic, so a failure logs and leaves the key off (COABuilder then
-    prints the old header row) and never blocks a certificate. Read-only,
-    inside a savepoint so a failed query cannot poison the caller's session."""
+    prints the old header row) and never blocks a certificate.
+
+    Read-only, inside a savepoint so a failed query cannot poison the caller's
+    session. On success the savepoint is RELEASED, not rolled back: any
+    rollback, a savepoint's included, fires the session's after_rollback
+    listeners, and flags.service drops staged flag events there.
+    """
+    sample_id = getattr(parent, "sample_id", "?")
     sp = None
     try:
         sp = db.begin_nested()
-        doc["sample_units"] = build_sample_units(db, parent, doc, single_vial=single_vial)
+        block = build_sample_units(db, parent, doc, single_vial=single_vial,
+                                   variance_keys=variance_keys)
+        sp.commit()
+        doc["sample_units"] = block
     except Exception:  # noqa: BLE001 - see the docstring
         log.warning("sample_units build failed for %s; the certificate keeps the "
-                    "old header row", getattr(parent, "sample_id", "?"), exc_info=True)
-    finally:
-        if sp is not None:
-            sp.rollback()
+                    "old header row", sample_id, exc_info=True)
+        try:
+            if sp is not None and sp.is_active:
+                sp.rollback()
+        except Exception:  # noqa: BLE001 - a dead connection must fail the caller's own next query, not this
+            log.warning("sample_units savepoint rollback failed for %s", sample_id,
+                        exc_info=True)
 
 
 def build_vial_wire_document(db, parent, vial=None, vial_parent_ids=None):

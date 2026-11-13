@@ -13,10 +13,15 @@ the reader:
 Handler rulings, 2026-11-13: the certificate says the form factor, the count
 is every vial reported on the certificate, not the HPLC vials alone, and a
 certificate without Variance captions the count with the form's name.
+
+The count is a number on a certificate, so it is sent only when every vial of
+the sample can be accounted for (see `_count`). Otherwise the block carries
+no `count` and COABuilder prints its old header row.
 """
 from sqlalchemy import select
 
 from models import AnalysisProfile, LimsSampleForm, LimsSubSample
+from sub_samples.variance_tests import _snapshot_profiles
 
 DEFAULT_WORDS = ("Vial", "Vials")
 # ponytail: keyed by the form's icon type (Settings, Sample Forms), the list
@@ -33,6 +38,7 @@ UNIT_WORDS = {
     "other": ("Unit", "Units"),
 }
 UNASSIGNED_ROLE = "xtra"  # the reserved bucket for vials no test uses
+HPLC_ROLE = "hplc"        # page 1: the HPLC (or Bacteriostatic Water) panel's vials
 
 
 def _form(db, parent) -> tuple[str | None, str | None]:
@@ -57,26 +63,88 @@ def unit_words(db, parent) -> tuple[str, str]:
     return UNIT_WORDS.get(form_icon(db, parent) or "", DEFAULT_WORDS)
 
 
-def _deferred_roles(db, doc) -> set[str]:
-    keys = list((doc or {}).get("deferred_sections") or [])
+def _roles(db, parent, keys) -> dict[str, str]:
+    """{profile key: vial role} for the keys that have one. The registration
+    snapshot wins over the live catalog, as it does for the seeder and the
+    Variance resolver: a role renamed after registration must still match the
+    vials the sample already has."""
+    keys = {k for k in keys if isinstance(k, str)}
     if not keys:
-        return set()
-    return {r for r in db.execute(
-        select(AnalysisProfile.fulfillment_role).where(AnalysisProfile.key.in_(keys))
-    ).scalars().all() if r}
+        return {}
+    roles = dict(db.execute(
+        select(AnalysisProfile.key, AnalysisProfile.fulfillment_role)
+        .where(AnalysisProfile.key.in_(keys))).all())
+    for entry in _snapshot_profiles(getattr(parent, "catalog_snapshot", None),
+                                    getattr(parent, "sample_id", None)):
+        if isinstance(entry, dict) and entry.get("key") in keys and entry.get("fulfillment_role"):
+            roles[entry["key"]] = entry["fulfillment_role"]
+    return {k: r for k, r in roles.items() if isinstance(r, str) and r}
 
 
-def build_sample_units(db, parent, doc=None, *, single_vial: bool = False) -> dict:
-    """The wire block for a parent certificate built from `doc` (the native
-    sections document), or for one vial's certificate (`single_vial`).
+def _count(db, parent, doc, variance_keys) -> tuple[int, bool] | None:
+    """(vials reported, any of them a Variance vial), or None when the count
+    cannot be trusted.
 
-    A vial counts when a test uses it and that test prints on this
-    certificate: it has a role other than the unassigned bucket, its role is
-    not one of a deferred section's, and it was not taken out of the variance
-    set. A parent that is itself vial 1 (not container mode) counts as one.
-    With nothing to count the block carries no `count` and COABuilder keeps
-    the old header row.
+    A vial counts when a test that PRINTS on this document used it:
+    - the page 1 panel (role `hplc`), unless the document has no page 1;
+    - a native section that printed (its profile's vial role).
+    A Variance vial on a native role counts only when that profile printed
+    Variance runs (`variance_keys`, from the builder's trace); the HPLC
+    series always prints its in-set Variance vials.
+
+    None, so that COABuilder keeps the old header row, when:
+    - the parent is itself vial 1 (not container mode): other vials may be
+      untracked, so Mk1 cannot say how many were used;
+    - one role belongs to both a printed and a deferred section (whose vials
+      are they?);
+    - any assigned vial belongs to something this document does not describe
+      (a legacy-keyed endotoxin or sterility bucket, a test that is not
+      reported): the rule would have to guess.
+    Skipped, not counted: unassigned vials, vials taken out of the variance
+    set, and the vials of a deferred section.
     """
+    if not getattr(parent, "container_mode", False):
+        return None
+    doc = doc or {}
+    printed_keys = [s.get("profile_key") for s in doc.get("sections") or []
+                    if isinstance(s, dict)]
+    deferred_keys = list(doc.get("deferred_sections") or [])
+    roles = _roles(db, parent, [*printed_keys, *deferred_keys, *variance_keys])
+    printed = {roles[k] for k in printed_keys if k in roles}
+    deferred = {roles[k] for k in deferred_keys if k in roles}
+    with_runs = {roles[k] for k in variance_keys if k in roles}
+    if (doc.get("legacy_rows") or {}).get("page1") != "none":
+        printed.add(HPLC_ROLE)
+    if printed & deferred:
+        return None
+    vials = db.execute(
+        select(LimsSubSample).where(LimsSubSample.parent_sample_pk == parent.id)
+    ).scalars().all()
+    count, variance = 0, False
+    for v in vials:
+        role = v.assignment_role
+        if not role or role == UNASSIGNED_ROLE:
+            continue
+        is_variance = v.assignment_kind == "variance"
+        if is_variance and not v.in_variance_set:
+            continue
+        if role in deferred:
+            continue
+        if role not in printed:
+            return None
+        if is_variance and role != HPLC_ROLE and role not in with_runs:
+            continue  # a replicate vial whose runs do not print (no Variance plan)
+        count += 1
+        variance = variance or is_variance
+    return (count, variance) if count else None
+
+
+def build_sample_units(db, parent, doc=None, *, single_vial: bool = False,
+                       variance_keys=()) -> dict:
+    """The wire block for a parent certificate built from `doc` (the native
+    sections document, with `legacy_rows` when Mk1 supplies page 1), or for
+    one vial's certificate (`single_vial`). `variance_keys`: the profile keys
+    whose Variance runs printed (the builder's trace)."""
     name, icon = _form(db, parent)
     one, many = UNIT_WORDS.get(icon or "", DEFAULT_WORDS)
     out: dict = {"one": one, "many": many}
@@ -90,20 +158,7 @@ def build_sample_units(db, parent, doc=None, *, single_vial: bool = False) -> di
         out["count"] = 1
         out["variance"] = False
         return out
-    deferred = _deferred_roles(db, doc)
-    vials = db.execute(
-        select(LimsSubSample).where(LimsSubSample.parent_sample_pk == parent.id)
-    ).scalars().all()
-    used = [
-        v for v in vials
-        if v.assignment_role and v.assignment_role != UNASSIGNED_ROLE
-        and v.assignment_role not in deferred
-        and not (v.assignment_kind == "variance" and not v.in_variance_set)
-    ]
-    count = len(used)
-    if used and not getattr(parent, "container_mode", True):
-        count += 1  # the parent is vial 1 and carries the core results
-    if count:
-        out["count"] = count
-        out["variance"] = any(v.assignment_kind == "variance" for v in used)
+    counted = _count(db, parent, doc, variance_keys)
+    if counted is not None:
+        out["count"], out["variance"] = counted
     return out

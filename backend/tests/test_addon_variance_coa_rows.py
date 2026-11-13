@@ -321,6 +321,20 @@ def test_run_rows_say_the_form_factor_and_a_digest_stays_a_digest(db, monkeypatc
         "Hm-Pb, Digest 1", "Hm-Pb, Digest 2"]
 
 
+def test_a_vial_form_still_prints_vial(db, monkeypatch):
+    # The non-regression case: nearly every sample is Lyophilized Powder, and
+    # its run rows must read exactly as they did before forms had a word.
+    from models import LimsSampleForm
+    powder = LimsSampleForm(name="Lyophilized Powder", route="injectable", icon="powder_vial")
+    db.add(powder)
+    db.flush()
+    w = _endo_world(db, monkeypatch, "P-7412", n=2)
+    w.parent.sample_form_id = powder.id
+    db.commit()
+    assert _names(build_native_sections(db, w.parent), ENDO_KEY) == [
+        f"{ENDO_NAME}, Vial 1", f"{ENDO_NAME}, Vial 2"]
+
+
 def test_replicate_loq_is_its_own(db, monkeypatch):
     prof, [svc] = _profile(db, ENDO_KEY, "endo85", ENDO_KW, max_value="100")
     parent = _parent(db, "P-7404")
