@@ -49,9 +49,9 @@ const PEPTIDES = {
   2: 'NAD+', 3: 'GHK-Cu', 4: 'Ipamorelin', 10: 'BPC-157', 11: 'Tesamorelin', 12: 'Diluent Vial',
   20: 'BPC-157 + GHK-Cu', 21: 'Tesamorelin + Ipamorelin', 22: 'BPC-157 + Tesamorelin',
   23: 'NAD+ + Tesamorelin', 24: 'BPC-157 + Ipamorelin', 25: 'Tesamorelin + BPC-157',
-  26: 'BPC-157 + Tesamorelin + Ipamorelin',
+  26: 'BPC-157 + Tesamorelin + Ipamorelin', 13: 'KPV', 27: 'BPC-157 + Tesamorelin + KPV',
 };
-const SOLO_IDS = [2, 3, 4, 10, 11, 12];
+const SOLO_IDS = [2, 3, 4, 10, 11, 12, 13];
 const idOfName = name => {
   const hit = Object.entries(PEPTIDES).find(([, n]) => n === name);
   if (!hit) throw new Error(`no peptide id for "${name}"`);
@@ -168,6 +168,9 @@ const CASES = [
   ['blend, typed lead',blend(24, [comp(10, 10), comp(4, 5)], 15), { ...STOCK_3ML, vials: { 1: { lead_id: 10 } } }],
   ['blend, typed component target', blend(25, [comp(11, 10), comp(10, 5)], 15), { ...STOCK_3ML, components: { 11: { target: 250 } } }],
   ['blend, weights that do not add up', blend(22, [comp(10, 5), comp(11, 5)], 10), { ...STOCK_3ML, components: { 10: { mg: 4 } } }],
+  // The split sum is left to right, as the tool adds it: these two disagree with a compensated sum
+  ['blend of three, 0.1 + 0.2 + 0.3 against 0.605 (left-to-right sum, no mismatch)', blend(27, [comp(10, 0.1), comp(11, 0.2), comp(13, 0.3)], 0.605), {}],
+  ['blend of three, 0.3 + 0.6 + 0.1 against 1.005 (left-to-right sum, mismatch)', blend(27, [comp(10, 0.3), comp(11, 0.6), comp(13, 0.1)], 1.005), {}],
 ];
 
 /* ─── Mk1 -> the tool's sample: the brief's translation table, written once ─── */

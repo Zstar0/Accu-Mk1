@@ -170,8 +170,11 @@ def sample_components(facts, inputs, declared, is_blend):
 def _split_mismatch(comps, declared):
     # calc.js sampleComponents (788): every share typed and their sum off the declared by 0.005
     weighed = [c["declared_mg"] for c in comps if c["declared_mg"] is not None]
+    total = 0.0
+    for mg in weighed:  # not sum(): compensated from Python 3.12; the source adds left to right
+        total += mg
     return (len(weighed) == len(comps) and declared is not None
-            and abs(sum(weighed) - declared) > 0.005)
+            and abs(total - declared) > 0.005)
 
 
 def _vial_target(v, lead, rule, is_blend, bac, params):
