@@ -405,10 +405,14 @@ def slot_rows(db: Session, parent: LimsSample, slot: int) -> list[LimsAnalysis]:
 
 def is_slot_pristine(db: Session, rows: list[LimsAnalysis]) -> bool:
     """True iff every current row is still untouched (no result, still in an
-    unassigned/assigned review_state) and no row is linked as a promotion
-    source. Rows superseded by a retest (retested=True) are history: they
-    keep their old label (restamp skips them) and do not block, so a
-    mislabel caught at the bench can retest, then relabel (P-5866)."""
+    unassigned/assigned review_state) and no row feeds a promoted result
+    that is still live on the parent. Rows superseded by a retest
+    (retested=True) are history: they keep their old label (restamp skips
+    them) and do not block, so a mislabel caught at the bench can retest,
+    then relabel (P-5866). A promotion link whose parent row is
+    retracted/rejected is history too: a parent retest retracts the parent
+    row but leaves the link (P-5971; same ruling as
+    manage_native._classify_vial_rows)."""
     from models import LimsAnalysisPromotion
     if any(r.review_state not in _PRISTINE_STATES or r.result_value is not None
            for r in rows if not r.retested):
@@ -416,8 +420,11 @@ def is_slot_pristine(db: Session, rows: list[LimsAnalysis]) -> bool:
     ids = [r.id for r in rows]
     if not ids:
         return True
-    linked = db.execute(select(LimsAnalysisPromotion.id).where(
-        LimsAnalysisPromotion.source_analysis_id.in_(ids))).first()
+    linked = db.execute(
+        select(LimsAnalysisPromotion.id)
+        .join(LimsAnalysis, LimsAnalysis.id == LimsAnalysisPromotion.parent_analysis_id)
+        .where(LimsAnalysisPromotion.source_analysis_id.in_(ids),
+               LimsAnalysis.review_state.notin_(("retracted", "rejected")))).first()
     return linked is None
 
 
