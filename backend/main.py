@@ -25342,7 +25342,7 @@ class WorksheetUpdate(BaseModel):
     assigned_analyst: Optional[int] = None
     notes: Optional[str] = None
     # Per-bench run settings, replaced whole (PCR: overage, curve, plate_type,
-    # sort_by_order). Omitted = untouched.
+    # sort_key, sort_dir, sort_by_order). Omitted = untouched.
     bench_config: Optional[dict] = None
     # Endo v2 run fields (spec 3.6 and 10). Sent = set (null clears the run
     # cartridge); omitted = untouched. 409 on a completed worksheet.

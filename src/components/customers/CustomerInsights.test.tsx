@@ -390,6 +390,31 @@ describe('CustomerInsights', () => {
     expect(onOpen).toHaveBeenLastCalledWith('wc:1')
   })
 
+  it('Top customers tab ranks everyone by period spend and shows the column', async () => {
+    setup({
+      list: listOf(1, [
+        row({ key: 'wc:2243', name: 'Zackary Smith', period_spend: '4321.00' }),
+      ]),
+    })
+    await userEvent.click(
+      await screen.findByRole('tab', { name: 'Top customers' })
+    )
+    expect(await screen.findByText('Zackary Smith')).toBeInTheDocument()
+    const call = vi.mocked(api.getCustomerList).mock.lastCall?.[0]
+    expect(call).toMatchObject({
+      period: '90d',
+      exclude_launch_accounts: false,
+      sort: 'period_spend',
+      dir: 'desc',
+      page: 1,
+    })
+    expect(call).not.toHaveProperty('new_only')
+    expect(
+      screen.getByRole('columnheader', { name: 'Period spend' })
+    ).toBeInTheDocument()
+    expect(screen.getByText('$4,321')).toBeInTheDocument()
+  })
+
   it('New customers tab queries new_only with the period and the launch switch', async () => {
     setup({ list: listOf(1, [row({ key: 'wc:2243', name: 'Zackary Smith' })]) })
     await userEvent.click(
