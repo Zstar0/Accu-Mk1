@@ -51,6 +51,55 @@ NET = {"cas_number": "80714-61-0", "net_counterion": "TFA", "net_counterion_mw":
        "net_parts_used": ["assay"], "serial_dilution": SERIAL, "injection": 2}
 
 
+def test_the_migrations_leave_every_existing_curve_as_it_was():
+    # Deferred from Task 1. First in the file and without the `migrated` fixture, so on a fresh
+    # scratch copy this hashes the template's curves before this module's migrations ever run.
+    # The worksheet columns are left out, so it holds whether or not the template already has them.
+    name = database.engine.url.database or ""
+    if not name.startswith("mk1_test"):
+        pytest.skip(f"refusing to migrate {name!r}: run through the scratch-database harness")
+
+    def digest():
+        with database.SessionLocal() as s:
+            return tuple(s.execute(text(
+                "SELECT count(*), md5(coalesce(string_agg((to_jsonb(c) - CAST(:new AS text[]))::text, '|' "
+                "ORDER BY c.id), '')) FROM calibration_curves c"), {"new": list(CURVE_COLUMNS)}).one())
+
+    before = digest()
+    database._run_migrations()
+    assert digest() == before
+    assert before[0] > 0  # the copy holds real curves
+
+
+def test_the_sheet_link_on_a_curve_is_named_as_postgres_names_it(db):
+    # Final review M4: use_alter and a name on the model's key break the create/drop cycle; the name
+    # is Postgres's own default, so a database that already has the key is not changed.
+    session, _ = db
+    (fk,) = CalibrationCurve.__table__.columns["calibration_sheet_id"].foreign_keys
+    assert fk.use_alter is True and fk.constraint.name == "calibration_curves_calibration_sheet_id_fkey"
+    assert session.execute(text(
+        "SELECT c.conname FROM pg_constraint c JOIN pg_attribute a ON a.attrelid = c.conrelid "
+        "AND a.attnum = c.conkey[1] WHERE c.contype = 'f' AND c.conrelid = 'calibration_curves'::regclass "
+        "AND a.attname = 'calibration_sheet_id'")).scalar_one() == fk.constraint.name
+
+
+def test_the_metadata_drops_without_a_cycle_warning_on_the_new_tables():
+    import warnings
+
+    from sqlalchemy import create_engine
+
+    from models import Base
+
+    engine = create_engine("sqlite://")
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")
+        Base.metadata.create_all(engine)
+        Base.metadata.drop_all(engine)
+    engine.dispose()
+    assert not [w for w in caught if "hplc_calibration_sheets" in str(w.message)
+                or "calibration_curves" in str(w.message)]
+
+
 @pytest.fixture(scope="module")
 def migrated():
     name = database.engine.url.database or ""
@@ -225,6 +274,25 @@ def test_the_column_check_script_knows_the_new_columns():
     assert check.CURVES_EXPECTED == {name: "YES" for name in CURVE_COLUMNS}
     assert check.evaluate({k: ("integer", v) for k, v in SHEET_NULLABLE.items()}, check.SHEETS_EXPECTED)[1] == 0
     assert check.evaluate({}, check.CURVES_EXPECTED)[1] == len(CURVE_COLUMNS)
+    # Final review M3: the script also reads the delete rule of every new key that must be SET NULL.
+    assert {key: "n" for key in check.FK_SET_NULL} == {k: v for k, v in FK_DELETE_RULES.items() if v == "n"}
+    lines, bad = check.evaluate_fk_rules({key: "n" for key in check.FK_SET_NULL})
+    assert bad == 0 and len(lines) == len(check.FK_SET_NULL)
+    wrong = {**{key: "n" for key in check.FK_SET_NULL}, ("calibration_curves", "replicate_of_id"): "a"}
+    del wrong[("hplc_calibration_sheets", "peptide_id")]
+    lines, bad = check.evaluate_fk_rules(wrong)
+    assert bad == 2
+    assert any("calibration_curves.replicate_of_id" in line and "WRONG on delete NO ACTION, want SET NULL" in line
+               for line in lines)
+    assert any("hplc_calibration_sheets.peptide_id" in line and "MISSING" in line for line in lines)
+
+
+def test_the_check_script_reads_the_delete_rules_from_this_database(db):
+    from scripts import check_hplc_columns as check
+
+    session, _ = db
+    lines, bad = check.evaluate_fk_rules(check._fk_rules(session))
+    assert bad == 0, lines
 
 
 def test_the_boot_statements_sit_above_the_pinned_last_statement():

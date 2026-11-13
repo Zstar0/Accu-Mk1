@@ -197,11 +197,11 @@ def _session(session, seeded, curve_id):
     session.commit()
 
 
-def _replicate(client, sheet_id, instrument=None):
-    """Duplicate for another injection, with fixture case 20's run results typed in."""
+def _replicate(client, sheet_id, instrument=None, inputs=None):
+    """Duplicate for another injection, with fixture case 20's run results (or `inputs`) typed in."""
     rep = client.post(f"/hplc-calibration-sheets/{sheet_id}/duplicate")
     assert rep.status_code == 201, rep.text
-    body = {"version": 1, "inputs": _case(20)}
+    body = {"version": 1, "inputs": inputs or _case(20)}
     if instrument is not None:
         body["instrument_id"] = instrument
     res = client.patch(f"/hplc-calibration-sheets/{rep.json()['id']}", json=body)
@@ -283,16 +283,41 @@ def test_standard_data_is_the_shape_analyze_reads(client, seeded, session):
     assert data["rts"] == [L["rt"] for L in inputs["levels"][:4]]
     expect = [L["actual_conc_ug_ml"] for L in _expect(13)["levels"][:4]]
     assert data["concentrations"] == pytest.approx(expect, rel=1e-12)
-    total = 0.0
-    for rt in data["rts"]:
-        total += rt
-    assert out["curve"]["reference_rt"] == round(total / 4, 4)
+    # Final review M2: the sheet's RT average (every typed RT, the two unfitted levels too).
+    assert out["curve"]["reference_rt"] == round(_expect(13)["rt_avg"], 4)
     assert _row(session, out["curve"]["id"])["standard_data"] == data
+
+
+def _rt_avg(inputs):
+    avg = _REAL_WORK_OUT(inputs)["rt_avg"]
+    return None if avg is None else round(avg, 4)
+
+
+def test_every_rt_typed_files_the_sheets_average(client, seeded):
+    # Final review M2: reference_rt is the RT average the sheet shows.
+    inputs = _case(1)
+    curve = _filed(client, _sheet(client, seeded, inputs)["id"])["curve"]
+    assert len(curve["standard_data"]["rts"]) == 6
+    assert curve["reference_rt"] == _rt_avg(inputs) and curve["reference_rt"] is not None
+
+
+def test_a_partial_rt_column_files_the_sheets_average(client, seeded):
+    # Final review M2: one blank RT used to file no reference RT at all.
+    inputs = _case(1)
+    inputs["levels"][2]["rt"] = None
+    curve = _filed(client, _sheet(client, seeded, inputs)["id"])["curve"]
+    assert "rts" not in curve["standard_data"]
+    expect = 0.0
+    typed = [L["rt"] for L in inputs["levels"] if L["rt"] is not None]
+    for rt in typed:
+        expect += rt
+    assert curve["reference_rt"] == round(expect / len(typed), 4) == _rt_avg(inputs)
 
 
 def test_no_rts_files_no_reference_rt(client, seeded):
     inputs = _case(1)
-    inputs["levels"][2]["rt"] = None
+    for L in inputs["levels"]:
+        L["rt"] = None
     curve = _filed(client, _sheet(client, seeded, inputs)["id"])["curve"]
     assert "rts" not in curve["standard_data"] and curve["reference_rt"] is None
 
@@ -419,8 +444,10 @@ def test_reversed_peak_areas_give_a_negative_slope_and_are_refused(client, seede
     assert _others(session, seeded) == others
 
 
-@pytest.mark.parametrize("density", [0.9971, 499.9, 2000.1])
+@pytest.mark.parametrize("density", [0.9971, 499.9, 2000.1, 10 ** 400],
+                         ids=["unit slip", "just below", "just above", "integer past float range"])
 def test_a_stored_density_outside_the_range_is_refused_at_filing(client, seeded, session, density):
+    # 10 ** 400: math.isfinite raised OverflowError on it (a 500); the band comparison alone refuses it.
     # The save refuses it now; a sheet saved before that can still hold one.
     sheet = _sheet(client, seeded, _case(1))
     row = session.get(HplcCalibrationSheet, sheet["id"])
@@ -722,10 +749,13 @@ def test_refiling_an_original_refiles_its_replicates(client, seeded, session):
         False, rep_curve["source_filename"], 2)
     # The replicate sheets themselves are not written; the unfiled one is untouched.
     assert _world(session, (unfiled["id"], rep["id"]))[1] == unfiled_before
-    ops = session.execute(select(AuditLog.operation).where(
+    rows = session.execute(select(AuditLog.operation, AuditLog.details).where(
         AuditLog.entity_type == "calibration_curve", AuditLog.entity_id == str(rep_curve["id"]))
-        .order_by(AuditLog.id)).scalars().all()
-    assert ops == ["calibration_curve_filed", "calibration_curve_refiled"]
+        .order_by(AuditLog.id)).all()
+    assert [op for op, _ in rows] == ["calibration_curve_filed", "calibration_curve_refiled"]
+    # Final review M5: the replicate's row names the replicate's own version.
+    assert [d["version"] for _, d in rows] == [rep["version"], rep["version"]]
+    assert out["warnings"] == []
 
 
 def test_refiling_an_original_with_a_used_replicate_is_refused_whole(client, seeded, session):
@@ -766,8 +796,9 @@ def test_a_curve_moved_to_another_instrument_is_not_refiled(client, seeded, sess
     _refused(client, session, sheet["id"], 409, "Start a new worksheet")
 
 
-def test_after_resync_deletes_the_curve_the_sheet_files_again(client, seeded, session):
-    # Review Focus 1: the re-sync deletes every curve of the peptide (main.py, resync).
+def test_a_deleted_curve_files_again_as_a_fresh_row(client, seeded, session):
+    # Review Focus 1: the re-sync deletes every curve of the peptide (main.py, resync). This runs
+    # the same DELETE the re-sync runs, not the re-sync route itself (final review M6).
     inputs = _case(7)
     sheet = _sheet(client, seeded, inputs)
     first = _filed(client, sheet["id"])["curve"]["id"]
@@ -810,11 +841,14 @@ def test_the_audit_row_carries_old_and_new_fit(client, seeded, session, user):
     second = _filed(client, sheet["id"], version=2)
     rows = session.execute(select(AuditLog.operation, AuditLog.details).where(
         AuditLog.entity_type == "calibration_curve", AuditLog.entity_id == str(cid)).order_by(AuditLog.id)).all()
-    fit = lambda c: {"slope": c["slope"], "intercept": c["intercept"], "r_squared": c["r_squared"]}
+    # Final review I2 and M5: the record also holds the density and the reference RT, and the row
+    # names the sheet version that was filed.
+    fit = lambda c: {"slope": c["slope"], "intercept": c["intercept"], "r_squared": c["r_squared"],
+                     "diluent_density": c["diluent_density"], "reference_rt": c["reference_rt"]}
     assert [op for op, _ in rows] == ["calibration_curve_filed", "calibration_curve_refiled"]
-    assert rows[0][1] == {"user_id": user.id, "sheet_id": sheet["id"], "old": None, "new": fit(first["curve"]),
-                          "activation": first["activation"]}
-    assert rows[1][1] == {"user_id": user.id, "sheet_id": sheet["id"], "old": fit(first["curve"]),
+    assert rows[0][1] == {"user_id": user.id, "sheet_id": sheet["id"], "version": 1, "old": None,
+                          "new": fit(first["curve"]), "activation": first["activation"]}
+    assert rows[1][1] == {"user_id": user.id, "sheet_id": sheet["id"], "version": 2, "old": fit(first["curve"]),
                           "new": fit(second["curve"]), "activation": second["activation"]}
 
 
@@ -834,3 +868,302 @@ def test_a_replicate_names_its_original_when_that_cannot_be_worked_out(client, s
     res = client.patch(f"/hplc-calibration-sheets/{rep['id']}",
                        json={"version": rep["version"], "inputs": {"notes": "x", "levels": []}})
     assert res.status_code == 400 and res.json()["detail"] == sentence
+
+
+# ---- final review C1: an injection never files under a compound its original does not have ----------
+
+HAS_INJECTIONS = ("Injections duplicated from this sheet carry the same compound, so the compound cannot change "
+                  "here. Start a new calibration worksheet for the other compound.")
+
+
+def _injection_on_another_compound(original_name):
+    return (f"This sheet is another injection of {original_name}, which is on a different compound now, so it is "
+            "not filed. Start a new calibration worksheet for this compound.")
+
+
+def _original_on_another_compound(injection_name):
+    return (f"The injection {injection_name} is on a different compound from this sheet, so nothing was filed. "
+            "Start a new calibration worksheet for this sheet's compound.")
+
+
+def _original_first(original_name):
+    return f"File the original worksheet, {original_name}, first. Filing it also re-files its injections."
+
+
+def _version(client, sheet_id):
+    return client.get(f"/hplc-calibration-sheets/{sheet_id}").json()["version"]
+
+
+def _deleted_original(client, seeded, instrument=None, file_injection=False):
+    """An original filed on the test peptide and instrument A, one injection (on `instrument`, else A,
+    filed or not), then the original's curve deleted on the Peptides page: the door the review found."""
+    original = _filed(client, _sheet(client, seeded, _case(1))["id"])
+    rep = _replicate(client, original["sheet"]["id"], instrument=instrument)
+    rep_curve = _filed(client, rep["id"])["curve"] if file_injection else None
+    res = client.delete(f"/peptides/{seeded.peptide}/calibrations/{original['curve']['id']}")
+    assert res.status_code == 204, res.text
+    return original["sheet"]["id"], rep, rep_curve
+
+
+@pytest.mark.parametrize("file_injection", [False, True], ids=["unfiled injection", "filed injection"])
+def test_an_original_with_injections_cannot_change_compound(client, seeded, session, file_injection):
+    # Review sequences 1 and 2 now stop here.
+    sid, rep, _ = _deleted_original(client, seeded, seeded.inst2, file_injection)
+    before = _world(session, (sid, rep["id"]))
+    for peptide in (seeded.other, None):
+        res = client.patch(f"/hplc-calibration-sheets/{sid}",
+                           json={"version": _version(client, sid), "peptide_id": peptide})
+        assert res.status_code == 409 and res.json()["detail"] == HAS_INJECTIONS
+    assert _world(session, (sid, rep["id"])) == before
+
+
+def test_an_original_without_injections_still_changes_compound(client, seeded):
+    sheet = _sheet(client, seeded, _case(1))
+    res = client.patch(f"/hplc-calibration-sheets/{sheet['id']}", json={"version": 1, "peptide_id": seeded.other})
+    assert res.status_code == 200 and res.json()["peptide_id"] == seeded.other
+
+
+def test_an_original_with_injections_may_change_instrument_and_the_injection_keeps_its_own(client, seeded, session):
+    # Review sequence 3, ruled accepted: the injection keeps its own instrument and files by the
+    # ordinary rules for it, once the original is filed again (I1).
+    sid, rep, _ = _deleted_original(client, seeded)
+    res = client.patch(f"/hplc-calibration-sheets/{sid}",
+                       json={"version": _version(client, sid), "instrument_id": seeded.inst2})
+    assert res.status_code == 200 and res.json()["instrument_id"] == seeded.inst2
+    name = res.json()["proposed_name"]
+    assert _refused(client, session, rep["id"], 409, None, sheets=(sid,)) == _original_first(name)
+    again = _filed(client, sid)
+    assert (again["curve"]["instrument_id"], again["refiled_curve_ids"]) == (seeded.inst2, [])
+    out = _filed(client, rep["id"])
+    curve = out["curve"]
+    assert (curve["peptide_id"], curve["instrument_id"]) == (seeded.peptide, seeded.inst)
+    assert curve["source_filename"] == f"{seeded.inst_name}-2026-02-05-{seeded.abbr}"
+    assert (curve["injection"], curve["replicate_of_id"]) == (None, again["curve"]["id"])
+    assert out["activation"]["reason"] == "first_active" and curve["is_active"] is True
+
+
+def test_an_injection_on_another_compound_than_its_original_is_not_filed(client, seeded, session):
+    original = _filed(client, _sheet(client, seeded, _case(1))["id"])
+    sid = original["sheet"]["id"]
+    rep = _replicate(client, sid, instrument=seeded.inst2)
+    row = session.get(HplcCalibrationSheet, rep["id"])
+    row.peptide_id = seeded.other  # the routes no longer allow this; a direct write only
+    session.commit()
+    detail = _refused(client, session, rep["id"], 409, None, sheets=(sid,))
+    assert detail == _injection_on_another_compound(original["curve"]["source_filename"])
+
+
+def test_an_original_whose_filed_injection_is_on_another_compound_is_refused_whole(client, seeded, session):
+    sid, rep, rep_curve = _deleted_original(client, seeded, seeded.inst2, file_injection=True)
+    row = session.get(HplcCalibrationSheet, sid)
+    row.peptide_id = seeded.other  # what the PATCH allowed before this fix; a direct write now
+    session.commit()
+    detail = _refused(client, session, sid, 409, None, sheets=(rep["id"],))
+    assert detail == _original_on_another_compound(rep_curve["source_filename"])
+
+
+# ---- final review I1: an injection is not filed while its original has unfiled changes -----------
+
+
+def test_an_injection_waits_for_its_original_to_be_filed_again(client, seeded, session):
+    # Review probe A: the injection filed the original's newest weighing, which its page never showed.
+    inputs = _case(1)
+    original = _filed(client, _sheet(client, seeded, inputs)["id"])
+    sid = original["sheet"]["id"]
+    rep = _replicate(client, sid)
+    inputs["stock"]["vial_standard_mg"] = 15729.5
+    assert client.patch(f"/hplc-calibration-sheets/{sid}", json={"version": 1, "inputs": inputs}).status_code == 200
+    detail = _refused(client, session, rep["id"], 409, None, sheets=(sid,))
+    assert detail == _original_first(original["curve"]["source_filename"])
+    again = _filed(client, sid, version=2)
+    out = _filed(client, rep["id"])
+    assert out["curve"]["stock_concentration_ug_ml"] == again["curve"]["stock_concentration_ug_ml"]
+    assert out["curve"]["serial_dilution"]["stock"] == inputs["stock"]
+
+
+def test_a_filed_injection_takes_the_corrected_preparation_through_its_original(client, seeded, session):
+    inputs = _case(1)
+    original = _filed(client, _sheet(client, seeded, inputs)["id"])
+    sid = original["sheet"]["id"]
+    rep = _replicate(client, sid)
+    rep_curve = _filed(client, rep["id"])["curve"]
+    inputs["stock"]["vial_standard_mg"] = 15729.5
+    assert client.patch(f"/hplc-calibration-sheets/{sid}", json={"version": 1, "inputs": inputs}).status_code == 200
+    detail = _refused(client, session, rep["id"], 409, None, sheets=(sid,))
+    assert detail == _original_first(original["curve"]["source_filename"])
+    again = _filed(client, sid, version=2)
+    assert again["refiled_curve_ids"] == [rep_curve["id"]]
+    after = _row(session, rep_curve["id"])
+    assert after["stock_concentration_ug_ml"] == again["curve"]["stock_concentration_ug_ml"]
+    assert after["stock_concentration_ug_ml"] != rep_curve["stock_concentration_ug_ml"]
+    # The original filed and unchanged: the injection files (re-files) again.
+    assert _file(client, rep["id"]).status_code == 200
+
+
+# ---- final review I2: a re-file says what it replaced, and the sheet says so beforehand -----------
+
+
+def _peptides_page_edit(client, seeded, curve, exclude=True, density=990.0):
+    body = {"diluent_density": density}
+    if exclude:
+        body["standard_data"] = {**curve["standard_data"], "excluded_indices": [0]}
+    res = client.patch(f"/peptides/{seeded.peptide}/calibrations/{curve['id']}", json=body)
+    assert res.status_code == 200, res.text
+    return res.json()
+
+
+def _replaced(name, *parts):
+    return (f"Curve {name} was changed on the Peptides page since it was filed, and filing replaced those changes: "
+            + "; ".join(parts) + ".")
+
+
+def _fit_part(c):
+    return (f"its slope was {c['slope']:.15g}, its intercept {c['intercept']:.15g} and its r squared "
+            f"{c['r_squared']:.15g}")
+
+
+def test_a_refile_says_what_it_replaced_on_the_peptides_page(client, seeded, session, user):
+    # Review probe B: the re-file put an excluded point back and the density back without a word.
+    sheet = _sheet(client, seeded, _case(1))
+    first = _filed(client, sheet["id"])
+    cid, name = first["curve"]["id"], first["curve"]["source_filename"]
+    assert first["sheet"]["curve_changed_since_filed"] is False
+    edited = _peptides_page_edit(client, seeded, first["curve"])
+    assert edited["slope"] != first["curve"]["slope"] and edited["diluent_density"] == 990.0
+    got = client.get(f"/hplc-calibration-sheets/{sheet['id']}").json()
+    assert (got["curve_changed_since_filed"], got["changed_since_filed"]) == (True, False)
+    # The Peptides page works the reference RT out again from the points it keeps.
+    assert edited["reference_rt"] != first["curve"]["reference_rt"]
+    out = _filed(client, sheet["id"])
+    assert out["warnings"] == [_replaced(name, _fit_part(edited), "the points excluded there are back in the fit",
+                                         "its diluent density was 990 mg/mL",
+                                         f"its reference RT was {edited['reference_rt']:.15g} min")]
+    assert out["curve"]["reference_rt"] == first["curve"]["reference_rt"]
+    curve = out["curve"]
+    assert curve["slope"] == first["curve"]["slope"] and curve["diluent_density"] == DEFAULT_DENSITY
+    assert "excluded_indices" not in curve["standard_data"]
+    assert out["sheet"]["curve_changed_since_filed"] is False
+    assert client.get(f"/hplc-calibration-sheets/{sheet['id']}").json()["curve_changed_since_filed"] is False
+    # The audit row keeps what was replaced.
+    old = session.execute(select(AuditLog.details).where(
+        AuditLog.entity_type == "calibration_curve", AuditLog.entity_id == str(cid))
+        .order_by(AuditLog.id.desc()).limit(1)).scalar_one()["old"]
+    assert old == {"slope": edited["slope"], "intercept": edited["intercept"], "r_squared": edited["r_squared"],
+                   "diluent_density": 990.0, "reference_rt": edited["reference_rt"]}
+
+
+def test_a_curve_never_touched_reads_unchanged_and_refiles_without_that_warning(client, seeded):
+    sheet = _sheet(client, seeded, _case(1))
+    first = _filed(client, sheet["id"])
+    assert client.get(f"/hplc-calibration-sheets/{sheet['id']}").json()["curve_changed_since_filed"] is False
+    again = _filed(client, sheet["id"])
+    assert again["warnings"] == [] and again["sheet"]["curve_changed_since_filed"] is False
+    assert again["curve"]["id"] == first["curve"]["id"]
+
+
+def test_an_unfiled_sheet_reads_curve_unchanged(client, seeded):
+    sheet = _sheet(client, seeded, _case(1))
+    assert sheet["curve_changed_since_filed"] is False
+    listed = client.get("/hplc-calibration-sheets", params={"peptide_id": seeded.peptide}).json()
+    assert [r["curve_changed_since_filed"] for r in listed] == [None]  # never worked out per list row
+
+
+def test_an_original_refile_says_what_it_replaced_on_an_injection(client, seeded, session):
+    inputs = _case(1)
+    original = _filed(client, _sheet(client, seeded, inputs)["id"])
+    sid = original["sheet"]["id"]
+    rep = _replicate(client, sid)
+    rep_curve = _filed(client, rep["id"])["curve"]
+    _peptides_page_edit(client, seeded, rep_curve, exclude=False, density=1000.0)
+    assert client.get(f"/hplc-calibration-sheets/{rep['id']}").json()["curve_changed_since_filed"] is True
+    inputs["stock"]["vial_standard_mg"] = 15729.5
+    assert client.patch(f"/hplc-calibration-sheets/{sid}", json={"version": 1, "inputs": inputs}).status_code == 200
+    out = _filed(client, sid, version=2)
+    assert out["refiled_curve_ids"] == [rep_curve["id"]]
+    assert out["warnings"] == [_replaced(rep_curve["source_filename"], "its diluent density was 1000 mg/mL")]
+    assert client.get(f"/hplc-calibration-sheets/{rep['id']}").json()["curve_changed_since_filed"] is False
+
+
+# ---- final review M1: a deadlock with a curve delete is a 409 -------------------------------------
+
+DEADLOCK = "Someone changed one of these curves at the same moment, so nothing was filed. Try again."
+
+
+def test_a_deadlock_is_a_409_that_writes_nothing(client, seeded, session, monkeypatch):
+    from sqlalchemy.exc import OperationalError
+
+    import main
+
+    class Deadlock(Exception):
+        pgcode = "40P01"
+
+    def deadlocked(*args, **kwargs):
+        raise OperationalError("SELECT ... FOR UPDATE", {}, Deadlock("deadlock detected"))
+
+    sheet = _sheet(client, seeded, _case(1))
+    monkeypatch.setattr(main, "_cal_curve_fields", deadlocked)
+    assert _refused(client, session, sheet["id"], 409, None) == DEADLOCK
+
+
+# ---- deferred from Task 5: poor-fit injections ------------------------------------------------------
+
+
+def _poor_injection():
+    """Case 20's run results with its areas reordered: a positive slope, r squared far below the floor."""
+    rep = _case(20)
+    areas = [L["peak_area"] for L in rep["levels"]]
+    for L, j in zip(rep["levels"], (1, 3, 5, 2, 4, 0)):
+        L["peak_area"] = areas[j]
+    fit = _REAL_WORK_OUT(hplc_calibration.replicate_prep(_case(1), rep))["fit"]
+    assert fit["slope"] > 0 and fit["r2"] < 0.99
+    return rep, fit["r2"]
+
+
+def test_a_poor_fit_injection_on_the_same_instrument_files_inactive_with_the_warning(client, seeded, session):
+    original = _filed(client, _sheet(client, seeded, _case(1))["id"])
+    inputs, r2 = _poor_injection()
+    out = _filed(client, _replicate(client, original["sheet"]["id"], inputs=inputs)["id"])
+    assert out["activation"] == {"active": False, "reason": "replicate", "deactivated_ids": [],
+                                 "other_active_ids": []}
+    assert out["warnings"] == [_poor_fit_warning(r2)]
+    assert _row(session, original["curve"]["id"])["is_active"] is True
+
+
+def test_a_poor_fit_injection_on_another_instrument_files_inactive(client, seeded, session):
+    original = _filed(client, _sheet(client, seeded, _case(1))["id"])
+    inputs, r2 = _poor_injection()
+    out = _filed(client, _replicate(client, original["sheet"]["id"], instrument=seeded.inst2, inputs=inputs)["id"])
+    assert out["activation"] == {"active": False, "reason": "poor_fit", "deactivated_ids": [],
+                                 "other_active_ids": []}
+    assert out["curve"]["is_active"] is False and out["warnings"] == [_poor_fit_warning(r2)]
+
+
+def test_a_poor_fit_injection_beside_two_active_curves_touches_neither(client, seeded, session):
+    original = _filed(client, _sheet(client, seeded, _case(1))["id"])
+    a = _curve(session, seeded.peptide, seeded.inst2, True)
+    b = _curve(session, seeded.peptide, seeded.inst2, True)
+    before = {cid: _row(session, cid) for cid in (a, b)}
+    inputs, r2 = _poor_injection()
+    out = _filed(client, _replicate(client, original["sheet"]["id"], instrument=seeded.inst2, inputs=inputs)["id"])
+    assert out["activation"] == {"active": False, "reason": "poor_fit", "deactivated_ids": [],
+                                 "other_active_ids": [a, b]}
+    assert out["warnings"] == [_poor_fit_warning(r2)]
+    assert {cid: _row(session, cid) for cid in before} == before
+
+
+def test_an_original_refile_warns_about_a_poor_fit_injection(client, seeded, session):
+    inputs = _case(1)
+    original = _filed(client, _sheet(client, seeded, inputs)["id"])
+    sid = original["sheet"]["id"]
+    rep = _replicate(client, sid)
+    rep_curve = _filed(client, rep["id"])["curve"]
+    poor, r2 = _poor_injection()
+    assert client.patch(f"/hplc-calibration-sheets/{rep['id']}",
+                        json={"version": rep["version"], "inputs": poor}).status_code == 200
+    inputs["stock"]["vial_standard_mg"] = 15729.5
+    assert client.patch(f"/hplc-calibration-sheets/{sid}", json={"version": 1, "inputs": inputs}).status_code == 200
+    out = _filed(client, sid, version=2)
+    r2 = _REAL_WORK_OUT(hplc_calibration.replicate_prep(inputs, poor))["fit"]["r2"]
+    assert out["warnings"] == [(
+        f"The injection {rep_curve['source_filename']} was re-filed with R squared {r2:.4f}, below 0.99, so check "
+        "it: it is not active and was updated in place.")]

@@ -21,6 +21,8 @@ BASE_KEYS = {
     "instrument_name", "replicate_of_sheet_id", "replicate_of_name", "curve_id", "curve_name",
     "curve_is_active", "filed_at", "updated_at", "updated_by_email", "changed_since_filed",
     "proposed_name", "blocking",
+    # Final review I2: true | false on a single sheet's answers, null on a list row.
+    "curve_changed_since_filed",
 }
 FULL_KEYS = BASE_KEYS | {"inputs", "effective_inputs"}
 
@@ -149,6 +151,8 @@ def test_read_model_declares_every_key(client, seeded):
     rows = listed.json()
     assert [r["id"] for r in rows] == [second["id"], first["id"]]  # newest updated_at first
     assert all(set(r) == BASE_KEYS for r in rows)
+    assert all(r["curve_changed_since_filed"] is None for r in rows)
+    assert first["curve_changed_since_filed"] is False and got.json()["curve_changed_since_filed"] is False
     assert client.get("/hplc-calibration-sheets/999999999").status_code == 404
 
 

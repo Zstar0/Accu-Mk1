@@ -1076,8 +1076,11 @@ class CalibrationCurve(Base):
     net_override_reason: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     net_parts_used: Mapped[Optional[list]] = mapped_column(JSON, nullable=True)  # subset of assay, counterion, water
     serial_dilution: Mapped[Optional[dict]] = mapped_column(JSON, nullable=True)  # the weighings at filing
+    # use_alter breaks the create/drop cycle with hplc_calibration_sheets.calibration_curve_id; the
+    # name is Postgres's own default for this key, so a database that has it is not changed.
     calibration_sheet_id: Mapped[Optional[int]] = mapped_column(
-        ForeignKey("hplc_calibration_sheets.id", ondelete="SET NULL"), nullable=True)
+        ForeignKey("hplc_calibration_sheets.id", ondelete="SET NULL", use_alter=True,
+                   name="calibration_curves_calibration_sheet_id_fkey"), nullable=True)
     replicate_of_id: Mapped[Optional[int]] = mapped_column(
         ForeignKey("calibration_curves.id", ondelete="SET NULL"), nullable=True)
     injection: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)  # 2, 3 ... same-instrument replicate
