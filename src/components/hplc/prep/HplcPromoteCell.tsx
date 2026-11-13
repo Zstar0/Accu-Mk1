@@ -1,4 +1,4 @@
-import { useId, useRef, useState } from 'react'
+import { useEffect, useId, useRef, useState } from 'react'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import {
@@ -21,6 +21,8 @@ import { VIAL_LETTERS } from './hplc-sheet-columns'
 
 const CONFIRM =
   'Promote this row? Its prep becomes final and can only be corrected by a retest.'
+
+const STILL_SAVING = 'Still saving. Press Promote again when it has finished.'
 
 const messageOf = (e: unknown) =>
   e instanceof Error ? e.message : 'something went wrong; try again'
@@ -55,13 +57,17 @@ function planLines(computed: HplcRowComputed | null): string[] {
  * A press reads the sheet and the rules again first (`check`); a row still
  * ready is asked about once, focus on Cancel, then promoted. The server's
  * refusal reasons are shown under the button as returned, and stay (in the
- * next confirm too) until a new answer replaces them.
+ * next confirm too) until a new answer replaces them; a press's own reasons
+ * go when a later press finds the row ready. When the confirm closes, focus
+ * goes back to Promote, or to the prep link once the row is final.
  */
 export function HplcPromoteCell({
   view,
   reasons,
   unsaved = null,
   saving,
+  othersPressing = false,
+  onRunning,
   check,
   promote,
 }: {
@@ -73,25 +79,64 @@ export function HplcPromoteCell({
   unsaved?: string | null
   /** A save on the sheet is pending. */
   saving: boolean
-  /** The press's read-again; null when there is nothing to ask (a save went
-   *  out meanwhile, or the row is already final). */
-  check: () => Promise<PromoteCheck | null>
+  /** Another row's press is running: this one is off meanwhile. */
+  othersPressing?: boolean
+  /** This row's press started (true) or ended (false). */
+  onRunning?: (itemId: number, on: boolean) => void
+  /** The press's read-again: 'saving' when a save went out before or during
+   *  it, null when there is nothing to ask (the row is already final). */
+  check: () => Promise<PromoteCheck | 'saving' | null>
   promote: () => Promise<unknown>
 }) {
   const { row } = view
-  // the last answer: the press's own reasons, or the server's
-  const [said, setSaid] = useState<{
-    lines: string[]
-    server: boolean
-  } | null>(null)
+  const itemId = row.item_id
+  // the press's own reasons, and the server's last refusal (kept until a
+  // new answer replaces it)
+  const [own, setOwn] = useState<string[] | null>(null)
+  const [server, setServer] = useState<string[] | null>(null)
   const [busy, setBusy] = useState<string | null>(null)
   const [asking, setAsking] = useState<PromoteCheck | null>(null)
   const cancelRef = useRef<HTMLButtonElement>(null)
+  const rootRef = useRef<HTMLElement | null>(null)
+  const toRoot = (el: HTMLElement | null) => {
+    rootRef.current = el
+  }
   const reasonsId = useId()
+
+  // a press runs from the click until the confirm closes and the request
+  // has answered
+  const running = busy !== null || asking !== null
+  useEffect(() => {
+    onRunning?.(itemId, running)
+    return () => onRunning?.(itemId, false)
+  }, [onRunning, itemId, running])
+
+  // Where focus goes once the confirm has closed: 'cell' is Promote (or
+  // its wrapper while it is off), 'link' the prep link once the row is
+  // final. It waits until that control can take focus.
+  const refocus = useRef<'cell' | 'link' | null>(null)
+  const putFocusBack = () => {
+    const want = refocus.current
+    if (!want || (want === 'link' && !row.promoted)) return
+    const to = rootRef.current?.querySelector<HTMLElement>(
+      'button:not(:disabled), [tabindex="0"]'
+    )
+    if (!to) return
+    refocus.current = null
+    to.focus()
+  }
+  useEffect(() => {
+    // only when focus was lost to the page, never away from a box
+    const at = document.activeElement
+    if (!at || at === document.body) putFocusBack()
+  })
 
   if (row.promoted)
     return (
-      <span className="flex items-center gap-1.5 whitespace-nowrap">
+      <span
+        ref={toRoot}
+        className="flex items-center gap-1.5 whitespace-nowrap"
+      >
         {row.prep ? (
           <button
             type="button"
@@ -116,43 +161,53 @@ export function HplcPromoteCell({
     // a box of this row whose save did not land: its old value would be
     // filed, so the press stops before it reads anything
     if (unsaved) {
-      setSaid({ lines: [unsaved], server: false })
+      setOwn([unsaved])
       return
     }
     setBusy('Checking...')
     try {
       const fresh = await check()
-      if (fresh?.reasons.length)
-        setSaid({ lines: fresh.reasons, server: false })
-      else if (fresh) setAsking(fresh)
+      if (fresh === 'saving') setOwn([STILL_SAVING])
+      else if (fresh?.reasons.length) setOwn(fresh.reasons)
+      else if (fresh) {
+        // ready: the last press's own reasons are out of date
+        setOwn(null)
+        setAsking(fresh)
+      }
     } catch (e) {
-      setSaid({
-        lines: [`could not read the sheet again: ${messageOf(e)}`],
-        server: false,
-      })
+      setOwn([`could not read the sheet again: ${messageOf(e)}`])
     } finally {
       setBusy(null)
     }
   }
 
+  /** The confirm closed without promoting: focus back on Promote. */
+  function cancel() {
+    refocus.current = 'cell'
+    setAsking(null)
+  }
+
   async function confirm() {
+    refocus.current = 'cell'
     setAsking(null)
     setBusy('Promoting...')
     try {
       await promote()
-      setSaid(null)
+      setOwn(null)
+      setServer(null)
+      refocus.current = 'link'
     } catch (e) {
-      setSaid(
-        e instanceof HplcPromoteRefused && e.reasons.length
-          ? { lines: e.reasons, server: true }
-          : { lines: [messageOf(e)], server: false }
-      )
+      if (e instanceof HplcPromoteRefused && e.reasons.length) {
+        setOwn(null)
+        setServer(e.reasons)
+      } else setOwn([messageOf(e)])
     } finally {
       setBusy(null)
     }
   }
 
-  const off = saving || busy !== null || reasons.length > 0
+  const said = [...(own ?? []), ...(server ?? [])]
+  const off = saving || busy !== null || reasons.length > 0 || othersPressing
   const button = (
     <Button
       size="sm"
@@ -164,10 +219,10 @@ export function HplcPromoteCell({
       {busy ?? (saving ? 'Saving...' : 'Promote')}
     </Button>
   )
-  const lastRefusal = said?.server ? said.lines : null
+  const lastRefusal = server
   const plan = asking ? planLines(asking.computed) : []
   return (
-    <div className="min-w-[7rem] max-w-[22rem] whitespace-normal">
+    <div ref={toRoot} className="min-w-[7rem] max-w-[22rem] whitespace-normal">
       {reasons.length && !saving && !busy ? (
         // a disabled button fires no hover: the wrapper carries the tooltip,
         // and a hidden copy of the reasons describes it for a screen reader
@@ -198,20 +253,20 @@ export function HplcPromoteCell({
       ) : (
         button
       )}
-      {said && (
-        <ul
-          role="alert"
-          className="mt-1 list-disc space-y-0.5 pl-4 text-[11px] leading-snug text-red-700 dark:text-red-300"
-        >
-          {said.lines.map(r => (
-            <li key={r}>{r}</li>
-          ))}
-        </ul>
+      {said.length > 0 && (
+        // the role on a wrapper, so the list keeps its own
+        <div role="alert">
+          <ul className="mt-1 list-disc space-y-0.5 pl-4 text-[11px] leading-snug text-red-700 dark:text-red-300">
+            {said.map(r => (
+              <li key={r}>{r}</li>
+            ))}
+          </ul>
+        </div>
       )}
       <Dialog
         open={asking !== null}
         onOpenChange={open => {
-          if (!open) setAsking(null)
+          if (!open) cancel()
         }}
       >
         <DialogContent
@@ -220,6 +275,12 @@ export function HplcPromoteCell({
           onOpenAutoFocus={e => {
             e.preventDefault()
             cancelRef.current?.focus()
+          }}
+          // no trigger to go back to: focus goes to this row's control, not
+          // the page body (or later, once it can take it)
+          onCloseAutoFocus={e => {
+            e.preventDefault()
+            putFocusBack()
           }}
         >
           <DialogTitle className="text-sm font-semibold">
@@ -251,7 +312,7 @@ export function HplcPromoteCell({
               ref={cancelRef}
               size="sm"
               variant="outline"
-              onClick={() => setAsking(null)}
+              onClick={cancel}
             >
               Cancel
             </Button>

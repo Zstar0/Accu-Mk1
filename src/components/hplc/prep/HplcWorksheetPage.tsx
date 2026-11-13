@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { toast } from 'sonner'
 import { Button } from '@/components/ui/button'
@@ -123,6 +123,14 @@ export function HplcWorksheetPage({
   const { promote, readFresh } = usePromoteHplcRow(id, itemId =>
     unsavedOf(failuresNow.current, itemId)
   )
+  // The row whose Promote press is running (read-again, confirm, request):
+  // the other rows' Promote buttons are off, so two confirms never stack.
+  const [pressing, setPressing] = useState<number | null>(null)
+  const onRunning = useCallback(
+    (itemId: number, on: boolean) =>
+      setPressing(p => (on ? itemId : p === itemId ? null : p)),
+    []
+  )
   // typed work still on its way: leaving the page asks first
   useEffect(() => {
     if (!saving) return
@@ -165,7 +173,7 @@ export function HplcWorksheetPage({
    *  sheet and the rules as the server has them now. */
   async function check(itemId: number) {
     const fresh = await readFresh()
-    if (!fresh) return null
+    if (!fresh) return 'saving' as const
     const v = sheetRowViews(fresh.sheet, fresh.rules, false).find(
       x => x.row.item_id === itemId
     )
@@ -338,6 +346,10 @@ export function HplcWorksheetPage({
                   view={v}
                   reasons={reasonsOf(sheet.data as HplcSheet, v)}
                   unsaved={unsavedOf(failures, v.row.item_id)}
+                  othersPressing={
+                    pressing !== null && pressing !== v.row.item_id
+                  }
+                  onRunning={onRunning}
                   saving={saving}
                   check={() => check(v.row.item_id)}
                   promote={() => promote.mutateAsync(v.row.item_id)}

@@ -282,7 +282,8 @@ export function useHplcSheetSaving(id: number) {
  * answer (its `row` can be null), unless saves are queued behind it: the
  * last of them reads it then. `readFresh` is the sheet and the prep rules as
  * the server has them now, or null when a save is pending before or after
- * the read (a save cancels the read, which then answers the cached sheet).
+ * the read, or was sent during it (a save cancels the read, which then
+ * answers the cached sheet).
  */
 export function usePromoteHplcRow(
   id: number,
@@ -299,7 +300,22 @@ export function usePromoteHplcRow(
     mutationFn: (itemId: number) => {
       const why = blocked?.(itemId)
       if (why) return Promise.reject(new Error(why))
-      return withTimeout(() => promoteHplcRow(id, itemId), PROMOTE_TIMED_OUT)
+      // The request can still land after the 15 second cut: when it does,
+      // the sheet is read again (onSettled read it at the cut), so a row it
+      // promoted shows final. Before the cut, onSettled does the reading.
+      let cut = false
+      const readAgain = () => {
+        if (cut && !saving())
+          void qc.invalidateQueries({ queryKey: HPLC_SHEET_KEY(id) })
+      }
+      return withTimeout(() => {
+        const sent = promoteHplcRow(id, itemId)
+        sent.then(readAgain, readAgain)
+        return sent
+      }, PROMOTE_TIMED_OUT).catch((e: unknown) => {
+        if (e instanceof Error && e.message === PROMOTE_TIMED_OUT) cut = true
+        throw e
+      })
     },
     onSettled: () =>
       saving()
@@ -311,19 +327,34 @@ export function usePromoteHplcRow(
     rules: HplcPrepRule[]
   } | null> => {
     if (saving()) return null
-    const [sheet, rules] = await Promise.all([
-      qc.fetchQuery({
-        queryKey: HPLC_SHEET_KEY(id),
-        queryFn: () => getHplcSheet(id),
-        staleTime: 0,
-      }),
-      qc.fetchQuery({
-        queryKey: HPLC_PREP_RULES_KEY,
-        queryFn: getHplcPrepRules,
-        staleTime: 0,
-      }),
-    ])
-    return saving() ? null : { sheet, rules }
+    // a save sent after the press began, even one that has already landed:
+    // what was read may be from before it
+    let sentSince = false
+    const saveKey = JSON.stringify(SAVE_KEY(id))
+    const stop = qc.getMutationCache().subscribe(e => {
+      if (
+        e.type === 'added' &&
+        JSON.stringify(e.mutation.options.mutationKey) === saveKey
+      )
+        sentSince = true
+    })
+    try {
+      const [sheet, rules] = await Promise.all([
+        qc.fetchQuery({
+          queryKey: HPLC_SHEET_KEY(id),
+          queryFn: () => getHplcSheet(id),
+          staleTime: 0,
+        }),
+        qc.fetchQuery({
+          queryKey: HPLC_PREP_RULES_KEY,
+          queryFn: getHplcPrepRules,
+          staleTime: 0,
+        }),
+      ])
+      return saving() || sentSince ? null : { sheet, rules }
+    } finally {
+      stop()
+    }
   }
   return { promote, readFresh }
 }
