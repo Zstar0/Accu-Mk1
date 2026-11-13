@@ -445,7 +445,12 @@ function netWorked(net: CalNetInputs | null | undefined): [CalNet, NetLine[]] {
       'net peptide: the mass spec on the CoA does not match the free-peptide MW: check the formula ' +
         'sum and the ion form (MS reports the free peptide, never the salt).',
     ])
-  // a divisor of 0 (nonsense MWs) gives null where JavaScript would give Infinity
+  // A divisor of 0 (nonsense MWs) gives null where calc.js 2793-2794 divide
+  // without div() and get NaN or -Infinity. workOutSheet then has no stock and
+  // no fit, as the source does. With -Infinity the source also counts the
+  // counterion as applied (so parts_used, net_assumption_missing, and
+  // level_cannot_be_made at level 0 from a -Infinity stock); those are
+  // Infinity arithmetic, not copied: with no fit nothing can be filed.
   let fCi: number | null
   if (!hasCi) fCi = 1
   else if (fwBasis === 'salt') fCi = div(free, stated)
@@ -538,7 +543,8 @@ export function replicatePrep(
 }
 
 /** calc.js calDuplicateWeighings (2958): [kind, level, value], same-row per
- *  level, then next-row. toFixed(6) is the source's own key. */
+ *  level, then next-row. toFixed(6) is the source's own key; -0 reads
+ *  "0.000000", as the Python's _to_fixed6 now gives. */
 function duplicateWeighings(
   raw: CalLevelInputs[]
 ): ['same-row' | 'next-row', number, number][] {
@@ -590,12 +596,11 @@ export function workOutSheet(inputs: CalInputs | null | undefined): CalWorked {
   const [net, netWarnings] = netWorked(netIn)
   const override = num(netIn.override_factor)
   const factorApplied = override !== null ? override : net.factor
+  // a factor that cannot be worked out leaves no net stock (calc.js 1144 on the net basis: NaN)
   const stockNetWeight =
-    stockWeight === null
+    stockWeight === null || factorApplied === null
       ? null
-      : factorApplied === null
-        ? stockWeight
-        : stockWeight * factorApplied
+      : stockWeight * factorApplied
   const stockDiluentToAdd = stockWeight === null ? null : CAL_STOCK_DILUENT_UL
   const stockActualDiluent =
     vialStd === null || vialDiluent === null

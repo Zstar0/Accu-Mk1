@@ -120,6 +120,31 @@ describe('workOutSheet gives the lab tool answer', () => {
   })
 })
 
+describe('a counterion fraction that cannot be worked out', () => {
+  // The source gets NaN or -Infinity here (calc.js 2793-2794 divide without
+  // div()), so it has no stock and no curve; neither may the twin.
+  const base = fixture.cases.find(c => c.name === 'no correction')
+    ?.inputs as CalInputs
+  it.each([
+    ['Acetate, 0 equivalents, free MW 0', { equivalents: 0, free_mw: 0 }],
+    [
+      'stated FW 0, free MW blank, 0 equivalents',
+      { equivalents: 0, stated_fw: 0 },
+    ],
+    ['free MW -120.1, 2 equivalents', { equivalents: 2, free_mw: -120.1 }],
+  ] as const)('%s: no stock, no curve', (_name, net) => {
+    const worked = workOutSheet({
+      ...base,
+      net: { counterion: 'Acetate', ...net },
+    })
+    expect(worked.net.factor).toBeNull()
+    expect(worked.stock_net_weight_mg).toBeNull()
+    expect(worked.stock_conc_ug_ml).toBeNull()
+    expect(worked.fit.n).toBe(0)
+    expect(worked.fit.slope).toBeNull()
+  })
+})
+
 describe('the constants are the source', () => {
   it('counterions and ion forms', () => {
     expect(COUNTERIONS).toEqual(fixture.counterions)
