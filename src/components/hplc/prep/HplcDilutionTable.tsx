@@ -2,6 +2,7 @@ import type {
   HplcPrepVialInputs,
   HplcRowComputed,
   HplcVialComputed,
+  HplcVialTarget,
 } from '@/lib/hplc-prep'
 import { DEFAULT_DILUENT } from '@/lib/hplc-prep-rules'
 import { TD } from '@/components/hplc/EndoWorksheetTable'
@@ -26,6 +27,16 @@ import { onSheetKey } from './hplc-sheet-keys'
 const LABEL = Object.fromEntries(
   STEP3_COLUMNS.map(c => [c.key, c.label])
 ) as Record<Step3Key, string>
+
+/** Where a vial's Target Conc came from, for its tooltip. */
+const TARGET_FROM: Record<HplcVialTarget['source'], string> = {
+  typed: 'typed for this row; 0 or blank goes back to the standard',
+  component: "the lead peptide's own target, typed in Step 2b",
+  bac: 'the bac water target from the method',
+  rule: "this peptide's rule line",
+  blend_rule: "the blend's rule line",
+  default: 'the method default',
+}
 
 /** Step 3: the dilution into the autosampler vial, one row per vial. */
 export function HplcDilutionTable({ rowViews, onPatch }: SheetSectionProps) {
@@ -81,9 +92,12 @@ function DilutionCell({
   const box = (
     key: keyof HplcPrepVialInputs,
     placeholder?: string,
-    hint?: string | null
+    hint?: string | null,
+    title?: string
   ) => {
     const what = `${row.sample_id}, ${LABEL[col]}${many ? `, vial ${letter}` : ''}`
+    // Target Conc: 0 or less means "the standard", as on the source sheet
+    const clears = key === 'target_ug_ml'
     return (
       <InputCell>
         <NumberBox
@@ -93,10 +107,17 @@ function DilutionCell({
           placeholder={placeholder}
           disabled={locked}
           hint={hint}
+          title={title}
           onCommit={v =>
             onPatch(
               row.item_id,
-              { hplc_prep: { vials: { [n]: { [key]: v } } } },
+              {
+                hplc_prep: {
+                  vials: {
+                    [n]: { [key]: clears && v !== null && v <= 0 ? null : v },
+                  },
+                },
+              },
               what
             )
           }
@@ -132,7 +153,12 @@ function DilutionCell({
     case 'stock_for_final':
       return <ComputedCell value={vial.stock_for_final} dp={2} />
     case 'target_ug_ml':
-      return box('target_ug_ml', fmtDp(vial.target.value, 0))
+      return box(
+        'target_ug_ml',
+        fmtDp(vial.target.value, 0),
+        undefined,
+        TARGET_FROM[vial.target.source]
+      )
     case 'target_volume_ul':
       return box('target_volume_ul', String(row.params.target_volume_ul))
     case 'vial_mg':

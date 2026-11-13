@@ -92,6 +92,9 @@ function IntermediateCell({
   const typed: HplcPrepVialInputs = row.hplc_prep.vials?.[n] ?? {}
   const box = (key: keyof HplcPrepVialInputs, placeholder?: string) => {
     const what = `${row.sample_id}, ${LABEL[col]}${many ? `, vial ${letter}` : ''}`
+    // the target and volume: 0 or less means "the standard", as on the
+    // source sheet
+    const clears = key === 'int_target_ug_ml' || key === 'int_volume_ul'
     return (
       <InputCell>
         <NumberBox
@@ -103,7 +106,13 @@ function IntermediateCell({
           onCommit={v =>
             onPatch(
               row.item_id,
-              { hplc_prep: { vials: { [n]: { [key]: v } } } },
+              {
+                hplc_prep: {
+                  vials: {
+                    [n]: { [key]: clears && v !== null && v <= 0 ? null : v },
+                  },
+                },
+              },
               what
             )
           }

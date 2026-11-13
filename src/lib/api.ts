@@ -6611,7 +6611,9 @@ export interface HplcRowPatch {
 export interface HplcPromoteResult {
   prep: { id: number; sample_id: string; status: string }
   already: boolean
-  row: HplcSheetRow
+  /** Null when the prep was written but the read after it failed: read the
+   *  sheet again instead. */
+  row: HplcSheetRow | null
 }
 
 /** A promote the server refused (409): its sentence and each reason. */
@@ -6693,7 +6695,7 @@ export async function promoteHplcRow(
       await extractErrorMessage(response, `Promote failed: ${response.status}`)
     )
   const result = (await response.json()) as HplcPromoteResult
-  return { ...result, row: hplcRowIn(result.row) }
+  return { ...result, row: result.row ? hplcRowIn(result.row) : null }
 }
 
 export async function removeWorksheetItem(
@@ -7348,6 +7350,8 @@ export async function applyWorksheetMethodInstrument(
   items_updated: number
   skipped_state: { analysis_id: number; review_state: string }[]
   skipped_uncovered: { analysis_id: number; keyword: string }[]
+  /** HPLC rows already promoted keep their instrument. */
+  skipped_promoted?: { item_id: number; sample_id: string }[]
 }> {
   const response = await fetch(
     `${API_BASE_URL()}/worksheets/${worksheetId}/apply-method-instrument`,

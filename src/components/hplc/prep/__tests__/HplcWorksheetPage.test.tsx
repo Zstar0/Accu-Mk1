@@ -364,6 +364,19 @@ describe('HplcWorksheetPage', () => {
     )
   })
 
+  it('a number the server would refuse is never sent and is listed as too large', async () => {
+    vi.mocked(getHplcSheet).mockResolvedValue(makeSheet([makeRow()]))
+    renderPage()
+    const box = await screen.findByRole('textbox', { name: `${S1}, ${VIAL}` })
+    typeAndLeave(box, '2e12')
+    expect(await screen.findByRole('alert')).toHaveTextContent(
+      `Not saved: ${S1}, ${VIAL}: that number is too large`
+    )
+    expect(box).toHaveValue('2e12')
+    expect(box).toHaveAttribute('aria-invalid', 'true')
+    expect(patchHplcRow).not.toHaveBeenCalled()
+  })
+
   it('a completed sheet is read-only on the page', async () => {
     vi.mocked(getHplcSheet).mockResolvedValue(
       makeSheet([makeRow()], 'completed')

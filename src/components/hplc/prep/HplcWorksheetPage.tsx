@@ -6,9 +6,11 @@ import { Textarea } from '@/components/ui/textarea'
 import {
   getInstruments,
   getWorksheetUsers,
+  type HplcSheet,
   type WorksheetListItem,
   type WorksheetUpdate,
 } from '@/lib/api'
+import { promoteReasons, REASON_COMPLETED } from '@/lib/hplc-promote'
 import { displayName } from '@/lib/user-display'
 import { parseWorksheetNotes, withNotesText } from '@/lib/worksheet-notes'
 import { useWorksheetDrawer } from '@/hooks/use-worksheet-drawer'
@@ -17,12 +19,19 @@ import { useHplcPrepRules } from '@/services/hplc-prep-rules'
 import {
   HPLC_SHEET_KEY,
   useHplcSheet,
+  useHplcSheetSaving,
   usePatchHplcRow,
+  usePromoteHplcRow,
   useSetHplcInstrument,
 } from '@/services/hplc-worksheet'
 import AddSamplesModal from '@/components/hplc/AddSamplesModal'
 import { CompleteWorksheetButton } from '@/components/hplc/WorksheetDrawer'
-import { HplcPrepSheet } from './HplcPrepSheet'
+import {
+  HplcPrepSheet,
+  sheetRowViews,
+  type SheetRowView,
+} from './HplcPrepSheet'
+import { HplcPromoteCell } from './HplcPromoteCell'
 import { CellSelect } from './HplcSheetCells'
 
 const FIVE_MINUTES = 5 * 60 * 1000
@@ -55,6 +64,8 @@ export function HplcWorksheetPage({
     ])
   const patch = usePatchHplcRow(id, onFailure)
   const instrument = useSetHplcInstrument(id, onFailure)
+  const saving = useHplcSheetSaving(id)
+  const { promote, readFresh } = usePromoteHplcRow(id)
   // A first load that failed leaves every row on the method standard.
   // One empty list, so the sheet's row views stay memoised while it loads.
   const rules = useHplcPrepRules().data ?? NO_RULES
@@ -76,6 +87,25 @@ export function HplcWorksheetPage({
   const isCompleted =
     worksheet.status === 'completed' || sheet.data?.status === 'completed'
   const { userNotes } = parseWorksheetNotes(worksheet.notes ?? '')
+
+  /** Why a row cannot be promoted, on this copy of the sheet. */
+  const reasonsOf = (s: HplcSheet, v: SheetRowView) =>
+    s.status === 'completed' || worksheet.status === 'completed'
+      ? [REASON_COMPLETED]
+      : promoteReasons(v.row, v.computed, s.blend_cap)
+
+  /** A press: the row's reasons from the sheet as the server has it now. */
+  async function check(itemId: number) {
+    const fresh = await readFresh()
+    if (!fresh) return null
+    const v = sheetRowViews(fresh, rules, false).find(
+      x => x.row.item_id === itemId
+    )
+    return !v || v.row.promoted ? null : reasonsOf(fresh, v)
+  }
+
+  // N of M promoted: M counts the rows that can have a prep
+  const preppable = sheet.data?.rows.filter(r => !r.rider_only) ?? []
 
   function update(data: WorksheetUpdate) {
     drawer.updateMutation.mutate({
@@ -100,6 +130,11 @@ export function HplcWorksheetPage({
           <span className="font-mono text-xs tracking-wide text-muted-foreground">
             WS-{id} · {worksheet.status} · HPLC
           </span>
+          {sheet.data && (
+            <span className="ml-3 text-xs text-muted-foreground">
+              {`${preppable.filter(r => r.promoted).length} of ${preppable.length} promoted`}
+            </span>
+          )}
         </div>
         <div className="flex flex-wrap items-center gap-2">
           {isCompleted ? (
@@ -204,6 +239,21 @@ export function HplcWorksheetPage({
             onSetInstrument={(itemId, instrumentId, what) =>
               instrument.mutate({ itemId, instrumentId, what })
             }
+            onNumberRefused={what =>
+              onFailure(what, 'that number is too large')
+            }
+            step2Trailing={{
+              header: 'Sample prep',
+              cell: v => (
+                <HplcPromoteCell
+                  view={v}
+                  reasons={reasonsOf(sheet.data as HplcSheet, v)}
+                  saving={saving}
+                  check={() => check(v.row.item_id)}
+                  promote={() => promote.mutateAsync(v.row.item_id)}
+                />
+              ),
+            }}
           />
         </>
       )}

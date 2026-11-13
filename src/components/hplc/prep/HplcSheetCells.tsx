@@ -1,4 +1,11 @@
-import { useId, useRef, useState, type ReactNode } from 'react'
+import {
+  createContext,
+  useContext,
+  useId,
+  useRef,
+  useState,
+  type ReactNode,
+} from 'react'
 import { NativeSelect, NativeSelectOption } from '@/components/ui/native-select'
 import {
   MONO,
@@ -29,12 +36,25 @@ export function Hint({ id, children }: { id?: string; children: ReactNode }) {
   )
 }
 
+/** Where a box reports a number too large to send: the page's failure
+ *  list. `what` is the box's name. */
+// eslint-disable-next-line react-refresh/only-export-components
+export const NumberRefusedContext = createContext<
+  ((what: string) => void) | undefined
+>(undefined)
+
+// The server's ceilings (worksheets_hplc._MAX_NUMBER, _MAX_WHOLE): it answers
+// 400 above them, so they are refused here instead.
+const MAX_NUMBER = 1e12
+const TOO_LARGE = 'that number is too large'
+
 /**
  * A number box that commits on blur or Enter. Empty sends null (never 0); a
- * value that is not a number (or not a whole number, for `integer`) is
- * refused and stays in the box, marked, until fixed or cleared. While the
- * box is not being edited it shows `value`, so a save the server refuses
- * shows the rolled-back figure as soon as the cache has it.
+ * value that is not a number (or not a whole number, for `integer`), or one
+ * larger than the server takes, is refused and stays in the box, marked,
+ * until fixed or cleared. While the box is not being edited it shows
+ * `value`, so a save the server refuses shows the rolled-back figure as soon
+ * as the cache has it. A box that turns disabled drops its draft.
  */
 export function NumberBox({
   label,
@@ -44,6 +64,7 @@ export function NumberBox({
   integer = false,
   disabled,
   hint,
+  title,
   onCommit,
 }: {
   /** The accessible name: <sample id>, <column label>. */
@@ -55,6 +76,8 @@ export function NumberBox({
   integer?: boolean
   disabled: boolean
   hint?: string | null
+  /** The box's tooltip (a refused value's reason replaces it). */
+  title?: string
   onCommit: (v: number | null) => void
 }) {
   const [draft, setDraftState] = useState<string | null>(null)
@@ -65,9 +88,25 @@ export function NumberBox({
     draftNow.current = d
     setDraftState(d)
   }
-  const [bad, setBad] = useState(false)
+  const [bad, setBad] = useState<string | null>(null)
+  const refused = useContext(NumberRefusedContext)
+  // the text last reported as too large: Enter and the blur after it
+  // report it once
+  const reported = useRef<string | null>(null)
   const hintId = useId()
   const shown = value === null || value === undefined ? '' : String(value)
+
+  // a row promoted while a box was being typed in: the box shows the stored
+  // value again, not a draft that can never be saved (commit refuses a
+  // disabled box, and a focus starts a new draft, so the ref needs no reset)
+  const [wasDisabled, setWasDisabled] = useState(disabled)
+  if (disabled !== wasDisabled) {
+    setWasDisabled(disabled)
+    if (disabled) {
+      setDraftState(null)
+      setBad(null)
+    }
+  }
 
   function commit() {
     // a locked box never saves (a row promoted while it was being edited)
@@ -78,10 +117,20 @@ export function NumberBox({
       v !== null &&
       (!Number.isFinite(v) || (integer && !Number.isInteger(v)))
     ) {
-      setBad(true)
+      setBad(integer ? 'Type a whole number' : 'Type a number')
       return
     }
-    setBad(false)
+    if (
+      v !== null &&
+      Math.abs(v) > (integer ? Number.MAX_SAFE_INTEGER : MAX_NUMBER)
+    ) {
+      setBad(TOO_LARGE)
+      if (reported.current !== text) refused?.(label)
+      reported.current = text
+      return
+    }
+    setBad(null)
+    reported.current = null
     setDraft(null)
     if (v !== (value ?? null)) onCommit(v)
   }
@@ -94,10 +143,8 @@ export function NumberBox({
         aria-label={label}
         aria-describedby={hint ? hintId : undefined}
         data-field={field}
-        aria-invalid={bad || undefined}
-        title={
-          bad ? (integer ? 'Type a whole number' : 'Type a number') : undefined
-        }
+        aria-invalid={bad ? true : undefined}
+        title={bad ?? title}
         disabled={disabled}
         placeholder={placeholder}
         value={draft ?? shown}

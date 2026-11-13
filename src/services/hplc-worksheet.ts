@@ -1,4 +1,5 @@
 import {
+  useIsMutating,
   useMutation,
   useQuery,
   useQueryClient,
@@ -7,6 +8,7 @@ import {
 import {
   getHplcSheet,
   patchHplcRow,
+  promoteHplcRow,
   updateWorksheetItem,
   type HplcRowPatch,
   type HplcSheet,
@@ -59,8 +61,9 @@ async function withTimeout<T>(
   let timer: ReturnType<typeof setTimeout> | undefined
   const timedOut = new Promise<never>((_, reject) => {
     timer = setTimeout(() => {
-      controller.abort()
+      // rejected first, so the abort's own error can never win the race
       reject(new Error(TIMED_OUT))
+      controller.abort()
     }, SAVE_TIMEOUT_MS)
   })
   try {
@@ -228,6 +231,37 @@ export function usePatchHplcRow(id: number, onFailure?: HplcSaveFailure) {
     applied,
     onFailure
   )
+}
+
+/** True while any save on the sheet is pending. */
+export function useHplcSheetSaving(id: number) {
+  return useIsMutating({ mutationKey: SAVE_KEY(id) }) > 0
+}
+
+/**
+ * A row's promote. It runs in the sheet's save scope, never retried, so it
+ * can never overtake a save still queued; the sheet is read again whatever
+ * the answer (its `row` can be null). `readFresh` is the sheet as the server
+ * has it now, or null while a save is pending.
+ */
+export function usePromoteHplcRow(id: number) {
+  const qc = useQueryClient()
+  const promote = useMutation({
+    mutationKey: ['hplc-sheet-promote', id],
+    scope: { id: `hplc-sheet-save-${id}` },
+    retry: 0,
+    mutationFn: (itemId: number) => promoteHplcRow(id, itemId),
+    onSettled: () => qc.invalidateQueries({ queryKey: HPLC_SHEET_KEY(id) }),
+  })
+  const readFresh = async (): Promise<HplcSheet | null> =>
+    qc.isMutating({ mutationKey: SAVE_KEY(id) })
+      ? null
+      : qc.fetchQuery({
+          queryKey: HPLC_SHEET_KEY(id),
+          queryFn: () => getHplcSheet(id),
+          staleTime: 0,
+        })
+  return { promote, readFresh }
 }
 
 /** The row's instrument, through the existing item PATCH. */

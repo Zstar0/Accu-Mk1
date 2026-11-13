@@ -36,6 +36,6 @@ describe('the HPLC sheet saves pass an abort signal to fetch', () => {
   it('updateWorksheetItem called the old way sends no signal', async () => {
     const fn = stubFetch({ status: 'ok', item_id: 311 })
     await updateWorksheetItem(7, 311, { instrument_id: 3 })
-    expect(initOf(fn).signal).toBeUndefined()
+    expect('signal' in initOf(fn)).toBe(false)
   })
 })

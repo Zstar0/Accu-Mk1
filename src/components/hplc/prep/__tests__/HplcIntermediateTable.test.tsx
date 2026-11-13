@@ -26,6 +26,23 @@ const heavyRow = () =>
   })
 
 describe('Step 3a, the intermediate dilution', () => {
+  it('0 or less in the intermediate target or volume clears the box, as the source does', () => {
+    const { onPatch } = renderLive([heavyRow()])
+    for (const [label, key] of [
+      ['Intermediate Target (ug/mL)', 'int_target_ug_ml'],
+      ['Intermediate Target Vol (uL)', 'int_volume_ul'],
+    ] as const) {
+      const what = `${S1}, ${label}`
+      typeAndLeave(box(what), '0')
+      expect(onPatch).toHaveBeenLastCalledWith(
+        311,
+        { hplc_prep: { vials: { '1': { [key]: null } } } },
+        what
+      )
+      expect(box(what)).toHaveValue('')
+    }
+  })
+
   it('the intermediate target shows 5000 as its placeholder until one is typed', () => {
     const { onPatch } = renderLive([heavyRow()])
     expect(headers(region(STEP3A))).toEqual([

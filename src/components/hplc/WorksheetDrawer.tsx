@@ -183,6 +183,9 @@ export function WorksheetDrawer() {
           if (res.skipped_uncovered.length) {
             message += `, ${res.skipped_uncovered.length} not covered by this method`
           }
+          if (res.skipped_promoted?.length) {
+            message += `, ${res.skipped_promoted.length} promoted rows kept their instrument`
+          }
           toast.success(message)
         },
       }

@@ -11,6 +11,7 @@ import { HplcStockTable } from './HplcStockTable'
 import { HplcDilutionTable } from './HplcDilutionTable'
 import { HplcBlendTable } from './HplcBlendTable'
 import { HplcIntermediateTable } from './HplcIntermediateTable'
+import { NumberRefusedContext } from './HplcSheetCells'
 import {
   STEP2_SUB,
   STEP2_TITLE,
@@ -47,10 +48,10 @@ export interface HplcPrepSheetProps {
     instrumentId: number | null,
     what: string
   ) => void
-  /** Task 9's promote control. */
-  onPromote?: (itemId: number) => void
-  /** A column after Step 2's last (Task 9's promote control). */
+  /** A column after Step 2's last (the Sample prep column). */
   step2Trailing?: { header: ReactNode; cell: (v: SheetRowView) => ReactNode }
+  /** A box refused a number too large to send; `what` names it. */
+  onNumberRefused?: (what: string) => void
 }
 
 /** What every step table takes. */
@@ -131,16 +132,18 @@ export function HplcPrepSheet(props: HplcPrepSheetProps) {
     [sheet, rules, readOnly]
   )
   return (
-    <div className="space-y-6">
-      <WarningsPanel views={rowViews} />
-      {SECTIONS.filter(s => !s.show || s.show(rowViews)).map(
-        ({ step, title, note, sub, Table }) => (
-          <Section key={step} step={step} title={title} note={note} sub={sub}>
-            <Table {...props} rowViews={rowViews} />
-          </Section>
-        )
-      )}
-    </div>
+    <NumberRefusedContext.Provider value={props.onNumberRefused}>
+      <div className="space-y-6">
+        <WarningsPanel views={rowViews} />
+        {SECTIONS.filter(s => !s.show || s.show(rowViews)).map(
+          ({ step, title, note, sub, Table }) => (
+            <Section key={step} step={step} title={title} note={note} sub={sub}>
+              <Table {...props} rowViews={rowViews} />
+            </Section>
+          )
+        )}
+      </div>
+    </NumberRefusedContext.Provider>
   )
 }
 

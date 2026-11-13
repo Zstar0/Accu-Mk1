@@ -456,6 +456,95 @@ describe('HplcPrepSheet', () => {
     }
   })
 
+  it('a box being typed in when its row is promoted drops the draft and shows the stored value', () => {
+    const row = makeRow({ hplc_prep: { stock_vial_mg: 5012.31 } })
+    const props = {
+      rules: [],
+      readOnly: false,
+      instruments: INSTRUMENTS,
+      onPatch: vi.fn(),
+      onSetInstrument: vi.fn(),
+    }
+    const { rerender } = render(
+      <HplcPrepSheet sheet={makeSheet([row])} {...props} />
+    )
+    const el = box(`${S1}, ${VIAL}`)
+    fireEvent.focus(el)
+    fireEvent.change(el, { target: { value: '6000' } })
+    rerender(
+      <HplcPrepSheet
+        sheet={makeSheet([
+          {
+            ...row,
+            promoted: true,
+            prep: { id: 9, sample_id: 'SP-1', status: 'x' },
+          },
+        ])}
+        {...props}
+      />
+    )
+    expect(el).toBeDisabled()
+    expect(el).toHaveValue('5012.31')
+    fireEvent.blur(el)
+    expect(props.onPatch).not.toHaveBeenCalled()
+  })
+
+  it('0 or less in Target Conc clears it, as the source does', () => {
+    const { onPatch } = renderSheet([makeRow()])
+    const what = `${S1}, Target Conc (ug/mL)`
+    typeAndLeave(box(what), '-5')
+    expect(onPatch).toHaveBeenLastCalledWith(
+      311,
+      { hplc_prep: { vials: { '1': { target_ug_ml: null } } } },
+      what
+    )
+  })
+
+  it('Target Conc says where its target comes from', () => {
+    const S3 = 'P-0122-S01'
+    const other = { peptide_id: 11, name: 'TB-500', abbreviation: 'TB-500' }
+    renderSheet(
+      [
+        makeRow({
+          peptide_id: 11,
+          components: [{ ...other, declared_mg: 10, vial: 1 }],
+        }),
+        makeRow({
+          item_id: 312,
+          sample_id: S2,
+          hplc_prep: { vials: { '1': { target_ug_ml: 250 } } },
+        }),
+        makeRow({ item_id: 313, sample_id: S3 }),
+      ],
+      { rules: [rule({ id: 4, target_conc_ug_ml: 300 })] }
+    )
+    const tip = (s: string) =>
+      box(`${s}, Target Conc (ug/mL)`).getAttribute('title')
+    expect(tip(S1)).toBe('the method default')
+    expect(tip(S2)).toBe(
+      'typed for this row; 0 or blank goes back to the standard'
+    )
+    expect(tip(S3)).toBe("this peptide's rule line")
+  })
+
+  it('the Step 3 diluent off-plan mark carries the warning as its tooltip', () => {
+    const row = rowFromCase(
+      'powder, final vial + diluent equal to empty (no diluent is legal)'
+    )
+    renderSheet([row])
+    const heads = within(step3())
+      .getAllByRole('columnheader')
+      .map(h => h.textContent)
+    const at = heads.indexOf('Actual Diluent Volume added (uL)')
+    const cell = within(step3()).getAllByRole('row')[1]?.querySelectorAll('td')[
+      at
+    ]
+    expect(cell?.className).toContain('bg-amber-500/20')
+    expect(cell?.getAttribute('title')).toMatch(
+      /the diluent added to the final vial/
+    )
+  })
+
   it('the selects send their one key, the first choice as null', () => {
     const { onPatch, onSetInstrument } = renderSheet([
       makeRow({ prep_form: 'liquid', form: 'liquid', instrument_id: null }),
