@@ -7,10 +7,12 @@ rows ("HPLC, Pen 1"); this module is the one place Mk1 decides them.
 Wire block (`sample_units` in the COA wire document), every key optional to
 the reader:
 
-    {"icon": "pen", "one": "Pen", "many": "Pens", "count": 7, "variance": true}
+    {"icon": "pen", "one": "Pen", "many": "Pens", "form": "Pen",
+     "count": 7, "variance": true}
 
-Handler rulings, 2026-11-13: the certificate says the form factor, and the
-count is every vial reported on the certificate, not the HPLC vials alone.
+Handler rulings, 2026-11-13: the certificate says the form factor, the count
+is every vial reported on the certificate, not the HPLC vials alone, and a
+certificate without Variance captions the count with the form's name.
 """
 from sqlalchemy import select
 
@@ -33,14 +35,20 @@ UNIT_WORDS = {
 UNASSIGNED_ROLE = "xtra"  # the reserved bucket for vials no test uses
 
 
-def form_icon(db, parent) -> str | None:
-    """The icon key of the sample's dosage form; None with no form or no icon."""
+def _form(db, parent) -> tuple[str | None, str | None]:
+    """(name, icon key) of the sample's dosage form; (None, None) with no form."""
     form_id = getattr(parent, "sample_form_id", None)
     if form_id is None:
-        return None
-    return db.execute(
-        select(LimsSampleForm.icon).where(LimsSampleForm.id == form_id)
-    ).scalar_one_or_none()
+        return None, None
+    row = db.execute(
+        select(LimsSampleForm.name, LimsSampleForm.icon).where(LimsSampleForm.id == form_id)
+    ).first()
+    return (row.name, row.icon) if row else (None, None)
+
+
+def form_icon(db, parent) -> str | None:
+    """The icon key of the sample's dosage form; None with no form or no icon."""
+    return _form(db, parent)[1]
 
 
 def unit_words(db, parent) -> tuple[str, str]:
@@ -69,11 +77,15 @@ def build_sample_units(db, parent, doc=None, *, single_vial: bool = False) -> di
     With nothing to count the block carries no `count` and COABuilder keeps
     the old header row.
     """
-    icon = form_icon(db, parent)
+    name, icon = _form(db, parent)
     one, many = UNIT_WORDS.get(icon or "", DEFAULT_WORDS)
     out: dict = {"one": one, "many": many}
     if icon:
         out["icon"] = icon
+    if name and name.strip():
+        # The header's caption on a certificate without Variance (Handler,
+        # 2026-11-13): "1 Vial" over "Lyophilized Powder".
+        out["form"] = name.strip()
     if single_vial:
         out["count"] = 1
         out["variance"] = False

@@ -26,10 +26,14 @@ def db():
         s.close()
 
 
+NAMES = {"powder_vial": "Lyophilized Powder", "pen": "Pen", "capsule": "Capsule",
+         "nasal_spray": "Nasal Spray"}
+
+
 def _parent(db, *, icon=None, form=True, container=True, sample_id="P-5010"):
     form_id = None
     if form:
-        f = LimsSampleForm(name=f"Form {icon}", route="injectable", icon=icon)
+        f = LimsSampleForm(name=NAMES.get(icon, f"Form {icon}"), route="injectable", icon=icon)
         db.add(f)
         db.flush()
         form_id = f.id
@@ -64,7 +68,8 @@ def test_counts_every_vial_a_printed_test_used(db):
     parent = _parent(db, icon="powder_vial")
     _vials(db, parent, P5010)
     assert build_sample_units(db, parent, {"sections": []}) == {
-        "icon": "powder_vial", "one": "Vial", "many": "Vials", "count": 7, "variance": True}
+        "icon": "powder_vial", "one": "Vial", "many": "Vials", "form": "Lyophilized Powder",
+        "count": 7, "variance": True}
 
 
 def test_deferred_section_vials_do_not_count(db):
@@ -86,7 +91,7 @@ def test_unused_and_excluded_vials_do_not_count(db):
     _vials(db, parent, [("hplc", "core", True), ("hplc", "variance", False),
                         ("xtra", None, True), (None, None, True)])
     units = build_sample_units(db, parent, {})
-    assert units == {"icon": "pen", "one": "Pen", "many": "Pens", "count": 1,
+    assert units == {"icon": "pen", "one": "Pen", "many": "Pens", "form": "Pen", "count": 1,
                      "variance": False}
 
 
@@ -99,8 +104,8 @@ def test_parent_that_is_vial_one_counts_once(db):
 def test_nothing_to_count_sends_the_word_only(db):
     parent = _parent(db, icon="capsule")
     assert build_sample_units(db, parent, {}) == {
-        "icon": "capsule", "one": "Capsule", "many": "Capsules"}
-    # No form, or a form with no icon: today's word, no icon key.
+        "icon": "capsule", "one": "Capsule", "many": "Capsules", "form": "Capsule"}
+    # No form: today's word, no icon and no form name.
     bare = _parent(db, form=False, sample_id="P-5011")
     assert build_sample_units(db, bare, {}) == {"one": "Vial", "many": "Vials"}
     assert unit_words(db, bare) == DEFAULT_WORDS
@@ -111,7 +116,7 @@ def test_one_vial_certificate_is_one_unit(db):
     _vials(db, parent, P5010)
     assert build_sample_units(db, parent, single_vial=True) == {
         "icon": "nasal_spray", "one": "Nasal Spray", "many": "Nasal Sprays",
-        "count": 1, "variance": False}
+        "form": "Nasal Spray", "count": 1, "variance": False}
 
 
 def test_wire_document_carries_the_block_and_survives_a_failure(db, monkeypatch):
