@@ -122,6 +122,7 @@ const navItems: NavItem[] = [
       { id: 'inbox', label: 'Inbox' },
       { id: 'worksheets', label: 'Worksheets' },
       { id: 'endo-prep-rules', label: 'Endo prep rules' },
+      { id: 'hplc-prep-rules', label: 'HPLC prep rules' },
     ],
   },
   {

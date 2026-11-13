@@ -90,6 +90,10 @@ export function MethodPanel({ method, onUpdated, onSelectMethod }: MethodPanelPr
   const isEndoMethod =
     services.some(s => /ENDO/i.test(s.keyword ?? '')) ||
     method.run_parameters?.endotoxin != null
+  // technique is nullable free text; methods that predate the column are HPLC.
+  const isHplcMethod =
+    !isEndoMethod &&
+    (!(method.technique ?? '').trim() || /hplc/i.test(method.technique ?? ''))
   const predecessor =
     method.supersedes_id != null
       ? allMethods.find(m => m.id === method.supersedes_id) ?? null
@@ -836,6 +840,13 @@ export function MethodPanel({ method, onUpdated, onSelectMethod }: MethodPanelPr
           <MethodConsumablesSection method={method} onUpdated={onUpdated} />
           <MethodRunParamsSection method={method} onUpdated={onUpdated} />
         </>
+      )}
+      {isHplcMethod && (
+        <MethodRunParamsSection
+          method={method}
+          onUpdated={onUpdated}
+          block="hplc"
+        />
       )}
 
       {/* Revision history section */}
