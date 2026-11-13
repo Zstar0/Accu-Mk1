@@ -742,6 +742,7 @@ def _run_check_main(monkeypatch, capsys, *, stock_nullable="YES", forms_column=T
             "stock_vial_empty": ("double precision", stock_nullable),
         },
         "lims_sample_forms": _FORMS_COLUMN if forms_column else {},
+        "hplc_prep_rules": {name: ("integer", want) for name, want in check.RULES_EXPECTED.items()},
     }
     session = _FakeSession(tables, constraints, rows)
     monkeypatch.setattr(database, "SessionLocal", lambda: session)
