@@ -72,6 +72,9 @@ const VIAL_LETTERS = 'ABCDEFG'
 const plannable = (row: HplcSheetRow) =>
   row.form !== null && row.components.length > 0 && !row.rider_only
 
+// Task 8's Step 2b and 3a tables read the same rows; Fast Refresh on this
+// file only.
+// eslint-disable-next-line react-refresh/only-export-components
 export function sheetRowViews(
   sheet: HplcSheet,
   rules: HplcPrepRule[],
@@ -350,7 +353,16 @@ function Step2Cell({
     case 'sample_id':
       return <td className={`${TD} ${MONO}`}>{row.sample_id}</td>
     case 'identity':
-      return <td className={TD}>{row.identity ?? '-'}</td>
+      return (
+        <td className={TD}>
+          {row.identity ?? '-'}
+          {row.is_blend && row.components_source === 'analyses' && (
+            <Hint>
+              components from the tests ordered; type each weight in Step 2b
+            </Hint>
+          )}
+        </td>
+      )
     case 'declared_mg':
       return (
         <InputCell>

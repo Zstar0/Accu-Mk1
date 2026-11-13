@@ -51,6 +51,7 @@ export function makeRow(over: Partial<HplcSheetRow> = {}): HplcSheetRow {
         vial: 1,
       },
     ],
+    components_source: 'analytes',
     declared_mg: 10,
     sample_form: { id: 1, name: 'Lyophilized Powder', hplc_prep: 'powder' },
     sample_bac: false,

@@ -143,9 +143,23 @@ export function WorksheetDrawer() {
   const kind = activeWorksheet ? worksheetKind(activeWorksheet.items) : null
   const isEndo = kind === 'endo'
   const isPcr = kind === 'pcr'
-  // An all-HPLC worksheet is worked on its page too (plan 2026-11-12-hplc-prep-worksheet).
-  const isHplc = kind === 'hplc'
-  const isBench = isEndo || isPcr || isHplc
+  const isBench = isEndo || isPcr
+  // An all-HPLC worksheet keeps the editable flyout (Start Prep, remove,
+  // reassign live there) and gains a way to its prep sheet page (plan
+  // 2026-11-12-hplc-prep-worksheet).
+  const openHplcPage = activeWorksheet && kind === 'hplc' && (
+    <Button
+      size="sm"
+      className="bg-teal-600 text-white hover:bg-teal-600/90"
+      onClick={() => {
+        const ui = useUIStore.getState()
+        ui.closeWorksheetDrawer()
+        ui.navigateToWorksheet(activeWorksheet.id)
+      }}
+    >
+      Open worksheet
+    </Button>
+  )
 
   // Parse notes JSON: separate user text from prep_started metadata
   const { userNotes, prepStartedItems } = useMemo(
@@ -281,28 +295,6 @@ export function WorksheetDrawer() {
             </div>
           )}
 
-          {/* HPLC worksheet: a short summary; the prep sheet is worked on its page */}
-          {!isLoading && !isError && activeWorksheet && isHplc && (
-            <div className="space-y-3 p-6">
-              <h2 className="text-xl font-semibold">{activeWorksheet.title}</h2>
-              <p className="font-mono text-xs text-muted-foreground">
-                WS-{activeWorksheet.id} · {activeWorksheet.status} · HPLC ·{' '}
-                {activeWorksheet.items.length} samples
-              </p>
-              <Button
-                size="sm"
-                className="bg-teal-600 text-white hover:bg-teal-600/90"
-                onClick={() => {
-                  const ui = useUIStore.getState()
-                  ui.closeWorksheetDrawer()
-                  ui.navigateToWorksheet(activeWorksheet.id)
-                }}
-              >
-                Open worksheet
-              </Button>
-            </div>
-          )}
-
           {/* PCR worksheet: Dennis's plate builder + the PCR run log (Worksheets 2.0) */}
           {!isLoading && !isError && activeWorksheet && isPcr && (
             <div className="flex flex-1 min-h-0 overflow-hidden bg-muted/30">
@@ -383,6 +375,7 @@ export function WorksheetDrawer() {
                     users={users}
                   />
                   <div className="flex-1" />
+                  {openHplcPage}
                   {completeAction}
                 </div>
               ) : (
@@ -391,6 +384,7 @@ export function WorksheetDrawer() {
                     View only — worksheet is completed
                   </span>
                   <div className="flex-1" />
+                  {openHplcPage}
                   <EndoWorksheetActions
                     worksheet={activeWorksheet}
                     users={users}

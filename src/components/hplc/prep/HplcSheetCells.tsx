@@ -3,6 +3,8 @@ import { NativeSelect, NativeSelectOption } from '@/components/ui/native-select'
 import { MONO, TD, TD_CALC } from '@/components/hplc/EndoWorksheetTable'
 
 /** The lab tool's fmt: dp places, "-0.00" read as zero; a dash for null. */
+// The tables format with it too; Fast Refresh on this file only.
+// eslint-disable-next-line react-refresh/only-export-components
 export function fmtDp(n: number | null | undefined, dp: number): string {
   if (n === null || n === undefined || !Number.isFinite(n)) return '-'
   const t = n.toFixed(dp)

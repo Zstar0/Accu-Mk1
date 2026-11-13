@@ -110,6 +110,23 @@ export function usePatchHplcRow(id: number) {
  *  worksheet page refetch after (the instrument's name and method follow). */
 export function useSetHplcInstrument(id: number) {
   const queryClient = useQueryClient()
+  const setInstrument = (
+    itemId: number,
+    instrumentId: number | null,
+    name: string | null
+  ) =>
+    queryClient.setQueryData<HplcSheet>(HPLC_SHEET_KEY(id), sheet =>
+      sheet
+        ? {
+            ...sheet,
+            rows: sheet.rows.map(r =>
+              r.item_id === itemId
+                ? { ...r, instrument_id: instrumentId, instrument_name: name }
+                : r
+            ),
+          }
+        : sheet
+    )
   return useMutation({
     mutationFn: ({
       itemId,
@@ -118,6 +135,24 @@ export function useSetHplcInstrument(id: number) {
       itemId: number
       instrumentId: number | null
     }) => updateWorksheetItem(id, itemId, { instrument_id: instrumentId }),
+    // Optimistic, so the select does not sit on its old value until the
+    // refetch lands; a failure puts back that row's instrument only.
+    onMutate: async ({ itemId, instrumentId }) => {
+      await queryClient.cancelQueries({ queryKey: HPLC_SHEET_KEY(id) })
+      const before = queryClient
+        .getQueryData<HplcSheet>(HPLC_SHEET_KEY(id))
+        ?.rows.find(r => r.item_id === itemId)
+      setInstrument(itemId, instrumentId, null)
+      return { before }
+    },
+    onError: (_err, { itemId }, context) => {
+      if (context?.before)
+        setInstrument(
+          itemId,
+          context.before.instrument_id,
+          context.before.instrument_name
+        )
+    },
     onSettled: () => {
       void queryClient.invalidateQueries({ queryKey: HPLC_SHEET_KEY(id) })
       void queryClient.invalidateQueries({ queryKey: worksheetPageKey(id) })

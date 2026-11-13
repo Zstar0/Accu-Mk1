@@ -6574,6 +6574,11 @@ export interface HplcSheetRow {
   peptide_name: string | null
   is_blend: boolean
   components: import('@/lib/hplc-prep').HplcRowFactsComponent[]
+  /** Where the components came from: the sample's own analytes (with
+   *  weights), the tests ordered on an older sample (a blend's weights are
+   *  then null, typed by the tech), or null with an empty list and a problem. */
+  components_source: 'analytes' | 'analyses' | null
+  /** Null is normal on an older sample: the tech types it. */
   declared_mg: number | null
   sample_form: { id: number; name: string; hplc_prep: HplcPrepForm | null } | null
   sample_bac: boolean

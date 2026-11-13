@@ -352,4 +352,62 @@ describe('HplcPrepSheet', () => {
     })
     expect(onSetInstrument).toHaveBeenLastCalledWith(311, 3)
   })
+
+  it('a row with no declared weight on file serves an empty box the tech types', () => {
+    const { onPatch } = renderSheet([
+      makeRow({
+        declared_mg: null,
+        components_source: 'analyses',
+        components: [
+          {
+            peptide_id: 10,
+            name: 'BPC-157',
+            abbreviation: 'BPC-157',
+            declared_mg: null,
+            vial: 1,
+          },
+        ],
+      }),
+    ])
+    const box = within(step2()).getByLabelText('Declared Peptide Wt')
+    expect(box).toHaveValue('')
+    expect(box).not.toHaveAttribute('placeholder')
+    expect(box).toBeEnabled()
+    expect(screen.queryByText(/components from the tests ordered/)).toBeNull()
+    typeAndLeave(box, '12.5')
+    expect(onPatch).toHaveBeenLastCalledWith(311, {
+      hplc_prep: { declared_mg: 12.5 },
+    })
+  })
+
+  it('a blend whose components came from the tests ordered says to type each weight', () => {
+    const blend = [
+      { peptide_id: 11, name: 'Tesamorelin', declared_mg: null, vial: 1 },
+      { peptide_id: 4, name: 'Ipamorelin', declared_mg: null, vial: 1 },
+    ]
+    renderSheet([
+      makeRow({
+        identity: 'Tesamorelin + Ipamorelin',
+        peptide_id: 21,
+        is_blend: true,
+        components_source: 'analyses',
+        components: blend,
+        declared_mg: null,
+      }),
+      makeRow({
+        item_id: 312,
+        sample_id: 'P-0121-S01',
+        identity: 'Tesamorelin + Ipamorelin',
+        peptide_id: 21,
+        is_blend: true,
+        components_source: 'analytes',
+        components: blend.map(c => ({ ...c, declared_mg: 5 })),
+      }),
+    ])
+    expect(
+      within(step2()).getAllByText(
+        'components from the tests ordered; type each weight in Step 2b'
+      )
+    ).toHaveLength(1)
+  })
 })

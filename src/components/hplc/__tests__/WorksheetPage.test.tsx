@@ -118,9 +118,10 @@ describe('WorksheetPage', () => {
       worksheetPageId: null,
     })
     render(wrap(<WorksheetDrawer />))
-    expect(screen.queryByText('generic items')).not.toBeInTheDocument()
+    // the editable flyout stays (Start Prep, remove and reassign live there)
+    expect(screen.getByText('generic items')).toBeInTheDocument()
     expect(
-      screen.getByText(/WS-7 · open · HPLC · 1 samples/)
+      screen.getByRole('button', { name: 'Add Samples' })
     ).toBeInTheDocument()
     fireEvent.click(screen.getByRole('button', { name: 'Open worksheet' }))
     const ui = useUIStore.getState()
