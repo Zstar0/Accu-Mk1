@@ -27030,13 +27030,24 @@ def update_worksheet_item(
                 and promoted_sample_ids(db, [item.sample_id])):
             raise HTTPException(409, PREP_FINAL)
 
-    # HPLC prep worksheet: a promoted HPLC row ran on its instrument, so that is final too.
-    # Postgres is asked only when the instrument would change ("" and 0 clear, as below).
-    if (("instrument_id" in data.model_fields_set and (data.instrument_id or None) != item.instrument_id)
-            or (data.instrument_uid is not None and (data.instrument_uid or None) != item.instrument_uid)):
-        from worksheets_hplc import PREP_FINAL as HPLC_PREP_FINAL, is_promoted_hplc_row
-        if is_promoted_hplc_row(db, item):
-            raise HTTPException(409, HPLC_PREP_FINAL)
+    # HPLC prep worksheet: a promoted HPLC row's form and instrument are final, as the
+    # HPLC route has them (its inputs live only there; this route's other prep fields are
+    # endo's and the HPLC sheet never reads them). Judged only when one would change ("" and
+    # 0 clear, as below), and under the worksheet then item locks (re-read), so a promote
+    # that commits meanwhile is seen. Other requests keep the locking above.
+    def _hplc_final_change() -> bool:
+        return (("instrument_id" in data.model_fields_set and (data.instrument_id or None) != item.instrument_id)
+                or (data.instrument_uid is not None and (data.instrument_uid or None) != item.instrument_uid)
+                or ("prep_form" in data.model_fields_set and data.prep_form != item.prep_form))
+
+    if _hplc_final_change():
+        from worksheets_hplc import PREP_FINAL as HPLC_PREP_FINAL, is_hplc_row, is_promoted_hplc_row
+        if is_hplc_row(db, item):
+            if not (endo_values or weight_sent):  # those took both locks above
+                ws = _worksheet_for_update(db, worksheet_id)
+                lock_items_for_update(db, ws, [item.id])
+            if _hplc_final_change() and is_promoted_hplc_row(db, item):
+                raise HTTPException(409, HPLC_PREP_FINAL)
 
     resolved_method = None
     if data.instrument_uid is not None:

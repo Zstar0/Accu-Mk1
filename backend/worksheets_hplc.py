@@ -182,17 +182,29 @@ def _preps_by_item(item_ids) -> dict[int, dict]:
     """item id -> {"id", "sample_id", "status"} of the sample_preps row promoted from it. The
     table lives behind mk1_db's own connection; ensure_sample_preps_table first, as every
     other reader does, so a deploy that has not run it yet still has worksheet_item_id."""
+    global _preps_table_ready
     if not item_ids:
         return {}
-    mk1_db.ensure_sample_preps_table()
+    if not _preps_table_ready:
+        # once per process: its ALTERs take a strong lock even when there is nothing to add,
+        # and the columns are never dropped
+        mk1_db.ensure_sample_preps_table()
+        _preps_table_ready = True
     return {p["worksheet_item_id"]: {"id": p["id"], "sample_id": p["sample_id"], "status": p["status"]}
             for p in mk1_db.list_sample_preps_for_worksheet_items(sorted(item_ids))}
 
 
+_preps_table_ready = False
+
+
+def is_hplc_row(db: Session, item) -> bool:
+    """The item is on the HPLC bench (main._bench_kind_for_item). One query."""
+    return bool(_hplc_items(db, [item])[0])
+
+
 def is_promoted_hplc_row(db: Session, item) -> bool:
-    """The item is an HPLC row with a sample_preps row: its prep and instrument are final."""
-    hplc, _ = _hplc_items(db, [item])
-    return bool(hplc) and item.id in _preps_by_item([item.id])
+    """The item is an HPLC row with a sample_preps row: its form, prep and instrument are final."""
+    return is_hplc_row(db, item) and item.id in _preps_by_item([item.id])
 
 
 def _declared(quantity) -> Optional[float]:
@@ -321,7 +333,9 @@ def sheet_rows(db: Session, worksheet, items=None) -> list[dict]:
                 pep = peptides[pid]
                 components.append({
                     "peptide_id": pid, "name": pep.name, "abbreviation": pep.abbreviation,
-                    "declared_mg": mg if blend or mg is not None else facts["declared_weight_mg"],
+                    # a solo's weight is the row's: converted from IU where the sample
+                    # was ordered in IU, which the analyte's raw quantity is not
+                    "declared_mg": mg if blend else facts["declared_weight_mg"],
                     "vial": (blend.get(pid) or 1) if blend else 1})
         form_row = forms.get(parent.sample_form_id) if parent is not None else None
         sample_form = ({"id": form_row.id, "name": form_row.name, "hplc_prep": form_row.hplc_prep}

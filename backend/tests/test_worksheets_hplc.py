@@ -312,9 +312,12 @@ def test_sheet_rows_serve_a_solo_peptide_row(db):
     }]
 
 
-def test_a_solo_component_without_its_own_quantity_takes_the_sample_weight(db):
+@pytest.mark.parametrize("quantity", [None, "10"])
+def test_a_solo_component_takes_the_row_weight(db, quantity):
+    # the row's weight is converted from IU where the sample was ordered in IU; the analyte's
+    # raw quantity is not, so a solo component never shows it under an mg key
     bpc = _peptide(db, "BPC-157")
-    parent = _sample(db, "P-0121", [(bpc, "BPC-157", None)], declared="12.5", form=_form(db))
+    parent = _sample(db, "P-0121", [(bpc, "BPC-157", quantity)], declared="12.5", form=_form(db))
     ws = _ws(db)
     _item(db, ws, parent)
     db.commit()
@@ -628,6 +631,35 @@ def test_the_item_route_refuses_an_instrument_change_on_a_promoted_row(client, d
     stored = db.get(WorksheetItem, item.id)
     assert (stored.instrument_id, stored.instrument_uid, stored.prep_status) == (
         one.id, "uid-1", "complete")
+
+
+def test_the_item_route_refuses_a_form_change_on_a_promoted_row(client, db, promote):
+    ws, item = _world(db, prep_form="powder")
+    promote(item)
+    url = f"/worksheets/{ws.id}/items/{item.id}"
+    for body in ({"prep_form": "liquid"}, {"prep_form": None}):
+        r = client.patch(url, json=body)
+        assert r.status_code == 409 and r.json()["detail"] == worksheets_hplc.PREP_FINAL, body
+    # the same form, and the fields that are not prep fields, still save
+    for body in ({"prep_form": "powder"}, {"made": True}, {"prep_status": "complete"}):
+        assert client.patch(url, json=body).status_code == 200, body
+    db.expire_all()
+    stored = db.get(WorksheetItem, item.id)
+    assert (stored.prep_form, stored.prep_status) == ("powder", "complete")
+    assert stored.made_at is not None
+
+
+def test_the_item_route_still_changes_the_form_of_other_rows(client, db, promote):
+    ws, item = _world(db)
+    parent = db.query(LimsSample).filter_by(sample_id="P-0200").one()
+    endo = _item(db, ws, parent, 2, role="endo85")
+    db.commit()
+    promote(endo)  # a sample_preps row says nothing about an endotoxin row
+    for row in (item, endo):
+        r = client.patch(f"/worksheets/{ws.id}/items/{row.id}", json={"prep_form": "liquid"})
+        assert r.status_code == 200, r.text
+    db.expire_all()
+    assert [db.get(WorksheetItem, i).prep_form for i in (item.id, endo.id)] == ["liquid", "liquid"]
 
 
 def test_an_unpromoted_row_still_changes_instrument(client, db):
