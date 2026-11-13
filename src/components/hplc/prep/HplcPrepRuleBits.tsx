@@ -381,7 +381,7 @@ export function RuleRow({
         <TableCell>
           {isBlend ? (
             <span
-              title="A blend is made to its lead's target"
+              title="not set on a blend line"
               className="font-mono text-muted-foreground"
             >
               -
