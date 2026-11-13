@@ -13,7 +13,7 @@ import {
   DILUTION_COLUMNS,
   PEAK_COLUMNS,
   STOCK_COLUMNS,
-  refusalOf,
+  boundRefusal,
 } from '../cal-sheet-columns'
 import {
   fixtureCase,
@@ -315,7 +315,7 @@ describe('HplcCalTables, fix round 1', () => {
       ['peak_area', Number.NaN, 'type a number'],
     ]
     for (const [key, v, say] of cases)
-      expect([key, v, refusalOf(key, v)]).toEqual([key, v, say])
+      expect([key, v, boundRefusal(key, v)]).toEqual([key, v, say])
   })
 
   it('P3 and I1: a negative RT and a density in g/mL are refused in their boxes', async () => {

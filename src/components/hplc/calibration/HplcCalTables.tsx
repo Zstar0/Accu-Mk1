@@ -369,7 +369,7 @@ export function HplcCalTables({
               [
                 'Average RT',
                 worked.rt_avg !== null ? `${fmtDp(worked.rt_avg, 4)} min` : '-',
-                "The workbook's N27: the mean retention time across the levels",
+                "The workbook's N27: the mean retention time over every level with an RT typed. The curve is filed with the mean over the levels in the fit, which can differ in the last digits when a level has an RT but no peak area.",
               ],
               ['RT %RSD', fmtDp(worked.rt_rsd_pct, 3), ''],
             ] as [string, string, string][]

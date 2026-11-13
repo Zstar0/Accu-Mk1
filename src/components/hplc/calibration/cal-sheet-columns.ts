@@ -472,7 +472,7 @@ export function parseDecimal(raw: string): number {
 }
 
 /** Why a typed number is refused (null: it is taken). */
-export function refusalOf(key: string, v: number): string | null {
+export function boundRefusal(key: string, v: number): string | null {
   if (!Number.isFinite(v)) return 'type a number'
   const b = CAL_BOUNDS[key]
   if (b !== WEIGHING && Math.abs(v) > MAX_NUMBER)

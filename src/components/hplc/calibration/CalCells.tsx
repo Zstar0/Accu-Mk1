@@ -1,7 +1,7 @@
 import { useEffect, useId, useRef, useState } from 'react'
 import { NativeSelect, NativeSelectOption } from '@/components/ui/native-select'
 import { MONO } from '@/components/hplc/EndoWorksheetTable'
-import { parseDecimal, refusalOf } from './cal-sheet-columns'
+import { parseDecimal, boundRefusal } from './cal-sheet-columns'
 
 /**
  * The calibration sheet's own boxes. The prep sheet's NumberBox and
@@ -95,7 +95,7 @@ export function CalNumberBox({
   const why = (raw: string): string | null => {
     const t = raw.trim()
     if (t === '') return null
-    return refusalOf(bound, parseDecimal(t))
+    return boundRefusal(bound, parseDecimal(t))
   }
 
   function commit(): boolean {
