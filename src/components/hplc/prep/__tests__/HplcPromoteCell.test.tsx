@@ -1123,7 +1123,7 @@ describe('Promote on the HPLC worksheet page', () => {
       window.dispatchEvent(new StorageEvent('storage', { key: STORE_KEY }))
     })
 
-  it("R1: a failure written by another tab is listed here, marks its box and blocks Promote; that tab's dismiss clears it", async () => {
+  it("R1/R5: a failure this tab only learned from another tab is listed here, marks its box and blocks Promote; an event that no longer holds it (that tab's dismiss) removes it here", async () => {
     vi.mocked(getHplcSheet).mockResolvedValue(makeSheet([ready()]))
     renderPage()
     const box = await screen.findByRole('textbox', { name: `${S1}, ${VIAL}` })
@@ -1194,6 +1194,84 @@ describe('Promote on the HPLC worksheet page', () => {
     } finally {
       spies.forEach(s => s.mockRestore())
     }
+  })
+
+  /** Another tab's failure on a box this test does not touch. */
+  const OTHER_G = {
+    text: `${S1}: another tab's capsule count refused`,
+    keys: ['311:hplc_prep.capsules'],
+  }
+  /** This tab types into the vial box and the save fails: F. */
+  async function recordF(second: 'fail' | 'land') {
+    vi.mocked(getHplcSheet).mockResolvedValue(makeSheet([ready()]))
+    const patch = vi
+      .mocked(patchHplcRow)
+      .mockRejectedValueOnce(new Error('timed out'))
+    if (second === 'land') patch.mockResolvedValue(ready())
+    else patch.mockRejectedValue(new Error('timed out again'))
+    renderPage()
+    const box = await screen.findByRole('textbox', { name: `${S1}, ${VIAL}` })
+    typeAndLeave(box, '6000')
+    expect(await screen.findByRole('alert')).toHaveTextContent('timed out')
+    expect(window.localStorage.getItem(STORE_KEY)).toContain('timed out')
+    return box
+  }
+  const dismissButtons = () =>
+    screen.queryAllByRole('button', { name: 'Dismiss' })
+  /** The listed failure whose text holds this, or undefined. */
+  const listed = (text: string) =>
+    dismissButtons()
+      .map(b => b.closest('[role="alert"]') as HTMLElement)
+      .find(a => a.textContent?.includes(text))
+
+  it('R5: another tab writing over a failure this tab recorded does not take it from here, and this tab puts it back in storage', async () => {
+    const box = await recordF('fail')
+    // the other tab read storage a moment before F was stored, and writes
+    // its own list over it
+    otherTabWrites([OTHER_G])
+    await waitFor(() => expect(dismissButtons()).toHaveLength(2))
+    expect(listed('timed out')).toBeDefined()
+    expect(box.className).toContain('border-red-500')
+    fireEvent.click(promoteButton())
+    expect(await within(step2()).findByText(UNSAVED)).toBeInTheDocument()
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument()
+    expect(window.localStorage.getItem(STORE_KEY)).not.toContain('timed out')
+    // this tab's next write restores it in storage
+    typeAndLeave(
+      screen.getByRole('textbox', { name: `${S1}, ${VIAL_DIL}` }),
+      '8000'
+    )
+    await waitFor(() => expect(dismissButtons()).toHaveLength(3))
+    const stored = window.localStorage.getItem(STORE_KEY) ?? ''
+    expect(stored).toContain(': timed out"')
+    expect(stored).toContain(OTHER_G.text)
+    // and an event that empties storage still leaves it here
+    otherTabWrites(null)
+    await waitFor(() => expect(dismissButtons()).toHaveLength(2))
+    expect(box.className).toContain('border-red-500')
+  })
+
+  it("R5: this tab's own landed save of the box clears its failure here and in storage", async () => {
+    const box = await recordF('land')
+    otherTabWrites([OTHER_G])
+    typeAndLeave(box, '6000')
+    await waitFor(() => expect(dismissButtons()).toHaveLength(1))
+    expect(listed('timed out')).toBeUndefined()
+    expect(box.className).not.toContain('border-red-500')
+    const stored = window.localStorage.getItem(STORE_KEY) ?? ''
+    expect(stored).not.toContain('timed out')
+    expect(stored).toContain(OTHER_G.text)
+  })
+
+  it("R5: this tab's Dismiss clears a failure it recorded, here and in storage", async () => {
+    const box = await recordF('fail')
+    otherTabWrites([OTHER_G])
+    await waitFor(() => expect(dismissButtons()).toHaveLength(2))
+    const own = listed('timed out') as HTMLElement
+    fireEvent.click(within(own).getByRole('button', { name: 'Dismiss' }))
+    await waitFor(() => expect(dismissButtons()).toHaveLength(1))
+    expect(box.className).not.toContain('border-red-500')
+    expect(window.localStorage.getItem(STORE_KEY)).not.toContain('timed out')
   })
 
   it('R1: with storage unavailable the list still works in memory', async () => {

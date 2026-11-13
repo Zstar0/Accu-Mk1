@@ -112,20 +112,21 @@ function current(id: number): HplcFailure[] {
   const mine = failureLists.get(id) ?? NO_FAILURES
   const stored = readStored(id)
   if (stored === null) return mine
-  // a server failure recorded here whose write storage refused (R4): it
-  // stays until this tab's own landed save or dismiss
-  const pend = unstored.get(id)
-  const kept = pend
+  // a server failure recorded here stays until this tab's own landed save,
+  // dismiss or prune, whatever storage holds now (R4, R5)
+  const own = recorded.get(id)
+  const kept = own
     ? mine.filter(
-        f => !f.refused && pend.has(f.n) && !stored.some(s => s.n === f.n)
+        f => !f.refused && own.has(f.n) && !stored.some(s => s.n === f.n)
       )
     : []
   return [...stored, ...kept, ...mine.filter(f => f.refused)]
 }
 
-/** By sheet: the numbers of server failures this tab holds that storage
- *  would not take (a write threw); cleared by the next write that lands. */
-const unstored = new Map<number, Set<number>>()
+/** By sheet: the numbers of the server failures recorded in this tab this
+ *  visit. Only this tab removes them; a failure only learned from storage
+ *  goes when storage no longer holds it. */
+const recorded = new Map<number, Set<number>>()
 
 function setMemory(id: number, list: HplcFailure[]) {
   if (list.length) failureLists.set(id, list)
@@ -142,15 +143,17 @@ function sync(id: number, list: HplcFailure[]) {
 }
 
 // Another tab wrote a sheet's failures: take them, so a failure there marks
-// and blocks here too, and a dismiss there clears it here.
+// and blocks here too, and a dismiss there clears it here (unless this tab
+// recorded it itself: R5).
 if (typeof window !== 'undefined')
   window.addEventListener('storage', e => {
     if (e.key !== null && !e.key.startsWith(STORE_PREFIX)) return
     for (const id of loaded) sync(id, current(id))
   })
 
-/** Writes the server failures; false when storage would not take them. */
-function writeStored(id: number, list: HplcFailure[]): boolean {
+/** Writes the server failures; a write storage will not take is skipped
+ *  (this tab keeps its own failures through `recorded`). */
+function writeStored(id: number, list: HplcFailure[]) {
   try {
     const keep = list
       .filter(f => !f.refused)
@@ -158,10 +161,8 @@ function writeStored(id: number, list: HplcFailure[]): boolean {
     if (keep.length)
       window.localStorage.setItem(STORE_PREFIX + id, JSON.stringify(keep))
     else window.localStorage.removeItem(STORE_PREFIX + id)
-    return true
   } catch {
     // storage off or full: the list still works for this visit
-    return false
   }
 }
 
@@ -188,16 +189,10 @@ export const hplcFailures = {
       return
     }
     setMemory(id, next)
-    if (writeStored(id, next)) unstored.delete(id)
-    else {
-      // what this write added or changed, and what was already waiting,
-      // stays this tab's until it is stored or this tab removes it
-      const was = unstored.get(id) ?? new Set<number>()
-      const pend = new Set<number>()
-      for (const f of next)
-        if (!f.refused && (was.has(f.n) || !base.includes(f))) pend.add(f.n)
-      unstored.set(id, pend)
-    }
+    // a recorded failure this change took out is no longer this tab's
+    const own = recorded.get(id)
+    if (own) for (const n of own) if (!next.some(f => f.n === n)) own.delete(n)
+    writeStored(id, next)
     failureWatchers.forEach(w => w())
   },
   /** A failure. One already listed with the same reason for any of the same
@@ -210,14 +205,21 @@ export const hplcFailures = {
       (x.keys.length === 0
         ? f.keys.length === 0
         : x.keys.some(k => f.keys.includes(k)))
+    let n = 0
     hplcFailures.update(id, list => {
       const hit = list.find(same)
-      if (!hit) return [...list, { ...f, n: ++failureSeq }]
+      if (!hit) return [...list, { ...f, n: (n = ++failureSeq) }]
+      n = hit.n
       if (f.keys.every(k => hit.keys.includes(k))) return list
       return list.map(x =>
         x === hit ? { ...x, keys: [...new Set([...x.keys, ...f.keys])] } : x
       )
     })
+    // recorded here: the value typed in this tab did not save (R5)
+    if (!f.refused) {
+      const own = recorded.get(id) ?? new Set<number>()
+      recorded.set(id, own.add(n))
+    }
   },
   /** A save of these keys landed: each failure loses those keys, and goes
    *  once it has none left. A failure holding other keys (a Form change that
@@ -264,7 +266,7 @@ export const hplcFailures = {
   reset() {
     failureLists.clear()
     loaded.clear()
-    unstored.clear()
+    recorded.clear()
     try {
       for (const k of Object.keys(window.localStorage))
         if (k.startsWith(STORE_PREFIX)) window.localStorage.removeItem(k)
@@ -277,7 +279,7 @@ export const hplcFailures = {
   forgetMemory() {
     failureLists.clear()
     loaded.clear()
-    unstored.clear()
+    recorded.clear()
   },
 }
 
