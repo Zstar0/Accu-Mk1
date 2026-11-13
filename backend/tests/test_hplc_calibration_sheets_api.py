@@ -208,10 +208,11 @@ def test_a_misspelled_key_is_a_422_not_a_silent_drop(client, seeded, session, ba
 
 def test_a_stale_version_is_a_409_and_changes_nothing(client, seeded, session):
     sheet = _create(client, seeded, FULL)
-    assert client.patch(f"/hplc-calibration-sheets/{sheet['id']}", json={"version": 1}).status_code == 200
+    first = client.patch(f"/hplc-calibration-sheets/{sheet['id']}", json={"version": 1, "instrument_id": seeded.inst2})
+    assert first.status_code == 200
     before = _stored(session, sheet["id"])
     res = client.patch(f"/hplc-calibration-sheets/{sheet['id']}",
-                       json={"version": 1, "instrument_id": seeded.inst2, "inputs": {"levels": [{"target": 5}]}})
+                       json={"version": 1, "instrument_id": seeded.inst, "inputs": {"levels": [{"target": 5}]}})
     assert res.status_code == 409
     assert res.json()["detail"] == "Someone else saved this sheet. It has been reloaded."
     assert _stored(session, sheet["id"]) == before
@@ -234,16 +235,29 @@ REFUSALS = [
     ("negative weighing", _at(("stock", "vial_mg"), -1.0), "Stock Vial + cap (mg): a balance reading"),
     ("huge weighing", _at(("levels", 1, "vial_diluent_mg"), 2e9), "Level 2, Vial, cap and Diluent (mg): a balance reading"),
     ("negative coa weight", _at(("coa_weight_mg",), -0.5), "Weight from COA (mg): a balance reading"),
-    ("zero target", _at(("levels", 0, "target"), 0), "Level 1, Target (ug/mL): must be more than 0"),
-    ("negative density", _at(("diluent_density_mg_ml",), -997.1), "Diluent density (mg/mL): must be more than 0"),
-    ("zero level volume", _at(("level_volume_ul",), 0), "Level volume (uL): must be more than 0"),
-    ("zero aliquot", _at(("top_aliquot_ul",), 0), "Aliquot (uL): must be more than 0"),
-    ("zero override", _at(("net", "override_factor"), 0), "Net factor, entered by hand: must be more than 0"),
-    ("zero free mw", _at(("net", "free_mw"), 0), "Free-peptide MW (g/mol): must be more than 0"),
-    ("negative stated fw", _at(("net", "stated_fw"), -1530.0), "Stated FW on the CoA (g/mol): must be more than 0"),
-    ("zero counterion mw", _at(("net", "counterion_mw"), 0), "Counterion mass (g/mol per eq): must be more than 0"),
-    ("zero equivalents", _at(("net", "equivalents"), 0), "Equivalents (n): must be more than 0"),
-    ("zero ms", _at(("net", "ms_mz"), 0), "Mass spec on the CoA (m/z): must be more than 0"),
+    ("zero target", _at(("levels", 0, "target"), 0), "Level 1, Target (ug/mL): must be at least 0.000001."),
+    ("tiny target", _at(("levels", 0, "target"), 9e-7), "Level 1, Target (ug/mL): must be at least 0.000001."),
+    ("negative density", _at(("diluent_density_mg_ml",), -997.1), "Diluent density (mg/mL): must be at least 0.000001."),
+    ("tiny density", _at(("diluent_density_mg_ml",), 9e-7), "Diluent density (mg/mL): must be at least 0.000001."),
+    ("zero level volume", _at(("level_volume_ul",), 0), "Level volume (uL): must be at least 0.000001."),
+    ("tiny level volume", _at(("level_volume_ul",), 9e-7), "Level volume (uL): must be at least 0.000001."),
+    ("zero aliquot", _at(("top_aliquot_ul",), 0), "Aliquot (uL): must be at least 0.000001."),
+    ("tiny aliquot", _at(("top_aliquot_ul",), 9e-7), "Aliquot (uL): must be at least 0.000001."),
+    ("zero override", _at(("net", "override_factor"), 0),
+     "Net factor, entered by hand: must be more than 0 and no more than 2."),
+    ("override over 2", _at(("net", "override_factor"), 2.01),
+     "Net factor, entered by hand: must be more than 0 and no more than 2."),
+    ("zero free mw", _at(("net", "free_mw"), 0), "Free-peptide MW (g/mol): must be at least 1."),
+    ("free mw under 1", _at(("net", "free_mw"), 0.999), "Free-peptide MW (g/mol): must be at least 1."),
+    ("negative stated fw", _at(("net", "stated_fw"), -1530.0), "Stated FW on the CoA (g/mol): must be at least 1."),
+    ("stated fw under 1", _at(("net", "stated_fw"), 0.5), "Stated FW on the CoA (g/mol): must be at least 1."),
+    ("zero counterion mw", _at(("net", "counterion_mw"), 0), "Counterion mass (g/mol per eq): must be at least 1."),
+    ("tiny counterion mw", _at(("net", "counterion_mw"), 1e-300), "Counterion mass (g/mol per eq): must be at least 1."),
+    ("zero equivalents", _at(("net", "equivalents"), 0), "Equivalents (n): must be from 0.01 to 100."),
+    ("equivalents under 0.01", _at(("net", "equivalents"), 0.009), "Equivalents (n): must be from 0.01 to 100."),
+    ("equivalents over 100", _at(("net", "equivalents"), 100.01), "Equivalents (n): must be from 0.01 to 100."),
+    ("zero ms", _at(("net", "ms_mz"), 0), "Mass spec on the CoA (m/z): must be at least 1."),
+    ("ms under 1", _at(("net", "ms_mz"), 0.5), "Mass spec on the CoA (m/z): must be at least 1."),
     ("zero assay", _at(("net", "assay_pct"), 0), "CoA assay (%): must be more than 0 and no more than 150"),
     ("assay over 150", _at(("net", "assay_pct"), 150.5), "CoA assay (%): must be more than 0 and no more than 150"),
     ("negative water", _at(("net", "water_pct"), -0.1), "Water, Karl Fischer (%): must be 0 or more and less than 100"),
@@ -290,6 +304,124 @@ def test_the_typed_limits_still_save(client, seeded):
     sheet = _create(client, seeded, inputs)
     assert len(sheet["inputs"]["levels"]) == 12
     assert sheet["inputs"]["net"]["counterion"] == "Other"
+
+
+ACCEPTED_BOUNDS = [
+    (("net", "free_mw"), 1), (("net", "stated_fw"), 1), (("net", "counterion_mw"), 1), (("net", "ms_mz"), 1),
+    (("net", "equivalents"), 0.01), (("net", "equivalents"), 100),
+    (("net", "override_factor"), 2), (("net", "override_factor"), 1e-9),
+    (("levels", 0, "target"), 1e-6), (("diluent_density_mg_ml",), 1e-6), (("level_volume_ul",), 1e-6),
+    (("top_aliquot_ul",), 1e-6), (("stock", "vial_mg"), 0), (("net", "assay_pct"), 150), (("net", "water_pct"), 0),
+]
+
+
+@pytest.mark.parametrize("path,value", ACCEPTED_BOUNDS, ids=[f"{p[-1]}={v}" for p, v in ACCEPTED_BOUNDS])
+def test_each_bound_itself_saves(client, seeded, path, value):
+    inputs = copy.deepcopy(FULL)
+    inputs["net"]["counterion"] = "Other"  # so counterion_mw is read, not the table's
+    _at(path, value)(inputs)
+    sheet = _create(client, seeded, inputs)
+    holder = sheet["inputs"]
+    for p in path:
+        holder = holder[p]
+    assert holder == value
+
+
+def test_the_tiny_counterion_body_is_refused_and_nothing_is_stored(client, seeded, session):
+    # The review's C1 body: it used to be stored and then break the sheet and the list for everyone.
+    inputs = copy.deepcopy(FULL)
+    inputs["net"].update(counterion="Other", counterion_mw=1e-300, stated_fw=1e12)
+    count = session.execute(select(HplcCalibrationSheet.id)).all()
+    res = client.post("/hplc-calibration-sheets", json={"inputs": inputs})
+    assert res.status_code == 400
+    assert session.execute(select(HplcCalibrationSheet.id)).all() == count
+
+
+def _raising(*_a, **_k):
+    raise OverflowError("cannot work this out")
+
+
+def test_inputs_that_cannot_be_worked_out_are_never_stored(client, seeded, session, monkeypatch):
+    import hplc_calibration
+
+    sentence = "These numbers cannot be worked out. Check the values just typed."
+    sheet = _create(client, seeded, FULL)
+    before = _stored(session, sheet["id"])
+    count = session.execute(select(HplcCalibrationSheet.id)).all()
+    monkeypatch.setattr(hplc_calibration, "work_out_sheet", _raising)
+    made = client.post("/hplc-calibration-sheets", json={"inputs": FULL})
+    assert made.status_code == 400 and made.json()["detail"] == sentence
+    assert session.execute(select(HplcCalibrationSheet.id)).all() == count
+    changed = copy.deepcopy(FULL)
+    changed["lot"] = "other lot"
+    res = client.patch(f"/hplc-calibration-sheets/{sheet['id']}", json={"version": 1, "inputs": changed})
+    assert res.status_code == 400 and res.json()["detail"] == sentence
+    assert _stored(session, sheet["id"]) == before
+    # The same guard on a replicate's save (its effective inputs are worked out).
+    monkeypatch.undo()
+    _file(session, sheet["id"], _curve(session, seeded.peptide, f"orig-{uuid4().hex}", seeded.inst))
+    rep = client.post(f"/hplc-calibration-sheets/{sheet['id']}/duplicate").json()
+    rep_before = _stored(session, rep["id"])
+    monkeypatch.setattr(hplc_calibration, "work_out_sheet", _raising)
+    res = client.patch(f"/hplc-calibration-sheets/{rep['id']}",
+                       json={"version": 1, "inputs": {"levels": [{"peak_area": 5.0}]}})
+    assert res.status_code == 400 and res.json()["detail"] == sentence
+    assert _stored(session, rep["id"]) == rep_before
+
+
+def test_one_unworkable_sheet_never_breaks_the_read_or_the_list(client, seeded, monkeypatch):
+    import hplc_calibration
+
+    sheet = _create(client, seeded, FULL)
+    monkeypatch.setattr(hplc_calibration, "work_out_sheet", _raising)
+    got = client.get(f"/hplc-calibration-sheets/{sheet['id']}")
+    assert got.status_code == 200
+    assert got.json()["blocking"] == ["cannot_be_worked_out"]
+    assert got.json()["inputs"] == FULL
+    listed = client.get("/hplc-calibration-sheets", params={"peptide_id": seeded.peptide})
+    assert listed.status_code == 200
+    assert [r["blocking"] for r in listed.json() if r["id"] == sheet["id"]] == [["cannot_be_worked_out"]]
+
+
+@pytest.mark.parametrize("stored", [{"levels": {"a": 1}}, [1, 2], {"levels": [1, "x"]}, {"net": [1], "levels": []}])
+def test_malformed_stored_inputs_read_and_duplicate_without_a_500(client, seeded, session, stored):
+    # Possible only by a direct database write.
+    sheet = _create(client, seeded, FULL)
+    _file(session, sheet["id"], _curve(session, seeded.peptide, f"bad-{uuid4().hex}", seeded.inst))
+    row = session.get(HplcCalibrationSheet, sheet["id"])
+    row.inputs = stored
+    session.commit()
+    got = client.get(f"/hplc-calibration-sheets/{sheet['id']}")
+    assert got.status_code == 200
+    assert got.json()["blocking"] == ["cannot_be_worked_out"]
+    listed = client.get("/hplc-calibration-sheets", params={"peptide_id": seeded.peptide})
+    assert listed.status_code == 200
+    dup = client.post(f"/hplc-calibration-sheets/{sheet['id']}/duplicate")
+    assert dup.status_code == 201
+    levels = stored.get("levels") if isinstance(stored, dict) else None
+    assert len(dup.json()["inputs"]["levels"]) == (len(levels) if isinstance(levels, list) else 0)
+    assert client.get(f"/hplc-calibration-sheets/{dup.json()['id']}").status_code == 200
+
+
+def test_an_unchanged_save_writes_nothing(client, seeded, session, user):
+    sheet = _create(client, seeded, FULL)
+    _file(session, sheet["id"], _curve(session, seeded.peptide, f"same-{uuid4().hex}", seeded.inst))
+    session.expire_all()
+    stamped = session.get(HplcCalibrationSheet, sheet["id"]).updated_at
+    audits = session.execute(select(AuditLog.id).where(AuditLog.entity_id == str(sheet["id"]),
+                                                       AuditLog.entity_type == "hplc_calibration_sheet")).all()
+    for body in ({}, {"inputs": copy.deepcopy(FULL)},
+                 {"inputs": FULL, "peptide_id": seeded.peptide, "instrument_id": seeded.inst}):
+        res = client.patch(f"/hplc-calibration-sheets/{sheet['id']}", json={"version": 1, **body})
+        assert res.status_code == 200, res.text
+        assert res.json()["version"] == 1
+        assert res.json()["changed_since_filed"] is False
+    session.expire_all()
+    assert session.get(HplcCalibrationSheet, sheet["id"]).updated_at == stamped
+    assert session.execute(select(AuditLog.id).where(AuditLog.entity_id == str(sheet["id"]),
+                                                     AuditLog.entity_type == "hplc_calibration_sheet")).all() == audits
+    # The stale-version check still comes first.
+    assert client.patch(f"/hplc-calibration-sheets/{sheet['id']}", json={"version": 7}).status_code == 409
 
 
 @pytest.mark.parametrize("body,reason", [
@@ -345,11 +477,11 @@ def test_changing_the_instrument_of_a_filed_sheet_is_refused(client, seeded, ses
     same = client.patch(f"/hplc-calibration-sheets/{sheet['id']}",
                         json={"version": 1, "instrument_id": seeded.inst, "peptide_id": seeded.peptide})
     assert same.status_code == 200
-    assert same.json()["changed_since_filed"] is True
+    assert (same.json()["changed_since_filed"], same.json()["version"]) == (False, 1)
     # Once a re-sync deletes the curve (Review Focus 1), the sheet is free again.
     session.delete(session.get(CalibrationCurve, curve_id))
     session.commit()
-    freed = client.patch(f"/hplc-calibration-sheets/{sheet['id']}", json={"version": 2, "instrument_id": seeded.inst2})
+    freed = client.patch(f"/hplc-calibration-sheets/{sheet['id']}", json={"version": 1, "instrument_id": seeded.inst2})
     assert freed.status_code == 200, freed.text
     assert freed.json()["instrument_id"] == seeded.inst2
 
@@ -402,6 +534,11 @@ def test_a_replicate_save_refuses_a_weighing(client, seeded, session):
     # A misspelled run result is still a 422; a number out of range a 400.
     assert client.patch(f"/hplc-calibration-sheets/{rep['id']}",
                         json={"version": 1, "inputs": {"levels": [{"peak_areaa": 1}]}}).status_code == 422
+    # A wrong type is a 422 too, never the "another injection" sentence.
+    for wrong in ({"levels": None}, {"levels": {"peak_area": 1}}, {"notes": 5}):
+        res = client.patch(f"/hplc-calibration-sheets/{rep['id']}", json={"version": 1, "inputs": wrong})
+        assert res.status_code == 422, wrong
+    assert _stored(session, rep["id"]) == before
     bad = client.patch(f"/hplc-calibration-sheets/{rep['id']}",
                        **_raw({"version": 1, "inputs": {"levels": [{"peak_area": float("nan")}]}}))
     assert bad.status_code == 400 and "Level 1, Peak Area" in bad.json()["detail"]
@@ -489,3 +626,48 @@ def test_the_list_filters_by_peptide(client, seeded, session):
     assert [r["id"] for r in rows] == [mine["id"]]
     everything = client.get("/hplc-calibration-sheets").json()
     assert {mine["id"], other["id"]} <= {r["id"] for r in everything}
+
+
+def test_the_list_pages_newest_first(client, seeded):
+    ids = [_create(client, seeded)["id"] for _ in range(3)]
+    page = {"peptide_id": seeded.peptide}
+    assert [r["id"] for r in client.get("/hplc-calibration-sheets", params={**page, "limit": 2}).json()] == ids[:0:-1]
+    assert [r["id"] for r in client.get("/hplc-calibration-sheets",
+                                        params={**page, "limit": 2, "offset": 2}).json()] == ids[:1]
+    assert len(client.get("/hplc-calibration-sheets", params={"limit": 500}).json()) <= 500
+    for bad in ({"limit": 0}, {"limit": 501}, {"offset": -1}):
+        assert client.get("/hplc-calibration-sheets", params=bad).status_code == 422
+
+
+def _list_queries(client, peptide_id):
+    from sqlalchemy import event
+
+    seen = []
+
+    def count(*_a, **_k):
+        seen.append(1)
+
+    event.listen(database.engine, "before_cursor_execute", count)
+    try:
+        res = client.get("/hplc-calibration-sheets", params={"peptide_id": peptide_id})
+    finally:
+        event.remove(database.engine, "before_cursor_execute", count)
+    assert res.status_code == 200
+    return len(res.json()), len(seen)
+
+
+def test_the_list_queries_do_not_grow_with_the_page(client, seeded, session):
+    def one_filed_family():
+        sheet = _create(client, seeded, FULL)
+        _file(session, sheet["id"], _curve(session, seeded.peptide, f"q-{uuid4().hex}", seeded.inst))
+        rep = client.post(f"/hplc-calibration-sheets/{sheet['id']}/duplicate").json()
+        client.patch(f"/hplc-calibration-sheets/{rep['id']}", json={"version": 1, "instrument_id": seeded.inst2})
+        _create(client, seeded)
+
+    one_filed_family()
+    rows_small, small = _list_queries(client, seeded.peptide)
+    for _ in range(3):
+        one_filed_family()
+    rows_big, big = _list_queries(client, seeded.peptide)
+    assert (rows_small, rows_big) == (3, 12)
+    assert big == small

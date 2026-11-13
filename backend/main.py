@@ -7045,8 +7045,10 @@ _CAL_MAX_WHOLE = 2 ** 53 - 1
 _CAL_MAX_ID = 2 ** 31 - 1  # the id columns are int4: a larger id is simply not on file
 _CAL_MAX_LEVELS = 12
 _CAL_WEIGHINGS = {"coa_weight_mg", "vial_mg", "vial_standard_mg", "vial_diluent_mg", "vial_diluent_std_mg"}
-_CAL_ABOVE_ZERO = {"target", "diluent_density_mg_ml", "level_volume_ul", "top_aliquot_ul", "override_factor",
-                   "free_mw", "stated_fw", "counterion_mw", "equivalents", "ms_mz"}
+# Typo stoppers with a physical floor (fix round 1): "above 0" let 1e-300 through to the arithmetic.
+_CAL_AT_LEAST_ONE = {"free_mw", "stated_fw", "counterion_mw", "ms_mz"}  # g/mol, m/z
+_CAL_AT_LEAST_TINY = {"target", "diluent_density_mg_ml", "level_volume_ul", "top_aliquot_ul"}  # >= 1e-6
+_CAL_TINY = 1e-6
 _CAL_LONG_TEXT = {"notes", "assumption"}
 # Labels as the source sheet writes them (calibration.html, cal.js STOCK_COLS, DIL_COLS, PEAK_COLS).
 _CAL_LABELS = {
@@ -7195,8 +7197,14 @@ def _cal_check_fields(prefix: str, section: str, values: dict) -> None:
             raise HTTPException(400, f"{label}: must be more than 0 and no more than 150.")
         if key == "water_pct" and not 0 <= v < 100:
             raise HTTPException(400, f"{label}: must be 0 or more and less than 100.")
-        if key in _CAL_ABOVE_ZERO and v <= 0:
-            raise HTTPException(400, f"{label}: must be more than 0.")
+        if key in _CAL_AT_LEAST_ONE and v < 1:
+            raise HTTPException(400, f"{label}: must be at least 1.")
+        if key == "equivalents" and not 0.01 <= v <= 100:
+            raise HTTPException(400, f"{label}: must be from 0.01 to 100.")
+        if key == "override_factor" and not 0 < v <= 2:
+            raise HTTPException(400, f"{label}: must be more than 0 and no more than 2.")
+        if key in _CAL_AT_LEAST_TINY and v < _CAL_TINY:
+            raise HTTPException(400, f"{label}: must be at least 0.000001.")
 
 
 def _cal_check_levels(levels: list) -> None:
@@ -7236,6 +7244,10 @@ def _cal_replicate_inputs(raw, refusal: str) -> dict:
     try:
         inputs = CalReplicateInputsIn.model_validate(raw).model_dump()
     except ValidationError as exc:
+        # The 400 only when every complaint is a key the original carries; a wrong type
+        # (levels: null, a string for a number) is a 422 like anywhere else.
+        if any(e["type"] != "extra_forbidden" for e in exc.errors()):
+            raise _cal_validation_422(exc)
         try:
             CalInputsIn.model_validate(raw)
         except ValidationError:
@@ -7265,14 +7277,38 @@ def _cal_original(db: Session, sheet):
     return db.get(HplcCalibrationSheet, sheet.replicate_of_sheet_id) if sheet.replicate_of_sheet_id else None
 
 
-def _cal_effective_inputs(sheet, original) -> dict:
+def _cal_effective_inputs(sheet, original) -> Optional[dict]:
     """What the sheet works out from: a replicate takes the original's preparation as it is
-    now and its own run results (calc.js replicatePrep)."""
+    now and its own run results (calc.js replicatePrep). None when the stored inputs are not
+    the shape a save writes (possible only by a direct database write)."""
     from hplc_calibration import replicate_prep
-    return replicate_prep(original.inputs, sheet.inputs) if original is not None else sheet.inputs
+    try:
+        effective = replicate_prep(original.inputs, sheet.inputs) if original is not None else sheet.inputs
+    except Exception:
+        return None
+    return effective if isinstance(effective, dict) else None
 
 
-def curve_name(db: Session, sheet) -> str:
+def _cal_work_out(sheet_id, effective: Optional[dict]) -> Optional[dict]:
+    """work_out_sheet, or None (logged) when it cannot work these inputs out. One sheet's bad
+    numbers must never break a response for everyone."""
+    from hplc_calibration import work_out_sheet
+    try:
+        if effective is None:
+            raise ValueError("stored inputs are malformed")
+        return work_out_sheet(effective)
+    except Exception:
+        logger.exception("calibration sheet %s: work_out_sheet failed", sheet_id)
+        return None
+
+
+def _cal_refuse_unworkable(sheet_id, effective: Optional[dict]) -> None:
+    """Before a commit that stores inputs: nothing is stored that cannot be worked out."""
+    if _cal_work_out(sheet_id, effective) is None:
+        raise HTTPException(400, "These numbers cannot be worked out. Check the values just typed.")
+
+
+def curve_name(db: Session, sheet, *, taken_names: Optional[set] = None) -> str:
     """calc.js calSheetName (2880) over calibration_curves.source_filename. Filed: the curve's own
     name. A replicate with no instrument or the original's: <original's name>-Inj<n>, n the first
     free from 2. Anything else: default_curve_name, then -2, -3 ... until no curve carries it."""
@@ -7282,49 +7318,54 @@ def curve_name(db: Session, sheet) -> str:
         return curve.source_filename
 
     def taken(name: str) -> bool:
+        if taken_names is not None:
+            return name in taken_names
         return db.execute(select(CalibrationCurve.id).where(
             CalibrationCurve.source_filename == name).limit(1)).first() is not None
 
     original = _cal_original(db, sheet)
     if original is not None and (sheet.instrument_id is None or sheet.instrument_id == original.instrument_id):
-        base, n = curve_name(db, original), 2
+        base, n = curve_name(db, original, taken_names=taken_names), 2
         while taken(f"{base}-Inj{n}"):
             n += 1
         return f"{base}-Inj{n}"
     pep = db.get(Peptide, sheet.peptide_id) if sheet.peptide_id else None
     inst = db.get(Instrument, sheet.instrument_id) if sheet.instrument_id else None
+    date_typed = (_cal_effective_inputs(sheet, original) or {}).get("date")
     base = default_curve_name(pep.abbreviation if pep else None, inst.name if inst else None,
-                              _cal_effective_inputs(sheet, original).get("date"))
+                              date_typed if isinstance(date_typed, str) else None)
     name, n = base, 2
     while taken(name):
         name, n = f"{base}-{n}", n + 1
     return name
 
 
-def _cal_sheet_out(db: Session, sheet, *, full: bool) -> dict:
-    """The sheet read model. Every key is always present; a list row leaves out the inputs."""
-    from hplc_calibration import work_out_sheet
+def _cal_sheet_out(db: Session, sheet, *, full: bool, taken_names: Optional[set] = None) -> dict:
+    """The sheet read model. Every key is always present; a list row leaves out the inputs.
+    A sheet whose inputs cannot be worked out still reads, with blocking
+    ["cannot_be_worked_out"], so it can be opened and corrected."""
     pep = db.get(Peptide, sheet.peptide_id) if sheet.peptide_id else None
     inst = db.get(Instrument, sheet.instrument_id) if sheet.instrument_id else None
     curve = db.get(CalibrationCurve, sheet.calibration_curve_id) if sheet.calibration_curve_id else None
     user = db.get(User, sheet.updated_by_id) if sheet.updated_by_id else None
     original = _cal_original(db, sheet)
     effective = _cal_effective_inputs(sheet, original)
+    worked = _cal_work_out(sheet.id, effective)
     out = {
         "id": sheet.id, "version": sheet.version,
         "peptide_id": sheet.peptide_id, "peptide_name": pep.name if pep else None,
         "peptide_abbreviation": pep.abbreviation if pep else None,
         "instrument_id": sheet.instrument_id, "instrument_name": inst.name if inst else None,
         "replicate_of_sheet_id": sheet.replicate_of_sheet_id,
-        "replicate_of_name": curve_name(db, original) if original is not None else None,
+        "replicate_of_name": curve_name(db, original, taken_names=taken_names) if original is not None else None,
         "curve_id": sheet.calibration_curve_id, "curve_name": curve.source_filename if curve else None,
         "curve_is_active": curve.is_active if curve else None,
         "filed_at": sheet.filed_at, "updated_at": sheet.updated_at,
         "updated_by_email": user.email if user else None,
         "changed_since_filed": bool(sheet.filed_at is not None and sheet.updated_at is not None
                                     and sheet.updated_at > sheet.filed_at),
-        "proposed_name": curve_name(db, sheet),
-        "blocking": work_out_sheet(effective)["blocking"],
+        "proposed_name": curve_name(db, sheet, taken_names=taken_names),
+        "blocking": worked["blocking"] if worked is not None else ["cannot_be_worked_out"],
     }
     if full:
         out["inputs"] = sheet.inputs
@@ -7351,16 +7392,40 @@ def _cal_audit(db: Session, operation: str, sheet, user_id) -> None:
 
 
 @app.get("/hplc-calibration-sheets")
-def list_calibration_sheets(peptide_id: Optional[int] = None, db: Session = Depends(get_db),
+def list_calibration_sheets(peptide_id: Optional[int] = None,
+                            limit: int = Query(100, ge=1, le=500),
+                            offset: int = Query(0, ge=0, le=_CAL_MAX_ID),
+                            db: Session = Depends(get_db),
                             _current_user=Depends(get_current_user)):
-    """Every sheet (or one peptide's), newest save first, without the inputs."""
+    """A page of sheets (or one peptide's), newest save first, without the inputs. The rows a
+    page reads are loaded one query per table up front, so the queries do not grow with it."""
     from models import HplcCalibrationSheet
-    q = select(HplcCalibrationSheet).order_by(HplcCalibrationSheet.updated_at.desc().nulls_last(),
-                                              HplcCalibrationSheet.id.desc())
+    q = (select(HplcCalibrationSheet)
+         .order_by(HplcCalibrationSheet.updated_at.desc().nulls_last(), HplcCalibrationSheet.id.desc())
+         .limit(limit).offset(offset))
     if peptide_id is not None:
         q = q.where(HplcCalibrationSheet.peptide_id == peptide_id)
-    # ponytail: a few lookups per row; batch them if the list ever runs to hundreds of sheets
-    return [_cal_sheet_out(db, s, full=False) for s in db.execute(q).scalars().all()]
+    sheets = db.execute(q).scalars().all()
+    if not sheets:
+        return []
+
+    def load(model, ids):
+        ids = {i for i in ids if i is not None}
+        return db.execute(select(model).where(model.id.in_(ids))).scalars().all() if ids else []
+
+    # Held in locals: the session's identity map is weak, and _cal_sheet_out's db.get() calls
+    # are answered from it with no query while these rows are referenced.
+    originals = load(HplcCalibrationSheet, (s.replicate_of_sheet_id for s in sheets))
+    every = [*sheets, *originals]
+    loaded = (load(Peptide, (s.peptide_id for s in every)), load(Instrument, (s.instrument_id for s in every)),
+              load(CalibrationCurve, (s.calibration_curve_id for s in every)),
+              load(User, (s.updated_by_id for s in sheets)))
+    # ponytail: every curve name in one query; narrow it by prefix if curves run to the tens of thousands
+    taken = set(db.execute(select(CalibrationCurve.source_filename)
+                           .where(CalibrationCurve.source_filename.is_not(None))).scalars())
+    out = [_cal_sheet_out(db, s, full=False, taken_names=taken) for s in sheets]
+    del originals, loaded
+    return out
 
 
 @app.post("/hplc-calibration-sheets", status_code=201)
@@ -7374,6 +7439,7 @@ def create_calibration_sheet(data: CalSheetCreateIn, db: Session = Depends(get_d
         _cal_check_peptide(db, data.peptide_id)
     if data.instrument_id is not None:
         _cal_check_instrument(db, data.instrument_id)
+    _cal_refuse_unworkable(None, inputs)
     user_id = getattr(current_user, "id", None)
     sheet = HplcCalibrationSheet(peptide_id=data.peptide_id, instrument_id=data.instrument_id, inputs=inputs,
                                  version=1, created_by_id=user_id, updated_by_id=user_id)
@@ -7430,6 +7496,18 @@ def save_calibration_sheet(sheet_id: int, data: CalSheetPatchIn, db: Session = D
             _cal_check_peptide(db, changes["peptide_id"])
         if changes.get("instrument_id") is not None:
             _cal_check_instrument(db, changes["instrument_id"])
+        if inputs is not None and inputs == sheet.inputs:
+            inputs = None
+        if not changes and inputs is None:
+            # A save that changes nothing writes nothing: no version, no audit row, no
+            # updated_at, so a filed sheet does not read "changed since filed".
+            db.rollback()
+            return _cal_sheet_out(db, sheet, full=True)
+        if inputs is not None:
+            stored, sheet.inputs = sheet.inputs, inputs  # the effective inputs as they will be
+            effective = _cal_effective_inputs(sheet, original)
+            sheet.inputs = stored
+            _cal_refuse_unworkable(sheet.id, effective)
         for f, v in changes.items():
             setattr(sheet, f, v)
         if inputs is not None:
@@ -7457,9 +7535,11 @@ def duplicate_calibration_sheet(sheet_id: int, db: Session = Depends(get_db),
     if original.calibration_curve_id is None:
         raise HTTPException(400, "File the curve first. The copy is named after it.")
     user_id = getattr(current_user, "id", None)
+    # Stored inputs of another shape (a direct database write only) count as zero levels.
+    levels = original.inputs.get("levels") if isinstance(original.inputs, dict) else None
     copy_ = HplcCalibrationSheet(
         peptide_id=original.peptide_id, instrument_id=original.instrument_id, replicate_of_sheet_id=original.id,
-        inputs=blank_replicate_inputs(len(original.inputs.get("levels") or [])), version=1,
+        inputs=blank_replicate_inputs(len(levels) if isinstance(levels, list) else 0), version=1,
         created_by_id=user_id, updated_by_id=user_id)
     try:
         db.add(copy_)
