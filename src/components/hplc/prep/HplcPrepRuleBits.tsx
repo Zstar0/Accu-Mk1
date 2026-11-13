@@ -120,9 +120,9 @@ function numOf(t: string): number | null | undefined {
 /** The draft as the API body, or why it cannot be sent. A field the line's
  *  kind does not use goes as null (a blend line has no blend target and no
  *  rank, any other line no lead and no floor), so a peptide switch never
- *  sends a stale one. A typed concentration of 0 or less is refused here in
- *  the sheet's words; the server makes every other check and its 400 text
- *  shows on the row. */
+ *  sends a stale one. A typed concentration of 0 or less, a negative weight
+ *  and a rank outside 1 to 999 are refused here in the sheet's words; the
+ *  server makes every other check and its 400 text shows on the row. */
 function bodyOf(d: Draft, isBlend: boolean): HplcPrepRuleIn | string {
   if (d.peptide_id === null) return 'Pick a peptide'
   const used = NUMBER_FIELDS.filter(([key]) => usedBy(key, isBlend))
@@ -133,9 +133,17 @@ function bodyOf(d: Draft, isBlend: boolean): HplcPrepRuleIn | string {
     return POSITIVE_FIELDS.includes(key) && n != null && n <= 0
   })
   if (notPositive) return `${notPositive[1]} must be more than 0`
+  const negative = used.find(([key]) => {
+    const n = numOf(d[key])
+    return !POSITIVE_FIELDS.includes(key) && n != null && n < 0
+  })
+  if (negative) return `${negative[1]} must not be negative`
   const rank = isBlend ? null : numOf(d.lead_priority)
-  if (rank === undefined || (rank !== null && !Number.isInteger(rank)))
-    return `${RANK_LABEL} must be a whole number`
+  if (
+    rank === undefined ||
+    (rank !== null && (!Number.isInteger(rank) || rank < 1 || rank > 999))
+  )
+    return `${RANK_LABEL} must be a whole number from 1 to 999`
   return {
     peptide_id: d.peptide_id,
     min_mg: numOf(d.min_mg) ?? null,

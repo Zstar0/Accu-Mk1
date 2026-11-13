@@ -159,7 +159,7 @@ describe('HPLC prep rule row', () => {
     })
     fireEvent.click(within(solo).getByRole('button', { name: 'Save' }))
     expect(await screen.findByRole('alert')).toHaveTextContent(
-      'Not saved: leads blends, rank must be a whole number'
+      'Not saved: leads blends, rank must be a whole number from 1 to 999'
     )
     expect(updateHplcPrepRule).toHaveBeenCalledTimes(1)
   })
@@ -233,6 +233,48 @@ describe('HPLC prep rule row', () => {
     )
     expect(updateHplcPrepRule).not.toHaveBeenCalled()
     expect(createHplcPrepRule).not.toHaveBeenCalled()
+  })
+
+  it('refuses a negative weight and a rank outside 1 to 999 on the row, without sending them', async () => {
+    for (const [label, value, message] of [
+      ['Above mg', '-1', 'Above mg must not be negative'],
+      [
+        'leads blends, rank',
+        '0',
+        'leads blends, rank must be a whole number from 1 to 999',
+      ],
+      [
+        'leads blends, rank',
+        '1000',
+        'leads blends, rank must be a whole number from 1 to 999',
+      ],
+    ] as const) {
+      const solo = setup(rule()).row
+      fireEvent.change(within(solo).getByLabelText(label), {
+        target: { value },
+      })
+      fireEvent.click(within(solo).getByRole('button', { name: 'Save' }))
+      expect(await screen.findByRole('alert')).toHaveTextContent(
+        `Not saved: ${message}`
+      )
+      cleanup()
+    }
+    // a band may start at 0
+    vi.mocked(updateHplcPrepRule).mockResolvedValue({
+      rule: rule({ min_mg: 0 }),
+      warnings: [],
+    })
+    const solo = setup(rule()).row
+    fireEvent.change(within(solo).getByLabelText('Above mg'), {
+      target: { value: '0' },
+    })
+    fireEvent.click(within(solo).getByRole('button', { name: 'Save' }))
+    expect(updateHplcPrepRule).toHaveBeenCalledTimes(1)
+    expect(updateHplcPrepRule).toHaveBeenCalledWith(1, { min_mg: 0 })
+    expect(createHplcPrepRule).not.toHaveBeenCalled()
+    await waitFor(() =>
+      expect(within(solo).getByRole('button', { name: 'Save' })).toBeEnabled()
+    )
   })
 
   it('sends an explicit null when a value is cleared, never 0 (a stored floor on a solo line too)', async () => {
