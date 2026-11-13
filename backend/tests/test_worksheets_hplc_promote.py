@@ -1301,3 +1301,45 @@ def test_b17_each_vial_of_a_split_blend_through_the_real_analyze_route(client, d
             assert out["dilution_factor"] == pytest.approx(_sheet_total(v), abs=1e-9)
             assert out["stock_volume_ml"] == pytest.approx(round(stock_ml, 6), abs=1e-9)
             assert out["quantity_mg"] == pytest.approx(_expected_quantity(v, stock_ml, None), abs=1.5e-4)
+
+# --- fix wave round 2 ------------------------------------------------------------------------
+
+
+def test_r2_two_places_rounds_an_exact_tie_up_as_tofixed_does():
+    # 150.125 is exact in binary: Python's format rounds it to even, JavaScript's toFixed(2) up
+    assert f"{150.125:.2f}" == "150.12"
+    assert promote_mod.two_places(150.125) == "150.13"
+    assert promote_mod.two_places(3333.3333333333335) == "3333.33" and promote_mod.two_places(5000) == "5000.00"
+    # below a tie the exact binary value decides, as toFixed reads it: 1.005 is 1.00499999...
+    assert promote_mod.two_places(1.005) == "1.00"
+
+
+def test_r2_a_tie_target_prints_as_the_browser_prints_it():
+    row = _facts(hplc_prep={**_STOCK, "declared_mg": 0.45, "vials": {"1": {**_VIAL, "target_ug_ml": 150.125}}})
+    [reason] = _reasons(row)
+    assert reason.startswith("Vial A: the target, 150.13 ug/mL, is above the stock it is diluted from, 150.00")
+
+
+def test_r2_a_difference_that_prints_the_same_is_not_a_reason():
+    # 0.004 above a 200 ug/mL stock: both print 200.00, so the tech could not see why
+    row = _facts(hplc_prep={**_STOCK, "declared_mg": 0.6, "vials": {"1": {**_VIAL, "target_ug_ml": 200.004}}})
+    assert _computed_pure(row)["vials"][0]["stock_conc_ug_ml"] == pytest.approx(200.0)
+    assert _reasons(row) == []
+
+
+def test_r2_a_failed_last_read_in_already_answers_the_prep_not_nothing_was_written(client, db, monkeypatch):
+    ws, item, _bpc, _inst = _solo(db)
+    first = client.post(_url(ws, item)).json()
+    real, calls = worksheets_hplc.sheet_rows, []
+
+    def last_read_fails(*a, **k):
+        calls.append(1)
+        if len(calls) == 2:  # _already: the first read, then the one after the stamp
+            raise psycopg2.OperationalError("server closed the connection")
+        return real(*a, **k)
+
+    monkeypatch.setattr(worksheets_hplc, "sheet_rows", last_read_fails)
+    r = client.post(_url(ws, item))
+    assert r.status_code == 200, r.text
+    assert r.json() == {"prep": first["prep"], "already": True, "row": None}
+    assert not db.in_transaction()

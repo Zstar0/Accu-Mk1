@@ -166,6 +166,15 @@ CASES = [
         **VIAL, "target_ug_ml": 200}}}), 4, 0),
     ("a neat capsule under the vial target is not a reason", row(form="capsule", prep_form="capsule", hplc_prep={
         **CAPSULE, "stock_vial_diluent_mg": 71466.0}), 4, 0),
+    # round 2: an exact binary tie prints as JavaScript's toFixed(2) prints it (150.13, not 150.12)
+    ("target on a rounding tie", row(hplc_prep={**STOCK, "declared_mg": 0.45, "vials": {"1": {
+        **VIAL, "target_ug_ml": 150.125}}}), 4, 1),
+    # round 2: above the stock by less than prints at two decimals is no reason
+    ("target above the stock by less than a printed figure", row(hplc_prep={**STOCK, "declared_mg": 0.6, "vials": {
+        "1": {**VIAL, "target_ug_ml": 200.004}}}), 4, 0),
+    # round 2: a prep already on the vial is shown, never a reason
+    ("a ready row whose vial has a wizard prep", row(other_preps=[
+        {"id": 1999990101, "sample_id": "SP-20261101-0001", "status": "awaiting_hplc"}]), 4, 0),
     # fix wave B18: a vial named by its letter
     ("vial B weighing missing", blend(BPC_TB, hplc_prep={**STOCK, "vials": {
         "1": TWO_VIALS["1"], "2": {"vial_mg": 2600.0}}}), 4, 1),

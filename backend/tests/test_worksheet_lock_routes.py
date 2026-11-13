@@ -76,7 +76,8 @@ def test_the_lock_taking_routes_run_in_the_threadpool(method, path):
     # Their writes take implicit row locks at flush (final re-review Observation 2).
     ("staging", "POST", "/worksheets/{ws}/printed", None, 404),
     ("completed", "POST", "/worksheets/{ws}/bench-ticks", {"made": True}, 409),
-    # HPLC fix wave B13: it takes the worksheet then item locks over HPLC rows
+    # Refused before any lock (no such method); the refusal after its HPLC locks is
+    # test_apply_method_instrument_rolls_back_a_refusal_after_its_hplc_locks below.
     ("open", "POST", "/worksheets/{ws}/apply-method-instrument", {"method_id": 987654, "instrument_id": 1}, 400),
 ])
 def test_a_refusal_after_a_lock_leaves_no_transaction_open(client, db, status, method, path,
@@ -105,3 +106,34 @@ def test_delete_takes_the_worksheet_lock_before_anything_else(client, db, monkey
         assert client.delete(f"/worksheets/{ws_id}").status_code == 200
     assert before == [0]
     assert db.get(Worksheet, ws_id) is None
+
+
+def test_apply_method_instrument_rolls_back_a_refusal_after_its_hplc_locks(client, db, monkeypatch):
+    """HPLC fix wave B13, round 2: a linked method over an HPLC row takes the worksheet then
+    item locks; a failure after them (mk1_db down: 500) leaves no transaction open."""
+    import psycopg2
+    import worksheets_hplc
+    from models import HplcMethod, Instrument, instrument_methods
+    from tests.test_worksheets_hplc import _form, _item, _peptide, _sample, _ws
+
+    bpc = _peptide(db, "BPC-157")
+    ws = _ws(db)
+    item = _item(db, ws, _sample(db, "P-0900", [(bpc, "BPC-157", "10")], form=_form(db)))
+    inst, method = Instrument(name="HPLC 1290a"), HplcMethod(name="HPLC M9")
+    db.add_all([inst, method])
+    db.flush()
+    db.execute(instrument_methods.insert().values(instrument_id=inst.id, method_id=method.id))
+    db.commit()
+    # read now: touching an expired row after the request would begin a transaction
+    ws_id, item_id, method_id, inst_id = ws.id, item.id, method.id, inst.id
+    locked, real = [], main._worksheet_for_update
+    monkeypatch.setattr(main, "_worksheet_for_update", lambda s, wid: (locked.append(wid), real(s, wid))[1])
+    monkeypatch.setattr(worksheets_hplc, "_preps_by_item",
+                        lambda _ids: (_ for _ in ()).throw(psycopg2.OperationalError("down")))
+    r = TestClient(app, raise_server_exceptions=False).post(
+        f"/worksheets/{ws_id}/apply-method-instrument", json={"method_id": method_id, "instrument_id": inst_id})
+    assert r.status_code == 500
+    assert locked == [ws_id]  # refused after the worksheet lock, not before it
+    assert not db.in_transaction()
+    db.expire_all()
+    assert db.get(type(item), item_id).instrument_id is None

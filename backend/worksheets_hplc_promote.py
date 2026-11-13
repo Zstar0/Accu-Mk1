@@ -10,6 +10,7 @@ compute_row and nowhere else: this module copies them into columns, it works not
 
 main imports this module inside its route, so this module imports main only inside functions."""
 import logging
+from decimal import ROUND_HALF_UP, Decimal
 from typing import Optional
 
 import mk1_db
@@ -102,6 +103,13 @@ def num(x) -> str:
     return str(int(x)) if x.is_integer() else repr(x)
 
 
+def two_places(x) -> str:
+    """A number at two decimals as JavaScript's x.toFixed(2) prints it (for |x| below 1e21): the
+    float's exact binary value, a tie rounded up, never to even as Python's format does
+    (150.125 is "150.13" here and in the browser, "150.12" from f"{x:.2f}")."""
+    return str(Decimal(float(x)).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP))
+
+
 def _facts(row: dict) -> dict:
     return {k: row[k] for k in ("declared_mg", "form", "peptide_id", "components")}
 
@@ -190,8 +198,10 @@ def promote_reasons(row: dict, computed: Optional[dict], blend_cap: int) -> list
 
 
 def _above(target, source) -> bool:
-    # strictly above, past float noise: a target typed equal to a worked-out stock is no reason
-    return target is not None and source is not None and target > source * (1 + 1e-9)
+    # strictly above, past float noise (a target typed equal to a worked-out stock is no
+    # reason), and by enough to show: two numbers that print alike are no reason either
+    return (target is not None and source is not None and target > source * (1 + 1e-9)
+            and two_places(target) != two_places(source))
 
 
 def _above_the_stock(v: dict) -> list[str]:
@@ -203,16 +213,17 @@ def _above_the_stock(v: dict) -> list[str]:
     out, letter = [], vial_letter(v["vial"])
     inter = v["intermediate"] if v["two_step"] else None
     if inter is not None and _above(inter["target_ug_ml"], v["stock_conc_ug_ml"]):
-        out.append(f"Vial {letter}, Step 3a: the intermediate target, {inter['target_ug_ml']:.2f} ug/mL, is above "
-                   f"the stock it is diluted from, {v['stock_conc_ug_ml']:.2f} ug/mL; lower it or check Step 2")
+        out.append(f"Vial {letter}, Step 3a: the intermediate target, {two_places(inter['target_ug_ml'])} ug/mL, "
+                   f"is above the stock it is diluted from, {two_places(v['stock_conc_ug_ml'])} ug/mL; lower it "
+                   "or check Step 2")
     if _above(v["target"]["value"], v["stock_for_final"]):
+        target, source = two_places(v["target"]["value"]), two_places(v["stock_for_final"])
         if inter is not None:
-            out.append(f"Vial {letter}, Step 3: the target, {v['target']['value']:.2f} ug/mL, is above the "
-                       f"intermediate it is diluted from, {v['stock_for_final']:.2f} ug/mL; lower the target "
-                       "or check Step 3a")
+            out.append(f"Vial {letter}, Step 3: the target, {target} ug/mL, is above the intermediate it is "
+                       f"diluted from, {source} ug/mL; lower the target or check Step 3a")
         else:
-            out.append(f"Vial {letter}: the target, {v['target']['value']:.2f} ug/mL, is above the stock it is "
-                       f"diluted from, {v['stock_for_final']:.2f} ug/mL; lower the target or check Step 2")
+            out.append(f"Vial {letter}: the target, {target} ug/mL, is above the stock it is diluted from, "
+                       f"{source} ug/mL; lower the target or check Step 2")
     return out
 
 
@@ -419,7 +430,14 @@ def _already(db: Session, current_user, worksheet, item, prep: dict) -> dict:
     # B6: every press re-stamps the vial's analyses, so a bench stamp lost after a good promote
     # heals; it fills only NULLs, so a repeat changes nothing
     _stamp_analyses(db, item, row, current_user.id)
-    out = {"prep": prep, "already": True, "row": worksheets_hplc.sheet_rows(db, worksheet, [item])[0]}
+    try:
+        out = {"prep": prep, "already": True, "row": worksheets_hplc.sheet_rows(db, worksheet, [item])[0]}
+    except Exception:
+        # Broad on purpose, as promote_row's read after a fresh promote: the prep exists and a
+        # stamp may have committed, so a 500 saying nothing was written would be wrong. Answer
+        # the prep; the page re-reads the row.
+        log.exception("hplc_promote_already_read_failed item=%s prep=%s", item.id, prep["id"])
+        out = {"prep": prep, "already": True, "row": None}
     db.rollback()  # the read above began a transaction; nothing in it is kept
     return out
 
