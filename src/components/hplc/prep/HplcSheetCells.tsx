@@ -38,8 +38,8 @@ export function Hint({ id, children }: { id?: string; children: ReactNode }) {
 
 /** The page's failure list, as the boxes see it. */
 export interface SheetSaves {
-  /** A box refused a number the server would refuse (`reason`), or now
-   *  holds one it takes or its stored one again (null). `what` is the box's
+  /** A box refused what was typed in it (`reason`), or now holds a value it
+   *  takes or its stored one again (null). `what` is the box's
    *  name, `key` its boxKey. */
   refused?: (what: string, reason: string | null, key?: string) => void
   /** The boxes whose save did not land, by boxKey, with the failure
@@ -82,7 +82,8 @@ const TOO_LARGE = 'that number is too large'
  * was typed in it: a box merely visited sends nothing, even when its stored
  * value changed under it. Empty sends null (never 0); a value that is not a
  * number (or not a whole number, for `integer`), or one outside what the
- * server takes (reported to SheetSavesContext), is refused: it stays in the
+ * server takes, is refused and reported to SheetSavesContext (the page's
+ * list, which keeps the row from being promoted): it stays in the
  * box, marked with its reason, Enter and Tab do not move on, and the mark
  * clears as soon as the box holds a value it takes or Escape gives the
  * stored one back. While the box is not being typed in it shows `value`, so
@@ -155,27 +156,23 @@ export function NumberBox({
     }
   }
 
-  /** Why the box will not take this text (null: it takes it), and whether
-   *  the server would refuse it (those go on the page's list). */
-  function refusalOf(raw: string): { why: string; listed: boolean } | null {
+  /** Why the box will not take this text (null: it takes it). Every
+   *  refusal goes on the page's list: the stored value was not changed, so
+   *  the row cannot be promoted while it stands. */
+  function refusalOf(raw: string): string | null {
     const text = raw.trim()
     if (text === '') return null
     const v = Number(text)
     if (!Number.isFinite(v) || (integer && !Number.isInteger(v)))
-      return {
-        why: integer ? 'Type a whole number' : 'Type a number',
-        listed: false,
-      }
+      return integer ? 'Type a whole number' : 'Type a number'
     // what the server would answer 400 for, in a plain sentence
-    const why =
-      Math.abs(v) > (integer ? Number.MAX_SAFE_INTEGER : MAX_NUMBER)
-        ? TOO_LARGE
-        : integer && v < 1
-          ? 'type a whole number of 1 or more'
-          : v < 0 && !zeroClears
-            ? 'a number here cannot be below 0'
-            : null
-    return why ? { why, listed: true } : null
+    return Math.abs(v) > (integer ? Number.MAX_SAFE_INTEGER : MAX_NUMBER)
+      ? TOO_LARGE
+      : integer && v < 1
+        ? 'type a whole number of 1 or more'
+        : v < 0 && !zeroClears
+          ? 'a number here cannot be below 0'
+          : null
   }
 
   /** False when the box refused its text (focus stays). */
@@ -186,9 +183,9 @@ export function NumberBox({
     const text = draftNow.current.trim()
     const refusal = refusalOf(text)
     if (refusal) {
-      setBad(refusal.why)
-      if (refusal.listed && reported.current !== text) {
-        refused?.(label, refusal.why, saveKey)
+      setBad(refusal)
+      if (reported.current !== text) {
+        refused?.(label, refusal, saveKey)
         reported.current = text
       }
       return false

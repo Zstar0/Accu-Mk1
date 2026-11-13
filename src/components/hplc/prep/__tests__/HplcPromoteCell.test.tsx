@@ -484,6 +484,25 @@ describe('Promote on the HPLC worksheet page', () => {
     expect(promoteHplcRow).not.toHaveBeenCalled()
   })
 
+  it('A1: a word left in a weighed box blocks Promote until it is put right', async () => {
+    vi.mocked(getHplcSheet).mockResolvedValue(makeSheet([ready()]))
+    renderPage()
+    const box = await screen.findByRole('textbox', { name: `${S1}, ${VIAL}` })
+    // a letter O for a zero, then a mouse click on Promote
+    typeAndLeave(box, '5O12')
+    fireEvent.click(promoteButton())
+    expect(
+      await within(step2()).findByText(
+        `A change to this row was not saved: ${S1}, ${VIAL}: Type a number. Type it again or dismiss it, then promote.`
+      )
+    ).toBeInTheDocument()
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument()
+    expect(getHplcSheet).toHaveBeenCalledTimes(1)
+    fireEvent.keyDown(box, { key: 'Escape' })
+    fireEvent.click(promoteButton())
+    expect(await screen.findByRole('dialog')).toBeInTheDocument()
+  })
+
   it('A1: a save that fails while the promote waits behind it stops the promote', async () => {
     vi.mocked(getHplcSheet).mockResolvedValue(makeSheet([ready()]))
     let refuse: (e: Error) => void = () => undefined
