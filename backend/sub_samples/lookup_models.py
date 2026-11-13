@@ -157,6 +157,10 @@ class SenaiteLookupResult(BaseModel):
     sample_form_id: Optional[int] = None
     sample_form_name: Optional[str] = None
     sample_form_eligible: bool = False
+    # Declared amount in IU from the peptide's cutoff forward (coa/iu_display.py):
+    # declared_weight_mg stays as stored, prep reads declared_prep_mg.
+    declared_unit: Optional[str] = None
+    declared_prep_mg: Optional[float] = None
 
 
 class RegistrySampleReadResult(SenaiteLookupResult):

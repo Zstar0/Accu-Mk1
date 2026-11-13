@@ -515,8 +515,9 @@ export function Step1SampleInfo() {
       // Auto-populate fields from SENAITE data. For a vial, label the prep with
       // the vial id; the rest of the populate is identical to the parent path.
       setSampleIdLabel(isVial ? rawId : result.sample_id)
-      if (result.declared_weight_mg != null) {
-        setDeclaredWeightMg(String(result.declared_weight_mg))
+      const prepMg = result.declared_prep_mg ?? result.declared_weight_mg
+      if (prepMg != null) {
+        setDeclaredWeightMg(String(prepMg))
       }
       // Auto-select peptide: try blend match first, then single peptide
       const matchedIds = result.analytes
@@ -955,7 +956,7 @@ export function Step1SampleInfo() {
                         <span className="text-muted-foreground">Declared Weight</span>
                         <p className="font-medium">
                           {lookupResult.declared_weight_mg != null
-                            ? `${lookupResult.declared_weight_mg} mg`
+                            ? `${lookupResult.declared_weight_mg} ${lookupResult.declared_unit ?? 'mg'}`
                             : '—'}
                         </p>
                       </div>
@@ -1011,11 +1012,16 @@ export function Step1SampleInfo() {
                         onChange={e => setDeclaredWeightMg(e.target.value)}
                       />
                       {lookupResult.declared_weight_mg != null &&
-                        declaredWeightMg !== String(lookupResult.declared_weight_mg) && (
+                        declaredWeightMg !== String(lookupResult.declared_prep_mg ?? lookupResult.declared_weight_mg) && (
                           <p className="text-xs text-amber-600 dark:text-amber-400">
-                            SENAITE value: {lookupResult.declared_weight_mg} mg (overridden)
+                            SENAITE value: {lookupResult.declared_prep_mg ?? lookupResult.declared_weight_mg} mg (overridden)
                           </p>
                         )}
+                      {lookupResult.declared_prep_mg != null && (
+                        <p className="text-xs text-muted-foreground">
+                          Declared {lookupResult.declared_weight_mg} {lookupResult.declared_unit}, shown here in mg.
+                        </p>
+                      )}
                     </div>
                     {targetFields}
                   </>

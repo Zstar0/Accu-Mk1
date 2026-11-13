@@ -108,7 +108,7 @@ def test_vial_set_walks_every_sub_sample_and_drops_unused(db_session, lot, monke
     figs = {vials[1].id: {"BPC-157": {"PURITY": "99.1%"}},
             vials[2].id: {"BPC-157": {"PURITY": "98.7%"}}}
     monkeypatch.setattr("coa.variance_series.build_vial_figures",
-                        lambda db, sub, unit="mg": figs.get(sub.id, {}))
+                        lambda db, sub, unit="mg", iu_factor=None: figs.get(sub.id, {}))
     out = list_vials_for_certificates(db_session, parent)
     assert [(seq, bool(f), ids) for seq, f, ids in out] == [
         (1, True, {rows["pb"].id}),

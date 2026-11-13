@@ -3,6 +3,9 @@ import json
 from typing import Any
 from sqlalchemy import select
 from sqlalchemy.orm import Session
+from catalog.bw_keys import BW_PRIMARY_KEYS
+from catalog.hplc_keys import HPLC_PRIMARY_KEYS
+from lims_analyses.hplc_native import is_native_born, strip_identity_suffix
 from models import LimsSample, LimsSampleRemark
 
 
@@ -42,6 +45,30 @@ def _analyte_details(raw: str | None) -> list[dict[str, Any]]:
                 "declared_quantity": None if q in (None, "") else str(q),
             })
     return out
+
+
+def _orders_no_panel(row: LimsSample) -> bool:
+    """True when the row's stored order snapshot holds no HPLC or Bac Water
+    primary: an a la carte order (tests only, no page-1 panel).
+
+    DISPLAY HINT for the list only. The authoritative decision is
+    coa.a_la_carte.a_la_carte_verdict (it also asks the Integration Service);
+    this reads nothing but the row, so a list page costs no extra query.
+    Fail closed: SENAITE-born rows, retests and rows with no usable snapshot
+    keep the stored names.
+    """
+    if not is_native_born(row):
+        return False
+    snap = row.catalog_snapshot
+    if not isinstance(snap, dict) or "retest" in snap:
+        return False
+    if row.is_retest or row.retest_of_sample_id:
+        return False
+    profiles = snap.get("profiles")
+    if not isinstance(profiles, list):
+        return False
+    keys = {p.get("key") for p in profiles if isinstance(p, dict) and p.get("key")}
+    return bool(keys) and not (keys & (HPLC_PRIMARY_KEYS | BW_PRIMARY_KEYS))
 
 
 def fetch_customer_notes(db: Session, rows: list[LimsSample]) -> dict[int, str]:
@@ -94,6 +121,16 @@ def registry_rows_to_list(
     working unchanged."""
     out: list[dict[str, Any]] = []
     for r in rows:
+        analytes = _analyte_names(r.analytes)
+        analyte_details = _analyte_details(r.analytes)
+        if _orders_no_panel(r):
+            # The registry stores the declared peptide as its identity service
+            # title ("BPC-157 - Identity (HPLC)"). With no HPLC ordered that
+            # reads as a test the customer did not buy: print the bare name.
+            analytes = [strip_identity_suffix(n) for n in analytes]
+            analyte_details = [
+                {**d, "name": strip_identity_suffix(d["name"])} for d in analyte_details
+            ]
         out.append({
             # uid is required (non-null) on the response model — fall back to
             # sample_id (NOT NULL + unique) for rows never synced to SENAITE,
@@ -118,8 +155,8 @@ def registry_rows_to_list(
             "shipping_carrier": r.shipping_carrier,
             "tracking_number": r.tracking_number,
             "tracking_url": r.tracking_url,
-            "analytes": _analyte_names(r.analytes),
-            "analyte_details": _analyte_details(r.analytes),
+            "analytes": analytes,
+            "analyte_details": analyte_details,
             "wc_line_item_ids": list(r.wc_line_item_ids or []),
             # Customer's wizard note ("Notes for Lab"); None when absent.
             "customer_note": (customer_notes or {}).get(getattr(r, "id", None)),

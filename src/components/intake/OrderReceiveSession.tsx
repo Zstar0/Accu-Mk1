@@ -212,7 +212,9 @@ export function OrderReceiveSession({ orders, onClose, initialPhase }: Props) {
   const clientSampleId = d?.client_sample_id ?? null
   const lot = d?.client_lot ?? null
   const declaredQty =
-    d?.declared_weight_mg != null ? `${d.declared_weight_mg} mg` : null
+    d?.declared_weight_mg != null
+      ? `${d.declared_weight_mg} ${d.declared_unit ?? 'mg'}`
+      : null
   const analytes = analyteLabel(d, current)
 
   // `current` guaranteed the union is non-empty, so an owning order always

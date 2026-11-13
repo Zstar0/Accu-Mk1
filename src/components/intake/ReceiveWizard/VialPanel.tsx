@@ -399,7 +399,9 @@ export function VialPanel({
     )
   }
   if (parentDetails?.declared_weight_mg != null) {
-    oneLinerParts.push(`${parentDetails.declared_weight_mg} mg`)
+    oneLinerParts.push(
+      `${parentDetails.declared_weight_mg} ${parentDetails.declared_unit ?? 'mg'}`
+    )
   }
   const oneLiner = oneLinerParts.join(' · ')
 

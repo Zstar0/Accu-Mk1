@@ -53,6 +53,10 @@ const LIST_DEFAULT = {
   sort: 'lifetime' as InsightsSortField,
   dir: 'desc' as 'asc' | 'desc',
 }
+const TOP_DEFAULT = {
+  ...LIST_DEFAULT,
+  sort: 'period_spend' as InsightsSortField,
+}
 const NEW = '#60a5fa'
 const RETURNING = '#34d399'
 const FIRST_ORDER_LABEL: Record<string, string> = {
@@ -198,6 +202,37 @@ export function CustomerInsights({
   const newTouch = useTouchpoints(
     tab === 'new' ? (newCustomers.data?.rows.map(r => r.key) ?? []) : []
   )
+  const [topView, setTopView] = useState(TOP_DEFAULT)
+  const { page: topPage, sort: topSort, dir: topDir } = topView
+  const setTop = (v: Partial<typeof LIST_DEFAULT>) =>
+    setTopView(cur => ({ ...cur, ...v }))
+  const topCustomers = useQuery({
+    queryKey: [
+      'customers',
+      'list',
+      'top',
+      period,
+      excludeLaunch,
+      topSort,
+      topDir,
+      topPage,
+    ],
+    queryFn: () =>
+      getCustomerList({
+        period,
+        exclude_launch_accounts: excludeLaunch,
+        sort: topSort,
+        dir: topDir,
+        page: topPage,
+        page_size: 25,
+      }),
+    staleTime: 60_000,
+    enabled: tab === 'top',
+    placeholderData: prev => prev,
+  })
+  const topTouch = useTouchpoints(
+    tab === 'top' ? (topCustomers.data?.rows.map(r => r.key) ?? []) : []
+  )
   // Segments: fixed trailing 12 months, launch accounts included (Handler 2026-10-20).
   const segments = useQuery({
     queryKey: ['customers', 'segments'],
@@ -257,6 +292,7 @@ export function CustomerInsights({
               onCheckedChange={v => {
                 setInsightsView({ excludeLaunch: v })
                 setNewView(LIST_DEFAULT)
+                setTopView(TOP_DEFAULT)
               }}
               aria-label="Exclude launch accounts"
             />
@@ -271,6 +307,7 @@ export function CustomerInsights({
                 onClick={() => {
                   setInsightsView({ period: p.key })
                   setNewView(LIST_DEFAULT)
+                  setTopView(TOP_DEFAULT)
                 }}
                 className={cn(
                   'cursor-pointer px-3 py-1 text-xs font-medium',
@@ -470,6 +507,7 @@ export function CustomerInsights({
                 <TabsTrigger value="at-risk">
                   At risk{risk.data && ` (${risk.data.rows.length})`}
                 </TabsTrigger>
+                <TabsTrigger value="top">Top customers</TabsTrigger>
                 <TabsTrigger value="new">
                   New customers
                   {newCustomers.data && ` (${newCustomers.data.total})`}
@@ -497,6 +535,44 @@ export function CustomerInsights({
                     touch={touch}
                     onOpenCustomer={onOpenCustomer}
                   />
+                )}
+              </TabsContent>
+              <TabsContent value="top" className="mt-2">
+                <p className="mb-2 text-[11px] text-muted-foreground">
+                  All customers, ranked by paid spend in this period
+                </p>
+                {topCustomers.error ? (
+                  <SectionError
+                    label="top customers"
+                    onRetry={() => topCustomers.refetch()}
+                  />
+                ) : (
+                  topCustomers.data && (
+                    <InsightsCustomerTable
+                      rows={topCustomers.data.rows}
+                      total={topCustomers.data.total}
+                      page={topPage}
+                      pageSize={25}
+                      onPage={page => setTop({ page })}
+                      sort={topSort}
+                      dir={topDir}
+                      onSort={f =>
+                        setTop(
+                          f === topSort
+                            ? {
+                                dir: topDir === 'asc' ? 'desc' : 'asc',
+                                page: 1,
+                              }
+                            : { sort: f, dir: 'desc', page: 1 }
+                        )
+                      }
+                      tz={s.tz}
+                      touch={topTouch}
+                      onOpenCustomer={onOpenCustomer}
+                      emptyText="No customers yet"
+                      showPeriodSpend
+                    />
+                  )
                 )}
               </TabsContent>
               <TabsContent value="new" className="mt-2">

@@ -273,6 +273,31 @@ describe('computeProductCompletion', () => {
       expect(native?.met).toBe(true)
     })
   })
+
+  describe('native Bac Water profile key', () => {
+    it('treats bacteriostatic-water-panel exactly like bac_water_panel', () => {
+      const cases = [
+        ctx({}),
+        ctx({
+          analyses: [ana('HPLC-PUR', 'Analytics')],
+          promos: [promo('HPLC-PUR', ['BW-1000-S01'])],
+        }),
+        ctx({
+          analyses: [ana('PH-BW', null), ana('PH-DETERM', null)],
+          promos: [promo('PH-BW', ['BW-1000-S01'])],
+        }),
+      ]
+      for (const c of cases) {
+        const legacy = computeProductCompletion(prod('bac_water_panel'), c)
+        const native = computeProductCompletion(
+          prod('bacteriostatic-water-panel'),
+          c
+        )
+        expect(native).not.toBeNull()
+        expect(native).toEqual(legacy)
+      }
+    })
+  })
 })
 
 // ── Native catalog families + keyword-first classification (v1.11.9) ────────

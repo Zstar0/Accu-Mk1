@@ -82,7 +82,7 @@ export function SampleInfoPanel({
 
   const declaredQty =
     details.declared_weight_mg != null
-      ? `${details.declared_weight_mg} mg`
+      ? `${details.declared_weight_mg} ${details.declared_unit ?? 'mg'}`
       : null
 
   return (

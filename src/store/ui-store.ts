@@ -84,7 +84,7 @@ export type CustomerDetailTab =
   | 'support'
   | 'ai-review'
 
-export type InsightsTab = 'at-risk' | 'new' | 'segments'
+export type InsightsTab = 'at-risk' | 'top' | 'new' | 'segments'
 
 export interface InsightsView {
   tab: InsightsTab
@@ -131,6 +131,7 @@ export type SettingsSubSection =
   | 'workflow'
   | 'integrations'
   | 'agents'
+  | 'acpProviders'
   | 'advanced'
 export type ActiveSubSection =
   | DashboardSubSection

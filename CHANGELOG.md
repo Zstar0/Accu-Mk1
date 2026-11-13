@@ -1,5 +1,64 @@
 # Changelog
 
+## v1.60.0 - 2026-11-11
+
+### Customer Insights
+- **A new Top customers tab.** It sits between At risk and New customers and lists every customer ranked by paid spend in the period picked at the top of the page, with a sortable "Period spend" column. It follows the "Exclude launch accounts" switch. Customers with no spend in the period sit at the bottom of the list.
+
+## v1.59.0 - 2026-11-10
+
+### À la carte orders (tests with no HPLC panel)
+- **A sample ordered with tests only now gets a certificate.** When a native-born sample's order carries no HPLC and no Bac Water primary, Mk1 asks COABuilder for the no-HPLC page: the tests print as native sections and no chromatogram is required. Nothing changes for a sample with an HPLC or Bac Water primary. A prod recount on 2026-11-10 (1,187 native samples) found no existing sample that starts certifying this way.
+- **A certificate still in review cannot be published.** An à la carte certificate whose overall status is IN REVIEW (a deferred section, for example USP 71 before sign-off) is refused at publish until the section is signed off and the certificate regenerated.
+- **MEASURED is its own status.** A certificate whose every result is informational (pH, vial vacuum) reads MEASURED. Reports count it as neither conforming nor failed, and Re-sync writes its reporting row the way the Integration Service does.
+- **The sample list reads right for these samples.** The Assigned column shows the vials' own roles when no vial carries the parent's role, and the Analytes column prints the bare peptide name when no HPLC was ordered.
+- Fentanyl, pH and vial vacuum share one sample vial when the order has no primary vial. This is catalog ride-list data, applied on prod on 2026-11-10.
+
+### Flags
+- v1.58.1 (flag threads show the date on every comment and event, PR #358) is now on master and ships with this frontend. So does the "Retested" label in the row history that v1.58.2 announced.
+
+## v1.58.4 - 2026-11-10
+
+### Endotoxin worksheets
+- **A retest claims only its own new row.** The claim added in v1.58.3 reached every analysis on the vial in the same department, so it could change the analyst on a Sterility PCR row or on the run being retested. It now touches the new retest row and nothing else. Backend-only release.
+
+## v1.58.3 - 2026-11-09
+
+### Endotoxin worksheets
+- **A retested vial's new row is claimed by the worksheet it sits on.** After a retest the new row used to sit unassigned with no analyst, even though its worksheet was open again. It is now assigned to the worksheet's analyst, the same as a row added to a sheet. Backend-only release.
+
+## v1.58.2 - 2026-11-09
+
+### Endotoxin worksheets
+- **Retesting an endotoxin vial gives its worksheet row back to the bench.** If the worksheet was already completed it goes back to open, so the re-run can be entered and promoted; complete it again when done. The first reading moves into the row's history with its Made and Ran ticks. An open worksheet stays open, and no other row changes: a promoted row that was not retested keeps its final prep.
+- Backend-only release. The "Retested" label in the row history ships with the next frontend release; until then the entry reads "override". v1.58.1 (flag thread dates, frontend only) is live on prod from PR #358 and is not on master yet.
+
+## v1.58.1 - 2026-11-06
+
+### Flags
+- **Flag threads show the date on every comment and event.** A comment used to read only "1:35 PM", so one from last week looked the same as one from today. It now reads "Nov 3, 1:35 PM", with the year added for anything outside the current year. The "raised this" and "assigned to" lines show the date too.
+
+## v1.58.0 - 2026-11-05
+
+### Bacteriostatic Water native-born
+- **New Bac Water orders can be born in Mk1, with no SENAITE AR.** The native services `PH-BW`, `BENZYL-ALCOHOL-BW` and `FILL-VOLUME-BW` and the profile `bacteriostatic-water-panel` are seeded. Nothing changes until WordPress puts that profile key on the Bac Water Panel row; the profile itself stays inactive.
+- **Native BW samples get `BW-` ids from 1000,** minted from the ordered profile key, never from a title. A BW retest takes its prefix from the sample it retests.
+- **The panel seeds on the S01 vial at check-in** and goes through promote and verify like every native family.
+- **The COA prints native BW results on page 1** under the legacy keywords, with Mk1's specification and conforms.
+- A legacy `bac_water_panel` retest carries the native panel key, the same as HPLC.
+
+### AI chat (admin only, off until a provider is set up)
+- **A chat button on every Mk1 page opens a side panel to a Hermes agent over ACP.** Settings gets an ACP Providers page; the first provider is Jarvis, admin only. Agent approvals show up as cards in the chat.
+- Nothing appears until an admin adds and enables a provider, and Jarvis also needs Mk1's key on its host, which is a separate sign-off. Three new tables (`acp_providers`, `ai_chats`, `ai_chat_messages`) are created empty.
+- The chat and the ACP Providers page are translated (English, French, Arabic). In Arabic the button and panel stay on the right, clear of the sidebar.
+
+## v1.57.0 - 2026-11-05
+
+### HGH quantity in IU
+- **A peptide can print its COA quantity in IU from a date we choose.** The peptide flyout's Aliases tab has a new COA Quantity in IU section with a factor and a cutoff. Samples ordered from the cutoff forward print IU on page 1, the variance page and per-vial certificates. The lab keeps entering mg, stored results stay mg, and spec is still judged on the mg.
+- **Nothing changes until both fields are set on a peptide.** They can be changed or cleared until the cutoff passes, and then they lock.
+- **Sample details, receiving and the prep wizard read the declared amount as IU on those samples,** and prep divides it back to mg.
+
 ## v1.56.1 - 2026-10-30
 
 ### Flags and Tasks

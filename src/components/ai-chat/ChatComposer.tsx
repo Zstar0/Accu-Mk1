@@ -1,0 +1,317 @@
+/**
+ * The message box, Send/Stop, and the notice above it (busy, unreachable with
+ * Retry, error, stopped).
+ *
+ * New chats are lazy: the chat is created by the first send, so a panel that
+ * is opened and closed leaves nothing behind. A failed send puts the text back
+ * in the box.
+ */
+
+import { useRef, useState, type KeyboardEvent } from 'react'
+import { useTranslation } from 'react-i18next'
+import type { TFunction } from 'i18next'
+import { useQueryClient } from '@tanstack/react-query'
+import { SendHorizontal, Square, X } from 'lucide-react'
+import { Button } from '@/components/ui/button'
+import { Textarea } from '@/components/ui/textarea'
+import { CrmError } from '@/lib/api-crm'
+import { cancelTurn, createChat, sendPrompt } from '@/lib/ai-chat-api'
+import { useAuthStore } from '@/store/auth-store'
+import { useUIStore } from '@/store/ui-store'
+import { useAiChatStore, type ChatNotice } from './chat-store'
+import { currentPageContext } from './page-context'
+import {
+  AI_CHAT_KEY,
+  loadMessages,
+  refreshChats,
+  useActiveProvider,
+} from './use-ai-chat-glue'
+
+/** Stable DOM id, so the panel can focus the box on open and on New chat. */
+export const COMPOSER_ID = 'ai-chat-composer'
+
+const MAX_LENGTH = 8000
+
+/**
+ * An error notice always ends by telling the reader what to do. `t` is passed
+ * in, not imported, so the compiler re-runs this when the language changes.
+ */
+function withAdvice(message: string, t: TFunction) {
+  const tryNew = t('aiChat.notice.tryNew')
+  return message === t('aiChat.notice.sessionExpired') ||
+    message.endsWith(tryNew)
+    ? message
+    : `${message} ${tryNew}`
+}
+
+export function ChatComposer() {
+  const { t } = useTranslation()
+  const qc = useQueryClient()
+  const agent = useActiveProvider()
+  const activeChatId = useAiChatStore(s => s.activeChatId)
+  const running = useAiChatStore(
+    s => s.activeChatId !== null && s.live[s.activeChatId] !== undefined
+  )
+  const notice = useAiChatStore(s => s.notice)
+  // The last thing the user said in this chat, from the stored rows. Read
+  // through a selector so Retry appears when the transcript loads after the
+  // error did (a reload mid-turn).
+  const storedPrompt = useAiChatStore(s =>
+    s.activeChatId === null
+      ? undefined
+      : s.messages[s.activeChatId]?.filter(m => m.role === 'user').at(-1)?.text
+  )
+
+  const [text, setText] = useState('')
+  const [sending, setSending] = useState(false)
+  const [stopping, setStopping] = useState(false)
+  // What each chat was last asked in this session, for Retry. Component
+  // state, not the store. Replaced, never mutated, so a change re-renders.
+  const [prompts, setPrompts] = useState<ReadonlyMap<number, string>>(
+    () => new Map()
+  )
+  const guard = useRef(false)
+
+  const agentName = agent?.display_name ?? t('aiChat.theAgent')
+  const empty = text.trim() === ''
+
+  /** Turn a rejected create/send into a notice. */
+  function explain(e: unknown, chatId: number | null) {
+    const store = useAiChatStore.getState()
+    const status = e instanceof CrmError ? e.status : null
+    const code = e instanceof CrmError ? e.code : null
+    const where = chatId === null ? {} : { chatId }
+
+    // A turn already runs on this chat; the reply is on its way.
+    if (status === 409 && code === 'turn_running') return
+
+    if (status === 401) {
+      // `crmFetch` does not clear auth on a 401. The chat is fine; the login is not.
+      // The same words `auth-api.ts` uses for a 401 on its own requests.
+      store.setNotice({
+        kind: 'error',
+        message: t('aiChat.notice.sessionExpired'),
+        ...where,
+      })
+    } else if (status === 429) {
+      store.setNotice({
+        kind: 'busy',
+        message: t('aiChat.notice.busy', { agent: agentName }),
+        ...where,
+      })
+    } else if (
+      status === 403 ||
+      (status === 404 &&
+        (code === 'provider_not_found' || code === 'chat_not_found'))
+    ) {
+      // The chat, or the user's access to it, is gone.
+      const gone = code === 'chat_not_found'
+      if (gone) store.selectChat(null) // clears the notice, so set it after
+      store.setNotice({
+        kind: 'error',
+        message: `${t('aiChat.notice.gone')} ${t('aiChat.notice.tryNew')}`,
+        ...(gone ? {} : where),
+      })
+      void qc.invalidateQueries({ queryKey: [...AI_CHAT_KEY, 'providers'] })
+    } else {
+      store.setNotice({
+        kind: 'error',
+        message: withAdvice(t('aiChat.notice.sendFailed'), t),
+        ...where,
+      })
+    }
+  }
+
+  /**
+   * `fromBox`: the text came from the box, so the box is cleared for the send
+   * and gets it back if the send fails. Retry sends an old prompt and leaves
+   * the box, and any draft in it, alone.
+   */
+  async function submit(raw: string, fromBox: boolean) {
+    const prompt = raw.trim()
+    if (prompt === '' || guard.current || agent === null) return
+    guard.current = true
+    setSending(true)
+    if (fromBox) setText('')
+    useAiChatStore.getState().setNotice(null)
+    // Whoever is signed in now owns this send. If they log out while it is in
+    // flight, nothing it learns may reach the store the next user will see,
+    // and nothing more may be sent.
+    const userId = useAuthStore.getState().user?.id
+    const left = () => useAuthStore.getState().user?.id !== userId
+
+    let chatId = useAiChatStore.getState().activeChatId
+    try {
+      if (chatId === null) {
+        const chat = await createChat(agent.id)
+        if (left()) return
+        // End any list fetch that began before this chat existed, so it cannot
+        // land after the selection below and clear it.
+        void refreshChats(qc)
+        const s = useAiChatStore.getState()
+        s.setChats([chat, ...s.chats.filter(c => c.id !== chat.id)])
+        s.selectChat(chat.id)
+        chatId = chat.id
+      }
+      await sendPrompt(
+        chatId,
+        prompt,
+        currentPageContext(useUIStore.getState())
+      )
+      if (left()) return
+      const sentTo = chatId // `chatId` is reassigned above; a closure would see number | null
+      setPrompts(p => new Map(p).set(sentTo, prompt))
+      void loadMessages(sentTo)
+    } catch (e) {
+      if (left()) return
+      // Keep whatever was typed since; otherwise put the message back.
+      if (fromBox) setText(now => (now === '' ? raw : now))
+      explain(e, chatId)
+    } finally {
+      guard.current = false
+      setSending(false)
+    }
+  }
+
+  async function stop() {
+    const chatId = activeChatId
+    if (chatId === null) return
+    const userId = useAuthStore.getState().user?.id
+    const left = () => useAuthStore.getState().user?.id !== userId
+    // The server holds a Stop for up to 5 s: one at a time.
+    setStopping(true)
+    try {
+      const { cancelled } = await cancelTurn(chatId)
+      if (cancelled || left()) return
+      // Nothing was running: the turn_ended we wait for never comes.
+      useAiChatStore.getState().clearLive(chatId)
+      void loadMessages(chatId)
+    } catch {
+      // Not kind 'error': that tells the reader to try a new chat, and the
+      // chat is fine. Stop stays on offer.
+      if (!left()) {
+        useAiChatStore.getState().setNotice({
+          kind: 'busy',
+          message: t('aiChat.notice.stopFailed'),
+          chatId,
+        })
+      }
+    } finally {
+      setStopping(false)
+    }
+  }
+
+  function retry() {
+    if (activeChatId === null) return
+    const prompt = prompts.get(activeChatId) ?? storedPrompt
+    if (prompt !== undefined) void submit(prompt, false)
+  }
+
+  function onKeyDown(e: KeyboardEvent<HTMLTextAreaElement>) {
+    if (e.key !== 'Enter' || e.shiftKey || e.nativeEvent.isComposing) return
+    e.preventDefault()
+    if (!running) void submit(text, true)
+  }
+
+  return (
+    <div className="border-t p-3">
+      <NoticeBanner
+        notice={notice}
+        chatId={activeChatId}
+        onRetry={
+          activeChatId !== null &&
+          (prompts.has(activeChatId) || storedPrompt !== undefined)
+            ? retry
+            : undefined
+        }
+      />
+      <form
+        className="flex items-end gap-2"
+        onSubmit={e => {
+          e.preventDefault()
+          void submit(text, true)
+        }}
+      >
+        <Textarea
+          id={COMPOSER_ID}
+          aria-label={t('aiChat.composer.message')}
+          placeholder={t('aiChat.composer.placeholder', { agent: agentName })}
+          value={text}
+          maxLength={MAX_LENGTH}
+          rows={1}
+          className="max-h-40 min-h-10 resize-none"
+          onChange={e => setText(e.target.value)}
+          onKeyDown={onKeyDown}
+        />
+        {running ? (
+          <Button
+            type="button"
+            variant="outline"
+            size="icon"
+            aria-label={t('aiChat.composer.stop')}
+            disabled={stopping}
+            onClick={() => void stop()}
+          >
+            <Square className="size-4" aria-hidden="true" />
+          </Button>
+        ) : (
+          <Button
+            type="submit"
+            size="icon"
+            aria-label={t('aiChat.composer.send')}
+            disabled={empty || sending || agent === null}
+          >
+            <SendHorizontal className="size-4" aria-hidden="true" />
+          </Button>
+        )}
+      </form>
+    </div>
+  )
+}
+
+function NoticeBanner({
+  notice,
+  chatId,
+  onRetry,
+}: {
+  notice: ChatNotice | null
+  chatId: number | null
+  onRetry?: (() => void) | undefined
+}) {
+  const { t } = useTranslation()
+  // A notice without a chat belongs to wherever the reader is.
+  if (
+    notice === null ||
+    (notice.chatId !== undefined && notice.chatId !== chatId)
+  ) {
+    return null
+  }
+  const message =
+    notice.kind === 'error' ? withAdvice(notice.message, t) : notice.message
+  return (
+    <div
+      role={notice.kind === 'cancelled' ? 'status' : 'alert'}
+      className="mb-2 flex items-start gap-2 rounded-md border bg-muted/50 px-2.5 py-1.5 text-xs"
+    >
+      <p className="min-w-0 flex-1 break-words">{message}</p>
+      {notice.kind === 'unreachable' && onRetry !== undefined && (
+        <Button
+          size="sm"
+          variant="outline"
+          className="h-6 px-2 text-xs"
+          onClick={onRetry}
+        >
+          {t('aiChat.retry')}
+        </Button>
+      )}
+      <button
+        type="button"
+        aria-label={t('aiChat.dismiss')}
+        className="text-muted-foreground hover:text-foreground"
+        onClick={() => useAiChatStore.getState().setNotice(null)}
+      >
+        <X className="size-3.5" aria-hidden="true" />
+      </button>
+    </div>
+  )
+}

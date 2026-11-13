@@ -32,16 +32,6 @@ export function relativeTime(iso: string, now: number = Date.now()): string {
   })
 }
 
-/** Wall-clock time for thread entries, e.g. "3:42 PM". */
-export function formatClock(iso: string): string {
-  const ms = toMs(iso)
-  if (Number.isNaN(ms)) return ''
-  return new Date(ms).toLocaleTimeString(undefined, {
-    hour: 'numeric',
-    minute: '2-digit',
-  })
-}
-
 /** Relative due-date label. Day-granular: floor((due - now) / 86_400_000).
  *  Null for an unset due date. `overdue` is true only in the past. */
 export function dueLabel(
@@ -57,11 +47,14 @@ export function dueLabel(
   return { text: `due in ${days}d`, overdue: false }
 }
 
-/** Compact absolute date+time, e.g. "Jun 30, 4:41 PM". */
-export function formatDateTime(iso: string): string {
+/** Compact absolute date+time, e.g. "Jun 30, 4:41 PM"; the year is added
+ *  outside the current one ("Dec 30, 2026, 4:41 PM"). */
+export function formatDateTime(iso: string, now: Date = new Date()): string {
   const ms = toMs(iso)
   if (Number.isNaN(ms)) return ''
-  return new Date(ms).toLocaleString(undefined, {
+  const d = new Date(ms)
+  return d.toLocaleString(undefined, {
+    year: d.getFullYear() === now.getFullYear() ? undefined : 'numeric',
     month: 'short',
     day: 'numeric',
     hour: 'numeric',

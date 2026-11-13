@@ -267,3 +267,44 @@ def test_retested_vial_uses_current_result(db):
 
     series = build_variance_analyte_series(db, parent)
     assert series["PH-DETERM"]["values"] == ["5.9"]
+
+
+def _bw_world(db, ext_system, sample_id):
+    ph = AnalysisService(title="pH", keyword="PH-BW", origin="mk1",
+                         variance_capable=True, unit="pH")
+    db.add(ph)
+    db.flush()
+    parent = LimsSample(sample_id=sample_id, external_lims_system=ext_system,
+                        sample_type_title="Bacteriostatic Water")
+    db.add(parent)
+    db.flush()
+    for seq, value in ((1, "5.4"), (2, "5.6")):
+        sub = LimsSubSample(
+            parent_sample_pk=parent.id, external_lims_uid=f"{ext_system}://{sample_id}-{seq}",
+            sample_id=f"{sample_id}-S{seq:02d}", vial_sequence=seq,
+            assignment_role="hplc", assignment_kind="variance",
+        )
+        db.add(sub)
+        db.flush()
+        _row(db, sub, ph, value, unit="pH")
+    db.commit()
+    return parent
+
+
+def test_native_bw_rows_key_by_legacy_keyword(db):
+    """MB5: a native BW vial row (PH-BW, origin mk1) keys the series by the
+    legacy SENAITE keyword the generic engine pairs on (PH-DETERM), so a
+    later BW-variance re-enable lands on the right results_table row."""
+    from coa.variance_series import build_variance_analyte_series
+
+    parent = _bw_world(db, "mk1", "BW-1003")
+    assert build_variance_analyte_series(db, parent) == {
+        "PH-DETERM": {"unit": "pH", "values": ["5.4", "5.6"]}}
+
+
+def test_native_bw_row_on_senaite_born_parent_not_rekeyed(db):
+    """Native-born discipline (as W4): a SENAITE-born parent keeps raw keying."""
+    from coa.variance_series import build_variance_analyte_series
+
+    parent = _bw_world(db, "senaite", "BW-9001")
+    assert set(build_variance_analyte_series(db, parent)) == {"PH-BW"}

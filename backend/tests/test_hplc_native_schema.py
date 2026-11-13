@@ -291,9 +291,11 @@ def test_root_index_widen_guard_is_idempotent_and_preserves_oid():
 def test_boot_migration_seeds_customer_counters():
     stmts = _captured()
     seed = [s for s in stmts if "lims_native_id_sequences" in s and "NOT EXISTS" in s]
-    assert len(seed) == 2, [s[:80] for s in seed]
+    # Bac Water native-born (spec 2026-10-05, R3) adds the guarded BW-1000 row.
+    assert len(seed) == 3, [s[:80] for s in seed]
     assert any("'P', 5000" in s for s in seed)
     assert any("'PB', 1000" in s for s in seed)
+    assert any("'BW', 1000" in s and "prefix = 'BW'" in s for s in seed)
 
 
 def _svc(db, keyword="HPLC-PURITY"):

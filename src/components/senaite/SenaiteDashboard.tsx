@@ -189,6 +189,56 @@ export function parentShowsVariance(agg: ParentAggregate | undefined): boolean {
   return parentHasVariance(agg) || agg?.has_variance_subs === true
 }
 
+/** Roles the Assigned column shows for a list row. The server decides
+ *  (`assigned_roles`): a container parent stores the default role 'hplc'
+ *  whatever was ordered, so for a parent with no vial of that role it sends
+ *  the roles its vials really carry. An older server sends no list: fall
+ *  back to the stored parent role, as before. */
+export function assignedRolesFor(agg: ParentAggregate): string[] {
+  return agg.assigned_roles?.length ? agg.assigned_roles : [agg.parent_role]
+}
+
+/** The Assigned cell. One role keeps the glyph + uppercased code pair (the
+ *  "HM HM" contract: the glyph stays single-char because the code sits beside
+ *  it). Several vial roles render as short badges, one per role. */
+function AssignedRoles({ agg }: { agg: ParentAggregate }) {
+  const roles = assignedRolesFor(agg)
+  const fromVials = roles.join() !== agg.parent_role
+  const single = roles.length === 1 ? roles[0] : undefined
+  if (single === undefined) {
+    return (
+      <span className="inline-flex flex-wrap items-center gap-1">
+        {roles.map(role => (
+          <RoleBadge
+            key={role}
+            role={role}
+            form="short"
+            unassignedLabel="?"
+            makeTitle={() => `Vial role: ${role}`}
+          />
+        ))}
+      </span>
+    )
+  }
+  return (
+    <span className="inline-flex items-center gap-1">
+      <RoleBadge
+        role={single}
+        form="glyph"
+        unassignedLabel="?"
+        makeTitle={() =>
+          fromVials
+            ? `Vial role: ${single}`
+            : `${agg.vial_count > 0 ? 'Parent' : 'Sub-sample'} vial: ${single}`
+        }
+      />
+      <span className="text-[11px] font-medium">
+        {single === 'unassigned' ? 'Unassigned' : single.toUpperCase()}
+      </span>
+    </span>
+  )
+}
+
 /** True when a sub-sample vial is explicitly assigned to a variance bucket
  *  (assignment_kind, set at check-in). Replaces the implicit role-bucket ×
  *  entitlement inference — each vial speaks for itself now. */
@@ -523,21 +573,7 @@ function SampleTable({
                   // markup — RoleBadge owns the glyph half, the second span
                   // is the plain uppercased code (the "HM HM" fix's contract:
                   // the glyph stays single-char BECAUSE the code sits beside it).
-                  <span className="inline-flex items-center gap-1">
-                    <RoleBadge
-                      role={agg.parent_role}
-                      form="glyph"
-                      unassignedLabel="?"
-                      makeTitle={() =>
-                        `${agg.vial_count > 0 ? 'Parent' : 'Sub-sample'} vial: ${agg.parent_role}`
-                      }
-                    />
-                    <span className="text-[11px] font-medium">
-                      {agg.parent_role === 'unassigned'
-                        ? 'Unassigned'
-                        : agg.parent_role.toUpperCase()}
-                    </span>
-                  </span>
+                  <AssignedRoles agg={agg} />
                 ) : (
                   <span className="text-muted-foreground/50 text-xs">—</span>
                 )}

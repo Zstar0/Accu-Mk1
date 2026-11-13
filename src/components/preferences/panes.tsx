@@ -23,6 +23,7 @@ import {
   Users,
   KeyRound,
   Bot,
+  MessagesSquare,
 } from 'lucide-react'
 import type { ComponentType } from 'react'
 import type { LucideIcon } from 'lucide-react'
@@ -33,6 +34,7 @@ import { DataSourcePane } from './panes/DataSourcePane'
 import { AdvancedPane } from './panes/AdvancedPane'
 import { IntegrationsPane } from './panes/IntegrationsPane'
 import { AgentsPane } from './panes/AgentsPane'
+import { AcpProvidersPane } from './panes/AcpProvidersPane'
 import { SlaPane } from './panes/SlaPane'
 import { PrioritiesPane } from './panes/PrioritiesPane'
 import { BusinessHoursPane } from './panes/BusinessHoursPane'
@@ -59,6 +61,7 @@ export type PreferencePane =
   | 'workflow'
   | 'integrations'
   | 'agents'
+  | 'acpProviders'
   | 'advanced'
 
 interface NavigationItem {
@@ -97,6 +100,12 @@ export const navigationItems: readonly NavigationItem[] = [
     adminOnly: true,
   },
   { id: 'agents', labelKey: 'preferences.agents', icon: Bot, adminOnly: true },
+  {
+    id: 'acpProviders',
+    labelKey: 'preferences.acpProviders',
+    icon: MessagesSquare,
+    adminOnly: true,
+  },
   { id: 'advanced', labelKey: 'preferences.advanced', icon: Zap },
 ] as const
 
@@ -116,6 +125,7 @@ export const PANE_COMPONENTS: Record<PreferencePane, ComponentType> = {
   workflow: WorkflowPane,
   integrations: IntegrationsPane,
   agents: AgentsPane,
+  acpProviders: AcpProvidersPane,
   advanced: AdvancedPane,
 }
 

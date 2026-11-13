@@ -6582,7 +6582,7 @@ export function SampleDetails() {
                               sampleUid={fieldEditKey(data)}
                               type="number"
                               mono
-                              suffix="mg"
+                              suffix={data.declared_unit ?? 'mg'}
                               onSaved={v =>
                                 setData(prev => {
                                   if (!prev) return prev
@@ -6645,11 +6645,11 @@ export function SampleDetails() {
                     sampleUid={fieldEditKey(data)}
                     type="number"
                     mono
-                    suffix="mg"
+                    suffix={data.declared_unit ?? 'mg'}
                     formatDisplay={v =>
                       v != null && v !== '' ? (
                         <span className="font-mono text-amber-600 dark:text-amber-400 font-semibold">
-                          {v} mg
+                          {v} {data.declared_unit ?? 'mg'}
                         </span>
                       ) : (
                         '—'

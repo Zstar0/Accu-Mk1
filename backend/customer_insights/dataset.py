@@ -69,7 +69,7 @@ class Coa:
     order_number: str
     sample_id: str
     product: str
-    passed: bool
+    passed: bool | None  # None = MEASURED (every row informational): no verdict
     published_at: datetime
 
 
@@ -257,7 +257,8 @@ def build_dataset(
         ))
     orders.sort(key=lambda o: o.paid_at)
 
-    coas = tuple(Coa(norm_order_number(n), str(s), p or "", (st or "").upper() == "PASSED", at)
+    coas = tuple(Coa(norm_order_number(n), str(s), p or "",
+                     None if (st or "").upper() == "MEASURED" else (st or "").upper() == "PASSED", at)
                  for n, s, p, st, at in coa_rows if n and norm_order_number(n))
 
     late = delivered = None

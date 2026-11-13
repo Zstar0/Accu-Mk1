@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest'
 import {
+  assignedRolesFor,
   parentHasVariance,
   parentShowsVariance,
   subIsVarianceMember,
@@ -75,6 +76,30 @@ describe('parentShowsVariance (entitlement OR assigned variance subs)', () => {
     expect(parentShowsVariance(agg({ hplc: 0, endo: 0, ster: 0 }, false))).toBe(false)
     expect(parentShowsVariance(agg(undefined, undefined))).toBe(false)
     expect(parentShowsVariance(undefined)).toBe(false)
+  })
+})
+
+describe('assignedRolesFor (the Assigned column of the sample list)', () => {
+  const a = (parent_role: string, assigned_roles?: string[]): ParentAggregate =>
+    ({ vial_count: 1, parent_role, assigned_roles }) as ParentAggregate
+
+  it('shows the vial role the server reports, not the stored parent default', () => {
+    // An a la carte endotoxin order: the parent row still stores 'hplc'.
+    expect(assignedRolesFor(a('hplc', ['endo85']))).toEqual(['endo85'])
+  })
+  it('keeps every distinct vial role, in the order given', () => {
+    expect(assignedRolesFor(a('hplc', ['endo85', 'fentanyl']))).toEqual([
+      'endo85',
+      'fentanyl',
+    ])
+  })
+  it('reads as before when the server reports the parent role itself', () => {
+    expect(assignedRolesFor(a('hplc', ['hplc']))).toEqual(['hplc'])
+  })
+  it('falls back to parent_role for an older server (no list, or an empty one)', () => {
+    expect(assignedRolesFor(a('hplc'))).toEqual(['hplc'])
+    expect(assignedRolesFor(a('endo', []))).toEqual(['endo'])
+    expect(assignedRolesFor(a('unassigned'))).toEqual(['unassigned'])
   })
 })
 

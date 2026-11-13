@@ -294,6 +294,100 @@ function HplcAliasesSection({ peptide, onUpdated }: { peptide: PeptideRecord; on
 }
 
 
+function IuDisplaySection({ peptide, onUpdated }: { peptide: PeptideRecord; onUpdated: () => void }) {
+  const [factor, setFactor] = useState(peptide.iu_per_mg?.toString() ?? '')
+  const [cutoff, setCutoff] = useState('')
+  const [saving, setSaving] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+
+  useEffect(() => {
+    setFactor(peptide.iu_per_mg?.toString() ?? '')
+    setCutoff('')
+    setError(null)
+  }, [peptide.id, peptide.iu_per_mg, peptide.iu_from])
+
+  const cutoffAt = peptide.iu_from ? new Date(`${peptide.iu_from}Z`) : null
+  const locked = cutoffAt != null && cutoffAt <= new Date()
+
+  const save = async () => {
+    if (cutoff && !window.confirm('The factor and cutoff lock when the cutoff arrives. COAs for samples ordered from then on will print IU. Save?')) return
+    setSaving(true)
+    setError(null)
+    const perMg = factor.trim() ? Number(factor) : null
+    try {
+      await updatePeptide(peptide.id, {
+        iu_per_mg: perMg,
+        // A blank factor clears a scheduled cutoff with it.
+        ...(cutoff ? { iu_from: new Date(cutoff).toISOString() } : perMg == null ? { iu_from: null } : {}),
+      })
+      onUpdated()
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Could not save')
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  return (
+    <div className="rounded-lg border border-zinc-800 p-4 space-y-3">
+      <h4 className="text-sm font-semibold text-muted-foreground">COA Quantity in IU</h4>
+      <p className="text-xs text-muted-foreground">
+        From the cutoff forward this peptide&apos;s COA prints quantity in IU and its
+        declared amount reads as IU. The lab still enters mg, and samples ordered
+        before the cutoff never change.
+      </p>
+
+      {locked ? (
+        <p className="text-sm">
+          {peptide.iu_per_mg} IU per mg, for samples ordered from{' '}
+          {cutoffAt.toLocaleString()}. Locked.
+        </p>
+      ) : (
+        <>
+          {cutoffAt && (
+            <p className="text-sm">
+              Scheduled: {peptide.iu_per_mg} IU per mg, for samples ordered from{' '}
+              {cutoffAt.toLocaleString()}. It locks at that time. Clear the factor to cancel.
+            </p>
+          )}
+          <div className="flex flex-wrap items-end gap-2">
+            <div className="space-y-1">
+              <Label htmlFor="iu-per-mg" className="text-xs">IU per mg</Label>
+              <Input
+                id="iu-per-mg"
+                type="number"
+                step="0.1"
+                min="0"
+                value={factor}
+                onChange={e => setFactor(e.target.value)}
+                placeholder="e.g., 3"
+                className="h-8 text-sm w-28"
+                disabled={saving}
+              />
+            </div>
+            <div className="space-y-1">
+              <Label htmlFor="iu-from" className="text-xs">Cutoff (your local time)</Label>
+              <Input
+                id="iu-from"
+                type="datetime-local"
+                value={cutoff}
+                onChange={e => setCutoff(e.target.value)}
+                className="h-8 text-sm w-56"
+                disabled={saving}
+              />
+            </div>
+            <Button size="sm" className="h-8" onClick={save} disabled={saving}>
+              {saving ? 'Saving...' : 'Save'}
+            </Button>
+          </div>
+        </>
+      )}
+      {error && <p className="text-xs text-destructive">{error}</p>}
+    </div>
+  )
+}
+
+
 function DisplayAliasesSection({ peptide, onUpdated }: { peptide: PeptideRecord; onUpdated: () => void }) {
   const [aliases, setAliases] = useState<string[]>(peptide.display_aliases ?? [])
   const [newAlias, setNewAlias] = useState('')
@@ -1327,6 +1421,10 @@ export function PeptideConfig() {
                     onUpdated={loadPeptides}
                   />
                   <DisplayAliasesSection
+                    peptide={selectedPeptide}
+                    onUpdated={loadPeptides}
+                  />
+                  <IuDisplaySection
                     peptide={selectedPeptide}
                     onUpdated={loadPeptides}
                   />

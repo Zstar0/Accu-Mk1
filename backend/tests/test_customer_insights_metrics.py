@@ -378,3 +378,18 @@ def test_segment_fields_use_the_trailing_12_months_and_summary_sums() -> None:
     assert summary["key"]["customers"] == 1 and summary["key"]["revenue_12m"] == "12000.00"
     assert summary["key"]["share"] == round(12000 / 15325, 4)
     assert summary["regular"]["median_testing_orders_12m"] == 2
+
+
+def test_measured_coa_is_neutral_in_customer_metrics() -> None:
+    orders = [o("wc:1", 0, oid=10, number="10")]
+    coas = [Coa("10", "P-1", "BPC-157", True, T0), Coa("10", "P-2", "BPC-157", False, T0),
+            Coa("10", "P-3", "BPC-157", None, T0)]
+    d = metrics.dossier(ds(orders, coas=coas), "wc:1", end=T0 + timedelta(days=1), tz=TZ)
+    assert d["kpis"]["nonconforming_rate"] == 0.5
+    assert d["kpis"]["lab_nonconforming_rate"] == 0.5
+    assert d["analytes"] == [{"product": "BPC-157", "coas": 2, "pass_rate": 0.5}]
+    assert d["recent"][0]["coas"] == 3 and d["recent"][0]["failed"] == 1
+
+    only = ds([o("wc:1", 0, oid=1, number="1")], coas=[Coa("1", "P", "X", None, T0)])
+    out = metrics.churn_signals(only, end=T0 + timedelta(days=200))
+    assert "conformance" not in {x["signal"] for x in out["buckets"]}

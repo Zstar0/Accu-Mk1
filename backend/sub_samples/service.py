@@ -399,7 +399,10 @@ def upsert_sample_from_signal(db: Session, sample_id: Optional[str],
     born_native = not sample_id
     if born_native:
         from sub_samples.native_id import mint_customer_sample_id
-        sample_id = mint_customer_sample_id(db, sample_type_title)
+        sample_id = mint_customer_sample_id(
+            db, sample_type_title,
+            ordered_service_keys=meta.get("OrderedServiceKeys"),
+            retest_of_sample_id=meta.get("RetestOfSampleId"))
     native_id_value = mint_native_id(
         db, senaite_sample_id=sample_id, sample_type_title=sample_type_title,
     )
@@ -1549,11 +1552,12 @@ def derive_variance_demand(services: dict) -> dict:
 
     The hplc bucket is BW-aware — it reads either HPLC primary key (legacy
     `hplcpurity_identity` or native `hplc-purity-identity`, see catalog/hplc_keys.py)
-    OR bac_water_panel (mirroring derive_base_demand), since both produce chromatography vials and
+    OR either BW primary key (BW_PRIMARY_KEYS, mirroring derive_base_demand), since both produce chromatography vials and
     are mutually exclusive per order. (Handler decision 2026-06-17.)"""
+    from catalog.bw_keys import bw_primary_count
     from catalog.hplc_keys import hplc_primary_count
     entitlement = normalize_variance_entitlement({"variance": (services or {}).get("variance")})
-    hplc_total = max(hplc_primary_count(entitlement), entitlement.get("bac_water_panel", 0))
+    hplc_total = max(hplc_primary_count(entitlement), bw_primary_count(entitlement))
     return {
         "hplc": max(0, hplc_total - 1),
         "endo": max(0, entitlement.get("endotoxin", 0) - 1),
@@ -1594,8 +1598,9 @@ def derive_base_demand(services: dict, db=None, snapshot: Optional[dict] = None)
     not as the expected steady-state noise it would otherwise be for every
     post-registration legacy-bucket purchase.
     """
+    from catalog.bw_keys import bw_primary_selected
     from catalog.hplc_keys import hplc_primary_selected
-    hplc = hplc_primary_selected(services) or bool(services.get("bac_water_panel"))
+    hplc = hplc_primary_selected(services) or bw_primary_selected(services)
     endo = bool(services.get("endotoxin"))
     ster = bool(services.get("sterility_pcr"))
     legacy = {
@@ -1642,7 +1647,7 @@ def derive_demand(services: dict, db=None, snapshot: Optional[dict] = None) -> d
     """Translate WP services dict to CORE vial demand per bucket.
 
     HPLC is satisfied by either HPLC primary key (legacy `hplcpurity_identity`
-    or native `hplc-purity-identity`, see catalog/hplc_keys.py) OR `bac_water_panel` —
+    or native `hplc-purity-identity`, see catalog/hplc_keys.py) OR either BW primary key (`BW_PRIMARY_KEYS`):
     both result in chromatography vials. No legacy bucket needs more than
     one vial (ruling 2026-08-05: PCR and USP<71> are separately sold
     products, one vial each).
@@ -2474,13 +2479,41 @@ def aggregate_by_parent(db: Session, parent_sample_ids: list[str]) -> dict[str, 
             LimsSample.variance_override,
         )
     ).all()
+    # A container-mode parent is a report depository, never a vial, and nothing
+    # sets its assignment_role: it keeps the column default 'hplc'. Collect the
+    # roles its vials really carry (distinct, in vial order) so the list does
+    # not print a role no vial has (an a la carte order has no HPLC vial).
+    container_vial_roles: dict[str, list[str]] = {}
+    for sample_id, vial_role in db.execute(
+        select(LimsSample.sample_id, LimsSubSample.assignment_role)
+        .join(LimsSubSample, LimsSubSample.parent_sample_pk == LimsSample.id)
+        .where(
+            LimsSample.sample_id.in_(parent_sample_ids),
+            LimsSample.container_mode.is_(True),
+            LimsSubSample.assignment_role.isnot(None),
+        )
+        .order_by(LimsSample.sample_id, LimsSubSample.vial_sequence)
+    ).all():
+        roles = container_vial_roles.setdefault(sample_id, [])
+        if vial_role not in roles:
+            roles.append(vial_role)
+
     for sample_id, parent_role, variance_override, sub_count, variance_sub_count in parent_rows:
         if sub_count == 0:
             continue
+        stored_role = parent_role or "hplc"
+        vial_roles = container_vial_roles.get(sample_id, [])
         result[sample_id] = {
             # Sub-sample vials only — the parent is not a physical vial.
             "vial_count": sub_count,
-            "parent_role": parent_role or "hplc",
+            "parent_role": stored_role,
+            # What the list's Assigned column shows: the stored parent role,
+            # unless this is a container parent whose vials carry roles and
+            # none of them is the stored one.
+            "assigned_roles": (
+                vial_roles if vial_roles and stored_role not in vial_roles
+                else [stored_role]
+            ),
             "variance": _variance_buckets_from_override(variance_override),
             "has_variance_subs": (variance_sub_count or 0) > 0,
         }
@@ -2497,6 +2530,7 @@ def aggregate_by_parent(db: Session, parent_sample_ids: list[str]) -> dict[str, 
             result[sample_id] = {
                 "vial_count": 0,
                 "parent_role": role or "unassigned",
+                "assigned_roles": [role or "unassigned"],
                 # _LEGACY_BUCKETS zero-floor contract (catalog_demand.py) —
                 # sub-sample rows carry no override of their own; AR-list hint only.
                 "variance": {"hplc": 0, "endo": 0, "ster": 0},

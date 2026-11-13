@@ -137,6 +137,8 @@ from customer_insights.routes import router as customer_insights_router
 from crm_close.routes import router as crm_close_router
 from support_plain.routes import router as support_plain_router
 from integration_keys.routes import router as integration_keys_router
+from ai_chat.providers import router as acp_providers_router
+from ai_chat.routes import router as ai_chat_router
 from agents.routes import router as agents_router
 from customer_review.routes import router as customer_review_router
 from workflow.cancel_routes import router as cancel_router
@@ -463,6 +465,9 @@ async def lifespan(app: FastAPI):
     from flags import bus as _flag_bus
     _flag_bus.BUS.set_loop(_asyncio.get_running_loop())
     _flag_seams.set_event_sink(_flag_bus.SSEEventSink(_flag_bus.BUS))
+    # AI chat: the idle-session reaper. Shutdown closes the sessions below, after `yield`.
+    from ai_chat import sessions as _ai_sessions, transport as _ai_transport
+    _ai_sessions.MANAGER.start_reaper()
     # Slack DM notifications (spec 2026-07-02) — dormant without the token.
     from slack_notify.notifier import maybe_start as _slack_maybe_start
     _slack_notifier_task = _slack_maybe_start(_flag_bus.BUS)
@@ -614,6 +619,17 @@ async def lifespan(app: FastAPI):
 
     yield
 
+    # --- AI chat shutdown --- first, and guarded: agent processes must not outlive the app, and a failure here
+    # must not stop the shutdown below. close_all cancels running turns, so it is bounded.
+    try:
+        await _asyncio.wait_for(_ai_sessions.MANAGER.close_all(), 10)
+    except Exception as exc:
+        _logger.warning("ai_chat.shutdown_failed error=%s", type(exc).__name__)
+    try:
+        _ai_transport.KEYFILES.cleanup()
+    except Exception as exc:
+        _logger.warning("ai_chat.keyfiles_cleanup_failed error=%s", type(exc).__name__)
+
     # --- Scale Bridge shutdown ---
     if getattr(app.state, 'scale_bridge', None) is not None:
         await app.state.scale_bridge.stop()
@@ -675,6 +691,8 @@ app.include_router(customer_insights_router)
 app.include_router(crm_close_router)
 app.include_router(support_plain_router)
 app.include_router(integration_keys_router)
+app.include_router(acp_providers_router)
+app.include_router(ai_chat_router)
 app.include_router(agents_router)
 app.include_router(customer_review_router)
 app.include_router(cancel_router)
@@ -3226,9 +3244,11 @@ _RIDE_HOST_FORBIDDEN = {"endo", "ster", "xtra"}
 # the route edge rather than a DB CHECK constraint so a new archetype is a
 # one-line addition here. legacy_hplc is owned by coa/hplc_shim.py (slice 8)
 # so the seed, legacy_rows, native_sections and this route share one literal.
+from coa.bw_shim import LEGACY_BW_ARCHETYPE
 from coa.hplc_shim import LEGACY_HPLC_ARCHETYPE
 
-COA_ARCHETYPES = {"limit_table", LEGACY_HPLC_ARCHETYPE}
+# legacy_bw (MB5) is owned by coa/bw_shim.py on the same terms as legacy_hplc.
+COA_ARCHETYPES = {"limit_table", LEGACY_HPLC_ARCHETYPE, LEGACY_BW_ARCHETYPE}
 
 # S9 Task 2: the POST/PATCH route guard that reserved hplc/endo/ster for the
 # five legacy-key profiles retired WITH Task 1's flip (its only justification
@@ -3588,6 +3608,8 @@ class PeptideUpdate(BaseModel):
     prep_vial_count: Optional[int] = None
     hplc_aliases: Optional[list[str]] = None  # Alternate names used in HPLC filenames
     display_aliases: Optional[list[str]] = None  # Approved customer-facing COA display aliases
+    iu_per_mg: Optional[float] = Field(None, gt=0, le=1000)  # COA quantity display factor (coa/iu_display.py)
+    iu_from: Optional[datetime] = None  # Samples ordered from here on print IU; locked once set
     method_ids: Optional[list[int]] = None  # Set all method assignments (one per instrument)
     analytes: Optional[list[AnalyteInput]] = None
     component_ids: Optional[list[int]] = None
@@ -3663,6 +3685,8 @@ class PeptideResponse(BaseModel):
     prep_vial_count: int = 1
     hplc_aliases: Optional[list[str]] = None
     display_aliases: Optional[list[str]] = None
+    iu_per_mg: Optional[float] = None
+    iu_from: Optional[datetime] = None
     created_at: datetime
     updated_at: datetime
     methods: list[MethodBrief] = []
@@ -3798,6 +3822,31 @@ def _build_analyte_responses(analytes) -> list[AnalyteResponse]:
             component_abbreviation=comp.abbreviation if comp else None,
         ))
     return results
+
+
+def _check_iu_update(peptide: Peptide, update: dict) -> None:
+    """Both IU fields lock once the cutoff arrives: moving either one then would
+    flip the numbers on published COAs at their next regen, so a slip is a
+    reviewed data fix, not an edit. Until then nothing has converted, so a
+    scheduled cutoff can still change. A new cutoff cannot be in the past: those
+    orders were declared in mg."""
+    from coa.iu_display import naive_utc
+    if update.get("iu_from"):
+        update["iu_from"] = naive_utc(update["iu_from"])
+    now = datetime.utcnow()
+    factor = float(peptide.iu_per_mg) if peptide.iu_per_mg is not None else None
+    new_factor = update.get("iu_per_mg", factor)
+    new_from = update.get("iu_from", peptide.iu_from)
+    if peptide.iu_from is not None and peptide.iu_from <= now:
+        if new_from != peptide.iu_from or new_factor != factor:
+            raise HTTPException(409, "IU factor and cutoff are locked once the cutoff has passed")
+        return
+    if peptide.is_blend and (update.get("iu_per_mg") or update.get("iu_from")):
+        raise HTTPException(422, "A blend never converts to IU")
+    if new_from is not None and new_factor is None:
+        raise HTTPException(422, "An IU cutoff needs an IU per mg factor")
+    if update.get("iu_from") and update["iu_from"] <= now:
+        raise HTTPException(422, "An IU cutoff cannot be in the past: those orders were declared in mg")
 
 
 def _peptide_to_response(db: Session, peptide: Peptide) -> PeptideResponse:
@@ -6136,6 +6185,7 @@ async def update_peptide(peptide_id: int, data: PeptideUpdate, db: Session = Dep
         raise HTTPException(404, f"Peptide {peptide_id} not found")
 
     update_data = data.model_dump(exclude_unset=True)
+    _check_iu_update(peptide, update_data)
     method_ids = update_data.pop("method_ids", None)
     analytes_data = update_data.pop("analytes", None)
     component_ids = update_data.pop("component_ids", None)
@@ -12509,6 +12559,9 @@ async def reports_resync(
 ):
     """Re-sync published_coa_results: backfill missing codes, remove orphans."""
     import json as _json
+    from reports_flagged_row import (
+        ENDOTOXIN_PROFILE_KEYS, STERILITY_PROFILE_KEYS, is_flagged, native_section_flag,
+    )
     synced = 0
     removed = 0
     try:
@@ -12555,7 +12608,9 @@ async def reports_resync(
                     product_components = product.get("components", [])
                     product_name = ", ".join(product_components) if product_components else product.get("name")
                     is_blend = len(product_components) > 1
-                    addons = results.get("addons", [])
+                    flagged = is_flagged(coa_data)
+                    # Flagged: flags come from native_sections only (IS twin), add-ons are never parsed.
+                    addons = [] if flagged else results.get("addons", [])
                     has_endo = any("endotoxin" in (a.get("test_name", "")).lower() for a in addons)
                     endo_conf = None
                     if has_endo:
@@ -12580,6 +12635,18 @@ async def reports_resync(
                         quantity_value, quantity_unit, overall_status,
                         has_endotoxin, endotoxin_conforms, has_sterility, sterility_conforms
                     ) VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)"""
+
+                    if flagged:
+                        # A la carte: one row, no result values, flags from
+                        # native_sections by profile_key (same as IS).
+                        ns = coa_data.get("native_sections")
+                        cur.execute(insert_sql, base + (
+                            product_name or "Unknown", is_blend,
+                            None, None, None, None, None, None, overall_status,
+                            *native_section_flag(ns, ENDOTOXIN_PROFILE_KEYS),
+                            *native_section_flag(ns, STERILITY_PROFILE_KEYS)))
+                        synced += 1
+                        continue
 
                     analytes = results.get("analytes", [])
                     if analytes:
@@ -14649,6 +14716,21 @@ async def generate_sample_coa(
                         )
                     except Exception:
                         needs_chromatogram = False
+                if _coa_src == "mk1" and needs_chromatogram and not kinds["has_chromatogram"]:
+                    from coa.a_la_carte import a_la_carte_verdict
+                    _alc_parent = db.get(LimsSample, _gate_parent_pk) if _gate_parent_pk is not None else None
+                    if _alc_parent is not None:
+                        # Savepoint: a DB error inside the helper comes back as
+                        # an "error:" verdict but leaves Postgres aborted, and
+                        # the gates below still query this session. The helper
+                        # only reads, so the savepoint always rolls back.
+                        _alc_sp = db.begin_nested()
+                        _alc_v = a_la_carte_verdict(db, _alc_parent, sections=None)
+                        _alc_sp.rollback()
+                        if _alc_v.eligible:
+                            needs_chromatogram = False  # a la carte: no HPLC, no chromatogram to attach
+                        else:
+                            _logger.info("a la carte check for %s: %s", sample_id, _alc_v.reason)
                 gate_missing = []
                 if not kinds["has_image"]:
                     gate_missing.append({
@@ -15210,6 +15292,31 @@ def _refuse_stale_draft_primary(sample_id: str) -> None:
         )
 
 
+def _refuse_in_review_a_la_carte(sample_id: str) -> None:
+    """409 when the draft Publish would pick is a flagged (a la carte) COA
+    whose badge is IN REVIEW: one ordered test has no results yet, so the
+    customer would get an incomplete certificate. Unflagged drafts are never
+    refused here. Fails open when the Integration Service can't be read, the
+    same as _refuse_stale_draft_primary."""
+    import logging as _logging
+    from integration_db import fetch_publish_draft_badge
+    try:
+        badge = fetch_publish_draft_badge(sample_id)
+    except Exception as e:  # noqa: BLE001
+        _logging.getLogger(__name__).warning(
+            "a la carte in-review check skipped for %s: %s", sample_id, e)
+        return
+    if badge and badge.get("page1") == "none" and badge.get("overall_status") == "IN REVIEW":
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                f"This a la carte COA (Gen #{badge['generation_number']}, "
+                f"{badge['verification_code']}) is IN REVIEW: a test has no "
+                "results yet. Finish it, regenerate, then publish."
+            ),
+        )
+
+
 def _refuse_while_publish_scheduled(db: Session, sample_id: str) -> None:
     """409 while a publish is parked for the sample (backend/scheduled_publish.py).
     Its newest draft carries the scheduled, future Published Date, and IS
@@ -15254,6 +15361,7 @@ async def publish_sample_coa(
         )
     _refuse_while_publish_scheduled(db, sample_id)
     _refuse_stale_draft_primary(sample_id)
+    _refuse_in_review_a_la_carte(sample_id)
 
     # 2. Resolve SENAITE UID upfront so we fail before touching integration service state.
     # Native-born samples (external_lims_system == "mk1") have no SENAITE AR at
@@ -17948,9 +18056,13 @@ def _attach_sample_form(db: Session, result, row: Optional[LimsSample]) -> None:
 
     Mutable Mk1 state like priority: re-stamped on every cache hit so a PATCHed
     form never shows stale. `result` is the lookup model (or a plain dict);
-    all three fields stay None/False for a SENAITE-only sample."""
+    all three fields stay None/False for a SENAITE-only sample. The declared
+    unit rides along: it follows the peptide record, so it is mutable too."""
+    from coa.iu_display import declared_payload
     from sample_forms.service import form_payload
-    payload = form_payload(db, row)
+    shown = (result.get("declared_weight_mg") if isinstance(result, dict)
+             else getattr(result, "declared_weight_mg", None))
+    payload = {**form_payload(db, row), **declared_payload(db, row, shown)}
     if isinstance(result, dict):
         result.update(payload)
         return
@@ -24685,11 +24797,13 @@ def _worksheet_item_parents(db: Session, sample_ids,
     return out
 
 
-def _worksheet_item_parent_facts(parent: "Optional[LimsSample]") -> dict:
+def _worksheet_item_parent_facts(parent: "Optional[LimsSample]", iu_factor=None) -> dict:
     """Parent-sample facts the endotoxin bench needs on a worksheet item
     (spec 2026-09-18-endo-worksheet-design §4). None-safe: every key is
     present even when the item has no resolvable parent, so the FE never
-    branches on a missing key."""
+    branches on a missing key. `iu_factor` (coa.iu_display.iu_factors, batched
+    by the caller) turns an IU declared amount into the mg the bench reads."""
+    from coa.iu_display import declared_to_mg
     if parent is None:
         return {"declared_weight_mg": None, "sample_type": None,
                 "client_order_number": None, "sample_identity": None}
@@ -24715,7 +24829,7 @@ def _worksheet_item_parent_facts(parent: "Optional[LimsSample]") -> dict:
                     names.append(str(name))
             identity = ", ".join(names) or None
     return {
-        "declared_weight_mg": declared,
+        "declared_weight_mg": declared_to_mg(declared, iu_factor),
         "sample_type": parent.sample_type_title or parent.sample_type,
         "client_order_number": parent.client_order_number,
         "sample_identity": identity or parent.peptide_name,
@@ -24938,6 +25052,13 @@ def _serialize_worksheets(db: Session, worksheets: "list[Worksheet]") -> list:
     def _parent_for(sample_id: str) -> Optional[LimsSample]:
         return parent_by_sample.get(sample_id)
 
+    from coa.iu_display import iu_factors
+    iu_by_parent = iu_factors(db, list(parent_by_sample.values()))
+
+    def _parent_facts(sample_id: str) -> dict:
+        parent = _parent_for(sample_id)
+        return _worksheet_item_parent_facts(parent, iu_factor=iu_by_parent.get(parent.id) if parent else None)
+
     # Resolve per-item stamped method/instrument names (bench-stamping
     # slice 2, task 5): the DISTINCT non-null stamped values across a
     # vial's lims_analyses rows -- one distinct name -> that name; >1
@@ -25149,7 +25270,7 @@ def _serialize_worksheets(db: Session, worksheets: "list[Worksheet]") -> list:
                         "prep_note": it.prep_note, "prep_history": it.prep_history,
                         "sample_peptide_id": peptide_by_parent.get(rule_parent_pk[it.id])}
                        if it.id in rule_parent_pk else {}),
-                    **_worksheet_item_parent_facts(_parent_for(it.sample_id)),
+                    **_parent_facts(it.sample_id),
                 }
                 for it in items
             ],

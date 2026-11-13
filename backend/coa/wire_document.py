@@ -16,8 +16,13 @@ from coa.source_setting import coa_generation_source
 log = logging.getLogger(__name__)
 
 
-def _legacy_block(db, parent) -> dict:
-    return {"source": "mk1", "rows": build_legacy_rows(db, parent)}
+def _legacy_block(db, parent, sections: list | None = None) -> dict:
+    rows = build_legacy_rows(db, parent, sections=sections)
+    block = {"source": "mk1", "rows": rows}
+    if rows == []:
+        # A la carte: the only signal COABuilder trusts for an empty page 1.
+        block["page1"] = "none"
+    return block
 
 
 def build_coa_wire_document(db, parent) -> dict:
@@ -28,7 +33,7 @@ def build_coa_wire_document(db, parent) -> dict:
     """
     doc = build_native_sections(db, parent)
     if coa_generation_source(db) == "mk1":
-        doc["legacy_rows"] = _legacy_block(db, parent)
+        doc["legacy_rows"] = _legacy_block(db, parent, doc["sections"])
         doc["sample_meta"] = build_sample_meta(db, parent)
     return doc
 

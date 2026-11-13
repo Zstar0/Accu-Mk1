@@ -246,6 +246,7 @@ def init_db():
     import groups.models  # noqa: F401  (register user_groups tables on Base)
     import boards.models  # noqa: F401  (register board_* tables on Base)
     import agents.models  # noqa: F401  (register agent_credentials on Base)
+    import ai_chat.models  # noqa: F401  (register acp_providers, ai_chats, ai_chat_messages on Base)
     # Run column migrations before create_all so ORM mappings match the DB schema
     _run_migrations()
     Base.metadata.create_all(bind=engine)
@@ -322,6 +323,16 @@ def init_db():
             upgrade_hplc_native_catalog(_db)
     except Exception as e:  # never block startup
         log.warning("catalog_hplc_native_catalog_upgrade_skipped err=%s", e)
+    # Bac Water native family (spec 2026-10-05, MB1): three services + the
+    # INACTIVE bacteriostatic-water-panel profile + wildcard specs. After
+    # backfill_departments (it needs the Analytical department), before
+    # service_spec_seed for symmetry with the HPLC seed.
+    try:
+        from catalog.bw_native_seed import seed_bw_native_catalog
+        with SessionLocal() as _db:
+            seed_bw_native_catalog(_db)
+    except Exception as e:  # never block startup
+        log.warning("catalog_bw_native_seed_skipped err=%s", e)
     try:
         from catalog.service_spec_seed import seed_service_specs
         with SessionLocal() as _db:
@@ -337,6 +348,15 @@ def init_db():
             verify_demand_catalog(_s)
     except Exception as e:  # never block startup
         log.warning("demand_catalog_verify_skipped err=%s", e)
+
+    # Customer-id counters (P/PB/BW) must stay above SENAITE's max while the
+    # legacy drain runs. ERROR per violation inside; never blocks startup.
+    try:
+        from sub_samples.native_id import customer_id_headroom_violations
+        with SessionLocal() as _s:
+            customer_id_headroom_violations(_s)
+    except Exception as e:  # never block startup
+        log.warning("customer_id_headroom_check_skipped err=%s", e)
 
 
 def _run_migrations():
@@ -412,6 +432,9 @@ def _run_migrations():
         "ALTER TABLE peptides ADD COLUMN IF NOT EXISTS hplc_aliases JSON",
         # Customer-facing display aliases — approved alternate names shown on COA
         "ALTER TABLE peptides ADD COLUMN IF NOT EXISTS display_aliases JSON",
+        # COA quantity display in IU from a cutoff forward (coa/iu_display.py)
+        "ALTER TABLE peptides ADD COLUMN IF NOT EXISTS iu_per_mg NUMERIC(10,4)",
+        "ALTER TABLE peptides ADD COLUMN IF NOT EXISTS iu_from TIMESTAMP",
         # Per-sample analyte display-alias picks (denormalized — survives changes to peptides.display_aliases)
         """
         CREATE TABLE IF NOT EXISTS sample_analyte_aliases (
@@ -2798,6 +2821,14 @@ def _run_migrations():
         INSERT INTO lims_native_id_sequences (prefix, next_value)
         SELECT 'PB', 1000
         WHERE NOT EXISTS (SELECT 1 FROM lims_native_id_sequences WHERE prefix = 'PB')
+        """,
+        # Bac Water native-born (spec 2026-10-05, R3): customer-facing BW-NNNN
+        # counter seeded ONCE at 1000, above SENAITE's prod max (BW-0135 on
+        # 2026-10-05). Guarded: never resets an existing counter.
+        """
+        INSERT INTO lims_native_id_sequences (prefix, next_value)
+        SELECT 'BW', 1000
+        WHERE NOT EXISTS (SELECT 1 FROM lims_native_id_sequences WHERE prefix = 'BW')
         """,
         # AI review as documents (2026-10-09): the review's document and the name scrub count.
         "ALTER TABLE customer_ai_reviews ADD COLUMN IF NOT EXISTS document_id INTEGER",

@@ -5,6 +5,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 import type * as Recharts from 'recharts'
 import { getAnalyteTrends, type AnalyteTrendCoa } from '@/lib/api'
 import { AnalyteTrends } from './AnalyteTrends'
+import { FailChips } from './AnalyteTrendDetail'
 
 vi.mock('@/lib/api', () => ({ getAnalyteTrends: vi.fn() }))
 vi.mock('@/lib/api-profiles', () => ({
@@ -121,5 +122,18 @@ describe('AnalyteTrends', () => {
     fireEvent.click(await screen.findByText('Bacteriostatic Water'))
     expect(await screen.findAllByText('pH Determination')).not.toHaveLength(0)
     expect(screen.getByText('5.5 pH')).toBeInTheDocument()
+  })
+})
+
+describe('FailChips', () => {
+  it('FailChips shows a neutral Measured for a MEASURED COA', () => {
+    render(<FailChips coa={coa({ overall: 'MEASURED' })} />)
+    expect(screen.getByText('Measured')).toBeInTheDocument()
+    expect(screen.queryByText('Conforms')).toBeNull()
+  })
+
+  it('FailChips still shows Conforms for a PASSED COA', () => {
+    render(<FailChips coa={coa({ overall: 'PASSED' })} />)
+    expect(screen.getByText('Conforms')).toBeInTheDocument()
   })
 })

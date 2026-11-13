@@ -10,7 +10,7 @@ WORKDIR /app
 
 # Install system dependencies for psycopg2-binary
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    gcc \
+    gcc openssh-client \
     && rm -rf /var/lib/apt/lists/*
 
 # Install Python dependencies

@@ -55,6 +55,7 @@ from sqlalchemy.orm import Session
 
 from models import LimsParentAttachment, LimsSample, LimsSampleRemark, User
 from priority.service import load_effective_safe
+from coa.iu_display import declared_payload
 from sample_forms.service import form_payload
 from sub_samples.lookup_models import (
     RegistrySampleReadResult,
@@ -104,6 +105,8 @@ _MK1_FIELD_SOURCES: dict[str, str] = {
     "sample_form_id": "mk1",
     "sample_form_name": "mk1",
     "sample_form_eligible": "mk1",
+    "declared_unit": "mk1",
+    "declared_prep_mg": "mk1",
 }
 
 
@@ -367,4 +370,5 @@ def build_native_details(db: Session, sample_id: str) -> RegistrySampleReadResul
         priority=(lambda e: e.as_dict() if e else None)(
             load_effective_safe(db, sample_pks=[row.id])[0].get(row.id)),
         **form_payload(db, row),
+        **declared_payload(db, row),
     )
