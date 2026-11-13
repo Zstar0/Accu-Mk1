@@ -263,6 +263,17 @@ def test_a_single_peptide_that_is_a_catalog_blend_is_a_reason():
     assert _reasons(_facts(peptide_is_blend=True)) == [promote_mod.REASON_SOLO_BLEND]
 
 
+@pytest.mark.parametrize("key, value", [("bac_stock_ug_ml", 8000.0), ("benzyl_alcohol_density_mg_ml", 1040.0)])
+def test_a_bac_row_whose_method_figures_are_not_the_engines_is_a_reason(key, value):
+    # Process HPLC works a bac stock volume out with its own 9000 ug/mL and 1034.72 mg/mL
+    # (calculate_dilution_factor passes neither on), so a method that sets others would file
+    # a prep whose sheet and certificate disagree
+    params = {**PARAMS, key: value}
+    assert _reasons(_facts(form="bac", hplc_prep=_INPUTS["bac"], params=params)) == [promote_mod.REASON_BAC_FIGURES]
+    # the same figures on a powder row change nothing the engine reads
+    assert _reasons(_facts(params=params)) == []
+
+
 def test_the_warnings_that_never_stop_a_promote():
     # volume_off (a vial far from its plan) and split_mismatch warn; neither is a reason
     inputs = {**_STOCK, "vials": {"1": {"vial_mg": 2500.0, "vial_diluent_mg": 3000.0, "vial_all_mg": 3200.0}},

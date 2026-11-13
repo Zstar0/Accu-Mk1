@@ -16,7 +16,7 @@ import mk1_db
 import psycopg2
 import psycopg2.errors
 import worksheets_hplc
-from calculations.hplc_processor import MAX_CAPSULES
+from calculations.hplc_processor import BAC_STOCK_UG_ML, BENZYL_ALCOHOL_DENSITY, MAX_CAPSULES
 from endo_prep_rules import _iso_now
 from hplc_prep import compute_row
 from hplc_prep_rules import load_rules
@@ -27,7 +27,7 @@ from sqlalchemy.orm import Session
 log = logging.getLogger(__name__)
 
 REFUSED_MESSAGE = "This row cannot be promoted yet."
-REASON_COMPLETED = "the worksheet is completed; reopen it to promote a row"
+REASON_COMPLETED = "the worksheet is completed; a completed worksheet promotes nothing"
 REASON_RIDER = "this vial rides the run with another sample; it has no prep of its own"
 REASON_NO_FORM = "this form has no HPLC prep in Mk1"
 REASON_NO_INSTRUMENT = ("pick the instrument first: a curve is checked against the run's instrument, "
@@ -39,6 +39,8 @@ REASON_LIQUID_VOLUME = "type the declared volume: a liquid's stock volume is the
 REASON_STOCK_PAIR = "weigh the stock vial: Step 2 needs both of its weighings"
 REASON_STOCK_BACKWARDS = ("Step 2: the vial and septum + diluent is not more than the empty vial; "
                           "check the two weights")
+REASON_BAC_FIGURES = ("this method's bac water figures (stock or benzyl alcohol density) are not the ones "
+                      "Process HPLC uses; have the method checked before a bac row is promoted")
 REASON_SOLO_BLEND = ("the sample names a catalog blend as one peptide; record the blend's components "
                      "on the sample so each one is quantified on its own curve")
 _FORM_PROBLEM = "no HPLC prep for this sample form"  # sheet_rows' wording for a null form
@@ -118,6 +120,11 @@ def promote_reasons(row: dict, computed: Optional[dict], blend_cap: int) -> list
         elif count > MAX_CAPSULES:
             reasons.append(f"a stock of {count} capsules is more than Process HPLC takes "
                            f"({MAX_CAPSULES}); check the count")
+    # calculate_dilution_factor works a bac stock volume out with its own constants (it passes
+    # stock_volume_ml neither), so the sheet's must be the same or the certificate differs
+    if form == "bac" and (row["params"]["bac_stock_ug_ml"] != BAC_STOCK_UG_ML
+                          or row["params"]["benzyl_alcohol_density_mg_ml"] != BENZYL_ALCOHOL_DENSITY):
+        reasons.append(REASON_BAC_FIGURES)
     if form == "liquid" and not (inputs.get("declared_volume_ml") or 0) > 0:
         reasons.append(REASON_LIQUID_VOLUME)
     if form != "liquid":
