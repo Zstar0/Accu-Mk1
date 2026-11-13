@@ -1095,6 +1095,49 @@ def test_a_changed_net_peptide_input_holds_the_injection(client, seeded, session
     assert detail == _preparation_changed(original["curve"]["source_filename"])
 
 
+def _original_in_use(original_name):
+    return (f"The original worksheet, {original_name}, has a changed preparation, but its curve or the curve of "
+            "one of its injections is part of an analysis's or a prep session's record, so it cannot be filed "
+            "again. Put its preparation back as it was filed, or start a new worksheet.")
+
+
+@pytest.mark.parametrize("used", ["original by an analysis", "injection by a prep session"])
+def test_a_changed_preparation_on_an_original_that_cannot_be_refiled_says_so(client, seeded, session, used):
+    # Round 3 R2, review sequence Q5: the round 2 sentence sent the chemist to a File that is refused.
+    inputs = _case(1)
+    filed_inputs = copy.deepcopy(inputs)
+    original = _filed(client, _sheet(client, seeded, inputs)["id"])
+    sid, ocid, name = original["sheet"]["id"], original["curve"]["id"], original["curve"]["source_filename"]
+    rep = _replicate(client, sid, instrument=seeded.inst2)
+    rep_curve = _filed(client, rep["id"])["curve"]
+    if used.startswith("original"):
+        _analysis(session, seeded, ocid)
+    else:
+        _session(session, seeded, rep_curve["id"])
+    inputs["stock"]["vial_standard_mg"] = 15729.5
+    assert client.patch(f"/hplc-calibration-sheets/{sid}", json={"version": 1, "inputs": inputs}).status_code == 200
+    assert _refused(client, session, rep["id"], 409, None, sheets=(sid,)) == _original_in_use(name)
+    assert _file(client, sid).status_code == 409  # what the round 2 sentence sent the chemist to
+    assert client.patch(f"/hplc-calibration-sheets/{sid}",
+                        json={"version": 2, "inputs": filed_inputs}).status_code == 200
+    if used.startswith("original"):
+        assert _file(client, rep["id"]).status_code == 200
+    else:  # the injection's own curve is in use: its own File says that, not the original's sentence
+        assert "has been used by" in _refused(client, session, rep["id"], 409, None)
+
+
+def test_an_unfiled_injection_of_an_original_in_use_is_told_the_way_out(client, seeded, session):
+    original = _filed(client, _sheet(client, seeded, _case(1))["id"])
+    sid = original["sheet"]["id"]
+    inputs = _case(1)
+    rep = _replicate(client, sid, instrument=seeded.inst2)
+    _analysis(session, seeded, original["curve"]["id"])
+    inputs["net"]["assay_pct"] = 98.5
+    assert client.patch(f"/hplc-calibration-sheets/{sid}", json={"version": 1, "inputs": inputs}).status_code == 200
+    detail = _refused(client, session, rep["id"], 409, None, sheets=(sid,))
+    assert detail == _original_in_use(original["curve"]["source_filename"])
+
+
 def test_the_originals_vendor_edited_on_the_peptides_page_does_not_hold_the_injection(client, seeded, session):
     # The vendor and the source sample are read from the filing record, not the editable column.
     original = _filed(client, _sheet(client, seeded, _case(1))["id"])
@@ -1191,14 +1234,20 @@ def test_a_refile_says_what_it_replaced_on_the_peptides_page(client, seeded, ses
                    "peptide_analyte_id": edited["peptide_analyte_id"], "excluded_indices": [0]}
 
 
+def _panel_text(v):
+    """CalibrationPanel.tsx handleSave sends each text box as `trim() || null`."""
+    return (v or "").strip() or None
+
+
 def _ui_save(client, seeded, curve, notes):
-    """What CalibrationPanel.tsx handleSave sends: every box as it stands, the points with them."""
+    """What CalibrationPanel.tsx handleSave sends: every box as it stands (text trimmed, an empty
+    box null), the points with them."""
     std = curve["standard_data"]
     body = {
         "reference_rt": curve["reference_rt"], "rt_tolerance": curve["rt_tolerance"],
         "diluent_density": curve["diluent_density"], "instrument_id": curve["instrument_id"],
-        "peptide_analyte_id": curve["peptide_analyte_id"], "notes": notes,
-        "source_sample_id": curve["source_sample_id"], "vendor": curve["vendor"],
+        "peptide_analyte_id": curve["peptide_analyte_id"], "notes": _panel_text(notes),
+        "source_sample_id": _panel_text(curve["source_sample_id"]), "vendor": _panel_text(curve["vendor"]),
         "standard_data": {"concentrations": std["concentrations"], "areas": std["areas"],
                           "rts": std.get("rts", []), "excluded_indices": []},
     }
@@ -1230,6 +1279,24 @@ def test_a_notes_only_save_on_the_peptides_page_names_the_notes_alone(client, se
     assert out["warnings"] == [_replaced(c["source_filename"], "its notes were changed")]
     assert "edited on the Peptides page" not in out["warnings"][0]
     assert out["curve"]["notes"] == c["notes"]
+
+
+@pytest.mark.parametrize("typed", [{"notes": "Run on the new column\n"}, {"supplier": "Cayman Chemical "},
+                                   {"notes": ""}, {"standard_id": " P-0111"}],
+                         ids=["notes newline", "supplier space", "empty notes", "standard id space"])
+def test_a_save_with_nothing_typed_reads_unchanged_whatever_the_edge_spaces(client, seeded, typed):
+    # Round 3 R1, review sequence Q4: the panel trims, the worksheet files text as typed.
+    inputs = _case(1)
+    inputs.update(typed)
+    first = _filed(client, _sheet(client, seeded, inputs)["id"])
+    sid, c = first["sheet"]["id"], first["curve"]
+    _ui_save(client, seeded, c, c["notes"])
+    assert client.get(f"/hplc-calibration-sheets/{sid}").json()["curve_changed_since_filed"] is False
+    assert _filed(client, sid)["warnings"] == []
+    # A real edit is still named.
+    _ui_save(client, seeded, c, (c["notes"] or "") + " checked")
+    assert client.get(f"/hplc-calibration-sheets/{sid}").json()["curve_changed_since_filed"] is True
+    assert _filed(client, sid)["warnings"] == [_replaced(c["source_filename"], "its notes were changed")]
 
 
 def test_a_curve_never_touched_reads_unchanged_and_refiles_without_that_warning(client, seeded):

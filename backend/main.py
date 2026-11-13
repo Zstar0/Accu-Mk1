@@ -7818,8 +7818,15 @@ def _cal_curve_changes(db: Session, curve) -> list:
     if "reference_rt" in filed and not _cal_same_number(curve.reference_rt, filed["reference_rt"]):
         changes.append(f"its reference RT was {_cal_shown(curve.reference_rt)}"
                        + (" min" if curve.reference_rt is not None else ""))
-    # Round 2 N3: named, never quoted; the old text is in the audit row.
-    changes += [said for k, said in _CAL_RECORD_TEXT.items() if k in filed and getattr(curve, k) != filed[k]]
+    # Round 2 N3: named, never quoted; the old text is in the audit row. Round 3 R1: the Peptides
+    # page sends its text boxes as `trim() || null` and the worksheet files text as typed, so the
+    # text is compared after that same normalisation on both sides; the analyte id as it is.
+    def same(k, a, b):
+        if k == "peptide_analyte_id":
+            return a == b
+        return ((a or "").strip() or None) == ((b or "").strip() or None) \
+            if isinstance(a, (str, type(None))) and isinstance(b, (str, type(None))) else a == b
+    changes += [said for k, said in _CAL_RECORD_TEXT.items() if k in filed and not same(k, getattr(curve, k), filed[k])]
     return changes
 
 
@@ -7839,6 +7846,8 @@ def file_calibration_curve(sheet_id: int, data: CalFileIn, db: Session = Depends
     then the curve rows. Every query runs before the first change, so the sheet's updated_at is
     stamped once, with filed_at, in the one flush (onupdate would otherwise read "changed since
     filed" the moment a curve is filed). Filing is not a save: the sheet's version is unchanged."""
+    from sqlalchemy import exists
+
     from catalog.method_run_params import HPLC_RUN_PARAM_DEFAULTS
     from models import HplcCalibrationSheet
     try:
@@ -7891,6 +7900,18 @@ def file_calibration_curve(sheet_id: int, data: CalFileIn, db: Session = Depends
                 raise HTTPException(409, f"The original worksheet, {orig_name}, is not filed. File it first, then "
                                          "file this one.")
             if _cal_preparation_changed(db, fields, orig_curve):
+                # Round 3 R2: never send the chemist to the original's File when it will be refused
+                # for a used curve (the same two counts it makes: analyses and prep sessions).
+                refile_ids = [orig_curve.id, *db.execute(
+                    select(HplcCalibrationSheet.calibration_curve_id).where(
+                        HplcCalibrationSheet.replicate_of_sheet_id == original.id,
+                        HplcCalibrationSheet.calibration_curve_id.isnot(None))).scalars()]
+                if any(db.execute(select(exists().where(column.in_(refile_ids)))).scalar()
+                       for column in (HPLCAnalysis.calibration_curve_id, WizardSession.calibration_curve_id)):
+                    raise HTTPException(409, f"The original worksheet, {orig_name}, has a changed preparation, but "
+                                             "its curve or the curve of one of its injections is part of an "
+                                             "analysis's or a prep session's record, so it cannot be filed again. "
+                                             "Put its preparation back as it was filed, or start a new worksheet.")
                 raise HTTPException(409, f"The original worksheet, {orig_name}, has a changed preparation that is "
                                          "not filed yet. File it first, then file this one."
                                     + (" Filing the original also re-files this injection."
