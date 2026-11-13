@@ -8,6 +8,14 @@ Locally:
 
     HPLC_SCRATCH=t6 bash C:/tmp/hplc-build/local-pytest.sh ws tests/test_worksheets_hplc_promote.py -q
 """
+import importlib.util
+import json
+import os
+import pathlib
+import threading
+import uuid
+from unittest.mock import MagicMock
+
 import endo_prep_rules
 import main
 import mk1_db
@@ -21,6 +29,8 @@ from hplc_prep import compute_row
 from hplc_prep_rules import load_rules
 from models import (
     AnalysisService,
+    CalibrationCurve,
+    HplcPrepRule,
     Instrument,
     LimsAnalysis,
     LimsSample,
@@ -269,7 +279,11 @@ def test_a_bac_row_whose_method_figures_are_not_the_engines_is_a_reason(key, val
     # (calculate_dilution_factor passes neither on), so a method that sets others would file
     # a prep whose sheet and certificate disagree
     params = {**PARAMS, key: value}
-    assert _reasons(_facts(form="bac", hplc_prep=_INPUTS["bac"], params=params)) == [promote_mod.REASON_BAC_FIGURES]
+    stock, ba = params["bac_stock_ug_ml"], params["benzyl_alcohol_density_mg_ml"]
+    assert _reasons(_facts(form="bac", hplc_prep=_INPUTS["bac"], params=params)) == [
+        f"this method's bac water figures ({stock:g} ug/mL stock, benzyl alcohol at {ba:g} mg/mL) are not "
+        "the ones Process HPLC uses (9000 ug/mL, 1034.72 mg/mL); have the method checked before a bac "
+        "row is promoted"]
     # the same figures on a powder row change nothing the engine reads
     assert _reasons(_facts(params=params)) == []
 
@@ -330,7 +344,8 @@ def test_promote_writes_one_prep_with_the_typed_weighings(client, db):
         "actual_diluent_vol_ul": v["actual"]["actual_diluent_ul"],
         "actual_stock_vol_ul": v["actual"]["actual_stock_ul"],
         "actual_total_vol_ul": v["actual"]["actual_total_ul"],
-        "is_blend": False, "components_json": None, "vial_data": None, "notes": None,
+        "is_blend": False, "components_json": None, "vial_data": None, "is_standard": False,
+        "notes": "the diluent density could not be checked for BPC-157: it has no active curve on HPLC 1290a",
     }
     assert {k: prep[k] for k in expected} == expected
     assert all(prep[k] is not None for k in ("stock_conc_ug_ml", "actual_conc_ug_ml", "actual_total_vol_ul"))
@@ -396,7 +411,9 @@ def test_a_promote_that_finds_a_prep_from_a_half_commit_heals(client, db, promot
     assert r.json()["already"] is True and r.json()["prep"]["id"] == made["id"]
     db.expire_all()
     rule = db.get(WorksheetItem, item.id).prep_rule
-    assert rule["event"] == "promote" and rule["vials"][0]["vial"] == 1
+    assert rule["event"] == "promote" and rule["healed"] is True
+    # built from the stored prep, which holds no diluent or target here
+    assert (rule["diluent"], rule["vials"]) == (None, [{"vial": 1, "lead": made["peptide_id"], "target": None}])
     # a promote stamp already there is left as it is
     stamped_at = rule["locked_at"]
     assert client.post(_url(ws, item)).json()["already"] is True
@@ -733,3 +750,279 @@ def test_every_vial_of_a_promoted_blend_goes_through_the_engine_and_matches_the_
             out = _through_the_engine(prep, by_component[pid])
             assert out["stock_volume_ml"] == pytest.approx(computed["stock"]["total_diluent_ml"], abs=1e-6)
             assert out["dilution_factor_total"] == pytest.approx(v["dilution_factor_total"], abs=1e-6)
+
+
+# --- fix round 1 ---------------------------------------------------------------------------
+
+
+def test_a_declared_weight_of_zero_is_a_reason():
+    assert _reasons(_facts(hplc_prep={**_INPUTS["powder"], "declared_mg": 0})) == [promote_mod.REASON_DECLARED_ZERO]
+
+
+def test_the_backstop_refuses_a_vial_with_no_factor():
+    row = _facts()
+    computed = compute_row({k: row[k] for k in ("declared_mg", "form", "peptide_id", "components")},
+                           row["hplc_prep"], [], PARAMS)
+    computed["vials"][0]["dilution_factor_total"] = None  # what no listed reason catches
+    assert promote_reasons(row, computed, 4) == ["Vial 1 cannot be worked out from these numbers; check the row"]
+
+
+def test_a_blend_with_its_split_typed_and_no_total_says_so_in_blend_words():
+    row = _facts(peptide_id=3, is_blend=True, declared_mg=None, hplc_prep={
+        **_INPUTS["powder"], "components": {"10": {"mg": 5.0}, "11": {"mg": 5.0}}}, components=[
+        {"peptide_id": 10, "name": "BPC-157", "abbreviation": "BPC-157", "declared_mg": None, "vial": 1},
+        {"peptide_id": 11, "name": "TB-500", "abbreviation": "TB-500", "declared_mg": None, "vial": 1}])
+    assert _reasons(row) == [promote_mod.REASON_DECLARED_BLEND]
+
+
+def test_a_blend_missing_from_the_catalog_is_refused(client, db):
+    bpc, tb = _peptide(db, "BPC-157"), _peptide(db, "TB-500")
+    ws, inst = _ws(db), _instrument(db)
+    parent = _sample(db, "P-0630", [(bpc, "BPC-157", "5"), (tb, "TB-500", "5")], form=_form(db))
+    item = _item(db, ws, parent, prep_form="powder", hplc_prep=_INPUTS["powder"], instrument_id=inst.id)
+    db.commit()
+    r = client.post(_url(ws, item))
+    assert r.status_code == 409 and r.json()["detail"]["reasons"] == ["this blend is not in the catalog"]
+
+
+def test_a_promoted_prep_is_a_production_prep_the_sample_preps_page_lists(client, db):
+    ws, item, _bpc, _inst = _solo(db)
+    prep_id = client.post(_url(ws, item)).json()["prep"]["id"]
+    assert _stored(item)["is_standard"] is False
+    r = client.get("/sample-preps", params={"is_standard": "false", "search": item.sample_id})
+    assert r.status_code == 200, r.text
+    assert prep_id in [p["id"] for p in r.json()]
+
+
+# The curve density check (ruling on Important 2)
+
+
+def _curve(db, peptide, instrument, density, *, active=True):
+    curve = CalibrationCurve(peptide_id=peptide.id, instrument_id=instrument.id, slope=1.0, intercept=0.0,
+                             r_squared=1.0, is_active=active)
+    db.add(curve)
+    db.flush()
+    curve.diluent_density = density  # set after the insert, so a None is stored as NULL, not the default
+    db.commit()
+    return curve
+
+
+def _density_sentence(abbr, sheet, curve):
+    return (f"The sheet worked this row out with a diluent density of {sheet:g} mg/mL (from the method). The active curve "
+            f"for {abbr} on HPLC 1290a uses {curve:g}, and the certificate is worked out with the curve's. "
+            "A lab admin has to make them agree before this row can be promoted.")
+
+
+def test_a_curve_with_the_sheets_density_promotes(client, db):
+    ws, item, bpc, inst = _solo(db)
+    _curve(db, bpc, inst, 997.1)
+    assert client.post(_url(ws, item)).status_code == 200
+    assert _stored(item)["notes"] is None
+
+
+def test_a_curve_with_another_density_is_refused_and_nothing_is_inserted(client, db):
+    ws, item, bpc, inst = _solo(db, instrument=True)
+    _curve(db, bpc, inst, 1000.0)
+    item.instrument_id = inst.id
+    db.commit()
+    r = client.post(_url(ws, item))
+    assert r.status_code == 409
+    assert r.json()["detail"]["reasons"] == [_density_sentence("BPC-157", 997.1, 1000)]
+    assert mk1_db.list_sample_preps_for_worksheet_items([item.id]) == []
+
+
+def test_the_density_reason_comes_with_the_others_at_once(client, db):
+    ws, item, bpc, inst = _solo(db)
+    _curve(db, bpc, inst, 1000.0)
+    item.hplc_prep = {"vials": {"1": dict(_VIAL)}}
+    db.commit()
+    assert client.post(_url(ws, item)).json()["detail"]["reasons"] == [
+        "weigh the stock vial: Step 2 needs both of its weighings", _density_sentence("BPC-157", 997.1, 1000)]
+
+
+def test_a_blend_whose_one_component_curve_differs_is_refused_and_names_it(client, db):
+    ws, item, (bpc, tb, _blend_pep), inst = _blend(db)
+    _curve(db, bpc, inst, 997.1)
+    _curve(db, tb, inst, 1000.0)
+    r = client.post(_url(ws, item))
+    assert r.status_code == 409
+    assert r.json()["detail"]["reasons"] == [_density_sentence("TB-500", 997.1, 1000)]
+
+
+def test_no_curve_promotes_and_says_the_density_was_not_checked(client, db):
+    ws, item, (bpc, tb, _blend_pep), inst = _blend(db)
+    _curve(db, bpc, inst, 997.1)
+    assert client.post(_url(ws, item)).status_code == 200
+    assert _stored(item)["notes"] == (
+        "the diluent density could not be checked for TB-500: it has no active curve on HPLC 1290a")
+
+
+def test_a_curve_with_no_density_is_read_as_the_engine_reads_it(client, db):
+    # POST /hplc/analyze passes the curve's NULL straight to the engine, which then has no
+    # density and refuses (no_density): never a silent quantity, but never one either
+    ws, item, bpc, inst = _solo(db)
+    _curve(db, bpc, inst, None)
+    assert db.get(CalibrationCurve, db.query(CalibrationCurve.id).scalar()).diluent_density is None
+    r = client.post(_url(ws, item))
+    assert r.status_code == 409
+    assert r.json()["detail"]["reasons"] == [
+        "The active curve for BPC-157 on HPLC 1290a has no diluent density, so Process HPLC cannot work "
+        "a quantity out with it. A lab admin has to set it (the sheet used 997.1 mg/mL) before this row "
+        "can be promoted."]
+
+
+def test_an_inactive_curve_with_another_density_is_not_a_reason(client, db):
+    ws, item, bpc, inst = _solo(db)
+    _curve(db, bpc, inst, 997.1)
+    _curve(db, bpc, inst, 1000.0, active=False)
+    assert client.post(_url(ws, item)).status_code == 200
+
+
+def test_a_curve_on_another_instrument_is_not_this_rows(client, db):
+    ws, item, bpc, _inst = _solo(db)
+    _curve(db, bpc, _instrument(db, "HPLC 1290b"), 1000.0)
+    assert client.post(_url(ws, item)).status_code == 200
+
+
+# Important 3, Minor 4 and 5
+
+
+def test_an_already_answer_leaves_no_transaction_holding_the_locks(client, db):
+    ws, item, _bpc, _inst = _solo(db)
+    assert client.post(_url(ws, item)).status_code == 200
+    r = client.post(_url(ws, item))
+    assert r.json()["already"] is True
+    assert not db.in_transaction()
+
+
+def test_a_heal_days_later_stamps_the_rule_the_prep_was_made_under(client, db):
+    ws, item, bpc, _inst = _solo(db)
+    first = client.post(_url(ws, item)).json()
+    db.expire_all()
+    stored = db.get(WorksheetItem, item.id)
+    stored.prep_rule = None  # the stamp of a half commit never landed
+    db.add(HplcPrepRule(peptide_id=bpc.id, target_conc_ug_ml=300, diluent="Water + 0.1% TFA"))
+    db.commit()
+    r = client.post(_url(ws, item))
+    assert r.json()["already"] is True and r.json()["prep"] == first["prep"]
+    db.expire_all()
+    rule = db.get(WorksheetItem, item.id).prep_rule
+    assert rule["healed"] is True and rule["event"] == "promote" and rule["user_id"] == 1
+    assert (rule["diluent"], rule["vials"]) == ("Water", [{"vial": 1, "lead": bpc.id, "target": 200.0}])
+
+
+def test_a_failed_read_after_the_commit_answers_the_prep_without_the_row(client, db, monkeypatch):
+    ws, item, _bpc, _inst = _solo(db)
+    real, calls = worksheets_hplc.sheet_rows, []
+
+    def second_read_fails(*a, **k):
+        calls.append(1)
+        if len(calls) == 2:
+            raise psycopg2.OperationalError("server closed the connection")
+        return real(*a, **k)
+
+    monkeypatch.setattr(worksheets_hplc, "sheet_rows", second_read_fails)
+    r = client.post(_url(ws, item))
+    assert r.status_code == 200, r.text
+    prep = _stored(item)
+    assert r.json() == {"prep": {"id": prep["id"], "sample_id": prep["sample_id"], "status": "awaiting_hplc"},
+                        "already": False, "row": None}
+
+
+# Minor 9: the locks block, on Postgres
+
+
+def test_promote_holds_its_locks_on_postgres_until_the_prep_is_written(monkeypatch):
+    if not os.environ.get("MK1_DB_NAME", "").startswith("mk1_test_"):
+        pytest.skip("needs the harness's scratch Postgres database")
+    from database import DATABASE_URL, Base
+    from sqlalchemy import create_engine, exc, text
+    from sqlalchemy.orm import sessionmaker
+
+    schema = f"t6_locks_{uuid.uuid4().hex[:8]}"
+    admin = create_engine(DATABASE_URL)
+    with admin.begin() as conn:
+        conn.execute(text(f"CREATE SCHEMA {schema}"))
+    engine = create_engine(DATABASE_URL, connect_args={"options": f"-csearch_path={schema}"})
+    one, two = sessionmaker(bind=engine)(), sessionmaker(bind=engine)()
+    prep_ids = []
+    try:
+        Base.metadata.create_all(engine)
+        ws, item, _bpc, _inst = _solo(one)
+        ws_id, item_id = ws.id, item.id
+        reached, release, out = threading.Event(), threading.Event(), {}
+        real = mk1_db.create_sample_prep
+
+        def slow_insert(data):
+            reached.set()
+            release.wait(10)
+            row = real(data)
+            prep_ids.append(row["id"])
+            return row
+
+        monkeypatch.setattr(mk1_db, "create_sample_prep", slow_insert)
+
+        def run():
+            try:
+                out["r"] = main.promote_worksheet_item_hplc(
+                    worksheet_id=ws_id, item_id=item_id, db=one,
+                    current_user=MagicMock(id=1, email="qa@accumark.test"))
+            except Exception as e:  # handed to the main thread
+                out["e"] = e
+
+        worker = threading.Thread(target=run)
+        worker.start()
+        assert reached.wait(10), out
+        # promote sits in its insert: the worksheet row and the item row are both held
+        for attempt in (lambda: main._worksheet_for_update(two, ws_id),
+                        lambda: two.execute(text("SELECT id FROM worksheet_items WHERE id = :i FOR UPDATE"),
+                                            {"i": item_id}).all()):
+            two.execute(text("SET LOCAL lock_timeout = '300ms'"))
+            with pytest.raises(exc.OperationalError, match="lock timeout"):
+                attempt()
+            two.rollback()
+        release.set()
+        worker.join(15)
+        assert "e" not in out and out["r"]["already"] is False, out
+        # once promote has committed, the Task 5 PATCH takes the same locks and sees the prep
+        two.execute(text("SET LOCAL lock_timeout = '2s'"))
+        locked = main._worksheet_for_update(two, ws_id)
+        row = two.get(WorksheetItem, item_id, with_for_update=True)
+        with pytest.raises(worksheets_hplc.Refused, match="final"):
+            worksheets_hplc.apply_patch(two, locked, row, hplc_prep={"declared_mg": 11.0})
+        two.rollback()
+    finally:
+        release.set()
+        one.close()
+        two.close()
+        for prep in mk1_db.list_sample_preps_for_worksheet_items([item_id]) if "item_id" in dir() else []:
+            mk1_db.delete_sample_prep(prep["id"])
+        engine.dispose()
+        with admin.begin() as conn:
+            conn.execute(text(f"DROP SCHEMA {schema} CASCADE"))
+        admin.dispose()
+
+
+# The reason cases the browser's copy is pinned to
+
+_FIXTURES = pathlib.Path(__file__).with_name("fixtures")
+
+
+def _maker():
+    spec = importlib.util.spec_from_file_location(
+        "make_hplc_promote_reason_cases", _FIXTURES / "make_hplc_promote_reason_cases.py")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def test_the_reason_cases_file_is_what_promote_reasons_answers_today():
+    stored = json.loads((_FIXTURES / "hplc_promote_reason_cases.json").read_text(encoding="utf-8"))
+    assert stored == _maker().build()
+    assert len({c["name"] for c in stored["cases"]}) == len(stored["cases"])
+    assert sum(1 for case in stored["cases"] if not case["reasons"]) >= 7
+
+
+def test_no_reason_in_the_cases_file_holds_an_em_dash():
+    text = (_FIXTURES / "hplc_promote_reason_cases.json").read_text(encoding="utf-8")
+    assert "\u2014" not in text and "\\u2014" not in text

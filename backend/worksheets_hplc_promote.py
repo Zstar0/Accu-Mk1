@@ -20,7 +20,7 @@ from calculations.hplc_processor import BAC_STOCK_UG_ML, BENZYL_ALCOHOL_DENSITY,
 from endo_prep_rules import _iso_now
 from hplc_prep import compute_row
 from hplc_prep_rules import load_rules
-from models import HplcMethod, LimsSubSample, Peptide, instrument_methods, peptide_methods
+from models import CalibrationCurve, HplcMethod, LimsSubSample, Peptide, instrument_methods, peptide_methods
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
@@ -33,14 +33,14 @@ REASON_NO_FORM = "this form has no HPLC prep in Mk1"
 REASON_NO_INSTRUMENT = ("pick the instrument first: a curve is checked against the run's instrument, "
                         "and a prep without one cannot be checked")
 REASON_DECLARED = "type the declared weight: the stock concentration is worked out from it"
+REASON_DECLARED_BLEND = ("type the blend's declared total weight: the prep records it as the sample's declared "
+                         "weight, and the split is checked against it")
 REASON_DECLARED_ZERO = "the declared weight must be more than 0 mg"
 REASON_CAPSULE_COUNT = "type how many capsules went into the stock"
 REASON_LIQUID_VOLUME = "type the declared volume: a liquid's stock volume is the volume the customer declared"
 REASON_STOCK_PAIR = "weigh the stock vial: Step 2 needs both of its weighings"
 REASON_STOCK_BACKWARDS = ("Step 2: the vial and septum + diluent is not more than the empty vial; "
                           "check the two weights")
-REASON_BAC_FIGURES = ("this method's bac water figures (stock or benzyl alcohol density) are not the ones "
-                      "Process HPLC uses; have the method checked before a bac row is promoted")
 REASON_SOLO_BLEND = ("the sample names a catalog blend as one peptide; record the blend's components "
                      "on the sample so each one is quantified on its own curve")
 _FORM_PROBLEM = "no HPLC prep for this sample form"  # sheet_rows' wording for a null form
@@ -112,7 +112,7 @@ def promote_reasons(row: dict, computed: Optional[dict], blend_cap: int) -> list
     inputs, form = row["hplc_prep"] or {}, computed["form"]
     declared = inputs.get("declared_mg") if inputs.get("declared_mg") is not None else row["declared_mg"]
     if form != "bac" and declared is None:
-        reasons.append(REASON_DECLARED)
+        reasons.append(REASON_DECLARED_BLEND if row["is_blend"] else REASON_DECLARED)
     if form == "capsule":
         count = inputs.get("capsules")
         if count is None:
@@ -124,7 +124,11 @@ def promote_reasons(row: dict, computed: Optional[dict], blend_cap: int) -> list
     # stock_volume_ml neither), so the sheet's must be the same or the certificate differs
     if form == "bac" and (row["params"]["bac_stock_ug_ml"] != BAC_STOCK_UG_ML
                           or row["params"]["benzyl_alcohol_density_mg_ml"] != BENZYL_ALCOHOL_DENSITY):
-        reasons.append(REASON_BAC_FIGURES)
+        reasons.append(
+            f"this method's bac water figures ({row['params']['bac_stock_ug_ml']:g} ug/mL stock, benzyl "
+            f"alcohol at {row['params']['benzyl_alcohol_density_mg_ml']:g} mg/mL) are not the ones Process "
+            f"HPLC uses ({BAC_STOCK_UG_ML:g} ug/mL, {BENZYL_ALCOHOL_DENSITY:g} mg/mL); have the method "
+            "checked before a bac row is promoted")
     if form == "liquid" and not (inputs.get("declared_volume_ml") or 0) > 0:
         reasons.append(REASON_LIQUID_VOLUME)
     if form != "liquid":
@@ -190,7 +194,37 @@ def _vial_columns(v: dict, weighed: dict, stock_pair: tuple) -> dict:
     }
 
 
-def _prep_data(db: Session, current_user, worksheet, item, row: dict, computed: dict) -> dict:
+def density_check(db: Session, row: dict) -> tuple[list, list]:
+    """(reasons, notes) for the curve density. /hplc/analyze works the stock volume out with the
+    active curve's diluent_density (a NULL as no density at all), the sheet with the method's.
+    Every active curve for the row's peptides on its instrument must carry the sheet's figure.
+    A peptide with no active curve is not refused (Process HPLC refuses it itself); it is noted."""
+    if row["instrument_id"] is None or not row["components"]:
+        return [], []
+    sheet, inst = row["params"]["diluent_density_mg_ml"], row["instrument_name"]
+    names = {c["peptide_id"]: c["abbreviation"] or c["name"] for c in row["components"]}
+    curves = db.execute(select(CalibrationCurve.peptide_id, CalibrationCurve.diluent_density).where(
+        CalibrationCurve.peptide_id.in_(list(names)), CalibrationCurve.instrument_id == row["instrument_id"],
+        CalibrationCurve.is_active.is_(True)).order_by(CalibrationCurve.id)).all()
+    reasons, seen = [], set()
+    for pid, density in curves:
+        seen.add(pid)
+        if density is None:
+            reasons.append(f"The active curve for {names[pid]} on {inst} has no diluent density, so Process "
+                           f"HPLC cannot work a quantity out with it. A lab admin has to set it (the sheet "
+                           f"used {sheet:g} mg/mL) before this row can be promoted.")
+        elif abs(density - sheet) > 1e-6:
+            reasons.append(f"The sheet worked this row out with a diluent density of {sheet:g} mg/mL (from "
+                           f"the method). The active curve for {names[pid]} on {inst} uses {density:g}, and "
+                           "the certificate is worked out with the curve's. A lab admin has to make them "
+                           "agree before this row can be promoted.")
+    notes = [f"the diluent density could not be checked for {name}: it has no active curve on {inst}"
+             for pid, name in names.items() if pid not in seen]
+    return reasons, notes
+
+
+def _prep_data(db: Session, current_user, worksheet, item, row: dict, computed: dict,
+               extra_notes=()) -> dict:
     """The sample_preps row, every value from the row facts, its inputs or compute_row."""
     import json
 
@@ -206,7 +240,7 @@ def _prep_data(db: Session, current_user, worksheet, item, row: dict, computed: 
     peptide = db.get(Peptide, row["peptide_id"])
     vial_pk = db.execute(select(LimsSubSample.id).where(
         LimsSubSample.sample_id == item.sample_id)).scalar_one_or_none()
-    notes = [w["text"] for w in computed["warnings"] if w["code"] in _NOTE_WARNINGS]
+    notes = [w["text"] for w in computed["warnings"] if w["code"] in _NOTE_WARNINGS] + list(extra_notes)
     data = {
         "worksheet_item_id": item.id, "lims_sub_sample_pk": vial_pk,
         "senaite_sample_id": item.sample_id,
@@ -223,6 +257,8 @@ def _prep_data(db: Session, current_user, worksheet, item, row: dict, computed: 
         "capsules_used": inputs.get("capsules") if form == "capsule" else None,
         "diluent": computed["diluent"]["diluent"],
         "is_blend": bool(row["is_blend"]),
+        # a production prep: Analysis History and Sample Preps filter is_standard = false
+        "is_standard": False,
         # vial 1 is the lowest vial: every component may have moved to vial 2
         **columns[computed["vials"][0]["vial"]],
     }
@@ -311,15 +347,34 @@ def _computed_row(db: Session, worksheet, item, *, peptide_check: bool) -> tuple
 
 def _already(db: Session, current_user, worksheet, item, prep: dict) -> dict:
     """A row promoted before: its prep, and the promote stamp written when a half commit lost
-    it (the prep committed, the item's stamp did not)."""
+    it (the prep committed, the item's stamp did not). Ends the transaction either way, so the
+    worksheet and item locks are not held into the session's close."""
     if (item.prep_rule or {}).get("event") != "promote":
-        _row, computed = _computed_row(db, worksheet, item, peptide_check=False)
-        if computed is not None and computed["vials"]:
-            item.prep_rule = _promote_stamp(computed, current_user.id)
+        stored = mk1_db.get_sample_prep(prep["id"])
+        if stored is not None:
+            row = worksheets_hplc.sheet_rows(db, worksheet, [item])[0]
+            item.prep_rule = _healed_stamp(stored, current_user.id)
             db.commit()
-            _stamp_analyses(db, item, _row, current_user.id)
-    row = worksheets_hplc.sheet_rows(db, worksheet, [item])[0]
-    return {"prep": prep, "already": True, "row": row}
+            _stamp_analyses(db, item, row, current_user.id)
+    out = {"prep": prep, "already": True, "row": worksheets_hplc.sheet_rows(db, worksheet, [item])[0]}
+    db.rollback()  # the read above began a transaction; nothing in it is kept
+    return out
+
+
+def _healed_stamp(stored: dict, user_id) -> dict:
+    """The promote stamp a half commit lost, from the prep as it was written (not from today's
+    rules, which may have changed since the promote). The prep keeps no floor."""
+    import json
+
+    vial_data = stored.get("vial_data")
+    if isinstance(vial_data, str):
+        vial_data = json.loads(vial_data)
+    # ponytail: a blend vial's lead is taken as its first component; the prep does not store it
+    vials = ([{"vial": e["vial_number"], "lead": (e.get("component_ids") or [None])[0],
+               "target": e.get("target_conc_ug_ml")} for e in vial_data] if vial_data else
+             [{"vial": 1, "lead": stored["peptide_id"], "target": stored.get("target_conc_ug_ml")}])
+    return {"event": "promote", "locked_at": _iso_now(), "locked_by": "promote", "user_id": user_id,
+            "healed": True, "diluent": stored.get("diluent"), "floor_ug_ml": None, "vials": vials}
 
 
 def promote_row(db: Session, current_user, worksheet, item) -> dict:
@@ -338,11 +393,12 @@ def promote_row(db: Session, current_user, worksheet, item) -> dict:
             return _already(db, current_user, worksheet, item, found[item.id])
         row, computed = _computed_row(db, worksheet, item, peptide_check=True)
         reasons = promote_reasons(row, computed, worksheets_hplc.blend_cap(db))
-        if reasons:
-            raise Refused(409, REFUSED_MESSAGE, reasons)
-        data = _prep_data(db, current_user, worksheet, item, row, computed)
+        density_reasons, density_notes = density_check(db, row) if computed is not None else ([], [])
+        if reasons or density_reasons:
+            raise Refused(409, REFUSED_MESSAGE, reasons + density_reasons)
+        data = _prep_data(db, current_user, worksheet, item, row, computed, density_notes)
         try:
-            mk1_db.create_sample_prep(data)
+            made = mk1_db.create_sample_prep(data)
         except psycopg2.errors.UniqueViolation as exc:
             # the backstop index: another request promoted this row first; read the winner
             if getattr(exc.diag, "constraint_name", None) != _UNIQUE_ITEM:
@@ -357,5 +413,12 @@ def promote_row(db: Session, current_user, worksheet, item) -> dict:
     item.prep_rule = _promote_stamp(computed, current_user.id)
     db.commit()
     _stamp_analyses(db, item, row, current_user.id)
-    out = worksheets_hplc.sheet_rows(db, worksheet, [item])[0]
+    try:
+        out = worksheets_hplc.sheet_rows(db, worksheet, [item])[0]
+    except Exception:
+        # the prep and its stamp are committed: answer the prep; the page re-reads the row
+        db.rollback()
+        log.exception("hplc_promote_row_read_failed item=%s prep=%s", item.id, made["id"])
+        return {"prep": {"id": made["id"], "sample_id": made["sample_id"], "status": made["status"]},
+                "already": False, "row": None}
     return {"prep": out["prep"], "already": False, "row": out}
