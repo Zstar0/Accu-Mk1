@@ -143,3 +143,33 @@ def test_the_post_deploy_check_wants_the_eight_columns_and_the_index(mk1):
     assert evaluate_sample_preps(found, indexdef)[1] == 0
     assert evaluate_sample_preps(found, None)[1] == 1
     assert evaluate_sample_preps({k: v for k, v in found.items() if k != "diluent"}, indexdef)[1] == 1
+
+
+def test_the_routes_the_flyout_reads_return_the_new_keys(mk1):
+    """The flyout's prep comes from GET /sample-preps (and GET /sample-preps/{id}). If either
+    dropped a key, prepAnalyzeFields would see a wizard-born prep and send a two-step prep
+    as one step, so the keys are checked in the JSON the routes return."""
+    from unittest.mock import MagicMock
+
+    from fastapi.testclient import TestClient
+
+    from auth import get_current_user
+    from main import app
+
+    values = {"prep_form": "powder", "int_vial_empty_mg": 500.5, "int_vial_with_diluent_mg": 1900.25,
+              "int_vial_final_mg": 2000.0, "diluent": "Water", "worksheet_item_id": ITEM}
+    row = mk1(**values)
+    saved = dict(app.dependency_overrides)
+    app.dependency_overrides[get_current_user] = lambda: MagicMock()
+    try:
+        client = TestClient(app)
+        one = client.get(f"/sample-preps/{row['id']}")
+        listed = client.get("/sample-preps", params={"search": row["sample_id"]})
+    finally:
+        app.dependency_overrides.clear()
+        app.dependency_overrides.update(saved)
+    assert one.status_code == 200 and listed.status_code == 200
+    from_list = next(r for r in listed.json() if r["id"] == row["id"])
+    for body in (one.json(), from_list):
+        assert {k: body[k] for k in values} == values
+        assert body["declared_volume_ml"] is None and body["capsules_used"] is None
