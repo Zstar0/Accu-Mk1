@@ -1,4 +1,9 @@
-import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
+import {
+  useMutation,
+  useQuery,
+  useQueryClient,
+  type QueryClient,
+} from '@tanstack/react-query'
 import {
   getHplcSheet,
   patchHplcRow,
@@ -13,6 +18,10 @@ import { worksheetPageKey } from '@/hooks/use-worksheet-drawer'
 /** The HPLC sheet's cache key (GET /worksheets/{id}/hplc). */
 export const HPLC_SHEET_KEY = (id: number) => ['hplc-sheet', id] as const
 
+/** Every save on one sheet (a cell's PATCH, an instrument), so each can
+ *  see the others in flight. */
+const SAVE_KEY = (id: number) => ['hplc-sheet-save', id] as const
+
 export function useHplcSheet(id: number) {
   return useQuery({
     queryKey: HPLC_SHEET_KEY(id),
@@ -20,24 +29,162 @@ export function useHplcSheet(id: number) {
   })
 }
 
+/** A save that did not land: which box ("<sample id>, <column>") and why. */
+export type HplcSaveFailure = (what: string, reason: string) => void
+
 type Plain = Record<string, unknown>
 const isPlain = (x: unknown): x is Plain =>
   x !== null && typeof x === 'object' && !Array.isArray(x)
 
-/** The merge patch that puts back what `patch` overwrote: each leaf it sent
- *  at its value in `before`, or null where there was none. */
-function undoPatch(before: unknown, patch: Plain): Plain {
-  const out: Plain = {}
-  for (const [key, value] of Object.entries(patch)) {
-    const was = isPlain(before) ? before[key] : undefined
-    out[key] = isPlain(value) ? undoPatch(was, value) : (was ?? null)
+interface SaveVars {
+  itemId: number
+  /** The box, for a failure: "<sample id>, <column>". */
+  what: string
+  body?: HplcRowPatch
+  instrumentId?: number | null
+}
+
+/** The order saves were made in, across the sheet. */
+let saveSeq = 0
+
+interface SaveCtx {
+  seq: number
+  before: HplcSheetRow | undefined
+}
+
+/** The leaves a save writes: "hplc_prep.vials.1.vial_mg", "prep_form",
+ *  "instrument_id". */
+function pathsOf(v: SaveVars): string[] {
+  if (v.instrumentId !== undefined) return ['instrument_id']
+  const out: string[] = []
+  const walk = (x: unknown, at: string) => {
+    if (isPlain(x))
+      for (const [k, y] of Object.entries(x)) walk(y, `${at}.${k}`)
+    else out.push(at)
   }
+  if (v.body?.prep_form !== undefined) out.push('prep_form')
+  if (v.body?.hplc_prep) walk(v.body.hplc_prep, 'hplc_prep')
   return out
+}
+
+function valueAt(row: unknown, path: string): unknown {
+  let x = row
+  for (const k of path.split('.')) x = isPlain(x) ? x[k] : undefined
+  return x
+}
+
+/** The other saves on this sheet for this row: pending ones, and those made
+ *  after `mine` that did not fail (a save still starting has no order yet
+ *  and counts as later). */
+function others(qc: QueryClient, id: number, itemId: number, mine: number) {
+  return qc
+    .getMutationCache()
+    .findAll({ mutationKey: SAVE_KEY(id) })
+    .filter(m => (m.state.variables as SaveVars | undefined)?.itemId === itemId)
+    .map(m => ({
+      seq: (m.state.context as SaveCtx | undefined)?.seq ?? Infinity,
+      status: m.state.status,
+      paths: pathsOf(m.state.variables as SaveVars),
+    }))
+    .filter(m => m.seq !== mine)
+}
+
+/**
+ * A sheet's saves. Each is optimistic. A server row replaces the cached
+ * one only when no other save for that row is in flight or came later, and
+ * the sheet is refetched once the last save on it settles, so answers that
+ * come back out of order never leave a stale figure. A failure puts back
+ * only the leaves it wrote that no later save has written since, and is
+ * reported through `onFailure` (a mutate call's own callbacks fire only for
+ * the latest call, so a failure before it would go unseen).
+ */
+function useSheetSave(
+  id: number,
+  send: (v: SaveVars) => Promise<unknown>,
+  apply: (row: HplcSheetRow, v: SaveVars) => HplcSheetRow,
+  onFailure?: HplcSaveFailure
+) {
+  const qc = useQueryClient()
+  const key = HPLC_SHEET_KEY(id)
+  const setRow = (itemId: number, fn: (row: HplcSheetRow) => HplcSheetRow) =>
+    qc.setQueryData<HplcSheet>(key, sheet =>
+      sheet
+        ? {
+            ...sheet,
+            rows: sheet.rows.map(r => (r.item_id === itemId ? fn(r) : r)),
+          }
+        : sheet
+    )
+  return useMutation({
+    mutationKey: SAVE_KEY(id),
+    mutationFn: send,
+    onMutate: async (v: SaveVars): Promise<SaveCtx> => {
+      const seq = ++saveSeq
+      await qc.cancelQueries({ queryKey: key })
+      const before = qc
+        .getQueryData<HplcSheet>(key)
+        ?.rows.find(r => r.item_id === v.itemId)
+      setRow(v.itemId, row => apply(row, v))
+      return { seq, before }
+    },
+    onError: (err, v, ctx) => {
+      onFailure?.(v.what, err instanceof Error ? err.message : 'Save failed')
+      const before = ctx?.before
+      if (!ctx || !before) return
+      const later = new Set(
+        others(qc, id, v.itemId, ctx.seq)
+          .filter(m => m.seq > ctx.seq && m.status !== 'error')
+          .flatMap(m => m.paths)
+      )
+      const undo = pathsOf(v).filter(p => !later.has(p))
+      if (!undo.length) return
+      setRow(v.itemId, row => {
+        const back = { ...row }
+        const prep: Plain = {}
+        for (const p of undo) {
+          if (p === 'prep_form') {
+            back.prep_form = before.prep_form
+            back.form = before.form
+          } else if (p === 'instrument_id') {
+            back.instrument_id = before.instrument_id
+            back.instrument_name = before.instrument_name
+          } else {
+            // hplc_prep.<a>.<b>: the value it held before, or null to remove
+            const keys = p.split('.').slice(1)
+            let node = prep
+            keys.slice(0, -1).forEach(k => {
+              node[k] = isPlain(node[k]) ? node[k] : {}
+              node = node[k] as Plain
+            })
+            node[keys[keys.length - 1] as string] = valueAt(before, p) ?? null
+          }
+        }
+        if (Object.keys(prep).length)
+          back.hplc_prep = mergeHplcPrep(row.hplc_prep, prep as HplcPrepInputs)
+        return back
+      })
+    },
+    onSuccess: (data, v, ctx) => {
+      if (v.instrumentId !== undefined || !ctx) return
+      const busy = others(qc, id, v.itemId, ctx.seq).some(
+        m => m.status === 'pending' || m.seq > ctx.seq
+      )
+      if (!busy) setRow(v.itemId, () => data as HplcSheetRow)
+    },
+    onSettled: (_d, _e, v) => {
+      if (v.instrumentId !== undefined)
+        void qc.invalidateQueries({ queryKey: worksheetPageKey(id) })
+      // This save still counts as in flight here, so 1 means it is the last.
+      if (qc.isMutating({ mutationKey: SAVE_KEY(id) }) > 1) return
+      void qc.invalidateQueries({ queryKey: key })
+    },
+  })
 }
 
 /** The row with `body` applied as the server will apply it. A prep_form
  *  sent as null goes back to the sample's own form (bac, else its form's). */
-function applied(row: HplcSheetRow, body: HplcRowPatch): HplcSheetRow {
+function applied(row: HplcSheetRow, v: SaveVars): HplcSheetRow {
+  const body = v.body ?? {}
   const next = { ...row }
   if (body.hplc_prep)
     next.hplc_prep = mergeHplcPrep(row.hplc_prep, body.hplc_prep)
@@ -50,112 +197,29 @@ function applied(row: HplcSheetRow, body: HplcRowPatch): HplcSheetRow {
   return next
 }
 
-/**
- * One cell's save. Optimistic through mergeHplcPrep; a failure puts back
- * only the keys that save wrote (several saves can be in flight on one
- * sheet, and a whole-sheet snapshot would undo the ones that succeeded),
- * and the mutation's error carries the server's reason for the page.
- */
-export function usePatchHplcRow(id: number) {
-  const queryClient = useQueryClient()
-  const key = HPLC_SHEET_KEY(id)
-  const setRow = (itemId: number, fn: (row: HplcSheetRow) => HplcSheetRow) =>
-    queryClient.setQueryData<HplcSheet>(key, sheet =>
-      sheet
-        ? {
-            ...sheet,
-            rows: sheet.rows.map(r => (r.item_id === itemId ? fn(r) : r)),
-          }
-        : sheet
-    )
-  return useMutation({
-    mutationFn: ({ itemId, body }: { itemId: number; body: HplcRowPatch }) =>
-      patchHplcRow(id, itemId, body),
-    onMutate: async ({ itemId, body }) => {
-      await queryClient.cancelQueries({ queryKey: key })
-      const before = queryClient
-        .getQueryData<HplcSheet>(key)
-        ?.rows.find(r => r.item_id === itemId)
-      setRow(itemId, row => applied(row, body))
-      return { before }
-    },
-    onError: (_err, { itemId, body }, context) => {
-      const before = context?.before
-      if (!before) return
-      setRow(itemId, row => {
-        const back: HplcSheetRow = body.hplc_prep
-          ? {
-              ...row,
-              hplc_prep: mergeHplcPrep(
-                row.hplc_prep,
-                undoPatch(
-                  before.hplc_prep,
-                  body.hplc_prep as Plain
-                ) as HplcPrepInputs
-              ),
-            }
-          : { ...row }
-        if (body.prep_form !== undefined) {
-          back.prep_form = before.prep_form
-          back.form = before.form
-        }
-        return back
-      })
-    },
-    onSuccess: (row, { itemId }) => setRow(itemId, () => row),
-  })
+/** One cell's save: a merge patch for its one key. */
+export function usePatchHplcRow(id: number, onFailure?: HplcSaveFailure) {
+  return useSheetSave(
+    id,
+    v => patchHplcRow(id, v.itemId, v.body ?? {}),
+    applied,
+    onFailure
+  )
 }
 
-/** The row's instrument, through the existing item PATCH; the sheet and the
- *  worksheet page refetch after (the instrument's name and method follow). */
-export function useSetHplcInstrument(id: number) {
-  const queryClient = useQueryClient()
-  const setInstrument = (
-    itemId: number,
-    instrumentId: number | null,
-    name: string | null
-  ) =>
-    queryClient.setQueryData<HplcSheet>(HPLC_SHEET_KEY(id), sheet =>
-      sheet
-        ? {
-            ...sheet,
-            rows: sheet.rows.map(r =>
-              r.item_id === itemId
-                ? { ...r, instrument_id: instrumentId, instrument_name: name }
-                : r
-            ),
-          }
-        : sheet
-    )
-  return useMutation({
-    mutationFn: ({
-      itemId,
-      instrumentId,
-    }: {
-      itemId: number
-      instrumentId: number | null
-    }) => updateWorksheetItem(id, itemId, { instrument_id: instrumentId }),
-    // Optimistic, so the select does not sit on its old value until the
-    // refetch lands; a failure puts back that row's instrument only.
-    onMutate: async ({ itemId, instrumentId }) => {
-      await queryClient.cancelQueries({ queryKey: HPLC_SHEET_KEY(id) })
-      const before = queryClient
-        .getQueryData<HplcSheet>(HPLC_SHEET_KEY(id))
-        ?.rows.find(r => r.item_id === itemId)
-      setInstrument(itemId, instrumentId, null)
-      return { before }
-    },
-    onError: (_err, { itemId }, context) => {
-      if (context?.before)
-        setInstrument(
-          itemId,
-          context.before.instrument_id,
-          context.before.instrument_name
-        )
-    },
-    onSettled: () => {
-      void queryClient.invalidateQueries({ queryKey: HPLC_SHEET_KEY(id) })
-      void queryClient.invalidateQueries({ queryKey: worksheetPageKey(id) })
-    },
-  })
+/** The row's instrument, through the existing item PATCH. */
+export function useSetHplcInstrument(id: number, onFailure?: HplcSaveFailure) {
+  return useSheetSave(
+    id,
+    v =>
+      updateWorksheetItem(id, v.itemId, {
+        instrument_id: v.instrumentId ?? null,
+      }),
+    (row, v) => ({
+      ...row,
+      instrument_id: v.instrumentId ?? null,
+      instrument_name: null,
+    }),
+    onFailure
+  )
 }

@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useRef, useState } from 'react'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { Button } from '@/components/ui/button'
 import { Skeleton } from '@/components/ui/skeleton'
@@ -42,8 +42,17 @@ export function HplcWorksheetPage({
   const queryClient = useQueryClient()
   const [addSamplesOpen, setAddSamplesOpen] = useState(false)
   const sheet = useHplcSheet(id)
-  const patch = usePatchHplcRow(id)
-  const instrument = useSetHplcInstrument(id)
+  // Every save that did not land, until dismissed: a later save that lands
+  // never clears an earlier failure.
+  const [failures, setFailures] = useState<{ n: number; text: string }[]>([])
+  const failureSeq = useRef(0)
+  const onFailure = (what: string, reason: string) =>
+    setFailures(f => [
+      ...f,
+      { n: ++failureSeq.current, text: `${what}: ${reason}` },
+    ])
+  const patch = usePatchHplcRow(id, onFailure)
+  const instrument = useSetHplcInstrument(id, onFailure)
   // A first load that failed leaves every row on the method standard.
   const { data: rules = [] } = useHplcPrepRules()
   const { data: users = [] } = useQuery({
@@ -64,7 +73,6 @@ export function HplcWorksheetPage({
   const isCompleted =
     worksheet.status === 'completed' || sheet.data?.status === 'completed'
   const { userNotes } = parseWorksheetNotes(worksheet.notes ?? '')
-  const saveError = patch.error ?? instrument.error
 
   function update(data: WorksheetUpdate) {
     drawer.updateMutation.mutate({
@@ -134,14 +142,22 @@ export function HplcWorksheetPage({
         </div>
       </div>
 
-      {saveError && (
+      {failures.map(f => (
         <p
+          key={f.n}
           role="alert"
-          className="rounded-[5px] border border-red-500/40 bg-red-500/10 px-3 py-2 text-sm text-red-700 dark:text-red-300"
+          className="flex items-center justify-between gap-3 rounded-[5px] border border-red-500/40 bg-red-500/10 px-3 py-2 text-sm text-red-700 dark:text-red-300"
         >
-          Not saved: {saveError.message}
+          <span>Not saved: {f.text}</span>
+          <Button
+            variant="ghost"
+            size="sm"
+            onClick={() => setFailures(all => all.filter(x => x.n !== f.n))}
+          >
+            Dismiss
+          </Button>
         </p>
-      )}
+      ))}
 
       {sheet.isLoading ? (
         <Skeleton className="h-40 w-full" />
@@ -162,9 +178,9 @@ export function HplcWorksheetPage({
           rules={rules}
           readOnly={isCompleted}
           instruments={instruments.filter(i => i.active)}
-          onPatch={(itemId, body) => patch.mutate({ itemId, body })}
-          onSetInstrument={(itemId, instrumentId) =>
-            instrument.mutate({ itemId, instrumentId })
+          onPatch={(itemId, body, what) => patch.mutate({ itemId, body, what })}
+          onSetInstrument={(itemId, instrumentId, what) =>
+            instrument.mutate({ itemId, instrumentId, what })
           }
         />
       )}

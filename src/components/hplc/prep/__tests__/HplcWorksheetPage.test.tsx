@@ -9,7 +9,7 @@ import {
 } from '@testing-library/react'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import type * as ApiModule from '@/lib/api'
-import type { WorksheetListItem } from '@/lib/api'
+import type { HplcSheetRow, WorksheetListItem } from '@/lib/api'
 import type * as WorksheetDrawerHook from '@/hooks/use-worksheet-drawer'
 import { getHplcSheet, patchHplcRow } from '@/lib/api'
 import { useWorksheetDrawer } from '@/hooks/use-worksheet-drawer'
@@ -57,6 +57,37 @@ function renderPage() {
   )
 }
 
+const S1 = 'P-0120-S01'
+const VIAL = 'Wt Customer Sample vial and Septum (mg)'
+const VIAL_DIL = 'Wt Customer Sample vial and Septum + Diluent (mg)'
+
+function typeAndLeave(el: HTMLElement, text: string) {
+  fireEvent.focus(el)
+  fireEvent.change(el, { target: { value: text } })
+  fireEvent.blur(el)
+}
+
+/** Each PATCH waits until the test answers it, by call number. */
+function queueSaves() {
+  const pending: {
+    resolve: (row: HplcSheetRow) => void
+    reject: (e: Error) => void
+  }[] = []
+  vi.mocked(patchHplcRow).mockImplementation(
+    () =>
+      new Promise<HplcSheetRow>((resolve, reject) => {
+        pending.push({ resolve, reject })
+      })
+  )
+  return {
+    ok: (n: number, row: HplcSheetRow | undefined) => {
+      if (!row) throw new Error('no row')
+      pending[n]?.resolve(row)
+    },
+    fail: (n: number, reason: string) => pending[n]?.reject(new Error(reason)),
+  }
+}
+
 describe('HplcWorksheetPage', () => {
   beforeEach(() => {
     vi.clearAllMocks()
@@ -72,20 +103,11 @@ describe('HplcWorksheetPage', () => {
     vi.mocked(getHplcSheet).mockResolvedValue(
       makeSheet([makeRow({ hplc_prep: { stock_vial_mg: 5012.31 } })])
     )
-    let refuse: (e: Error) => void = () => undefined
-    vi.mocked(patchHplcRow).mockReturnValue(
-      new Promise((_resolve, reject) => {
-        refuse = reject
-      })
-    )
+    const saves = queueSaves()
     renderPage()
-    const box = await screen.findByLabelText(
-      'Wt Customer Sample vial and Septum'
-    )
+    const box = await screen.findByRole('textbox', { name: `${S1}, ${VIAL}` })
     expect(box).toHaveValue('5012.31')
-    fireEvent.focus(box)
-    fireEvent.change(box, { target: { value: '6000' } })
-    fireEvent.blur(box)
+    typeAndLeave(box, '6000')
     await waitFor(() =>
       expect(patchHplcRow).toHaveBeenCalledWith(7, 311, {
         hplc_prep: { stock_vial_mg: 6000 },
@@ -93,29 +115,101 @@ describe('HplcWorksheetPage', () => {
     )
     // optimistic: the sheet works from the new weighing at once
     expect(await screen.findByDisplayValue('6000')).toBe(box)
-    await act(async () => {
-      refuse(new Error('the row is promoted; its prep is final'))
-    })
+    await act(async () =>
+      saves.fail(0, 'the row is promoted; its prep is final')
+    )
     expect(await screen.findByRole('alert')).toHaveTextContent(
-      'Not saved: the row is promoted; its prep is final'
+      `Not saved: ${S1}, ${VIAL}: the row is promoted; its prep is final`
     )
     expect(box).toHaveValue('5012.31')
   })
 
   it('a saved cell shows what the server stored', async () => {
-    vi.mocked(getHplcSheet).mockResolvedValue(makeSheet([makeRow()]))
-    vi.mocked(patchHplcRow).mockResolvedValue(
-      makeRow({ hplc_prep: { vials: { '1': { vial_mg: 2500.1 } } } })
-    )
-    renderPage()
-    const step3 = await screen.findByRole('region', {
-      name: 'Step 3 Peptide dilution into the autosampler vial',
+    const saved = makeRow({
+      hplc_prep: { vials: { '1': { vial_mg: 2500.1 } } },
     })
-    const box = within(step3).getByLabelText('Wt Autosampler vial and cap')
-    fireEvent.focus(box)
-    fireEvent.change(box, { target: { value: '2500.1' } })
-    fireEvent.blur(box)
+    // the sheet is read again once the last save settles
+    vi.mocked(getHplcSheet)
+      .mockResolvedValueOnce(makeSheet([makeRow()]))
+      .mockResolvedValue(makeSheet([saved]))
+    vi.mocked(patchHplcRow).mockResolvedValue(saved)
+    renderPage()
+    const box = await screen.findByRole('textbox', {
+      name: `${S1}, Wt Autosampler vial and cap (mg)`,
+    })
+    typeAndLeave(box, '2500.1')
     expect(await screen.findByDisplayValue('2500.1')).toBe(box)
+    await waitFor(() => expect(getHplcSheet).toHaveBeenCalledTimes(2))
+    expect(box).toHaveValue('2500.1')
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument()
+  })
+
+  it('responses that come back out of order leave the newest value', async () => {
+    const at = (mg: number) =>
+      makeSheet([makeRow({ hplc_prep: { stock_vial_mg: mg } })])
+    vi.mocked(getHplcSheet)
+      .mockResolvedValueOnce(at(5012.31))
+      .mockResolvedValue(at(7000))
+    const saves = queueSaves()
+    renderPage()
+    const box = await screen.findByRole('textbox', { name: `${S1}, ${VIAL}` })
+    typeAndLeave(box, '6000')
+    typeAndLeave(box, '7000')
+    await waitFor(() => expect(patchHplcRow).toHaveBeenCalledTimes(2))
+    // the newer answers first, the older last
+    await act(async () => saves.ok(1, at(7000).rows[0]))
+    await act(async () => saves.ok(0, at(6000).rows[0]))
+    await waitFor(() => expect(getHplcSheet).toHaveBeenCalledTimes(2))
+    await waitFor(() => expect(box).toHaveValue('7000'))
+  })
+
+  it('a save that fails after a later one succeeded leaves the later value', async () => {
+    const at = (mg: number) =>
+      makeSheet([makeRow({ hplc_prep: { stock_vial_mg: mg } })])
+    vi.mocked(getHplcSheet)
+      .mockResolvedValueOnce(at(5012.31))
+      .mockResolvedValue(at(7000))
+    const saves = queueSaves()
+    renderPage()
+    const box = await screen.findByRole('textbox', { name: `${S1}, ${VIAL}` })
+    typeAndLeave(box, '6000')
+    typeAndLeave(box, '7000')
+    await waitFor(() => expect(patchHplcRow).toHaveBeenCalledTimes(2))
+    await act(async () => saves.ok(1, at(7000).rows[0]))
+    await act(async () => saves.fail(0, 'timed out'))
+    expect(box).toHaveValue('7000')
+    await waitFor(() => expect(getHplcSheet).toHaveBeenCalledTimes(2))
+    expect(box).toHaveValue('7000')
+  })
+
+  it('two saves where the first fails show an alert naming that sample and column', async () => {
+    const before = makeRow({ hplc_prep: { stock_vial_mg: 5012.31 } })
+    vi.mocked(getHplcSheet).mockResolvedValue(makeSheet([before]))
+    const saves = queueSaves()
+    renderPage()
+    const first = await screen.findByRole('textbox', {
+      name: `${S1}, ${VIAL}`,
+    })
+    const second = screen.getByRole('textbox', { name: `${S1}, ${VIAL_DIL}` })
+    typeAndLeave(first, '6000')
+    typeAndLeave(second, '8003.6')
+    await waitFor(() => expect(patchHplcRow).toHaveBeenCalledTimes(2))
+    await act(async () =>
+      saves.ok(
+        1,
+        makeRow({
+          hplc_prep: { stock_vial_mg: 6000, stock_vial_diluent_mg: 8003.6 },
+        })
+      )
+    )
+    await act(async () => saves.fail(0, 'weighing out of range'))
+    const alert = await screen.findByRole('alert')
+    expect(alert).toHaveTextContent(
+      `Not saved: ${S1}, ${VIAL}: weighing out of range`
+    )
+    expect(first).toHaveValue('5012.31')
+    // dismissible
+    fireEvent.click(within(alert).getByRole('button', { name: 'Dismiss' }))
     expect(screen.queryByRole('alert')).not.toBeInTheDocument()
   })
 
@@ -124,9 +218,7 @@ describe('HplcWorksheetPage', () => {
       makeSheet([makeRow()], 'completed')
     )
     renderPage()
-    const box = await screen.findByLabelText(
-      'Wt Customer Sample vial and Septum'
-    )
+    const box = await screen.findByRole('textbox', { name: `${S1}, ${VIAL}` })
     expect(box).toBeDisabled()
     expect(
       screen.queryByRole('button', { name: 'Add samples' })
