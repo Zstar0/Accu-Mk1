@@ -326,25 +326,32 @@ git -C C:/tmp/Accu-Mk1-hplc-ws commit -m "feat(hplc): the results engine takes a
 export interface PrepAnalyzeFields {
   weights: { stock_vial_empty: number | null; stock_vial_with_diluent: number | null;
              dil_vial_empty: number | null; dil_vial_with_diluent: number | null;
-             dil_vial_with_diluent_and_sample: number | null }
-  prep_form: 'powder' | 'liquid' | 'bac' | 'capsule'
+             dil_vial_with_diluent_and_sample: number | null;
+             int_vial_empty?: number | null; int_vial_with_diluent?: number | null;
+             int_vial_with_diluent_and_sample?: number | null }
+  prep_form?: 'powder' | 'liquid' | 'bac' | 'capsule'
   declared_volume_ml?: number
   capsules_used?: number
-  intermediate?: { int_vial_empty: number | null; int_vial_with_diluent: number | null;
-                   int_vial_with_diluent_and_sample: number | null }
 }
 /** What POST /hplc/analyze needs from a prep, for the row as a whole (vialNumber null) or for
  *  one entry of its vial_data. */
 export function prepAnalyzeFields(prep: SamplePrep, vialNumber?: number | null): PrepAnalyzeFields
 ```
 
-  Rules: `prep_form` is the prep's, `'powder'` when it has none (every wizard-born prep). A
-  **wizard-born prep (no `prep_form`) must produce exactly the request it produces today**: the
-  five weights with the same `?? 0` fallbacks, and none of the three optional keys. For a prep
-  that has a `prep_form`, a missing weight is `null`, not 0; `intermediate` is present only when
-  at least one of its three weighings is; `declared_volume_ml` only for `liquid`;
-  `capsules_used` only for `capsule`. A blend takes the weights and the intermediate from the
-  `vial_data` entry of that vial, and the form, the volume and the count from the row.
+  **Corrected 2026-11-12 during the build.** An earlier draft of this task put the intermediate
+  weighings in a top-level `intermediate` key. `HPLCAnalyzeRequest` has no such field: the route
+  reads the three `int_vial_*` weighings from INSIDE `weights` (`HPLCWeightsInput`), and an
+  unknown top-level key is dropped without an error, which would have computed a two-step prep
+  as one step. They go inside `weights`.
+
+  Rules: a **wizard-born prep (no `prep_form`) must produce exactly the request it produces
+  today**: the five weights with the same `?? 0` fallbacks, no `int_vial_*` keys, and none of
+  `prep_form`, `declared_volume_ml`, `capsules_used` (the server defaults the form to powder).
+  For a prep that has a `prep_form`: `prep_form` is sent; a missing weight is `null`, not 0; the
+  three `int_vial_*` keys are present inside `weights` only when at least one of them is stored;
+  `declared_volume_ml` only for `liquid`; `capsules_used` only for `capsule`. A blend takes the
+  weights, intermediate included, from the `vial_data` entry of that vial, and the form, the
+  volume and the count from the row.
   The flyout calls it at both call sites and spreads the result into the request.
 
 - [ ] **Step 1: Write the failing tests**
