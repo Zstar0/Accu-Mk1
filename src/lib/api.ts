@@ -11,6 +11,7 @@ import type {
   PrepHistoryEntry,
   PrepRuleLock,
 } from '@/lib/endo-prep-rules'
+import type { HplcPrepRule } from '@/lib/hplc-prep-rules'
 
 // Helper to get current API base URL (called dynamically)
 export const API_BASE_URL = () => getApiBaseUrl()
@@ -7015,6 +7016,103 @@ export async function reorderEndoPrepRules(
       await extractErrorMessage(
         response,
         `Reorder prep rules failed: ${response.status}`
+      )
+    )
+  return response.json()
+}
+
+/** HPLC prep rules (plan 2026-11-12-hplc-prep-rules): POST body; PATCH
+ *  takes any subset, an explicit null clearing a value back to the method
+ *  default. The server sets sort_order. */
+export interface HplcPrepRuleIn {
+  peptide_id: number
+  min_mg: number | null
+  max_mg: number | null
+  target_conc_ug_ml: number | null
+  blend_target_conc_ug_ml: number | null
+  lead_component_id: number | null
+  lead_priority: number | null
+  floor_ug_ml: number | null
+  diluent: string | null
+  default_instrument_id: number | null
+  status: HplcPrepRule['status']
+  note: string | null
+  active: boolean
+}
+
+/** A save's result: the line, and warnings that did not stop it. */
+export interface HplcPrepRuleSaved {
+  rule: HplcPrepRule
+  warnings: string[]
+}
+
+/** Every HPLC line, inactive ones included, by sort_order then id. */
+export async function getHplcPrepRules(): Promise<HplcPrepRule[]> {
+  const response = await fetch(`${API_BASE_URL()}/hplc-prep-rules`, {
+    headers: getBearerHeaders(),
+  })
+  if (!response.ok)
+    throw new Error(
+      await extractErrorMessage(
+        response,
+        `Load HPLC prep rules failed: ${response.status}`
+      )
+    )
+  return response.json()
+}
+
+/** 400 carries the save check that refused it, word for word. */
+export async function createHplcPrepRule(
+  body: HplcPrepRuleIn
+): Promise<HplcPrepRuleSaved> {
+  const response = await fetch(`${API_BASE_URL()}/hplc-prep-rules`, {
+    method: 'POST',
+    headers: getBearerHeaders('application/json'),
+    body: JSON.stringify(body),
+  })
+  if (!response.ok)
+    throw new Error(
+      await extractErrorMessage(
+        response,
+        `Save HPLC prep rule failed: ${response.status}`
+      )
+    )
+  return response.json()
+}
+
+export async function updateHplcPrepRule(
+  id: number,
+  body: Partial<HplcPrepRuleIn>
+): Promise<HplcPrepRuleSaved> {
+  const response = await fetch(`${API_BASE_URL()}/hplc-prep-rules/${id}`, {
+    method: 'PATCH',
+    headers: getBearerHeaders('application/json'),
+    body: JSON.stringify(body),
+  })
+  if (!response.ok)
+    throw new Error(
+      await extractErrorMessage(
+        response,
+        `Save HPLC prep rule failed: ${response.status}`
+      )
+    )
+  return response.json()
+}
+
+/** The whole list in its new order; returns it as GET does. */
+export async function reorderHplcPrepRules(
+  ids: number[]
+): Promise<HplcPrepRule[]> {
+  const response = await fetch(`${API_BASE_URL()}/hplc-prep-rules/reorder`, {
+    method: 'POST',
+    headers: getBearerHeaders('application/json'),
+    body: JSON.stringify({ ids }),
+  })
+  if (!response.ok)
+    throw new Error(
+      await extractErrorMessage(
+        response,
+        `Reorder HPLC prep rules failed: ${response.status}`
       )
     )
   return response.json()
