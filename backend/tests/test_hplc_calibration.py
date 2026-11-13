@@ -161,13 +161,70 @@ def test_default_curve_name_matches_the_source():
     assert default_curve_name("", "", "") == "1290-undated-std"
 
 
+ALL_WARNING_CODES = {
+    "level_cannot_be_made", "same_weight_row", "same_weight_next", "level_backwards_diluent",
+    "level_backwards_standard", "volume_off_diluent", "volume_off_standard", "stock_not_heavier",
+    "stock_under_min", "net_equivalents_disagree", "net_fw_mismatch", "net_fw_mismatch_no_counterion",
+    "net_ms_mismatch", "net_kf_missing", "net_counterion_partial", "net_assumption_missing",
+    "net_partial", "override_reason_missing",
+}
+
+
+def test_every_warning_code_is_raised_by_some_case():
+    raised = {w["code"] for c in CASES for w in c["expect"]["warnings"]}
+    assert raised == ALL_WARNING_CODES
+
+
+def _with_net(**net):
+    inputs = copy.deepcopy(BY_NAME["no correction"]["inputs"])
+    inputs["net"].update(net)
+    return inputs
+
+
+@pytest.mark.parametrize("net", [
+    {"counterion": "Acetate", "equivalents": 0, "free_mw": 0, "stated_fw": 0, "water_pct": 0},
+    {"counterion": "Acetate", "equivalents": 0, "stated_fw": 0, "water_pct": 0},
+    {"counterion": "Acetate", "equivalents": 2, "free_mw": -120.1, "water_pct": 0},
+], ids=["free 0 eq 0", "stated 0 free blank eq 0", "free -120.1 eq 2"])
+def test_a_counterion_fraction_that_cannot_be_worked_out_gives_no_curve(net):
+    """calc.js 2793-2794 divide without div(): NaN or -Infinity, so the source has no stock and no fit."""
+    worked = work_out_sheet(_with_net(**net))
+    assert worked["net"]["factor"] is None and worked["factor_applied"] is None
+    assert worked["stock_net_weight_mg"] is None and worked["stock_conc_ug_ml"] is None
+    assert worked["fit"]["n"] == 0 and worked["fit"]["slope"] is None
+    assert worked["range"] is None and standard_data_for(worked) == {"concentrations": [], "areas": []}
+
+
+def test_to_fixed6_is_javascripts():
+    assert hplc_calibration._to_fixed6(-0.0) == "0.000000"
+    assert hplc_calibration._to_fixed6(-1e-7) == "-0.000000"
+    assert hplc_calibration._to_fixed6(2794.0078125) == "2794.007813"
+
+
+# What the port may import, and which names it may use from those modules.
+ALLOWED_IMPORTS = {"copy", "math", "re", "decimal", "typing", "catalog.method_run_params"}
+ALLOWED_ATTRS = {"math": {"floor", "isfinite", "sqrt"}, "copy": {"deepcopy"},
+                 "re": {"fullmatch", "sub", "IGNORECASE"}}
+ALLOWED_FROM = {"decimal": {"ROUND_HALF_UP", "Decimal"}, "typing": {"Optional"},
+                "catalog.method_run_params": {"HPLC_RUN_PARAM_DEFAULTS"}}
+
+
 def test_no_sum_builtin_in_the_port():
     tree = ast.parse(Path(hplc_calibration.__file__).read_text(encoding="utf-8"))
-    banned = {"sum", "fsum", "mean", "fmean"}
+    imported = set()
     for node in ast.walk(tree):
-        if isinstance(node, ast.Call):
-            name = getattr(node.func, "id", None) or getattr(node.func, "attr", None)
-            assert name not in banned, f"line {node.lineno}: {name}()"
-        if isinstance(node, (ast.Import, ast.ImportFrom)):
-            mods = [a.name for a in node.names] + [getattr(node, "module", None) or ""]
-            assert not any(m.startswith(("statistics", "calculations")) for m in mods), mods
+        if isinstance(node, ast.Import):
+            for a in node.names:
+                assert a.asname is None, f"line {node.lineno}: import {a.name} as {a.asname}"
+                imported.add(a.name)
+        elif isinstance(node, ast.ImportFrom):
+            imported.add(node.module)
+            for a in node.names:
+                assert a.asname is None and a.name in ALLOWED_FROM.get(node.module, set()), \
+                    f"line {node.lineno}: from {node.module} import {a.name}"
+        elif isinstance(node, ast.Call) and isinstance(node.func, ast.Name):
+            assert node.func.id not in {"sum", "fsum", "mean", "fmean", "reduce"}, f"line {node.lineno}"
+        elif isinstance(node, ast.Attribute) and isinstance(node.value, ast.Name) \
+                and node.value.id in ALLOWED_ATTRS:
+            assert node.attr in ALLOWED_ATTRS[node.value.id], f"line {node.lineno}: {node.value.id}.{node.attr}"
+    assert imported == ALLOWED_IMPORTS

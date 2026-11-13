@@ -67,7 +67,9 @@ def _js_round(x):
 
 
 def _to_fixed6(v):
-    # JavaScript toFixed(6): the exact binary value rounded, a tie away from zero
+    # JavaScript toFixed(6): the exact binary value rounded, a tie away from zero; -0 reads "0.000000"
+    if v == 0:
+        v = 0
     return str(Decimal(v).quantize(Decimal("0.000001"), rounding=ROUND_HALF_UP))
 
 
@@ -213,7 +215,11 @@ def _net_worked(net: Optional[dict]):
         warnings.append(("net_ms_mismatch",
                          "net peptide: the mass spec on the CoA does not match the free-peptide MW: check the formula "
                          "sum and the ion form (MS reports the free peptide, never the salt)."))
-    # a divisor of 0 (nonsense MWs) gives None where JavaScript would give Infinity
+    # A divisor of 0 (nonsense MWs) gives None where calc.js 2793-2794 divide without div() and get
+    # NaN or -Infinity. work_out_sheet then has no stock and no fit, as the source does. With -Infinity
+    # the source also counts the counterion as applied (so parts_used, net_assumption_missing, and
+    # level_cannot_be_made at level 0 from a -Infinity stock); those are Infinity arithmetic, not copied:
+    # with no fit nothing can be filed.
     if not has_ci:
         f_ci = 1
     elif fw_basis == "salt":
@@ -314,8 +320,8 @@ def work_out_sheet(inputs: dict) -> dict:
     net, net_warnings = _net_worked(net_in)
     override = _num(net_in.get("override_factor"))
     factor_applied = override if override is not None else net["factor"]
-    stock_net_weight = None if stock_weight is None else \
-        stock_weight if factor_applied is None else stock_weight * factor_applied
+    # a factor that cannot be worked out leaves no net stock (calc.js 1144 on the net basis: NaN)
+    stock_net_weight = None if stock_weight is None or factor_applied is None else stock_weight * factor_applied
     stock_diluent_to_add = None if stock_weight is None else CAL_STOCK_DILUENT_UL
     stock_actual_diluent = None if vial_std is None or vial_diluent is None else \
         _volume_ul(vial_diluent - vial_std, density)
