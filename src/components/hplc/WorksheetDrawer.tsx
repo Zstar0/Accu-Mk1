@@ -143,7 +143,9 @@ export function WorksheetDrawer() {
   const kind = activeWorksheet ? worksheetKind(activeWorksheet.items) : null
   const isEndo = kind === 'endo'
   const isPcr = kind === 'pcr'
-  const isBench = isEndo || isPcr
+  // An all-HPLC worksheet is worked on its page too (plan 2026-11-12-hplc-prep-worksheet).
+  const isHplc = kind === 'hplc'
+  const isBench = isEndo || isPcr || isHplc
 
   // Parse notes JSON: separate user text from prep_started metadata
   const { userNotes, prepStartedItems } = useMemo(
@@ -276,6 +278,28 @@ export function WorksheetDrawer() {
           {!isLoading && !isError && activeWorksheet && isEndo && (
             <div className="flex flex-1 min-h-0 overflow-hidden bg-muted/30">
               <EndoFlyoutSummary worksheet={activeWorksheet} users={users} />
+            </div>
+          )}
+
+          {/* HPLC worksheet: a short summary; the prep sheet is worked on its page */}
+          {!isLoading && !isError && activeWorksheet && isHplc && (
+            <div className="space-y-3 p-6">
+              <h2 className="text-xl font-semibold">{activeWorksheet.title}</h2>
+              <p className="font-mono text-xs text-muted-foreground">
+                WS-{activeWorksheet.id} · {activeWorksheet.status} · HPLC ·{' '}
+                {activeWorksheet.items.length} samples
+              </p>
+              <Button
+                size="sm"
+                className="bg-teal-600 text-white hover:bg-teal-600/90"
+                onClick={() => {
+                  const ui = useUIStore.getState()
+                  ui.closeWorksheetDrawer()
+                  ui.navigateToWorksheet(activeWorksheet.id)
+                }}
+              >
+                Open worksheet
+              </Button>
             </div>
           )}
 

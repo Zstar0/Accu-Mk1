@@ -6556,6 +6556,139 @@ export async function getWorksheet(worksheetId: number): Promise<WorksheetListIt
   return response.json()
 }
 
+// ---- HPLC prep worksheet (plan 2026-11-12-hplc-prep-worksheet, Task 7) ----
+
+type HplcPrepForm = import('@/lib/hplc-prep').HplcPrepForm
+type HplcPrepInputs = import('@/lib/hplc-prep').HplcPrepInputs
+
+/** One HPLC row as the server knows it before and after anything is typed
+ *  (the plan's "row facts"). `hplc_prep` is never null once read through
+ *  getHplcSheet or patchHplcRow: a null from the server is read as {}. */
+export interface HplcSheetRow {
+  item_id: number
+  sample_id: string
+  parent_sample_id: string | null
+  order_number: string | null
+  identity: string | null
+  peptide_id: number | null
+  peptide_name: string | null
+  is_blend: boolean
+  components: import('@/lib/hplc-prep').HplcRowFactsComponent[]
+  declared_mg: number | null
+  sample_form: { id: number; name: string; hplc_prep: HplcPrepForm | null } | null
+  sample_bac: boolean
+  /** The effective form; null = no HPLC prep for this form. */
+  form: HplcPrepForm | null
+  rider_only: boolean
+  instrument_id: number | null
+  instrument_name: string | null
+  params: import('@/lib/hplc-prep').HplcRunParams
+  prep_form: HplcPrepForm | null
+  hplc_prep: HplcPrepInputs
+  promoted: boolean
+  prep: { id: number; sample_id: string; status: string } | null
+  problems: string[]
+}
+
+export interface HplcSheet {
+  worksheet_id: number
+  status: string
+  blend_cap: number
+  rows: HplcSheetRow[]
+}
+
+/** PATCH body: `hplc_prep` is a merge patch (a key sent as null is removed). */
+export interface HplcRowPatch {
+  prep_form?: HplcPrepForm | null
+  hplc_prep?: HplcPrepInputs
+}
+
+export interface HplcPromoteResult {
+  prep: { id: number; sample_id: string; status: string }
+  already: boolean
+  row: HplcSheetRow
+}
+
+/** A promote the server refused (409): its sentence and each reason. */
+export class HplcPromoteRefused extends Error {
+  reasons: string[]
+  constructor(message: string, reasons: string[]) {
+    super(message)
+    this.name = 'HplcPromoteRefused'
+    this.reasons = reasons
+  }
+}
+
+function hplcRowIn(row: HplcSheetRow): HplcSheetRow {
+  return { ...row, hplc_prep: row.hplc_prep ?? {} }
+}
+
+export async function getHplcSheet(worksheetId: number): Promise<HplcSheet> {
+  const response = await fetch(`${API_BASE_URL()}/worksheets/${worksheetId}/hplc`, {
+    headers: getBearerHeaders(),
+  })
+  if (!response.ok)
+    throw new Error(
+      await extractErrorMessage(response, `Load HPLC worksheet failed: ${response.status}`)
+    )
+  const sheet = (await response.json()) as HplcSheet
+  return { ...sheet, rows: sheet.rows.map(hplcRowIn) }
+}
+
+/** 400 carries the reason a patch was refused; 409 a completed worksheet or
+ *  a promoted row. Returns the row's facts after the change. */
+export async function patchHplcRow(
+  worksheetId: number,
+  itemId: number,
+  body: HplcRowPatch
+): Promise<HplcSheetRow> {
+  const response = await fetch(
+    `${API_BASE_URL()}/worksheets/${worksheetId}/items/${itemId}/hplc`,
+    {
+      method: 'PATCH',
+      headers: getBearerHeaders('application/json'),
+      body: JSON.stringify(body),
+    }
+  )
+  if (!response.ok)
+    throw new Error(
+      await extractErrorMessage(response, `Save HPLC prep failed: ${response.status}`)
+    )
+  return hplcRowIn(await response.json())
+}
+
+/** A 409 throws HplcPromoteRefused with the server's message and reasons. */
+export async function promoteHplcRow(
+  worksheetId: number,
+  itemId: number
+): Promise<HplcPromoteResult> {
+  const response = await fetch(
+    `${API_BASE_URL()}/worksheets/${worksheetId}/items/${itemId}/hplc/promote`,
+    { method: 'POST', headers: getBearerHeaders() }
+  )
+  if (response.status === 409) {
+    const body = (await response.json().catch(() => null)) as {
+      detail?: { message?: string; reasons?: string[] } | string
+    } | null
+    const detail = body?.detail
+    if (detail && typeof detail === 'object')
+      throw new HplcPromoteRefused(
+        detail.message ?? 'Promote refused',
+        Array.isArray(detail.reasons) ? detail.reasons : []
+      )
+    throw new HplcPromoteRefused(
+      typeof detail === 'string' ? detail : 'Promote refused',
+      []
+    )
+  }
+  if (!response.ok)
+    throw new Error(
+      await extractErrorMessage(response, `Promote failed: ${response.status}`)
+    )
+  const result = (await response.json()) as HplcPromoteResult
+  return { ...result, row: hplcRowIn(result.row) }
+}
+
 export async function removeWorksheetItem(
   worksheetId: number,
   itemId: number
