@@ -376,11 +376,9 @@ describe('HplcPrepSheet', () => {
     const { onPatch } = renderSheet([rowFromCase(name, { sample_bac: true })])
     // the left cell, named for its column, holds the full weighing
     const left = box(`${S1}, ${VIAL}`)
-    expect(left).toHaveAccessibleDescription(
-      '(1) full, as received: weigh first'
-    )
+    expect(left).toHaveAccessibleDescription('① full, as received: weigh first')
     expect(box(`${S1}, ${VIAL_DIL}`)).toHaveAccessibleDescription(
-      '(2) emptied and dried: weigh after'
+      '② emptied and dried: weigh after'
     )
     typeAndLeave(left, '36000')
     expect(onPatch).toHaveBeenLastCalledWith(
@@ -599,6 +597,8 @@ describe('HplcPrepSheet keyboard (the source sheet: down the column)', () => {
     fireEvent.change(first, { target: { value: '5020' } })
     fireEvent.keyDown(first, { key: 'Enter' })
     expect(document.activeElement).toBe(box(`${S2}, ${VIAL}`))
+    // one patch: Enter commits, and the blur that follows does not again
+    expect(onPatch).toHaveBeenCalledTimes(1)
     expect(onPatch).toHaveBeenCalledWith(
       311,
       { hplc_prep: { stock_vial_mg: 5020 } },

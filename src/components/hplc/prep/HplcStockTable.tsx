@@ -214,7 +214,7 @@ function StockCell({
           dp={2}
           title={
             computed.declared_total_mg === null
-              ? 'Weigh the vial full ((1) the left box), then emptied and dried ((2) the right box): the declared weight is 9 mg/mL × the volume'
+              ? 'Weigh the vial full (① the left box), then emptied and dried (② the right box): the declared weight is 9 mg/mL × the volume'
               : `Worked out: ${fmtDp(computed.stock.total_diluent_ml, 4)} mL × 9 mg/mL (0.9% benzyl alcohol).`
           }
         >
@@ -352,7 +352,7 @@ function StockCell({
           {bac
             ? weighBox(
                 'stock_vial_diluent_mg',
-                '(1) full, as received: weigh first'
+                '① full, as received: weigh first'
               )
             : weighBox(
                 'stock_vial_mg',
@@ -364,7 +364,7 @@ function StockCell({
       return (
         <InputCell>
           {bac
-            ? weighBox('stock_vial_mg', '(2) emptied and dried: weigh after')
+            ? weighBox('stock_vial_mg', '② emptied and dried: weigh after')
             : weighBox(
                 'stock_vial_diluent_mg',
                 capsule ? 'the same vial after the water' : null

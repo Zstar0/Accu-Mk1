@@ -68,7 +68,7 @@ export const STEP2_COLUMNS: SheetColumn<Step2Key>[] = [
     kind: 'select',
     label: 'Form',
     title:
-      "How the vial arrived. Lyophilized powder (the usual) is weighed and dissolved here in Step 2. Liquid (reconstituted) means the customer's declared volume is the stock: type it in the next box; the weighing boxes switch off. Bacteriostatic water: weigh the vial full ((1) the left weighing box), then emptied and dried ((2) the right box); the stock is 9000 ug/mL (0.9% benzyl alcohol) and the declared weight is worked out. Capsule (2026-10-21): the declared weight is per capsule and Capsules used says how many went in; empty the capsules into a vial, cap it and weigh (the left weighing box), add water and weigh again (the right box): the difference is the water added, worked out as for a powder.",
+      "How the vial arrived. Lyophilized powder (the usual) is weighed and dissolved here in Step 2. Liquid (reconstituted) means the customer's declared volume is the stock: type it in the next box; the weighing boxes switch off. Bacteriostatic water: weigh the vial full (① the left weighing box), then emptied and dried (② the right box); the stock is 9000 ug/mL (0.9% benzyl alcohol) and the declared weight is worked out. Capsule (2026-10-21): the declared weight is per capsule and Capsules used says how many went in; empty the capsules into a vial, cap it and weigh (the left weighing box), add water and weigh again (the right box): the difference is the water added, worked out as for a powder.",
   },
   {
     key: 'declared_volume_ml',

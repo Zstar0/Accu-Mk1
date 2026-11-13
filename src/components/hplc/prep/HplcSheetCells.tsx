@@ -1,4 +1,4 @@
-import { useId, useState, type ReactNode } from 'react'
+import { useId, useRef, useState, type ReactNode } from 'react'
 import { NativeSelect, NativeSelectOption } from '@/components/ui/native-select'
 import {
   MONO,
@@ -57,14 +57,21 @@ export function NumberBox({
   hint?: string | null
   onCommit: (v: number | null) => void
 }) {
-  const [draft, setDraft] = useState<string | null>(null)
+  const [draft, setDraftState] = useState<string | null>(null)
+  // Enter commits and then moves on, and the move's blur would commit again
+  // before a re-render: the ref is the draft as of now.
+  const draftNow = useRef<string | null>(null)
+  const setDraft = (d: string | null) => {
+    draftNow.current = d
+    setDraftState(d)
+  }
   const [bad, setBad] = useState(false)
   const hintId = useId()
   const shown = value === null || value === undefined ? '' : String(value)
 
   function commit() {
-    if (draft === null) return
-    const text = draft.trim()
+    if (draftNow.current === null) return
+    const text = draftNow.current.trim()
     const v = text === '' ? null : Number(text)
     if (
       v !== null &&
