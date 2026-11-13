@@ -118,6 +118,7 @@ The row's **form** is the existing `worksheet_items.prep_form` column (`powder`,
   "peptide_id": 10, "peptide_name": "BPC-157", "is_blend": false,
   "components": [{"peptide_id": 10, "name": "BPC-157", "abbreviation": "BPC-157",
                   "declared_mg": 10.0, "vial": 1}],
+  "components_source": "analytes",
   "declared_mg": 10.0,
   "sample_form": {"id": 1, "name": "Lyophilized Powder", "hplc_prep": "powder"},
   "sample_bac": false,
@@ -136,7 +137,17 @@ bacteriostatic water, else the sample form's `hplc_prep`, else null (a Pen, a Na
 HPLC prep maths, the sheet shows the row with no weighing boxes and it cannot be promoted).
 `components` comes from the sample's own analytes (`lims_samples.analytes`, positional slots
 with `peptide_id` and `declared_quantity`); a component's default `vial` comes from the catalog
-blend's `blend_components.vial_number`. `problems` lists what stops the row being planned, in
+blend's `blend_components.vial_number`.
+
+**Corrected 2026-11-13 during the build.** Only natively registered samples carry `analytes`;
+a sample born in the older LIMS has it NULL, and on the dev copy that was every sample. So the
+resolution has two steps, and `components_source` says which one answered: `analytes` when the
+sample's own slots name at least one peptide; else `analyses`, the peptide set of the sample's
+live analyses (`coalesce(LimsAnalysis.peptide_id, AnalysisService.peptide_id)` over the parent
+and its vials, the way `coa.spec_rules.sample_peptide_ids` reads it), where a blend's components
+come in the catalog blend's display order with `declared_mg` null because the split is not on
+file; else null, with `components` empty and a sentence in `problems`. A null `declared_mg` on
+the row is normal for an older sample and is typed on the sheet; it is never a problem. `problems` lists what stops the row being planned, in
 words ("this blend is not in the catalog", "no declared weight").
 
 **`compute_row(facts, inputs, rules, params)`, the one working-out.** `facts` is the
