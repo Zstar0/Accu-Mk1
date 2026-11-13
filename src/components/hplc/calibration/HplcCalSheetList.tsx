@@ -7,6 +7,9 @@ import { createCalSheet, getPeptides, type CalSheetListItem } from '@/lib/api'
 import {
   CAL_SHEETS_KEY,
   CAL_SHEET_KEY,
+  NEW_NO_ANSWER,
+  inTime,
+  refusalOf,
   useCalSheets,
 } from '@/services/hplc-calibration-sheets'
 import { useUIStore } from '@/store/ui-store'
@@ -51,12 +54,12 @@ export function HplcCalSheetList() {
     setBusy(true)
     setFailed(null)
     try {
-      const s = await createCalSheet({})
+      const s = await inTime(() => createCalSheet({}))
       qc.setQueryData(CAL_SHEET_KEY(s.id), s)
       void qc.invalidateQueries({ queryKey: [...CAL_SHEETS_KEY, 'list'] })
       open(s.id)
     } catch (e) {
-      setFailed(e instanceof Error ? e.message : 'the server did not answer')
+      setFailed(refusalOf(e, NEW_NO_ANSWER))
     } finally {
       setBusy(false)
     }
@@ -94,7 +97,7 @@ export function HplcCalSheetList() {
       </div>
       {failed && (
         <p role="alert" className="text-sm text-destructive">
-          {`A new worksheet could not be made: ${failed}`}
+          {failed}
         </p>
       )}
       {list.isPending ? (

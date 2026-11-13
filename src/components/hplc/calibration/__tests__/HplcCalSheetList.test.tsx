@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import {
+  act,
   fireEvent,
   render,
   screen,
@@ -19,7 +20,10 @@ import {
   type PeptideRecord,
 } from '@/lib/api'
 import type { CalInputs } from '@/lib/hplc-calibration'
-import { resetCalSaves } from '@/services/hplc-calibration-sheets'
+import {
+  SAVE_TIMEOUT_MS,
+  resetCalSaves,
+} from '@/services/hplc-calibration-sheets'
 import { useUIStore } from '@/store/ui-store'
 import { HplcCalibrationSheetPage } from '../HplcCalibrationSheetPage'
 import { fixtureCase, makeSheet } from './cal-test-helpers'
@@ -230,6 +234,36 @@ describe('HplcCalSheetList', () => {
       expect(useUIStore.getState().calibrationSheetPageId).toBe(14)
     )
     expect(createCalSheet).toHaveBeenCalledTimes(1)
+  })
+
+  it('fix round 2: New from the list says a 502 or a timeout may have gone through', async () => {
+    const said =
+      'New calibration worksheet: the server did not answer, so it may have been made. Look under Calibration worksheets before trying again.'
+    vi.mocked(createCalSheet).mockRejectedValueOnce(
+      new CalSheetError('Create calibration sheet failed: 502', 502)
+    )
+    renderList()
+    await screen.findByText('1290C-20261113-RETA')
+    const btn = screen.getByRole('button', {
+      name: 'New calibration worksheet',
+    })
+    fireEvent.click(btn)
+    expect(await screen.findByText(said)).toBeInTheDocument()
+    expect(screen.queryByText(/502/)).toBeNull()
+    vi.useFakeTimers({ shouldAdvanceTime: true })
+    try {
+      vi.mocked(createCalSheet).mockImplementation(
+        () => new Promise(() => undefined)
+      )
+      fireEvent.click(btn)
+      await waitFor(() => expect(screen.queryByText(said)).toBeNull())
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(SAVE_TIMEOUT_MS + 10)
+      })
+      expect(await screen.findByText(said)).toBeInTheDocument()
+    } finally {
+      vi.useRealTimers()
+    }
   })
 
   it('an empty list says so', async () => {

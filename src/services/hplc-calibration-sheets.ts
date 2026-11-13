@@ -69,6 +69,17 @@ export const RELOADED =
 export const RELOADED_NOTHING_LOST =
   'Someone else saved this sheet. It has been reloaded: check the values before filing.'
 
+/** What no answer means for New, wherever a sheet is started (M3). */
+export const NEW_NO_ANSWER =
+  'New calibration worksheet: the server did not answer, so it may have been made. Look under Calibration worksheets before trying again.'
+
+/** The server's sentence, or what no answer means for that action: a
+ *  timeout, a network failure, or a 5xx (a gateway may have timed out on a
+ *  request that went through) is no answer (M3). */
+export function refusalOf(e: unknown, noAnswer: string): string {
+  return e instanceof CalSheetError && e.status < 500 ? e.message : noAnswer
+}
+
 /** Equal as stored: key order does not count, and a missing key, undefined
  *  and null are all "empty" (the server fills every key, with null). */
 export function sameJson(a: unknown, b: unknown): boolean {
@@ -101,6 +112,9 @@ export interface CalSaveState {
   error: string | null
   /** The reload line's sentence, until dismissed (null: none). */
   reloaded: string | null
+  /** A refusal whose compound or instrument was put back, until dismissed
+   *  or replaced (fix round 2; null: none). */
+  said: string | null
   /** The local inputs are the server's, nothing is out, no sent save is
    *  unaccounted for, no box holds a refused value. File and Duplicate wait
    *  for it. */
@@ -127,6 +141,7 @@ interface Entry {
   inFlight: boolean
   error: string | null
   reloaded: string | null
+  said: string | null
   refused: Set<string>
   /** Every body sent that the server has not answered (timed out, or the
    *  network failed), oldest first: one may have landed after all, and the
@@ -170,6 +185,7 @@ function stateOf(e: Entry): CalSaveState {
     saving: e.inFlight,
     error: e.error,
     reloaded: e.reloaded,
+    said: e.said,
     saved: isSaved(e),
     version: e.version,
     refused: [...e.refused],
@@ -194,6 +210,7 @@ function newEntry(qc: QueryClient, s: CalSheet): Entry {
     inFlight: false,
     error: null,
     reloaded: null,
+    said: null,
     refused: new Set(),
     unanswered: [],
     lost: [],
@@ -267,11 +284,14 @@ function pump(id: number) {
         if (refused && err.status < 500)
           e.unanswered = e.unanswered.filter(b => b !== sent)
         if (refused && err.status === 409) {
-          await conflict(id, e, version, msg)
+          await conflict(id, e, version, msg, sent)
           return
         }
-        e.error = msg
-        leftWith(e, msg)
+        if (refused && err.status < 500) refuse(e, sent, msg)
+        else {
+          e.error = msg
+          leftWith(e, msg)
+        }
       }
     )
     .finally(() => {
@@ -308,7 +328,8 @@ async function conflict(
   id: number,
   e: Entry,
   sentVersion: number,
-  msg: string
+  msg: string,
+  sent: CalDraft
 ) {
   let fresh: CalSheet
   try {
@@ -319,11 +340,32 @@ async function conflict(
     return
   }
   if (fresh.version <= sentVersion) {
-    e.error = msg
-    leftWith(e, msg)
+    refuse(e, sent, msg)
     if (fresh.version >= e.latest.version) e.latest = fresh
   } else settle(e, fresh, msg)
   e.qc.setQueryData(CAL_SHEET_KEY(id), fresh)
+}
+
+/** A refusal (4xx) of a body. When that body changed the compound or the
+ *  instrument (a picker) and the picker still shows it, the picker goes back
+ *  to the stored value, the rest of the draft is sent on its own, and the
+ *  sentence stays as `said` until dismissed (fix round 2): a picker value
+ *  the server refuses can never be saved. Anything else (a typed box) stays
+ *  on the page with the Not saved line and Retry. */
+function refuse(e: Entry, sent: CalDraft, msg: string) {
+  const back = (['peptide_id', 'instrument_id'] as const).filter(
+    k => sent[k] !== e.confirmed[k] && e.local[k] === sent[k]
+  )
+  leftWith(e, msg)
+  if (back.length === 0) {
+    e.error = msg
+    return
+  }
+  const local = { ...e.local }
+  for (const k of back) local[k] = e.confirmed[k]
+  e.local = local
+  e.said = msg
+  e.error = null // pump sends what is left once this one is done
 }
 
 /** A copy of the sheet newer than the version held, by any route (a 409's
@@ -520,6 +562,10 @@ export function useSaveCalSheet(id: number) {
     dismissReloaded: () =>
       withEntry(e => {
         e.reloaded = null
+      }),
+    dismissSaid: () =>
+      withEntry(e => {
+        e.said = null
       }),
     /** A box holds (`on`) or no longer holds a value it refused. */
     setRefused: (key: string, on: boolean) => {

@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import {
+  act,
   fireEvent,
   render,
   screen,
@@ -8,6 +9,7 @@ import {
 } from '@testing-library/react'
 import type * as ApiModule from '@/lib/api'
 import {
+  CalSheetError,
   createCalSheet,
   getCalibration,
   getCalibrations,
@@ -17,6 +19,7 @@ import {
   type Instrument,
   type PeptideRecord,
 } from '@/lib/api'
+import { SAVE_TIMEOUT_MS } from '@/services/hplc-calibration-sheets'
 import { useUIStore } from '@/store/ui-store'
 import { CalibrationPanel } from '../CalibrationPanel'
 
@@ -233,6 +236,41 @@ describe('CalibrationPanel: the way into the worksheet', () => {
     expect((await screen.findByRole('tooltip')).textContent).toContain(
       "A curve is for one peptide. A blend's components each have their own."
     )
+  })
+
+  it('fix round 2: Calibration worksheet says a 502 or a timeout may have gone through', async () => {
+    const said =
+      'New calibration worksheet: the server did not answer, so it may have been made. Look under Calibration worksheets before trying again.'
+    vi.mocked(getCalibrations).mockResolvedValue([])
+    vi.mocked(createCalSheet).mockRejectedValueOnce(
+      new CalSheetError('Create calibration sheet failed: 502', 502)
+    )
+    render(
+      <CalibrationPanel
+        peptide={PEPTIDE}
+        onUpdated={vi.fn()}
+        instrumentFilter="all"
+      />
+    )
+    await screen.findByText('No calibration curves yet')
+    const btn = screen.getByRole('button', { name: 'Calibration worksheet' })
+    fireEvent.click(btn)
+    expect(await screen.findByText(said)).toBeInTheDocument()
+    expect(screen.queryByText(/502/)).toBeNull()
+    vi.useFakeTimers({ shouldAdvanceTime: true })
+    try {
+      vi.mocked(createCalSheet).mockImplementation(
+        () => new Promise(() => undefined)
+      )
+      fireEvent.click(btn)
+      await waitFor(() => expect(screen.queryByText(said)).toBeNull())
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(SAVE_TIMEOUT_MS + 10)
+      })
+      expect(await screen.findByText(said)).toBeInTheDocument()
+    } finally {
+      vi.useRealTimers()
+    }
   })
 
   it('M6: a single peptide has no hover wrapper in the tab order', async () => {

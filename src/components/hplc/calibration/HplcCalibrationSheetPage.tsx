@@ -15,7 +15,6 @@ import {
   TooltipTrigger,
 } from '@/components/ui/tooltip'
 import {
-  CalSheetError,
   createCalSheet,
   getCalSheet,
   getInstruments,
@@ -34,8 +33,10 @@ import {
   CAL_SHEETS_KEY,
   CAL_SHEET_KEY,
   CHECKING,
+  NEW_NO_ANSWER,
   NO_ANSWER,
   inTime,
+  refusalOf,
   useDuplicateCalSheet,
   useFileCalSheet,
   useSaveCalSheet,
@@ -175,18 +176,13 @@ function filedMessage(res: CalFileResult): string {
   }
 }
 
-/** The server's sentence, or what no answer means for that action: a
- *  timeout, a network failure, or a 5xx (a gateway may have timed out on a
- *  request that went through) is no answer (M3). */
-function refusalOf(e: unknown, noAnswer: string): string {
-  return e instanceof CalSheetError && e.status < 500 ? e.message : noAnswer
-}
+/** The time limit ends the wait, not the request: a filing can land after
+ *  the one re-read, so this promises nothing it cannot see (fix round 2). */
 const FILE_NO_ANSWER =
-  'File curve: the server did not answer. The sheet is read again: if it now shows a curve name, the filing went through.'
+  'File curve: the server did not answer, so the curve may or may not have been filed. This page has read the sheet again once: a curve name means it was. Pressing File curve again is safe: it files the sheet if it was not filed, and updates the same curve if it was.'
 const DUP_NO_ANSWER =
   'Duplicate: the server did not answer, so the copy may have been made. Look under Calibration worksheets before trying again.'
-const NEW_NO_ANSWER =
-  'New calibration worksheet: the server did not answer, so it may have been made. Look under Calibration worksheets before trying again.'
+
 /** Duplicate's check of a lagging copy (M1): nothing was filed or copied. */
 const DUP_CHANGED =
   'Duplicate did not go: this sheet was saved again since the page last read it. Check it and try again.'
@@ -664,6 +660,17 @@ function SheetView({
         >
           <span>{state.reloaded}</span>
           <Button size="sm" variant="outline" onClick={save.dismissReloaded}>
+            Dismiss
+          </Button>
+        </div>
+      )}
+      {state.said && (
+        <div
+          role="alert"
+          className="flex flex-wrap items-center gap-3 rounded-md border border-red-500/60 bg-red-500/10 px-3 py-2 text-sm"
+        >
+          <span>{state.said}</span>
+          <Button size="sm" variant="outline" onClick={save.dismissSaid}>
             Dismiss
           </Button>
         </div>

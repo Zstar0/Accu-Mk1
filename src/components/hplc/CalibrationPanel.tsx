@@ -61,6 +61,11 @@ import {
 } from '@/lib/api'
 import { getApiBaseUrl } from '@/lib/config'
 import { getAuthToken } from '@/store/auth-store'
+import {
+  NEW_NO_ANSWER,
+  inTime,
+  refusalOf,
+} from '@/services/hplc-calibration-sheets'
 import { useUIStore } from '@/store/ui-store'
 import { toast } from 'sonner'
 
@@ -134,13 +139,16 @@ export function CalibrationPanel({
     setOpening(true)
     setOpenFailed(null)
     try {
-      const sheet = await createCalSheet({
-        peptide_id: peptide.id,
-        ...(inst ? { instrument_id: inst.id } : {}),
-      })
+      const sheet = await inTime(() =>
+        createCalSheet({
+          peptide_id: peptide.id,
+          ...(inst ? { instrument_id: inst.id } : {}),
+        })
+      )
       useUIStore.getState().navigateToCalibrationSheet(sheet.id)
     } catch (err) {
-      setOpenFailed(err instanceof Error ? err.message : 'Create failed')
+      // a timeout or a 5xx may have made one (fix round 2)
+      setOpenFailed(refusalOf(err, NEW_NO_ANSWER))
     } finally {
       setOpening(false)
     }
@@ -216,7 +224,7 @@ export function CalibrationPanel({
         </div>
         {openFailed && (
           <p role="alert" className="text-xs text-destructive">
-            {`A worksheet could not be opened: ${openFailed}`}
+            {openFailed}
           </p>
         )}
       </CardHeader>

@@ -680,12 +680,13 @@ describe('HplcCalibrationSheetPage, fix round 1', () => {
     // filed meanwhile: the save is refused and the sheet now has a curve
     vi.mocked(getCalSheet).mockResolvedValue({ ...sheet, curve_id: 70 })
     await saves.fail(0, new CalSheetError('This curve is filed on 1290C.', 409))
-    await screen.findByText(/Not saved: This curve is filed on 1290C/)
-    expect(pick().value).toBe('3')
-    expect(pick()).not.toBeDisabled()
-    expect(screen.getByLabelText('Compound')).toBeDisabled()
-    fireEvent.change(pick(), { target: { value: '2' } })
+    // fix round 2 ruling: the refused picker goes back to the stored value
+    // (it agrees with the filed sheet, so it locks), and the sentence stays
+    await screen.findByText('This curve is filed on 1290C.')
+    expect(pick().value).toBe('2')
     await waitFor(() => expect(pick()).toBeDisabled())
+    expect(screen.getByLabelText('Compound')).toBeDisabled()
+    expect(screen.queryByRole('button', { name: 'Retry' })).toBeNull()
   })
 
   it('Task 7: setQueryData with the filed sheet (same version) is not a foreign change', async () => {
@@ -1562,7 +1563,7 @@ describe('fix round 1: File, Duplicate and New (M1, M3, M4)', () => {
       name: /^(New calibration worksheet|Start a blank one\? Click again|Opening a new one\.\.\.)$/,
     })
   const FILE_NO_ANSWER =
-    'File curve: the server did not answer. The sheet is read again: if it now shows a curve name, the filing went through.'
+    'File curve: the server did not answer, so the curve may or may not have been filed. This page has read the sheet again once: a curve name means it was. Pressing File curve again is safe: it files the sheet if it was not filed, and updates the same curve if it was.'
   const DUP_NO_ANSWER =
     'Duplicate: the server did not answer, so the copy may have been made. Look under Calibration worksheets before trying again.'
   const NEW_NO_ANSWER =
@@ -1761,39 +1762,67 @@ describe('fix round 1: File, Duplicate and New (M1, M3, M4)', () => {
     expect(useUIStore.getState().calibrationSheetPageId).toBe(4)
   })
 
-  it('backend wave: a compound change refused with a 409 shows the sentence and stores nothing', async () => {
+  it('fix round 2: a refused compound change puts the picker back, keeps the sentence, and saves the rest', async () => {
     const saves = queueSaves()
     vi.mocked(getPeptides).mockResolvedValue([
       { id: 11, name: 'Retatrutide', abbreviation: 'RETA' },
       { id: 12, name: 'BPC-157', abbreviation: 'BPC' },
     ] as Awaited<ReturnType<typeof getPeptides>>)
     const { sheet } = await openCase1()
+    const base = sheet.inputs as CalInputs
     const said =
       'Injections duplicated from this sheet carry the same compound, so the compound cannot change here. Start a new calibration worksheet for the other compound.'
-    const picker = (await waitFor(() => {
-      const el = screen.getByLabelText('Compound') as HTMLSelectElement
-      expect(el.options.length).toBeGreaterThan(2)
-      return el
-    })) as HTMLSelectElement
-    fireEvent.change(picker, { target: { value: '12' } })
+    const picker = () => screen.getByLabelText('Compound') as HTMLSelectElement
+    await waitFor(() => expect(picker().options.length).toBeGreaterThan(2))
+    typeAndLeave(box('Lot #'), 'L1') // save 0, held open
     await waitFor(() => expect(saves.count()).toBe(1))
-    expect(body(0).peptide_id).toBe(12)
-    vi.mocked(getCalSheet).mockResolvedValue(sheet) // the same version
-    await saves.fail(0, new CalSheetError(said, 409))
-    await waitFor(() =>
-      expect(screen.getByTestId('save-line').textContent).toContain(
-        said.replace(/\.$/, '')
-      )
+    typeAndLeave(box('Weight from COA (mg)'), '6') // typed just before
+    fireEvent.change(picker(), { target: { value: '12' } })
+    const v2 = makeSheet({ ...base, lot: 'L1' }, { version: 2 })
+    await saves.ok(0, v2)
+    // save 1: the weight and the compound together, on v2
+    await waitFor(() => expect(saves.count()).toBe(2))
+    expect(body(1).peptide_id).toBe(12)
+    expect(String(inputsOf(1).coa_weight_mg)).toBe('6')
+    vi.mocked(getCalSheet).mockResolvedValue(v2) // the same version: refused
+    await saves.fail(1, new CalSheetError(said, 409))
+    // the picker is back on the stored compound; the weight goes on its own
+    await waitFor(() => expect(saves.count()).toBe(3))
+    expect(picker().value).toBe('11')
+    expect(body(2).peptide_id).toBe(11)
+    expect(body(2).version).toBe(2)
+    expect(String(inputsOf(2).coa_weight_mg)).toBe('6')
+    expect(box('Weight from COA (mg)').value).toBe('6')
+    expect(screen.getByText(said)).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'Retry' })).toBeNull()
+    await saves.ok(
+      2,
+      makeSheet({ ...base, lot: 'L1', coa_weight_mg: 6 }, { version: 3 })
     )
-    expect(page().dataset.saved).toBe('false')
+    await waitFor(() => expect(fileBtn()).not.toBeDisabled())
+    expect(page().dataset.saved).toBe('true')
+    // the sentence outlives the revert and the save, until dismissed
+    const line = screen.getByText(said).closest('[role="alert"]') as HTMLElement
     expect(screen.queryByText(RELOADED)).toBeNull()
-    // what the page does today (fix round 1 report): the picker keeps the
-    // chemist's choice, with Retry, until it is set back by hand
-    expect((screen.getByLabelText('Compound') as HTMLSelectElement).value).toBe(
-      '12'
-    )
+    fireEvent.click(within(line).getByRole('button', { name: 'Dismiss' }))
+    expect(screen.queryByText(said)).toBeNull()
   })
 
+  it('fix round 2: a refused typed box keeps its value and the Not saved line', async () => {
+    const saves = queueSaves()
+    await openCase1()
+    typeAndLeave(box('Lot #'), 'BAD')
+    await waitFor(() => expect(saves.count()).toBe(1))
+    await saves.fail(0, new CalSheetError('Lot is too long.', 400))
+    await waitFor(() =>
+      expect(screen.getByTestId('save-line').textContent).toContain(
+        'Lot is too long'
+      )
+    )
+    expect(box('Lot #').value).toBe('BAD')
+    expect(screen.getByRole('button', { name: 'Retry' })).toBeInTheDocument()
+    expect(fileBtn()).toBeDisabled()
+  })
   it('backend wave: the curve deadlock 409 is shown and File stays on', async () => {
     await openCase1({ curve_id: 70, curve_name: NAME })
     const said =
