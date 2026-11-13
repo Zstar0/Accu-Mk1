@@ -13,6 +13,7 @@ import {
   DILUTION_COLUMNS,
   PEAK_COLUMNS,
   STOCK_COLUMNS,
+  refusalOf,
 } from '../cal-sheet-columns'
 import {
   fixtureCase,
@@ -260,5 +261,109 @@ describe('HplcCalTables', () => {
         screen.getByLabelText('Counterion mass (g/mol per eq)')
       ).toBeInTheDocument()
     )
+  })
+})
+
+describe('HplcCalTables, fix round 1', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+    resetCalSaves()
+    vi.mocked(getPeptides).mockResolvedValue([])
+    vi.mocked(getInstruments).mockResolvedValue([])
+    vi.mocked(saveCalSheet).mockImplementation(
+      () => new Promise(() => undefined)
+    )
+  })
+
+  it('I1: every bound equals the server, field by field', () => {
+    const cases: [string, number, string | null][] = [
+      ['rt', -0.01, 'must be 0 or more'],
+      ['rt', 0, null],
+      ['diluent_density_mg_ml', 0.9971, 'must be from 500 to 2000'],
+      ['diluent_density_mg_ml', 499.9, 'must be from 500 to 2000'],
+      ['diluent_density_mg_ml', 500, null],
+      ['diluent_density_mg_ml', 2000, null],
+      ['diluent_density_mg_ml', 2000.1, 'must be from 500 to 2000'],
+      [
+        'coa_weight_mg',
+        -1,
+        'a balance reading is between 0 and 1,000,000,000 mg',
+      ],
+      ['vial_mg', 1e9, null],
+      [
+        'vial_mg',
+        1e9 + 1,
+        'a balance reading is between 0 and 1,000,000,000 mg',
+      ],
+      ['target', 1e-7, 'must be at least 0.000001'],
+      ['level_volume_ul', 1e-6, null],
+      ['top_aliquot_ul', 0, 'must be at least 0.000001'],
+      ['target', 2e12, 'that number is too large'],
+      ['free_mw', 0.99, 'must be at least 1'],
+      ['ms_mz', 1, null],
+      ['equivalents', 0.009, 'must be from 0.01 to 100'],
+      ['equivalents', 100, null],
+      ['override_factor', 0, 'must be more than 0 and no more than 2'],
+      ['override_factor', 2, null],
+      ['assay_pct', 150, null],
+      ['assay_pct', 0, 'must be more than 0 and no more than 150'],
+      ['water_pct', 0, null],
+      ['water_pct', 100, 'must be 0 or more and less than 100'],
+      ['peak_area', -5, null],
+      ['purity', -1e12, null],
+      ['peak_area', -1.5e12, 'that number is too large'],
+      ['peak_area', Number.NaN, 'type a number'],
+    ]
+    for (const [key, v, say] of cases)
+      expect([key, v, refusalOf(key, v)]).toEqual([key, v, say])
+  })
+
+  it('P3 and I1: a negative RT and a density in g/mL are refused in their boxes', async () => {
+    open(fixtureCase(1).inputs as CalInputs)
+    await screen.findByText('Curve name:', { exact: false })
+    const rt = screen.getAllByLabelText(/RT \(min\)$/)[0] as HTMLInputElement
+    typeAndLeave(rt, '-1')
+    expect(rt).toHaveAttribute('aria-invalid', 'true')
+    expect(screen.getByText('must be 0 or more')).toBeInTheDocument()
+    const density = screen.getByLabelText('Diluent density (mg/mL)')
+    typeAndLeave(density, '0.9971')
+    expect(screen.getByText('must be from 500 to 2000')).toBeInTheDocument()
+    expect(saveCalSheet).not.toHaveBeenCalled()
+  })
+
+  it('(c) only plain decimals are numbers; above 1e12 is too large', async () => {
+    open(fixtureCase(1).inputs as CalInputs)
+    await screen.findByText('Curve name:', { exact: false })
+    const area = screen.getAllByLabelText(/Peak Area$/)[0] as HTMLInputElement
+    typeAndLeave(area, '0x10')
+    expect(screen.getByText('type a number')).toBeInTheDocument()
+    typeAndLeave(area, '2000000000000')
+    expect(screen.getByText('that number is too large')).toBeInTheDocument()
+    typeAndLeave(area, ' -12.5 ')
+    expect(area).not.toHaveAttribute('aria-invalid')
+    await waitFor(() => expect(saveCalSheet).toHaveBeenCalledTimes(1))
+  })
+
+  it('I3: with an override the factor sentence names both factors, and the Weighed line says which', async () => {
+    open(fixtureCase(7).inputs as CalInputs)
+    await screen.findByText('Curve name:', { exact: false })
+    const s = screen.getByTestId('net-summary').textContent ?? ''
+    expect(s).toContain(
+      '= 0.9084; a factor of 0.8500 entered by hand is used instead.'
+    )
+    expect(s).toMatch(
+      /Weighed [\d.]+ mg of standard → [\d.]+ mg of peptide with the factor entered by hand\./
+    )
+    expect(s).not.toContain('after the counterion, water and assay come off')
+    expect(s).not.toContain('net peptide = as weighed')
+  })
+
+  it('I3: without an override the factor sentence and the Weighed line are the plain ones', async () => {
+    open(fixtureCase(4).inputs as CalInputs)
+    await screen.findByText('Curve name:', { exact: false })
+    const s = screen.getByTestId('net-summary').textContent ?? ''
+    expect(s).toMatch(/Net factor = .* = [\d.]+: net peptide = as weighed × /)
+    expect(s).toContain('after the counterion, water and assay come off.')
+    expect(s).not.toContain('entered by hand')
   })
 })

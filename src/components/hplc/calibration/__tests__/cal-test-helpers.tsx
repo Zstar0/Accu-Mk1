@@ -64,11 +64,12 @@ export function renderSheet(id = 5) {
   const qc = new QueryClient({
     defaultOptions: { queries: { retry: false }, mutations: { retry: 0 } },
   })
-  return render(
+  const view = render(
     <QueryClientProvider client={qc}>
       <HplcCalibrationSheetPage />
     </QueryClientProvider>
   )
+  return Object.assign(view, { qc })
 }
 
 export function typeAndLeave(el: HTMLElement, text: string) {

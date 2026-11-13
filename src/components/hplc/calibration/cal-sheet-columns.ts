@@ -404,8 +404,10 @@ export const MS_ION_LABELS: Record<string, string> = {
   'M-4H': '[M-4H]4-',
 }
 
-/** Bounds the server enforces (task-4-report "Bounds as enforced"), by input
- *  key, with the sentence a box shows instead of sending a 400. */
+/** Bounds the server enforces (backend/main.py `_cal_check_fields`), by
+ *  input key, with the sentence a box shows instead of sending a 400. A
+ *  weighing has its own range; every other number is first held to
+ *  |v| <= 1e12, as the server checks it first. */
 export interface CalBound {
   min?: number
   minOpen?: boolean
@@ -413,22 +415,14 @@ export interface CalBound {
   maxOpen?: boolean
   say: string
 }
+const MAX_NUMBER = 1e12
 const WEIGHING: CalBound = {
   min: 0,
   max: 1e9,
   say: 'a balance reading is between 0 and 1,000,000,000 mg',
 }
-const TINY: CalBound = {
-  min: 1e-6,
-  max: 1e12,
-  say: 'must be at least 0.000001',
-}
-const ONE: CalBound = { min: 1, max: 1e12, say: 'must be at least 1' }
-const MAGNITUDE: CalBound = {
-  min: -1e12,
-  max: 1e12,
-  say: 'that number is far too large',
-}
+const TINY: CalBound = { min: 1e-6, say: 'must be at least 0.000001' }
+const ONE: CalBound = { min: 1, say: 'must be at least 1' }
 export const CAL_BOUNDS: Record<string, CalBound> = {
   coa_weight_mg: WEIGHING,
   vial_mg: WEIGHING,
@@ -436,9 +430,15 @@ export const CAL_BOUNDS: Record<string, CalBound> = {
   vial_diluent_mg: WEIGHING,
   vial_diluent_std_mg: WEIGHING,
   target: TINY,
-  diluent_density_mg_ml: TINY,
   level_volume_ul: TINY,
   top_aliquot_ul: TINY,
+  // water is 997.1 mg/mL: the band stops 0.9971 typed in g/mL
+  diluent_density_mg_ml: {
+    min: 500,
+    max: 2000,
+    say: 'must be from 500 to 2000',
+  },
+  rt: { min: 0, say: 'must be 0 or more' },
   free_mw: ONE,
   stated_fw: ONE,
   counterion_mw: ONE,
@@ -462,15 +462,22 @@ export const CAL_BOUNDS: Record<string, CalBound> = {
     maxOpen: true,
     say: 'must be 0 or more and less than 100',
   },
-  peak_area: MAGNITUDE,
-  purity: MAGNITUDE,
-  rt: MAGNITUDE,
+  // peak_area and purity: only the size limit, as on the server
+}
+
+/** A plain decimal, as typed: no hex, no "Infinity". NaN when it is not. */
+export function parseDecimal(raw: string): number {
+  const t = raw.trim()
+  return /^[+-]?(\d+\.?\d*|\.\d+)(e[+-]?\d+)?$/i.test(t) ? Number(t) : NaN
 }
 
 /** Why a typed number is refused (null: it is taken). */
 export function refusalOf(key: string, v: number): string | null {
   if (!Number.isFinite(v)) return 'type a number'
-  const b = CAL_BOUNDS[key] ?? MAGNITUDE
+  const b = CAL_BOUNDS[key]
+  if (b !== WEIGHING && Math.abs(v) > MAX_NUMBER)
+    return 'that number is too large'
+  if (!b) return null
   if (b.min !== undefined && (b.minOpen ? v <= b.min : v < b.min)) return b.say
   if (b.max !== undefined && (b.maxOpen ? v >= b.max : v > b.max)) return b.say
   return null

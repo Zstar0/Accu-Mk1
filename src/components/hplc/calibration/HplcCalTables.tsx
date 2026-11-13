@@ -27,12 +27,13 @@ const WEIGH_FIELDS = [
   'vial_diluent_std_mg',
 ] as const
 
-/** "the 1000 ug/mL level", or "level 3" before a target is typed. */
+/** "Level 3, 1000 ug/mL", or "Level 3" before a target is typed: the
+ *  position keeps two levels with one target apart. */
 // eslint-disable-next-line react-refresh/only-export-components
 export function levelName(target: unknown, i: number) {
   return typeof target === 'number' && Number.isFinite(target)
-    ? `${fmtDp(target, 0)} ug/mL level`
-    : `level ${i + 1}`
+    ? `Level ${i + 1}, ${fmtDp(target, 0)} ug/mL`
+    : `Level ${i + 1}`
 }
 
 /**

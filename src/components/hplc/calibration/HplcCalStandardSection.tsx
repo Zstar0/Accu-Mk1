@@ -125,24 +125,28 @@ export function netSummary(
         : `Mass spec ${ion} ${f(mz, 1)} → ${f(n.ms_m, 1)}, ${f(Math.abs(d), 1)} Da ${d > 0 ? 'above' : 'below'} the free peptide (${f(free, 2)}): check the formula sum, the ion form, or whether the m/z is of a fragment.`
     )
   }
+  const byHand = worked.factor_source === 'override'
+  const handNote = `a factor of ${f(worked.factor_applied, 4)} entered by hand is used instead.`
   if (n.factor !== null) {
     const applied = Math.abs(n.factor - 1) > 1e-12
     parts.push(
       `Net factor = ${n.assay_pct === null ? '100' : f(n.assay_pct, 2)} % assay × f counterion ${f(n.f_counterion, 4)} × (1 - ${n.water_pct === null ? '0' : f(n.water_pct, 2)} % water) = ${f(n.factor, 4)}${
-        applied
-          ? `: net peptide = as weighed × ${f(n.factor, 3)}. The factor limits the precision: quote net values to 3 to 4 figures.`
-          : ': nothing to correct yet.'
+        byHand
+          ? `; ${handNote}`
+          : applied
+            ? `: net peptide = as weighed × ${f(n.factor, 3)}. The factor limits the precision: quote net values to 3 to 4 figures.`
+            : ': nothing to correct yet.'
       }`
     )
-  }
-  if (worked.factor_source === 'override')
-    parts.push(
-      `The stock uses the factor entered by hand, ${f(worked.factor_applied, 4)}, in place of the one worked out.`
-    )
+  } else if (byHand) parts.push(`The factor cannot be worked out; ${handNote}`)
   const sw = worked.stock_weight_mg
   if (worked.factor_applied !== null && sw !== null)
     parts.push(
-      `Weighed ${f(sw, 2)} mg of standard → ${f(worked.stock_net_weight_mg, 2)} mg of peptide after the counterion, water and assay come off.`
+      `Weighed ${f(sw, 2)} mg of standard → ${f(worked.stock_net_weight_mg, 2)} mg of peptide ${
+        byHand
+          ? 'with the factor entered by hand.'
+          : 'after the counterion, water and assay come off.'
+      }`
     )
   return parts.join(' ')
 }
@@ -177,6 +181,7 @@ export function HplcCalStandardSection({
   peptides,
   instruments,
   names,
+  stored,
   replicate,
   filed,
   onSheet,
@@ -191,6 +196,10 @@ export function HplcCalStandardSection({
   instruments: Instrument[]
   /** The stored peptide's and instrument's names, from the read model. */
   names: { peptide: string | null; instrument: string | null }
+  /** The stored peptide and instrument: a filed sheet's picker locks only
+   *  while the page's choice agrees with them, so a refused change can be
+   *  put back. */
+  stored: { peptide: number | null; instrument: number | null }
   replicate: boolean
   filed: boolean
   onSheet: (field: 'peptide_id' | 'instrument_id', id: number | null) => void
@@ -278,7 +287,7 @@ export function HplcCalStandardSection({
               label="Compound"
               value={peptideId === null ? '' : String(peptideId)}
               options={peptideOptions}
-              disabled={replicate || filed}
+              disabled={replicate || (filed && peptideId === stored.peptide)}
               help={filed ? FILED_HELP : STEP1.peptide_id.title}
               minWidth="min-w-44"
               onChange={v => onSheet('peptide_id', v ? Number(v) : null)}
@@ -289,7 +298,7 @@ export function HplcCalStandardSection({
               label="Instrument"
               value={instrumentId === null ? '' : String(instrumentId)}
               options={instrumentOptions}
-              disabled={filed}
+              disabled={filed && instrumentId === stored.instrument}
               help={filed ? FILED_HELP : STEP1.instrument_id.title}
               onChange={v => onSheet('instrument_id', v ? Number(v) : null)}
             />

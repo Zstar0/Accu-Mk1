@@ -3624,6 +3624,8 @@ export interface CalFileResult {
     other_active_ids: number[]
   }
   refiled_curve_ids: number[]
+  /** Sentences to show after filing (low R squared, a non-default density). */
+  warnings: string[]
 }
 
 async function calSheetFetch<T>(

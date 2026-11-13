@@ -4,6 +4,7 @@ import { toast } from 'sonner'
 import { Button } from '@/components/ui/button'
 import {
   createCalSheet,
+  getCalSheet,
   getInstruments,
   getPeptides,
   type CalSheet,
@@ -25,7 +26,7 @@ import {
   type CalDraft,
 } from '@/services/hplc-calibration-sheets'
 import { useUIStore } from '@/store/ui-store'
-import { CalTextBox } from './CalCells'
+import { CalDateBox, CalTextBox } from './CalCells'
 import {
   HplcCalStandardSection,
   Step,
@@ -75,11 +76,15 @@ function written(
   return { ...d, inputs: next }
 }
 
-/** The replicate note (cal.js renderReplicate, 351). */
-function replicateNote(sheet: CalSheet) {
-  const where = sheet.instrument_name
-    ? `on the ${sheet.instrument_name}`
-    : 'with no instrument chosen yet'
+/** The replicate note (cal.js renderReplicate, 350 and 351). */
+function replicateNote(sheet: CalSheet, original: CalSheet | undefined) {
+  const own = sheet.instrument_name
+  const theirs = original?.instrument_name
+  const where = !own
+    ? 'with no instrument chosen yet'
+    : theirs && theirs !== own
+      ? `on the ${own} (the original ran on the ${theirs})`
+      : `on the ${own}`
   return `Another injection of the same vials as ${sheet.replicate_of_name ?? 'the original sheet'}, ${where}. Steps 1 to 3 are that sheet's (read-only here): open it to correct a weighing, and every injection follows. Choose this injection's Instrument above, and type its peak areas, purity and RT in Step 4.`
 }
 
@@ -95,6 +100,14 @@ function SheetView({ id }: { id: number }) {
     queryKey: ['instruments'],
     queryFn: getInstruments,
     staleTime: 5 * 60 * 1000,
+  })
+  // the original's instrument, for the replicate note (read only here)
+  const originalId = sheet?.replicate_of_sheet_id ?? null
+  const { data: original } = useQuery({
+    queryKey: CAL_SHEET_KEY(originalId ?? 0),
+    queryFn: () => getCalSheet(originalId ?? 0),
+    enabled: originalId !== null,
+    refetchOnWindowFocus: false,
   })
 
   if (!sheet && save.loadError)
@@ -147,13 +160,12 @@ function SheetView({ id }: { id: number }) {
           </label>
           <label className="flex flex-col gap-1">
             <span className="text-muted-foreground">Date</span>
-            <input
-              type="date"
-              aria-label="Date"
-              value={inputs.date ?? ''}
+            <CalDateBox
+              label="Date"
+              value={inputs.date}
               disabled={replicate}
-              onChange={e => commit('sheet', 0, 'date', e.target.value || null)}
-              className="rounded-md border bg-card px-1.5 py-[3px] font-mono text-[12.5px] disabled:opacity-50"
+              onCommit={v => commit('sheet', 0, 'date', v)}
+              onRefused={on => save.setRefused('sheet.date', on)}
             />
           </label>
         </div>
@@ -213,7 +225,7 @@ function SheetView({ id }: { id: number }) {
           className="rounded-md border border-sky-500/50 bg-sky-500/10 px-3 py-2 text-sm"
           data-testid="replicate-note"
         >
-          {replicateNote(sheet)}
+          {replicateNote(sheet, original)}
         </p>
       )}
       {worked.warnings.length > 0 && (
@@ -254,6 +266,10 @@ function SheetView({ id }: { id: number }) {
             sheet.instrument_id === local.instrument_id
               ? sheet.instrument_name
               : null,
+        }}
+        stored={{
+          peptide: sheet.peptide_id,
+          instrument: sheet.instrument_id,
         }}
         replicate={replicate}
         filed={filed}

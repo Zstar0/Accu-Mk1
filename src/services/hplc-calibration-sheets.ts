@@ -1,4 +1,4 @@
-import { useEffect, useSyncExternalStore } from 'react'
+import { useEffect, useState, useSyncExternalStore } from 'react'
 import {
   useQuery,
   useQueryClient,
@@ -47,9 +47,10 @@ export const NO_ANSWER = 'the server did not answer'
 export const RELOADED =
   'Someone else saved this sheet. It has been reloaded, and the changes you had not saved were dropped.'
 
-/** Equal as JSON: key order does not count, a missing key equals undefined. */
+/** Equal as stored: key order does not count, and a missing key, undefined
+ *  and null are all "empty" (the server fills every key, with null). */
 export function sameJson(a: unknown, b: unknown): boolean {
-  if (a === b) return true
+  if (a === b || (a == null && b == null)) return true
   if (
     a === null ||
     b === null ||
@@ -80,6 +81,8 @@ export interface CalSaveState {
   /** The local inputs are the server's, nothing is out, no box holds a
    *  refused value. File and Duplicate wait for it. */
   saved: boolean
+  /** The version the next save goes on (the last answer's). */
+  version: number
 }
 
 interface Entry {
@@ -93,8 +96,10 @@ interface Entry {
   error: string | null
   reloaded: boolean
   refused: Set<string>
-  /** A body that timed out: if it landed after all, the 409 sorts it out. */
-  timedOut: CalDraft | null
+  /** Every body sent that the server has not answered (timed out, or the
+   *  network failed), oldest first: one may have landed after all, and the
+   *  next 409 tells it from someone else's save. Cleared by a confirmed save. */
+  unanswered: CalDraft[]
   seq: number
   mounted: number
   state: CalSaveState
@@ -107,7 +112,12 @@ const entries = new Map<number, Entry>()
 const watchers = new Set<() => void>()
 
 function isSaved(e: Entry) {
-  return !e.inFlight && e.refused.size === 0 && sameJson(e.local, e.confirmed)
+  return (
+    !e.inFlight &&
+    e.error === null &&
+    e.refused.size === 0 &&
+    sameJson(e.local, e.confirmed)
+  )
 }
 
 function changed(_id: number, e: Entry) {
@@ -117,6 +127,7 @@ function changed(_id: number, e: Entry) {
     error: e.error,
     reloaded: e.reloaded,
     saved: isSaved(e),
+    version: e.version,
   }
   watchers.forEach(w => w())
 }
@@ -133,7 +144,7 @@ function newEntry(qc: QueryClient, s: CalSheet): Entry {
     error: null,
     reloaded: false,
     refused: new Set(),
-    timedOut: null,
+    unanswered: [],
     seq: 0,
     mounted: 0,
     state: null as unknown as CalSaveState,
@@ -144,6 +155,7 @@ function newEntry(qc: QueryClient, s: CalSheet): Entry {
     error: null,
     reloaded: false,
     saved: true,
+    version: e.version,
   }
   return e
 }
@@ -155,11 +167,13 @@ function leftWith(e: Entry, why: string) {
     )
 }
 
-/** Sends the local draft when it differs from the confirmed one: one
- *  request at a time, the version the last answer gave. */
+/** Sends the local draft when it differs from the confirmed one, or when a
+ *  failure is showing (a body that may have landed must be overwritten):
+ *  one request at a time, the version the last answer gave. */
 function pump(id: number) {
   const e = entries.get(id)
-  if (!e || e.inFlight || sameJson(e.local, e.confirmed)) return
+  if (!e || e.inFlight) return
+  if (e.error === null && sameJson(e.local, e.confirmed)) return
   const sent = structuredClone(e.local)
   const version = e.version
   const body: CalSheetSave = e.replicate
@@ -172,23 +186,16 @@ function pump(id: number) {
       }
   const seq = ++e.seq
   e.inFlight = true
+  e.unanswered.push(sent)
   changed(id, e)
-  const controller = new AbortController()
-  let timer: ReturnType<typeof setTimeout> | undefined
-  const timeout = new Promise<never>((_, reject) => {
-    timer = setTimeout(() => {
-      reject(new Error(NO_ANSWER))
-      controller.abort()
-    }, SAVE_TIMEOUT_MS)
-  })
-  Promise.race([saveCalSheet(id, body, { signal: controller.signal }), timeout])
+  inTime(signal => saveCalSheet(id, body, { signal }))
     .then(
       res => {
         if (e.seq !== seq) return
         e.version = res.version
         e.confirmed = sent
         e.error = null
-        e.timedOut = null
+        e.unanswered = []
         e.name = res.curve_name ?? res.proposed_name
         e.qc.setQueryData(CAL_SHEET_KEY(id), res)
         void e.qc.invalidateQueries({
@@ -197,18 +204,22 @@ function pump(id: number) {
       },
       async (err: unknown) => {
         if (e.seq !== seq) return
-        const msg = err instanceof Error ? err.message : NO_ANSWER
-        if (err instanceof CalSheetError && err.status === 409) {
+        // only a refusal is the server's answer; anything else (a timeout,
+        // "Failed to fetch") may have landed, and reads as no answer
+        const refused = err instanceof CalSheetError
+        const msg = refused ? err.message : NO_ANSWER
+        // a 4xx was not stored; a 5xx (a gateway timing out) may have been
+        if (refused && err.status < 500)
+          e.unanswered = e.unanswered.filter(b => b !== sent)
+        if (refused && err.status === 409) {
           await conflict(id, e, version, msg)
           return
         }
-        if (msg === NO_ANSWER) e.timedOut = sent
         e.error = msg
         leftWith(e, msg)
       }
     )
     .finally(() => {
-      clearTimeout(timer)
       if (e.seq !== seq) return
       e.inFlight = false
       changed(id, e)
@@ -217,9 +228,28 @@ function pump(id: number) {
     })
 }
 
-/** A 409: the sheet as the server has it decides. A newer version is
- *  someone else's save (or this page's own that timed out and landed); the
- *  same version is a refusal of this save (a filed curve's instrument). */
+/** A request that counts as unanswered after SAVE_TIMEOUT_MS (and is then
+ *  aborted). */
+function inTime<T>(start: (signal: AbortSignal) => Promise<T>): Promise<T> {
+  const controller = new AbortController()
+  let timer: ReturnType<typeof setTimeout> | undefined
+  const timeout = new Promise<never>((_, reject) => {
+    timer = setTimeout(() => {
+      reject(new Error(NO_ANSWER))
+      controller.abort()
+    }, SAVE_TIMEOUT_MS)
+  })
+  return Promise.race([start(controller.signal), timeout]).finally(() =>
+    clearTimeout(timer)
+  )
+}
+
+/** A 409: the sheet as the server has it decides. The same version is a
+ *  refusal of this save (a filed curve's instrument). A newer version whose
+ *  inputs are one of this page's unanswered bodies, or the last confirmed
+ *  ones, is this page's own save landing late: nothing was lost, so the
+ *  typed values stay and go again on that version. Anything else is
+ *  someone else's save: reload and say so. */
 async function conflict(
   id: number,
   e: Entry,
@@ -228,10 +258,10 @@ async function conflict(
 ) {
   let fresh: CalSheet
   try {
-    fresh = await getCalSheet(id)
+    fresh = await inTime(() => getCalSheet(id))
   } catch {
-    e.error = msg
-    leftWith(e, msg)
+    e.error = NO_ANSWER
+    leftWith(e, NO_ANSWER)
     return
   }
   e.qc.setQueryData(CAL_SHEET_KEY(id), fresh)
@@ -242,17 +272,17 @@ async function conflict(
   }
   const server = draftOf(fresh)
   e.version = fresh.version
-  if (e.timedOut && sameJson(server, e.timedOut)) {
-    // our own save landed late: nothing was lost, send what came after it
+  e.error = null
+  const own =
+    e.unanswered.some(b => sameJson(b, server)) || sameJson(server, e.confirmed)
+  // every unanswered body went on an older version: none can land now
+  e.unanswered = []
+  if (own) {
     e.confirmed = server
-    e.timedOut = null
-    e.error = null
     return
   }
   e.local = server
   e.confirmed = structuredClone(server)
-  e.timedOut = null
-  e.error = null
   e.reloaded = true
   toast.error(msg)
   leftWith(e, RELOADED)
@@ -277,15 +307,24 @@ export function resetCalSaves() {
  */
 export function useSaveCalSheet(id: number) {
   const qc = useQueryClient()
-  const { data, error: loadError } = useCalSheet(id)
-  const ready = data !== undefined
-  // created on first sight without notifying (render must not set others' state)
-  if (data && !entries.has(id) && data.id === id)
+  // Coming back to a sheet whose entry holds nothing unsaved: drop it, so the
+  // page waits for the server's copy instead of showing the one kept.
+  const [dropped] = useState(() => {
+    const e = entries.get(id)
+    if (!e || e.mounted > 0 || !isSaved(e)) return false
+    entries.delete(id)
+    return true
+  })
+  const { data, error: loadError, isFetching } = useCalSheet(id)
+  // created on first sight without notifying (render must not set others'
+  // state); after a drop, from the server's answer, not the cached copy
+  if (data && !(dropped && isFetching) && !entries.has(id) && data.id === id)
     entries.set(id, newEntry(qc, data))
   const state = useSyncExternalStore(
     subscribe,
     () => entries.get(id)?.state ?? null
   )
+  const ready = state !== null
 
   // a newer copy from the server replaces the draft only when nothing is unsaved
   useEffect(() => {
@@ -300,7 +339,10 @@ export function useSaveCalSheet(id: number) {
 
   useEffect(() => {
     const e = entries.get(id)
-    if (e) e.mounted++
+    if (e) {
+      e.mounted++
+      e.qc = qc
+    }
     return () => {
       const now = entries.get(id)
       if (!now) return
@@ -311,8 +353,8 @@ export function useSaveCalSheet(id: number) {
       // one last save; a failure of it is a toast naming the sheet
       pump(id)
     }
-    // data: the entry exists only once the sheet has been read
-  }, [id, ready])
+    // ready: the entry exists only once the server's sheet has been read
+  }, [id, ready, qc])
 
   const saved = state?.saved ?? true
   useEffect(() => {

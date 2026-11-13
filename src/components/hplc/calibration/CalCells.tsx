@@ -1,7 +1,7 @@
 import { useEffect, useId, useRef, useState } from 'react'
 import { NativeSelect, NativeSelectOption } from '@/components/ui/native-select'
 import { MONO } from '@/components/hplc/EndoWorksheetTable'
-import { refusalOf } from './cal-sheet-columns'
+import { parseDecimal, refusalOf } from './cal-sheet-columns'
 
 /**
  * The calibration sheet's own boxes. The prep sheet's NumberBox and
@@ -95,7 +95,7 @@ export function CalNumberBox({
   const why = (raw: string): string | null => {
     const t = raw.trim()
     if (t === '') return null
-    return refusalOf(bound, Number(t))
+    return refusalOf(bound, parseDecimal(t))
   }
 
   function commit(): boolean {
@@ -106,7 +106,7 @@ export function CalNumberBox({
       setBad(refusal)
       return false
     }
-    const v = t === '' ? null : Number(t)
+    const v = t === '' ? null : parseDecimal(t)
     setBad(null)
     setDraft(null)
     if (v !== (value ?? null)) onCommit(v)
@@ -228,6 +228,90 @@ export function CalTextBox({
         />
       )}
       {desc.note}
+    </>
+  )
+}
+
+const DATE_SAY = 'use the date picker or YYYY-MM-DD'
+
+/** A real calendar date written YYYY-MM-DD (what the server takes). */
+function isDate(v: string) {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(v)) return false
+  const d = new Date(`${v}T00:00:00Z`)
+  return !Number.isNaN(d.getTime()) && d.toISOString().startsWith(v)
+}
+
+/**
+ * The browser's date box, committed once on blur or Enter. A date the
+ * browser holds only part of (it reads as '' with badInput) is refused in
+ * the box, never sent as a cleared date; Escape gives the stored one back.
+ */
+export function CalDateBox({
+  label,
+  value,
+  disabled,
+  onCommit,
+  onRefused,
+}: {
+  label: string
+  value: string | null | undefined
+  disabled: boolean
+  onCommit: (v: string | null) => void
+  onRefused?: (on: boolean) => void
+}) {
+  const [draft, setDraft] = useState<string | null>(null)
+  const [bad, setBad] = useState(false)
+  const refusedRef = useRef(onRefused)
+  useEffect(() => {
+    refusedRef.current = onRefused
+  })
+  useEffect(() => {
+    if (!bad) return
+    refusedRef.current?.(true)
+    return () => refusedRef.current?.(false)
+  }, [bad])
+  const errId = useId()
+
+  function commit(el: HTMLInputElement) {
+    if (draft === null && !bad) return
+    const v = el.value
+    if (el.validity.badInput || (v !== '' && !isDate(v))) {
+      setBad(true)
+      return
+    }
+    setBad(false)
+    setDraft(null)
+    if ((v || null) !== (value ?? null)) onCommit(v || null)
+  }
+  return (
+    <>
+      <input
+        type="date"
+        aria-label={label}
+        aria-invalid={bad ? true : undefined}
+        aria-describedby={bad ? errId : undefined}
+        title={bad ? DATE_SAY : undefined}
+        value={draft ?? value ?? ''}
+        disabled={disabled}
+        onChange={e => setDraft(e.target.value)}
+        onBlur={e => commit(e.currentTarget)}
+        onKeyDown={e => {
+          if (e.key === 'Enter') commit(e.currentTarget)
+          if (e.key === 'Escape') {
+            setDraft(null)
+            setBad(false)
+          }
+        }}
+        className={`${BOX} text-[12.5px] ${bad ? FLAG : ''}`}
+      />
+      {bad && (
+        <span
+          id={errId}
+          className="block text-[10px] leading-tight text-red-600 dark:text-red-400"
+        >
+          {DATE_SAY}
+        </span>
+      )}
     </>
   )
 }
