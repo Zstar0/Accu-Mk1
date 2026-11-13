@@ -52,6 +52,8 @@ NET = {"cas_number": "80714-61-0", "net_counterion": "TFA", "net_counterion_mw":
 
 
 def test_the_migrations_leave_every_existing_curve_as_it_was():
+    """Proves a first run of the migrations only when run alone on a fresh copy; inside the gate
+    another file has already migrated it, so there it proves a re-run."""
     # Deferred from Task 1. First in the file and without the `migrated` fixture, so on a fresh
     # scratch copy this hashes the template's curves before this module's migrations ever run.
     # The worksheet columns are left out, so it holds whether or not the template already has them.

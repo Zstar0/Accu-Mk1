@@ -7522,7 +7522,9 @@ def save_calibration_sheet(sheet_id: int, data: CalSheetPatchIn, db: Session = D
                                      "the same vials on another instrument, use Duplicate for another injection.")
         # Final review C1: a duplicate keeps the compound it was made with, so the original cannot
         # leave it (filed or not). An instrument change stays allowed: each injection keeps its own.
-        if "peptide_id" in changes and original is None:
+        # Round 2 N4: an original whose compound was deleted (null) may take one; its injections keep
+        # the null and File refuses them with its own sentence.
+        if "peptide_id" in changes and original is None and sheet.peptide_id is not None:
             from sqlalchemy import exists
 
             from models import HplcCalibrationSheet
@@ -7648,10 +7650,12 @@ def _cal_curve_fields(db: Session, sheet, effective: dict, worked: dict, name: s
     if not fit["slope"] > 0:  # flat or falling (areas typed in reverse): every sample's quantity wrong; NaN too
         raise HTTPException(400, _CAL_SLOPE_NOT_POSITIVE)
     std = standard_data_for(worked)
-    # The RT average the sheet shows (every typed RT), so a partial RT column still files one
-    # (final review M2); standard_data.rts stays absent unless every fitted level has an RT.
-    rt_avg = worked.get("rt_avg")
-    ref_rt = round(rt_avg, 4) if isinstance(rt_avg, (int, float)) and not isinstance(rt_avg, bool) else None
+    # Round 2 N2.1: the average of the fitted levels' typed RTs, summed as the Peptides page save
+    # sums standard_data.rts, so a save of the same points leaves it where File put it. A partial
+    # column still files one (final review M2); standard_data.rts stays absent unless all are typed.
+    fitted_rts = [L["rt"] for L in worked["levels"] if L["actual_conc_ug_ml"] is not None
+                  and L["peak_area"] is not None and L["rt"] is not None]
+    ref_rt = round(sum(fitted_rts) / len(fitted_rts), 4) if fitted_rts else None
     net, net_in = worked["net"], effective.get("net") or {}
     parts = net.get("parts_used") or []
     if not isinstance(parts, list) or any(p not in _CAL_NET_PARTS for p in parts):
@@ -7711,21 +7715,81 @@ def _cal_fit_of(curve) -> dict:
     return {"slope": curve.slope, "intercept": curve.intercept, "r_squared": curve.r_squared}
 
 
+# Round 2 N3: what the Peptides page can set that File also writes, and how a re-file names it.
+_CAL_RECORD_TEXT = {"notes": "its notes were changed", "vendor": "its vendor was changed",
+                    "source_sample_id": "its source sample was changed", "peptide_analyte_id": "its analyte was changed"}
+
+
 def _cal_filed_record(curve) -> dict:
-    """What a filing audit row records of a curve: the fit, the density and the reference RT."""
-    return {**_cal_fit_of(curve), "diluent_density": curve.diluent_density, "reference_rt": curve.reference_rt}
+    """What a filing audit row records of a curve: the fit, the density, the reference RT, and
+    the four Peptides-page fields File also writes (round 2 N3)."""
+    return {**_cal_fit_of(curve), "diluent_density": curve.diluent_density, "reference_rt": curve.reference_rt,
+            **{k: getattr(curve, k) for k in _CAL_RECORD_TEXT}}
 
 
-def _cal_same_number(a, b) -> bool:
+def _cal_old_record(curve) -> dict:
+    """The record of a curve about to be re-filed: also the points excluded on the Peptides page,
+    which the re-file puts back (round 2 N3)."""
+    old = _cal_filed_record(curve)
+    excluded = curve.standard_data.get("excluded_indices") if isinstance(curve.standard_data, dict) else None
+    if excluded:
+        old["excluded_indices"] = excluded
+    return old
+
+
+def _cal_last_filed(db: Session, curve_id) -> Optional[dict]:
+    """The `new` record of the curve's last filing audit row, or None."""
+    details = db.execute(select(AuditLog.details).where(
+        AuditLog.entity_type == "calibration_curve", AuditLog.entity_id == str(curve_id),
+        AuditLog.operation.in_(_CAL_FILING_OPS)).order_by(AuditLog.id.desc()).limit(1)).scalar_one_or_none()
+    filed = details.get("new") if isinstance(details, dict) else None
+    return filed if isinstance(filed, dict) else None
+
+
+def _cal_same_number(a, b, abs_tol=1e-12) -> bool:
     """Equal within a tolerance a JSON round trip cannot break; None only equals None."""
     if a is None or b is None:
         return a is None and b is None
     if isinstance(a, bool) or isinstance(b, bool) or not isinstance(a, (int, float)) or not isinstance(b, (int, float)):
         return False
     try:
-        return math.isclose(a, b, rel_tol=1e-9, abs_tol=1e-12)
+        return math.isclose(a, b, rel_tol=1e-9, abs_tol=abs_tol)
     except OverflowError:  # an integer past float range, written directly
         return a == b
+
+
+# The fields an injection takes from its original (round 2 N1), as a curve row holds them.
+_CAL_PREP_COLUMNS = ("net_counterion", "net_counterion_mw", "net_equivalents", "net_free_mw", "net_stated_fw",
+                     "net_ms_mz", "net_ms_ion", "net_assay_pct", "net_water_pct", "net_assumption",
+                     "net_override_reason", "net_parts_used", "net_factor_applied", "cas_number", "lot_number",
+                     "standard_weight_mg", "operator", "run_date")
+
+
+def _cal_preparation(values: dict) -> Optional[dict]:
+    """The preparation in a set of curve values: the columns above, the vendor and source sample,
+    and the weighings with each level's own run results (peak area, purity, RT) left out. None
+    when the weighings are not there to compare (fail closed)."""
+    from hplc_calibration import _REP_LEVEL_OWN
+    serial = values.get("serial_dilution")
+    if not isinstance(serial, dict) or not isinstance(serial.get("levels"), list) \
+            or not all(isinstance(L, dict) for L in serial["levels"]):
+        return None
+    levels = [{k: v for k, v in L.items() if k not in _REP_LEVEL_OWN} for L in serial["levels"]]
+    return {**{k: values.get(k) for k in (*_CAL_PREP_COLUMNS, "vendor", "source_sample_id")},
+            "serial_dilution": {**serial, "levels": levels}}
+
+
+def _cal_preparation_changed(db: Session, sheet_fields: dict, original_curve) -> bool:
+    """Round 2 N1: whether what an injection takes from its original now (its fields, built from
+    the original's inputs) differs from what the original's curve recorded at filing. Values are
+    compared, not timestamps. The vendor and the source sample are editable on the Peptides page,
+    so they are read from the last filing record when it holds them."""
+    filed = {k: getattr(original_curve, k) for k in (*_CAL_PREP_COLUMNS, "vendor", "source_sample_id",
+                                                      "serial_dilution")}
+    record = _cal_last_filed(db, original_curve.id) or {}
+    filed.update({k: record[k] for k in ("vendor", "source_sample_id") if k in record})
+    was, now = _cal_preparation(filed), _cal_preparation(sheet_fields)
+    return was is None or now is None or was != now
 
 
 def _cal_shown(v) -> str:
@@ -7735,15 +7799,15 @@ def _cal_shown(v) -> str:
 def _cal_curve_changes(db: Session, curve) -> list:
     """What changed on a filed curve since its last filing (the Peptides page edits curves), in
     plain words, against the `new` of its last filing audit row (final review I2). A key an older
-    row lacks is not compared; no filing row at all is no change."""
-    details = db.execute(select(AuditLog.details).where(
-        AuditLog.entity_type == "calibration_curve", AuditLog.entity_id == str(curve.id),
-        AuditLog.operation.in_(_CAL_FILING_OPS)).order_by(AuditLog.id.desc()).limit(1)).scalar_one_or_none()
-    filed = details.get("new") if isinstance(details, dict) else None
-    if not isinstance(filed, dict):
+    row lacks is not compared; no filing row at all is no change. The fit counts as unchanged
+    within 1e-6, as the Peptides page rounds it to 6 places on any save that sends the points
+    (round 2 N2.2); an excluded point is caught by excluded_indices."""
+    filed = _cal_last_filed(db, curve.id)
+    if filed is None:
         return []
     changes = []
-    if any(k in filed and not _cal_same_number(getattr(curve, k), filed[k]) for k in ("slope", "intercept", "r_squared")):
+    if any(k in filed and not _cal_same_number(getattr(curve, k), filed[k], abs_tol=1e-6)
+           for k in ("slope", "intercept", "r_squared")):
         changes.append(f"its slope was {_cal_shown(curve.slope)}, its intercept {_cal_shown(curve.intercept)} and "
                        f"its r squared {_cal_shown(curve.r_squared)}")
     if isinstance(curve.standard_data, dict) and curve.standard_data.get("excluded_indices"):
@@ -7754,6 +7818,8 @@ def _cal_curve_changes(db: Session, curve) -> list:
     if "reference_rt" in filed and not _cal_same_number(curve.reference_rt, filed["reference_rt"]):
         changes.append(f"its reference RT was {_cal_shown(curve.reference_rt)}"
                        + (" min" if curve.reference_rt is not None else ""))
+    # Round 2 N3: named, never quoted; the old text is in the audit row.
+    changes += [said for k, said in _CAL_RECORD_TEXT.items() if k in filed and getattr(curve, k) != filed[k]]
     return changes
 
 
@@ -7815,11 +7881,20 @@ def file_calibration_curve(sheet_id: int, data: CalFileIn, db: Session = Depends
         now = datetime.utcnow()
         name = curve_name(db, sheet)  # after the locks: two duplicates of one original never share -Inj2
         fields = _cal_curve_fields(db, sheet, effective, worked, name, now, original_name=orig_name)
-        # Final review I1: an injection files only from a preparation its original has filed; the
-        # original's File is the one place a corrected preparation enters, and it re-files the rest.
-        if original is not None and (original.calibration_curve_id is None or _cal_changed_since_filed(original)):
-            raise HTTPException(409, f"File the original worksheet, {orig_name}, first. Filing it also re-files "
-                                     "its injections.")
+        # Final review I1, round 2 N1: an injection files only from a preparation its original has
+        # filed, judged by value: the original's own run results and later saves that leave the
+        # preparation as filed do not hold it. The original's File re-files the rest.
+        if original is not None:
+            orig_curve = db.get(CalibrationCurve, original.calibration_curve_id) \
+                if original.calibration_curve_id else None
+            if orig_curve is None:
+                raise HTTPException(409, f"The original worksheet, {orig_name}, is not filed. File it first, then "
+                                         "file this one.")
+            if _cal_preparation_changed(db, fields, orig_curve):
+                raise HTTPException(409, f"The original worksheet, {orig_name}, has a changed preparation that is "
+                                         "not filed yet. File it first, then file this one."
+                                    + (" Filing the original also re-files this injection."
+                                       if sheet.calibration_curve_id else ""))
 
         # An original re-files each injection that has a curve, with the corrected preparation.
         jobs = []  # (replicate sheet, its curve fields)
@@ -7928,7 +8003,7 @@ def file_calibration_curve(sheet_id: int, data: CalFileIn, db: Session = Depends
 
         # Every query is done; from here on only changes, then one flush and one commit.
         user_id, email = getattr(current_user, "id", None), getattr(current_user, "email", None)
-        old = _cal_filed_record(curve) if curve is not None else None
+        old = _cal_old_record(curve) if curve is not None else None
         if curve is None:
             curve = CalibrationCurve(**fields, replicate_of_id=orig_curve_id, is_active=activation["active"],
                                      created_by_user_id=user_id, created_by_email=email,
@@ -7943,7 +8018,7 @@ def file_calibration_curve(sheet_id: int, data: CalFileIn, db: Session = Depends
         refiled = []  # (curve, its record before, its sheet)
         for rep, rep_fields in jobs:
             rc = curves[rep.calibration_curve_id]
-            refiled.append((rc, _cal_filed_record(rc), rep))
+            refiled.append((rc, _cal_old_record(rc), rep))
             for k, v in rep_fields.items():
                 setattr(rc, k, v)
             rc.updated_by_user_id, rc.updated_by_email = user_id, email
