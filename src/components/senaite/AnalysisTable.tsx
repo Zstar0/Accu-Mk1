@@ -731,12 +731,19 @@ type AnalysisGroup = {
   history: SenaiteAnalysis[] // superseded older entries, oldest first
 }
 
-/** Group analyses by title so retest chains collapse under their most recent entry. */
-function groupAnalysesByTitle(analyses: SenaiteAnalysis[]): AnalysisGroup[] {
+/** Group analyses so retest chains collapse under their most recent entry.
+ *  Native slot rows key on (service, slot): a relabel restamps the live rows'
+ *  title but leaves superseded history on the old peptide's title (P-5866),
+ *  so a title key split the chain. Everything else keeps the title key. */
+export function groupAnalysesByTitle(analyses: SenaiteAnalysis[]): AnalysisGroup[] {
   const groups = new Map<string, SenaiteAnalysis[]>()
   for (const a of analyses) {
-    if (!groups.has(a.title)) groups.set(a.title, [])
-    groups.get(a.title)!.push(a)
+    const key =
+      a.slot != null && a.analysis_service_id != null
+        ? `svc:${a.analysis_service_id}#${a.slot}`
+        : a.title
+    if (!groups.has(key)) groups.set(key, [])
+    groups.get(key)!.push(a)
   }
   return Array.from(groups.values()).map(rows => ({
     current: rows[rows.length - 1]!,
