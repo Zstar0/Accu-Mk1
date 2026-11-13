@@ -123,8 +123,9 @@ export function HplcPrepRulesPage() {
       <p className="text-sm text-muted-foreground">
         A blend is made to its lead&apos;s target. A rule on the blend itself
         names the lead; without one, the component with the lowest rank leads,
-        then the heaviest. A component that comes out below the floor only
-        warns: the prep still runs.
+        then the heaviest. A floor is set on the blend&apos;s own line. A
+        component that comes out below the floor only warns: the prep still
+        runs.
       </p>
 
       <Card className="flex-1 overflow-auto">

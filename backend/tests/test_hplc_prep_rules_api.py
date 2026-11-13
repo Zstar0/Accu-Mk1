@@ -176,16 +176,33 @@ def test_every_route_needs_a_signed_in_user(client, reta):
     ({"floor_ug_ml": -5}, "floor_ug_ml must be greater than zero"),
     ({"min_mg": 30, "max_mg": 30}, "min_mg must be below max_mg"),
     ({"min_mg": 40, "max_mg": 30}, "min_mg must be below max_mg"),
-    ({"lead_priority": 0}, "lead_priority must be a whole number of at least 1"),
+    ({"lead_priority": 0}, "lead_priority must be a whole number from 1 to 999"),
+    ({"lead_priority": 1000}, "lead_priority must be a whole number from 1 to 999"),
+    ({"lead_priority": 2147483648}, "lead_priority must be a whole number from 1 to 999"),
+    ({"min_mg": -1}, "min_mg must not be negative"),
+    ({"max_mg": -1}, "max_mg must not be negative"),
     ({"diluent": "Methanol"},
      "diluent 'Methanol' is not one of: Water, Water + 0.1% TFA"),
     ({"default_instrument_id": 987654}, "instrument 987654 is not an active instrument"),
-    ({"floor_ug_ml": 200}, "the floor 200 ug/mL must be below the target 200 ug/mL"),
-    ({"target_conc_ug_ml": 50}, "the floor 60 ug/mL must be below the target 50 ug/mL"),
+    ({"floor_ug_ml": 40}, "only a blend line sets a floor"),
 ])
 def test_create_refuses_with_the_reason(client, db, reta, body, detail):
     _refused(_post(client, **{"peptide_id": reta.id, **body}), detail)
     assert db.execute(select(HplcPrepRule)).first() is None
+
+
+@pytest.mark.parametrize("body, detail", [
+    ({"floor_ug_ml": 200}, "the floor 200 ug/mL must be below the target 200 ug/mL"),
+    ({"target_conc_ug_ml": 50}, "the floor 60 ug/mL must be below the target 50 ug/mL"),
+])
+def test_create_refuses_a_blend_floor_not_below_the_target(client, db, blend, body, detail):
+    mix, _bpc, _ghk = blend
+    _refused(_post(client, **{"peptide_id": mix.id, **body}), detail)
+    assert db.execute(select(HplcPrepRule)).first() is None
+
+
+def test_a_solo_line_has_no_floor_check(client, reta):
+    assert _post(client, peptide_id=reta.id, target_conc_ug_ml=50).status_code == 201
 
 
 @pytest.mark.parametrize("raw, detail", [
@@ -257,6 +274,12 @@ def test_a_shared_lead_priority_saves_with_a_warning(client, db, blend):
     assert res.status_code == 201
     assert res.json()["warnings"] == [
         f"lead_priority 1 is also used by rule {first}; ties go to the component listed first"]
+    # A second band of the same peptide carries its priority without a warning.
+    tesa = _mk_peptide(db, "TESA", name="Tesamorelin")
+    db.commit()
+    _post(client, peptide_id=tesa.id, max_mg=10, lead_priority=2)
+    assert _post(client, peptide_id=tesa.id, min_mg=10,
+                 lead_priority=2).json()["warnings"] == []
 
 
 # --- edit -----------------------------------------------------------------------
@@ -274,9 +297,9 @@ def test_patch_changes_only_what_it_sends_and_checks_the_stored_line(client, ret
     # The band check reads the stored bound beside the sent one.
     _refused(client.patch(f"/hplc-prep-rules/{rid}", json={"max_mg": 20}),
              "min_mg must be below max_mg")
-    # The floor check reads the stored target beside a sent floor.
-    _refused(client.patch(f"/hplc-prep-rules/{rid}", json={"floor_ug_ml": 300}),
-             "the floor 300 ug/mL must be below the target 300 ug/mL")
+    # A solo line sets no floor.
+    _refused(client.patch(f"/hplc-prep-rules/{rid}", json={"floor_ug_ml": 40}),
+             "only a blend line sets a floor")
     for field in ("peptide_id", "status", "active"):
         _refused(client.patch(f"/hplc-prep-rules/{rid}", json={field: None}),
                  f"{field} cannot be empty")
@@ -284,9 +307,31 @@ def test_patch_changes_only_what_it_sends_and_checks_the_stored_line(client, ret
     assert (res.status_code, res.json()["detail"]) == (404, "prep rule 987654 not found")
 
 
-def test_an_explicit_null_clears_a_value_back_to_the_standard(client, db, reta):
+def test_the_floor_check_reads_the_stored_target_beside_a_sent_floor(client, blend):
+    mix, _bpc, _ghk = blend
+    rid = _post(client, peptide_id=mix.id, target_conc_ug_ml=300).json()["rule"]["id"]
+    _refused(client.patch(f"/hplc-prep-rules/{rid}", json={"floor_ug_ml": 300}),
+             "the floor 300 ug/mL must be below the target 300 ug/mL")
+    assert client.patch(f"/hplc-prep-rules/{rid}",
+                        json={"floor_ug_ml": 80}).json()["rule"]["floor_ug_ml"] == 80.0
+
+
+def test_moving_a_blend_line_that_names_a_lead_onto_a_solo_peptide_is_refused(
+        client, db, reta, blend):
+    mix, _bpc, ghk = blend
+    rid = _post(client, peptide_id=mix.id, lead_component_id=ghk.id).json()["rule"]["id"]
+    _refused(client.patch(f"/hplc-prep-rules/{rid}", json={"peptide_id": reta.id}),
+             "only a blend line names a lead")
+    db.expire_all()
+    stored = db.get(HplcPrepRule, rid)
+    assert (stored.peptide_id, stored.lead_component_id) == (mix.id, ghk.id)
+    assert _audits(db, "hplc_prep_rule_updated") == []
+
+
+def test_an_explicit_null_clears_a_value_back_to_the_standard(client, db, blend):
+    mix, _bpc, _ghk = blend
     inst = _instrument(db, "1260 Infinity")
-    rid = _post(client, peptide_id=reta.id, target_conc_ug_ml=250, floor_ug_ml=80,
+    rid = _post(client, peptide_id=mix.id, target_conc_ug_ml=250, floor_ug_ml=80,
                 diluent="Water + 0.1% TFA", default_instrument_id=inst.id,
                 note="keep").json()["rule"]["id"]
     res = client.patch(f"/hplc-prep-rules/{rid}",
@@ -330,14 +375,18 @@ def test_reactivating_a_line_rechecks_a_retired_instrument(client, db, reta):
     assert res.status_code == 200 and res.json()["rule"]["active"] is True
 
 
-def test_reactivating_a_line_that_no_longer_passes_the_other_checks_is_refused(client, db, reta):
-    for values, detail in [
-        ({"floor_ug_ml": 250}, "the floor 250 ug/mL must be below the target 200 ug/mL"),
-        ({"min_mg": 30, "max_mg": 30}, "min_mg must be below max_mg"),
-        ({"target_conc_ug_ml": 0}, "target_conc_ug_ml must be greater than zero"),
-        ({"diluent": "Methanol"}, "diluent 'Methanol' is not one of: Water, Water + 0.1% TFA"),
+def test_reactivating_a_line_that_no_longer_passes_the_other_checks_is_refused(
+        client, db, reta, blend):
+    mix, _bpc, _ghk = blend
+    for peptide, values, detail in [
+        (mix, {"floor_ug_ml": 250}, "the floor 250 ug/mL must be below the target 200 ug/mL"),
+        (reta, {"floor_ug_ml": 40}, "only a blend line sets a floor"),
+        (reta, {"min_mg": 30, "max_mg": 30}, "min_mg must be below max_mg"),
+        (reta, {"target_conc_ug_ml": 0}, "target_conc_ug_ml must be greater than zero"),
+        (reta, {"diluent": "Methanol"},
+         "diluent 'Methanol' is not one of: Water, Water + 0.1% TFA"),
     ]:
-        stale = HplcPrepRule(peptide_id=reta.id, active=False, sort_order=0, **values)
+        stale = HplcPrepRule(peptide_id=peptide.id, active=False, sort_order=0, **values)
         db.add(stale)
         db.commit()
         _refused(client.patch(f"/hplc-prep-rules/{stale.id}", json={"active": True}), detail)

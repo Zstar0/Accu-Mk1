@@ -57,7 +57,8 @@ const fixture = JSON.parse(
 /** One case through the function its fn names, as the Python test's _run_case
  *  does: row_rule_id resolves to that rule's snapshot in the case's set. */
 function runCase(c: FixtureCase): unknown {
-  const rules = fixture.rule_sets[c.rules] ?? []
+  const rules = fixture.rule_sets[c.rules]
+  if (rules === undefined) throw new Error(`no rule set ${c.rules}`)
   const q = c.query
   const rowRule =
     q.row_rule_id == null
@@ -116,6 +117,21 @@ describe('the shared HPLC prep rule fixture', () => {
   it('matchRule returns the snapshot itself, not a copy', () => {
     const rules = fixture.rule_sets.main ?? []
     expect(matchRule(rules, { peptideId: 4, weightMg: 5 })).toBe(rules[3])
+  })
+
+  it('pickLead reads a component with no declared_mg as no weight', () => {
+    // Built from a partial API object: never the heaviest.
+    const partial = { peptide_id: 5 } as HplcPrepComponent
+    expect(
+      pickLead([], [partial, { peptide_id: 6, declared_mg: 4 }], {
+        rowRule: null,
+      })
+    ).toEqual({ peptide_id: 6, why: 'heaviest' })
+    expect(
+      pickLead([], [partial, { peptide_id: 6 } as HplcPrepComponent], {
+        rowRule: null,
+      })
+    ).toEqual({ peptide_id: 5, why: 'first' })
   })
 })
 

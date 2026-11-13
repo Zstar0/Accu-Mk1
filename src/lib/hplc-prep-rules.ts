@@ -156,9 +156,13 @@ export function componentTarget(
   return { value: q.default, source: 'default', rule_id: null }
 }
 
-/** A component's own line, matched on the component's declared_mg. */
+/** A component's own line, matched on the component's declared_mg (a
+ *  missing one is no weight). */
 function ownLine(rules: Line[], c: HplcPrepComponent): Line | null {
-  return matchRule(rules, { peptideId: c.peptide_id, weightMg: c.declared_mg })
+  return matchRule(rules, {
+    peptideId: c.peptide_id,
+    weightMg: typeof c.declared_mg === 'number' ? c.declared_mg : null,
+  })
 }
 
 /**
@@ -200,7 +204,7 @@ export function pickLead(
   let mostMg = -Infinity
   for (const c of components) {
     if (
-      c.declared_mg !== null &&
+      typeof c.declared_mg === 'number' &&
       (heaviest === null || c.declared_mg > mostMg)
     ) {
       heaviest = c
@@ -213,34 +217,47 @@ export function pickLead(
 }
 
 /** The line that sets `key` for a row: the row's own line if it sets it,
- *  else the first component, in order, whose own line does; else null. */
+ *  else the first component, in order, whose own line does (a component
+ *  line whose value is `noOpinion` counts as not setting it); else null. */
 function rowValue(
   rules: Line[],
   key: 'diluent' | 'default_instrument_id',
   rowRule: Line | null,
-  components: HplcPrepComponent[]
+  components: HplcPrepComponent[],
+  noOpinion: string | null = null
 ): Line | null {
   if (rowRule !== null && rowRule[key] !== null) return rowRule
   for (const c of components) {
     const line = ownLine(rules, c)
-    if (line !== null && line[key] !== null) return line
+    if (line !== null && line[key] !== null && line[key] !== noOpinion)
+      return line
   }
   return null
 }
 
 /** The row's diluent and the line that set it (DEFAULT_DILUENT, rule_id
- *  null, when no line names one). */
+ *  null, when no line names one). The row's own line wins whatever it says;
+ *  a component line that names DEFAULT_DILUENT is no opinion, as in the
+ *  lab's tool, where any listed peptide's TFA decides and Water is never
+ *  listed. */
 export function rowDiluent(
   rules: Line[],
   q: { rowRule: Line | null; components: HplcPrepComponent[] }
 ): RowDiluent {
-  const line = rowValue(rules, 'diluent', q.rowRule, q.components)
+  const line = rowValue(
+    rules,
+    'diluent',
+    q.rowRule,
+    q.components,
+    DEFAULT_DILUENT
+  )
   if (line === null || line.diluent === null)
     return { diluent: DEFAULT_DILUENT, rule_id: null }
   return { diluent: line.diluent, rule_id: line.id }
 }
 
-/** The instrument the row usually runs on, by rowDiluent's walk; null when
+/** The instrument the row usually runs on: the row's own line if it names
+ *  one, else the first component, in order, whose own line does; null when
  *  no line names one. */
 export function rowInstrument(
   rules: Line[],

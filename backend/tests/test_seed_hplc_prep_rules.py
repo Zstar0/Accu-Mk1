@@ -99,6 +99,84 @@ def test_a_missing_peptide_is_reported_and_the_rest_still_seed(db):
     assert reta.default_instrument_id is None
 
 
+def test_an_inactive_instrument_counts_as_missing(db):
+    db.execute(select(Instrument)).scalar_one().active = False
+    db.commit()
+    out = seed(db, apply=False)
+    assert "Retatrutide" in out["inserted"]
+    assert any(n.startswith("HPLC 1290b") and "no active instrument" in n
+               and "would go in without an instrument" in n for n in out["not_found"])
+    out = seed(db, apply=True)
+    assert any("goes in without an instrument" in n for n in out["not_found"])
+    assert _lines(db)[db.peps["Retatrutide"].id].default_instrument_id is None
+
+
+def test_the_dry_run_says_the_values_it_would_insert_and_what_it_skips(db):
+    ghk = db.peps["GHK-Cu"]
+    db.add_all([HplcPrepRule(peptide_id=ghk.id, max_mg=10, sort_order=0),
+                HplcPrepRule(peptide_id=ghk.id, min_mg=10, sort_order=1)])
+    db.commit()
+    said = []
+    seed(db, apply=False, say=said.append)
+    assert said == [
+        "NAD+: would insert target 150, blend target standard, lead priority none, "
+        "diluent standard, instrument none",
+        "GHK-Cu: would skip, the peptide already has 2 line(s)",
+        "Ipamorelin: would insert target 150, blend target 175, lead priority 1, "
+        "diluent standard, instrument none",
+        "Retatrutide: would insert target standard, blend target standard, "
+        "lead priority none, diluent standard, instrument HPLC 1290B",
+    ]
+
+
+def test_main_dry_run_prints_the_details_as_intention_and_writes_nothing(
+        db, monkeypatch, capsys):
+    import database
+    from scripts import seed_hplc_prep_rules as module
+
+    ghk_id = db.peps["GHK-Cu"].id   # main() closes the session it is handed
+    db.add(HplcPrepRule(peptide_id=ghk_id, sort_order=0))
+    db.execute(select(Instrument)).scalar_one().active = False
+    db.commit()
+    monkeypatch.setattr(database, "SessionLocal", lambda: db)
+    monkeypatch.setattr(module.sys, "argv", ["seed_hplc_prep_rules.py"])
+    module.main()
+    out = capsys.readouterr().out.splitlines()
+    assert "NAD+: would insert target 150, blend target standard, lead priority none, " \
+           "diluent standard, instrument none" in out
+    assert "GHK-Cu: would skip, the peptide already has 1 line(s)" in out
+    assert any(line.startswith("Not found or would not insert: HPLC 1290b")
+               and "would go in without an instrument" in line for line in out)
+    assert any(line.startswith("Would skip, the peptide already has a line") for line in out)
+    assert out[-1] == "Dry run: nothing was written. Run again with --apply to write."
+    assert {r.peptide_id for r in db.execute(select(HplcPrepRule)).scalars()} == {ghk_id}
+
+
+def test_the_save_check_warnings_are_said(db):
+    # Another peptide's active line already ranks 1, as Ipamorelin's will.
+    other = _mk_peptide(db, "TESA", name="Tesamorelin")
+    db.add(HplcPrepRule(peptide_id=other.id, lead_priority=1, sort_order=0))
+    db.commit()
+    said = []
+    seed(db, apply=True, say=said.append)
+    assert any(line.startswith("Ipamorelin: warning: lead_priority 1 is also used by rule")
+               for line in said)
+
+
+def test_a_refused_line_gets_no_instrument_note(db, monkeypatch):
+    from scripts import seed_hplc_prep_rules as module
+
+    db.execute(select(Instrument)).scalar_one().active = False
+    db.commit()
+    monkeypatch.setattr(module, "LINES", [("Retatrutide", {"diluent": "Saline"},
+                                           module.INSTRUMENT)])
+    out = seed(db, apply=False)
+    assert out["inserted"] == []
+    assert out["not_found"] == [
+        "Retatrutide (would be refused by the save checks: diluent 'Saline' is not one of: "
+        "Water, Water + 0.1% TFA)"]
+
+
 def test_an_ambiguous_peptide_is_reported_not_guessed(db):
     # No abbreviation is "Retatrutide", and two names are, case aside.
     _mk_peptide(db, "RETA2", name="RETATRUTIDE")

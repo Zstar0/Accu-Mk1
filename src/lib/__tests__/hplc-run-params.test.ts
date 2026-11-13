@@ -1,26 +1,28 @@
 import { describe, it, expect } from 'vitest'
+import { readFileSync } from 'node:fs'
+import { resolve } from 'node:path'
 import {
   HPLC_RUN_PARAM_DEFAULTS,
   hplcRunParamsFrom,
 } from '@/lib/hplc-run-params'
 
+// The shared defaults fixture: pytest holds the backend's table to the same
+// file. Read at run time, not imported, so the production `tsc` (whose Docker
+// context has no backend/) never resolves a path outside src.
+const fixture = JSON.parse(
+  readFileSync(
+    resolve(
+      __dirname,
+      '../../../backend/tests/fixtures/hplc_run_param_defaults.json'
+    ),
+    'utf8'
+  )
+) as { defaults: Record<string, number> }
+
 describe('HPLC method run parameters', () => {
   it('carries the same thirteen defaults the backend does', () => {
-    expect(HPLC_RUN_PARAM_DEFAULTS).toEqual({
-      default_target_ug_ml: 200,
-      intermediate_target_ug_ml: 5000,
-      intermediate_volume_ul: 1500,
-      two_step_threshold_mg: 500,
-      bac_stock_ug_ml: 9000,
-      bac_target_ug_ml: 500,
-      capsule_neat_max_ug_ml: 350,
-      diluent_density_mg_ml: 997.1,
-      benzyl_alcohol_density_mg_ml: 1034.72,
-      floor_ug_ml: 60,
-      target_volume_ul: 1500,
-      sample_diluent_ul: 3000,
-      volume_tolerance_pct: 15,
-    })
+    expect(HPLC_RUN_PARAM_DEFAULTS).toEqual(fixture.defaults)
+    expect(Object.keys(fixture.defaults)).toHaveLength(13)
   })
 
   it('fills missing and null keys with the default', () => {

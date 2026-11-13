@@ -735,7 +735,7 @@ class _FakeSession:
 
 def _run_check_main(monkeypatch, capsys, *, stock_nullable="YES", forms_column=True,
                     constraints=("ck_lims_sample_forms_hplc_prep",), rows=_FORMS_ROWS,
-                    rules_table=True, preps_table=True, preps_index=True, items_column=True):
+                    rules_table=True, rules_over=None, preps_table=True, preps_index=True, items_column=True):
     """(exit code, output lines) of check_hplc_columns.main() over canned query results."""
     from scripts import check_hplc_columns as check
 
@@ -747,7 +747,7 @@ def _run_check_main(monkeypatch, capsys, *, stock_nullable="YES", forms_column=T
         "lims_sample_forms": _FORMS_COLUMN if forms_column else {},
         "hplc_prep_rules": (
             {name: ("integer", want) for name, want in check.RULES_EXPECTED.items()} if rules_table else {}
-        ),
+        ) | (rules_over or {}),
         "sample_preps": {name: ("integer", "YES") for name in check.PREPS_EXPECTED} if preps_table else {},
         "worksheet_items": {name: ("json", "YES") for name in check.ITEMS_EXPECTED} if items_column else {},
     }
@@ -791,6 +791,26 @@ def test_the_column_check_script_exits_one_for_a_failure_on_either_table(monkeyp
     # the exit code: dropping them leaves evaluate_sample_forms correct and the gate green.
     code, lines = _run_check_main(monkeypatch, capsys, **broken)
     assert code == 1 and "PROBLEM(S)" in lines[-1] and "ALL PRESENT" not in lines[-1]
+
+
+def test_the_closing_line_names_only_what_failed(monkeypatch, capsys):
+    code, lines = _run_check_main(monkeypatch, capsys, rules_table=False)
+    assert code == 1 and "hplc_prep_rules" in lines[-1]
+    assert "liquid prep" not in lines[-1] and "lims_sample_forms" not in lines[-1]
+    code, lines = _run_check_main(monkeypatch, capsys, stock_nullable="NO")
+    assert code == 1 and "liquid prep" in lines[-1] and "hplc_prep_rules" not in lines[-1]
+    code, lines = _run_check_main(monkeypatch, capsys, preps_index=False)
+    assert code == 1 and "sample_preps" in lines[-1] and "worksheet_items" not in lines[-1]
+    code, lines = _run_check_main(monkeypatch, capsys, items_column=False)
+    assert code == 1 and "worksheet_items" in lines[-1] and "sample_preps" not in lines[-1]
+
+
+def test_the_rules_timestamps_pass_as_create_all_makes_them(monkeypatch, capsys):
+    # A fresh database's create_all makes created_at and updated_at NOT NULL.
+    code, lines = _run_check_main(monkeypatch, capsys, rules_over={
+        "created_at": ("timestamp without time zone", "NO"),
+        "updated_at": ("timestamp without time zone", "NO")})
+    assert code == 0 and lines[-1] == "ALL PRESENT"
 
 
 def test_a_renamed_built_in_exits_zero_but_the_last_line_says_so(monkeypatch, capsys):

@@ -1,4 +1,7 @@
 """The hplc block in method run parameters (plan 2026-11-12 hplc prep rules, task 1). Pure."""
+import json
+from pathlib import Path
+
 import pytest
 
 from calculations import hplc_processor
@@ -7,6 +10,15 @@ from catalog.method_run_params import (
     hplc_run_params,
     validate_run_parameters,
 )
+
+DEFAULTS_FIXTURE = Path(__file__).parent / "fixtures" / "hplc_run_param_defaults.json"
+
+
+def test_defaults_are_the_shared_fixtures():
+    # The TypeScript table (src/lib/hplc-run-params.ts) is held to the same file.
+    fixture = json.loads(DEFAULTS_FIXTURE.read_text(encoding="utf-8"))["defaults"]
+    assert HPLC_RUN_PARAM_DEFAULTS == fixture
+    assert list(HPLC_RUN_PARAM_DEFAULTS) == list(fixture)
 
 
 def test_defaults_are_the_engines_own_constants():

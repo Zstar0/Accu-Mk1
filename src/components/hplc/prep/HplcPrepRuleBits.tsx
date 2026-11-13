@@ -69,6 +69,17 @@ const NUMBER_FIELDS = [
 
 type NumberKey = (typeof NUMBER_FIELDS)[number][0]
 
+/** The concentrations: a typed one must be more than 0 (blank is the standard). */
+const POSITIVE_FIELDS: readonly NumberKey[] = [
+  'target_conc_ug_ml',
+  'blend_target_conc_ug_ml',
+  'floor_ug_ml',
+]
+
+/** A blend line has no blend target; only a blend line has a floor. */
+const usedBy = (key: NumberKey, isBlend: boolean) =>
+  isBlend ? key !== 'blend_target_conc_ug_ml' : key !== 'floor_ug_ml'
+
 const RANK_LABEL = 'leads blends, rank'
 
 const STATUS_TONE: Record<HplcPrepRuleStatus, string> = {
@@ -108,19 +119,31 @@ function numOf(t: string): number | null | undefined {
 
 /** The draft as the API body, or why it cannot be sent. A field the line's
  *  kind does not use goes as null (a blend line has no blend target and no
- *  rank, any other line no lead), so a peptide switch never sends a stale
- *  one. The server makes every other check and its 400 text shows on the row. */
+ *  rank, any other line no lead and no floor), so a peptide switch never
+ *  sends a stale one. A typed concentration of 0 or less, a negative weight
+ *  and a rank outside 1 to 999 are refused here in the sheet's words; the
+ *  server makes every other check and its 400 text shows on the row. */
 function bodyOf(d: Draft, isBlend: boolean): HplcPrepRuleIn | string {
   if (d.peptide_id === null) return 'Pick a peptide'
-  const bad = NUMBER_FIELDS.find(
-    ([key]) =>
-      !(isBlend && key === 'blend_target_conc_ug_ml') &&
-      numOf(d[key]) === undefined
-  )
+  const used = NUMBER_FIELDS.filter(([key]) => usedBy(key, isBlend))
+  const bad = used.find(([key]) => numOf(d[key]) === undefined)
   if (bad) return `${bad[1]} must be a number`
+  const notPositive = used.find(([key]) => {
+    const n = numOf(d[key])
+    return POSITIVE_FIELDS.includes(key) && n != null && n <= 0
+  })
+  if (notPositive) return `${notPositive[1]} must be more than 0`
+  const negative = used.find(([key]) => {
+    const n = numOf(d[key])
+    return !POSITIVE_FIELDS.includes(key) && n != null && n < 0
+  })
+  if (negative) return `${negative[1]} must not be negative`
   const rank = isBlend ? null : numOf(d.lead_priority)
-  if (rank === undefined || (rank !== null && !Number.isInteger(rank)))
-    return `${RANK_LABEL} must be a whole number`
+  if (
+    rank === undefined ||
+    (rank !== null && (!Number.isInteger(rank) || rank < 1 || rank > 999))
+  )
+    return `${RANK_LABEL} must be a whole number from 1 to 999`
   return {
     peptide_id: d.peptide_id,
     min_mg: numOf(d.min_mg) ?? null,
@@ -131,7 +154,7 @@ function bodyOf(d: Draft, isBlend: boolean): HplcPrepRuleIn | string {
       : (numOf(d.blend_target_conc_ug_ml) ?? null),
     lead_component_id: isBlend ? d.lead_component_id : null,
     lead_priority: rank,
-    floor_ug_ml: numOf(d.floor_ug_ml) ?? null,
+    floor_ug_ml: isBlend ? (numOf(d.floor_ug_ml) ?? null) : null,
     diluent: d.diluent || null,
     default_instrument_id: d.default_instrument_id,
     status: d.status,
@@ -230,7 +253,8 @@ function PeptidePicker({
 /** One line, editable in place: Save sends the changed fields (a new line,
  *  all of them); the server's 400 text shows under the row until the next
  *  save, its warnings as chips. A blend line picks its lead from the blend's
- *  components; any other line takes a rank for leading the blends it is in. */
+ *  components and sets the floor; any other line takes a rank for leading
+ *  the blends it is in. */
 export function RuleRow({
   n,
   rule,
@@ -420,7 +444,8 @@ export function RuleRow({
             <label className="flex items-center gap-1.5 whitespace-nowrap text-[11px] text-muted-foreground">
               <Input
                 inputMode="numeric"
-                placeholder="-"
+                placeholder="unranked"
+                title="blank = never preferred as the lead"
                 value={draft.lead_priority}
                 onChange={e => set('lead_priority', e.target.value)}
                 className="h-8 w-12 text-right font-mono text-sm text-foreground"
@@ -445,10 +470,19 @@ export function RuleRow({
           </NativeSelect>
         </TableCell>
         <TableCell>
-          {numberInput(
-            'floor_ug_ml',
-            'Floor (ug/mL)',
-            String(HPLC_RUN_PARAM_DEFAULTS.floor_ug_ml)
+          {isBlend ? (
+            numberInput(
+              'floor_ug_ml',
+              'Floor (ug/mL)',
+              String(HPLC_RUN_PARAM_DEFAULTS.floor_ug_ml)
+            )
+          ) : (
+            <span
+              title="set on the blend's own line"
+              className="font-mono text-muted-foreground"
+            >
+              -
+            </span>
           )}
         </TableCell>
         <TableCell>
