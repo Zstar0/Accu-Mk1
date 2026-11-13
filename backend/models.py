@@ -1377,6 +1377,10 @@ class WorksheetItem(Base):
         Boolean, nullable=False, default=False, server_default="false")
     prep_note: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     prep_history: Mapped[Optional[list]] = mapped_column(JSON, nullable=True)
+    # HPLC prep worksheet (plan 2026-11-12, Task 5): what a tech typed for an HPLC row, in the
+    # hplc_prep shape (worksheets_hplc.py). Inputs only; derived figures are never stored.
+    # Always assigned a new dict: a plain JSON column misses in-place edits.
+    hplc_prep: Mapped[Optional[dict]] = mapped_column(JSON, nullable=True)
 
     def __repr__(self) -> str:
         return f"<WorksheetItem(id={self.id}, worksheet_id={self.worksheet_id}, sample_uid='{self.sample_uid}')>"

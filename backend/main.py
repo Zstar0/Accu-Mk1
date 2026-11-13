@@ -27030,6 +27030,14 @@ def update_worksheet_item(
                 and promoted_sample_ids(db, [item.sample_id])):
             raise HTTPException(409, PREP_FINAL)
 
+    # HPLC prep worksheet: a promoted HPLC row ran on its instrument, so that is final too.
+    # Postgres is asked only when the instrument would change ("" and 0 clear, as below).
+    if (("instrument_id" in data.model_fields_set and (data.instrument_id or None) != item.instrument_id)
+            or (data.instrument_uid is not None and (data.instrument_uid or None) != item.instrument_uid)):
+        from worksheets_hplc import PREP_FINAL as HPLC_PREP_FINAL, is_promoted_hplc_row
+        if is_promoted_hplc_row(db, item):
+            raise HTTPException(409, HPLC_PREP_FINAL)
+
     resolved_method = None
     if data.instrument_uid is not None:
         item.instrument_uid = data.instrument_uid if data.instrument_uid else None
@@ -27114,6 +27122,59 @@ def update_worksheet_item(
         except Exception:
             logger.exception("endo_method resolution failed after the PATCH of item %s", item_id)
             db.rollback()
+    return out
+
+
+@app.get("/worksheets/{worksheet_id}/hplc")
+def get_worksheet_hplc(
+    worksheet_id: int,
+    db: Session = Depends(get_db),
+    _current_user=Depends(get_current_user),
+):
+    """The HPLC prep sheet (plan 2026-11-12-hplc-prep-worksheet, Task 5): each HPLC row's
+    facts and typed inputs; the browser computes. A plain dict, no response_model, so no
+    key is dropped."""
+    from worksheets_hplc import blend_cap, sheet_rows
+    ws = db.execute(select(Worksheet).where(Worksheet.id == worksheet_id)).scalar_one_or_none()
+    if not ws or ws.status == "staging":
+        raise HTTPException(404, "Worksheet not found")
+    return {"worksheet_id": ws.id, "status": ws.status, "blend_cap": blend_cap(db),
+            "rows": sheet_rows(db, ws)}
+
+
+class WorksheetItemHplcUpdate(BaseModel):
+    # Any, so a wrong type reaches worksheets_hplc and gets a 400 with the reason, not a 422.
+    # Sent = set (null clears the form); omitted = untouched (model_fields_set).
+    prep_form: Any = None
+    hplc_prep: Any = None
+
+
+@app.patch("/worksheets/{worksheet_id}/items/{item_id}/hplc")
+@_rollback_on_error
+def update_worksheet_item_hplc(
+    worksheet_id: int,
+    item_id: int,
+    data: WorksheetItemHplcUpdate,
+    db: Session = Depends(get_db),
+    _current_user=Depends(get_current_user),
+):
+    """One HPLC row's form and a merge patch of its typed inputs; returns the row's facts.
+    The worksheet row, then the item, under row locks (the lock order, _worksheet_for_update)."""
+    from worksheets_hplc import Refused, apply_patch
+    ws = _worksheet_for_update(db, worksheet_id)
+    if not ws or ws.status == "staging":
+        raise HTTPException(404, "Worksheet not found")
+    item = db.execute(select(WorksheetItem).where(
+        WorksheetItem.id == item_id, WorksheetItem.worksheet_id == worksheet_id)
+        .with_for_update().execution_options(populate_existing=True)).scalar_one_or_none()
+    if not item:
+        raise HTTPException(404, "Worksheet item not found")
+    sent = {f: getattr(data, f) for f in ("prep_form", "hplc_prep") if f in data.model_fields_set}
+    try:
+        out = apply_patch(db, ws, item, **sent)
+    except Refused as exc:
+        raise HTTPException(exc.status, str(exc))
+    db.commit()
     return out
 
 

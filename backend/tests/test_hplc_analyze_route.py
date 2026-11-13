@@ -735,7 +735,7 @@ class _FakeSession:
 
 def _run_check_main(monkeypatch, capsys, *, stock_nullable="YES", forms_column=True,
                     constraints=("ck_lims_sample_forms_hplc_prep",), rows=_FORMS_ROWS,
-                    rules_table=True, preps_table=True, preps_index=True):
+                    rules_table=True, preps_table=True, preps_index=True, items_column=True):
     """(exit code, output lines) of check_hplc_columns.main() over canned query results."""
     from scripts import check_hplc_columns as check
 
@@ -749,6 +749,7 @@ def _run_check_main(monkeypatch, capsys, *, stock_nullable="YES", forms_column=T
             {name: ("integer", want) for name, want in check.RULES_EXPECTED.items()} if rules_table else {}
         ),
         "sample_preps": {name: ("integer", "YES") for name in check.PREPS_EXPECTED} if preps_table else {},
+        "worksheet_items": {name: ("json", "YES") for name in check.ITEMS_EXPECTED} if items_column else {},
     }
     indexes = (
         {check.PREPS_INDEX: (
@@ -780,8 +781,10 @@ def test_the_column_check_script_exits_zero_only_when_both_tables_are_right(monk
         {"rules_table": False},  # hplc_prep_rules: the CREATE TABLE that never ran
         {"preps_table": False},  # sample_preps: ensure_sample_preps_table never ran on this image
         {"preps_index": False},  # sample_preps: the worksheet-item unique index is missing
+        {"items_column": False},  # worksheet_items: the hplc_prep ADD COLUMN that never applied
     ],
-    ids=["hplc_analyses", "no_column", "no_check", "backfill", "hplc_prep_rules", "sample_preps", "preps_index"],
+    ids=["hplc_analyses", "no_column", "no_check", "backfill", "hplc_prep_rules", "sample_preps", "preps_index",
+         "items_column"],
 )
 def test_the_column_check_script_exits_one_for_a_failure_on_either_table(monkeypatch, capsys, broken):
     # The three lims_sample_forms cases are what pin main() adding that table's problems to

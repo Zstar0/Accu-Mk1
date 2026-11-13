@@ -10,7 +10,8 @@ nullable sample_preps columns and the unique partial index uq_sample_preps_works
 sample_preps is not created by database.py or _run_migrations: mk1_db.ensure_sample_preps_table()
 creates and alters it, and the /sample-preps routes (and others) call it before they touch the
 table, so a fresh deploy gets the columns on the first such request. Run this check after one
-(open the Sample Preps page): a miss before that is expected, a miss after it is not.
+(open the Sample Preps page): a miss before that is expected, a miss after it is not. Task 5
+adds worksheet_items.hplc_prep, nullable (an HPLC row's typed prep inputs).
 
 _run_migrations runs each ALTER on its own and LOGS a failure instead of raising, so a
 column can silently fail to exist in production, and a DROP NOT NULL that failed leaves
@@ -88,6 +89,8 @@ PREPS_EXPECTED = {
     )
 }
 PREPS_INDEX = "uq_sample_preps_worksheet_item"
+# worksheet_items (HPLC prep worksheet plan, Task 5): the row's typed inputs, nullable.
+ITEMS_EXPECTED = {"hplc_prep": "YES"}
 FORMS_CHECK = "ck_lims_sample_forms_hplc_prep"
 FORMS_PREP = {
     "lyophilized powder": "powder",
@@ -193,6 +196,7 @@ def main():
         forms_found = _columns(db, "lims_sample_forms", FORMS_EXPECTED)
         rules_found = _columns(db, "hplc_prep_rules", RULES_EXPECTED)
         preps_found = _columns(db, "sample_preps", PREPS_EXPECTED)
+        items_found = _columns(db, "worksheet_items", ITEMS_EXPECTED)
         preps_index = next(
             (
                 row[0]
@@ -225,8 +229,10 @@ def main():
     forms_lines, forms_bad, not_found = evaluate_sample_forms(forms_found, constraints, rows)
     rules_lines, rules_bad = evaluate(rules_found, RULES_EXPECTED)
     preps_lines, preps_bad = evaluate_sample_preps(preps_found, preps_index)
-    print("\n".join(lines + forms_lines + ["hplc_prep_rules:"] + rules_lines + ["sample_preps:"] + preps_lines))
-    bad += forms_bad + rules_bad + preps_bad
+    items_lines, items_bad = evaluate(items_found, ITEMS_EXPECTED)
+    print("\n".join(lines + forms_lines + ["hplc_prep_rules:"] + rules_lines + ["sample_preps:"] + preps_lines
+                    + ["worksheet_items:"] + items_lines))
+    bad += forms_bad + rules_bad + preps_bad + items_bad
     if bad:
         closing = f"{bad} PROBLEM(S): do not ship a liquid prep or read hplc_prep until fixed"
     elif not_found:

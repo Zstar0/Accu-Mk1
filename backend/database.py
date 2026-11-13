@@ -475,6 +475,8 @@ def _run_migrations():
         # A liquid prep never weighs its stock vial, so those two weighings are NULL for it.
         "ALTER TABLE hplc_analyses ALTER COLUMN stock_vial_empty DROP NOT NULL",
         "ALTER TABLE hplc_analyses ALTER COLUMN stock_vial_with_diluent DROP NOT NULL",
+        # HPLC prep worksheet (2026-11-12, Task 5): an HPLC row's typed prep inputs.
+        "ALTER TABLE worksheet_items ADD COLUMN IF NOT EXISTS hplc_prep JSON",
         # Phase 17: Worksheet item SENAITE received date + prep status
         "ALTER TABLE worksheet_items ADD COLUMN IF NOT EXISTS date_received TIMESTAMP",
         "ALTER TABLE worksheet_items ADD COLUMN IF NOT EXISTS prep_status VARCHAR(20) DEFAULT 'ready'",
