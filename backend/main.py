@@ -4412,6 +4412,200 @@ async def reorder_endo_prep_rules(data: EndoPrepRuleReorderIn, db: Session = Dep
     return _endo_prep_rules_out(db)
 
 
+# ─── HPLC prep rules (plan 2026-11-12-hplc-prep-rules, Task 3) ───
+#
+# The HPLC twin of the endotoxin prep rule routes above: the same permission
+# (any signed-in user, get_current_user) and the same audit idiom.
+
+
+class HplcPrepRuleIn(BaseModel):
+    """A rule as the rules page creates it. sort_order is never sent: a new
+    line goes to the end of the list, and POST /hplc-prep-rules/reorder moves it."""
+    peptide_id: int
+    min_mg: Optional[float] = None
+    max_mg: Optional[float] = None
+    target_conc_ug_ml: Optional[float] = None
+    blend_target_conc_ug_ml: Optional[float] = None
+    lead_component_id: Optional[int] = None
+    lead_priority: Optional[int] = None
+    floor_ug_ml: Optional[float] = None
+    diluent: Optional[str] = None
+    default_instrument_id: Optional[int] = None
+    status: Literal["trial", "validated"] = "trial"
+    note: Optional[str] = None
+    active: bool = True
+
+
+class HplcPrepRulePatch(BaseModel):
+    """PATCH body: sent = set, an explicit null clears (back to the method
+    default), omitted = untouched. peptide_id, status and active cannot be cleared."""
+    peptide_id: Optional[int] = None
+    min_mg: Optional[float] = None
+    max_mg: Optional[float] = None
+    target_conc_ug_ml: Optional[float] = None
+    blend_target_conc_ug_ml: Optional[float] = None
+    lead_component_id: Optional[int] = None
+    lead_priority: Optional[int] = None
+    floor_ug_ml: Optional[float] = None
+    diluent: Optional[str] = None
+    default_instrument_id: Optional[int] = None
+    status: Optional[Literal["trial", "validated"]] = None
+    note: Optional[str] = None
+    active: Optional[bool] = None
+
+
+class HplcPrepRuleOut(BaseModel):
+    """hplc_prep_rules.snapshot() plus what the page shows. Every key is
+    declared, because response_model drops undeclared ones."""
+    id: int
+    peptide_id: int
+    min_mg: Optional[float] = None
+    max_mg: Optional[float] = None
+    target_conc_ug_ml: Optional[float] = None
+    blend_target_conc_ug_ml: Optional[float] = None
+    lead_component_id: Optional[int] = None
+    lead_priority: Optional[int] = None
+    floor_ug_ml: Optional[float] = None
+    diluent: Optional[str] = None
+    default_instrument_id: Optional[int] = None
+    status: str
+    note: Optional[str] = None
+    sort_order: int
+    active: bool
+    peptide_name: Optional[str] = None
+    peptide_is_blend: bool = False
+    lead_component_name: Optional[str] = None
+    default_instrument_name: Optional[str] = None
+    updated_at: Optional[datetime] = None
+
+
+class HplcPrepRuleSaveOut(BaseModel):
+    rule: HplcPrepRuleOut
+    warnings: list[str]
+
+
+class HplcPrepRuleReorderIn(BaseModel):
+    ids: list[int]
+
+
+def _hplc_prep_rules_out(db: Session, rule_id: Optional[int] = None) -> list[HplcPrepRuleOut]:
+    """Every rule (or the one rule_id names) with its peptide, lead component
+    and instrument names, inactive ones included, in list order (sort_order,
+    then id). One query."""
+    from sqlalchemy.orm import aliased
+    from hplc_prep_rules import snapshot
+    from models import HplcPrepRule
+    lead = aliased(Peptide)
+    q = (select(HplcPrepRule, Peptide.name, Peptide.is_blend, lead.name, Instrument.name)
+         .outerjoin(Peptide, Peptide.id == HplcPrepRule.peptide_id)
+         .outerjoin(lead, lead.id == HplcPrepRule.lead_component_id)
+         .outerjoin(Instrument, Instrument.id == HplcPrepRule.default_instrument_id)
+         .order_by(HplcPrepRule.sort_order, HplcPrepRule.id))
+    if rule_id is not None:
+        q = q.where(HplcPrepRule.id == rule_id)
+    return [HplcPrepRuleOut(**snapshot(rule), peptide_name=peptide_name,
+                            peptide_is_blend=bool(is_blend), lead_component_name=lead_name,
+                            default_instrument_name=instrument_name,
+                            updated_at=rule.updated_at)
+            for rule, peptide_name, is_blend, lead_name, instrument_name in db.execute(q).all()]
+
+
+@app.get("/hplc-prep-rules", response_model=list[HplcPrepRuleOut])
+async def list_hplc_prep_rules(db: Session = Depends(get_db),
+                               _current_user=Depends(get_current_user)):
+    """Every HPLC prep rule, inactive ones included, in list order."""
+    return _hplc_prep_rules_out(db)
+
+
+@app.post("/hplc-prep-rules", response_model=HplcPrepRuleSaveOut, status_code=201)
+async def create_hplc_prep_rule(data: HplcPrepRuleIn, db: Session = Depends(get_db),
+                                current_user=Depends(get_current_user)):
+    """Add a line at the end of the list. A refusal is a 400 with the reason;
+    the warnings come back with the saved line."""
+    from hplc_prep_rules import check_rule, snapshot
+    from models import HplcPrepRule
+    fields = data.model_dump()
+    fields["note"] = _blank_to_none(fields["note"])
+    try:
+        warnings = check_rule(db, {**fields, "id": None}, fields)
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    user_id = getattr(current_user, "id", None)
+    next_order = db.execute(
+        select(func.coalesce(func.max(HplcPrepRule.sort_order), -1) + 1)).scalar_one()
+    rule = HplcPrepRule(**fields, sort_order=next_order, updated_by_id=user_id)
+    db.add(rule)
+    db.flush()
+    db.add(AuditLog(operation="hplc_prep_rule_created", entity_type="hplc_prep_rule",
+                    entity_id=str(rule.id),
+                    details={"user_id": user_id, "old": None, "new": snapshot(rule)}))
+    db.commit()
+    return {"rule": _hplc_prep_rules_out(db, rule.id)[0], "warnings": warnings}
+
+
+@app.patch("/hplc-prep-rules/{rule_id}", response_model=HplcPrepRuleSaveOut)
+async def update_hplc_prep_rule(rule_id: int, data: HplcPrepRulePatch,
+                                db: Session = Depends(get_db),
+                                current_user=Depends(get_current_user)):
+    """Edit or (de)activate a line; there is no delete. Only the fields sent
+    change. The checks run on the line as it will be stored (every check when
+    the line is turned back on), and a save that changes nothing writes no
+    audit row."""
+    from hplc_prep_rules import check_rule, snapshot
+    from models import HplcPrepRule
+    rule = db.get(HplcPrepRule, rule_id)
+    if rule is None:
+        raise HTTPException(404, f"prep rule {rule_id} not found")
+    fields = data.model_dump(exclude_unset=True)
+    if "note" in fields:
+        fields["note"] = _blank_to_none(fields["note"])
+    old = snapshot(rule)
+    # Turning a line on again re-checks every field: an instrument retired or
+    # a method default moved while it was off must not slip back into the matcher.
+    sent = set(old) if fields.get("active") is True and not old["active"] else fields
+    try:
+        warnings = check_rule(db, {**old, **fields}, sent, rule_id=rule_id)
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    for name, value in fields.items():
+        setattr(rule, name, value)
+    new = snapshot(rule)
+    if new != old:
+        user_id = getattr(current_user, "id", None)
+        rule.updated_by_id = user_id
+        db.add(AuditLog(operation="hplc_prep_rule_updated", entity_type="hplc_prep_rule",
+                        entity_id=str(rule.id),
+                        details={"user_id": user_id, "old": old, "new": new}))
+    db.commit()
+    return {"rule": _hplc_prep_rules_out(db, rule_id)[0], "warnings": warnings}
+
+
+@app.post("/hplc-prep-rules/reorder", response_model=list[HplcPrepRuleOut])
+async def reorder_hplc_prep_rules(data: HplcPrepRuleReorderIn, db: Session = Depends(get_db),
+                                  current_user=Depends(get_current_user)):
+    """Set the list order, the matcher's tie-break. ids lists every rule,
+    inactive ones included, exactly once; position i becomes sort_order i.
+    Sending the current order changes nothing."""
+    from models import HplcPrepRule
+    rules = db.execute(select(HplcPrepRule)
+                       .order_by(HplcPrepRule.sort_order, HplcPrepRule.id)).scalars().all()
+    old = [r.id for r in rules]
+    if sorted(data.ids) != sorted(old):
+        raise HTTPException(400, "ids must list every rule exactly once")
+    if data.ids != old:
+        user_id = getattr(current_user, "id", None)
+        by_id = {r.id: r for r in rules}
+        for position, rule_id in enumerate(data.ids):
+            if by_id[rule_id].sort_order != position:
+                by_id[rule_id].sort_order = position
+                by_id[rule_id].updated_by_id = user_id
+        db.add(AuditLog(operation="hplc_prep_rules_reordered", entity_type="hplc_prep_rule",
+                        entity_id=None,
+                        details={"user_id": user_id, "old": old, "new": data.ids}))
+        db.commit()
+    return _hplc_prep_rules_out(db)
+
+
 # ─── Analysis Service Endpoints ───
 
 
