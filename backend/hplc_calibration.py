@@ -522,8 +522,9 @@ def work_out_sheet(inputs: dict) -> dict:
         warn("override_reason_missing", None, "net peptide: the factor is entered by hand: write why before the "
              "curve is filed.")
 
-    # a range whose ends are both NaN (NaN levels count as fitted at calc.js 1258) is no range
-    if rng and rng["low"] != rng["low"] and rng["high"] != rng["high"]:
+    # a range with no finite end (NaN or Infinity levels count as fitted at calc.js 1258) is no range;
+    # one non-finite end alone is None on that end (_finite)
+    if rng and not math.isfinite(rng["low"]) and not math.isfinite(rng["high"]):
         rng = None
     return _finite({
         "density": density, "level_volume_ul": target_total, "stock_weight_mg": stock_weight,

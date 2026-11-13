@@ -225,7 +225,8 @@ export interface CalWorked {
   fit: CalFit
   rt_avg: number | null
   rt_rsd_pct: number | null
-  range: { low: number; high: number } | null
+  // an end is null when it alone is not finite; no finite end at all is null
+  range: { low: number | null; high: number | null } | null
   warnings: CalWarning[]
   blocking: CalWarningCode[]
 }
@@ -903,10 +904,12 @@ export function workOutSheet(inputs: CalInputs | null | undefined): CalWorked {
         'curve is filed.'
     )
 
-  // a range whose ends are both NaN (NaN levels count as fitted at calc.js
-  // 1258) is no range
+  // a range with no finite end (NaN or Infinity levels count as fitted at
+  // calc.js 1258) is no range; one non-finite end alone is null (finite)
   const rangeOut =
-    range && Number.isNaN(range.low) && Number.isNaN(range.high) ? null : range
+    range && !Number.isFinite(range.low) && !Number.isFinite(range.high)
+      ? null
+      : range
   return finite({
     density,
     level_volume_ul: targetTotal,

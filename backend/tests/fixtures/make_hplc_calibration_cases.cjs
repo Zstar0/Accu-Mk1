@@ -152,10 +152,15 @@ const CASES = [
   // Fix round 2: three netPeptide lines at once, so their ORDER is pinned (fw mismatch with no counterion
   // mass, then KF missing, then the counterion not applied).
   ['two net warnings, in order', sheet({ counterion: 'Other', free_mw: 4731.3, stated_fw: 4800, assay_pct: 99.3 })],
+  // Final fix wave: a stock past float range (no route accepts these weighings) makes every level's
+  // concentration Infinity, so the range has no finite end: no range at all, in both ports.
+  ['stock past float range', sheet({ water_pct: 0 }, { stock: { vial_mg: 0, vial_standard_mg: 1e308, vial_diluent_mg: 1.5e308 },
+    stock_as_top: true })],
 ];
-// The one case whose source run divides by zero (calc.js 2793-2794: free 0 / (0 + 0 x 60.05) is NaN).
-// Its NaN values are written as null (the port's None); every other case must be finite throughout.
-const NON_FINITE_OK = new Set(['free 0 and eq 0 (acetate)']);
+// The cases whose source run is not finite throughout: 'free 0 and eq 0 (acetate)' divides by zero
+// (calc.js 2793-2794: free 0 / (0 + 0 x 60.05) is NaN); 'stock past float range' overflows to Infinity.
+// Their non-finite values are written as null (the port's None); every other case must be finite throughout.
+const NON_FINITE_OK = new Set(['free 0 and eq 0 (acetate)', 'stock past float range']);
 
 /* ─── Mk1 -> the tool's calibration record, written once ─── */
 const or = (v, d = null) => (v === undefined || v === null ? d : v);
@@ -304,9 +309,9 @@ const cases = CASES.map(([name, inputs, replicateOf]) => {
   if (NON_FINITE_OK.has(name)) {
     const nulled = nullNonFinite(expect, '');
     if (!nulled.length) throw new Error(`${name}: expected a non-finite source value`);
-    // calc.js 1258 filters with `!== null`, so NaN levels count as fitted and the range is {NaN, NaN}:
-    // no range at all, which is null in the port (no level has a concentration)
-    if (expect.range && expect.range.low === null && expect.range.high === null) { expect.range = null; nulled.push('range (both ends NaN, written as range null)'); }
+    // calc.js 1258 filters with `!== null`, so NaN (or Infinity) levels count as fitted and the range is
+    // {NaN, NaN} (or {Infinity, Infinity}): a range with no finite end is no range at all, null in the port
+    if (expect.range && expect.range.low === null && expect.range.high === null) { expect.range = null; nulled.push('range (no finite end, written as range null)'); }
     console.log(`${name}: written as null: ${nulled.join(', ')}`);
   }
   assertFinite(expect, name);
