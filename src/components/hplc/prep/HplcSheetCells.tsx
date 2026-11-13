@@ -8,6 +8,11 @@ import {
 } from 'react'
 import { NativeSelect, NativeSelectOption } from '@/components/ui/native-select'
 import {
+  Tooltip,
+  TooltipContent,
+  TooltipTrigger,
+} from '@/components/ui/tooltip'
+import {
   MONO,
   TD,
   TD_CALC,
@@ -288,6 +293,16 @@ export function NumberBox({
   )
 }
 
+/** A select sizes to its longest choice once it is `w-auto` (the shared
+ *  NativeSelect is `w-full` in a `w-fit` wrapper, which a table crushes to
+ *  its arrow); the floor keeps a short choice from making a thin column. */
+const SELECT_MIN: Record<string, string> = {
+  form: 'min-w-44',
+  instrument: 'min-w-36',
+  diluent: 'min-w-36',
+  vial: 'min-w-14',
+}
+
 /** A compact native select; '' is its "not set" choice. A save of it that
  *  did not land marks it (by `saveKey`), as a NumberBox. */
 export function CellSelect({
@@ -317,7 +332,7 @@ export function CellSelect({
         value={value}
         disabled={disabled}
         onChange={e => onChange(e.target.value)}
-        className={`h-auto rounded-md bg-card py-[3px] pl-1.5 pr-7 text-[12.5px] dark:bg-card ${mark.outline}`}
+        className={`h-auto w-auto ${SELECT_MIN[field ?? ''] ?? 'min-w-20'} rounded-md bg-card py-[3px] pl-1.5 pr-7 text-[12.5px] dark:bg-card ${mark.outline}`}
       >
         {options.map(([v, text], i) => (
           <NativeSelectOption key={i} value={v}>
@@ -361,16 +376,41 @@ export function InputCell({ children }: { children: ReactNode }) {
   return <td className={`${TD} px-1 text-right`}>{children}</td>
 }
 
-/** The Sample ID column stays in view while the table scrolls right. */
-const STICKY = 'sticky left-0 z-10 bg-card'
+/** The Sample ID column stays in view while the table scrolls right. Its
+ *  width is fixed at 7rem, the sections' `scroll-pl-28`, and the id never
+ *  wraps (a hint under it may). */
+const ID_COL = 'left-0 w-28 min-w-28 max-w-28 whitespace-nowrap'
+const STICKY = `sticky ${ID_COL} z-10 bg-card [&_.block]:whitespace-normal`
+/** The header's own sticky top set, without its translucent background and
+ *  low z: one set of classes, above the body's sticky cells. */
+const TH_STICKY = `${TH.replace('z-[2] bg-muted/60', '')} ${ID_COL} z-[11] bg-muted`
 
 export function HeadCell({ col }: { col: SheetColumn }) {
+  const sticky = col.key === 'sample_id'
   return (
     <th
-      title={col.title}
-      className={`${TH} ${col.kind === 'computed' ? TH_CALC : ''} ${col.key === 'sample_id' ? STICKY : ''} whitespace-normal`}
+      className={`${sticky ? TH_STICKY : TH} ${col.kind === 'computed' ? TH_CALC : ''} ${sticky ? '' : 'whitespace-normal'}`}
     >
-      {col.label}
+      {col.title ? (
+        // the column's help in the app's tooltip card, on hover or focus;
+        // the header is outside the table body, so the arrow keys never
+        // stop here
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <span
+              tabIndex={0}
+              className="cursor-help underline decoration-dotted underline-offset-2 focus:outline-none focus-visible:ring-2 focus-visible:ring-teal-500/40"
+            >
+              {col.label}
+            </span>
+          </TooltipTrigger>
+          <TooltipContent className="max-w-sm normal-case tracking-normal">
+            {col.title}
+          </TooltipContent>
+        </Tooltip>
+      ) : (
+        col.label
+      )}
     </th>
   )
 }

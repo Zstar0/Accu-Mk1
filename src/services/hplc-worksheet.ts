@@ -28,10 +28,12 @@ export const HPLC_SHEET_KEY = (id: number) => ['hplc-sheet', id] as const
  *  see the others in flight. */
 const SAVE_KEY = (id: number) => ['hplc-sheet-save', id] as const
 
-export function useHplcSheet(id: number) {
+/** `enabled` false reads nothing (the drawer asks only on an HPLC worksheet). */
+export function useHplcSheet(id: number, enabled = true) {
   return useQuery({
     queryKey: HPLC_SHEET_KEY(id),
     queryFn: () => getHplcSheet(id),
+    enabled,
   })
 }
 

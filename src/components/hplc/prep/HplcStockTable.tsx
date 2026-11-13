@@ -139,6 +139,20 @@ function formPatch(
     : { prep_form: picked }
 }
 
+/** A cell with no box for this row's form. */
+const NOT_WEIGHED = <span className="text-muted-foreground">-</span>
+
+/** Why a row has no plan, each sentence once: the server's problems can
+ *  already say there is no prep for the form. */
+// eslint-disable-next-line react-refresh/only-export-components
+export function unplannedWhy(row: SheetRowView['row']): string {
+  const why = [...row.problems]
+  if (row.form === null && !why.some(p => /no HPLC prep for this/i.test(p)))
+    why.unshift('no HPLC prep for this form')
+  const once = [...new Set(why)]
+  return once.length ? once.join('. ') : 'no HPLC prep for this row'
+}
+
 /** A row computeRow cannot plan: its id, identity and form, and why. */
 function UnplannedCells({
   view,
@@ -150,10 +164,6 @@ function UnplannedCells({
   onPatch: HplcPrepSheetProps['onPatch']
 }) {
   const { row } = view
-  const why = [
-    row.form === null ? 'no HPLC prep for this form' : null,
-    ...row.problems,
-  ].filter(Boolean)
   return (
     <>
       <IdCell>{row.sample_id}</IdCell>
@@ -163,7 +173,7 @@ function UnplannedCells({
         {!row.rider_only && <FormSelect view={view} onPatch={onPatch} />}
       </td>
       <td className={`${TD} text-muted-foreground`} colSpan={cols - 4}>
-        {why.length ? why.join('. ') : 'no HPLC prep for this row'}
+        {unplannedWhy(row)}
       </td>
     </>
   )
@@ -203,20 +213,25 @@ function StockCell({
   }
   // On a bac row the two weighing boxes trade cells (below); each is named
   // for the column it is in.
+  // A liquid vial is never weighed: as on the source sheet, its weighing
+  // cells are empty (a dash); what is stored stays stored.
   const weighBox = (
     key: 'stock_vial_mg' | 'stock_vial_diluent_mg',
     hint: string | null
-  ) => (
-    <NumberBox
-      label={what}
-      field={col}
-      saveKey={keyOf(key)}
-      value={inputs[key]}
-      disabled={locked || liquid}
-      hint={hint}
-      onCommit={v => set(key, v)}
-    />
-  )
+  ) =>
+    liquid ? (
+      NOT_WEIGHED
+    ) : (
+      <NumberBox
+        label={what}
+        field={col}
+        saveKey={keyOf(key)}
+        value={inputs[key]}
+        disabled={locked}
+        hint={hint}
+        onCommit={v => set(key, v)}
+      />
+    )
   switch (col) {
     case 'sample_id':
       return <IdCell>{row.sample_id}</IdCell>
@@ -406,6 +421,9 @@ function StockCell({
         ? computed.capsule_diluent_ul
         : row.params.sample_diluent_ul
       const target = computed.vials[0]?.target.value ?? null
+      // a liquid row has no box here (L4, as on the source); none of ours
+      // goes into a bac vial either, its box stays off
+      if (liquid) return <InputCell>{NOT_WEIGHED}</InputCell>
       return (
         <InputCell>
           <NumberBox
@@ -414,8 +432,7 @@ function StockCell({
             saveKey={keyOf('diluent_ul')}
             value={inputs.diluent_ul}
             placeholder={assumed === null ? undefined : fmtDp(assumed, 0)}
-            // none of ours goes into a liquid or bac vial
-            disabled={locked || liquid || bac}
+            disabled={locked || bac}
             hint={
               !capsule
                 ? null

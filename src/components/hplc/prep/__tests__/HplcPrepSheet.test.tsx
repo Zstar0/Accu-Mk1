@@ -1,8 +1,21 @@
 import { describe, it, expect, vi } from 'vitest'
-import { act, fireEvent, render, screen, within } from '@testing-library/react'
+import {
+  act,
+  fireEvent,
+  render,
+  screen,
+  waitFor,
+  within,
+} from '@testing-library/react'
 import type { HplcSheetRow } from '@/lib/api'
 import type { HplcPrepRule } from '@/lib/hplc-prep-rules'
 import { HplcPrepSheet } from '../HplcPrepSheet'
+import {
+  STEP2_COLUMNS,
+  STEP2B_COLUMNS,
+  STEP3_COLUMNS,
+  STEP3A_COLUMNS,
+} from '../hplc-sheet-columns'
 import {
   fixtureCase,
   INSTRUMENTS,
@@ -48,6 +61,23 @@ const AS_VIAL = 'Wt Autosampler vial and cap (mg)'
 const box = (name: string) => screen.getByRole('textbox', { name })
 const select = (name: string) => screen.getByRole('combobox', { name })
 
+const tesaIpaBlend = () =>
+  rowFromCase('blend Tesamorelin + Ipamorelin, split', {
+    identity: 'Tesamorelin + Ipamorelin',
+    is_blend: true,
+  })
+
+/** A column's help, as its header's tooltip card shows it on focus. */
+async function help(header: HTMLElement): Promise<string> {
+  const trigger = header.querySelector<HTMLElement>('[tabindex="0"]')
+  if (!trigger) throw new Error(`no help on ${header.textContent}`)
+  fireEvent.focus(trigger)
+  const text = (await screen.findByRole('tooltip')).textContent ?? ''
+  fireEvent.blur(trigger)
+  await waitFor(() => expect(screen.queryByRole('tooltip')).toBeNull())
+  return text
+}
+
 /** Types into a box and leaves it, as a tech tabs on. */
 function typeAndLeave(el: HTMLElement, text: string) {
   fireEvent.focus(el)
@@ -92,7 +122,7 @@ function rule(over: Partial<HplcPrepRule>): HplcPrepRule {
 }
 
 describe('HplcPrepSheet', () => {
-  it('renders Step 2 and Step 3 with the source labels, in the source order', () => {
+  it('renders Step 2 and Step 3 with the source labels, in the source order', async () => {
     renderSheet([makeRow()])
     expect(headers(step2())).toEqual([
       'Sample ID',
@@ -108,12 +138,12 @@ describe('HplcPrepSheet', () => {
       'Peptide Stock Conc (ug/mL)',
       '2-step dilution',
     ])
-    expect(
-      within(step2()).getByRole('columnheader', {
-        name: 'Peptide Stock Conc (ug/mL)',
-      })
-    ).toHaveAttribute(
-      'title',
+    // T1: the help is the app's tooltip card, no longer a browser title
+    const conc = within(step2()).getByRole('columnheader', {
+      name: 'Peptide Stock Conc (ug/mL)',
+    })
+    expect(conc).not.toHaveAttribute('title')
+    expect(await help(conc)).toBe(
       "Declared Peptide Wt × 1000 ÷ Total Diluent added. For a blend: the lead component's weight (Step 2b) × 1000 ÷ Total Diluent added."
     )
     expect(headers(step3())).toEqual([
@@ -152,21 +182,59 @@ describe('HplcPrepSheet', () => {
     )
   })
 
-  it('keeps the source arrows and leaves out the instrument-naming sentence', () => {
+  it('names the HPLC Prep Rules, not the source tool, and leaves out the instrument-naming sentence', async () => {
+    // T2: "Lab rules →" pointed at a dialog of the source tool only
     renderSheet([makeRow()])
-    const identity = within(step2()).getByRole('columnheader', {
-      name: 'Sample Identity',
-    })
-    expect(identity.title).toContain('Lab rules → Blend shorthand')
-    expect(identity.title).not.toContain('sets the dropdown')
+    const identity = await help(
+      within(step2()).getByRole('columnheader', { name: 'Sample Identity' })
+    )
+    expect(identity).not.toContain('Lab rules')
+    expect(identity).not.toContain('sets the dropdown')
     expect(
-      within(step2()).getByRole('columnheader', { name: 'Diluent' }).title
-    ).toContain('Lab rules → Diluent by peptide')
+      await help(within(step2()).getByRole('columnheader', { name: 'Diluent' }))
+    ).toContain('unless the HPLC Prep Rules give a peptide')
     expect(
-      within(step3()).getByRole('columnheader', {
-        name: 'Total Dilution Factor',
-      }).title
+      await help(
+        within(step3()).getByRole('columnheader', {
+          name: 'Total Dilution Factor',
+        })
+      )
     ).toMatch(/^Stock → final vial\./)
+    expect(
+      await help(
+        within(step2()).getByRole('columnheader', { name: 'Instrument' })
+      )
+    ).toBe('Which HPLC instrument this vial runs on')
+  })
+
+  it('no column help names a date, a person or the source tool (T2)', () => {
+    const all = [
+      ...STEP2_COLUMNS,
+      ...STEP2B_COLUMNS,
+      ...STEP3A_COLUMNS,
+      ...STEP3_COLUMNS,
+    ]
+    for (const c of all) {
+      expect(c.title ?? '').not.toMatch(/\d{4}-\d\d-\d\d|Dennis|Lab rules|1290/)
+    }
+  })
+
+  it('every weighing header has help, reachable by keyboard (T1)', async () => {
+    renderSheet([makeRow()])
+    for (const name of [VIAL, VIAL_DIL, AS_VIAL]) {
+      const head = screen.getAllByRole('columnheader', { name })[0]
+      const trigger = within(head as HTMLElement).getByText(name)
+      expect(trigger).toHaveAttribute('tabindex', '0')
+      expect((await help(head as HTMLElement)).length).toBeGreaterThan(20)
+    }
+  })
+
+  it('ArrowUp from the first box of a table stays in the body, never the header help', () => {
+    renderSheet([makeRow()])
+    const first = box(`${S1}, Declared Peptide Wt (mg)`)
+    first.focus()
+    fireEvent.keyDown(first, { key: 'ArrowUp' })
+    expect(first).toHaveFocus()
   })
 
   it('names every box with its sample id and column, and ties its hint to it', () => {
@@ -306,11 +374,28 @@ describe('HplcPrepSheet', () => {
     )
   })
 
-  it('a liquid row has its weighing and diluent boxes off and its volume box on', () => {
-    renderSheet([rowFromCase('liquid, declared 3 mL')])
-    expect(box(`${S1}, ${VIAL}`)).toBeDisabled()
-    expect(box(`${S1}, ${VIAL_DIL}`)).toBeDisabled()
-    expect(box(`${S1}, Diluent to add (uL)`)).toBeDisabled()
+  it('a liquid row has no weighing or diluent boxes (a dash, as the source) and its volume box on', () => {
+    // L4: the source hides them; a weighing stored before the form changed
+    // stays stored, unseen
+    renderSheet([
+      rowFromCase('liquid, declared 3 mL', {
+        hplc_prep: {
+          ...rowFromCase('liquid, declared 3 mL').hplc_prep,
+          stock_vial_mg: 5012.31,
+        },
+      }),
+    ])
+    const cols = headers(step2())
+    const cells = within(
+      within(step2()).getByText(S1).closest('tr') as HTMLElement
+    ).getAllByRole('cell')
+    for (const name of [VIAL, 'Diluent to add (uL)', VIAL_DIL]) {
+      expect(
+        screen.queryByRole('textbox', { name: `${S1}, ${name}` })
+      ).not.toBeInTheDocument()
+      expect(cells[cols.indexOf(name)]).toHaveTextContent(/^-$/)
+    }
+    expect(screen.queryByDisplayValue('5012.31')).not.toBeInTheDocument()
     const volume = box(`${S1}, Declared Liquid Vol (mL)`)
     expect(volume).toBeEnabled()
     expect(volume).toHaveValue('3')
@@ -416,6 +501,46 @@ describe('HplcPrepSheet', () => {
       screen.queryByRole('textbox', { name: `${S1}, ${VIAL}` })
     ).not.toBeInTheDocument()
     expect(within(step3()).queryByText(S1)).not.toBeInTheDocument()
+  })
+
+  it('says "no HPLC prep" once when the server already says it (L5)', () => {
+    renderSheet([
+      makeRow({
+        form: null,
+        problems: ['no HPLC prep for this sample form'],
+        sample_form: { id: 9, name: 'Pen', hplc_prep: null },
+      }),
+    ])
+    const note = within(step2()).getByText(/no HPLC prep/, { selector: 'td' })
+    expect(note).toHaveTextContent(/^no HPLC prep for this sample form$/)
+  })
+
+  it('names every select by its sample id and column (T3)', () => {
+    renderSheet([tesaIpaBlend()])
+    const selects = screen.getAllByRole('combobox')
+    expect(selects.length).toBeGreaterThan(4)
+    for (const s of selects)
+      expect(s).toHaveAccessibleName(new RegExp(`^${S1}, \\S`))
+  })
+
+  it('selects size to their choices and the Sample ID column is one fixed sticky width (L1, L2)', () => {
+    renderSheet([makeRow()])
+    const form = select(`${S1}, Form`)
+    expect(form.className).toContain('w-auto')
+    expect(form.className).toContain('min-w-44')
+    expect(form.className).not.toMatch(/(^|\s)w-full(\s|$)/)
+    const head = within(step2()).getByRole('columnheader', {
+      name: 'Sample ID',
+    })
+    expect(head.className).not.toContain('bg-muted/60')
+    expect(head.className).not.toContain('z-[2]')
+    expect(head.className).toMatch(/(^|\s)z-\[11\](\s|$)/)
+    const id = within(step2()).getByText(S1)
+    for (const el of [head, id]) {
+      expect(el.className).toContain('left-0')
+      expect(el.className).toContain('w-28')
+      expect(el.className).toContain('whitespace-nowrap')
+    }
   })
 
   it('a backwards weighing shows in the warnings panel with its sample id', () => {

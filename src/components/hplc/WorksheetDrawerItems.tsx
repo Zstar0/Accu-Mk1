@@ -41,10 +41,13 @@ import {
 } from '@/lib/service-group-colors'
 import { SampleIdBadge } from '@/components/samples/SampleIdBadge'
 import type {
+  HplcSheetRow,
   WorksheetListItem,
   Instrument,
   WorksheetItemPatch,
 } from '@/lib/api'
+import { worksheetKind } from '@/lib/worksheet-kind'
+import { useHplcSheet } from '@/services/hplc-worksheet'
 import { isEndoWorksheetItem } from '@/lib/endo-worksheet'
 import { EndoPrepLine } from './EndoPrepLine'
 import { PrepStatusSelect } from './PrepStatusSelect'
@@ -105,6 +108,19 @@ export function WorksheetDrawerItems({
   worksheet,
 }: WorksheetDrawerItemsProps) {
   const otherWorksheets = openWorksheets.filter(ws => ws.id !== worksheetId)
+
+  // An HPLC worksheet's prep sheet keeps its own instrument per row (by id),
+  // which the prep uses; the select below writes the item's SENAITE uid. The
+  // sheet's is shown beside it. Other benches never read the sheet.
+  const onHplcSheet = worksheetKind(items) === 'hplc'
+  const sheet = useHplcSheet(worksheetId, onHplcSheet)
+  const sheetRows = useMemo(
+    () =>
+      new Map(
+        (onHplcSheet ? (sheet.data?.rows ?? []) : []).map(r => [r.item_id, r])
+      ),
+    [onHplcSheet, sheet.data]
+  )
 
   const slaSubjects: SlaSubject[] = useMemo(
     () =>
@@ -206,6 +222,7 @@ export function WorksheetDrawerItems({
                     onStartPrep={onStartPrep}
                     onUpdateItem={onUpdateItem}
                     worksheet={worksheet}
+                    sheetRow={sheetRows.get(item.id)}
                   />
                 ))}
               </div>
@@ -239,6 +256,8 @@ interface SortableItemRowProps {
   }) => void
   onUpdateItem: (itemId: number, data: WorksheetItemPatch) => void
   worksheet?: WorksheetListItem
+  /** The item's row on the HPLC prep sheet; absent on other benches. */
+  sheetRow?: HplcSheetRow
 }
 
 function SortableItemRow({
@@ -255,7 +274,10 @@ function SortableItemRow({
   onStartPrep,
   onUpdateItem,
   worksheet,
+  sheetRow,
 }: SortableItemRowProps) {
+  // a promoted row's prep is final: its instrument is no longer changed here
+  const promoted = sheetRow?.promoted === true
   const {
     attributes,
     listeners,
@@ -411,12 +433,16 @@ function SortableItemRow({
         ) : (
           <Select
             value={item.instrument_uid ?? ''}
+            disabled={promoted}
             onValueChange={value =>
               onUpdateItem(item.id, { instrument_uid: value })
             }
           >
             <SelectTrigger
               size="sm"
+              aria-label={
+                sheetRow ? `${item.sample_id}, Instrument` : undefined
+              }
               className="h-6 text-[10px] border-transparent bg-transparent shadow-none hover:border-border"
             >
               <SelectValue placeholder="Instrument…" />
@@ -432,6 +458,14 @@ function SortableItemRow({
               ))}
             </SelectContent>
           </Select>
+        )}
+        {sheetRow && (
+          <span className="block text-[10px] text-muted-foreground">
+            Sheet instrument: {sheetRow.instrument_name ?? 'not set'}
+            {promoted && !isCompleted && (
+              <span className="block">final: the prep is promoted</span>
+            )}
+          </span>
         )}
       </div>
 

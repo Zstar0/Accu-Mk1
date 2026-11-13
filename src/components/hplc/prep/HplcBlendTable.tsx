@@ -21,6 +21,7 @@ import {
   type Step2bKey,
 } from './hplc-sheet-columns'
 import { onSheetKey } from './hplc-sheet-keys'
+import { unplannedWhy } from './HplcStockTable'
 import { boxKey } from '@/services/hplc-worksheet'
 
 const leadId = (row: HplcSheetRow, peptideId: number) =>
@@ -76,10 +77,6 @@ export function HplcBlendTable({ rowViews, onPatch }: SheetSectionProps) {
       </thead>
       <tbody>
         {rows.flatMap(v => {
-          const why = [
-            v.row.form === null ? 'no HPLC prep for this form' : null,
-            ...v.row.problems,
-          ].filter(Boolean)
           if (v.computed === null || v.row.problems.length > 0)
             return [
               <SheetRow key={v.row.item_id} shaded={v.shaded}>
@@ -88,7 +85,7 @@ export function HplcBlendTable({ rowViews, onPatch }: SheetSectionProps) {
                   className={`${TD} text-muted-foreground`}
                   colSpan={STEP2B_COLUMNS.length - 1}
                 >
-                  {why.length ? why.join('. ') : 'no HPLC prep for this row'}
+                  {unplannedWhy(v.row)}
                 </td>
               </SheetRow>,
             ]

@@ -771,3 +771,81 @@ describe('CalculationVisuals with null masses', () => {
     expect(document.body.textContent).not.toContain('mass / 1000')
   })
 })
+
+// V1: a two-step prep (the shape calculate_dilution_factor stores with an
+// intermediate vial). The engine keeps the intermediate leg's volumes and factor,
+// not its weighings.
+const TWO_STEP_DILUTION = {
+  diluent_mass_mg: 1434.2,
+  diluent_vol_ul: 1438.5,
+  sample_mass_mg: 59.6,
+  sample_vol_ul: 59.8,
+  total_vol_ul: 1498.3,
+  dilution_factor: 25.05,
+  stock_mass_mg: 2959.75,
+  stock_volume_ml: 2.968358,
+  problem: null,
+  form: 'powder',
+  dilution_factor_total: 827.9526,
+  intermediate: {
+    diluent_vol_ul: 1454.62,
+    stock_vol_ul: 45.38,
+    total_vol_ul: 1500,
+    dilution_factor: 33.052,
+    problem: null,
+  },
+}
+
+describe('CalculationVisuals two-step dilution', () => {
+  it('shows each step with its own factor and their product, which the headline uses', () => {
+    render(<CalculationVisuals trace={{ dilution: TWO_STEP_DILUTION }} />)
+    const block = screen.getByTestId('two-step-factors')
+    expect(block).toHaveTextContent('Intermediate Vial (stock to intermediate)')
+    expect(block).toHaveTextContent('1454.6 µL')
+    expect(block).toHaveTextContent('45.4 µL')
+    expect(block).toHaveTextContent('1500.0 µL')
+    expect(block).toHaveTextContent('Intermediate factor33.05×')
+    expect(block).toHaveTextContent('Final vial factor25.05×')
+    // the Dilution Vial's own box names its factor as the final step's
+    expect(screen.queryByText('Dilution Factor')).toBeNull()
+    expect(screen.getAllByText('Final vial factor')).toHaveLength(2)
+    expect(block).toHaveTextContent('Total Dilution Factor827.95×')
+    expect(block).toHaveTextContent(/weighings are not kept/)
+    expect(screen.queryByText(/not determined/)).not.toBeInTheDocument()
+  })
+
+  it('keeps one problem line when the intermediate leg has the problem', () => {
+    const { container } = render(
+      <CalculationVisuals
+        trace={{
+          dilution: {
+            ...TWO_STEP_DILUTION,
+            problem: 'intermediate_stock',
+            dilution_factor_total: null,
+          },
+        }}
+      />
+    )
+    expect(
+      container.textContent?.split(PROBLEM_WORDING.intermediate_stock)
+    ).toHaveLength(2)
+    expect(screen.getByTestId('two-step-factors')).toHaveTextContent(
+      'Total Dilution Factornot determined'
+    )
+  })
+
+  it('renders no two-step block for a one-step prep', () => {
+    render(
+      <CalculationVisuals
+        trace={{
+          dilution: {
+            ...TWO_STEP_DILUTION,
+            dilution_factor_total: 25.05,
+            intermediate: null,
+          },
+        }}
+      />
+    )
+    expect(screen.queryByTestId('two-step-factors')).toBeNull()
+  })
+})

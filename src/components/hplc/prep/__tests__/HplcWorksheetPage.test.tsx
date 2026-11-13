@@ -21,6 +21,7 @@ import {
 import { toast } from 'sonner'
 import { useWorksheetDrawer } from '@/hooks/use-worksheet-drawer'
 import { hplcFailures } from '@/services/hplc-worksheet'
+import { useUIStore } from '@/store/ui-store'
 import { HplcWorksheetPage } from '../HplcWorksheetPage'
 import { makeRow, makeSheet } from './hplc-sheet-fixtures'
 
@@ -756,6 +757,38 @@ describe('HplcWorksheetPage', () => {
     const holder = screen.getByRole('alert').parentElement
     expect(holder?.className).toMatch(/\bmax-h-48\b/)
     expect(holder?.className).toMatch(/\boverflow-y-auto\b/)
+  })
+
+  it('the page root is its own stacking context, keeps to the width it is given, and darkens native controls (L2, L3)', async () => {
+    vi.mocked(getHplcSheet).mockResolvedValue(makeSheet([makeRow()]))
+    renderPage()
+    await screen.findByRole('textbox', { name: `${S1}, ${VIAL}` })
+    const root = screen.getByTestId('hplc-worksheet-page')
+    for (const c of [
+      'isolate',
+      '[contain:inline-size]',
+      'dark:[color-scheme:dark]',
+    ])
+      expect(root.className.split(/\s+/)).toContain(c)
+  })
+
+  it('the header links to the HPLC Prep Rules page (T2)', async () => {
+    vi.mocked(getHplcSheet).mockResolvedValue(makeSheet([makeRow()]))
+    const navigateTo = vi.fn()
+    const real = useUIStore.getState().navigateTo
+    useUIStore.setState({ navigateTo })
+    try {
+      renderPage()
+      fireEvent.click(
+        await screen.findByRole('button', { name: 'HPLC Prep Rules' })
+      )
+      expect(navigateTo).toHaveBeenCalledWith(
+        'hplc-analysis',
+        'hplc-prep-rules'
+      )
+    } finally {
+      useUIStore.setState({ navigateTo: real })
+    }
   })
 
   it('a completed sheet is read-only on the page', async () => {

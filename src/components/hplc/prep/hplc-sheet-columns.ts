@@ -57,7 +57,7 @@ export const STEP2_COLUMNS: SheetColumn<Step2Key>[] = [
     kind: 'text',
     label: 'Sample Identity',
     title:
-      'What the sample is, as Accu-Mk1 names it. A blend lists its peptides joined with " + " ("BPC-157 + TB500"), or is a nickname from the Lab rules → Blend shorthand ("KLOW" = its four peptides); Step 2b then asks for each one\'s weight.',
+      'What the sample is, as Accu-Mk1 names it. A blend lists its peptides joined with " + " ("BPC-157 + TB500"), or is a blend\'s short name ("KLOW" = its four peptides); Step 2b then asks for each one\'s weight.',
   },
   {
     key: 'declared_mg',
@@ -71,7 +71,7 @@ export const STEP2_COLUMNS: SheetColumn<Step2Key>[] = [
     kind: 'select',
     label: 'Form',
     title:
-      "How the vial arrived. Lyophilized powder (the usual) is weighed and dissolved here in Step 2. Liquid (reconstituted) means the customer's declared volume is the stock: type it in the next box; the weighing boxes switch off. Bacteriostatic water: weigh the vial full (① the left weighing box), then emptied and dried (② the right box); the stock is 9000 ug/mL (0.9% benzyl alcohol) and the declared weight is worked out. Capsule (2026-10-21): the declared weight is per capsule and Capsules used says how many went in; empty the capsules into a vial, cap it and weigh (the left weighing box), add water and weigh again (the right box): the difference is the water added, worked out as for a powder.",
+      "How the vial arrived. Lyophilized powder (the usual) is weighed and dissolved here in Step 2. Liquid (reconstituted) means the customer's declared volume is the stock: type it in the next box; the weighing boxes switch off. Bacteriostatic water: weigh the vial full (① the left weighing box), then emptied and dried (② the right box); the stock is 9000 ug/mL (0.9% benzyl alcohol) and the declared weight is worked out. Capsule: the declared weight is per capsule and Capsules used says how many went in; empty the capsules into a vial, cap it and weigh (the left weighing box), add water and weigh again (the right box): the difference is the water added, worked out as for a powder.",
   },
   {
     key: 'declared_volume_ml',
@@ -93,25 +93,29 @@ export const STEP2_COLUMNS: SheetColumn<Step2Key>[] = [
     key: 'instrument',
     kind: 'select',
     label: 'Instrument',
-    title: 'Which Agilent 1290 this vial runs on',
+    title: 'Which HPLC instrument this vial runs on',
   },
   {
     key: 'diluent',
     kind: 'select',
     label: 'Diluent',
     title:
-      'What the stock (and its dilutions) are made in. Water, unless a peptide in the Sample Identity is listed under Lab rules → Diluent by peptide (GHK-Cu, GLOW and KLOW take water + 0.1% TFA). Pick one to use another for this row; the first choice goes back to the rule.',
+      'What the stock (and its dilutions) are made in. Water, unless the HPLC Prep Rules give a peptide in the Sample Identity another (GHK-Cu, GLOW and KLOW take water + 0.1% TFA). Pick one to use another for this row; the first choice goes back to the rule.',
   },
   {
     key: 'stock_vial_mg',
     kind: 'input',
     label: 'Wt Customer Sample vial and Septum (mg)',
+    title:
+      'The customer sample vial with its septum, before the diluent. Bacteriostatic water: the vial full, as received, weighed first. Capsule: the vial and cap with the capsules emptied in.',
   },
   { key: 'diluent_ul', kind: 'input', label: 'Diluent to add (uL)' },
   {
     key: 'stock_vial_diluent_mg',
     kind: 'input',
     label: 'Wt Customer Sample vial and Septum + Diluent (mg)',
+    title:
+      'The same vial after the diluent goes in. Bacteriostatic water: the vial emptied and dried, weighed after. Capsule: the same vial after the water.',
   },
   {
     key: 'total_diluent_ml',
@@ -176,7 +180,7 @@ export const STEP2B_COLUMNS: SheetColumn<Step2bKey>[] = [
     kind: 'input',
     label: 'Lead',
     title:
-      'The component the Step 3 plan hits the Target Conc for, in its vial. The others in that vial land where that same dilution puts them. Blank = the usual lead for the blend (the Usual blend leads list under Lab rules), else the heaviest.',
+      "The component the Step 3 plan hits the Target Conc for, in its vial. The others in that vial land where that same dilution puts them. Blank = the blend's lead from the HPLC Prep Rules, else the heaviest.",
   },
   {
     key: 'stock_conc_ug_ml',
@@ -191,7 +195,7 @@ export const STEP2B_COLUMNS: SheetColumn<Step2bKey>[] = [
     kind: 'input',
     label: 'Own Target (ug/mL)',
     title:
-      "What this peptide is diluted to on its own: blank = 200, or its special case under Lab rules (greyed in). Type a value to use another (Dennis, 2026-09-29). The lead's is the target its vial is diluted to in Step 3 unless one is typed there; the others' are what they would be on their own.",
+      "What this peptide is diluted to on its own: blank = 200, or its target from the HPLC Prep Rules (greyed in). Type a value to use another. The lead's is the target its vial is diluted to in Step 3 unless one is typed there; the others' are what they would be on their own.",
   },
   {
     key: 'planned_final_ug_ml',
@@ -247,7 +251,7 @@ export const STEP3A_COLUMNS: SheetColumn<Step3aKey>[] = [
     kind: 'text',
     label: 'Diluent',
     title:
-      'From Step 2: what the stock and this dilution are made in (Water, or water + 0.1% TFA for GHK by the Lab rules; a row can pick its own there).',
+      'From Step 2: what the stock and this dilution are made in (Water, or water + 0.1% TFA for GHK by the HPLC Prep Rules; a row can pick its own there).',
   },
   {
     key: 'int_target_ug_ml',
@@ -266,6 +270,7 @@ export const STEP3A_COLUMNS: SheetColumn<Step3aKey>[] = [
     key: 'int_vial_mg',
     kind: 'input',
     label: 'Wt Intermediate vial and cap (mg)',
+    title: 'The empty intermediate vial with its cap, weighed first.',
   },
   {
     key: 'diluent_vol_ul',
@@ -285,6 +290,7 @@ export const STEP3A_COLUMNS: SheetColumn<Step3aKey>[] = [
     key: 'int_vial_diluent_mg',
     kind: 'input',
     label: 'Wt Intermediate vial and cap + Diluent (mg)',
+    title: 'The intermediate vial after the diluent goes in (both halves).',
   },
   {
     key: 'stock_vol_ul',
@@ -305,6 +311,8 @@ export const STEP3A_COLUMNS: SheetColumn<Step3aKey>[] = [
     key: 'int_vial_all_mg',
     kind: 'input',
     label: 'Wt Intermediate vial, cap, Diluent + Stock (mg)',
+    title:
+      'The intermediate vial after the stock goes in (both halves), on top of the diluent.',
   },
   {
     key: 'actual_diluent_ul',
@@ -366,7 +374,7 @@ export const STEP3_COLUMNS: SheetColumn<Step3Key>[] = [
     kind: 'text',
     label: 'Diluent',
     title:
-      'From Step 2: what the stock and this dilution are made in (Water, or water + 0.1% TFA for GHK by the Lab rules; a row can pick its own there).',
+      'From Step 2: what the stock and this dilution are made in (Water, or water + 0.1% TFA for GHK by the HPLC Prep Rules; a row can pick its own there).',
   },
   {
     key: 'stock_for_final',
@@ -378,7 +386,12 @@ export const STEP3_COLUMNS: SheetColumn<Step3Key>[] = [
   },
   { key: 'target_ug_ml', kind: 'input', label: 'Target Conc (ug/mL)' },
   { key: 'target_volume_ul', kind: 'input', label: 'Target Total Vol (uL)' },
-  { key: 'vial_mg', kind: 'input', label: 'Wt Autosampler vial and cap (mg)' },
+  {
+    key: 'vial_mg',
+    kind: 'input',
+    label: 'Wt Autosampler vial and cap (mg)',
+    title: 'The empty autosampler vial with its cap, weighed first.',
+  },
   {
     key: 'diluent_vol_ul',
     kind: 'computed',
@@ -397,6 +410,8 @@ export const STEP3_COLUMNS: SheetColumn<Step3Key>[] = [
     key: 'vial_diluent_mg',
     kind: 'input',
     label: 'Wt Autosampler vial and cap + Diluent (mg)',
+    title:
+      'The autosampler vial after the diluent goes in (both halves). A neat capsule vial takes no diluent: blank = the vial weight.',
   },
   {
     key: 'stock_vol_ul',
@@ -416,6 +431,8 @@ export const STEP3_COLUMNS: SheetColumn<Step3Key>[] = [
     key: 'vial_all_mg',
     kind: 'input',
     label: 'Wt of Vial, cap, Diluent + Sample (mg)',
+    title:
+      'The autosampler vial after the stock goes in (both halves), on top of the diluent.',
   },
   {
     key: 'actual_diluent_ul',

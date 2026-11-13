@@ -16,6 +16,7 @@ import { displayName } from '@/lib/user-display'
 import { parseWorksheetNotes, withNotesText } from '@/lib/worksheet-notes'
 import { useWorksheetDrawer } from '@/hooks/use-worksheet-drawer'
 import { useHplcPrepRules } from '@/services/hplc-prep-rules'
+import { useUIStore } from '@/store/ui-store'
 import {
   HPLC_SHEET_KEY,
   hplcFailures,
@@ -204,7 +205,14 @@ export function HplcWorksheetPage({
   }
 
   return (
-    <div className="h-full min-h-0 space-y-4 overflow-y-auto bg-muted/30 px-6 pb-8 pt-5">
+    // isolate: the sticky Sample ID cells (z-10) stack inside the page, not
+    // against the app's fixed sidebar; contain inline-size keeps the page at
+    // the width it is given, so the wide tables scroll in their own box;
+    // native selects, spinners and radios follow the dark theme
+    <div
+      data-testid="hplc-worksheet-page"
+      className="isolate h-full min-h-0 space-y-4 overflow-y-auto bg-muted/30 px-6 pb-8 pt-5 [contain:inline-size] dark:[color-scheme:dark]"
+    >
       <div className="flex flex-wrap items-end justify-between gap-4">
         <div className="min-w-0">
           <h2 className="truncate text-[23px] font-semibold leading-tight tracking-tight">
@@ -218,6 +226,17 @@ export function HplcWorksheetPage({
               {`${preppable.filter(r => r.promoted).length} of ${preppable.length} promoted`}
             </span>
           )}
+          <button
+            type="button"
+            onClick={() =>
+              useUIStore
+                .getState()
+                .navigateTo('hplc-analysis', 'hplc-prep-rules')
+            }
+            className="ml-3 text-xs text-teal-700 underline-offset-2 hover:underline dark:text-teal-400"
+          >
+            HPLC Prep Rules
+          </button>
         </div>
         <div className="flex flex-wrap items-center gap-2">
           {isCompleted ? (

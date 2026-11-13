@@ -70,6 +70,20 @@ interface DilutionTrace {
   // The prep form that produced the row. Absent on a trace stored before the engine
   // wrote it, which means "not known to be liquid", not "powder": see stockMassText.
   form?: string
+  // A two-step prep (hplc_processor.calculate_dilution_factor): the stock to
+  // intermediate leg, and the product of both factors. `dilution_factor` is then
+  // the final leg's alone. The engine keeps the intermediate's volumes, not its
+  // weighings. Null or absent on a one-step prep.
+  dilution_factor_total?: number | null
+  intermediate?: IntermediateLeg | null
+}
+
+interface IntermediateLeg {
+  diluent_vol_ul: number | null
+  stock_vol_ul: number | null
+  total_vol_ul: number | null
+  dilution_factor: number | null
+  problem?: string | null
 }
 
 interface CalculationTrace {
@@ -531,7 +545,9 @@ function DilutionBreakdown({ trace }: { trace: DilutionTrace }) {
               </tbody>
             </table>
             <div className="mt-2 flex items-baseline justify-between rounded-md bg-blue-500/10 border border-blue-500/20 px-2 py-1.5">
-              <span className="text-xs text-slate-400">Dilution Factor</span>
+              <span className="text-xs text-slate-400">
+                {trace.intermediate ? 'Final vial factor' : 'Dilution Factor'}
+              </span>
               <span className="text-sm font-bold tabular-nums text-blue-400">{fixed(trace.dilution_factor, 2, '\u00d7')}</span>
             </div>
           </div>
@@ -556,6 +572,9 @@ function DilutionBreakdown({ trace }: { trace: DilutionTrace }) {
             </p>
           </div>
         </div>
+        {trace.intermediate && (
+          <TwoStepFactors trace={trace} leg={trace.intermediate} />
+        )}
         {trace.problem && (
           <p className="mt-3 text-xs text-amber-400">
             {undeterminedLabel(trace)} {NOT_DETERMINED}. {problemCopy(trace.problem)}
@@ -563,6 +582,68 @@ function DilutionBreakdown({ trace }: { trace: DilutionTrace }) {
         )}
       </CardContent>
     </Card>
+  )
+}
+
+/** A two-step prep: the intermediate leg's volumes and factor, the final leg's
+ *  factor, and their product, which is the factor the result uses. Its problem,
+ *  if any, is the panel's one problem line. */
+function TwoStepFactors({
+  trace,
+  leg,
+}: {
+  trace: DilutionTrace
+  leg: IntermediateLeg
+}) {
+  const rows: [string, string][] = [
+    ['Diluent', fixed(leg.diluent_vol_ul, 1, ' µL')],
+    ['Stock', fixed(leg.stock_vol_ul, 1, ' µL')],
+    ['Total volume', fixed(leg.total_vol_ul, 1, ' µL')],
+  ]
+  return (
+    <div
+      data-testid="two-step-factors"
+      className="mt-4 grid grid-cols-2 gap-4 border-t pt-3"
+    >
+      <div>
+        <p className="mb-2 text-xs font-medium text-muted-foreground">
+          Intermediate Vial (stock to intermediate)
+        </p>
+        <table className="w-full text-xs">
+          <tbody className="font-mono">
+            {rows.map(([label, vol]) => (
+              <tr key={label} className="border-b last:border-0">
+                <td className="py-1 font-sans text-muted-foreground">{label}</td>
+                <td className="py-1 text-right">{vol}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+        <div className="mt-2 flex items-baseline justify-between rounded-md bg-blue-500/10 border border-blue-500/20 px-2 py-1.5">
+          <span className="text-xs text-slate-400">Intermediate factor</span>
+          <span className="text-sm font-bold tabular-nums text-blue-400">
+            {fixed(leg.dilution_factor, 2, '×')}
+          </span>
+        </div>
+      </div>
+      <div className="space-y-2 text-xs">
+        <p className="mb-2 font-medium text-slate-400">Two steps</p>
+        <div className="flex justify-between">
+          <span className="text-slate-400">Final vial factor</span>
+          <span className="font-mono">{fixed(trace.dilution_factor, 2, '×')}</span>
+        </div>
+        <div className="flex items-baseline justify-between rounded-md bg-blue-500/10 border border-blue-500/20 px-2 py-1.5">
+          <span className="text-slate-400">Total Dilution Factor</span>
+          <span className="text-sm font-bold tabular-nums text-blue-400">
+            {fixed(trace.dilution_factor_total, 2, '×')}
+          </span>
+        </div>
+        <p className="text-[10px] text-muted-foreground leading-relaxed">
+          Total = intermediate factor × final vial factor. The intermediate
+          vial&apos;s weighings are not kept with the result, only its volumes.
+        </p>
+      </div>
+    </div>
   )
 }
 
