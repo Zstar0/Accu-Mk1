@@ -32,6 +32,7 @@ import {
   CAL_SHEET_KEY,
   NO_ANSWER,
   RELOADED,
+  RELOADED_NOTHING_LOST,
   SAVE_TIMEOUT_MS,
   resetCalSaves,
   useSaveCalSheet,
@@ -1312,6 +1313,23 @@ describe('H1: a save that changes nothing does not forget one that can still lan
     expect(box('Weight from COA (mg)').value).toBe('6')
   })
 
+  it('a foreign save reaching a saved page is still announced, and its values shown', async () => {
+    const { sheet, view } = await openCase1()
+    expect(saved()).toBe('true')
+    act(() =>
+      view.qc.setQueryData(
+        CAL_SHEET_KEY(5),
+        makeSheet(
+          { ...(sheet.inputs as CalInputs), coa_weight_mg: 9 },
+          { version: 2 }
+        )
+      )
+    )
+    expect(await screen.findByText(RELOADED_NOTHING_LOST)).toBeInTheDocument()
+    expect(box('Weight from COA (mg)').value).toBe('9')
+    expect(screen.queryByText(RELOADED)).toBeNull()
+    expect(saved()).toBe('true')
+  })
   it('leaving and coming back with a save in the air keeps the entry', async () => {
     const { w0 } = await noOpAfterTimeout()
     act(() => useUIStore.setState({ calibrationSheetPageId: null }))

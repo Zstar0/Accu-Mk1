@@ -55,6 +55,9 @@ export const LOST_AFTER_MS = 60_000
 export const CHECKING = 'Checking that the last save went through...'
 export const RELOADED =
   'Someone else saved this sheet. It has been reloaded, and the changes you had not saved were dropped.'
+/** The same, when this page had nothing unsaved to drop. */
+export const RELOADED_NOTHING_LOST =
+  'Someone else saved this sheet. It has been reloaded: check the values before filing.'
 
 /** Equal as stored: key order does not count, and a missing key, undefined
  *  and null are all "empty" (the server fills every key, with null). */
@@ -86,7 +89,8 @@ export interface CalSaveState {
   local: CalDraft
   saving: boolean
   error: string | null
-  reloaded: boolean
+  /** The reload line's sentence, until dismissed (null: none). */
+  reloaded: string | null
   /** The local inputs are the server's, nothing is out, no sent save is
    *  unaccounted for, no box holds a refused value. File and Duplicate wait
    *  for it. */
@@ -109,7 +113,7 @@ interface Entry {
   version: number
   inFlight: boolean
   error: string | null
-  reloaded: boolean
+  reloaded: string | null
   refused: Set<string>
   /** Every body sent that the server has not answered (timed out, or the
    *  network failed), oldest first: one may have landed after all, and the
@@ -167,7 +171,7 @@ function newEntry(qc: QueryClient, s: CalSheet): Entry {
     version: s.version,
     inFlight: false,
     error: null,
-    reloaded: false,
+    reloaded: null,
     refused: new Set(),
     unanswered: [],
     seq: 0,
@@ -303,6 +307,12 @@ function settle(e: Entry, fresh: CalSheet, said: string) {
   const server = draftOf(fresh)
   const own =
     e.unanswered.some(b => sameJson(b, server)) || sameJson(server, e.confirmed)
+  // anything typed, refused or in the air that the reload throws away
+  const lost =
+    e.inFlight ||
+    e.unanswered.length > 0 ||
+    e.refused.size > 0 ||
+    !sameJson(e.local, e.confirmed)
   e.version = fresh.version
   e.replicate = fresh.replicate_of_sheet_id !== null
   e.error = null
@@ -313,9 +323,9 @@ function settle(e: Entry, fresh: CalSheet, said: string) {
   }
   e.local = server
   e.confirmed = structuredClone(server)
-  e.reloaded = true
-  toast.error(said)
-  leftWith(e, RELOADED)
+  e.reloaded = lost ? RELOADED : RELOADED_NOTHING_LOST
+  toast.error(lost ? said : RELOADED_NOTHING_LOST)
+  if (lost) leftWith(e, RELOADED)
 }
 
 /** While a sent save is unaccounted for and nothing is out: read the sheet
@@ -382,20 +392,16 @@ export function useSaveCalSheet(id: number) {
   )
   const ready = state !== null
 
-  // A newer copy from the server. With nothing unsaved and nothing in the air
-  // it is simply taken (nothing can be lost). Otherwise it goes through the
-  // same own-or-foreign match as a 409 (H1). Never while a save is out: its
-  // answer or its 409 decides, and this runs again once it is back.
+  // A newer copy from the server goes through the same own-or-foreign match
+  // as a 409 (H1): never taken blindly, and someone else's save is always
+  // announced, even when this page had nothing unsaved. Never while a save
+  // is out: its answer or its 409 decides, and this runs again once it is back.
   const saving = state?.saving ?? false
   useEffect(() => {
     const e = entries.get(id)
     if (!data || !e || e.inFlight || data.version <= e.version) return
-    if (isSaved(e)) {
-      e.local = draftOf(data)
-      e.confirmed = draftOf(data)
-      e.version = data.version
-      e.replicate = data.replicate_of_sheet_id !== null
-    } else settle(e, data, RELOADED)
+    settle(e, data, RELOADED)
+
     changed(id, e)
     if (e.error === null) pump(id)
   }, [id, data, saving])
@@ -463,7 +469,7 @@ export function useSaveCalSheet(id: number) {
     retry: () => pump(id),
     dismissReloaded: () =>
       withEntry(e => {
-        e.reloaded = false
+        e.reloaded = null
       }),
     /** A box holds (`on`) or no longer holds a value it refused. */
     setRefused: (key: string, on: boolean) => {

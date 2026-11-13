@@ -27,7 +27,6 @@ import {
   CAL_SHEET_KEY,
   CHECKING,
   NO_ANSWER,
-  RELOADED,
   useDuplicateCalSheet,
   useFileCalSheet,
   useSaveCalSheet,
@@ -583,7 +582,7 @@ function SheetView({
           role="alert"
           className="flex flex-wrap items-center gap-3 rounded-md border border-amber-500/60 bg-amber-500/10 px-3 py-2 text-sm"
         >
-          <span>{RELOADED}</span>
+          <span>{state.reloaded}</span>
           <Button size="sm" variant="outline" onClick={save.dismissReloaded}>
             Dismiss
           </Button>
