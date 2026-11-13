@@ -528,7 +528,15 @@ function TestCard({
           <span className="ml-auto text-xs font-mono text-muted-foreground">Spec {specText(firstSpec)}</span>
         )}
       </header>
-      <table className="w-full text-sm">
+      {/* Fixed column widths so every test card lines up with the next one. */}
+      <table className="w-full table-fixed text-sm">
+        <colgroup>
+          <col className="w-[13%]" />
+          <col className="w-[15%]" />
+          <col />
+          <col className="w-[16%]" />
+          <col className="w-[27%]" />
+        </colgroup>
         <thead className="bg-muted/30 text-xs text-muted-foreground">
           <tr>
             <th className="p-2 text-left font-medium">
