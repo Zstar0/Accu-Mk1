@@ -93,6 +93,18 @@ def test_put_replaces_bench_config_whole(client, db):
     assert client.get(f"/worksheets/{ws.id}").json()["bench_config"] == {"overage": 1.1}
 
 
+def test_the_column_sort_is_saved_and_read_back(client, db):
+    """The samples-list sort is shared per worksheet (Handler, 2026-09-24): the
+    keys the frontend writes must survive the PUT and come back on both reads."""
+    ws, _ = _seed(db)
+    cfg = {"overage": 1.4, "curve": "", "plate_type": "",
+           "sort_key": "due", "sort_dir": "desc", "sort_by_order": False}
+    assert client.put(f"/worksheets/{ws.id}", json={"bench_config": cfg}).status_code == 200
+    assert client.get(f"/worksheets/{ws.id}").json()["bench_config"] == cfg
+    by_id = {w["id"]: w for w in client.get("/worksheets").json()}
+    assert by_id[ws.id]["bench_config"] == cfg
+
+
 # --- Freezing wells --------------------------------------------------------
 
 
