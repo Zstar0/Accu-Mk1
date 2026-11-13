@@ -510,6 +510,41 @@ describe('Promote on the HPLC worksheet page', () => {
     expect(promoteHplcRow).not.toHaveBeenCalled()
   })
 
+  it('A3: from the last typed box of a row ArrowRight reaches Promote, and Enter opens the flow', async () => {
+    vi.mocked(getHplcSheet).mockResolvedValue(makeSheet([ready()]))
+    const user = userEvent.setup()
+    renderPage()
+    const last = await screen.findByRole('combobox', {
+      name: `${S1}, 2-step dilution`,
+    })
+    act(() => last.focus())
+    await user.keyboard('{ArrowRight}')
+    expect(document.activeElement).toBe(promoteButton())
+    await user.keyboard('{Enter}')
+    expect(await screen.findByRole('dialog')).toHaveTextContent(CONFIRM)
+  })
+
+  it('A2: a rules read-again that fails keeps the sheet and says it may be out of date', async () => {
+    vi.mocked(getHplcSheet).mockResolvedValue(makeSheet([ready()]))
+    vi.mocked(getHplcPrepRules)
+      .mockResolvedValueOnce([])
+      .mockRejectedValueOnce(new Error('network down'))
+    renderPage()
+    await screen.findByRole('textbox', { name: `${S1}, ${VIAL}` })
+    // a press reads the rules again; that read fails
+    fireEvent.click(promoteButton())
+    expect(
+      await screen.findByText(
+        'Could not refresh the sheet; what you see may be out of date'
+      )
+    ).toBeInTheDocument()
+    expect(screen.getByRole('status')).toBeInTheDocument()
+    expect(
+      screen.getByRole('textbox', { name: `${S1}, ${VIAL}` })
+    ).toBeInTheDocument()
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument()
+  })
+
   it('the read-again after a promote waits for the saves queued behind it', async () => {
     let answerPromote: (r: HplcPromoteResult) => void = () => undefined
     let answerSave: (row: HplcSheetRow) => void = () => undefined

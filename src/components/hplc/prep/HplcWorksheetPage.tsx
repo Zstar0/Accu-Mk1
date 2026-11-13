@@ -15,7 +15,6 @@ import { promoteReasons, REASON_COMPLETED } from '@/lib/hplc-promote'
 import { displayName } from '@/lib/user-display'
 import { parseWorksheetNotes, withNotesText } from '@/lib/worksheet-notes'
 import { useWorksheetDrawer } from '@/hooks/use-worksheet-drawer'
-import type { HplcPrepRule } from '@/lib/hplc-prep-rules'
 import { useHplcPrepRules } from '@/services/hplc-prep-rules'
 import {
   HPLC_SHEET_KEY,
@@ -46,7 +45,6 @@ interface Failure {
   /** The boxKeys of the values it wrote (empty: none known). */
   keys: string[]
 }
-const NO_RULES: HplcPrepRule[] = []
 
 /**
  * The HPLC prep worksheet as a page (plan 2026-11-12-hplc-prep-worksheet):
@@ -132,9 +130,12 @@ export function HplcWorksheetPage({
     window.addEventListener('beforeunload', ask)
     return () => window.removeEventListener('beforeunload', ask)
   }, [saving])
-  // A first load that failed leaves every row on the method standard.
-  // One empty list, so the sheet's row views stay memoised while it loads.
-  const rules = useHplcPrepRules().data ?? NO_RULES
+  // The sheet is never worked out without its rules: it waits for their
+  // first load, and a failed one shows Retry, not tables (with no rules a
+  // GHK-Cu stock would read as plain water). A read-again that fails keeps
+  // the rules on screen and says they may be out of date.
+  const rulesQuery = useHplcPrepRules()
+  const rules = rulesQuery.data
   const { data: users = [] } = useQuery({
     queryKey: ['worksheet-users'],
     queryFn: getWorksheetUsers,
@@ -271,7 +272,7 @@ export function HplcWorksheetPage({
         </div>
       )}
 
-      {sheet.isLoading ? (
+      {sheet.isLoading || (rules === undefined && !rulesQuery.isError) ? (
         <Skeleton className="h-40 w-full" />
       ) : !sheet.data ? (
         <p className="flex items-center gap-3 text-sm text-muted-foreground">
@@ -284,10 +285,22 @@ export function HplcWorksheetPage({
             Retry
           </Button>
         </p>
+      ) : rules === undefined ? (
+        <p className="flex items-center gap-3 text-sm text-muted-foreground">
+          Could not load the prep rules, so the sheet cannot be worked out.
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={() => void rulesQuery.refetch()}
+          >
+            Retry
+          </Button>
+        </p>
       ) : (
         <>
-          {/* A read-again that failed keeps the sheet, and every draft in it. */}
-          {sheet.isError && (
+          {/* A read-again of the sheet or the rules that failed keeps the
+              sheet, and every draft in it. */}
+          {(sheet.isError || rulesQuery.isError) && (
             <p
               role="status"
               className="flex items-center gap-3 rounded-[5px] border border-amber-500/40 bg-amber-500/10 px-3 py-1.5 text-sm text-amber-800 dark:text-amber-200"
@@ -296,7 +309,10 @@ export function HplcWorksheetPage({
               <Button
                 variant="outline"
                 size="sm"
-                onClick={() => void sheet.refetch()}
+                onClick={() => {
+                  if (sheet.isError) void sheet.refetch()
+                  if (rulesQuery.isError) void rulesQuery.refetch()
+                }}
               >
                 Retry
               </Button>

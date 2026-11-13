@@ -12,6 +12,7 @@ import type * as ApiModule from '@/lib/api'
 import type { HplcSheetRow, WorksheetListItem } from '@/lib/api'
 import type * as WorksheetDrawerHook from '@/hooks/use-worksheet-drawer'
 import {
+  getHplcPrepRules,
   getHplcSheet,
   getInstruments,
   patchHplcRow,
@@ -581,6 +582,36 @@ describe('HplcWorksheetPage', () => {
     await waitFor(() => expect(getHplcSheet).toHaveBeenCalledTimes(2))
     await waitFor(() => expect(select).toHaveValue('3'))
     expect(updateWorksheetItem).toHaveBeenCalledTimes(1)
+  })
+
+  it('A2: while the prep rules load, the sheet is not shown', async () => {
+    vi.mocked(getHplcSheet).mockResolvedValue(makeSheet([makeRow()]))
+    vi.mocked(getHplcPrepRules).mockImplementationOnce(
+      () => new Promise(() => undefined)
+    )
+    renderPage()
+    await waitFor(() => expect(getHplcSheet).toHaveBeenCalled())
+    await act(() => new Promise(r => setTimeout(r, 30)))
+    expect(screen.queryByRole('table')).not.toBeInTheDocument()
+    expect(
+      screen.queryByRole('textbox', { name: `${S1}, ${VIAL}` })
+    ).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'Retry' })).toBeNull()
+  })
+
+  it('A2: a failed rules load shows Retry and no tables, and Retry brings the sheet', async () => {
+    vi.mocked(getHplcSheet).mockResolvedValue(makeSheet([makeRow()]))
+    vi.mocked(getHplcPrepRules).mockRejectedValueOnce(new Error('down'))
+    renderPage()
+    expect(
+      await screen.findByText(/Could not load the prep rules/)
+    ).toBeInTheDocument()
+    expect(screen.queryByRole('table')).not.toBeInTheDocument()
+    fireEvent.click(screen.getByRole('button', { name: 'Retry' }))
+    expect(
+      await screen.findByRole('textbox', { name: `${S1}, ${VIAL}` })
+    ).toBeInTheDocument()
+    expect(screen.queryByText(/Could not load the prep rules/)).toBeNull()
   })
 
   it('a completed sheet is read-only on the page', async () => {

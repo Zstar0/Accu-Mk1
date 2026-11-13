@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest'
 import { act, cleanup, fireEvent, screen, within } from '@testing-library/react'
+import userEvent from '@testing-library/user-event'
 import type { HplcSheetRow } from '@/lib/api'
 import { makeRow, rowFromCase } from './hplc-sheet-fixtures'
 import {
@@ -318,12 +319,18 @@ describe('Step 2b, blend components', () => {
     })
     const target = (c: string) =>
       screen.getByRole('textbox', { name: `${S1}, Own Target (ug/mL), ${c}` })
+    const lead = (c: string) => line(c).getByRole('radio')
     act(() => vialA.focus())
+    // A3: the arrow keys stop on the Lead radio on the way across
     fireEvent.keyDown(vialA, { key: 'ArrowRight' })
+    expect(document.activeElement).toBe(lead('Tesamorelin'))
+    fireEvent.keyDown(lead('Tesamorelin'), { key: 'ArrowRight' })
     expect(document.activeElement).toBe(target('Tesamorelin'))
     fireEvent.keyDown(target('Tesamorelin'), { key: 'ArrowDown' })
     expect(document.activeElement).toBe(target('Ipamorelin'))
     fireEvent.keyDown(target('Ipamorelin'), { key: 'ArrowLeft' })
+    expect(document.activeElement).toBe(lead('Ipamorelin'))
+    fireEvent.keyDown(lead('Ipamorelin'), { key: 'ArrowLeft' })
     expect(document.activeElement).toBe(vialB)
     fireEvent.keyDown(vialB, { key: 'Tab' })
     expect(document.activeElement).toBe(target('Tesamorelin'))
@@ -336,6 +343,35 @@ describe('Step 2b, blend components', () => {
     )
     expect(leads).toEqual([])
     expect(line('Tesamorelin').getByRole('radio')).toBeChecked()
+  })
+
+  it('A3: the arrow keys across the Lead radios never send a lead; Space sends exactly one', async () => {
+    const user = userEvent.setup()
+    const { onPatch } = renderLive([tesaIpa()])
+    const leads = () =>
+      onPatch.mock.calls.filter(([, p]) =>
+        JSON.stringify(p).includes('lead_id')
+      )
+    const vialA = screen.getByRole('combobox', {
+      name: `${S1}, Vial, Tesamorelin`,
+    })
+    act(() => vialA.focus())
+    await user.keyboard('{ArrowRight}')
+    expect(document.activeElement).toBe(line('Tesamorelin').getByRole('radio'))
+    await user.keyboard('{ArrowDown}{ArrowUp}{ArrowDown}')
+    expect(document.activeElement).toBe(line('Ipamorelin').getByRole('radio'))
+    await user.keyboard('{ArrowRight}{ArrowLeft}')
+    expect(document.activeElement).toBe(line('Ipamorelin').getByRole('radio'))
+    expect(leads()).toEqual([])
+    expect(line('Tesamorelin').getByRole('radio')).toBeChecked()
+    await user.keyboard(' ')
+    expect(leads()).toEqual([
+      [
+        311,
+        { hplc_prep: { vials: { '1': { lead_id: 4 } } } },
+        `${S1}, Lead, Ipamorelin`,
+      ],
+    ])
   })
 
   it('a share or own target of 0 goes back to the standard (sent as null)', () => {
