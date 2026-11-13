@@ -112,8 +112,20 @@ function current(id: number): HplcFailure[] {
   const mine = failureLists.get(id) ?? NO_FAILURES
   const stored = readStored(id)
   if (stored === null) return mine
-  return [...stored, ...mine.filter(f => f.refused)]
+  // a server failure recorded here whose write storage refused (R4): it
+  // stays until this tab's own landed save or dismiss
+  const pend = unstored.get(id)
+  const kept = pend
+    ? mine.filter(
+        f => !f.refused && pend.has(f.n) && !stored.some(s => s.n === f.n)
+      )
+    : []
+  return [...stored, ...kept, ...mine.filter(f => f.refused)]
 }
+
+/** By sheet: the numbers of server failures this tab holds that storage
+ *  would not take (a write threw); cleared by the next write that lands. */
+const unstored = new Map<number, Set<number>>()
 
 function setMemory(id: number, list: HplcFailure[]) {
   if (list.length) failureLists.set(id, list)
@@ -137,7 +149,8 @@ if (typeof window !== 'undefined')
     for (const id of loaded) sync(id, current(id))
   })
 
-function writeStored(id: number, list: HplcFailure[]) {
+/** Writes the server failures; false when storage would not take them. */
+function writeStored(id: number, list: HplcFailure[]): boolean {
   try {
     const keep = list
       .filter(f => !f.refused)
@@ -145,8 +158,10 @@ function writeStored(id: number, list: HplcFailure[]) {
     if (keep.length)
       window.localStorage.setItem(STORE_PREFIX + id, JSON.stringify(keep))
     else window.localStorage.removeItem(STORE_PREFIX + id)
+    return true
   } catch {
     // storage off or full: the list still works for this visit
+    return false
   }
 }
 
@@ -173,7 +188,16 @@ export const hplcFailures = {
       return
     }
     setMemory(id, next)
-    writeStored(id, next)
+    if (writeStored(id, next)) unstored.delete(id)
+    else {
+      // what this write added or changed, and what was already waiting,
+      // stays this tab's until it is stored or this tab removes it
+      const was = unstored.get(id) ?? new Set<number>()
+      const pend = new Set<number>()
+      for (const f of next)
+        if (!f.refused && (was.has(f.n) || !base.includes(f))) pend.add(f.n)
+      unstored.set(id, pend)
+    }
     failureWatchers.forEach(w => w())
   },
   /** A failure. One already listed with the same reason for any of the same
@@ -240,6 +264,7 @@ export const hplcFailures = {
   reset() {
     failureLists.clear()
     loaded.clear()
+    unstored.clear()
     try {
       for (const k of Object.keys(window.localStorage))
         if (k.startsWith(STORE_PREFIX)) window.localStorage.removeItem(k)
@@ -252,6 +277,7 @@ export const hplcFailures = {
   forgetMemory() {
     failureLists.clear()
     loaded.clear()
+    unstored.clear()
   },
 }
 

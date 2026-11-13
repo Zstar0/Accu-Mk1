@@ -1156,6 +1156,46 @@ describe('Promote on the HPLC worksheet page', () => {
     expect(stored).toContain('timed out')
   })
 
+  it('R4: storage that reads but will not take a write keeps every failure this tab recorded', async () => {
+    const spies = (['setItem', 'removeItem'] as const).map(m =>
+      vi.spyOn(Storage.prototype, m).mockImplementation(() => {
+        throw new Error('quota')
+      })
+    )
+    try {
+      vi.mocked(getHplcSheet).mockResolvedValue(makeSheet([ready()]))
+      vi.mocked(patchHplcRow).mockRejectedValue(new Error('timed out'))
+      renderPage()
+      const box = await screen.findByRole('textbox', {
+        name: `${S1}, ${VIAL}`,
+      })
+      typeAndLeave(box, '6000')
+      await screen.findByRole('alert')
+      typeAndLeave(
+        screen.getByRole('textbox', { name: `${S1}, ${VIAL_DIL}` }),
+        '8000'
+      )
+      await waitFor(() => expect(screen.getAllByRole('alert')).toHaveLength(2))
+      // an event from another tab does not take it away either
+      act(() => {
+        window.dispatchEvent(new StorageEvent('storage', { key: STORE_KEY }))
+      })
+      expect(screen.getAllByRole('alert')).toHaveLength(2)
+      expect(box.className).toContain('border-red-500')
+      fireEvent.click(promoteButton())
+      expect(await within(step2()).findByText(UNSAVED)).toBeInTheDocument()
+      expect(screen.queryByRole('dialog')).not.toBeInTheDocument()
+      // this tab's own dismiss still takes it out (the line under Promote
+      // is an alert too, so count the list's Dismiss buttons)
+      const dismiss = () => screen.getAllByRole('button', { name: 'Dismiss' })
+      expect(dismiss()).toHaveLength(2)
+      fireEvent.click(dismiss()[0] as HTMLElement)
+      expect(dismiss()).toHaveLength(1)
+    } finally {
+      spies.forEach(s => s.mockRestore())
+    }
+  })
+
   it('R1: with storage unavailable the list still works in memory', async () => {
     const spies = (['getItem', 'setItem', 'removeItem'] as const).map(m =>
       vi.spyOn(Storage.prototype, m).mockImplementation(() => {
