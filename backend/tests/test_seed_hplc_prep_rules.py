@@ -121,12 +121,35 @@ def test_the_dry_run_says_the_values_it_would_insert_and_what_it_skips(db):
     assert said == [
         "NAD+: would insert target 150, blend target standard, lead priority none, "
         "diluent standard, instrument none",
-        "GHK-Cu: skipped, the peptide already has 2 line(s)",
+        "GHK-Cu: would skip, the peptide already has 2 line(s)",
         "Ipamorelin: would insert target 150, blend target 175, lead priority 1, "
         "diluent standard, instrument none",
         "Retatrutide: would insert target standard, blend target standard, "
         "lead priority none, diluent standard, instrument HPLC 1290B",
     ]
+
+
+def test_main_dry_run_prints_the_details_as_intention_and_writes_nothing(
+        db, monkeypatch, capsys):
+    import database
+    from scripts import seed_hplc_prep_rules as module
+
+    ghk_id = db.peps["GHK-Cu"].id   # main() closes the session it is handed
+    db.add(HplcPrepRule(peptide_id=ghk_id, sort_order=0))
+    db.execute(select(Instrument)).scalar_one().active = False
+    db.commit()
+    monkeypatch.setattr(database, "SessionLocal", lambda: db)
+    monkeypatch.setattr(module.sys, "argv", ["seed_hplc_prep_rules.py"])
+    module.main()
+    out = capsys.readouterr().out.splitlines()
+    assert "NAD+: would insert target 150, blend target standard, lead priority none, " \
+           "diluent standard, instrument none" in out
+    assert "GHK-Cu: would skip, the peptide already has 1 line(s)" in out
+    assert any(line.startswith("Not found or would not insert: HPLC 1290b")
+               and "would go in without an instrument" in line for line in out)
+    assert any(line.startswith("Would skip, the peptide already has a line") for line in out)
+    assert out[-1] == "Dry run: nothing was written. Run again with --apply to write."
+    assert {r.peptide_id for r in db.execute(select(HplcPrepRule)).scalars()} == {ghk_id}
 
 
 def test_the_save_check_warnings_are_said(db):

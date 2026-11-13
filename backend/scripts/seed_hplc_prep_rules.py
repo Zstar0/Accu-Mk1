@@ -105,7 +105,8 @@ def seed(db, *, apply: bool, say=lambda line: None) -> dict:
             HplcPrepRule.peptide_id == peptide.id)).scalar_one()
         if existing:
             out["skipped_existing"].append(name)
-            say(f"{name}: skipped, the peptide already has {existing} line(s)")
+            say(f"{name}: {'skipped' if apply else 'would skip'}, the peptide already has "
+                f"{existing} line(s)")
             continue
         instrument_id, instrument_label, instrument_problem = None, None, None
         if instrument_name is not None:
@@ -162,10 +163,11 @@ def main():
             db.rollback()
     verb = "Inserted" if apply else "Would insert"
     print(f"{verb} a line for: {', '.join(out['inserted']) or 'none'}.")
-    print("Skipped, the peptide already has a line (edit it on the rules page): "
-          f"{', '.join(out['skipped_existing']) or 'none'}.")
+    print(f"{'Skipped' if apply else 'Would skip'}, the peptide already has a line "
+          f"(edit it on the rules page): {', '.join(out['skipped_existing']) or 'none'}.")
     for miss in out["not_found"]:
-        print(f"Not found or not inserted: {miss}.")
+        print(f"{'Not found or not inserted' if apply else 'Not found or would not insert'}: "
+              f"{miss}.")
     if not apply:
         print("Dry run: nothing was written. Run again with --apply to write.")
 
