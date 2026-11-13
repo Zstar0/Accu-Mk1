@@ -18,6 +18,7 @@
  * Spec: docs/superpowers/specs/2026-09-22-pcr-worksheet-design.md
  */
 import { csvField } from '@/lib/endo-bench-sheet'
+import { priorityRank } from '@/lib/endo-prep'
 import { shortLabDate } from '@/lib/endo-worksheet'
 
 export const PROTOCOL = {
@@ -234,24 +235,80 @@ export function orderKey(order: string): number | string | null {
   return Number.isFinite(n) ? n : raw
 }
 
+/** The samples-list column the plate is dealt by; 'listed' = worksheet order. */
+export type PcrSortKey =
+  | 'listed'
+  | 'order'
+  | 'sampleId'
+  | 'identity'
+  | 'received'
+  | 'due'
+  | 'priority'
+export interface PcrSort {
+  key: PcrSortKey
+  dir: 'asc' | 'desc'
+}
+export const PCR_SORT_KEYS: readonly PcrSortKey[] = [
+  'listed',
+  'order',
+  'sampleId',
+  'identity',
+  'received',
+  'due',
+  'priority',
+]
+export const DEFAULT_PCR_SORT: PcrSort = { key: 'order', dir: 'asc' }
+
+/** A header click: a new column starts ascending, the same one flips;
+ *  worksheet order has no direction. */
+export function nextSort(cur: PcrSort, key: PcrSortKey): PcrSort {
+  if (key === 'listed') return { key, dir: 'asc' }
+  return cur.key === key
+    ? { key, dir: cur.dir === 'asc' ? 'desc' : 'asc' }
+    : { key, dir: 'asc' }
+}
+
+const SORT_VALUE: Record<
+  Exclude<PcrSortKey, 'listed'>,
+  (s: PcrSample) => number | string | null
+> = {
+  order: s => orderKey(s.order),
+  sampleId: s => s.id || null,
+  identity: s => s.identity || null,
+  received: s => s.received,
+  due: s => s.assessment.due,
+  priority: s => priorityRank(s.priority),
+}
+
 /**
- * Ordering rule with "Order wells by order #" on: samples carrying an order
- * number first, ascending; samples with no order number after them; the
- * worksheet's own order within one order number (the lab's practice, asked
- * for by Dennis 2026-09-15).
+ * The deal order for the loose samples (Handler, 2026-09-24): by the list
+ * column the worksheet is sorted on. Blanks go last in both directions so a
+ * flip never buries the real rows; ties keep the worksheet's own order, which
+ * with Order # ascending is Dennis's rule (order numbers ascending, the
+ * worksheet's order within one order, 2026-09-15).
  */
-function compareByOrder(
-  a: { s: PcrSample; i: number },
-  b: { s: PcrSample; i: number }
-): number {
-  const ka = orderKey(a.s.order)
-  const kb = orderKey(b.s.order)
-  if ((ka === null) !== (kb === null)) return ka === null ? 1 : -1
-  if (ka !== null && kb !== null && ka !== kb) {
-    if (typeof ka === 'number' && typeof kb === 'number') return ka - kb
-    return String(ka).localeCompare(String(kb), undefined, { numeric: true })
+function compareBy(
+  sort: PcrSort
+): (a: { s: PcrSample; i: number }, b: { s: PcrSample; i: number }) => number {
+  if (sort.key === 'listed') return (a, b) => a.i - b.i
+  const value = SORT_VALUE[sort.key]
+  const sign = sort.dir === 'asc' ? 1 : -1
+  return (a, b) => {
+    const va = value(a.s)
+    const vb = value(b.s)
+    if ((va === null) !== (vb === null)) return va === null ? 1 : -1
+    if (va !== null && vb !== null && va !== vb) {
+      const c =
+        typeof va === 'number' && typeof vb === 'number'
+          ? va - vb
+          : String(va).localeCompare(String(vb), undefined, {
+              numeric: true,
+              sensitivity: 'base',
+            })
+      if (c !== 0) return c * sign
+    }
+    return a.i - b.i
   }
-  return a.i - b.i
 }
 
 /** Row letter A..H of a column-major position. */
@@ -276,9 +333,18 @@ export const wellName = (pos: number): string =>
  */
 export function layoutPlates(
   samples: PcrSample[],
-  opts: { sortByOrder?: boolean; highWater?: Record<number, number> } = {}
+  opts: {
+    sort?: PcrSort
+    /** calc.js's switch: false = worksheet order. `sort` wins when given. */
+    sortByOrder?: boolean
+    highWater?: Record<number, number>
+  } = {}
 ): PcrLayout {
-  const sortByOrder = opts.sortByOrder !== false
+  const sort: PcrSort =
+    opts.sort ??
+    (opts.sortByOrder === false
+      ? { key: 'listed', dir: 'asc' }
+      : DEFAULT_PCR_SORT)
   const issuedUpTo = (plate: number) => opts.highWater?.[plate] ?? -1
   const wells = new Map<number, Map<number, PcrSample>>()
   const place = (plate: number, pos: number, s: PcrSample) => {
@@ -298,7 +364,7 @@ export function layoutPlates(
   const nextFree = (plate: number) =>
     Math.max(issuedUpTo(plate), ...(wells.get(plate)?.keys() ?? [])) + 1
   const loose = samples.map((s, i) => ({ s, i })).filter(x => !x.s.frozen)
-  if (sortByOrder) loose.sort(compareByOrder)
+  loose.sort(compareBy(sort))
   let plate = 1
   let next = nextFree(plate)
   for (const { s } of loose) {

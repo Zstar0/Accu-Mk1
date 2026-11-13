@@ -7,6 +7,7 @@ worksheets (Review Focus 5) and the endo_analysis key on worksheet items.
 In-memory SQLite + dependency overrides, test_endo_v2_worksheets.py's
 pattern and helpers."""
 import json
+from datetime import datetime
 from decimal import Decimal
 from types import SimpleNamespace
 from unittest.mock import MagicMock
@@ -29,7 +30,8 @@ from lims_analyses.service import BadRequestError, apply_transition
 from main import app
 from models import (
     AnalysisProfile, AnalysisServiceSpec, AuditLog, LimsAnalysis, LimsAnalysisPromotion,
-    LimsAnalysisTransition, LimsSample, LimsSubSample, ServiceGroup, WorksheetItem,
+    LimsAnalysisTransition, LimsSample, LimsSubSample, LimsSubSampleEvent, ServiceGroup,
+    WorksheetItem,
     analysis_profile_members, service_group_members,
 )
 from tests.test_endo_v2_worksheets import _cartridge, _count_sql, _method, _record, _service, _ws
@@ -1137,3 +1139,148 @@ def test_endo_promote_plan_without_a_form_keeps_the_matrix_limit(client, db):
     db.commit()
     [res] = _results(_promote(client, w.ws, _line(item)))
     assert res["promoted"] is True, res
+
+
+# --- a retest gives the worksheet row back to the bench (Dennis, P-5901-S02) --
+
+def test_a_retest_reopens_a_completed_worksheet_and_moves_the_reading_to_history(client, db):
+    w = _world(client, db)
+    item, vial = _row(db, w)
+    other, _ = _row(db, w, "P-4002-S01")
+    item.ran_at = datetime(2026, 11, 6, 22, 57)
+    item.prep_status = "complete"
+    db.commit()
+    vial_id, ws_id = vial.id, w.ws.id
+    _results(_promote(client, w.ws, _line(item), _line(other)))
+    assert client.post(f"/worksheets/{ws_id}/complete").status_code == 200
+    assert client.patch(f"/worksheets/{ws_id}/items/{item.id}",
+                        json={"result_reading": "0.1"}).status_code == 409
+
+    apply_transition(db, analysis_id=vial_id, kind="retest", user_id=7)
+    db.expire_all()
+
+    assert (w.ws.status, w.ws.completed_at, w.ws.completed_by) == ("open", None, None)
+    assert (item.result_reading, item.ran_at, item.prep_status) == (None, None, "ready")
+    [entry] = item.prep_history
+    assert (entry["why"], entry["result_reading"], entry["reading_moved"]) == ("retest", "<0.05", True)
+    assert entry["ticks"]["prep_status"] == "complete"
+    audit = db.query(AuditLog).filter_by(operation="endo_worksheet_reopened_for_retest").one()
+    assert audit.details["worksheet_id"] == ws_id and audit.details["was_completed"] is True
+    # The row that was not retested stays as promoted: its reading, and its prep final.
+    assert other.result_reading == "<0.05"
+    assert client.patch(f"/worksheets/{ws_id}/items/{other.id}",
+                        json={"result_reading": "0.2"}).status_code == 409
+    # The bench enters the re-run and promotes it over the first result.
+    assert client.patch(f"/worksheets/{ws_id}/items/{item.id}",
+                        json={"result_reading": "0.1"}).status_code == 200
+    assert _results(_promote(client, w.ws, _line(item, 50)))[0]["promoted"] is True
+    assert client.post(f"/worksheets/{ws_id}/complete").status_code == 200
+
+
+def test_a_retest_on_an_open_worksheet_touches_only_its_own_row(client, db):
+    w = _world(client, db)
+    item, vial = _row(db, w)
+    due, _ = _row(db, w, "P-4002-S01", reading=None)
+    db.commit()
+    _results(_promote(client, w.ws, _line(item)))
+
+    apply_transition(db, analysis_id=vial.id, kind="retest", user_id=7)
+    db.expire_all()
+
+    assert w.ws.status == "open"
+    assert item.result_reading is None and item.prep_history[0]["why"] == "retest"
+    assert due.prep_history is None and due.result_reading is None
+    assert client.patch(f"/worksheets/{w.ws.id}/items/{due.id}",
+                        json={"result_reading": "0.1", "cartridge_type_id": w.c05.id}).status_code == 200
+
+
+def test_a_retest_never_touches_the_vials_row_on_another_bench(client, db):
+    """One vial hosts endotoxin and PCR: its newer row is on the PCR
+    worksheet, and that worksheet is not the retest's to reopen."""
+    w = _world(client, db)
+    item, vial = _row(db, w, state="to_be_verified", role=None)
+    item.analyses_json = json.dumps([{"keyword": w.svc.keyword}])
+    pcr_ws = _ws(db, "PCR 11/06/2026", status="completed")
+    pcr = WorksheetItem(worksheet_id=pcr_ws.id, sample_uid=item.sample_uid, sample_id=item.sample_id,
+                        analyses_json=json.dumps([{"keyword": "STER-PCR"}]), prep_status="complete")
+    db.add(pcr)
+    w.ws.status = "completed"
+    db.commit()
+
+    apply_transition(db, analysis_id=vial.id, kind="retest", user_id=7)
+    db.expire_all()
+
+    assert (pcr_ws.status, pcr.prep_status, pcr.prep_history) == ("completed", "complete", None)
+    assert w.ws.status == "open" and item.result_reading is None
+
+
+def test_a_second_retest_of_the_superseded_row_keeps_the_re_runs_reading(client, db):
+    w = _world(client, db)
+    item, vial = _row(db, w, state="to_be_verified")
+    db.commit()
+    vial_id = vial.id
+    apply_transition(db, analysis_id=vial_id, kind="retest", user_id=7)
+    item.result_reading = "0.1"            # the re-run, entered on the row
+    db.commit()
+
+    try:                                   # a double click, a retried request
+        apply_transition(db, analysis_id=vial_id, kind="retest", user_id=7)
+    except Exception:
+        db.rollback()
+    db.expire_all()
+
+    assert item.result_reading == "0.1" and len(item.prep_history) == 1
+
+
+@pytest.mark.parametrize("status, reading", [("completed", "<0.05"), ("open", "<0.05"), ("open", None)])
+def test_the_retest_row_is_claimed_by_its_worksheet_like_a_row_added_to_it(client, db, status,
+                                                                           reading):
+    """On an open worksheet a row is `assigned` and carries the worksheet's
+    analyst; the retest row minted under it must not sit unclaimed."""
+    w = _world(client, db)
+    item, vial = _row(db, w, state="to_be_verified", reading=reading)
+    w.ws.assigned_analyst_id = 9
+    w.ws.status = status
+    db.commit()
+
+    new_id = apply_transition(db, analysis_id=vial.id, kind="retest", user_id=7).id
+    db.expire_all()
+
+    new = db.get(LimsAnalysis, new_id)
+    assert (new.review_state, new.analyst_user_id) == ("assigned", 9)
+    assert w.ws.status == "open"
+
+
+def test_the_claim_takes_the_retest_row_only_never_the_vials_other_rows(client, db):
+    """Endotoxin and Sterility PCR share a department: the claim must not
+    reach a PCR row on the same vial, nor re-stamp the run being retested."""
+    w = _world(client, db)
+    item, vial = _row(db, w, state="to_be_verified")
+    vial.analyst_user_id = 4
+    w.ws.assigned_analyst_id = 9
+    pcr_svc = _service(db, "STER-PCR")
+    pcr = [LimsAnalysis(lims_sub_sample_pk=vial.lims_sub_sample_pk, analysis_service_id=pcr_svc.id,
+                        keyword="STER-PCR", title="PCR", review_state=state,
+                        analyst_user_id=analyst, provenance="canonical")
+           for state, analyst in (("unassigned", None), ("to_be_verified", 5))]
+    db.add_all(pcr)
+    db.commit()
+
+    new_id = apply_transition(db, analysis_id=vial.id, kind="retest", user_id=7).id
+    db.expire_all()
+
+    assert [(p.review_state, p.analyst_user_id) for p in pcr] == [("unassigned", None), ("to_be_verified", 5)]
+    assert vial.analyst_user_id == 4
+    new = db.get(LimsAnalysis, new_id)
+    assert (new.review_state, new.analyst_user_id) == ("assigned", 9)
+    [event] = db.query(LimsSubSampleEvent).filter_by(event="worksheet_assigned").all()
+    assert event.details["assigned_keywords"] == [w.svc.keyword]
+
+
+def test_a_retest_of_a_vial_on_no_open_worksheet_stays_unassigned(client, db):
+    w = _world(client, db)
+    _item, vial = _row(db, w, state="to_be_verified", role=None)   # no endo row: no bench kind
+    db.commit()
+    new_id = apply_transition(db, analysis_id=vial.id, kind="retest", user_id=7).id
+    db.expire_all()
+    assert db.get(LimsAnalysis, new_id).review_state == "unassigned"

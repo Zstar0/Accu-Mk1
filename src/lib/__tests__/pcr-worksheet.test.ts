@@ -85,7 +85,7 @@ describe('pcrConfigOf', () => {
       overage: 1.4,
       curve: '',
       plateType: '',
-      sortByOrder: true,
+      sort: { key: 'order', dir: 'asc' },
     })
     expect(
       pcrConfigOf({
@@ -100,20 +100,51 @@ describe('pcrConfigOf', () => {
       overage: 1.4,
       curve: 'P/A',
       plateType: '',
-      sortByOrder: false,
+      sort: { key: 'listed', dir: 'asc' },
     })
+  })
+
+  it('reads the saved column sort, falling back on anything unknown', () => {
+    const sortOf = (c: Record<string, unknown>) =>
+      pcrConfigOf({ bench_config: c }).sort
+    expect(sortOf({ sort_key: 'due', sort_dir: 'desc' })).toEqual({
+      key: 'due',
+      dir: 'desc',
+    })
+    // The saved column wins over the older on/off switch.
     expect(
+      sortOf({ sort_key: 'priority', sort_dir: 'asc', sort_by_order: false })
+    ).toEqual({ key: 'priority', dir: 'asc' })
+    expect(sortOf({ sort_key: 'nonsense', sort_dir: 'desc' })).toEqual({
+      key: 'order',
+      dir: 'asc',
+    })
+    expect(sortOf({ sort_key: 'due', sort_dir: 'sideways' })).toEqual({
+      key: 'due',
+      dir: 'asc',
+    })
+  })
+
+  it('writes the sort back, keeping the older switch in step', () => {
+    const wire = (key: 'order' | 'due') =>
       pcrConfigToWire({
         overage: 1.1,
         curve: 'Q',
         plateType: 'S',
-        sortByOrder: true,
+        sort: { key, dir: 'desc' },
       })
-    ).toEqual({
+    expect(wire('due')).toEqual({
       overage: 1.1,
       curve: 'Q',
       plate_type: 'S',
-      sort_by_order: true,
+      sort_key: 'due',
+      sort_dir: 'desc',
+      sort_by_order: false,
+    })
+    expect(wire('order').sort_by_order).toBe(true)
+    expect(pcrConfigOf({ bench_config: wire('due') }).sort).toEqual({
+      key: 'due',
+      dir: 'desc',
     })
   })
 })

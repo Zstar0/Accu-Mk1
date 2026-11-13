@@ -1,5 +1,43 @@
 # Changelog
 
+## v1.60.0 - 2026-11-11
+
+### Customer Insights
+- **A new Top customers tab.** It sits between At risk and New customers and lists every customer ranked by paid spend in the period picked at the top of the page, with a sortable "Period spend" column. It follows the "Exclude launch accounts" switch. Customers with no spend in the period sit at the bottom of the list.
+
+## v1.59.0 - 2026-11-10
+
+### À la carte orders (tests with no HPLC panel)
+- **A sample ordered with tests only now gets a certificate.** When a native-born sample's order carries no HPLC and no Bac Water primary, Mk1 asks COABuilder for the no-HPLC page: the tests print as native sections and no chromatogram is required. Nothing changes for a sample with an HPLC or Bac Water primary. A prod recount on 2026-11-10 (1,187 native samples) found no existing sample that starts certifying this way.
+- **A certificate still in review cannot be published.** An à la carte certificate whose overall status is IN REVIEW (a deferred section, for example USP 71 before sign-off) is refused at publish until the section is signed off and the certificate regenerated.
+- **MEASURED is its own status.** A certificate whose every result is informational (pH, vial vacuum) reads MEASURED. Reports count it as neither conforming nor failed, and Re-sync writes its reporting row the way the Integration Service does.
+- **The sample list reads right for these samples.** The Assigned column shows the vials' own roles when no vial carries the parent's role, and the Analytes column prints the bare peptide name when no HPLC was ordered.
+- Fentanyl, pH and vial vacuum share one sample vial when the order has no primary vial. This is catalog ride-list data, applied on prod on 2026-11-10.
+
+### Flags
+- v1.58.1 (flag threads show the date on every comment and event, PR #358) is now on master and ships with this frontend. So does the "Retested" label in the row history that v1.58.2 announced.
+
+## v1.58.4 - 2026-11-10
+
+### Endotoxin worksheets
+- **A retest claims only its own new row.** The claim added in v1.58.3 reached every analysis on the vial in the same department, so it could change the analyst on a Sterility PCR row or on the run being retested. It now touches the new retest row and nothing else. Backend-only release.
+
+## v1.58.3 - 2026-11-09
+
+### Endotoxin worksheets
+- **A retested vial's new row is claimed by the worksheet it sits on.** After a retest the new row used to sit unassigned with no analyst, even though its worksheet was open again. It is now assigned to the worksheet's analyst, the same as a row added to a sheet. Backend-only release.
+
+## v1.58.2 - 2026-11-09
+
+### Endotoxin worksheets
+- **Retesting an endotoxin vial gives its worksheet row back to the bench.** If the worksheet was already completed it goes back to open, so the re-run can be entered and promoted; complete it again when done. The first reading moves into the row's history with its Made and Ran ticks. An open worksheet stays open, and no other row changes: a promoted row that was not retested keeps its final prep.
+- Backend-only release. The "Retested" label in the row history ships with the next frontend release; until then the entry reads "override". v1.58.1 (flag thread dates, frontend only) is live on prod from PR #358 and is not on master yet.
+
+## v1.58.1 - 2026-11-06
+
+### Flags
+- **Flag threads show the date on every comment and event.** A comment used to read only "1:35 PM", so one from last week looked the same as one from today. It now reads "Nov 3, 1:35 PM", with the year added for anything outside the current year. The "raised this" and "assigned to" lines show the date too.
+
 ## v1.58.0 - 2026-11-05
 
 ### Bacteriostatic Water native-born
@@ -501,6 +539,9 @@ Needs COA Builder 2.35.6 (deployed first, 2026-10-28).
 
 ### Fixed
 - **Inline field edits on native-born samples failed with "Not Found" (P-5178).** Every pencil-edit on the sample-details page (Client Lot, Declared Qty, Client Sample ID, Date Sampled, the COA Info fields) posted to the SENAITE field-update route keyed by SENAITE uid; a native-born parent has no uid, so the request returned 404 before any write. The route now resolves a native-born parent by its sample id and writes the Accu-Mk1 registry row directly, logging the change to the activity feed. Fields the row cannot store fail closed, and analyte peptides still go through Relabel or Replace. SENAITE-born samples are unchanged. (#260)
+
+### PCR worksheet
+- **Sort the samples list and the plate follows.** Order #, Sample ID, Sample identity, Received, Due and Priority are clickable column headers (click again to flip); `#` returns to worksheet order. The plate is dealt in the list's order, so Print, Preview and the QuantStudio and CSV exports follow too. The sort is saved on the worksheet (`bench_config.sort_key` / `sort_dir`), so every analyst sees the plate that will be printed. It replaces the "Order wells by order #" switch: Order # ascending stays the default, and a worksheet that had the switch off keeps worksheet order. Locked wells never move, so after a print a sort only re-deals the unlocked samples. Order boxes and tints show only when sorted by Order #.
 
 ## v1.28.0 - 2026-09-23
 

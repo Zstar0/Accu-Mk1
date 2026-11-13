@@ -6382,7 +6382,8 @@ export interface WorksheetListItem {
   printed_at?: string | null
   printed_by_user_id?: number | null
   print_count?: number
-  /** Per-bench run settings (PCR: overage, curve, plate_type, sort_by_order). */
+  /** Per-bench run settings (PCR: overage, curve, plate_type, sort_key,
+   *  sort_dir, and the older sort_by_order kept in step). */
   bench_config?: Record<string, unknown> | null
   /** PCR plate map: the highest well ever frozen per plate ({"1": 46}); a
    *  frozen well stays spent after its sample is removed. Server-owned. */
@@ -8657,6 +8658,12 @@ export interface ParentAggregate {
    *  string (spec 4, Task 10): was 'hplc' | 'endo' | 'ster' | 'xtra' |
    *  'unassigned'. */
   parent_role: string
+  /** What the Assigned column shows. Normally just [parent_role]. For a
+   *  container parent (never a vial itself) whose vials carry roles and none
+   *  of them is the stored parent role, the server sends the vials' distinct
+   *  roles, so an a la carte order with no HPLC vial does not read HPLC.
+   *  Optional for back-compat with older responses. */
+  assigned_roles?: string[]
   /** Per-bucket variance counts from the parent's variance_override (zeros when
    *  none). AR-list display hint; authoritative gate is server-side. Optional
    *  for back-compat with older responses. */

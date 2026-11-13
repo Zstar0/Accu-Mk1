@@ -166,6 +166,8 @@ export interface ProductRow {
   product: string
   is_blend: boolean
   total: number
+  /** COAs with a verdict (MEASURED has none): the failure-rate denominator. */
+  judged: number
   failed: number
   last: number
   cells: Record<TestKey, Cell>
@@ -204,6 +206,7 @@ export function buildMatrix(
         product: c.product,
         is_blend: c.is_blend,
         total: 0,
+        judged: 0,
         failed: 0,
         last: 0,
         cells: Object.fromEntries(
@@ -221,6 +224,8 @@ export function buildMatrix(
     const inPeriod = t >= cutoff
     if (inPeriod) {
       r.total++
+      // MEASURED has no verdict: counted as a COA, never in the failure rate.
+      if (c.overall !== 'MEASURED') r.judged++
       if (isFailed(c)) r.failed++
       r.last = Math.max(r.last, t || 0)
       const d = qtyDeltaPct(c)

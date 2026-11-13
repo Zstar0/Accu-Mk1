@@ -429,7 +429,8 @@ def dossier(ds: Dataset, key: str, *, end: datetime, tz: str, sla_from: date | N
     all_samples = sum(x.samples for x in ds.orders if x.paid_at <= end)
     products: dict[str, list[bool]] = defaultdict(list)
     for x in mine:
-        products[x.product].append(x.passed)
+        if x.passed is not None:  # MEASURED has no verdict
+            products[x.product].append(x.passed)
 
     def on_time(nums: set[str]) -> float | None:
         if ds.delivered_orders is None or ds.late_orders is None:
@@ -457,7 +458,7 @@ def dossier(ds: Dataset, key: str, *, end: datetime, tz: str, sla_from: date | N
         if ds.delivered_orders is not None and ds.late_orders is not None and x.order_number in ds.delivered_orders:
             sla = "late" if x.order_number in ds.late_orders else "on_time"
         return {"order_number": x.order_number, "paid_at": x.paid_at.isoformat(), "coas": len(cs),
-                "failed": sum(not y.passed for y in cs), "sla": sla}
+                "failed": sum(y.passed is False for y in cs), "sla": sla}
 
     return {
         "identity": {"key": key, "name": c.name if c else key, "email": c.email if c else None,
@@ -470,8 +471,10 @@ def dossier(ds: Dataset, key: str, *, end: datetime, tz: str, sla_from: date | N
             "samples": samples, "samples_per_order": round(samples / len(orders), 1),
             "usual_gap_days": round(rules.usual_gap_days(dates), 1) if len(dates) >= 3 else None,
             "gap_iqr": iqr,
-            "nonconforming_rate": _rate(sum(not x.passed for x in mine), len(mine)),
-            "lab_nonconforming_rate": _rate(sum(not x.passed for x in lab_coas), len(lab_coas)),
+            "nonconforming_rate": _rate(sum(x.passed is False for x in mine),
+                                        sum(x.passed is not None for x in mine)),
+            "lab_nonconforming_rate": _rate(sum(x.passed is False for x in lab_coas),
+                                            sum(x.passed is not None for x in lab_coas)),
             "on_time_rate": on_time(numbers), "lab_on_time_rate": on_time(all_numbers),
         },
         "status": rules.spend_status(paid_orders=len(orders), at_risk=risk, period=period, prior=prior),
@@ -504,7 +507,8 @@ def churn_signals(ds: Dataset, *, end: datetime) -> dict[str, Any]:
         by_key[x.customer_key].append(x.paid_at)
     coa_by_order: dict[str, list[bool]] = defaultdict(list)
     for c in ds.coas:
-        coa_by_order[c.order_number].append(c.passed)
+        if c.passed is not None:  # MEASURED has no verdict
+            coa_by_order[c.order_number].append(c.passed)
     acc: dict[tuple[str, str], list[bool]] = defaultdict(list)
     for x in testing:
         if x.paid_at > end - window:
