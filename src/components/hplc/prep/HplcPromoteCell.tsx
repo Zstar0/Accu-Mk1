@@ -14,6 +14,7 @@ import {
 } from '@/components/ui/tooltip'
 import { HplcPromoteRefused } from '@/lib/api'
 import type { HplcRowComputed } from '@/lib/hplc-prep'
+import { HplcRulesReadError } from '@/services/hplc-worksheet'
 import { useUIStore } from '@/store/ui-store'
 import type { SheetRowView } from './HplcPrepSheet'
 import { fmtDp } from './HplcSheetCells'
@@ -24,8 +25,17 @@ const CONFIRM =
 
 const STILL_SAVING = 'Still saving. Press Promote again when it has finished.'
 
+const OTHERS_PRESSING = 'Another row is being promoted. Wait for it to finish.'
+
+/** How the page's "a save of this row did not land" sentence starts. */
+export const UNSAVED_LEAD = 'A change to this row was not saved:'
+
 const messageOf = (e: unknown) =>
   e instanceof Error ? e.message : 'something went wrong; try again'
+
+/** The preps this row's vial already has, by number. */
+const othersOf = (row: SheetRowView['row']) =>
+  row.other_preps.map(p => p.sample_id).join(', ')
 
 /** What a press found: the reasons, and the row worked out from the
  *  server's values (null when it cannot be planned). */
@@ -36,13 +46,20 @@ export interface PromoteCheck {
 
 /** What the prep will record, for the confirm: each vial's target and the
  *  diluent, as worked out from the server's values. */
-function planLines(computed: HplcRowComputed | null): string[] {
+function planLines(
+  computed: HplcRowComputed | null,
+  row: SheetRowView['row']
+): string[] {
   if (!computed) return []
   const many = computed.vials.length > 1
+  const nameOf = (id: number) => {
+    const c = row.components.find(x => x.peptide_id === id)
+    return c?.abbreviation || c?.name || `peptide ${id}`
+  }
   return [
     ...computed.vials.map(
       v =>
-        `${many ? `Vial ${VIAL_LETTERS[v.vial - 1] ?? v.vial}: ` : ''}Target Conc ${fmtDp(v.target.value, 0)} ug/mL`
+        `${many ? `Vial ${VIAL_LETTERS[v.vial - 1] ?? v.vial}: ` : ''}${row.is_blend ? `lead ${nameOf(v.lead.peptide_id)}, ` : ''}Target Conc ${fmtDp(v.target.value, 0)} ug/mL`
     ),
     ...(computed.diluent.diluent
       ? [`Diluent ${computed.diluent.diluent}`]
@@ -114,6 +131,8 @@ export function HplcPromoteCell({
   // Where focus goes once the confirm has closed: 'cell' is Promote (or
   // its wrapper while it is off), 'link' the prep link once the row is
   // final. It waits until that control can take focus.
+  // The request expires on the next focus anywhere (the tech has moved on),
+  // and once the press has settled with nothing here to take focus.
   const refocus = useRef<'cell' | 'link' | null>(null)
   const putFocusBack = () => {
     const want = refocus.current
@@ -121,10 +140,21 @@ export function HplcPromoteCell({
     const to = rootRef.current?.querySelector<HTMLElement>(
       'button:not(:disabled), [tabindex="0"]'
     )
-    if (!to) return
+    if (!to) {
+      // settled, and no control to go to (a final row without a link)
+      if (!running && (want === 'cell' || row.promoted)) refocus.current = null
+      return
+    }
     refocus.current = null
     to.focus()
   }
+  useEffect(() => {
+    const expire = () => {
+      refocus.current = null
+    }
+    document.addEventListener('focusin', expire)
+    return () => document.removeEventListener('focusin', expire)
+  }, [])
   useEffect(() => {
     // only when focus was lost to the page, never away from a box
     const at = document.activeElement
@@ -175,7 +205,9 @@ export function HplcPromoteCell({
         setAsking(fresh)
       }
     } catch (e) {
-      setOwn([`could not read the sheet again: ${messageOf(e)}`])
+      setOwn([
+        `${e instanceof HplcRulesReadError ? 'could not read the prep rules again' : 'could not read the sheet again'}: ${messageOf(e)}`,
+      ])
     } finally {
       setBusy(null)
     }
@@ -206,8 +238,24 @@ export function HplcPromoteCell({
     }
   }
 
-  const said = [...(own ?? []), ...(server ?? [])]
+  // a press stopped by a save that did not land: the line goes once the row
+  // has no such failure left (it was dismissed or saved)
+  const ownNow = (own ?? []).filter(
+    r => !r.startsWith(UNSAVED_LEAD) || unsaved !== null
+  )
+  const said = [...ownNow, ...(server ?? [])]
   const off = saving || busy !== null || reasons.length > 0 || othersPressing
+  const others = othersOf(row)
+  // why the button is off, in its tooltip: the reasons, or another row's
+  // press (nothing to tell while saving or this row's own press runs)
+  const why =
+    saving || busy
+      ? null
+      : reasons.length
+        ? { head: 'Not ready to promote:', lines: reasons }
+        : othersPressing
+          ? { head: null, lines: [OTHERS_PRESSING] }
+          : null
   const button = (
     <Button
       size="sm"
@@ -220,10 +268,10 @@ export function HplcPromoteCell({
     </Button>
   )
   const lastRefusal = server
-  const plan = asking ? planLines(asking.computed) : []
+  const plan = asking ? planLines(asking.computed, row) : []
   return (
     <div ref={toRoot} className="min-w-[7rem] max-w-[22rem] whitespace-normal">
-      {reasons.length && !saving && !busy ? (
+      {why ? (
         // a disabled button fires no hover: the wrapper carries the tooltip,
         // and a hidden copy of the reasons describes it for a screen reader
         <>
@@ -238,20 +286,32 @@ export function HplcPromoteCell({
               </span>
             </TooltipTrigger>
             <TooltipContent className="max-w-sm">
-              <p className="pb-1 font-semibold">Not ready to promote:</p>
-              <ul className="list-disc space-y-0.5 pl-4">
-                {reasons.map(r => (
-                  <li key={r}>{r}</li>
-                ))}
-              </ul>
+              {why.head ? (
+                <>
+                  <p className="pb-1 font-semibold">{why.head}</p>
+                  <ul className="list-disc space-y-0.5 pl-4">
+                    {why.lines.map(r => (
+                      <li key={r}>{r}</li>
+                    ))}
+                  </ul>
+                </>
+              ) : (
+                <p>{why.lines.join(' ')}</p>
+              )}
             </TooltipContent>
           </Tooltip>
           <span id={reasonsId} className="sr-only">
-            Not ready to promote: {reasons.join('; ')}
+            {why.head ? `${why.head} ` : ''}
+            {why.lines.join('; ')}
           </span>
         </>
       ) : (
         button
+      )}
+      {others && (
+        <p className="mt-1 text-[11px] leading-snug text-muted-foreground">
+          This vial already has a prep: {others}
+        </p>
       )}
       {said.length > 0 && (
         // the role on a wrapper, so the list keeps its own
@@ -286,6 +346,12 @@ export function HplcPromoteCell({
           <DialogTitle className="text-sm font-semibold">
             Promote {row.sample_id}
           </DialogTitle>
+          {others && (
+            <p className="text-sm text-amber-700 dark:text-amber-300">
+              This vial already has a prep ({others}). Promoting makes another
+              one.
+            </p>
+          )}
           <DialogDescription className="text-sm">{CONFIRM}</DialogDescription>
           {plan.length > 0 && (
             <ul className="space-y-0.5 text-xs text-muted-foreground">

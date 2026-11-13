@@ -25,8 +25,9 @@ import {
 } from '@/lib/api'
 import { useWorksheetDrawer } from '@/hooks/use-worksheet-drawer'
 import { useUIStore } from '@/store/ui-store'
+import { hplcFailures } from '@/services/hplc-worksheet'
 import { HplcWorksheetPage } from '../HplcWorksheetPage'
-import { makeRow, makeSheet } from './hplc-sheet-fixtures'
+import { makeRow, makeSheet, rowFromCase } from './hplc-sheet-fixtures'
 
 vi.mock('@/lib/api', async importOriginal => ({
   ...(await importOriginal<typeof ApiModule>()),
@@ -113,6 +114,7 @@ function typeAndLeave(el: HTMLElement, text: string) {
 describe('Promote on the HPLC worksheet page', () => {
   beforeEach(() => {
     vi.clearAllMocks()
+    hplcFailures.reset()
     const mutation = { mutate: vi.fn(), mutateAsync: vi.fn(), isPending: false }
     vi.mocked(useWorksheetDrawer).mockReturnValue({
       updateMutation: mutation,
@@ -406,6 +408,22 @@ describe('Promote on the HPLC worksheet page', () => {
     const dialog = await screen.findByRole('dialog')
     expect(getHplcPrepRules).toHaveBeenCalledTimes(2)
     expect(dialog).toHaveTextContent('Target Conc 300 ug/mL')
+  })
+
+  it('T4: the confirm names the lead of a blend vial', async () => {
+    vi.mocked(getHplcSheet).mockResolvedValue(
+      makeSheet([
+        rowFromCase('blend Tesamorelin + Ipamorelin, split', {
+          identity: 'Tesamorelin + Ipamorelin',
+          is_blend: true,
+        }),
+      ])
+    )
+    renderPage()
+    await screen.findByRole('region', { name: 'Step 2b Blend components' })
+    fireEvent.click(promoteButton())
+    const dialog = await screen.findByRole('dialog')
+    expect(dialog).toHaveTextContent(/lead Tesamorelin, Target Conc \d+ ug\/mL/)
   })
 
   it('the confirm starts on Cancel: Enter and Escape close it and promote nothing', async () => {
@@ -780,5 +798,154 @@ describe('Promote on the HPLC worksheet page', () => {
     expect(box).toHaveValue('5001')
     await act(async () => answerSave(ready()))
     await waitFor(() => expect(getHplcSheet).toHaveBeenCalledTimes(reads + 1))
+  })
+
+  it('Y1: Escape on a refused word does not free a row whose save failed', async () => {
+    vi.mocked(getHplcSheet).mockResolvedValue(makeSheet([ready()]))
+    vi.mocked(patchHplcRow).mockRejectedValue(
+      new Error('weighing out of range')
+    )
+    renderPage()
+    const box = await screen.findByRole('textbox', { name: `${S1}, ${VIAL}` })
+    typeAndLeave(box, '6000')
+    await screen.findByRole('alert')
+    fireEvent.focus(box)
+    fireEvent.change(box, { target: { value: 'abc' } })
+    fireEvent.keyDown(box, { key: 'Enter' })
+    fireEvent.keyDown(box, { key: 'Escape' })
+    fireEvent.blur(box)
+    await act(() => new Promise(r => setTimeout(r, 30)))
+    fireEvent.click(promoteButton())
+    expect(
+      await within(step2()).findByText(
+        `A change to this row was not saved: ${S1}, ${VIAL}: weighing out of range. Type it again or dismiss it, then promote.`
+      )
+    ).toBeInTheDocument()
+    await act(() => new Promise(r => setTimeout(r, 30)))
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument()
+  })
+
+  it('X1: a failure kept while the page was away blocks that row when it is back', async () => {
+    vi.mocked(getHplcSheet).mockResolvedValue(makeSheet([ready()]))
+    hplcFailures.add(7, {
+      text: `${S1}, ${VIAL}: weighing out of range`,
+      keys: ['311:hplc_prep.stock_vial_mg'],
+    })
+    renderPage()
+    await screen.findByRole('textbox', { name: `${S1}, ${VIAL}` })
+    fireEvent.click(promoteButton())
+    expect(
+      await within(step2()).findByText(/^A change to this row was not saved/)
+    ).toBeInTheDocument()
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument()
+  })
+
+  it('Y4: the "not saved" line under Promote goes when its failure is dismissed', async () => {
+    vi.mocked(getHplcSheet).mockResolvedValue(makeSheet([ready()]))
+    vi.mocked(patchHplcRow).mockRejectedValue(
+      new Error('weighing out of range')
+    )
+    renderPage()
+    const box = await screen.findByRole('textbox', { name: `${S1}, ${VIAL}` })
+    typeAndLeave(box, '6000')
+    const alert = await screen.findByRole('alert')
+    fireEvent.click(promoteButton())
+    await within(step2()).findByText(/^A change to this row was not saved/)
+    fireEvent.click(within(alert).getByRole('button', { name: 'Dismiss' }))
+    expect(
+      within(step2()).queryByText(/^A change to this row was not saved/)
+    ).toBeNull()
+  })
+
+  it('X3: Promote off while another row is pressed says why', async () => {
+    vi.mocked(getHplcSheet).mockResolvedValue(
+      makeSheet([ready(), ready({ item_id: 312, sample_id: S2 })])
+    )
+    renderPage()
+    await screen.findByRole('textbox', { name: `${S1}, ${VIAL}` })
+    const buttons = () =>
+      within(
+        screen.getByRole('region', {
+          name: 'Step 2 Peptide sample stock preparation',
+          hidden: true,
+        })
+      ).getAllByRole('button', { name: 'Promote', hidden: true })
+    fireEvent.click(buttons()[0] as HTMLElement)
+    await screen.findByRole('dialog')
+    const wrapper = (buttons()[1] as HTMLElement).parentElement as HTMLElement
+    const id = wrapper.getAttribute('aria-describedby')
+    expect(id).toBeTruthy()
+    expect(document.getElementById(id as string)).toHaveTextContent(
+      'Another row is being promoted. Wait for it to finish.'
+    )
+  })
+
+  it('P3: a vial that already has a prep says so under Promote and in the confirm, and Promote stays on', async () => {
+    const other = {
+      id: 9,
+      sample_id: 'SP-20261101-0001',
+      status: 'awaiting_hplc',
+    }
+    vi.mocked(getHplcSheet).mockResolvedValue(
+      makeSheet([ready({ other_preps: [other] })])
+    )
+    renderPage()
+    await screen.findByRole('textbox', { name: `${S1}, ${VIAL}` })
+    expect(
+      within(step2()).getByText(
+        'This vial already has a prep: SP-20261101-0001'
+      )
+    ).toBeInTheDocument()
+    expect(promoteButton()).toBeEnabled()
+    fireEvent.click(promoteButton())
+    const dialog = await screen.findByRole('dialog')
+    expect(
+      within(dialog).getByText(
+        'This vial already has a prep (SP-20261101-0001). Promoting makes another one.'
+      )
+    ).toBeInTheDocument()
+    // above the question
+    const text = dialog.textContent ?? ''
+    expect(text.indexOf('This vial already has a prep')).toBeLessThan(
+      text.indexOf(CONFIRM)
+    )
+  })
+
+  it('T4: a failed read of the prep rules says so, not the sheet', async () => {
+    vi.mocked(getHplcSheet).mockResolvedValue(makeSheet([ready()]))
+    vi.mocked(getHplcPrepRules)
+      .mockResolvedValueOnce([])
+      .mockRejectedValueOnce(new Error('network down'))
+    renderPage()
+    await screen.findByRole('textbox', { name: `${S1}, ${VIAL}` })
+    fireEvent.click(promoteButton())
+    expect(
+      await within(step2()).findByText(
+        'could not read the prep rules again: network down'
+      )
+    ).toBeInTheDocument()
+  })
+
+  it('Y2: a focus request expires when the tech moves on during the press', async () => {
+    vi.mocked(getHplcSheet).mockResolvedValue(makeSheet([ready()]))
+    let refuse: (e: Error) => void = () => undefined
+    vi.mocked(promoteHplcRow).mockImplementation(
+      () =>
+        new Promise((_, reject) => {
+          refuse = reject
+        })
+    )
+    renderPage()
+    const box = await screen.findByRole('textbox', { name: `${S1}, ${VIAL}` })
+    fireEvent.click(promoteButton())
+    const dialog = await screen.findByRole('dialog')
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Promote' }))
+    await waitFor(() => expect(promoteHplcRow).toHaveBeenCalledTimes(1))
+    // the tech goes to a box, then leaves it for the page
+    act(() => box.focus())
+    act(() => box.blur())
+    await act(async () => refuse(new Error('server down')))
+    await within(step2()).findByText('server down')
+    expect(document.activeElement).toBe(document.body)
   })
 })

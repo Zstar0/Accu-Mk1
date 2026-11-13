@@ -635,9 +635,10 @@ describe('HplcPrepSheet', () => {
       })
     ).toBeInTheDocument()
     fireEvent.change(form, { target: { value: '' } })
+    // P5: leaving liquid drops the declared volume in the same PATCH
     expect(onPatch).toHaveBeenLastCalledWith(
       311,
-      { prep_form: null },
+      { prep_form: null, hplc_prep: { declared_volume_ml: null } },
       `${S1}, Form`
     )
     fireEvent.change(select(`${S1}, Diluent`), {
@@ -663,6 +664,33 @@ describe('HplcPrepSheet', () => {
       `${S1}, Instrument`
     )
   })
+
+  it.each([
+    ['powder', 'capsule', { declared_mg: null, capsules: null }],
+    ['capsule', 'powder', { declared_mg: null, capsules: null }],
+    [
+      'liquid',
+      'capsule',
+      { declared_mg: null, capsules: null, declared_volume_ml: null },
+    ],
+    ['liquid', 'powder', { declared_volume_ml: null }],
+    ['powder', 'liquid', null],
+  ] as const)(
+    'a Form change %s to %s clears only the leftovers whose meaning changes (P5)',
+    (from, to, cleared) => {
+      const { onPatch } = renderSheet([
+        makeRow({ prep_form: from, form: from }),
+      ])
+      fireEvent.change(select(`${S1}, Form`), { target: { value: to } })
+      expect(onPatch).toHaveBeenLastCalledWith(
+        311,
+        cleared === null
+          ? { prep_form: to }
+          : { prep_form: to, hplc_prep: cleared },
+        `${S1}, Form`
+      )
+    }
+  )
 
   it('offers the usual instrument as a real choice that writes it', () => {
     const { onSetInstrument } = renderSheet(

@@ -20,6 +20,7 @@ import {
 } from '@/lib/api'
 import { toast } from 'sonner'
 import { useWorksheetDrawer } from '@/hooks/use-worksheet-drawer'
+import { hplcFailures } from '@/services/hplc-worksheet'
 import { HplcWorksheetPage } from '../HplcWorksheetPage'
 import { makeRow, makeSheet } from './hplc-sheet-fixtures'
 
@@ -107,6 +108,7 @@ function queueSaves() {
 describe('HplcWorksheetPage', () => {
   beforeEach(() => {
     vi.clearAllMocks()
+    hplcFailures.reset()
     const mutation = { mutate: vi.fn(), mutateAsync: vi.fn(), isPending: false }
     vi.mocked(useWorksheetDrawer).mockReturnValue({
       updateMutation: mutation,
@@ -612,6 +614,148 @@ describe('HplcWorksheetPage', () => {
       await screen.findByRole('textbox', { name: `${S1}, ${VIAL}` })
     ).toBeInTheDocument()
     expect(screen.queryByText(/Could not load the prep rules/)).toBeNull()
+  })
+
+  /** A box whose save failed: 6000 typed over 5012.31, refused by the server. */
+  async function failedBox() {
+    vi.mocked(getHplcSheet).mockResolvedValue(
+      makeSheet([makeRow({ hplc_prep: { stock_vial_mg: 5012.31 } })])
+    )
+    const saves = queueSaves()
+    const page = renderPage()
+    const box = await screen.findByRole('textbox', { name: `${S1}, ${VIAL}` })
+    typeAndLeave(box, '6000')
+    await waitFor(() => expect(patchHplcRow).toHaveBeenCalledTimes(1))
+    await act(async () => saves.fail(0, 'weighing out of range'))
+    await screen.findByRole('alert')
+    return { box, page }
+  }
+  const SERVER_LINE = `Not saved: ${S1}, ${VIAL}: weighing out of range`
+
+  it('Y1: Escape on a refused word keeps the failed save of the same box listed and marked', async () => {
+    const { box } = await failedBox()
+    fireEvent.focus(box)
+    fireEvent.change(box, { target: { value: 'abc' } })
+    fireEvent.keyDown(box, { key: 'Enter' })
+    expect(screen.getAllByRole('alert')).toHaveLength(2)
+    fireEvent.keyDown(box, { key: 'Escape' })
+    fireEvent.blur(box)
+    await act(() => new Promise(r => setTimeout(r, 30)))
+    expect(box).toHaveValue('5012.31')
+    const alerts = screen.getAllByRole('alert')
+    expect(alerts).toHaveLength(1)
+    expect(alerts[0]).toHaveTextContent(SERVER_LINE)
+    expect(box.className).toContain('border-red-500')
+    expect(hplcFailures.get(7)).toHaveLength(1)
+  })
+
+  it('Y1: an acceptable value then Escape keeps the failed save listed and marked', async () => {
+    const { box } = await failedBox()
+    fireEvent.focus(box)
+    fireEvent.change(box, { target: { value: '-3' } })
+    fireEvent.keyDown(box, { key: 'Enter' })
+    expect(screen.getAllByRole('alert')).toHaveLength(2)
+    fireEvent.change(box, { target: { value: '5' } })
+    expect(screen.getAllByRole('alert')).toHaveLength(1)
+    fireEvent.keyDown(box, { key: 'Escape' })
+    fireEvent.blur(box)
+    await act(() => new Promise(r => setTimeout(r, 30)))
+    expect(screen.getByRole('alert')).toHaveTextContent(SERVER_LINE)
+    expect(box.className).toContain('border-red-500')
+  })
+
+  it('Y3: a refusal dismissed and typed again is listed again', async () => {
+    vi.mocked(getHplcSheet).mockResolvedValue(makeSheet([makeRow()]))
+    renderPage()
+    const box = await screen.findByRole('textbox', { name: `${S1}, ${VIAL}` })
+    typeAndLeave(box, '-3')
+    const alert = await screen.findByRole('alert')
+    fireEvent.click(within(alert).getByRole('button', { name: 'Dismiss' }))
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument()
+    typeAndLeave(box, '-3')
+    expect(await screen.findByRole('alert')).toHaveTextContent(
+      'a number here cannot be below 0'
+    )
+    // Enter and the blur after it list it once
+    fireEvent.keyDown(box, { key: 'Enter' })
+    fireEvent.blur(box)
+    expect(screen.getAllByRole('alert')).toHaveLength(1)
+  })
+
+  it('X1: a save that fails while the page is away is listed and marks its box when the page is back; Dismiss takes it out of the store', async () => {
+    vi.mocked(getHplcSheet).mockResolvedValue(
+      makeSheet([makeRow({ hplc_prep: { stock_vial_mg: 5012.31 } })])
+    )
+    const saves = queueSaves()
+    const { unmount } = renderPage()
+    const box = await screen.findByRole('textbox', { name: `${S1}, ${VIAL}` })
+    typeAndLeave(box, '6000')
+    await waitFor(() => expect(patchHplcRow).toHaveBeenCalledTimes(1))
+    unmount()
+    await act(async () => saves.fail(0, 'weighing out of range'))
+    await waitFor(() => expect(hplcFailures.get(7)).toHaveLength(1))
+    renderPage()
+    const alert = await screen.findByRole('alert')
+    expect(alert).toHaveTextContent(SERVER_LINE)
+    const again = await screen.findByRole('textbox', {
+      name: `${S1}, ${VIAL}`,
+    })
+    expect(again.className).toContain('border-red-500')
+    fireEvent.click(within(alert).getByRole('button', { name: 'Dismiss' }))
+    expect(hplcFailures.get(7)).toHaveLength(0)
+    expect(again.className).not.toContain('border-red-500')
+  })
+
+  it('P4: a weighing above 1e9 mg and a declared volume above 1e6 mL are refused in the box; the ceilings themselves are sent', async () => {
+    vi.mocked(getHplcSheet).mockResolvedValue(
+      makeSheet([makeRow({ form: 'liquid', prep_form: 'liquid' })])
+    )
+    vi.mocked(patchHplcRow).mockResolvedValue(makeRow())
+    renderPage()
+    const vol = await screen.findByRole('textbox', {
+      name: `${S1}, Declared Liquid Vol (mL)`,
+    })
+    const vial = screen.getByRole('textbox', {
+      name: `${S1}, Wt Autosampler vial and cap (mg)`,
+    })
+    typeAndLeave(vol, '1000001')
+    typeAndLeave(vial, '1000000001')
+    const alerts = await screen.findAllByRole('alert')
+    expect(alerts.map(a => a.textContent)).toEqual([
+      expect.stringContaining(
+        'Declared Liquid Vol (mL): a declared volume cannot be more than 1,000,000 mL'
+      ),
+      expect.stringContaining(
+        'Wt Autosampler vial and cap (mg): a weighing cannot be more than 1,000,000,000 mg'
+      ),
+    ])
+    expect(patchHplcRow).not.toHaveBeenCalled()
+    typeAndLeave(vol, '1000000')
+    typeAndLeave(vial, '1000000000')
+    await waitFor(() => expect(patchHplcRow).toHaveBeenCalledTimes(2))
+  })
+
+  it('Y6: leaving the page while saving sets a returnValue too', async () => {
+    vi.mocked(getHplcSheet).mockResolvedValue(makeSheet([makeRow()]))
+    queueSaves()
+    renderPage()
+    const box = await screen.findByRole('textbox', { name: `${S1}, ${VIAL}` })
+    typeAndLeave(box, '6000')
+    await waitFor(() => expect(patchHplcRow).toHaveBeenCalledTimes(1))
+    const e = new Event('beforeunload', { cancelable: true }) as Event & {
+      returnValue: unknown
+    }
+    const set = vi.fn()
+    Object.defineProperty(e, 'returnValue', { set, get: () => '' })
+    window.dispatchEvent(e)
+    expect(set).toHaveBeenCalledWith('')
+  })
+
+  it('Y5: a long failure list scrolls inside itself', async () => {
+    await failedBox()
+    const holder = screen.getByRole('alert').parentElement
+    expect(holder?.className).toMatch(/\bmax-h-48\b/)
+    expect(holder?.className).toMatch(/\boverflow-y-auto\b/)
   })
 
   it('a completed sheet is read-only on the page', async () => {

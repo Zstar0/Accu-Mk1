@@ -1,3 +1,4 @@
+import { useSyncExternalStore } from 'react'
 import {
   useIsMutating,
   useMutation,
@@ -42,6 +43,58 @@ export const boxKey = (itemId: number, path: string) => `${itemId}:${path}`
 /** True when the key is one of this row's. */
 export const isRowKey = (key: string, itemId: number) =>
   key.startsWith(`${itemId}:`)
+
+/** One line of a sheet's failure list. `refused`: a value a box refused
+ *  before sending; the box itself clears it (Escape, or a value it takes).
+ *  A save that did not land goes only when that box saves or the line is
+ *  dismissed. */
+export interface HplcFailure {
+  n: number
+  /** "<sample id>, <column>: <reason>" */
+  text: string
+  /** The boxKeys of the values it wrote (empty: none known). */
+  keys: string[]
+  refused?: boolean
+}
+
+// Each sheet's undismissed failures, by worksheet id. Module state, so a
+// failure that answers after the technician left the page is still there
+// (listed, marking its box, blocking its row) when they come back.
+const failureLists = new Map<number, HplcFailure[]>()
+const failureWatchers = new Set<() => void>()
+const NO_FAILURES: HplcFailure[] = []
+let failureSeq = 0
+
+/** The failure lists. Every write reads the list as it is now, so a save
+ *  started on an earlier mount of the page writes into the same list. */
+export const hplcFailures = {
+  get: (id: number): HplcFailure[] => failureLists.get(id) ?? NO_FAILURES,
+  update(id: number, fn: (list: HplcFailure[]) => HplcFailure[]) {
+    const next = fn(hplcFailures.get(id))
+    if (next.length) failureLists.set(id, next)
+    else failureLists.delete(id)
+    failureWatchers.forEach(w => w())
+  },
+  add(id: number, f: Omit<HplcFailure, 'n'>) {
+    hplcFailures.update(id, list => [...list, { ...f, n: ++failureSeq }])
+  },
+  subscribe(watch: () => void) {
+    failureWatchers.add(watch)
+    return () => void failureWatchers.delete(watch)
+  },
+  /** Tests: every list emptied. */
+  reset() {
+    failureLists.clear()
+    failureWatchers.forEach(w => w())
+  },
+}
+
+/** One sheet's failure list, re-rendering as it changes. */
+export function useHplcFailures(id: number): HplcFailure[] {
+  return useSyncExternalStore(hplcFailures.subscribe, () =>
+    hplcFailures.get(id)
+  )
+}
 
 /** A save that did not land: which box ("<sample id>, <column>"), why, and
  *  the keys of the values it wrote (boxKey). */
@@ -275,6 +328,9 @@ export function useHplcSheetSaving(id: number) {
   return useIsMutating({ mutationKey: SAVE_KEY(id) }) > 0
 }
 
+/** A press's read-again of the prep rules failed (not the sheet's). */
+export class HplcRulesReadError extends Error {}
+
 /**
  * A row's promote. It runs in the sheet's save scope, never retried, and
  * gives up after SAVE_TIMEOUT_MS, so it can neither overtake a save still
@@ -345,11 +401,18 @@ export function usePromoteHplcRow(
           queryFn: () => getHplcSheet(id),
           staleTime: 0,
         }),
-        qc.fetchQuery({
-          queryKey: HPLC_PREP_RULES_KEY,
-          queryFn: getHplcPrepRules,
-          staleTime: 0,
-        }),
+        qc
+          .fetchQuery({
+            queryKey: HPLC_PREP_RULES_KEY,
+            queryFn: getHplcPrepRules,
+            staleTime: 0,
+          })
+          .catch((e: unknown) => {
+            // the press says which read failed
+            throw new HplcRulesReadError(
+              e instanceof Error ? e.message : 'the read failed'
+            )
+          }),
       ])
       return saving() || sentSince ? null : { sheet, rules }
     } finally {

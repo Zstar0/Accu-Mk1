@@ -2,6 +2,7 @@ import { describe, it, expect } from 'vitest'
 import { act, cleanup, fireEvent, screen, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import type { HplcSheetRow } from '@/lib/api'
+import { boxKey } from '@/services/hplc-worksheet'
 import { makeRow, rowFromCase } from './hplc-sheet-fixtures'
 import {
   queryRegion,
@@ -187,6 +188,24 @@ describe('Step 2b, blend components', () => {
     expect(line('Tesamorelin').queryByText('heaviest')).toBeNull()
   })
 
+  it("a Lead save that did not land marks that vial's radios (X2)", () => {
+    renderLive([tesaIpa()], {
+      failed: new Map([
+        [boxKey(311, 'hplc_prep.vials.1.lead_id'), 'timed out'],
+      ]),
+    })
+    for (const name of ['Tesamorelin', 'Ipamorelin']) {
+      const radio = line(name).getByRole('radio')
+      expect(radio).toHaveAccessibleDescription('Not saved: timed out')
+      expect(radio.className).toContain('ring-red-500')
+    }
+    cleanup()
+    renderLive([tesaIpa()])
+    const radio = line('Tesamorelin').getByRole('radio')
+    expect(radio).not.toHaveAttribute('aria-describedby')
+    expect(radio.className).not.toContain('ring-red-500')
+  })
+
   it('typing a share or an own target sends that one key', () => {
     const { onPatch } = renderLive([tesaIpa()])
     const mg = screen.getByRole('textbox', {
@@ -309,7 +328,7 @@ describe('Step 2b, blend components', () => {
     expect(r.queryAllByRole('textbox')).toHaveLength(0)
   })
 
-  it('the keyboard walk never lands on a Lead radio and never changes the lead', () => {
+  it('Tab and Enter never land on a Lead radio, and no arrow key changes a lead', () => {
     const { onPatch } = renderLive([tesaIpa()])
     const vialA = screen.getByRole('combobox', {
       name: `${S1}, Vial, Tesamorelin`,

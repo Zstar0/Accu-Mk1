@@ -6593,6 +6593,9 @@ export interface HplcSheetRow {
   promoted: boolean
   prep: { id: number; sample_id: string; status: string } | null
   problems: string[]
+  /** Preps of this row's vial not made from this row (a wizard prep,
+   *  another worksheet's), newest first. Information only. */
+  other_preps: { id: number; sample_id: string; status: string }[]
 }
 
 export interface HplcSheet {

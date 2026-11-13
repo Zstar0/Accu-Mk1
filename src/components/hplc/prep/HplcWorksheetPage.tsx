@@ -18,7 +18,10 @@ import { useWorksheetDrawer } from '@/hooks/use-worksheet-drawer'
 import { useHplcPrepRules } from '@/services/hplc-prep-rules'
 import {
   HPLC_SHEET_KEY,
+  hplcFailures,
   isRowKey,
+  useHplcFailures,
+  type HplcFailure,
   useHplcSheet,
   useHplcSheetSaving,
   usePatchHplcRow,
@@ -32,19 +35,12 @@ import {
   sheetRowViews,
   type SheetRowView,
 } from './HplcPrepSheet'
-import { HplcPromoteCell } from './HplcPromoteCell'
+import { HplcPromoteCell, UNSAVED_LEAD } from './HplcPromoteCell'
 import { CellSelect } from './HplcSheetCells'
 
 const FIVE_MINUTES = 5 * 60 * 1000
 
-/** One line of the failure list. */
-interface Failure {
-  n: number
-  /** "<sample id>, <column>: <reason>" */
-  text: string
-  /** The boxKeys of the values it wrote (empty: none known). */
-  keys: string[]
-}
+type Failure = HplcFailure
 
 /**
  * The HPLC prep worksheet as a page (plan 2026-11-12-hplc-prep-worksheet):
@@ -66,16 +62,12 @@ export function HplcWorksheetPage({
   // dismissed or until that same box saves (or, refused, holds a value it
   // takes): a save of another box never clears it. `keys` are the boxKeys
   // of the values it wrote; a row with one on the list cannot be promoted.
-  const [failures, setFailuresState] = useState<Failure[]>([])
-  // the list as of now, for a promote about to go (it reads it after the
-  // saves queued before it have answered, before a re-render)
-  const failuresNow = useRef<Failure[]>([])
-  const setFailures = (fn: (f: Failure[]) => Failure[]) => {
-    failuresNow.current = fn(failuresNow.current)
-    setFailuresState(failuresNow.current)
-  }
-  const failureSeq = useRef(0)
-  // a failure that answers after the tech left the page is a toast
+  // The list outlives the page (hplcFailures, by worksheet id): a save that
+  // fails after the tech left is there when they come back.
+  const failures = useHplcFailures(id)
+  const setFailures = (fn: (f: Failure[]) => Failure[]) =>
+    hplcFailures.update(id, fn)
+  // a failure that answers after the tech left the page is also a toast
   const mounted = useRef(true)
   useEffect(() => {
     mounted.current = true
@@ -85,30 +77,40 @@ export function HplcWorksheetPage({
   }, [])
   const onFailure = (what: string, reason: string, keys: string[]) => {
     const text = `${what}: ${reason}`
-    if (!mounted.current) {
-      toast.error(`Not saved: ${text}`)
-      return
-    }
-    setFailures(f => [...f, { n: ++failureSeq.current, text, keys }])
+    if (!mounted.current) toast.error(`Not saved: ${text}`)
+    hplcFailures.add(id, { text, keys })
   }
+  /** A save of these keys landed: every line for them goes. */
   const clearKeys = (keys: string[]) => {
-    if (failuresNow.current.some(f => f.keys.some(k => keys.includes(k))))
+    if (hplcFailures.get(id).some(f => f.keys.some(k => keys.includes(k))))
       setFailures(f => f.filter(x => !x.keys.some(k => keys.includes(k))))
   }
   const onNumberRefused = (
     what: string,
     reason: string | null,
     key?: string
-  ) =>
-    reason === null
-      ? key && clearKeys([key])
-      : onFailure(what, reason, key ? [key] : [])
+  ) => {
+    const keys = key ? [key] : []
+    const mine = (f: Failure) =>
+      f.refused === true && (key ? f.keys.includes(key) : f.keys.length === 0)
+    // the box gave up its own refusal: only that goes, never a save of the
+    // same box that did not land
+    if (reason === null) {
+      if (key && hplcFailures.get(id).some(mine))
+        setFailures(f => f.filter(x => !mine(x)))
+      return
+    }
+    const text = `${what}: ${reason}`
+    // listed once while it stands (Enter, then the blur after it)
+    if (hplcFailures.get(id).some(f => mine(f) && f.text === text)) return
+    hplcFailures.add(id, { text, keys, refused: true })
+  }
   /** Why this row cannot be promoted while the list holds one of its
    *  boxes; null when it holds none. */
   const unsavedOf = (list: Failure[], itemId: number) => {
     const f = list.find(x => x.keys.some(k => isRowKey(k, itemId)))
     return f
-      ? `A change to this row was not saved: ${f.text.replace(/\.$/, '')}. Type it again or dismiss it, then promote.`
+      ? `${UNSAVED_LEAD} ${f.text.replace(/\.$/, '')}. Type it again or dismiss it, then promote.`
       : null
   }
   const failed = useMemo(() => {
@@ -121,7 +123,7 @@ export function HplcWorksheetPage({
   const instrument = useSetHplcInstrument(id, onFailure, clearKeys)
   const saving = useHplcSheetSaving(id)
   const { promote, readFresh } = usePromoteHplcRow(id, itemId =>
-    unsavedOf(failuresNow.current, itemId)
+    unsavedOf(hplcFailures.get(id), itemId)
   )
   // The row whose Promote press is running (read-again, confirm, request):
   // the other rows' Promote buttons are off, so two confirms never stack.
@@ -134,7 +136,11 @@ export function HplcWorksheetPage({
   // typed work still on its way: leaving the page asks first
   useEffect(() => {
     if (!saving) return
-    const ask = (e: BeforeUnloadEvent) => e.preventDefault()
+    const ask = (e: BeforeUnloadEvent) => {
+      e.preventDefault()
+      // some engines show the prompt only for a returnValue
+      e.returnValue = ''
+    }
     window.addEventListener('beforeunload', ask)
     return () => window.removeEventListener('beforeunload', ask)
   }, [saving])
@@ -259,8 +265,9 @@ export function HplcWorksheetPage({
 
       {failures.length > 0 && (
         // stays in view while the sheet scrolls, above its sticky Sample
-        // ID cells (z-10); opaque, so the rows do not show through
-        <div className="sticky top-0 z-20 space-y-2 bg-background py-1">
+        // ID cells (z-10); opaque, so the rows do not show through; a long
+        // list scrolls inside itself rather than cover the sheet
+        <div className="sticky top-0 z-20 max-h-48 space-y-2 overflow-y-auto bg-background py-1">
           {failures.map(f => (
             <p
               key={f.n}

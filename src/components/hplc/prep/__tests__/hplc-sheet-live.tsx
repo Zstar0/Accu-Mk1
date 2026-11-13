@@ -13,7 +13,11 @@ import { INSTRUMENTS, makeSheet } from './hplc-sheet-fixtures'
  */
 export function renderLive(
   rows: HplcSheetRow[],
-  { rules = [] as HplcPrepRule[], readOnly = false } = {}
+  {
+    rules = [] as HplcPrepRule[],
+    readOnly = false,
+    failed = undefined as ReadonlyMap<string, string> | undefined,
+  } = {}
 ) {
   const onPatch =
     vi.fn<(id: number, patch: HplcRowPatch, what: string) => void>()
@@ -24,6 +28,7 @@ export function renderLive(
         sheet={sheet}
         rules={rules}
         readOnly={readOnly}
+        failed={failed}
         instruments={INSTRUMENTS}
         onPatch={(id, patch, what) => {
           onPatch(id, patch, what)

@@ -1,5 +1,5 @@
-import type { HplcSheetRow } from '@/lib/api'
-import type { HplcRowComputed } from '@/lib/hplc-prep'
+import type { HplcRowPatch, HplcSheetRow } from '@/lib/api'
+import type { HplcPrepInputs, HplcRowComputed } from '@/lib/hplc-prep'
 import {
   HPLC_DILUENTS,
   matchRule,
@@ -107,15 +107,36 @@ function FormSelect({
         ['', `from the sample (${own ? FORM_LABELS[own] : 'no HPLC prep'})`],
         ...Object.entries(FORM_LABELS),
       ]}
-      onChange={v =>
-        onPatch(
-          row.item_id,
-          { prep_form: v === '' ? null : (v as HplcSheetRow['form']) },
-          what
-        )
-      }
+      onChange={v => {
+        const picked = v === '' ? null : (v as HplcSheetRow['form'])
+        onPatch(row.item_id, formPatch(row, picked), what)
+      }}
     />
   )
+}
+
+/**
+ * The PATCH for a Form pick. The source tool keeps every value on a form
+ * change; here the leftovers whose meaning changes go with it: to or from
+ * capsule the declared weight switches between per capsule and total, so it
+ * and the count are removed, and a row leaving liquid drops its declared
+ * volume. Weighings are never cleared.
+ */
+function formPatch(
+  row: HplcSheetRow,
+  picked: HplcSheetRow['form']
+): HplcRowPatch {
+  const from = row.form
+  const to = picked ?? sampleOwnForm(row)
+  const prep: HplcPrepInputs = {}
+  if (from !== to && (from === 'capsule' || to === 'capsule')) {
+    prep.declared_mg = null
+    prep.capsules = null
+  }
+  if (from === 'liquid' && to !== 'liquid') prep.declared_volume_ml = null
+  return Object.keys(prep).length
+    ? { prep_form: picked, hplc_prep: prep }
+    : { prep_form: picked }
 }
 
 /** A row computeRow cannot plan: its id, identity and form, and why. */

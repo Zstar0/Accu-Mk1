@@ -54,7 +54,11 @@ export const SheetSavesContext = createContext<SheetSaves>({
 
 /** A box's failure mark: its sentence (or null), the red outline, and the
  *  hidden description that carries it. */
-function useFailMark(saveKey: string | undefined, bad: string | null = null) {
+// eslint-disable-next-line react-refresh/only-export-components
+export function useFailMark(
+  saveKey: string | undefined,
+  bad: string | null = null
+) {
   const { failed } = useContext(SheetSavesContext)
   const fail = saveKey ? failed.get(saveKey) : undefined
   const id = useId()
@@ -76,6 +80,41 @@ function useFailMark(saveKey: string | undefined, bad: string | null = null) {
 // to _MAX_WHOLE): it answers 400 outside them, so they are refused here.
 const MAX_NUMBER = 1e12
 const TOO_LARGE = 'that number is too large'
+
+/** A tighter ceiling the server keeps for some boxes, with its sentence. */
+interface Ceiling {
+  max: number
+  say: string
+}
+/** A balance reading (worksheets_hplc.MAX_WEIGHING_MG). */
+const WEIGHING_CEILING: Ceiling = {
+  max: 1e9,
+  say: 'a weighing cannot be more than 1,000,000,000 mg',
+}
+/** A declared liquid volume (worksheets_hplc.MAX_DECLARED_VOLUME_ML). */
+const VOLUME_CEILING: Ceiling = {
+  max: 1e6,
+  say: 'a declared volume cannot be more than 1,000,000 mL',
+}
+
+/** The keys of hplc_prep that are balance readings. */
+const WEIGHINGS = new Set([
+  'stock_vial_mg',
+  'stock_vial_diluent_mg',
+  'vial_mg',
+  'vial_diluent_mg',
+  'vial_all_mg',
+  'int_vial_mg',
+  'int_vial_diluent_mg',
+  'int_vial_all_mg',
+])
+
+/** The ceiling of the value a box writes, by its boxKey's last part. */
+function ceilingOf(saveKey: string | undefined): Ceiling | null {
+  const leaf = saveKey?.split('.').pop() ?? ''
+  if (WEIGHINGS.has(leaf)) return WEIGHING_CEILING
+  return leaf === 'declared_volume_ml' ? VOLUME_CEILING : null
+}
 
 /**
  * A number box that commits on blur, Enter or Tab, and only once something
@@ -134,8 +173,8 @@ export function NumberBox({
   const [bad, setBad] = useState<string | null>(null)
   const { refused } = useContext(SheetSavesContext)
   const mark = useFailMark(saveKey, bad)
-  // the text last reported to the list: Enter and the blur after it report
-  // it once; null when nothing of this box is on the list
+  // the text last reported to the list (the page lists a sentence once);
+  // null when no refusal of this box is on the list
   const reported = useRef<string | null>(null)
   const unreport = () => {
     if (reported.current !== null) refused?.(label, null, saveKey)
@@ -166,13 +205,16 @@ export function NumberBox({
     if (!Number.isFinite(v) || (integer && !Number.isInteger(v)))
       return integer ? 'Type a whole number' : 'Type a number'
     // what the server would answer 400 for, in a plain sentence
+    const ceiling = ceilingOf(saveKey)
     return Math.abs(v) > (integer ? Number.MAX_SAFE_INTEGER : MAX_NUMBER)
       ? TOO_LARGE
-      : integer && v < 1
-        ? 'type a whole number of 1 or more'
-        : v < 0 && !zeroClears
-          ? 'a number here cannot be below 0'
-          : null
+      : ceiling && v > ceiling.max
+        ? ceiling.say
+        : integer && v < 1
+          ? 'type a whole number of 1 or more'
+          : v < 0 && !zeroClears
+            ? 'a number here cannot be below 0'
+            : null
   }
 
   /** False when the box refused its text (focus stays). */
@@ -184,10 +226,10 @@ export function NumberBox({
     const refusal = refusalOf(text)
     if (refusal) {
       setBad(refusal)
-      if (reported.current !== text) {
-        refused?.(label, refusal, saveKey)
-        reported.current = text
-      }
+      // every time: the list keeps one line per sentence, and lists it
+      // again after it was dismissed
+      refused?.(label, refusal, saveKey)
+      reported.current = text
       return false
     }
     const v = text === '' ? null : Number(text)

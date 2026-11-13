@@ -12,6 +12,7 @@ import {
   InputCell,
   NumberBox,
   SheetRow,
+  useFailMark,
 } from './HplcSheetCells'
 import type { HplcSheetRow } from '@/lib/api'
 import {
@@ -138,6 +139,10 @@ function BlendCell({
   const what = `${row.sample_id}, ${COL[col].label}, ${name}`
   const typed = row.hplc_prep.components?.[id] ?? {}
   const n = String(c.vial)
+  // a Lead save of this vial that did not land marks its radios
+  const leadMark = useFailMark(
+    boxKey(row.item_id, `hplc_prep.vials.${n}.lead_id`)
+  )
   const letter = VIAL_LETTERS[c.vial - 1] ?? n
   const many = computed.vials.length > 1
   const sendComponent = (key: 'mg' | 'vial' | 'target', v: number | null) =>
@@ -234,17 +239,19 @@ function BlendCell({
             id={leadId(row, c.peptide_id)}
             name={`lead-${row.item_id}-${n}`}
             aria-label={what}
+            aria-describedby={leadMark.id}
             data-field={col}
             title={COL.lead.title}
             checked={c.lead}
             readOnly
             disabled={locked}
             // the rule's lead shows checked but greyed until one is chosen
-            className={`accent-teal-600 ${c.lead && auto ? 'opacity-50' : ''}`}
+            className={`accent-teal-600 ${c.lead && auto ? 'opacity-50' : ''} ${leadMark.outline ? 'rounded-full ring-2 ring-red-500' : ''}`}
             onClick={() => {
               if (!c.lead || auto) setLead(c.peptide_id, what)
             }}
           />
+          {leadMark.note}
           {c.lead && auto && vial && <Hint>{WHY[vial.lead.why]}</Hint>}
           {c.lead && !auto && (
             <button

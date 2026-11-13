@@ -65,6 +65,7 @@ export function makeRow(over: Partial<HplcSheetRow> = {}): HplcSheetRow {
     promoted: false,
     prep: null,
     problems: [],
+    other_preps: [],
     ...over,
   }
 }
