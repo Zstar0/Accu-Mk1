@@ -1,12 +1,18 @@
-import { useState } from 'react'
+import { useEffect, useId, useRef, useState, type Ref } from 'react'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
-import { toast } from 'sonner'
 import { Button } from '@/components/ui/button'
 import {
+  Tooltip,
+  TooltipContent,
+  TooltipTrigger,
+} from '@/components/ui/tooltip'
+import {
+  CalSheetError,
   createCalSheet,
   getCalSheet,
   getInstruments,
   getPeptides,
+  type CalFileResult,
   type CalSheet,
 } from '@/lib/api'
 import {
@@ -19,14 +25,26 @@ import {
 import {
   CAL_SHEETS_KEY,
   CAL_SHEET_KEY,
+  CHECKING,
   NO_ANSWER,
   RELOADED,
-  useCalSheets,
+  useDuplicateCalSheet,
+  useFileCalSheet,
   useSaveCalSheet,
   type CalDraft,
+  type CalSaveState,
 } from '@/services/hplc-calibration-sheets'
 import { useUIStore } from '@/store/ui-store'
 import { CalDateBox, CalTextBox } from './CalCells'
+import { CalTip } from './CalTip'
+import {
+  DILUTION_COLUMNS,
+  NET_FIELDS,
+  PEAK_COLUMNS,
+  STEP1_FIELDS,
+  STOCK_COLUMNS,
+} from './cal-sheet-columns'
+import { HplcCalSheetList } from './HplcCalSheetList'
 import {
   HplcCalStandardSection,
   Step,
@@ -88,7 +106,366 @@ function replicateNote(sheet: CalSheet, original: CalSheet | undefined) {
   return `Another injection of the same vials as ${sheet.replicate_of_name ?? 'the original sheet'}, ${where}. Steps 1 to 3 are that sheet's (read-only here): open it to correct a weighing, and every injection follows. Choose this injection's Instrument above, and type its peak areas, purity and RT in Step 4.`
 }
 
-function SheetView({ id }: { id: number }) {
+// --- The Worksheet toolbar (calibration.html:57 to 61, Task 7) ---
+
+/** A message that stays until dismissed or replaced: what filing did, and
+ *  every warning the server sent (task-7-addendum). Held above the sheet, so
+ *  a Duplicate's message is still there on the copy it opens. */
+export interface CalNotice {
+  sheetId: number
+  tone: 'ok' | 'bad'
+  lines: string[]
+  warnings: string[]
+}
+
+// The source's tooltips (calibration.html:59 to 61). Duplicate files only
+// when it has to; New never files (the sheet is already saved here).
+const FILE_HELP =
+  'Saves this worksheet as the curve, under its curve name. Filing again updates it.'
+const DUP_HELP =
+  "Another injection of the same vials, on this or another instrument: files this sheet (when it is not filed yet, or has changed since), then opens a copy with the standard, stock and every level's weighings locked to this one, the Instrument free to change, and Step 4 blank for the new peak areas. On the same instrument it files as ...-Inj2 (then -Inj3 ...); on another, as that instrument's own curve."
+const NEW_HELP =
+  'Starts a blank one. This worksheet stays saved under Calibration worksheets as it is; it is not filed. Asks first: click, then click again within four seconds.'
+const NEW_LABEL = 'New calibration worksheet'
+const NEW_ASK = 'Start a blank one? Click again'
+/** cal.js armed(): the question stays this long. */
+const ARMED_MS = 4000
+
+type FileReason =
+  | 'first_active'
+  | 'replaced'
+  | 'several_active'
+  | 'poor_fit'
+  | 'replicate'
+  | 'refiled'
+
+/** What filing did to the active curve, keyed on activation.reason (never on
+ *  a warning's text). The server decides; this only says it. */
+function filedMessage(res: CalFileResult): string {
+  const name = res.sheet.curve_name ?? res.curve.source_filename ?? 'the curve'
+  const on = res.sheet.instrument_name ?? 'its instrument'
+  const a = res.activation
+  switch (a.reason as FileReason) {
+    case 'first_active':
+      return `Filed ${name}, now the active curve on ${on}.`
+    case 'replaced':
+      return `Filed ${name}. It replaces curve ${a.deactivated_ids.join(', ')} as the active curve on ${on}.`
+    case 'several_active':
+      return `Filed ${name}, not starred: ${on} already has ${a.other_active_ids.length} active curves for this peptide (${a.other_active_ids.join(', ')}). The lab has to choose which stays first. Star the one to use on the Peptides page.`
+    case 'poor_fit':
+      return `Filed ${name}, not made active: no curve on ${on} was switched on or off.`
+    case 'replicate':
+      return `Filed ${name}, another injection of the same vials. Star it on the Peptides page to use it.`
+    case 'refiled': {
+      const n = res.refiled_curve_ids.length
+      const inj = n ? ` and its ${n} injection${n === 1 ? '' : 's'}` : ''
+      return `Updated ${name}${inj}. It is still ${a.active ? '' : 'not '}the active curve on ${on}.`
+    }
+    default:
+      // a reason this page does not know yet: say only what is certain
+      return `Filed ${name}. It is ${a.active ? '' : 'not '}the active curve on ${on}.`
+  }
+}
+
+/** The server's sentence, or what no answer means for that action. */
+function refusalOf(e: unknown, noAnswer: string): string {
+  return e instanceof CalSheetError ? e.message : noAnswer
+}
+const FILE_NO_ANSWER =
+  'File curve: the server did not answer. The sheet is read again: if it now shows a curve name, the filing went through.'
+const DUP_NO_ANSWER =
+  'Duplicate: the server did not answer. Look under Calibration worksheets for the copy before trying again.'
+
+/** A refused box's label, as the page shows it, when the key names one. */
+function boxName(key: string): string | null {
+  const [part, a = '', b = ''] = key.split('.')
+  const find = (cols: { key: string; label: string }[], k: string) =>
+    cols.find(c => c.key === k)?.label ?? null
+  if (part === 'level') {
+    const label = find([...DILUTION_COLUMNS, ...PEAK_COLUMNS], b)
+    return label ? `Level ${Number(a) + 1}, ${label}` : null
+  }
+  if (part === 'stock') return find(STOCK_COLUMNS, a)
+  if (part === 'net') return find(NET_FIELDS, a)
+  if (part === 'sheet')
+    return (
+      find(STEP1_FIELDS, a) ??
+      (
+        { date: 'Date', top_aliquot_ul: 'Aliquot (uL)' } as Record<
+          string,
+          string
+        >
+      )[a] ??
+      null
+    )
+  return null
+}
+
+/** Why File and Duplicate cannot go now, one reason per line (rules 1 and 6). */
+function notReady(
+  state: CalSaveState,
+  sheet: CalSheet,
+  blocking: string[],
+  busy: string | null
+): string[] {
+  const r: string[] = []
+  if (busy) r.push(busy)
+  if (state.saving) r.push('Still saving. This waits until the save lands.')
+  else if (state.checking) r.push('Checking that the last save went through.')
+  else if (state.error !== null) r.push('Not saved yet. Retry the save above.')
+  if (state.refused.length) {
+    const names = state.refused.map(boxName).filter(n => n !== null)
+    r.push(
+      names.length
+        ? `A box holds a value that was not accepted: ${names.join(', ')}.`
+        : 'A box holds a value that was not accepted.'
+    )
+  } else if (!state.saved && r.length === (busy ? 1 : 0))
+    r.push('Not saved yet.')
+  if (sheet.blocking.includes('cannot_be_worked_out'))
+    r.push(
+      'These numbers cannot be worked out as stored, so nothing can be filed from them.'
+    )
+  else if (blocking.length) r.push(...blocking)
+  else if (sheet.blocking.length)
+    r.push('A warning must be fixed before filing. Check the warnings above.')
+  if (state.local.peptide_id === null)
+    r.push('Pick the compound first. The curve is filed under it.')
+  if (state.local.instrument_id === null)
+    r.push(
+      'Pick the instrument. A curve belongs to the instrument that ran it.'
+    )
+  return r
+}
+
+/** A toolbar button whose reasons show on hover and as its description,
+ *  even while disabled (a disabled button fires no hover: the wrapper does). */
+function ActionButton({
+  label,
+  help,
+  reasons,
+  variant = 'outline',
+  onClick,
+  buttonRef,
+}: {
+  label: string
+  help: string
+  reasons: string[]
+  variant?: 'default' | 'outline'
+  onClick: () => void
+  buttonRef?: Ref<HTMLButtonElement>
+}) {
+  const reasonsId = useId()
+  const helpId = useId()
+  const off = reasons.length > 0
+  return (
+    <>
+      <Tooltip>
+        <TooltipTrigger asChild>
+          <span tabIndex={off ? 0 : undefined} className="inline-block">
+            <Button
+              ref={buttonRef}
+              size="sm"
+              variant={variant}
+              disabled={off}
+              aria-describedby={`${reasonsId} ${helpId}`}
+              onClick={onClick}
+            >
+              {label}
+            </Button>
+          </span>
+        </TooltipTrigger>
+        <TooltipContent className="max-w-sm">
+          {off ? (
+            <CalTip title="Not now:" lines={reasons} />
+          ) : (
+            <CalTip title={label} lines={[help]} />
+          )}
+        </TooltipContent>
+      </Tooltip>
+      <span id={reasonsId} className="sr-only">
+        {reasons.map(r => (
+          <span key={r} className="block">
+            {r}
+          </span>
+        ))}
+      </span>
+      <span id={helpId} className="sr-only">
+        {help}
+      </span>
+    </>
+  )
+}
+
+function SheetToolbar({
+  id,
+  sheet,
+  state,
+  blocking,
+  onNotice,
+}: {
+  id: number
+  sheet: CalSheet
+  state: CalSaveState
+  blocking: string[]
+  onNotice: (n: CalNotice | null) => void
+}) {
+  const qc = useQueryClient()
+  const file = useFileCalSheet(id)
+  const duplicate = useDuplicateCalSheet()
+  // one filing at a time: set before the first await, so a double click
+  // sends one request (rule 3)
+  const running = useRef(false)
+  const [busy, setBusy] = useState<string | null>(null)
+  const [asking, setAsking] = useState(false)
+  const fileRef = useRef<HTMLButtonElement>(null)
+  const refocus = useRef(false)
+
+  useEffect(() => {
+    if (!asking) return
+    const t = setTimeout(() => setAsking(false), ARMED_MS)
+    return () => clearTimeout(t)
+  }, [asking])
+  // after a filing, focus goes back to File (it was disabled meanwhile)
+  useEffect(() => {
+    if (busy === null && refocus.current) {
+      refocus.current = false
+      fileRef.current?.focus()
+    }
+  }, [busy])
+
+  async function run(label: string, work: () => Promise<void>) {
+    if (running.current) return
+    running.current = true
+    setBusy(label)
+    try {
+      await work()
+    } finally {
+      running.current = false
+      setBusy(null)
+    }
+  }
+  const say = (
+    tone: CalNotice['tone'],
+    lines: string[],
+    warnings: string[] = []
+  ) => onNotice({ sheetId: id, tone, lines, warnings })
+
+  const reasons = notReady(state, sheet, blocking, busy)
+
+  const onFile = () =>
+    void run('Filing...', async () => {
+      refocus.current = true
+      try {
+        // the version the hook holds, not a query copy that may lag (rule 2)
+        const res = await file(state.version)
+        say('ok', [filedMessage(res)], res.warnings)
+      } catch (e) {
+        say('bad', [refusalOf(e, FILE_NO_ANSWER)])
+      }
+    })
+
+  const onDuplicate = () =>
+    void run('Duplicating...', async () => {
+      let lines: string[] = []
+      let warnings: string[] = []
+      // files first when there is no curve yet or the sheet changed since
+      // (rule 5); a refusal stops here, so the route's 400 is never hit
+      if (sheet.curve_id === null || sheet.changed_since_filed) {
+        try {
+          const res = await file(state.version)
+          lines = [filedMessage(res)]
+          warnings = res.warnings
+        } catch (e) {
+          say('bad', [refusalOf(e, FILE_NO_ANSWER)])
+          return
+        }
+      }
+      let copy: CalSheet
+      try {
+        copy = await duplicate(id)
+      } catch (e) {
+        say('bad', [...lines, refusalOf(e, DUP_NO_ANSWER)], warnings)
+        return
+      }
+      const where = copy.instrument_name
+        ? `it files as ${copy.proposed_name} on the ${copy.instrument_name}`
+        : `it files as ${copy.proposed_name} once its Instrument is chosen`
+      onNotice({
+        sheetId: copy.id,
+        tone: 'ok',
+        lines: [
+          ...lines,
+          `Opened a copy of ${copy.replicate_of_name ?? sheet.curve_name ?? sheet.proposed_name}: the same vials. Choose its Instrument (${where}), type its peak areas in Step 4, then File curve.`,
+        ],
+        warnings,
+      })
+      useUIStore.getState().navigateToCalibrationSheet(copy.id)
+    })
+
+  const onNew = () => {
+    if (!asking) {
+      setAsking(true)
+      return
+    }
+    setAsking(false)
+    void run('Opening a new one...', async () => {
+      try {
+        const s = await createCalSheet({})
+        qc.setQueryData(CAL_SHEET_KEY(s.id), s)
+        void qc.invalidateQueries({ queryKey: [...CAL_SHEETS_KEY, 'list'] })
+        useUIStore.getState().navigateToCalibrationSheet(s.id)
+      } catch (e) {
+        say('bad', [
+          e instanceof CalSheetError
+            ? e.message
+            : 'A new worksheet could not be made: the server did not answer.',
+        ])
+      }
+    })
+  }
+
+  return (
+    <div
+      role="group"
+      aria-label="Worksheet"
+      className="flex flex-wrap items-center gap-2"
+    >
+      <ActionButton
+        label={busy === 'Filing...' ? busy : 'File curve'}
+        help={FILE_HELP}
+        reasons={reasons}
+        variant="default"
+        onClick={onFile}
+        buttonRef={fileRef}
+      />
+      <ActionButton
+        label={
+          busy === 'Duplicating...' ? busy : 'Duplicate for another injection'
+        }
+        help={DUP_HELP}
+        reasons={reasons}
+        onClick={onDuplicate}
+      />
+      <ActionButton
+        label={asking ? NEW_ASK : NEW_LABEL}
+        help={NEW_HELP}
+        reasons={busy ? [busy] : []}
+        onClick={onNew}
+      />
+    </div>
+  )
+}
+
+function SheetView({
+  id,
+  notice,
+  onNotice,
+}: {
+  id: number
+  notice: CalNotice | null
+  onNotice: (n: CalNotice | null) => void
+}) {
   const save = useSaveCalSheet(id)
   const { sheet, state } = save
   const { data: peptides = [] } = useQuery({
@@ -171,6 +548,36 @@ function SheetView({ id }: { id: number }) {
         </div>
       </div>
 
+      <SheetToolbar
+        id={id}
+        sheet={sheet}
+        state={state}
+        blocking={blocking.map(w => w.text)}
+        onNotice={onNotice}
+      />
+      {notice && notice.sheetId === id && (
+        <div
+          role={notice.tone === 'bad' ? 'alert' : 'status'}
+          data-testid="cal-notice"
+          className={`flex flex-wrap items-start gap-3 rounded-md border px-3 py-2 text-sm ${notice.tone === 'bad' ? 'border-red-500/60 bg-red-500/10' : 'border-emerald-500/50 bg-emerald-500/10'}`}
+        >
+          <div className="min-w-0 flex-1 space-y-1">
+            {notice.lines.map(l => (
+              <p key={l}>{l}</p>
+            ))}
+            {notice.warnings.length > 0 && (
+              <ul className="space-y-1 font-medium text-amber-800 dark:text-amber-200">
+                {notice.warnings.map(w => (
+                  <li key={w}>{w}</li>
+                ))}
+              </ul>
+            )}
+          </div>
+          <Button size="sm" variant="outline" onClick={() => onNotice(null)}>
+            Dismiss
+          </Button>
+        </div>
+      )}
       {state.reloaded && (
         <div
           role="alert"
@@ -211,6 +618,11 @@ function SheetView({ id }: { id: number }) {
             Saving...
           </div>
         )
+      )}
+      {state.checking && (
+        <div role="status" className="text-xs text-muted-foreground">
+          {CHECKING}
+        </div>
       )}
       {sheet.blocking.includes('cannot_be_worked_out') && (
         <div
@@ -300,59 +712,18 @@ function SheetView({ id }: { id: number }) {
   )
 }
 
-/** The sheets, newest first (Task 7 builds this list out). */
-function SheetList() {
-  const { data: sheets = [], error } = useCalSheets()
-  const qc = useQueryClient()
-  const [busy, setBusy] = useState(false)
-  const open = (id: number) =>
-    useUIStore.getState().navigateToCalibrationSheet(id)
-  async function create() {
-    setBusy(true)
-    try {
-      const s = await createCalSheet({})
-      qc.setQueryData(CAL_SHEET_KEY(s.id), s)
-      void qc.invalidateQueries({ queryKey: [...CAL_SHEETS_KEY, 'list'] })
-      open(s.id)
-    } catch (e) {
-      toast.error(e instanceof Error ? e.message : 'Create failed')
-    } finally {
-      setBusy(false)
-    }
-  }
-  return (
-    <>
-      <div className="flex items-center justify-between">
-        <h2 className="text-[23px] font-semibold tracking-tight">
-          Calibration worksheets
-        </h2>
-        <Button onClick={() => void create()} disabled={busy}>
-          New calibration worksheet
-        </Button>
-      </div>
-      {error && <p className="text-sm text-destructive">{error.message}</p>}
-      <ul className="divide-y rounded-md border bg-card">
-        {sheets.map(s => (
-          <li
-            key={s.id}
-            className="flex items-center justify-between px-3 py-2 text-sm"
-          >
-            <span className="font-mono">{s.curve_name ?? s.proposed_name}</span>
-            <Button size="sm" variant="outline" onClick={() => open(s.id)}>
-              Open
-            </Button>
-          </li>
-        ))}
-      </ul>
-    </>
-  )
-}
-
 export function HplcCalibrationSheetPage() {
   const id = useUIStore(s => s.calibrationSheetPageId)
+  // held here, not in the sheet view: a Duplicate's message must survive
+  // the move to the copy it opens
+  const [notice, setNotice] = useState<CalNotice | null>(null)
   return (
     <div data-testid="hplc-calibration-page" className={ROOT}>
-      {id === null ? <SheetList /> : <SheetView key={id} id={id} />}
+      {id === null ? (
+        <HplcCalSheetList />
+      ) : (
+        <SheetView key={id} id={id} notice={notice} onNotice={setNotice} />
+      )}
     </div>
   )
 }

@@ -12,6 +12,7 @@ import {
   X,
   Trash2,
   Cloud,
+  NotebookPen,
 } from 'lucide-react'
 import {
   Card,
@@ -22,6 +23,11 @@ import {
 } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipTrigger,
+} from '@/components/ui/tooltip'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import {
@@ -42,6 +48,7 @@ import {
 import { CalibrationChart } from './CalibrationChart'
 import { ChromatogramChart, downsampleLTTB, type ChromatogramTrace } from './ChromatogramChart'
 import {
+  createCalSheet,
   getCalibrations,
   getCalibration,
   getInstruments,
@@ -54,6 +61,7 @@ import {
 } from '@/lib/api'
 import { getApiBaseUrl } from '@/lib/config'
 import { getAuthToken } from '@/store/auth-store'
+import { useUIStore } from '@/store/ui-store'
 import { toast } from 'sonner'
 
 interface CalibrationPanelProps {
@@ -115,6 +123,29 @@ export function CalibrationPanel({
       ? allCalibrations.filter(c => c.instrument_id == null)
       : allCalibrations.filter(c => c.instrument_id === Number(instrumentFilter))
 
+  // Calibration worksheet (plan 4, Task 7): a new sheet for this peptide, on
+  // the filtered instrument when that is one instrument still in service.
+  const [opening, setOpening] = useState(false)
+  const [openFailed, setOpenFailed] = useState<string | null>(null)
+  const openWorksheet = async () => {
+    const inst = instruments.find(
+      i => String(i.id) === instrumentFilter && i.active
+    )
+    setOpening(true)
+    setOpenFailed(null)
+    try {
+      const sheet = await createCalSheet({
+        peptide_id: peptide.id,
+        ...(inst ? { instrument_id: inst.id } : {}),
+      })
+      useUIStore.getState().navigateToCalibrationSheet(sheet.id)
+    } catch (err) {
+      setOpenFailed(err instanceof Error ? err.message : 'Create failed')
+    } finally {
+      setOpening(false)
+    }
+  }
+
   const activeCals = filteredCals.filter(c => c.is_active)
   const inactiveCals = filteredCals.filter(c => !c.is_active)
 
@@ -131,13 +162,44 @@ export function CalibrationPanel({
               {peptide.name}
             </CardDescription>
           </div>
-          {onImport && (
-            <Button variant="outline" size="sm" onClick={onImport} className="gap-1.5">
-              <Cloud className="h-3.5 w-3.5" />
-              Add Curve
+          <div className="flex items-center gap-2">
+            <Button
+              variant="outline"
+              size="sm"
+              className="gap-1.5"
+              disabled={peptide.is_blend || opening}
+              aria-describedby={
+                peptide.is_blend ? `cal-ws-blend-${peptide.id}` : undefined
+              }
+              onClick={() => void openWorksheet()}
+            >
+              <NotebookPen className="h-3.5 w-3.5" />
+              Calibration worksheet
             </Button>
-          )}
+            {peptide.is_blend && (
+              <span id={`cal-ws-blend-${peptide.id}`} className="sr-only">
+                A curve is for one peptide. A blend&apos;s components each have
+                their own.
+              </span>
+            )}
+            {onImport && (
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={onImport}
+                className="gap-1.5"
+              >
+                <Cloud className="h-3.5 w-3.5" />
+                Add Curve
+              </Button>
+            )}
+          </div>
         </div>
+        {openFailed && (
+          <p role="alert" className="text-xs text-destructive">
+            {`A worksheet could not be opened: ${openFailed}`}
+          </p>
+        )}
       </CardHeader>
       <CardContent className="flex flex-col gap-4">
         {loading ? (
@@ -339,6 +401,50 @@ function getBearerHeadersForCal(): Record<string, string> {
 }
 
 
+const ENTERED_BY_HAND =
+  'This curve was entered before the Calibration Curve Worksheet, with the net peptide weight already applied by hand. Its numbers are left as they were.'
+
+/** How the curve's net peptide weight was applied: entered by hand (every
+ *  curve from before the worksheet) or worked out on a worksheet (plan 4). */
+function NetBasisBadge({ calibration }: { calibration: CalibrationCurve }) {
+  if (calibration.net_basis !== 'entered_by_hand')
+    return (
+      <>
+        <Badge variant="secondary" className="text-[10px] px-1.5 py-0">
+          worksheet
+        </Badge>
+        {calibration.injection != null && (
+          <Badge
+            variant="secondary"
+            className="text-[10px] px-1.5 py-0 font-mono"
+          >
+            {`Inj${calibration.injection}`}
+          </Badge>
+        )}
+      </>
+    )
+  const tipId = `cal-net-hand-${calibration.id}`
+  return (
+    <>
+      <Tooltip>
+        <TooltipTrigger asChild>
+          <Badge
+            variant="outline"
+            className="text-[10px] px-1.5 py-0 text-muted-foreground"
+            aria-describedby={tipId}
+          >
+            net, entered by hand
+          </Badge>
+        </TooltipTrigger>
+        <TooltipContent className="max-w-xs">{ENTERED_BY_HAND}</TooltipContent>
+      </Tooltip>
+      <span id={tipId} className="sr-only">
+        {ENTERED_BY_HAND}
+      </span>
+    </>
+  )
+}
+
 function CalibrationRow({
   calibration,
   isExpanded,
@@ -520,6 +626,7 @@ function CalibrationRow({
                   {calibration.instrument}
                 </Badge>
               )}
+              <NetBasisBadge calibration={calibration} />
               <span className="font-mono text-sm truncate">
                 y = {liveReg.slope.toFixed(4)}x + {liveReg.intercept.toFixed(4)}
               </span>
@@ -576,6 +683,24 @@ function CalibrationRow({
           </div>
         </div>
         <div className="flex items-center gap-1 shrink-0">
+          {calibration.calibration_sheet_id != null && (
+            <Button
+              variant="ghost"
+              size="sm"
+              className="text-xs h-7 px-2"
+              onClick={e => {
+                e.stopPropagation()
+                useUIStore
+                  .getState()
+                  .navigateToCalibrationSheet(
+                    calibration.calibration_sheet_id as number
+                  )
+              }}
+            >
+              <NotebookPen className="h-3 w-3 mr-1" />
+              Open worksheet
+            </Button>
+          )}
           {onSetActive && (
             <Button
               variant="ghost"

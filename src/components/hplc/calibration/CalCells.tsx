@@ -298,6 +298,9 @@ export function CalDateBox({
         onKeyDown={e => {
           if (e.key === 'Enter') commit(e.currentTarget)
           if (e.key === 'Escape') {
+            // a part-typed date reads as '', the same as an empty stored one,
+            // so React would leave the typed segments up: clear them here
+            e.currentTarget.value = value ?? ''
             setDraft(null)
             setBad(false)
           }
