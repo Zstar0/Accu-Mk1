@@ -135,6 +135,200 @@ export const STEP2_COLUMNS: SheetColumn<Step2Key>[] = [
   },
 ]
 
+export const STEP2B_TITLE = 'Blend components'
+export const STEP2B_NOTE = 'samples with more than one peptide'
+export const STEP2B_SUB =
+  "One stock, one dilution per vial. Split the declared weight across the peptides and pick the lead: the Step 3 plan hits the lead's target and the others land where that dilution puts them. A peptide that would land under 60 ug/mL gets its own vial: choose B in the Vial column and Step 3 gains a row for it from the same stock."
+
+export type Step2bKey =
+  | 'sample_id'
+  | 'component'
+  | 'mg'
+  | 'vial'
+  | 'lead'
+  | 'stock_conc_ug_ml'
+  | 'target'
+  | 'planned_final_ug_ml'
+  | 'actual_final_ug_ml'
+
+export const STEP2B_COLUMNS: SheetColumn<Step2bKey>[] = [
+  { key: 'sample_id', kind: 'text', label: 'Sample ID' },
+  { key: 'component', kind: 'text', label: 'Component' },
+  {
+    key: 'mg',
+    kind: 'input',
+    label: 'Declared Wt (mg)',
+    title:
+      "This component's share of the row's Declared Peptide Wt (Step 2). The shares should add up to it.",
+  },
+  {
+    key: 'vial',
+    kind: 'select',
+    label: 'Vial',
+    title:
+      'Which autosampler vial this peptide is read from. All start in A; choose B for the peptides that need their own dilution: Step 3 then gets a row per vial from the same stock.',
+  },
+  {
+    key: 'lead',
+    kind: 'input',
+    label: 'Lead',
+    title:
+      'The component the Step 3 plan hits the Target Conc for, in its vial. The others in that vial land where that same dilution puts them. Blank = the usual lead for the blend (the Usual blend leads list under Lab rules), else the heaviest.',
+  },
+  {
+    key: 'stock_conc_ug_ml',
+    kind: 'computed',
+    dp: 2,
+    label: 'Component Stock Conc (ug/mL)',
+    title:
+      'Declared Wt × 1000 ÷ Total Diluent added (Step 2), the same diluent for every component',
+  },
+  {
+    key: 'target',
+    kind: 'input',
+    label: 'Own Target (ug/mL)',
+    title:
+      "What this peptide is diluted to on its own: blank = 200, or its special case under Lab rules (greyed in). Type a value to use another (Dennis, 2026-09-29). The lead's is the target its vial is diluted to in Step 3 unless one is typed there; the others' are what they would be on their own.",
+  },
+  {
+    key: 'planned_final_ug_ml',
+    kind: 'computed',
+    dp: 2,
+    label: 'Planned Final Conc (ug/mL)',
+    title:
+      "In its vial: Target Conc (Step 3) × Component Stock Conc ÷ the vial lead's Component Stock Conc. Under 60 ug/mL and not the lead: put it in its own vial.",
+  },
+  {
+    key: 'actual_final_ug_ml',
+    kind: 'computed',
+    dp: 2,
+    label: 'Actual Final Conc (ug/mL)',
+    title:
+      "In its vial: Actual Conc (Step 3) × Component Stock Conc ÷ the vial lead's Component Stock Conc",
+  },
+]
+
+export const STEP3A_TITLE = 'Intermediate dilution'
+export const STEP3A_NOTE = 'samples declared at 500 mg or more'
+export const STEP3A_SUB =
+  'Too much peptide for one step: dilute the stock into an intermediate vial first, then Step 3 dilutes from that. Same routine: diluent, then stock, weigh after each.'
+
+export type Step3aKey =
+  | 'sample_id'
+  | 'identity'
+  | 'diluent'
+  | 'int_target_ug_ml'
+  | 'int_volume_ul'
+  | 'int_vial_mg'
+  | 'diluent_vol_ul'
+  | 'diluent_half_ul'
+  | 'int_vial_diluent_mg'
+  | 'stock_vol_ul'
+  | 'stock_half_ul'
+  | 'int_vial_all_mg'
+  | 'actual_diluent_ul'
+  | 'actual_stock_ul'
+  | 'actual_conc_ug_ml'
+
+export const STEP3A_COLUMNS: SheetColumn<Step3aKey>[] = [
+  { key: 'sample_id', kind: 'text', label: 'Sample ID' },
+  {
+    key: 'identity',
+    kind: 'text',
+    label: 'Sample Identity',
+    title:
+      'Copied from Step 2, change it there. A blend split across vials also says which peptides this vial holds.',
+  },
+  {
+    key: 'diluent',
+    kind: 'text',
+    label: 'Diluent',
+    title:
+      'From Step 2: what the stock and this dilution are made in (Water, or water + 0.1% TFA for GHK by the Lab rules; a row can pick its own there).',
+  },
+  {
+    key: 'int_target_ug_ml',
+    kind: 'input',
+    label: 'Intermediate Target (ug/mL)',
+    title:
+      'Blank = 5000 ug/mL, the intermediate the lab makes. Type a value to use a different one for this row.',
+  },
+  {
+    key: 'int_volume_ul',
+    kind: 'input',
+    label: 'Intermediate Target Vol (uL)',
+    title: 'Blank = 1500 uL',
+  },
+  {
+    key: 'int_vial_mg',
+    kind: 'input',
+    label: 'Wt Intermediate vial and cap (mg)',
+  },
+  {
+    key: 'diluent_vol_ul',
+    kind: 'computed',
+    dp: 2,
+    label: 'Diluent Vol to Add (uL), total',
+    title: 'Intermediate Vol - Stock Vol to Add',
+  },
+  {
+    key: 'diluent_half_ul',
+    kind: 'computed',
+    dp: 2,
+    label: 'half',
+    title: 'Half of Diluent Vol to Add',
+  },
+  {
+    key: 'int_vial_diluent_mg',
+    kind: 'input',
+    label: 'Wt Intermediate vial and cap + Diluent (mg)',
+  },
+  {
+    key: 'stock_vol_ul',
+    kind: 'computed',
+    dp: 2,
+    label: 'Stock Vol to Add (uL), total',
+    title:
+      'Intermediate Target × Intermediate Target Vol ÷ Peptide Stock Conc (from Step 2)',
+  },
+  {
+    key: 'stock_half_ul',
+    kind: 'computed',
+    dp: 2,
+    label: 'half',
+    title: 'Half of Stock Vol to Add',
+  },
+  {
+    key: 'int_vial_all_mg',
+    kind: 'input',
+    label: 'Wt Intermediate vial, cap, Diluent + Stock (mg)',
+  },
+  {
+    key: 'actual_diluent_ul',
+    kind: 'computed',
+    dp: 2,
+    label: 'Actual Diluent added (uL)',
+    title:
+      '(Wt vial and cap + Diluent - Wt vial and cap) ÷ Diluent density × 1000',
+  },
+  {
+    key: 'actual_stock_ul',
+    kind: 'computed',
+    dp: 2,
+    label: 'Actual Stock added (uL)',
+    title:
+      '(Wt vial, cap, Diluent + Stock - Wt vial and cap + Diluent) ÷ Diluent density × 1000',
+  },
+  {
+    key: 'actual_conc_ug_ml',
+    kind: 'computed',
+    dp: 2,
+    label: 'Actual Intermediate Conc (ug/mL)',
+    title:
+      'Peptide Stock Conc × Actual Stock added ÷ (Actual Stock added + Actual Diluent added). Step 3 dilutes from this.',
+  },
+]
+
 export type Step3Key =
   | 'sample_id'
   | 'identity'

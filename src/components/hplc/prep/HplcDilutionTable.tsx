@@ -111,38 +111,14 @@ function DilutionCell({
           {row.sample_id}
           {many && ` ${letter}`}
           {vial.two_step && (
-            <Hint>
-              two-step: its intermediate vial (Step 3a) is not on the sheet yet
-            </Hint>
+            <Hint>two-step: dilutes from its intermediate vial (Step 3a)</Hint>
           )}
         </IdCell>
       )
     case 'identity':
-      return (
-        <td className={TD}>
-          {vial.component_ids
-            .map(
-              id =>
-                row.components.find(c => c.peptide_id === id)?.name ??
-                `peptide #${id}`
-            )
-            .join(' + ')}
-        </td>
-      )
-    case 'diluent': {
-      const d = computed.diluent.diluent
-      return (
-        <td className={TD}>
-          {d !== null && d !== DEFAULT_DILUENT ? (
-            <span className="rounded-[3px] bg-amber-500/15 px-1.5 py-px text-amber-700 dark:text-amber-300">
-              {d}
-            </span>
-          ) : (
-            (d ?? '-')
-          )}
-        </td>
-      )
-    }
+      return <VialIdentityCell view={view} vial={vial} />
+    case 'diluent':
+      return <DiluentCell computed={computed} />
     case 'stock_for_final':
       return <ComputedCell value={vial.stock_for_final} dp={2} />
     case 'target_ug_ml':
@@ -192,4 +168,41 @@ function DilutionCell({
     case 'dilution_factor_total':
       return <ComputedCell value={vial.dilution_factor_total} dp={4} />
   }
+}
+
+/** Which peptides a vial holds (Steps 3 and 3a). */
+export function VialIdentityCell({
+  view,
+  vial,
+}: {
+  view: SheetRowView
+  vial: HplcVialComputed
+}) {
+  return (
+    <td className={TD}>
+      {vial.component_ids
+        .map(
+          id =>
+            view.row.components.find(c => c.peptide_id === id)?.name ??
+            `peptide #${id}`
+        )
+        .join(' + ')}
+    </td>
+  )
+}
+
+/** The row's diluent, marked when it is not plain water (Steps 3 and 3a). */
+export function DiluentCell({ computed }: { computed: HplcRowComputed }) {
+  const d = computed.diluent.diluent
+  return (
+    <td className={TD}>
+      {d !== null && d !== DEFAULT_DILUENT ? (
+        <span className="rounded-[3px] bg-amber-500/15 px-1.5 py-px text-amber-700 dark:text-amber-300">
+          {d}
+        </span>
+      ) : (
+        (d ?? '-')
+      )}
+    </td>
+  )
 }

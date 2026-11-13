@@ -9,11 +9,19 @@ import { computeRow, type HplcRowComputed } from '@/lib/hplc-prep'
 import type { HplcPrepRule } from '@/lib/hplc-prep-rules'
 import { HplcStockTable } from './HplcStockTable'
 import { HplcDilutionTable } from './HplcDilutionTable'
+import { HplcBlendTable } from './HplcBlendTable'
+import { HplcIntermediateTable } from './HplcIntermediateTable'
 import {
   STEP2_SUB,
   STEP2_TITLE,
+  STEP2B_NOTE,
+  STEP2B_SUB,
+  STEP2B_TITLE,
   STEP3_SUB,
   STEP3_TITLE,
+  STEP3A_NOTE,
+  STEP3A_SUB,
+  STEP3A_TITLE,
 } from './hplc-sheet-columns'
 
 /** One row as the sheet shows it: its facts, what computeRow made of them
@@ -74,15 +82,35 @@ export function sheetRowViews(
   }))
 }
 
-/** The step sections in the source's order; Task 8 adds Step 2b after
- *  Step 2 and Step 3a before Step 3. */
+/** The step sections in the source's order; Step 2b and Step 3a show only
+ *  when a row on the sheet needs them. */
 const SECTIONS: {
   step: string
   title: string
+  note?: string
   sub: string
   Table: ComponentType<SheetSectionProps>
+  show?: (views: SheetRowView[]) => boolean
 }[] = [
   { step: 'Step 2', title: STEP2_TITLE, sub: STEP2_SUB, Table: HplcStockTable },
+  {
+    step: 'Step 2b',
+    title: STEP2B_TITLE,
+    note: STEP2B_NOTE,
+    sub: STEP2B_SUB,
+    Table: HplcBlendTable,
+    // the same rows HplcBlendTable lists
+    show: views => views.some(v => v.row.is_blend && !v.row.rider_only),
+  },
+  {
+    step: 'Step 3a',
+    title: STEP3A_TITLE,
+    note: STEP3A_NOTE,
+    sub: STEP3A_SUB,
+    Table: HplcIntermediateTable,
+    show: views =>
+      views.some(v => v.computed?.vials.some(x => x.intermediate !== null)),
+  },
   {
     step: 'Step 3',
     title: STEP3_TITLE,
@@ -105,11 +133,13 @@ export function HplcPrepSheet(props: HplcPrepSheetProps) {
   return (
     <div className="space-y-6">
       <WarningsPanel views={rowViews} />
-      {SECTIONS.map(({ step, title, sub, Table }) => (
-        <Section key={step} step={step} title={title} sub={sub}>
-          <Table {...props} rowViews={rowViews} />
-        </Section>
-      ))}
+      {SECTIONS.filter(s => !s.show || s.show(rowViews)).map(
+        ({ step, title, note, sub, Table }) => (
+          <Section key={step} step={step} title={title} note={note} sub={sub}>
+            <Table {...props} rowViews={rowViews} />
+          </Section>
+        )
+      )}
     </div>
   )
 }
@@ -136,11 +166,13 @@ function WarningsPanel({ views }: { views: SheetRowView[] }) {
 function Section({
   step,
   title,
+  note,
   sub,
   children,
 }: {
   step: string
   title: string
+  note?: string
   sub: string
   children: ReactNode
 }) {
@@ -153,6 +185,11 @@ function Section({
         <h3 className="text-[15px] font-semibold">
           <span className="mr-2 text-teal-600 dark:text-teal-400">{step}</span>
           {title}
+          {note && (
+            <span className="ml-2 text-xs font-normal text-muted-foreground">
+              {note}
+            </span>
+          )}
         </h3>
         <p className="text-xs text-muted-foreground">{sub}</p>
       </div>
