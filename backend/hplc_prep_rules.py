@@ -92,9 +92,10 @@ def component_target(rules: list[dict], *, peptide_id: Optional[int],
 
 
 def _own_line(rules: list[dict], component: dict) -> Optional[dict]:
-    """A component's own line, matched on the component's declared_mg."""
+    """A component's own line, matched on the component's declared_mg (a missing
+    key is no weight)."""
     return match_rule(rules, peptide_id=component["peptide_id"],
-                      weight_mg=component["declared_mg"])
+                      weight_mg=component.get("declared_mg"))
 
 
 def pick_lead(rules: list[dict], components: list[dict], *, row_rule: Optional[dict],
@@ -120,21 +121,22 @@ def pick_lead(rules: list[dict], components: list[dict], *, row_rule: Optional[d
         if ranked:
             return {"peptide_id": ids[min(ranked)[1]], "why": "preferred"}
     weighed = [(-c["declared_mg"], i) for i, c in enumerate(components)
-               if c["declared_mg"] is not None]
+               if c.get("declared_mg") is not None]
     if weighed:
         return {"peptide_id": ids[min(weighed)[1]], "why": "heaviest"}
     return {"peptide_id": ids[0], "why": "first"}
 
 
 def _row_value(rules: list[dict], key: str, row_rule: Optional[dict],
-               components: list[dict]) -> Optional[dict]:
+               components: list[dict], no_opinion=None) -> Optional[dict]:
     """The line that sets `key` for a row: the row's own line if it sets it,
-    else the first component, in order, whose own line does; else None."""
+    else the first component, in order, whose own line does (a component
+    line whose value is `no_opinion` counts as not setting it); else None."""
     if row_rule is not None and row_rule[key] is not None:
         return row_rule
     for component in components:
         line = _own_line(rules, component)
-        if line is not None and line[key] is not None:
+        if line is not None and line[key] is not None and line[key] != no_opinion:
             return line
     return None
 
@@ -142,8 +144,10 @@ def _row_value(rules: list[dict], key: str, row_rule: Optional[dict],
 def row_diluent(rules: list[dict], *, row_rule: Optional[dict],
                 components: list[dict]) -> dict:
     """The row's diluent and the line that set it (DEFAULT_DILUENT, rule_id None,
-    when no line names one)."""
-    line = _row_value(rules, "diluent", row_rule, components)
+    when no line names one). The row's own line wins whatever it says; a
+    component line that names DEFAULT_DILUENT is no opinion, as in the lab's
+    tool, where any listed peptide's TFA decides and Water is never listed."""
+    line = _row_value(rules, "diluent", row_rule, components, no_opinion=DEFAULT_DILUENT)
     if line is None:
         return {"diluent": DEFAULT_DILUENT, "rule_id": None}
     return {"diluent": line["diluent"], "rule_id": line["id"]}
@@ -151,8 +155,9 @@ def row_diluent(rules: list[dict], *, row_rule: Optional[dict],
 
 def row_instrument(rules: list[dict], *, row_rule: Optional[dict],
                    components: list[dict]) -> Optional[int]:
-    """The instrument the row usually runs on, by row_diluent's walk; None
-    when no line names one."""
+    """The instrument the row usually runs on: the row's own line if it names
+    one, else the first component, in order, whose own line does; None when
+    no line names one."""
     line = _row_value(rules, "default_instrument_id", row_rule, components)
     return None if line is None else line["default_instrument_id"]
 
@@ -177,11 +182,12 @@ def check_rule(db: Session, values: dict, sent, *, rule_id: Optional[int] = None
     sent. A refusal raises ValueError with the reason (the routes answer
     400). Each check runs only when a field it reads was sent, so a line that
     an old value no longer fits (a retired instrument, a new method floor)
-    can still be deactivated or re-noted. The floor check compares the
-    effective floor and target, each falling back to HPLC_RUN_PARAM_DEFAULTS.
+    can still be deactivated or re-noted. Only a blend line sets a floor, and
+    on a blend line the floor check compares the effective floor and target,
+    each falling back to HPLC_RUN_PARAM_DEFAULTS.
     Returns the warnings, for an active line only: a band that overlaps
-    another active line of the same peptide, and a lead_priority another
-    active line already uses."""
+    another active line of the same peptide, and a lead_priority an active
+    line of another peptide already uses."""
     from catalog.method_run_params import HPLC_RUN_PARAM_DEFAULTS
     from models import Instrument, Peptide, blend_components
 
@@ -190,7 +196,9 @@ def check_rule(db: Session, values: dict, sent, *, rule_id: Optional[int] = None
         if field in sent and values[field] is None:
             raise ValueError(f"{field} cannot be empty")
     for field in _NUMBER_FIELDS:
-        if field in sent and values[field] is not None and not math.isfinite(values[field]):
+        # An int is always finite (and math.isfinite raises on one too big for a float).
+        if (field in sent and isinstance(values[field], float)
+                and not math.isfinite(values[field])):
             raise ValueError(f"{field} must be a finite number")
     peptide = db.get(Peptide, values["peptide_id"]) if values["peptide_id"] is not None else None
     if "peptide_id" in sent and peptide is None:
@@ -198,13 +206,17 @@ def check_rule(db: Session, values: dict, sent, *, rule_id: Optional[int] = None
     for field in _POSITIVE_FIELDS:
         if field in sent and values[field] is not None and values[field] <= 0:
             raise ValueError(f"{field} must be greater than zero")
+    for field in ("min_mg", "max_mg"):
+        if field in sent and values[field] is not None and values[field] < 0:
+            raise ValueError(f"{field} must not be negative")
     lo, hi = values["min_mg"], values["max_mg"]
     if sent & {"min_mg", "max_mg"} and lo is not None and hi is not None and lo >= hi:
         raise ValueError("min_mg must be below max_mg")
     priority = values["lead_priority"]
     if "lead_priority" in sent and priority is not None and (
-            isinstance(priority, bool) or priority < 1 or priority != int(priority)):
-        raise ValueError("lead_priority must be a whole number of at least 1")
+            isinstance(priority, bool) or not 1 <= priority <= 999
+            or priority != int(priority)):
+        raise ValueError("lead_priority must be a whole number from 1 to 999")
     diluent = values["diluent"]
     if "diluent" in sent and diluent is not None and diluent not in HPLC_DILUENTS:
         raise ValueError(f"diluent '{diluent}' is not one of: {', '.join(HPLC_DILUENTS)}")
@@ -227,7 +239,13 @@ def check_rule(db: Session, values: dict, sent, *, rule_id: Optional[int] = None
             and (values["blend_target_conc_ug_ml"] is not None or priority is not None)):
         raise ValueError("blend_target_conc_ug_ml and lead_priority are for component lines: "
                          "a blend is never a component of another blend")
-    if sent & {"floor_ug_ml", "target_conc_ug_ml"}:
+    # The floor is the blend's: row_floor reads only the row's own line, and a
+    # solo peptide has no other component to hold to it.
+    if (sent & {"peptide_id", "floor_ug_ml"} and values["floor_ug_ml"] is not None
+            and peptide is not None and not peptide.is_blend):
+        raise ValueError("only a blend line sets a floor")
+    if (sent & {"peptide_id", "floor_ug_ml", "target_conc_ug_ml"}
+            and peptide is not None and peptide.is_blend):
         floor = values["floor_ug_ml"]
         target = values["target_conc_ug_ml"]
         floor = HPLC_RUN_PARAM_DEFAULTS["floor_ug_ml"] if floor is None else floor
@@ -248,6 +266,7 @@ def check_rule(db: Session, values: dict, sent, *, rule_id: Optional[int] = None
     if priority is not None:
         warnings += [
             f"lead_priority {priority:g} is also used by rule {other['id']}; {LEAD_PRIORITY_TIE}"
-            for other in others if other["lead_priority"] == priority
+            for other in others
+            if other["lead_priority"] == priority and other["peptide_id"] != values["peptide_id"]
         ]
     return warnings

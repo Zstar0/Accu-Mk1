@@ -68,6 +68,15 @@ def test_fixture_lines_are_whole_snapshots():
         assert snapshot(HplcPrepRule(**line)) == line
 
 
+def test_pick_lead_reads_a_component_with_no_declared_mg_key_as_no_weight():
+    # A component built from a partial object: never the heaviest, never a KeyError.
+    rules = DATA["rule_sets"]["main"]
+    assert hpr.pick_lead(rules, [{"peptide_id": 5}, {"peptide_id": 6, "declared_mg": 4}],
+                         row_rule=None) == {"peptide_id": 6, "why": "heaviest"}
+    assert hpr.pick_lead(rules, [{"peptide_id": 5}, {"peptide_id": 6}],
+                         row_rule=None) == {"peptide_id": 5, "why": "first"}
+
+
 def test_constants():
     assert HPLC_DILUENTS == ("Water", "Water + 0.1% TFA")
     assert DEFAULT_DILUENT == "Water"
@@ -201,7 +210,7 @@ def _instrument(db, name, active):
 def test_a_valid_line_saves_with_no_warnings(db_session, pep):
     inst = _instrument(db_session, "1290B", True)
     assert _check(db_session, peptide_id=pep.id, min_mg=5, max_mg=10, target_conc_ug_ml=150,
-                  blend_target_conc_ug_ml=175, lead_priority=1, floor_ug_ml=40,
+                  blend_target_conc_ug_ml=175, lead_priority=1,
                   diluent="Water + 0.1% TFA", default_instrument_id=inst.id) == []
 
 
@@ -239,11 +248,23 @@ def test_a_band_whose_bottom_is_not_below_its_top_is_refused(db_session, pep, lo
         _check(db_session, peptide_id=pep.id, min_mg=lo, max_mg=hi)
 
 
-@pytest.mark.parametrize("raw", [0, -1, 1.5, True])
-def test_a_lead_priority_that_is_not_a_whole_number_of_at_least_1_is_refused(
+@pytest.mark.parametrize("field", ["min_mg", "max_mg"])
+def test_a_negative_band_bound_is_refused(db_session, pep, field):
+    with pytest.raises(ValueError, match=f"{field} must not be negative"):
+        _check(db_session, peptide_id=pep.id, **{field: -1})
+    assert _check(db_session, peptide_id=pep.id, **{field: 0}) == []
+
+
+@pytest.mark.parametrize("raw", [0, -1, 1.5, True, 1000, 2147483648, 10 ** 400],
+                         ids=["0", "-1", "1.5", "True", "1000", "2^31", "10^400"])
+def test_a_lead_priority_that_is_not_a_whole_number_from_1_to_999_is_refused(
         db_session, pep, raw):
-    with pytest.raises(ValueError, match="lead_priority must be a whole number of at least 1"):
+    with pytest.raises(ValueError, match="lead_priority must be a whole number from 1 to 999"):
         _check(db_session, peptide_id=pep.id, lead_priority=raw)
+
+
+def test_a_lead_priority_of_999_saves(db_session, pep):
+    assert _check(db_session, peptide_id=pep.id, lead_priority=999) == []
 
 
 def test_a_whole_float_lead_priority_saves(db_session, pep):
@@ -286,22 +307,39 @@ def test_a_component_field_on_a_blend_line_is_refused(db_session, blend, field, 
         _check(db_session, peptide_id=mix.id, **{field: raw})
 
 
+def test_a_floor_on_a_line_that_is_not_a_blend_is_refused(db_session, pep, blend):
+    _, bpc, _ = blend
+    for solo in (pep, bpc):   # a solo peptide, and a blend component
+        with pytest.raises(ValueError, match="only a blend line sets a floor"):
+            _check(db_session, peptide_id=solo.id, floor_ug_ml=40)
+    # A line moved onto a solo peptide with its floor is refused too.
+    with pytest.raises(ValueError, match="only a blend line sets a floor"):
+        _check(db_session, sent={"peptide_id"}, peptide_id=pep.id, floor_ug_ml=40)
+
+
 @pytest.mark.parametrize("over", [
     {"floor_ug_ml": 200},                              # the method target, 200
     {"target_conc_ug_ml": 50},                         # the method floor, 60
     {"target_conc_ug_ml": 100, "floor_ug_ml": 100},
     {"target_conc_ug_ml": 100, "floor_ug_ml": 150},
 ])
-def test_a_floor_at_or_above_the_target_is_refused(db_session, pep, over):
+def test_a_floor_at_or_above_the_target_is_refused(db_session, blend, over):
+    mix, _, _ = blend
     with pytest.raises(ValueError, match="floor .* must be below the target"):
-        _check(db_session, peptide_id=pep.id, **over)
+        _check(db_session, peptide_id=mix.id, **over)
 
 
-def test_the_floor_check_falls_back_to_the_method_defaults(db_session, pep):
+def test_the_floor_check_falls_back_to_the_method_defaults(db_session, blend):
+    mix, _, _ = blend
     assert HPLC_RUN_PARAM_DEFAULTS["default_target_ug_ml"] == 200
     assert HPLC_RUN_PARAM_DEFAULTS["floor_ug_ml"] == 60
-    assert _check(db_session, peptide_id=pep.id, floor_ug_ml=199) == []
-    assert _check(db_session, peptide_id=pep.id, target_conc_ug_ml=61) == []
+    assert _check(db_session, peptide_id=mix.id, floor_ug_ml=199) == []
+    assert _check(db_session, peptide_id=mix.id, target_conc_ug_ml=61) == []
+
+
+def test_the_floor_check_is_for_blend_lines_only(db_session, pep):
+    # A solo line has no floor of its own: a target under the method floor saves.
+    assert _check(db_session, peptide_id=pep.id, target_conc_ug_ml=50) == []
 
 
 def test_a_line_an_old_value_no_longer_fits_can_still_be_deactivated(db_session, pep):
@@ -345,3 +383,8 @@ def test_a_lead_priority_another_active_line_uses_saves_with_a_warning(db_sessio
     assert _check(db_session, rule_id=other.id, peptide_id=ipa.id, lead_priority=1) == []
     assert _check(db_session, peptide_id=pep.id, lead_priority=2) == []
     assert _check(db_session, peptide_id=pep.id, lead_priority=1, active=False) == []
+
+
+def test_two_bands_of_one_peptide_may_share_a_lead_priority(db_session, pep):
+    _stored(db_session, peptide_id=pep.id, max_mg=10, lead_priority=1)
+    assert _check(db_session, peptide_id=pep.id, min_mg=10, lead_priority=1) == []
