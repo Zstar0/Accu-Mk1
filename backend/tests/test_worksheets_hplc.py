@@ -155,7 +155,7 @@ def test_validate_names_the_bad_key(patch, key):
 
 @pytest.mark.parametrize("patch", [None, [], "x", 5])
 def test_validate_refuses_a_patch_that_is_not_an_object(patch):
-    with pytest.raises(ValueError, match="hplc_prep"):
+    with pytest.raises(ValueError, match="^hplc_prep must be an object$"):
         worksheets_hplc.validate_hplc_prep_patch(patch)
 
 

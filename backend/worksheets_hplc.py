@@ -119,7 +119,9 @@ def validate_hplc_prep_patch(patch) -> dict:
     weight, volume or target below zero, a capsules or lead_id that is not a whole number of
     at least 1, a vial outside 1 to 7, a components or vials key that is not a positive whole
     number, a two_step that is not a boolean, or a diluent outside HPLC_DILUENTS. null is
-    always allowed, and removes the key."""
+    always allowed, and removes the key; the patch itself must be an object."""
+    if not isinstance(patch, dict):
+        raise ValueError("hplc_prep must be an object")
     _check_object(patch, "hplc_prep", _ROW_NUMBERS, {"capsules": (1, None)}, {
         "diluent": _check_diluent, "two_step": _check_bool,
         "components": _check_map(_check_component), "vials": _check_map(_check_vial)})
