@@ -4503,8 +4503,7 @@ export function SampleDetails() {
     parentSampleId === null && effectiveReadSource === 'mk1'
   const mainParentRetest = useParentRetestFlow({
     sampleId: data?.sample_id,
-    promotions:
-      parentSampleId === null ? promotions : undefined,
+    promotions: parentSampleId === null ? promotions : undefined,
     onDone: () => {
       if (data) refreshSample(data.sample_id)
     },
@@ -5376,7 +5375,9 @@ export function SampleDetails() {
                           // whole title was gated on created_at).
                           const titleParts: string[] = []
                           if (r.created_at) {
-                            titleParts.push(`Created ${formatDate(r.created_at)}`)
+                            titleParts.push(
+                              `Created ${formatDate(r.created_at)}`
+                            )
                           }
                           if (r.retest?.length) {
                             titleParts.push(`retesting ${r.retest.join(', ')}`)
@@ -6523,7 +6524,8 @@ export function SampleDetails() {
                                   onClick={() =>
                                     setClearSlot({
                                       slot,
-                                      peptideId: analyte.matched_peptide_id ?? null,
+                                      peptideId:
+                                        analyte.matched_peptide_id ?? null,
                                       peptideName: displayName,
                                     })
                                   }
@@ -7353,9 +7355,7 @@ export function SampleDetails() {
             ? mainParentRetest.requestRetest
             : undefined
         }
-        promotions={
-          parentSampleId === null ? promotions : undefined
-        }
+        promotions={parentSampleId === null ? promotions : undefined}
         vialAssignmentByKeyword={
           parentSampleId === null ? vialAssignmentByKeyword : undefined
         }
@@ -7474,39 +7474,39 @@ export function SampleDetails() {
       {parentSampleId === null &&
         data.sample_id &&
         (data.external_lims_system === 'mk1' || data.sample_uid) && (
-        <SelectVialImageDialog
-          open={selectVialImageOpen}
-          onOpenChange={setSelectVialImageOpen}
-          parentSampleId={data.sample_id}
-          parentSampleUid={data.sample_uid}
-          isNativeBorn={data.external_lims_system === 'mk1'}
-          vials={subData?.sub_samples ?? []}
-          containerMode={subData?.parent.container_mode ?? false}
-          onAttached={() => {
-            // Header thumb: remount → picks up the freshly seeded cache
-            // entry immediately (no SENAITE read-after-write race).
-            setVialPhotoVersion(v => v + 1)
-            // Attachments list: re-pull the lookup. SENAITE's attachment
-            // listing can lag a beat; the next refresh catches up if so.
-            refreshSample(data.sample_id)
-          }}
-        />
-      )}
+          <SelectVialImageDialog
+            open={selectVialImageOpen}
+            onOpenChange={setSelectVialImageOpen}
+            parentSampleId={data.sample_id}
+            parentSampleUid={data.sample_uid}
+            isNativeBorn={data.external_lims_system === 'mk1'}
+            vials={subData?.sub_samples ?? []}
+            containerMode={subData?.parent.container_mode ?? false}
+            onAttached={() => {
+              // Header thumb: remount → picks up the freshly seeded cache
+              // entry immediately (no SENAITE read-after-write race).
+              setVialPhotoVersion(v => v + 1)
+              // Attachments list: re-pull the lookup. SENAITE's attachment
+              // listing can lag a beat; the next refresh catches up if so.
+              refreshSample(data.sample_id)
+            }}
+          />
+        )}
 
       {parentSampleId === null &&
         data.sample_id &&
         (data.external_lims_system === 'mk1' || data.sample_uid) && (
-        <SelectVialChromatogramDialog
-          open={selectVialChromOpen}
-          onOpenChange={setSelectVialChromOpen}
-          parentSampleId={data.sample_id}
-          parentSampleUid={data.sample_uid}
-          isNativeBorn={data.external_lims_system === 'mk1'}
-          chromatograms={vialChromatograms}
-          containerMode={subData?.parent.container_mode ?? false}
-          onAttached={() => refreshSample(data.sample_id)}
-        />
-      )}
+          <SelectVialChromatogramDialog
+            open={selectVialChromOpen}
+            onOpenChange={setSelectVialChromOpen}
+            parentSampleId={data.sample_id}
+            parentSampleUid={data.sample_uid}
+            isNativeBorn={data.external_lims_system === 'mk1'}
+            chromatograms={vialChromatograms}
+            containerMode={subData?.parent.container_mode ?? false}
+            onAttached={() => refreshSample(data.sample_id)}
+          />
+        )}
 
       {/* Sub-Samples + Sub-Sample Analyses sections moved into the wizard's
             "Sub Sample Details" tab (open via "Manage Sub-Samples" button).
