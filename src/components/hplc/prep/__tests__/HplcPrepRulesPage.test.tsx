@@ -152,6 +152,9 @@ describe('HplcPrepRulesPage', () => {
       screen.getByText(/a blend is made to its lead's target/i)
     ).toBeInTheDocument()
     expect(screen.getByText(/below the floor only warns/i)).toBeInTheDocument()
+    expect(
+      screen.getByText(/a floor is set on the blend's own line/i)
+    ).toBeInTheDocument()
   })
 
   it('lists the lines in order with their values, and counts them', async () => {
@@ -183,7 +186,6 @@ describe('HplcPrepRulesPage', () => {
       peptide_id: 2,
       max_mg: null,
       target_conc_ug_ml: 125,
-      floor_ug_ml: 40,
       diluent: 'Water + 0.1% TFA',
       default_instrument_id: 5,
       status: 'trial',
@@ -207,9 +209,6 @@ describe('HplcPrepRulesPage', () => {
     fireEvent.change(within(row).getByLabelText('Target Conc (ug/mL)'), {
       target: { value: '125' },
     })
-    fireEvent.change(within(row).getByLabelText('Floor (ug/mL)'), {
-      target: { value: '40' },
-    })
     fireEvent.change(within(row).getByLabelText('Diluent'), {
       target: { value: 'Water + 0.1% TFA' },
     })
@@ -225,7 +224,7 @@ describe('HplcPrepRulesPage', () => {
       blend_target_conc_ug_ml: null,
       lead_component_id: null,
       lead_priority: null,
-      floor_ug_ml: 40,
+      floor_ug_ml: null,
       diluent: 'Water + 0.1% TFA',
       default_instrument_id: 5,
       status: 'trial',
@@ -296,32 +295,36 @@ describe('HplcPrepRulesPage', () => {
       OVERLAP,
     ]
     vi.mocked(updateHplcPrepRule).mockResolvedValue({
-      rule: { ...RETA_30, floor_ug_ml: 50 },
+      rule: { ...RETA_30, target_conc_ug_ml: 150 },
       warnings,
     })
     setup()
     await loaded('2 rules, 1 on trial')
     const row = rowOf(1)
-    fireEvent.change(within(row).getByLabelText('Floor (ug/mL)'), {
-      target: { value: '50' },
+    fireEvent.change(within(row).getByLabelText('Target Conc (ug/mL)'), {
+      target: { value: '150' },
     })
     fireEvent.click(within(row).getByRole('button', { name: 'Save' }))
-    expect(updateHplcPrepRule).toHaveBeenCalledWith(1, { floor_ug_ml: 50 })
+    expect(updateHplcPrepRule).toHaveBeenCalledWith(1, {
+      target_conc_ug_ml: 150,
+    })
     for (const w of warnings) expect(await screen.findByText(w)).toBeVisible()
     expect(screen.queryByRole('alert')).not.toBeInTheDocument()
-    expect(within(rowOf(1)).getByLabelText('Floor (ug/mL)')).toHaveValue('50')
+    expect(within(rowOf(1)).getByLabelText('Target Conc (ug/mL)')).toHaveValue(
+      '150'
+    )
   })
 
   it('refuses a value that is not a number on the row, without sending it', async () => {
     setup()
     await loaded('2 rules, 1 on trial')
     const row = rowOf(1)
-    fireEvent.change(within(row).getByLabelText('Floor (ug/mL)'), {
+    fireEvent.change(within(row).getByLabelText('Target Conc (ug/mL)'), {
       target: { value: '1,5' },
     })
     fireEvent.click(within(row).getByRole('button', { name: 'Save' }))
     expect(await screen.findByRole('alert')).toHaveTextContent(
-      'Not saved: Floor (ug/mL) must be a number'
+      'Not saved: Target Conc (ug/mL) must be a number'
     )
     expect(updateHplcPrepRule).not.toHaveBeenCalled()
   })

@@ -170,16 +170,72 @@ describe('HPLC prep rule row', () => {
       'placeholder',
       '200'
     )
-    expect(within(row).getByLabelText('Floor (ug/mL)')).toHaveAttribute(
-      'placeholder',
-      '60'
-    )
     const diluent = within(row).getByLabelText('Diluent')
     expect(diluent).toHaveValue('')
     expect(selected(diluent)).toMatch(/^Water\b/)
+    cleanup()
+    // the floor is a blend line's
+    const blend = setup(BLEND).row
+    expect(within(blend).getByLabelText('Floor (ug/mL)')).toHaveAttribute(
+      'placeholder',
+      '60'
+    )
   })
 
-  it('sends an explicit null when a value is cleared, never 0', async () => {
+  it('sets a floor on a blend line only, a dash on any other line', async () => {
+    const solo = setup(rule()).row
+    expect(
+      within(solo).queryByLabelText('Floor (ug/mL)')
+    ).not.toBeInTheDocument()
+    // column 7 is Floor: the same plain dash as a blend's Target in a blend
+    expect(solo.querySelectorAll('td')[7]).toHaveTextContent(/^-$/)
+    cleanup()
+
+    vi.mocked(updateHplcPrepRule).mockResolvedValue({
+      rule: { ...BLEND, floor_ug_ml: 40 },
+      warnings: [],
+    })
+    const blend = setup(BLEND).row
+    fireEvent.change(within(blend).getByLabelText('Floor (ug/mL)'), {
+      target: { value: '40' },
+    })
+    fireEvent.click(within(blend).getByRole('button', { name: 'Save' }))
+    expect(updateHplcPrepRule).toHaveBeenCalledWith(7, { floor_ug_ml: 40 })
+    await waitFor(() =>
+      expect(within(blend).getByRole('button', { name: 'Save' })).toBeEnabled()
+    )
+  })
+
+  it('says what a blank rank means', () => {
+    const rank = within(setup(rule()).row).getByLabelText('leads blends, rank')
+    expect(rank).toHaveAttribute('placeholder', 'unranked')
+    expect(rank).toHaveAttribute('title', 'blank = never preferred as the lead')
+  })
+
+  it('refuses a concentration of 0 or less on the row in the sheet words, without sending it', async () => {
+    const solo = setup(rule()).row
+    fireEvent.change(within(solo).getByLabelText('Target Conc (ug/mL)'), {
+      target: { value: '0' },
+    })
+    fireEvent.click(within(solo).getByRole('button', { name: 'Save' }))
+    expect(await screen.findByRole('alert')).toHaveTextContent(
+      'Not saved: Target Conc (ug/mL) must be more than 0'
+    )
+    cleanup()
+
+    const blend = setup(BLEND).row
+    fireEvent.change(within(blend).getByLabelText('Floor (ug/mL)'), {
+      target: { value: '-5' },
+    })
+    fireEvent.click(within(blend).getByRole('button', { name: 'Save' }))
+    expect(await screen.findByRole('alert')).toHaveTextContent(
+      'Not saved: Floor (ug/mL) must be more than 0'
+    )
+    expect(updateHplcPrepRule).not.toHaveBeenCalled()
+    expect(createHplcPrepRule).not.toHaveBeenCalled()
+  })
+
+  it('sends an explicit null when a value is cleared, never 0 (a stored floor on a solo line too)', async () => {
     const stored = rule({
       target_conc_ug_ml: 125,
       blend_target_conc_ug_ml: 350,
@@ -198,7 +254,6 @@ describe('HPLC prep rule row', () => {
       'Target Conc (ug/mL)',
       'Target in a blend (ug/mL)',
       'leads blends, rank',
-      'Floor (ug/mL)',
     ])
       fireEvent.change(within(row).getByLabelText(label), {
         target: { value: '' },
