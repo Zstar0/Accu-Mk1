@@ -464,7 +464,7 @@ def test_the_engine_understands_every_form_the_endo_bench_accepts():
 
 
 def test_the_constants_are_the_bench_sheets():
-    assert PREP_FORMS == ("powder", "liquid", "bac")
+    assert PREP_FORMS == ("powder", "liquid", "bac", "capsule")
     assert DILUENT_DENSITY_MG_ML == 997.1
     assert BENZYL_ALCOHOL_DENSITY == 1034.72
     assert BAC_STOCK_UG_ML == 9000.0
@@ -561,12 +561,12 @@ def test_bac_stock_volume_is_the_corrected_volume_of_the_same_mass_powder_weighs
 
 def test_an_unknown_form_names_the_accepted_list():
     with pytest.raises(ValueError, match="powder"):
-        stock_volume_ml("capsule", FORWARD_WEIGHTS, 997.1)
+        stock_volume_ml("tablet", FORWARD_WEIGHTS, 997.1)
 
 
 def test_an_unknown_form_is_refused_by_the_dilution_factor_too():
     with pytest.raises(ValueError, match="powder, liquid, bac"):
-        calculate_dilution_factor(FORWARD_WEIGHTS, DENSITY, form="capsule")
+        calculate_dilution_factor(FORWARD_WEIGHTS, DENSITY, form="tablet")
 
 
 def test_a_null_diluent_density_says_why_instead_of_raising():

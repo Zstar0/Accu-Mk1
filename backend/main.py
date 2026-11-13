@@ -7054,7 +7054,7 @@ class HPLCAnalyzeRequest(BaseModel):
     calibration_curve_id: Optional[int] = None  # If provided, use this specific curve
     weights: HPLCWeightsInput
     injections: list[dict]  # Parsed injection data from /hplc/parse-files
-    # How the stock volume is obtained: powder and bac weigh the stock vial, liquid
+    # How the stock volume is obtained: powder, bac and capsule weigh the stock vial, liquid
     # declares its volume. The route does not resolve this from the sample; the caller says.
     prep_form: str = "powder"
     declared_volume_ml: Annotated[
@@ -7062,6 +7062,10 @@ class HPLCAnalyzeRequest(BaseModel):
         Field(gt=0, le=MAX_DECLARED_VOLUME_ML, allow_inf_nan=False),
         BeforeValidator(_text_if_not_finite),
     ] = None
+    # How many capsules went into the stock vial: required for a capsule prep, whose
+    # quantity is reported per capsule, and refused on any other form. Strict, so a JSON
+    # true or "3" is not read as a count.
+    capsules_used: Annotated[Optional[int], Field(ge=1, strict=True)] = None
     # Provenance fields (Phase 10.5)
     sample_prep_id: Optional[int] = None
     instrument_id: Optional[int] = None
@@ -7088,8 +7092,8 @@ class HPLCAnalyzeRequest(BaseModel):
         buried in a calculation trace. The engine guards the same conditions on its own;
         this is the trust boundary in front of it.
 
-        powder and bac weigh a stock vial, so all five stock and dilution weighings are
-        needed. liquid never weighs its stock vial, so only the dilution vial's three are,
+        powder, bac and capsule weigh a stock vial, so all five stock and dilution weighings
+        are needed. A capsule also needs its count, and only a capsule may send one. liquid never weighs its stock vial, so only the dilution vial's three are,
         but it must declare its volume. The intermediate vial is all or nothing: a partly
         weighed one passed through as "no intermediate" would print a one-step quantity,
         too low by the intermediate factor.
@@ -7116,6 +7120,12 @@ class HPLCAnalyzeRequest(BaseModel):
             ]
         if self.prep_form == "liquid" and self.declared_volume_ml is None:
             errors.append((("declared_volume_ml",), "declared_volume_ml is required for a liquid prep"))
+        # A capsule without its count would report the whole stock as one capsule; a count
+        # on another form is a caller that thinks it is reporting per capsule and is not.
+        if self.prep_form == "capsule" and self.capsules_used is None:
+            errors.append((("capsules_used",), "capsules_used is required for a capsule prep"))
+        elif self.prep_form != "capsule" and self.capsules_used is not None:
+            errors.append((("capsules_used",), f"capsules_used is only for a capsule prep, not a {self.prep_form} prep"))
         if errors:
             raise ValidationError.from_exception_data(
                 type(self).__name__,
@@ -7160,6 +7170,7 @@ class HPLCAnalysisResponse(BaseModel):
     # dilution_factor_steps is None again for a row whose quantity was refused.
     prep_form: Optional[str] = None
     dilution_factor_steps: Optional[dict] = None  # {"intermediate": float | None, "final": float}
+    capsules_used: Optional[int] = None  # capsule rows only; quantity_mg is then per capsule
 
 
 def _analysis_to_response(analysis: "HPLCAnalysis", peptide_abbreviation: str) -> "HPLCAnalysisResponse":
@@ -7197,6 +7208,7 @@ def _analysis_to_response(analysis: "HPLCAnalysis", peptide_abbreviation: str) -
         # HPLC results engine: the per-step factors live in the trace, not in a column
         prep_form=analysis.prep_form,
         dilution_factor_steps=quantity_trace.get("dilution_factor_steps"),
+        capsules_used=analysis.capsules_used,
     )
 
 
@@ -7348,6 +7360,7 @@ async def run_hplc_analysis(
         intermediate=intermediate,
         form=request.prep_form,
         declared_volume_ml=request.declared_volume_ml,
+        capsules_used=request.capsules_used,
     )
 
     # Run analysis
@@ -7370,6 +7383,7 @@ async def run_hplc_analysis(
         dil_vial_with_diluent_and_sample=request.weights.dil_vial_with_diluent_and_sample,
         prep_form=request.prep_form,
         declared_volume_ml=request.declared_volume_ml if is_liquid else None,
+        capsules_used=request.capsules_used,  # the validator leaves it None on every other form
         int_vial_empty=request.weights.int_vial_empty,
         int_vial_with_diluent=request.weights.int_vial_with_diluent,
         int_vial_with_diluent_and_sample=request.weights.int_vial_with_diluent_and_sample,

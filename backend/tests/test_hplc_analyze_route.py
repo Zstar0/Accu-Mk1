@@ -663,7 +663,7 @@ _FORMS_ROWS = [
     (2, "Reconstituted Solution", "injectable", "liquid"),
     (3, "Pen", "injectable", None),
     (4, "Nasal Spray", "nasal_inhaled", None),
-    (5, "Capsule", "oral", None),
+    (5, "Capsule", "oral", "capsule"),
     (6, "Tablet", "oral", None),
 ]
 
@@ -682,10 +682,10 @@ def test_the_sample_forms_check_wants_the_column_the_constraint_and_the_two_back
     assert run({"hplc_prep": ("character varying", "NO")})[1] == 1
     # The DO block that never added the CHECK:
     assert run(constraints=())[1] == 1
-    # The backfill that never ran (both fills missing):
-    assert run(rows=[(i, n, r, None) for i, n, r, _ in _FORMS_ROWS])[1] == 2
+    # The backfill that never ran (all three fills missing):
+    assert run(rows=[(i, n, r, None) for i, n, r, _ in _FORMS_ROWS])[1] == 3
     # Every one of the six built-ins is judged: each holding a value other than its own fails,
-    # so none of the names (least of all the four that must stay NULL) can drop out of the
+    # so none of the names (least of all the three that must stay NULL) can drop out of the
     # expectations unnoticed.
     for at, (_, name, _, prep) in enumerate(_FORMS_ROWS):
         other = "liquid" if prep == "powder" else "powder"

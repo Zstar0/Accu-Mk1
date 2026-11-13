@@ -2,7 +2,8 @@
 docs/superpowers/plans/2026-10-31-hplc-results-engine.md, Task 6): do the new
 hplc_analyses columns exist, and are the two stock-vial weighings nullable? Task 8 adds
 lims_sample_forms: does hplc_prep exist, is its CHECK there, and did the backfill fill the
-two built-in forms that have a prep kind? The HPLC prep rules plan (2026-11-12, Task 2)
+built-in forms that have a prep kind (three since the HPLC prep worksheet plan added
+capsule, with hplc_analyses.capsules_used)? The HPLC prep rules plan (2026-11-12, Task 2)
 adds hplc_prep_rules: does the table exist with every column, nullable as its CREATE
 TABLE statement makes it?
 
@@ -38,11 +39,13 @@ import sys
 if "__file__" in globals():
     sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-# column -> is_nullable. The first five are new; the two stock weighings were NOT NULL
-# until a liquid prep (which never weighs its stock vial) needed them blank.
+# column -> is_nullable. The first six are new (capsules_used from the HPLC prep worksheet
+# plan, 2026-11-12, Task 1); the two stock weighings were NOT NULL until a liquid prep
+# (which never weighs its stock vial) needed them blank.
 EXPECTED = {
     "prep_form": "YES",
     "declared_volume_ml": "YES",
+    "capsules_used": "YES",
     "int_vial_empty": "YES",
     "int_vial_with_diluent": "YES",
     "int_vial_with_diluent_and_sample": "YES",
@@ -53,8 +56,10 @@ EXPECTED = {
 
 # lims_sample_forms (Task 8): the new column stays nullable (NULL = no HPLC prep maths), its
 # CHECK is added by a DO block that only logs on failure, and the backfill matches the six
-# built-in names as lower(btrim(name)). Only the first two have a prep kind; the other four
-# stay NULL until capsule is ruled. A form the Handler added or renamed is not judged.
+# built-in names as lower(btrim(name)). Three have a prep kind (capsule since its 2026-11-12
+# ruling: its fill runs after a DO block that widens the CHECK and also only logs on failure,
+# so a Capsule row still NULL is how a failed widen shows here); the other three stay NULL.
+# A form the Handler added or renamed is not judged.
 FORMS_EXPECTED = {"hplc_prep": "YES"}
 
 # hplc_prep_rules (HPLC prep rules plan, Task 2): the boot CREATE TABLE IF NOT EXISTS runs
@@ -73,7 +78,7 @@ FORMS_PREP = {
     "reconstituted solution": "liquid",
     "pen": None,
     "nasal spray": None,
-    "capsule": None,
+    "capsule": "capsule",
     "tablet": None,
 }
 
