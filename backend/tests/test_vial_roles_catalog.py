@@ -17,7 +17,8 @@ def test_seed_creates_five_legacy_roles_with_parity_flags(db_session):
     assert reg["hm"].boxable
     for code in ("hplc", "endo", "ster", "xtra"):
         assert reg[code].variance_eligible
-    assert not reg["hm"].variance_eligible
+    # Decision 5 (2026-11-10): a heavy metals replicate is a full digest; hm is variance-eligible.
+    assert reg["hm"].variance_eligible
     assert all(reg[c].is_system and reg[c].frozen for c in ("hplc", "endo", "ster", "xtra", "hm"))
     assert reg["xtra"].department_id is None  # deviation 2
 

@@ -14593,10 +14593,21 @@ async def generate_sample_coa(
         ).scalar_one_or_none()
         if _pre_parent is not None:
             try:
-                from sub_samples.service import fetch_sample_services, variance_lock_required
+                from sub_samples.service import (fetch_sample_services, variance_lock_required,
+                                                 variance_plan_for_parent)
                 _vsvc = fetch_sample_services(sample_id)
+                _vservices = (_vsvc or {}).get("services") or {}
+                # A retest's four-key entry is a note, not a run: no lock, as at
+                # base. A failed resolve keeps the strict rule (plan=None: any
+                # four-key entry holds the certificate), never fails open.
+                try:
+                    _vplan = variance_plan_for_parent(db, _pre_parent, _vservices)
+                except Exception:
+                    logger.warning("variance_lock_gate.plan_failed sample=%s", sample_id,
+                                   exc_info=True)
+                    _vplan = None
                 _variance_required = variance_lock_required(
-                    (_vsvc or {}).get("services") or {}, _pre_parent.variance_locked_at
+                    _vservices, _pre_parent.variance_locked_at, plan=_vplan,
                 )
             except HTTPException:
                 raise
@@ -14659,8 +14670,10 @@ async def generate_sample_coa(
             # certificate must not be generated at all.
             from coa.native_sections import NativeSectionsError
             from coa.wire_document import build_coa_wire_document
+            _variance_trace = []
             try:
-                _native_doc = build_coa_wire_document(db, _parent_row)
+                _native_doc = build_coa_wire_document(db, _parent_row,
+                                                      trace=_variance_trace)
             except NativeSectionsError as e:
                 return SampleCOAActionResponse(
                     success=False,
@@ -14809,9 +14822,12 @@ async def generate_sample_coa(
     # deferred_sections key (COA Builder's completeness-rule exemption).
     # Who generated it: coa_generations (IS) has no actor column; the activity
     # log overlays this onto its "COA vN generated" row.
+    _gen_details = {"verification_code": verification_code,
+                    "generation_number": generation_number}
+    if not is_sub and _parent_row is not None:
+        _add_variance_record(db, sample_id, _gen_details, _variance_trace, data)
     _record_parent_event(
-        db, sample_id, "coa_generated",
-        {"verification_code": verification_code, "generation_number": generation_number},
+        db, sample_id, "coa_generated", _gen_details,
         getattr(current_user, "id", None), commit=True,
     )
     return SampleCOAActionResponse(
@@ -15153,6 +15169,49 @@ def _refuse_in_review_a_la_carte(sample_id: str) -> None:
         )
 
 
+def _add_variance_record(db: Session, sample_id: str, details: dict, trace: list,
+                         data: dict) -> None:
+    """Put the add-on test Variance fingerprint of the document just
+    generated on its `coa_generated` event (details["variance"]); nothing
+    when no runs printed and the sample is out of the publish guard's scope.
+    Called only after COABuilder answered success. Never raises: a missing
+    record fails CLOSED at publish (the guard asks for a regenerate)."""
+    try:
+        from coa.native_sections import variance_generation_record
+        # A savepoint: a database error in the record's reads must not abort
+        # the transaction the base coa_generated event is written in.
+        with db.begin_nested():
+            record = variance_generation_record(
+                db, sample_id, trace, generation_id=(data or {}).get("generation_id"))
+        if record is not None:
+            details["variance"] = record
+    except Exception:  # noqa: BLE001
+        logger.warning("variance_record.failed sample_id=%s", sample_id, exc_info=True)
+
+
+def _refuse_unfinished_variance_runs(db: Session, sample_id: str) -> None:
+    """409 when the draft Publish would pick no longer matches the sample's
+    add-on test Variance runs (coa.native_sections.variance_publish_refusal):
+    the rebuilt document is refused, or its Variance fingerprint differs from
+    the one recorded when that draft was generated. Out of scope (no
+    recorded runs and no variance vial of the four test roles, every sample
+    today) it makes no network call: two SELECTs for a sample with no
+    variance vial, three for one with variance vials of other roles (HPLC:
+    the roles read). In scope it fails CLOSED: an order or draft read that
+    fails refuses."""
+    import integration_db
+    from coa.native_sections import variance_publish_refusal
+    refusal = variance_publish_refusal(
+        db, sample_id,
+        draft_badge=lambda: integration_db.fetch_publish_draft_badge(sample_id))
+    if refusal:
+        exc = HTTPException(status_code=409, detail=refusal.detail)
+        # The lab sees the full detail; logs and the scheduled row's
+        # last_error carry no result values (scheduled_publish reads this).
+        exc.log_detail = refusal.log_detail
+        raise exc
+
+
 def _refuse_while_publish_scheduled(db: Session, sample_id: str) -> None:
     """409 while a publish is parked for the sample (backend/scheduled_publish.py).
     Its newest draft carries the scheduled, future Published Date, and IS
@@ -15198,6 +15257,7 @@ async def publish_sample_coa(
     _refuse_while_publish_scheduled(db, sample_id)
     _refuse_stale_draft_primary(sample_id)
     _refuse_in_review_a_la_carte(sample_id)
+    _refuse_unfinished_variance_runs(db, sample_id)
 
     # 2. Resolve SENAITE UID upfront so we fail before touching integration service state.
     # Native-born samples (external_lims_system == "mk1") have no SENAITE AR at
@@ -15699,6 +15759,7 @@ async def regen_primary_coa(
     _regen_parent = db.execute(
         select(LimsSample).where(LimsSample.sample_id == sample_id)
     ).scalar_one_or_none()
+    _regen_trace: list = []
     if _regen_parent is not None:
         # Customer remarks — MUST mirror generate_sample_coa. COA Builder's
         # lab-remarks gate refuses a non-conforming certificate with no
@@ -15720,7 +15781,7 @@ async def regen_primary_coa(
         from coa.native_sections import NativeSectionsError
         from coa.wire_document import build_coa_wire_document
         try:
-            _native_doc = build_coa_wire_document(db, _regen_parent)
+            _native_doc = build_coa_wire_document(db, _regen_parent, trace=_regen_trace)
         except NativeSectionsError as e:
             return SampleCOAActionResponse(
                 success=False,
@@ -15765,10 +15826,12 @@ async def regen_primary_coa(
             success=False,
             message="Primary regenerated but no verification code returned",
         )
+    _gen_details = {"verification_code": verification_code,
+                    "generation_number": data.get("generation_number")}
+    if _regen_parent is not None:
+        _add_variance_record(db, sample_id, _gen_details, _regen_trace, data)
     _record_parent_event(
-        db, sample_id, "coa_generated",
-        {"verification_code": verification_code,
-         "generation_number": data.get("generation_number")},
+        db, sample_id, "coa_generated", _gen_details,
         getattr(current_user, "id", None), commit=True,
     )
 

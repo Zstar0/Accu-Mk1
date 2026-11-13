@@ -688,7 +688,9 @@ async def _fire_one(session_factory, publish, row_id: int, now: datetime) -> str
                 db.rollback()
             except Exception:
                 pass
-            note = str(getattr(exc, "detail", None) or exc)
+            # log_detail: a refusal whose detail carries result values gives
+            # a value-free line for the log and last_error (Variance guard).
+            note = str(getattr(exc, "log_detail", None) or getattr(exc, "detail", None) or exc)
             # The 502 "published on IS, SENAITE silently rejected" class raises
             # AFTER the native publish landed; the event row is the truth. The
             # pre-fire guard proved no event existed since scheduling, so any

@@ -75,7 +75,9 @@ def _patch_wire_document(monkeypatch):
     monkeypatch.setattr("coa.wire_document.coa_generation_source", lambda db: "mk1")
     monkeypatch.setattr(
         "coa.wire_document.build_native_sections",
-        lambda db, parent: {"sample_id": parent.sample_id, "ordered_profiles": [], "sections": []},
+        # **kw: the wrapper always passes `trace` (the unit block reads it).
+        lambda db, parent, **kw: {"sample_id": parent.sample_id, "ordered_profiles": [],
+                                  "sections": []},
     )
 
 

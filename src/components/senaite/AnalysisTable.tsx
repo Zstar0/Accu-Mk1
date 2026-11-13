@@ -31,7 +31,7 @@ import {
 } from '@/components/ui/dialog'
 import { useQueryClient } from '@tanstack/react-query'
 import { toast } from 'sonner'
-import type { SenaiteAnalysis, SampleRetestInfo } from '@/lib/api'
+import type { SenaiteAnalysis, SampleRetestInfo, VarianceTest } from '@/lib/api'
 import { promotionForRow, type PromotionIndex } from '@/lib/promotion-index'
 import { retestChipFor } from '@/lib/retest-chips'
 import { setAnalysisMethodInstrument, promoteAnalyses, getMethods } from '@/lib/api'
@@ -61,6 +61,7 @@ import { useAnalysisTransition, type UseAnalysisTransitionReturn } from '@/hooks
 import { useBulkAnalysisTransition } from '@/hooks/use-bulk-analysis-transition'
 import { useSidebar } from '@/components/ui/sidebar'
 import { useUIStore } from '@/store/ui-store'
+import { VarianceRunRow } from '@/components/samples/VarianceRunRow'
 import { AnalysisServiceLink } from '@/components/senaite/AnalysisServiceLink'
 
 // --- Status styling constants ---
@@ -1642,6 +1643,7 @@ function AnalysisRow({
   onPromotedNativeRetest,
   parentRegistryRetestSeam = false,
   retestInfo,
+  hiddenVarianceVialIds,
 }: {
   analysis: SenaiteAnalysis
   analyteNameMap: Map<number, string>
@@ -1689,6 +1691,8 @@ function AnalysisRow({
   /** Task 3: retest/carry/add sets for this sample, used only to render
    *  RetestLineChip on an ordered placeholder line. Omit → no chip. */
   retestInfo?: SampleRetestInfo | null
+  /** Variance vials whose test has a Variance row on screen: their chips are dropped. */
+  hiddenVarianceVialIds?: ReadonlySet<string>
 }) {
   const rowTint = ROW_STATUS_STYLE[analysis.review_state ?? ''] ?? ''
   const { display, original } = formatAnalysisTitle(analysis.title, analyteNameMap)
@@ -1817,6 +1821,9 @@ function AnalysisRow({
           <PromotedFromBadge promotion={promotionForRow(promotions, analysis)} />
           {retestChip ? <RetestLineChip kind={retestChip} /> : null}
           {vialAssign && vialAssign.matches.filter(m => {
+            // Mk1-born parent pages: a Variance row on screen lists the
+            // replicate vials, so their per-row chips are dropped here.
+            if (m.assignmentKind === 'variance' && hiddenVarianceVialIds?.has(m.vialSampleId)) return false
             // The "from <vial>" promotion badge above already names the
             // source vial — drop its duplicate assignment chip and keep
             // only the OTHER vials (e.g. the variance replicate).
@@ -2266,6 +2273,13 @@ interface AnalysisTableProps {
    *  AnalysisRow to render RetestLineChip on ordered placeholder lines.
    *  Omit → no chip. */
   retestInfo?: SampleRetestInfo | null
+  /** Mk1-born parent pages only: the variance-set `tests`. When given, each
+   *  test renders one read-only Variance row after its section, and the
+   *  per-row chips of `variance` vials are dropped (the row replaces them).
+   *  Omit (every other surface) → byte-identical to today. */
+  varianceTests?: VarianceTest[]
+  /** Opens the Variance overlay (the row's "+N more"). */
+  onOpenVariance?: () => void
 }
 
 export function AnalysisTable({
@@ -2290,6 +2304,8 @@ export function AnalysisTable({
   onPromotedNativeRetest,
   parentRegistryRetestSeam = false,
   retestInfo,
+  varianceTests,
+  onOpenVariance,
 }: AnalysisTableProps) {
   const [analysisFilter, setAnalysisFilter] = useState<'all' | 'verified' | 'pending' | 'invalid'>('all')
   const [sortConfig, setSortConfig] = useState<SortConfig | null>(null)
@@ -2396,6 +2412,21 @@ export function AnalysisTable({
     }
     return Array.from(byKey.values()).sort((a, b) => a.sort - b.sort)
   })()
+
+  // Variance rows sit under their section, and only when that section is on
+  // screen. The flat view (column sort, or no sections at all) has no
+  // sections to sit under, so on the All tab every row goes at the end.
+  const flatView = sectioned.length === 1 && sectioned[0]?.key == null
+  const varianceRowsAtEnd = flatView && analysisFilter === 'all' ? varianceTests ?? [] : []
+  const renderedVarianceTests = flatView
+    ? varianceRowsAtEnd
+    : (varianceTests ?? []).filter(
+        t => t.section_key != null && groups.length > 0 && sectioned.some(s => s.key === t.section_key)
+      )
+  // A variance vial's chip is dropped only when its test's Variance row is shown.
+  const hiddenVarianceVialIds = new Set(
+    renderedVarianceTests.flatMap(t => t.runs.filter(r => r.kind === 'variance').map(r => r.sample_id))
+  )
 
   // Header checkbox state — current (COA) rows only
   const selectableUids = groups
@@ -2680,6 +2711,7 @@ export function AnalysisTable({
                       onPromotedNativeRetest={onPromotedNativeRetest}
                       parentRegistryRetestSeam={parentRegistryRetestSeam}
                       retestInfo={retestInfo}
+                      hiddenVarianceVialIds={hiddenVarianceVialIds}
                     />
                     {isExpanded && group.history.map(h => (
                       <HistoryRow
@@ -2691,6 +2723,12 @@ export function AnalysisTable({
                   </Fragment>
                 )
               })}
+                  {section.key != null &&
+                    (varianceTests ?? [])
+                      .filter(t => t.section_key === section.key)
+                      .map(t => (
+                        <VarianceRunRow key={`variance-${t.role}`} test={t} onOpenVariance={onOpenVariance} />
+                      ))}
                 </Fragment>
               ))
             ) : (
@@ -2703,6 +2741,9 @@ export function AnalysisTable({
                 </td>
               </tr>
             )}
+            {varianceRowsAtEnd.map(t => (
+                <VarianceRunRow key={`variance-${t.role}`} test={t} onOpenVariance={onOpenVariance} />
+              ))}
           </tbody>
         </table>
 

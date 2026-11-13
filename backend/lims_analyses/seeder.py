@@ -253,6 +253,8 @@ def _catalog_members_for_role(
     role: str,
     wp_services: Dict[str, bool],
     sub_sample: Optional[LimsSubSample] = None,
+    *,
+    hosts_only: bool = False,
 ) -> List[AnalysisService]:
     """Ordered mk1-origin member services for `role`. Fail-closed on origin:
     a profile with any non-mk1 member seeds nothing (mirrors spec-2's
@@ -280,7 +282,10 @@ def _catalog_members_for_role(
     snapshot (S4 rider, task 6): on the edge-driven branch, read from
     `sub_sample.parent_sample.catalog_snapshot` (not a parameter here — see
     _members_from_edges for the per-profile frozen-vs-live split) and
-    threaded straight through."""
+    threaded straight through.
+
+    hosts_only (add-on Variance): only HOST edges feed the membership, so a
+    replicate vial seeds its own test's work and never rider work."""
     from models import AnalysisProfile
 
     if sub_sample is not None:
@@ -288,6 +293,8 @@ def _catalog_members_for_role(
 
         edges = current_custody(db, sub_sample.id)
         if edges:
+            if hosts_only:
+                edges = [e for e in edges if e.relation == "host"]
             snapshot = sub_sample.parent_sample.catalog_snapshot
             return _members_from_edges(db, edges, snapshot=snapshot)
         log.warning(
@@ -683,24 +690,49 @@ def _analytical_vials_for_role(
 
 
 def _sibling_anchor_count(
-    db: Session, *, sub_sample: LimsSubSample, role: str
+    db: Session, *, sub_sample: LimsSubSample, role: str, kind_scoped: bool = False,
 ) -> int:
     """How many OTHER same-parent vials with this role already carry live
     analyses (rejected/retracted rows don't hold an anchor slot — mirrors
-    the seeder's dead-rows-don't-block idiom)."""
-    from sqlalchemy import func
+    the seeder's dead-rows-don't-block idiom).
 
+    kind_scoped (add-on Variance, only when the sample's VariancePlan covers
+    `role`): a variance vial counts only variance siblings, any other vial
+    (core or NULL kind) only non-variance ones, so a replicate digest never
+    takes the core digest's anchor slot. Off, the count is kind-blind (base)."""
+    from sqlalchemy import func, or_
+
+    where = [
+        LimsSubSample.parent_sample_pk == sub_sample.parent_sample_pk,
+        LimsSubSample.assignment_role == role,
+        LimsSubSample.id != sub_sample.id,
+        LimsAnalysis.review_state.notin_(["rejected", "retracted"]),
+    ]
+    if kind_scoped:
+        if sub_sample.assignment_kind == "variance":
+            where.append(LimsSubSample.assignment_kind == "variance")
+        else:
+            where.append(or_(LimsSubSample.assignment_kind.is_(None),
+                             LimsSubSample.assignment_kind != "variance"))
     return db.execute(
         select(func.count(func.distinct(LimsAnalysis.lims_sub_sample_pk)))
         .select_from(LimsAnalysis)
         .join(LimsSubSample, LimsSubSample.id == LimsAnalysis.lims_sub_sample_pk)
-        .where(
-            LimsSubSample.parent_sample_pk == sub_sample.parent_sample_pk,
-            LimsSubSample.assignment_role == role,
-            LimsSubSample.id != sub_sample.id,
-            LimsAnalysis.review_state.notin_(["rejected", "retracted"]),
-        )
+        .where(*where)
     ).scalar() or 0
+
+
+def _planned_role_variance(
+    db: Session, *, sub_sample: LimsSubSample, role: str,
+    wp_services: Optional[Dict[str, bool]],
+):
+    """The RoleVariance the sample's VariancePlan holds for `role`, or None
+    (no four-key entry, a refused entry, or services unknown: `{}`/None)."""
+    from sub_samples.service import variance_plan_for_parent
+
+    parent = db.get(LimsSample, sub_sample.parent_sample_pk)
+    plan = variance_plan_for_parent(db, parent, wp_services) if parent is not None else None
+    return plan.by_role.get(role) if plan is not None else None
 
 
 def seed_analyses_for_vial(
@@ -842,9 +874,35 @@ def seed_analyses_for_vial(
         # already carry live analyses, this vial is a custody-only "material"
         # vial — seed nothing. Assignment order decides which vials anchor
         # (first assigned, first anchored); dead rows don't hold the slot.
+        #
+        # Add-on Variance, only when the sample's VariancePlan covers the role:
+        # core and variance vials anchor separately, and the variance vials
+        # get one anchor per replicate run. Anchors are the first vials of
+        # each kind assigned (seeded) that get rows; no digest pairing is
+        # stored, so which material vial belongs to which digest is not
+        # recorded. With no plan for the role the rule is exactly the base
+        # rule (kind-blind count, plain cap), whatever the vial's kind.
+        is_variance = sub_sample.assignment_kind == "variance"
+        test_replicate = False
+        if is_variance:
+            from sub_samples.variance_tests import variance_test_roles
+            test_replicate = role in variance_test_roles(db)
         cap = _analytical_vials_for_role(db, sub_sample=sub_sample, role=role)
         if cap is not None:
-            anchored = _sibling_anchor_count(db, sub_sample=sub_sample, role=role)
+            rv = _planned_role_variance(db, sub_sample=sub_sample, role=role,
+                                        wp_services=wp_services)
+            if rv is not None and is_variance:
+                cap = cap * rv.replicate_runs
+            elif rv is None and test_replicate:
+                parent = db.get(LimsSample, sub_sample.parent_sample_pk)
+                log.warning(
+                    "seeder.variance_plan_unknown sample=%s role=%s sub=%s "
+                    "keeping the plain cap=%d",
+                    parent.sample_id if parent is not None else None,
+                    role, sub_sample.sample_id, cap,
+                )
+            anchored = _sibling_anchor_count(db, sub_sample=sub_sample, role=role,
+                                             kind_scoped=rv is not None)
             if anchored >= cap:
                 log.info(
                     "seeder.material_vial sub=%s role=%s anchored=%d cap=%d "
@@ -852,7 +910,11 @@ def seed_analyses_for_vial(
                     sub_sample.sample_id, role, anchored, cap,
                 )
                 return []
-        services = _catalog_members_for_role(db, role, wp_services, sub_sample=sub_sample)
+        # A replicate of one of the four tests seeds host work only. Kind
+        # based, not plan based, so a lookup outage never seeds rider work
+        # onto a real replicate. Any other role seeds exactly as at base.
+        services = _catalog_members_for_role(db, role, wp_services, sub_sample=sub_sample,
+                                             hosts_only=test_replicate)
         if not services:
             log.warning(
                 "seeder.no_matching_catalog_members sub=%s role=%s — nothing to seed",

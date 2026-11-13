@@ -131,8 +131,9 @@ class VialPlanResponse(BaseModel):
     # Per-bucket variance target (purchased count from the order/override);
     # zeros when none purchased. Informational — auto-assign fills core to
     # demand first, then the variance bucket up to this target. Never blocks.
-    # _LEGACY_BUCKETS zero-floor contract (catalog_demand.py): stays hplc/
-    # endo/ster only — variance is never catalog-role-eligible (Task 3).
+    # _LEGACY_BUCKETS zero-floor contract (catalog_demand.py): always carries
+    # hplc/endo/ster; an add-on Variance test (the four VARIANCE_TEST_KEYS)
+    # adds its role's replicate vial count on top.
     variance: dict = {"hplc": 0, "endo": 0, "ster": 0}
     # _LEGACY_BUCKETS zero-floor contract (catalog_demand.py) — pre-variance
     # baseline shape kept 3-bucket for back-compat; real catalog roles (e.g.
@@ -150,6 +151,13 @@ class VialPlanResponse(BaseModel):
     # unconditionally, outside this catalog-driven metadata). Empty on the
     # IS-unreachable early return.
     sections: list = []
+    # Add-on Variance (plan 3 Task 2), empty unless services.variance names
+    # one of the four tests. variance_tests: {role: {key, n, replicate_runs,
+    # replicate_vials, run_label}}. variance_errors / variance_notes: the
+    # resolver's refusal sentences and retest notes.
+    variance_tests: dict = {}
+    variance_errors: list[str] = []
+    variance_notes: list[str] = []
 
 
 class AssignmentPatchRequest(BaseModel):
@@ -267,6 +275,61 @@ class VarianceStatsEntry(BaseModel):
         populate_by_name = True
 
 
+class VarianceRunValue(BaseModel):
+    """One analysis result on a run's vial, as the analyses table shows it."""
+    keyword: str
+    label: Optional[str] = None
+    value: Optional[str] = None
+    unit: Optional[str] = None
+    conforms: Optional[bool] = None
+    review_state: Optional[str] = None
+    analyst: Optional[str] = None
+    specification: Optional[dict] = None
+
+
+class VarianceRun(BaseModel):
+    sample_id: str
+    vial_sequence: int
+    kind: str  # "core" | "variance"
+    in_variance_set: bool
+    exclusion_reason: Optional[str] = None
+    signed_off: bool
+    has_result: bool
+    values: list[VarianceRunValue] = []
+
+
+class VarianceTestStat(BaseModel):
+    """HPLC only: today's per-analysis numbers (compute_variance_stats)."""
+    keyword: str
+    label: Optional[str] = None
+    kind: str
+    mean: Optional[float] = None
+    sd: Optional[float] = None
+    cv_pct: Optional[float] = None
+    n: int
+    conforms_count: Optional[int] = None
+    total: Optional[int] = None
+
+
+class VarianceTestSummary(BaseModel):
+    """Counts over the core run(s) plus the in-set replicates."""
+    runs: int
+    runs_with_result: int
+    conforming: int
+    replicates: int
+    replicates_signed_off: int
+    stats: list[VarianceTestStat] = []
+
+
+class VarianceTest(BaseModel):
+    role: str
+    section_key: Optional[str] = None  # the parent analysis list's section key
+    title: str
+    is_hplc: bool
+    runs: list[VarianceRun]
+    summary: VarianceTestSummary
+
+
 class VarianceSetResponse(BaseModel):
     parent: ParentSampleSummary
     vials: list[VarianceVialResult]
@@ -274,6 +337,9 @@ class VarianceSetResponse(BaseModel):
     locked: bool
     locked_at: Optional[datetime] = None
     locked_by_user_id: Optional[int] = None
+    locked_by_name: Optional[str] = None
+    # Container families only; [] for legacy families.
+    tests: list[VarianceTest] = []
 
 
 class PatchVarianceMembershipRequest(BaseModel):

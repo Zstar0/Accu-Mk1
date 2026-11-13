@@ -91,3 +91,38 @@ def test_addon_fulfillment_roles_match_seeder():
     for key, pdef in PRODUCT_REGISTRY.items():
         if pdef.is_addon and pdef.fulfillment_dim == "role":
             assert pdef.fulfillment_role == service_to_role.get(key), key
+
+
+# ---- Add-on test Variance (Task 16): the chip is not called HPLC for other tests ----
+
+
+def test_variance_chip_label_hplc_only_unchanged():
+    # Characterization (passes on the base): an HPLC-only map keeps the
+    # registry chip byte for byte.
+    out = build_ordered_products(
+        {"hplcpurity_identity": True, "samplevariance": True,
+         "variance": {"hplcpurity_identity": 3}}, "core",
+    )
+    assert [p for p in out if p["key"] == "variance"] == [{
+        "key": "variance", "label": "Variance HPLC", "is_addon": True,
+        "fulfillment_role": "variance", "fulfillment_dim": "kind",
+        "ride_host_roles": [],
+    }]
+
+
+def test_variance_chip_label_for_four_key_map_is_variance():
+    expected = {
+        "key": "variance", "label": "Variance", "is_addon": True,
+        "fulfillment_role": "variance", "fulfillment_dim": "kind",
+        "ride_host_roles": [],
+    }
+    out = build_ordered_products(
+        {"endotoxin-usp85-lal": True, "variance": {"endotoxin-usp85-lal": 3}}, None,
+    )
+    assert [p for p in out if p["key"] == "variance"] == [expected]
+    # Mixed HPLC + endotoxin map: one chip, still "Variance".
+    mixed = build_ordered_products(
+        {"hplcpurity_identity": True, "endotoxin-usp85-lal": True,
+         "variance": {"hplcpurity_identity": 2, "endotoxin-usp85-lal": 2}}, "core",
+    )
+    assert [p for p in mixed if p["key"] == "variance"] == [expected]

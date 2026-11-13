@@ -7971,18 +7971,32 @@ export interface VialPlanSection {
   roles: VialPlanRoleSpot[]
 }
 
+export interface VialPlanVarianceTest {
+  key: string
+  n: number
+  replicate_runs: number
+  replicate_vials: number
+  run_label: 'Vial' | 'Digest'
+}
+
 export interface VialPlanResponse {
   // Shape-driven like VialDemandResponse below: demand/base_demand carry
   // hplc/endo/ster plus any catalog-only role (e.g. 'hm') the order actually
-  // demanded. `variance` stays the legacy 3-bucket shape BY CONTRACT —
-  // derive_variance_demand only ever emits hplc/endo/ster (a catalog-only
-  // role like hm is never variance-eligible, Task 3).
+  // demanded. `variance` carries the legacy three plus any role with
+  // replicates bought.
   /** Base (core) vial demand per role — NOT inflated by variance. */
   demand: Record<string, number>
   /** Per-role variance target: count of variance vials IN ADDITION to core
    *  demand (zeros when none purchased). Display-only paid marker for the
    *  AssignStep variance drop zones — never a drop blocker. */
-  variance: { hplc: number; endo: number; ster: number }
+  variance: Record<string, number> & { hplc: number; endo: number; ster: number }
+  /** Add-on test Variance per role code: the test key, its total runs `n`,
+   *  the paid replicate runs and vials, and the certificate run label. */
+  variance_tests?: Record<string, VialPlanVarianceTest>
+  /** Refusals from the backend variance resolver, one sentence each. */
+  variance_errors?: string[]
+  /** Informational variance notes, one sentence each. */
+  variance_notes?: string[]
   /** Pre-variance lab baseline; equals demand under the separate-bucket
    *  contract. Kept for back-compat. */
   base_demand: Record<string, number>
@@ -8568,10 +8582,7 @@ export interface VialDemandResponse {
   // Shape-driven like OrderBoxLabelSummary.counts: demand/base_demand come
   // from the backend's derive_base_demand, which carries hplc/endo/ster plus
   // any catalog-only role (e.g. 'hm') the order actually demanded. `variance`
-  // is widened to match for consistency, but is legacy-only by backend
-  // contract (derive_variance_demand only ever emits hplc/endo/ster — a
-  // catalog-only role like hm is never variance-eligible, Task 3) — it just
-  // never happens to carry extra keys in practice.
+  // carries the legacy three plus any role with replicates bought.
   demand: Record<string, number>
   variance: Record<string, number>
   base_demand: Record<string, number>
@@ -9130,6 +9141,60 @@ export interface VarianceStatsEntry {
   pass: boolean | null
 }
 
+/** One result on a run's vial, as the parent analysis list shows it. */
+export interface VarianceRunValue {
+  keyword: string
+  label: string | null
+  value: string | null
+  unit: string | null
+  conforms: boolean | null
+  review_state: string | null
+  analyst: string | null
+  specification: AnalysisSpecification | null
+}
+
+export interface VarianceRun {
+  sample_id: string
+  vial_sequence: number
+  kind: 'core' | 'variance' | string
+  in_variance_set: boolean
+  exclusion_reason: string | null
+  signed_off: boolean
+  has_result: boolean
+  values: VarianceRunValue[]
+}
+
+export interface VarianceTestStat {
+  keyword: string
+  label: string | null
+  kind: 'numeric' | 'categorical'
+  mean: number | null
+  sd: number | null
+  cv_pct: number | null
+  n: number
+  conforms_count: number | null
+  total: number | null
+}
+
+/** One test bought with Variance (container families only). Values in each
+ *  run come in a fixed order; counts cover the core run plus the in-set
+ *  replicates. */
+export interface VarianceTest {
+  role: string
+  section_key: string | null
+  title: string
+  is_hplc: boolean
+  runs: VarianceRun[]
+  summary: {
+    runs: number
+    runs_with_result: number
+    conforming: number
+    replicates: number
+    replicates_signed_off: number
+    stats: VarianceTestStat[]
+  }
+}
+
 export interface VarianceSetResponse {
   parent: ParentSampleSummary
   vials: VarianceVial[]
@@ -9137,6 +9202,9 @@ export interface VarianceSetResponse {
   locked: boolean
   locked_at: string | null
   locked_by_user_id: number | null
+  locked_by_name?: string | null
+  /** Container families only; empty for legacy families. */
+  tests?: VarianceTest[]
 }
 
 export async function getVarianceSet(parentSampleId: string): Promise<VarianceSetResponse> {
@@ -9180,6 +9248,11 @@ export async function lockVarianceSet(parentSampleId: string): Promise<{ parent_
   if (r.status === 422) {
     const body = await r.json().catch(() => ({}))
     throw new Error(body.detail?.message ?? 'need >=2 selected vials to lock')
+  }
+  if (r.status === 409) {
+    // variance_series_incomplete: the message lists what is unfinished.
+    const body = await r.json().catch(() => ({}))
+    throw new Error(body.detail?.message ?? `lockVarianceSet failed: ${r.status}`)
   }
   if (!r.ok) throw new Error(`lockVarianceSet failed: ${r.status}`)
   return r.json()

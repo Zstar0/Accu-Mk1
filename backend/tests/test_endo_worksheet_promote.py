@@ -1284,3 +1284,184 @@ def test_a_retest_of_a_vial_on_no_open_worksheet_stays_unassigned(client, db):
     new_id = apply_transition(db, analysis_id=vial.id, kind="retest", user_id=7).id
     db.expire_all()
     assert db.get(LimsAnalysis, new_id).review_state == "unassigned"
+
+
+# --- add-on test Variance: a replicate is entered, never promoted ------------
+
+def _endo85_profile(db):
+    """The catalog row that makes endo85 one of the four Variance test roles
+    (sub_samples.variance_tests.variance_test_roles)."""
+    db.add(AnalysisProfile(key="endotoxin-usp85-lal", name="Endotoxin USP 85", is_addon=True,
+                           fulfillment_role="endo85", vials_required=1,
+                           coa_archetype="limit_table", coa_sort_order=10))
+
+
+def _kind(db, item, kind, in_set=True):
+    vial = db.execute(select(LimsSubSample).where(
+        LimsSubSample.sample_id == item.sample_id)).scalar_one()
+    vial.assignment_kind, vial.in_variance_set = kind, in_set
+
+
+def _replicate(client, db, sample_id="P-4001-S02", **kw):
+    w = kw.pop("w", None) or _world(client, db)
+    if not db.query(AnalysisProfile).filter_by(key="endotoxin-usp85-lal").count():
+        _endo85_profile(db)
+    item, vial = _row(db, w, sample_id, **kw)
+    _kind(db, item, "variance")
+    db.commit()
+    return w, item, vial
+
+
+def _submitted(item):
+    return {"item_id": item.id, "promoted": False, "parent_analysis_id": None,
+            "state": "to_be_verified", "reason": worksheets_endo_promote.REASON_REPLICATE_SUBMITTED}
+
+
+def test_a_core_endo85_vial_with_the_variance_catalog_promotes_as_today(client, db):
+    """Characterization, captured on the base checkout first: a core vial of
+    a Variance test role is untouched by the replicate branch."""
+    w = _world(client, db)
+    _endo85_profile(db)
+    item, vial = _row(db, w)
+    _kind(db, item, "core")
+    db.commit()
+    vial_id = vial.id
+    [res] = _results(_promote(client, w.ws, _line(item)))
+    [parent] = _parent_rows(db, "P-4001")
+    assert res == {"item_id": item.id, "promoted": True, "parent_analysis_id": parent.id,
+                   "state": "parent_to_verify", "reason": None}
+    vial = db.get(LimsAnalysis, vial_id)
+    assert (vial.review_state, vial.result_value, vial.loq, vial.lod, vial.method_id) == (
+        "promoted", "25", 25.0, 0.05, w.mid)
+    assert db.query(AuditLog).filter_by(operation="endo_worksheet_promoted").count() == 1
+    assert db.query(AuditLog).filter_by(operation="endo_worksheet_replicate_submitted").count() == 0
+
+
+def test_a_variance_vial_on_a_legacy_role_is_refused_as_today(client, db):
+    """Characterization, captured on the base checkout first: only the four
+    tests' roles take the replicate branch; a legacy `endo` variance vial
+    still reaches promote and is refused by it, writing nothing."""
+    w = _world(client, db)
+    _endo85_profile(db)
+    item, vial = _row(db, w, role="endo")
+    _kind(db, item, "variance")
+    db.commit()
+    vial_id = vial.id
+    assert _results(_promote(client, w.ws, _line(item))) == [_refused(
+        item, f"source {vial_id} (vial P-4001-S01) is assigned to a variance bucket and "
+              f"cannot be promoted; re-assign it to the core bucket first")]
+    assert db.get(LimsAnalysis, vial_id).review_state == "assigned"
+    assert _parent_rows(db, "P-4001") == []
+
+
+def test_a_replicate_row_is_submitted_not_promoted(client, db, cascade_calls):
+    w, item, vial = _replicate(client, db, "P-4001-S01")
+    vial_id = vial.id
+    assert _results(_promote(client, w.ws, _line(item))) == [_submitted(item)]
+    # The cascade the sample page's submit schedules, once, for the parent.
+    parent_pk = db.execute(select(LimsSample.id).where(LimsSample.sample_id == "P-4001")).scalar_one()
+    assert cascade_calls == [(parent_pk, 1)]
+    vial = db.get(LimsAnalysis, vial_id)
+    assert (vial.review_state, vial.result_value, vial.result_unit, vial.loq, vial.lod,
+            vial.lod_unit, vial.method_id) == (
+        "to_be_verified", "25", "EU/vial", 25.0, 0.05, "EU/mL", w.mid)
+    assert _parent_rows(db, "P-4001") == []
+    [audit] = db.query(AuditLog).filter_by(operation="endo_worksheet_replicate_submitted").all()
+    assert (audit.entity_type, audit.entity_id) == ("lims_analysis", str(vial_id))
+    assert audit.details["item_id"] == item.id and audit.details["value"] == 25
+    assert db.query(AuditLog).filter_by(operation="endo_worksheet_promoted").count() == 0
+    [t] = db.query(LimsAnalysisTransition).filter_by(analysis_id=vial_id).all()
+    assert t.transition_kind == "submit" and "promoted" not in (t.reason or "")
+
+
+def test_a_replicate_row_is_not_refused_when_the_core_already_promoted(client, db):
+    w = _world(client, db)
+    _endo85_profile(db)
+    core, _ = _row(db, w, "P-4001-S01")
+    db.commit()
+    [res] = _results(_promote(client, w.ws, _line(core)))
+    assert res["promoted"] is True, res
+    _, item, _ = _replicate(client, db, w=w)
+    assert _results(_promote(client, w.ws, _line(item))) == [_submitted(item)]
+    assert len(_parent_rows(db, "P-4001")) == 1
+
+
+def test_a_replicate_and_a_core_row_in_one_request_each_take_their_own_path(client, db):
+    w, rep, _ = _replicate(client, db)
+    core, _ = _row(db, w, "P-4001-S01")
+    db.commit()
+    res = _results(_promote(client, w.ws, _line(rep), _line(core)))
+    [parent] = _parent_rows(db, "P-4001")
+    assert res == [_submitted(rep),
+                   {"item_id": core.id, "promoted": True, "parent_analysis_id": parent.id,
+                    "state": "parent_to_verify", "reason": None}]
+
+
+def test_a_replicate_then_variance_verify_signs_it_off(client, db):
+    w, item, vial = _replicate(client, db)
+    vial_id = vial.id
+    _results(_promote(client, w.ws, _line(item)))
+    apply_transition(db, analysis_id=vial_id, kind="variance_verify", user_id=2)
+    db.expire_all()
+    assert db.get(LimsAnalysis, vial_id).review_state == "variance_verified"
+    # Signed off, the row is no longer the worksheet's to fill.
+    assert _results(_promote(client, w.ws, _line(item))) == [
+        _refused(item, "the vial's endotoxin analysis is variance_verified")]
+
+
+def test_a_replicate_entered_twice_is_corrected_in_place(client, db):
+    w, item, vial = _replicate(client, db)
+    vial_id = vial.id
+    _results(_promote(client, w.ws, _line(item)))
+    assert client.patch(f"/worksheets/{w.ws.id}/items/{item.id}",
+                        json={"result_reading": "0.1"}).status_code == 200
+    assert _results(_promote(client, w.ws, _line(item, 50))) == [_submitted(item)]
+    db.expire_all()
+    assert (db.get(LimsAnalysis, vial_id).review_state,
+            db.get(LimsAnalysis, vial_id).result_value) == ("to_be_verified", "50")
+
+
+def test_a_replicate_with_a_bad_reading_is_still_refused(client, db):
+    w, item, vial = _replicate(client, db)
+    vial_id = vial.id
+    assert _results(_promote(client, w.ws, _line(item, 26))) == [
+        _refused(item, worksheets_endo_promote.REASON_BAD_NUMBERS)]
+    vial = db.get(LimsAnalysis, vial_id)
+    assert (vial.review_state, vial.result_value) == ("assigned", None)
+    assert db.query(AuditLog).count() == 0
+    assert _parent_rows(db, "P-4001") == []
+
+
+def test_a_worksheet_whose_rows_are_all_replicates_completes(client, db):
+    """Completion never waits on a promote: the entered replicate stays
+    to_be_verified for its sign-off, and one never entered goes back to
+    unassigned as any claimed, unsubmitted row does (release_for_worksheet)."""
+    w, entered, a = _replicate(client, db)
+    _, never, b = _replicate(client, db, "P-4001-S03", w=w, reading=None)
+    a_id, b_id = a.id, b.id
+    assert _results(_promote(client, w.ws, _line(entered))) == [_submitted(entered)]
+    assert client.post(f"/worksheets/{w.ws.id}/complete").status_code == 200
+    db.expire_all()
+    assert w.ws.status == "completed"
+    assert db.get(LimsAnalysis, a_id).review_state == "to_be_verified"
+    assert db.get(LimsAnalysis, b_id).review_state == "unassigned"
+    apply_transition(db, analysis_id=a_id, kind="variance_verify", user_id=2)
+    assert db.get(LimsAnalysis, a_id).review_state == "variance_verified"
+
+
+def test_a_retested_replicate_is_re_entered_never_promoted(client, db):
+    """The v1.58.2 to v1.58.4 claim stands: the retest row comes back
+    `assigned` on its worksheet, and its re-entry is a submit, not a promote."""
+    w, item, vial = _replicate(client, db, state="to_be_verified")
+    w.ws.assigned_analyst_id = 9
+    db.commit()
+    new_id = apply_transition(db, analysis_id=vial.id, kind="retest", user_id=7).id
+    db.expire_all()
+    assert db.get(LimsAnalysis, new_id).review_state == "assigned"
+    assert client.patch(f"/worksheets/{w.ws.id}/items/{item.id}",
+                        json={"result_reading": "<0.05",
+                              "cartridge_type_id": w.c05.id}).status_code == 200
+    assert _results(_promote(client, w.ws, _line(item))) == [_submitted(item)]
+    db.expire_all()
+    assert db.get(LimsAnalysis, new_id).review_state == "to_be_verified"
+    assert _parent_rows(db, "P-4001") == []

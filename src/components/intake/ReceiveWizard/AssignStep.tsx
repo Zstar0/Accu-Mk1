@@ -20,6 +20,7 @@ import {
   type VialPlanItem,
   type VialPlanSection,
   type VialPlanRoleProfile,
+  type VialPlanVarianceTest,
   type AssignmentRole,
 } from '@/lib/api'
 import { useQueryClient } from '@tanstack/react-query'
@@ -27,6 +28,17 @@ import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
 import { Textarea } from '@/components/ui/textarea'
+import { Alert, AlertDescription } from '@/components/ui/alert'
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from '@/components/ui/alert-dialog'
 import { Spinner } from '@/components/ui/spinner'
 import { cn } from '@/lib/utils'
 import { invalidateVialAssignmentCaches } from '@/lib/vial-assignment'
@@ -65,16 +77,10 @@ export function bucketToAssignment(b: string): { role: string; kind: 'core' | 'v
   return { role: b, kind: 'core' }
 }
 
-/** plan.variance stays the legacy fixed shape {hplc, endo, ster} BY CONTRACT
- *  (derive_variance_demand never emits a catalog-only role like hm/t_role —
- *  Task 3). An explicit lookup — rather than a cast to an indexed type —
- *  keeps that contract visible at the call site instead of hidden behind a
- *  cast that would silently paper over a real code drifting outside it. */
-function varianceFor(variance: VialPlanResponse['variance'], code: string): number {
-  if (code === 'hplc') return variance.hplc
-  if (code === 'endo') return variance.endo
-  if (code === 'ster') return variance.ster
-  return 0
+/** plan.variance carries the legacy three plus any role with replicates
+ *  bought: paid variance vials for the role, 0 when none. */
+export function varianceFor(variance: VialPlanResponse['variance'], code: string): number {
+  return variance[code] ?? 0
 }
 
 /** Routes an assignment PATCH failure to the right toast. Branches on the
@@ -106,14 +112,16 @@ export function AssignStep({ parentSampleId, parentSampleUid }: Props) {
   const roleColor: RoleColorFn = code =>
     ROLE_COLOR_CHIP[roleColorForCode(code, vialRolesQ.data, departmentsQ.data)]
 
-  const refresh = useCallback(async () => {
+  const refresh = useCallback(async (): Promise<VialPlanResponse | null> => {
     setLoading(true)
     setError(null)
     try {
       const result = await getVialPlan(parentSampleId)
       setPlan(result)
+      return result
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e))
+      return null
     } finally {
       setLoading(false)
     }
@@ -239,6 +247,18 @@ export function AssignStep({ parentSampleId, parentSampleUid }: Props) {
             Drag vials manually. Print still works.
           </div>
         )}
+        {plan.variance_errors && plan.variance_errors.length > 0 && (
+          <Alert variant="destructive" className="mb-4">
+            <AlertDescription>
+              {plan.variance_errors.map((msg, i) => <p key={`${i}-${msg}`}>{msg}</p>)}
+            </AlertDescription>
+          </Alert>
+        )}
+        {plan.variance_notes && plan.variance_notes.length > 0 && (
+          <div className="mb-4 text-xs text-muted-foreground space-y-0.5">
+            {plan.variance_notes.map((msg, i) => <p key={`${i}-${msg}`}>{msg}</p>)}
+          </div>
+        )}
         <div className="grid gap-4" style={{ gridTemplateColumns }}>
           {sections.map(section => (
             <DepartmentSection
@@ -276,16 +296,53 @@ export function AssignStep({ parentSampleId, parentSampleUid }: Props) {
   )
 }
 
-/** Lab-side variance count override — interim until the WP variance addon ships.
- *  UNCHANGED by Task 9's catalog-driven rewrite: the three WP-key ternaries
- *  below are legacy-only by backend contract (plan.variance is fixed-shape
- *  {hplc, endo, ster} — derive_variance_demand never emits a catalog-only
- *  role), so this editor has no section/role-spot dependency to widen. */
-const VARIANCE_OVERRIDE_FIELDS = [
-  { key: 'hplcpurity_identity', label: 'HPLC', ariaLabel: 'Variance HPLC' },
-  { key: 'endotoxin', label: 'Endo', ariaLabel: 'Variance Endo' },
-  { key: 'sterility_pcr', label: 'Sterility', ariaLabel: 'Variance Sterility' },
+/** Lab-side variance count override. The three legacy fields read their
+ *  count from plan.variance[bucket] exactly as before; the four add-on test
+ *  fields read `n` from plan.variance_tests and show only when the test is
+ *  on the sample (some section profile carries the key). */
+const LEGACY_VARIANCE_OVERRIDE_FIELDS = [
+  { key: 'hplcpurity_identity', label: 'HPLC', ariaLabel: 'Variance HPLC', bucket: 'hplc' },
+  { key: 'endotoxin', label: 'Endo', ariaLabel: 'Variance Endo', bucket: 'endo' },
+  { key: 'sterility_pcr', label: 'Sterility', ariaLabel: 'Variance Sterility', bucket: 'ster' },
 ] as const
+
+const VARIANCE_TEST_OVERRIDE_FIELDS = [
+  { key: 'endotoxin-usp85-lal', label: 'Endotoxin USP85', unit: 'vials' },
+  { key: 'rapid-sterility-pcr', label: 'Rapid PCR', unit: 'vials' },
+  { key: 'sterility-usp71', label: 'USP 71', unit: 'vials' },
+  // One heavy metals run is a digest of 2 vials: n counts digests.
+  { key: 'heavy_metals', label: 'Heavy Metals', unit: 'digests' },
+] as const
+
+/** Same cap as the backend's VARIANCE_N_MAX. */
+const VARIANCE_TEST_N_MAX = 10
+
+interface OverrideField { key: string; label: string; ariaLabel: string; max?: number; unit?: string }
+
+function overrideFieldsFor(plan: VialPlanResponse): OverrideField[] {
+  const keysOnSample = new Set(
+    (plan.sections ?? []).flatMap(s => s.roles.flatMap(r => r.profiles.map(p => p.key)))
+  )
+  return [
+    ...LEGACY_VARIANCE_OVERRIDE_FIELDS,
+    ...VARIANCE_TEST_OVERRIDE_FIELDS.filter(f => keysOnSample.has(f.key)).map(f => ({
+      ...f,
+      ariaLabel: `Variance ${f.label}`,
+      max: VARIANCE_TEST_N_MAX,
+    })),
+  ]
+}
+
+function overrideCountsFor(plan: VialPlanResponse): Record<string, number> {
+  const counts: Record<string, number> = {}
+  // plan.variance[bucket] is the replicate count (n - 1); the input means total n.
+  for (const f of LEGACY_VARIANCE_OVERRIDE_FIELDS) {
+    const replicates = plan.variance[f.bucket] ?? 0
+    counts[f.key] = replicates > 0 ? replicates + 1 : 0
+  }
+  for (const t of Object.values(plan.variance_tests ?? {})) counts[t.key] = t.n
+  return counts
+}
 
 function VarianceOverrideEditor({
   parentSampleId,
@@ -294,42 +351,61 @@ function VarianceOverrideEditor({
 }: {
   parentSampleId: string
   plan: VialPlanResponse
-  refresh: () => void
+  /** Re-fetches the plan; resolves to the new plan, or null on failure. */
+  refresh: () => Promise<VialPlanResponse | null>
 }) {
   const queryClient = useQueryClient()
+  const fields = overrideFieldsFor(plan)
   // Effective variance counts from the plan (0 when not set).
-  const initialCounts = Object.fromEntries(
-    VARIANCE_OVERRIDE_FIELDS.map(f => [
-      f.key,
-      plan.variance[f.key === 'hplcpurity_identity' ? 'hplc' : f.key === 'endotoxin' ? 'endo' : 'ster'] ?? 0,
-    ])
-  )
-  const [counts, setCounts] = useState<Record<string, number>>(initialCounts)
+  const [counts, setCounts] = useState<Record<string, number>>(() => overrideCountsFor(plan))
   const [saving, setSaving] = useState(false)
 
   // Sync when plan changes (e.g. after a refresh)
   useEffect(() => {
-    setCounts(Object.fromEntries(
-      VARIANCE_OVERRIDE_FIELDS.map(f => [
-        f.key,
-        plan.variance[f.key === 'hplcpurity_identity' ? 'hplc' : f.key === 'endotoxin' ? 'endo' : 'ster'] ?? 0,
-      ])
-    ))
+    setCounts(overrideCountsFor(plan))
   }, [plan])
 
-  async function handleSave() {
+  const [confirmOpen, setConfirmOpen] = useState(false)
+  const refused = plan.variance_errors ?? []
+  const confirmPayloadEmpty = buildPayload() === null
+
+  // A non-empty save replaces the order's Variance entries wholesale, so an
+  // entry the backend refused (no variance_tests row, never sent) is removed;
+  // an empty save leaves the order's own entries, refusals included. Ask
+  // first whenever there are refusals; otherwise save as before.
+  function handleSave() {
+    if (refused.length > 0) {
+      setConfirmOpen(true)
+      return
+    }
+    void doSave()
+  }
+
+  // The override map the fields would save, or null when empty. An empty
+  // override is stored as none, so the order's own Variance entries apply.
+  function buildPayload(): Record<string, number> | null {
+    const map: Record<string, number> = {}
+    for (const f of fields) {
+      const n = counts[f.key] ?? 0
+      if (n >= 2) map[f.key] = n
+    }
+    return Object.keys(map).length > 0 ? map : null
+  }
+
+  async function doSave() {
     setSaving(true)
     try {
-      const map: Record<string, number> = {}
-      for (const f of VARIANCE_OVERRIDE_FIELDS) {
-        const n = counts[f.key] ?? 0
-        if (n >= 2) map[f.key] = n
-      }
-      const payload = Object.keys(map).length > 0 ? map : null
-      await putVarianceOverride(parentSampleId, payload)
-      toast.success('Variance override saved')
-      void refresh()
+      await putVarianceOverride(parentSampleId, buildPayload())
       queryClient.invalidateQueries({ queryKey: ['variance-entitlement', parentSampleId] })
+      const next = await refresh()
+      const stillRefused = next?.variance_errors ?? []
+      if (stillRefused.length > 0) {
+        toast.warning('Variance override saved, but entries are still refused', {
+          description: stillRefused[0],
+        })
+      } else {
+        toast.success('Variance override saved')
+      }
     } catch (err) {
       toast.error(err instanceof Error ? err.message : 'Failed to save variance override')
     } finally {
@@ -352,34 +428,34 @@ function VarianceOverrideEditor({
               </span>
             </TooltipTrigger>
             <TooltipContent className="max-w-sm text-left space-y-1.5 p-3">
-              <p className="font-semibold">Variance count = total vials tested</p>
+              <p className="font-semibold">Variance count = total runs of the test</p>
               <p>
-                The number is the TOTAL vials tested from the lot. The first
-                vial is part of the <span className="font-medium">core
+                The number is the TOTAL runs of the test on the lot. The first
+                run is part of the <span className="font-medium">core
                 offering</span>, so the client pays for n&nbsp;−&nbsp;1
                 replicates: HPLC&nbsp;2 = the core vial + 1 paid variance
-                replicate. The paid marker on the Variance drop zone below
-                shows the replicate count — it never blocks assignment.
+                replicate. A run is one vial, except heavy metals, where a run
+                is one digest of 2 vials. The paid marker on the Variance drop
+                zone below shows the replicates; it never blocks assignment.
               </p>
               <p>
-                0 = no variance testing purchased. 1 is meaningless (one vial
+                0 = no variance testing purchased. 1 is meaningless (one run
                 is just the core test) and is treated as none.
               </p>
               <p className="text-muted-foreground">
                 Lab override: while set, it replaces the order&apos;s variance.
-                Clearing all fields falls back to the WP order (none until the
-                addon ships).
+                Clearing all fields falls back to the order.
               </p>
             </TooltipContent>
           </Tooltip>
         </div>
         <p className="text-xs text-muted-foreground">
-          Lab override — replaces the order's variance until the WP addon ships. 0 = none,
-          otherwise the TOTAL vials tested (≥2; the first is the core vial).
+          Lab override: replaces the order's variance. 0 = none, otherwise the TOTAL
+          runs (≥2; the first is the core run). A heavy metals run is a digest of 2 vials.
         </p>
       </div>
       <div className="flex items-end gap-3 flex-wrap">
-        {VARIANCE_OVERRIDE_FIELDS.map(f => (
+        {fields.map(f => (
           <div key={f.key} className="flex flex-col gap-1">
             <label className="text-xs text-muted-foreground" htmlFor={`varov-${f.key}`}>
               {f.label}
@@ -388,6 +464,7 @@ function VarianceOverrideEditor({
               id={`varov-${f.key}`}
               type="number"
               min={0}
+              max={f.max}
               aria-label={f.ariaLabel}
               value={counts[f.key] ?? 0}
               onChange={e =>
@@ -396,6 +473,11 @@ function VarianceOverrideEditor({
               disabled={saving}
               className="w-20 text-sm"
             />
+            {f.unit && (
+              <span className="text-[10px] text-muted-foreground" data-testid={`varov-unit-${f.key}`}>
+                {f.unit}
+              </span>
+            )}
           </div>
         ))}
         <Button
@@ -410,6 +492,41 @@ function VarianceOverrideEditor({
           Save
         </Button>
       </div>
+      <AlertDialog open={confirmOpen} onOpenChange={setConfirmOpen}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            {confirmPayloadEmpty ? (
+              <>
+                <AlertDialogTitle>The refused Variance entries will stay</AlertDialogTitle>
+                <AlertDialogDescription>
+                  With every field at 0 or 1 the override is empty, so the
+                  order&apos;s own Variance entries apply. The refused entries
+                  below come from the order and will stay refused. Correct the
+                  order, or enter a count for a test that can run.
+                </AlertDialogDescription>
+              </>
+            ) : (
+              <>
+                <AlertDialogTitle>Remove the refused Variance entries?</AlertDialogTitle>
+                <AlertDialogDescription>
+                  Saving replaces the order&apos;s Variance entries with the fields
+                  shown. The refused entries below are not among them and will no
+                  longer apply:
+                </AlertDialogDescription>
+              </>
+            )}
+          </AlertDialogHeader>
+          <ul className="list-disc pl-5 text-sm space-y-1">
+            {refused.map((msg, i) => <li key={`${i}-${msg}`}>{msg}</li>)}
+          </ul>
+          <AlertDialogFooter>
+            <AlertDialogCancel>Cancel</AlertDialogCancel>
+            <AlertDialogAction onClick={() => void doSave()} disabled={saving}>
+              Save anyway
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </div>
   )
 }
@@ -525,8 +642,10 @@ function VariancePill({ n }: { n: number }) {
 }
 
 function Bucket({
-  id, label, shortLabel, vials, demand, onReset, varianceN = 0, varianceVials, withVarianceZone = false, roleShort, roleColor,
+  id, label, shortLabel, vials, demand, onReset, varianceN = 0, varianceTest, varianceVials, withVarianceZone = false, roleShort, roleColor,
 }: {
+  /** The role's add-on test Variance entry, passed to its variance zone. */
+  varianceTest?: VialPlanVarianceTest
   id: BucketId
   label: string
   /** Short form of `label` for the nested variance zone's "{shortLabel}
@@ -557,6 +676,9 @@ function Bucket({
   const { setNodeRef, isOver } = useDroppable({ id })
   const isShort = demand !== null && vials.length < demand
   const isFull = demand !== null && vials.length === demand
+  // The pill counts replicate runs; varianceN is vials (equal except for a
+  // pooled test such as heavy metals).
+  const pillN = varianceTest?.replicate_runs ?? varianceN
 
   return (
     <div
@@ -575,7 +697,7 @@ function Bucket({
       <header className="flex justify-between items-baseline mb-2 text-xs uppercase tracking-wide text-muted-foreground">
         <strong className="text-foreground font-semibold">{label}</strong>
         <div className="flex items-center gap-2">
-          {varianceN >= 2 && <VariancePill n={varianceN} />}
+          {pillN >= 2 && <VariancePill n={pillN} />}
           {demand !== null && (
             <span className={cn(isShort && 'text-amber-500')}>
               {vials.length} / {demand}
@@ -605,6 +727,7 @@ function Bucket({
         <VarianceDropZone
           id={varianceBucketId}
           paidCount={varianceN}
+          varianceTest={varianceTest}
           vials={varianceVials ?? []}
           roleLabel={shortLabel}
           roleShort={roleShort}
@@ -693,9 +816,7 @@ function SingleRoleSection({
   // zone off the paid count. Gating the whole thing on variance_eligible
   // would make already-assigned variance vials invisible the moment an
   // admin edits that flag off — the same invisibility class this task fixed
-  // for hm. See varianceFor: roleVarianceN can only be nonzero for
-  // hplc/endo/ster anyway (plan.variance's fixed legacy shape), so
-  // variance_eligible only ever matters as a guard on THAT branch.
+  // for hm. variance_eligible only guards the paid-count branch.
   const withVarianceZone = variance.length > 0 || (role.variance_eligible && roleVarianceN > 0)
   return (
     <div>
@@ -707,6 +828,7 @@ function SingleRoleSection({
         varianceVials={variance}
         demand={demand}
         varianceN={roleVarianceN}
+        varianceTest={plan.variance_tests?.[role.code]}
         withVarianceZone={withVarianceZone}
         onReset={() => onReset(role.code)}
         roleShort={roleShort}
@@ -778,9 +900,8 @@ function MultiRoleSection({
         // at least one PAID variance replicate — plan.variance is the replicate
         // count (total vials − 1), so >0 means "any variance purchased" (a
         // 2-total upsell = 1 replicate). variance_eligible guards ONLY that paid-
-        // count branch (belt-and-braces — plan.variance is a fixed 3-key legacy
-        // dict, so only hplc/endo/ster can ever carry a nonzero count regardless
-        // of what the catalog role allows); it must NOT gate stored variance
+        // count branch (plan.variance carries the legacy three plus any role
+        // with replicates bought); it must NOT gate stored variance
         // vials — an admin flipping the flag off must never make an
         // already-assigned variance vial invisible (the hm-invisibility class).
         const showVarianceZone = variance.length > 0 || (role.variance_eligible && roleVarianceN > 0)
@@ -791,7 +912,7 @@ function MultiRoleSection({
               label={role.label}
               vials={core}
               demand={roleDemand}
-              varianceN={roleVarianceN}
+              varianceN={plan.variance_tests?.[role.code]?.replicate_runs ?? roleVarianceN}
               onReset={() => onReset(role.code)}
               roleShort={roleShort}
               roleColor={roleColor}
@@ -801,6 +922,7 @@ function MultiRoleSection({
               <VarianceDropZone
                 id={`${role.code}_variance`}
                 paidCount={roleVarianceN}
+                varianceTest={plan.variance_tests?.[role.code]}
                 vials={variance}
                 roleLabel={roleShort(role.code)}
                 roleShort={roleShort}
@@ -817,10 +939,13 @@ function MultiRoleSection({
 /** Droppable sub-zone for variance vials within a role bucket.
  *  Shows "HPLC Variance · paid N" header and accepts drops into `{role}_variance`. */
 function VarianceDropZone({
-  id, paidCount, vials, roleLabel, roleShort, roleColor,
+  id, paidCount, varianceTest, vials, roleLabel, roleShort, roleColor,
 }: {
   id: BucketId
+  /** Paid variance vials for the role. */
   paidCount: number
+  /** The role's add-on test Variance entry, when it has one. */
+  varianceTest?: VialPlanVarianceTest
   vials: VialPlanItem[]
   roleLabel: string
   roleShort: RoleShortFn
@@ -828,9 +953,13 @@ function VarianceDropZone({
 }) {
   const { setNodeRef, isOver } = useDroppable({ id })
   const extraCount = Math.max(0, vials.length - paidCount)
+  const paidText = varianceTest?.run_label === 'Digest'
+    ? `· paid ${varianceTest.replicate_runs} ${varianceTest.replicate_runs === 1 ? 'digest' : 'digests'} (${varianceTest.replicate_vials} vials)`
+    : `· paid ${paidCount}`
   return (
     <div
       ref={setNodeRef}
+      data-bucket-id={id}
       className={cn(
         'pl-3 mt-2 border-l-2 transition-colors',
         isOver ? 'border-l-sky-500' : 'border-l-sky-500/30'
@@ -839,7 +968,7 @@ function VarianceDropZone({
       <div className="text-[10px] uppercase tracking-wide mb-1 flex justify-between text-sky-600 dark:text-sky-400">
         <span>
           {roleLabel} Variance
-          <span className="ml-1 text-muted-foreground normal-case">· paid {paidCount}</span>
+          <span className="ml-1 text-muted-foreground normal-case">{paidText}</span>
         </span>
         {extraCount > 0 && (
           <span className="text-amber-500">+{extraCount} extra</span>

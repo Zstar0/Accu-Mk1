@@ -30,6 +30,7 @@ from models import (
     AnalysisService, AuditLog, LimsAnalysis, LimsSubSample, WorksheetItem,
     service_group_members,
 )
+from sub_samples.variance_tests import variance_test_roles
 from worksheets_endo import (
     _DEAD_STATES, cartridge_sensitivities, endo_run_params, form_is_bac, parse_reading,
     reader_shows, reader_validity, resolve_endo_method,
@@ -67,6 +68,10 @@ REASON_BAD_NUMBERS = "the value, LOQ or LOD does not match the worksheet row"
 REASON_GT = ("a '>' reading reports only when the floor itself already fails, so "
              "re-run the vial at a higher dilution for a number")
 REASON_UNEXPECTED = "not promoted: an unexpected error, see the server log"
+# Add-on test Variance: a replicate is entered here and signed off later with
+# variance_verify on the sample page, never promoted (contract).
+REASON_REPLICATE_SUBMITTED = ("replicate vial: result entered, sign it off with "
+                              "Verify (Variance) on the sample page")
 TYPED = "typed, no reader record"
 
 
@@ -278,9 +283,17 @@ def _plan(db: Session, worksheet, item, row: EndoPromoteRowIn, ctx) -> dict:
         state = "retested" if analysis.retested else analysis.review_state
         raise _Refused(f"the vial's endotoxin analysis is {state}")
     parent = ctx.parent_by_sample[item.sample_id]
+    # A Variance replicate: a variance-kind vial of one of the four tests'
+    # roles, judged from the vial alone (the seeder's rule), so no lookup
+    # outage can promote it. It is submitted, never promoted, so the parent's
+    # result is no bar to it. Read after the analysis lock above.
+    vial = db.get(LimsSubSample, analysis.lims_sub_sample_pk, populate_existing=True)
+    replicate = (vial is not None and vial.assignment_kind == "variance"
+                 and vial.assignment_role in ctx.variance_test_roles)
     # Only a retest row's promote may supersede the parent's live result
     # (promote_to_parent); any other row would collide with it.
-    if analysis.retest_of_id is None and _parent_holds(db, parent.id, svc.id):
+    if (not replicate and analysis.retest_of_id is None
+            and _parent_holds(db, parent.id, svc.id)):
         raise _Refused(REASON_PARENT_HOLDS)
     if item.result_reading is None:
         raise _Refused(REASON_NO_READING)
@@ -380,6 +393,7 @@ def _plan(db: Session, worksheet, item, row: EndoPromoteRowIn, ctx) -> dict:
     loq = row.value if lt else row.loq
     return {
         "analysis": analysis,
+        "replicate": replicate,
         "unit": unit,
         "loq": loq,
         "result_floor": gt,
@@ -410,7 +424,8 @@ def _promote_one(db: Session, current_user, worksheet, item, row: EndoPromoteRow
 
     analysis = plan["analysis"]
     value = _num_text(row.value)
-    reason = f"promoted from worksheet WS-{worksheet.id} row {item.sample_id}"
+    verb = "entered" if plan["replicate"] else "promoted"
+    reason = f"{verb} from worksheet WS-{worksheet.id} row {item.sample_id}"
     # The worksheet's pinned endotoxin method (v2 pins it at the first reading
     # or print); unpinned, the vial keeps the method it has.
     method_id = worksheet.endo_method_id or analysis.method_id
@@ -420,6 +435,21 @@ def _promote_one(db: Session, current_user, worksheet, item, row: EndoPromoteRow
         result_floor=plan["result_floor"] or None,
         method_id=method_id, user_id=plan["details"]["user_id"], reason=reason, commit=False,
     )
+    if plan["replicate"]:
+        # The fill and its audit row commit together; the reviewer signs the
+        # result off with Verify (Variance), so entry and sign-off stay two acts.
+        db.add(AuditLog(operation="endo_worksheet_replicate_submitted",
+                        entity_type="lims_analysis", entity_id=str(analysis.id),
+                        details=plan["details"]))
+        db.commit()
+        # The side-by-side cascade the sample page's submit schedules
+        # (lims_analyses.routes.transition), through the same helper.
+        from lims_analyses.routes import _schedule_sbs_cascade  # call time: routes imports promote_flow
+        _schedule_sbs_cascade(background_tasks if background_tasks is not None
+                              else promote_flow._RunNow(), db, analysis, current_user)
+        return EndoPromoteRowResult(item_id=row.item_id, promoted=False,
+                                    state=analysis.review_state,
+                                    reason=REASON_REPLICATE_SUBMITTED)
     resp = promote_flow.run_promote(db, current_user, PromoteRequest(
         keyword=analysis.keyword, result_value=value, result_unit=plan["unit"],
         method_id=method_id,
@@ -483,6 +513,7 @@ def promote_rows(db: Session, current_user, worksheet, rows: list[EndoPromoteRow
         # Slice 5: the rows' match inputs and today's lines, once per request.
         facts=row_facts(db, worksheet, items.values()),
         rules=load_rules(db),
+        variance_test_roles=variance_test_roles(db),
     )
     results = []
     for row in rows:
