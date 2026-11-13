@@ -84,6 +84,16 @@ def _missing(weighed: dict, names, skip=()) -> list:
     return [label for key, label in names if key not in skip and weighed.get(key) is None]
 
 
+def num(x) -> str:
+    """A number as the sentences print it: the shortest text that reads back as the same float,
+    an integer without ".0". Python's repr and JavaScript's String(x) agree on this for every
+    value from 1e-4 up to 1e16 (outside it both switch to exponents, in different spellings),
+    so the browser's copy can print it identically; "%g" cannot be ported (it keeps six figures
+    and prints 997.1 and 997.1004 alike)."""
+    x = float(x)
+    return str(int(x)) if x.is_integer() else repr(x)
+
+
 def _facts(row: dict) -> dict:
     return {k: row[k] for k in ("declared_mg", "form", "peptide_id", "components")}
 
@@ -118,16 +128,16 @@ def promote_reasons(row: dict, computed: Optional[dict], blend_cap: int) -> list
         if count is None:
             reasons.append(REASON_CAPSULE_COUNT)
         elif count > MAX_CAPSULES:
-            reasons.append(f"a stock of {count} capsules is more than Process HPLC takes "
-                           f"({MAX_CAPSULES}); check the count")
+            reasons.append(f"a stock of {num(count)} capsules is more than Process HPLC takes "
+                           f"({num(MAX_CAPSULES)}); check the count")
     # calculate_dilution_factor works a bac stock volume out with its own constants (it passes
     # stock_volume_ml neither), so the sheet's must be the same or the certificate differs
     if form == "bac" and (row["params"]["bac_stock_ug_ml"] != BAC_STOCK_UG_ML
                           or row["params"]["benzyl_alcohol_density_mg_ml"] != BENZYL_ALCOHOL_DENSITY):
         reasons.append(
-            f"this method's bac water figures ({row['params']['bac_stock_ug_ml']:g} ug/mL stock, benzyl "
-            f"alcohol at {row['params']['benzyl_alcohol_density_mg_ml']:g} mg/mL) are not the ones Process "
-            f"HPLC uses ({BAC_STOCK_UG_ML:g} ug/mL, {BENZYL_ALCOHOL_DENSITY:g} mg/mL); have the method "
+            f"this method's bac water figures ({num(row['params']['bac_stock_ug_ml'])} ug/mL stock, benzyl "
+            f"alcohol at {num(row['params']['benzyl_alcohol_density_mg_ml'])} mg/mL) are not the ones Process "
+            f"HPLC uses ({num(BAC_STOCK_UG_ML)} ug/mL, {num(BENZYL_ALCOHOL_DENSITY)} mg/mL); have the method "
             "checked before a bac row is promoted")
     if form == "liquid" and not (inputs.get("declared_volume_ml") or 0) > 0:
         reasons.append(REASON_LIQUID_VOLUME)
@@ -195,33 +205,48 @@ def _vial_columns(v: dict, weighed: dict, stock_pair: tuple) -> dict:
 
 
 def density_check(db: Session, row: dict) -> tuple[list, list]:
-    """(reasons, notes) for the curve density. /hplc/analyze works the stock volume out with the
-    active curve's diluent_density (a NULL as no density at all), the sheet with the method's.
-    Every active curve for the row's peptides on its instrument must carry the sheet's figure.
-    A peptide with no active curve is not refused (Process HPLC refuses it itself); it is noted."""
-    if row["instrument_id"] is None or not row["components"]:
+    """(reasons, notes) for the curve density, from the row facts alone. /hplc/analyze works the
+    stock volume out with its curve's diluent_density (a NULL as no density at all), the sheet
+    with the method's. Per peptide of the row, on the row's instrument: when it has an active
+    curve, every active curve must carry the sheet's figure; when it has none, EVERY curve of
+    it there must (the flyout then falls back to another curve, even an inactive one, and
+    analyze takes any hand-picked curve on the instrument), so this never depends on which
+    curve the flyout would pick. No curve at all there: not refused (analyze has nothing to
+    work with), noted. A rider, or a row with no instrument or no peptides: nothing to compare."""
+    if row["rider_only"] or row["instrument_id"] is None or not row["components"]:
         return [], []
     sheet, inst = row["params"]["diluent_density_mg_ml"], row["instrument_name"]
     names = {c["peptide_id"]: c["abbreviation"] or c["name"] for c in row["components"]}
-    curves = db.execute(select(CalibrationCurve.peptide_id, CalibrationCurve.diluent_density).where(
-        CalibrationCurve.peptide_id.in_(list(names)), CalibrationCurve.instrument_id == row["instrument_id"],
-        CalibrationCurve.is_active.is_(True)).order_by(CalibrationCurve.id)).all()
-    reasons, seen = [], set()
-    for pid, density in curves:
-        seen.add(pid)
-        if density is None:
-            reasons.append(f"The active curve for {names[pid]} on {inst} has no diluent density, so Process "
-                           f"HPLC cannot work a quantity out with it. A lab admin has to set it (the sheet "
-                           f"used {sheet:g} mg/mL) before this row can be promoted.")
-        elif abs(density - sheet) > 1e-6:
-            reasons.append(f"The sheet worked this row out with a diluent density of {sheet:g} mg/mL (from "
-                           f"the method). The active curve for {names[pid]} on {inst} uses {density:g}, and "
-                           "the certificate is worked out with the curve's. A lab admin has to make them "
-                           "agree before this row can be promoted.")
-    notes = [f"the diluent density could not be checked for {name}: it has no active curve on {inst}"
-             for pid, name in names.items() if pid not in seen]
+    curves: dict = {}
+    for cid, pid, density, active in db.execute(
+            select(CalibrationCurve.id, CalibrationCurve.peptide_id, CalibrationCurve.diluent_density,
+                   CalibrationCurve.is_active)
+            .where(CalibrationCurve.peptide_id.in_(list(names)),
+                   CalibrationCurve.instrument_id == row["instrument_id"])
+            .order_by(CalibrationCurve.id)).all():
+        curves.setdefault(pid, []).append((cid, density, bool(active)))
+    reasons, notes = [], []
+    for pid, name in names.items():
+        mine = curves.get(pid, [])
+        if not mine:
+            notes.append(f"the diluent density could not be checked for {name}: it has no curve on {inst}")
+            continue
+        has_active = any(active for _cid, _d, active in mine)
+        for cid, density, active in mine:
+            if has_active and not active:
+                continue
+            where = f"Curve {cid} for {name} on {inst}" + (
+                "" if active else " (inactive, but with no active curve there it can still be picked)")
+            if density is None:
+                reasons.append(f"{where} has no diluent density, so Process HPLC cannot work a quantity "
+                               f"out with it. A lab admin has to set it (the sheet used {num(sheet)} mg/mL) "
+                               "before this row can be promoted.")
+            elif abs(density - sheet) > 1e-6:
+                reasons.append(f"The sheet worked this row out with a diluent density of {num(sheet)} mg/mL "
+                               f"(from the method). {where} uses {num(density)}, and the certificate is "
+                               "worked out with the curve's. A lab admin has to make them agree before "
+                               "this row can be promoted.")
     return reasons, notes
-
 
 def _prep_data(db: Session, current_user, worksheet, item, row: dict, computed: dict,
                extra_notes=()) -> dict:
@@ -363,14 +388,16 @@ def _already(db: Session, current_user, worksheet, item, prep: dict) -> dict:
 
 def _healed_stamp(stored: dict, user_id) -> dict:
     """The promote stamp a half commit lost, from the prep as it was written (not from today's
-    rules, which may have changed since the promote). The prep keeps no floor."""
+    rules, which may have changed since the promote). A healed stamp carries no floor and no
+    lead for a vial of several components, because the stored prep holds neither: the real
+    lead came from the rules, a typed lead_id or the weights, and is never guessed."""
     import json
 
     vial_data = stored.get("vial_data")
     if isinstance(vial_data, str):
         vial_data = json.loads(vial_data)
-    # ponytail: a blend vial's lead is taken as its first component; the prep does not store it
-    vials = ([{"vial": e["vial_number"], "lead": (e.get("component_ids") or [None])[0],
+    vials = ([{"vial": e["vial_number"],
+               "lead": e["component_ids"][0] if len(e.get("component_ids") or []) == 1 else None,
                "target": e.get("target_conc_ug_ml")} for e in vial_data] if vial_data else
              [{"vial": 1, "lead": stored["peptide_id"], "target": stored.get("target_conc_ug_ml")}])
     return {"event": "promote", "locked_at": _iso_now(), "locked_by": "promote", "user_id": user_id,
@@ -393,7 +420,7 @@ def promote_row(db: Session, current_user, worksheet, item) -> dict:
             return _already(db, current_user, worksheet, item, found[item.id])
         row, computed = _computed_row(db, worksheet, item, peptide_check=True)
         reasons = promote_reasons(row, computed, worksheets_hplc.blend_cap(db))
-        density_reasons, density_notes = density_check(db, row) if computed is not None else ([], [])
+        density_reasons, density_notes = density_check(db, row)
         if reasons or density_reasons:
             raise Refused(409, REFUSED_MESSAGE, reasons + density_reasons)
         data = _prep_data(db, current_user, worksheet, item, row, computed, density_notes)
@@ -416,7 +443,8 @@ def promote_row(db: Session, current_user, worksheet, item) -> dict:
     try:
         out = worksheets_hplc.sheet_rows(db, worksheet, [item])[0]
     except Exception:
-        # the prep and its stamp are committed: answer the prep; the page re-reads the row
+        # Broad on purpose: the prep and its stamp are committed, so any 500 here would tell the
+        # technician a write failed that in fact succeeded. Answer the prep; the page re-reads the row.
         db.rollback()
         log.exception("hplc_promote_row_read_failed item=%s prep=%s", item.id, made["id"])
         return {"prep": {"id": made["id"], "sample_id": made["sample_id"], "status": made["status"]},

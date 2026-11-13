@@ -63,6 +63,8 @@ def row(**over):
         "promoted": False, "prep": None, "problems": [],
     }
     out.update(over)
+    if not out["is_blend"]:  # sheet_rows: a solo component carries the row's weight
+        out["components"] = [{**c, "declared_mg": out["declared_mg"]} for c in out["components"]]
     return copy.deepcopy(out)
 
 
@@ -115,15 +117,21 @@ CASES = [
     ("capsule count over 1000", row(form="capsule", prep_form="capsule", hplc_prep={**CAPSULE, "capsules": 1001}), 4, 1),
     ("bac method figures", row(form="bac", sample_bac=True, declared_mg=None, hplc_prep=BAC,
                                params={**PARAMS, "bac_stock_ug_ml": 8000.0}), 4, 1),
+    ("bac method figure with seven significant figures", row(
+        form="bac", sample_bac=True, declared_mg=None, hplc_prep=BAC,
+        params={**PARAMS, "benzyl_alcohol_density_mg_ml": 1034.725}), 4, 1),
     ("liquid with no volume", row(form="liquid", prep_form="liquid", hplc_prep={"vials": {"1": dict(VIAL)}}), 4, 1),
     ("stock vial not weighed", row(hplc_prep={"stock_vial_mg": 5000.0, "vials": {"1": dict(VIAL)}}), 4, 1),
     ("stock weighings backwards", row(hplc_prep={**STOCK, "stock_vial_diluent_mg": 4000.0,
                                                  "vials": {"1": dict(VIAL)}}), 4, 1),
     ("Step 3 weighing missing", row(hplc_prep={**STOCK, "vials": {"1": {"vial_mg": 2500.0, "vial_all_mg": 3995.0}}}), 4, 1),
+    ("Step 3 two weighings missing", row(hplc_prep={**STOCK, "vials": {"1": {"vial_mg": 2500.0}}}), 4, 1),
     ("Step 3 diluent flagged", row(hplc_prep={**STOCK, "vials": {"1": {**VIAL, "vial_diluent_mg": 2400.0}}}), 4, 1),
     ("Step 3 stock flagged", row(hplc_prep={**STOCK, "vials": {"1": {**VIAL, "vial_all_mg": 3906.0}}}), 4, 1),
     ("Step 3a weighings missing", row(hplc_prep={**STOCK, "declared_mg": 600.0, "vials": {"1": {
         k: v for k, v in TWO_STEP_VIAL.items() if not k.startswith("int_")}}}), 4, 1),
+    ("Step 3a diluent flagged", row(hplc_prep={**STOCK, "declared_mg": 600.0, "vials": {"1": {
+        **TWO_STEP_VIAL, "int_vial_diluent_mg": 2300.0}}}), 4, 1),
     ("Step 3a stock flagged", row(hplc_prep={**STOCK, "declared_mg": 600.0, "vials": {"1": {
         **TWO_STEP_VIAL, "int_vial_all_mg": 3858.0}}}), 4, 1),
     ("a blend component with no weight", blend([_component(10, "BPC-157", None), _component(11, "TB-500", 5.0)]), 4, 1),
@@ -149,7 +157,14 @@ def build() -> dict:
             raise AssertionError(f"case {name!r}: expected {count} reason(s), got {reasons}")
         if count is None and len(reasons) < 3:
             raise AssertionError(f"case {name!r}: expected several reasons, got {reasons}")
+        if not r["is_blend"]:
+            assert all(c["declared_mg"] == r["declared_mg"] for c in r["components"]), name
         cases.append({"name": name, "row": r, "computed": computed, "blend_cap": cap, "reasons": reasons})
+    # every sentence the cases reach has a case where it stands alone
+    alone = {c["reasons"][0] for c in cases if len(c["reasons"]) == 1}
+    lonely = {s for c in cases for s in c["reasons"]} - alone
+    if lonely:
+        raise AssertionError(f"no isolated case for: {sorted(lonely)}")
     # through JSON, so the in-memory answer compares equal to the file
     return json.loads(json.dumps({"about": ABOUT, "cases": cases}, allow_nan=False))
 

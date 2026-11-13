@@ -345,7 +345,7 @@ def test_promote_writes_one_prep_with_the_typed_weighings(client, db):
         "actual_stock_vol_ul": v["actual"]["actual_stock_ul"],
         "actual_total_vol_ul": v["actual"]["actual_total_ul"],
         "is_blend": False, "components_json": None, "vial_data": None, "is_standard": False,
-        "notes": "the diluent density could not be checked for BPC-157: it has no active curve on HPLC 1290a",
+        "notes": "the diluent density could not be checked for BPC-157: it has no curve on HPLC 1290a",
     }
     assert {k: prep[k] for k in expected} == expected
     assert all(prep[k] is not None for k in ("stock_conc_ug_ml", "actual_conc_ug_ml", "actual_total_vol_ul"))
@@ -807,10 +807,17 @@ def _curve(db, peptide, instrument, density, *, active=True):
     return curve
 
 
-def _density_sentence(abbr, sheet, curve):
-    return (f"The sheet worked this row out with a diluent density of {sheet:g} mg/mL (from the method). The active curve "
-            f"for {abbr} on HPLC 1290a uses {curve:g}, and the certificate is worked out with the curve's. "
-            "A lab admin has to make them agree before this row can be promoted.")
+def _density_sentence(abbr, sheet, curve, *, inactive=False):
+    """sheet and curve are the exact texts: shortest round trip, an integer without its .0"""
+    q = " (inactive, but with no active curve there it can still be picked)" if inactive else ""
+    return (f"The sheet worked this row out with a diluent density of {sheet} mg/mL (from the method). "
+            f"Curve {curve.id} for {abbr} on HPLC 1290a{q} uses {_shown(curve.diluent_density)}, and the "
+            "certificate is worked out with the curve's. A lab admin has to make them agree before this "
+            "row can be promoted.")
+
+
+def _shown(x):
+    return str(int(x)) if float(x).is_integer() else repr(float(x))
 
 
 def test_a_curve_with_the_sheets_density_promotes(client, db):
@@ -821,32 +828,59 @@ def test_a_curve_with_the_sheets_density_promotes(client, db):
 
 
 def test_a_curve_with_another_density_is_refused_and_nothing_is_inserted(client, db):
-    ws, item, bpc, inst = _solo(db, instrument=True)
-    _curve(db, bpc, inst, 1000.0)
-    item.instrument_id = inst.id
-    db.commit()
+    ws, item, bpc, inst = _solo(db)
+    curve = _curve(db, bpc, inst, 1000.0)
     r = client.post(_url(ws, item))
     assert r.status_code == 409
-    assert r.json()["detail"]["reasons"] == [_density_sentence("BPC-157", 997.1, 1000)]
+    assert r.json()["detail"]["reasons"] == [_density_sentence("BPC-157", "997.1", curve)]
+    assert "uses 1000," in r.json()["detail"]["reasons"][0]
     assert mk1_db.list_sample_preps_for_worksheet_items([item.id]) == []
+
+
+def test_two_densities_that_differ_past_six_figures_never_print_alike(client, db):
+    ws, item, bpc, inst = _solo(db)
+    curve = _curve(db, bpc, inst, 997.1004)
+    reason = client.post(_url(ws, item)).json()["detail"]["reasons"][0]
+    assert reason == _density_sentence("BPC-157", "997.1", curve)
+    assert "of 997.1 mg/mL" in reason and "uses 997.1004," in reason
 
 
 def test_the_density_reason_comes_with_the_others_at_once(client, db):
     ws, item, bpc, inst = _solo(db)
-    _curve(db, bpc, inst, 1000.0)
+    curve = _curve(db, bpc, inst, 1000.0)
     item.hplc_prep = {"vials": {"1": dict(_VIAL)}}
     db.commit()
     assert client.post(_url(ws, item)).json()["detail"]["reasons"] == [
-        "weigh the stock vial: Step 2 needs both of its weighings", _density_sentence("BPC-157", 997.1, 1000)]
+        "weigh the stock vial: Step 2 needs both of its weighings", _density_sentence("BPC-157", "997.1", curve)]
+
+
+def test_the_density_reason_comes_even_when_the_row_cannot_be_computed(client, db):
+    ws, item, bpc, inst = _solo(db)
+    curve = _curve(db, bpc, inst, 1000.0)
+    item.prep_form = None
+    db.get(LimsSample, db.get(LimsSubSample, db.query(LimsSubSample.id).filter(
+        LimsSubSample.sample_id == item.sample_id).scalar()).parent_sample_pk).sample_form_id = _form(
+        db, "Pen", None).id
+    db.commit()
+    assert client.post(_url(ws, item)).json()["detail"]["reasons"] == [
+        promote_mod.REASON_NO_FORM, _density_sentence("BPC-157", "997.1", curve)]
 
 
 def test_a_blend_whose_one_component_curve_differs_is_refused_and_names_it(client, db):
     ws, item, (bpc, tb, _blend_pep), inst = _blend(db)
     _curve(db, bpc, inst, 997.1)
-    _curve(db, tb, inst, 1000.0)
+    curve = _curve(db, tb, inst, 1000.0)
     r = client.post(_url(ws, item))
     assert r.status_code == 409
-    assert r.json()["detail"]["reasons"] == [_density_sentence("TB-500", 997.1, 1000)]
+    assert r.json()["detail"]["reasons"] == [_density_sentence("TB-500", "997.1", curve)]
+
+
+def test_two_active_curves_are_each_named_by_id(client, db):
+    ws, item, bpc, inst = _solo(db)
+    _curve(db, bpc, inst, 997.1)
+    curve = _curve(db, bpc, inst, 1000.0)
+    assert client.post(_url(ws, item)).json()["detail"]["reasons"] == [
+        _density_sentence("BPC-157", "997.1", curve)]
 
 
 def test_no_curve_promotes_and_says_the_density_was_not_checked(client, db):
@@ -854,29 +888,46 @@ def test_no_curve_promotes_and_says_the_density_was_not_checked(client, db):
     _curve(db, bpc, inst, 997.1)
     assert client.post(_url(ws, item)).status_code == 200
     assert _stored(item)["notes"] == (
-        "the diluent density could not be checked for TB-500: it has no active curve on HPLC 1290a")
+        "the diluent density could not be checked for TB-500: it has no curve on HPLC 1290a")
 
 
 def test_a_curve_with_no_density_is_read_as_the_engine_reads_it(client, db):
     # POST /hplc/analyze passes the curve's NULL straight to the engine, which then has no
     # density and refuses (no_density): never a silent quantity, but never one either
     ws, item, bpc, inst = _solo(db)
-    _curve(db, bpc, inst, None)
-    assert db.get(CalibrationCurve, db.query(CalibrationCurve.id).scalar()).diluent_density is None
+    curve = _curve(db, bpc, inst, None)
+    assert db.get(CalibrationCurve, curve.id).diluent_density is None
     r = client.post(_url(ws, item))
     assert r.status_code == 409
     assert r.json()["detail"]["reasons"] == [
-        "The active curve for BPC-157 on HPLC 1290a has no diluent density, so Process HPLC cannot work "
+        f"Curve {curve.id} for BPC-157 on HPLC 1290a has no diluent density, so Process HPLC cannot work "
         "a quantity out with it. A lab admin has to set it (the sheet used 997.1 mg/mL) before this row "
         "can be promoted."]
 
 
-def test_an_inactive_curve_with_another_density_is_not_a_reason(client, db):
+def test_an_inactive_curve_with_another_density_is_not_a_reason_beside_an_active_one(client, db):
     ws, item, bpc, inst = _solo(db)
     _curve(db, bpc, inst, 997.1)
     _curve(db, bpc, inst, 1000.0, active=False)
     assert client.post(_url(ws, item)).status_code == 200
+    assert _stored(item)["notes"] is None
 
+
+def test_with_no_active_curve_an_inactive_one_that_differs_is_refused_by_id(client, db):
+    # the flyout falls back to another curve of the peptide, and analyze takes a hand-picked one
+    ws, item, bpc, inst = _solo(db)
+    _curve(db, bpc, inst, 997.1, active=False)
+    curve = _curve(db, bpc, inst, 1000.0, active=False)
+    r = client.post(_url(ws, item))
+    assert r.status_code == 409
+    assert r.json()["detail"]["reasons"] == [_density_sentence("BPC-157", "997.1", curve, inactive=True)]
+
+
+def test_with_no_active_curve_an_inactive_one_that_agrees_promotes_with_no_note(client, db):
+    ws, item, bpc, inst = _solo(db)
+    _curve(db, bpc, inst, 997.1, active=False)
+    assert client.post(_url(ws, item)).status_code == 200
+    assert _stored(item)["notes"] is None
 
 def test_a_curve_on_another_instrument_is_not_this_rows(client, db):
     ws, item, bpc, _inst = _solo(db)
@@ -910,6 +961,23 @@ def test_a_heal_days_later_stamps_the_rule_the_prep_was_made_under(client, db):
     assert rule["healed"] is True and rule["event"] == "promote" and rule["user_id"] == 1
     assert (rule["diluent"], rule["vials"]) == ("Water", [{"vial": 1, "lead": bpc.id, "target": 200.0}])
 
+
+@pytest.mark.parametrize("vials", [(1, 2), (1, 1)])
+def test_a_healed_blend_stamp_names_a_lead_only_for_a_one_component_vial(client, db, vials):
+    v1 = {"vial_mg": 2500.0, "vial_diluent_mg": 3800.0, "vial_all_mg": 3996.0}
+    inputs = {**_STOCK, "vials": {"1": v1, "2": {"vial_mg": 2600.0, "vial_diluent_mg": 3900.0,
+                                                 "vial_all_mg": 4100.0}} if vials == (1, 2) else {"1": v1}}
+    ws, item, (bpc, tb, _b), _inst = _blend(db, vials=vials, inputs=inputs)
+    assert client.post(_url(ws, item)).status_code == 200
+    db.expire_all()
+    db.get(WorksheetItem, item.id).prep_rule = None
+    db.commit()
+    assert client.post(_url(ws, item)).json()["already"] is True
+    db.expire_all()
+    rule = db.get(WorksheetItem, item.id).prep_rule
+    leads = [v["lead"] for v in rule["vials"]]
+    assert leads == ([bpc.id, tb.id] if vials == (1, 2) else [None])
+    assert rule["floor_ug_ml"] is None and rule["healed"] is True
 
 def test_a_failed_read_after_the_commit_answers_the_prep_without_the_row(client, db, monkeypatch):
     ws, item, _bpc, _inst = _solo(db)
@@ -945,7 +1013,7 @@ def test_promote_holds_its_locks_on_postgres_until_the_prep_is_written(monkeypat
         conn.execute(text(f"CREATE SCHEMA {schema}"))
     engine = create_engine(DATABASE_URL, connect_args={"options": f"-csearch_path={schema}"})
     one, two = sessionmaker(bind=engine)(), sessionmaker(bind=engine)()
-    prep_ids = []
+    prep_ids, worker = [], None
     try:
         Base.metadata.create_all(engine)
         ws, item, _bpc, _inst = _solo(one)
@@ -993,6 +1061,8 @@ def test_promote_holds_its_locks_on_postgres_until_the_prep_is_written(monkeypat
         two.rollback()
     finally:
         release.set()
+        if worker is not None:
+            worker.join(15)  # its prep exists before the cleanup below looks
         one.close()
         two.close()
         for prep in mk1_db.list_sample_preps_for_worksheet_items([item_id]) if "item_id" in dir() else []:
