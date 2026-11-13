@@ -12,6 +12,7 @@ import type {
   PrepRuleLock,
 } from '@/lib/endo-prep-rules'
 import type { HplcPrepRule } from '@/lib/hplc-prep-rules'
+import type { HplcRunParamsWire } from '@/lib/hplc-run-params'
 
 // Helper to get current API base URL (called dynamically)
 export const API_BASE_URL = () => getApiBaseUrl()
@@ -2412,6 +2413,8 @@ export interface EndoRunParamsWire {
 
 export interface MethodRunParameters {
   endotoxin?: Partial<EndoRunParamsWire>
+  /** The HPLC prep worksheet's method constants (plan 2026-11-12). */
+  hplc?: HplcRunParamsWire
 }
 
 /** One consumable type a method allows; names come from listConsumables. */

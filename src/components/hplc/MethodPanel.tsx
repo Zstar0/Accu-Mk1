@@ -837,6 +837,13 @@ export function MethodPanel({ method, onUpdated, onSelectMethod }: MethodPanelPr
           <MethodRunParamsSection method={method} onUpdated={onUpdated} />
         </>
       )}
+      {!isEndoMethod && (
+        <MethodRunParamsSection
+          method={method}
+          onUpdated={onUpdated}
+          block="hplc"
+        />
+      )}
 
       {/* Revision history section */}
       <div className="border-t pt-4">
