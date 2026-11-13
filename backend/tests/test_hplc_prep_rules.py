@@ -70,10 +70,9 @@ def test_fixture_lines_are_whole_snapshots():
 
 def test_pick_lead_reads_a_component_with_no_declared_mg_key_as_no_weight():
     # A component built from a partial object: never the heaviest, never a KeyError.
-    rules = DATA["rule_sets"]["main"]
-    assert hpr.pick_lead(rules, [{"peptide_id": 5}, {"peptide_id": 6, "declared_mg": 4}],
+    assert hpr.pick_lead([], [{"peptide_id": 5}, {"peptide_id": 6, "declared_mg": 4}],
                          row_rule=None) == {"peptide_id": 6, "why": "heaviest"}
-    assert hpr.pick_lead(rules, [{"peptide_id": 5}, {"peptide_id": 6}],
+    assert hpr.pick_lead([], [{"peptide_id": 5}, {"peptide_id": 6}],
                          row_rule=None) == {"peptide_id": 5, "why": "first"}
 
 

@@ -121,15 +121,14 @@ describe('the shared HPLC prep rule fixture', () => {
 
   it('pickLead reads a component with no declared_mg as no weight', () => {
     // Built from a partial API object: never the heaviest.
-    const rules = fixture.rule_sets.main ?? []
     const partial = { peptide_id: 5 } as HplcPrepComponent
     expect(
-      pickLead(rules, [partial, { peptide_id: 6, declared_mg: 4 }], {
+      pickLead([], [partial, { peptide_id: 6, declared_mg: 4 }], {
         rowRule: null,
       })
     ).toEqual({ peptide_id: 6, why: 'heaviest' })
     expect(
-      pickLead(rules, [partial, { peptide_id: 6 } as HplcPrepComponent], {
+      pickLead([], [partial, { peptide_id: 6 } as HplcPrepComponent], {
         rowRule: null,
       })
     ).toEqual({ peptide_id: 5, why: 'first' })
