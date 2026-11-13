@@ -437,8 +437,98 @@ def test_a_typed_density_files_with_a_warning(client, seeded, session):
     out = _filed(client, _sheet(client, seeded, inputs, instrument=seeded.inst2)["id"])
     assert out["curve"]["diluent_density"] == 1000.0 and out["curve"]["is_active"] is True
     assert out["warnings"] == [(
-        "This curve is filed with a diluent density of 1000 mg/mL. The prep worksheet works with "
-        f"{DEFAULT_DENSITY:.15g} unless its method says otherwise, and it refuses to promote a prep while the two differ.")]
+        "This curve is filed with a diluent density of 1000 mg/mL. The prep worksheet works with its method's "
+        f"density ({DEFAULT_DENSITY:.15g} unless the method sets another) and refuses to promote a prep while the "
+        "curve's differs.")]
+
+
+@pytest.mark.parametrize("stored", ["0.9971", True, [997.1], {"v": 997.1}])
+def test_a_stored_density_that_is_not_a_number_is_refused_at_filing(client, seeded, session, stored):
+    sheet = _sheet(client, seeded, _case(1))
+    row = session.get(HplcCalibrationSheet, sheet["id"])
+    row.inputs = {**copy.deepcopy(row.inputs), "diluent_density_mg_ml": stored}
+    session.commit()
+    assert _refused(client, session, sheet["id"], 400, None) == DENSITY_RANGE
+
+
+def test_a_replicate_refused_for_its_originals_density_names_the_original(client, seeded, session):
+    original = _filed(client, _sheet(client, seeded, _case(1))["id"])
+    sid = original["sheet"]["id"]
+    rep = _replicate(client, sid)
+    row = session.get(HplcCalibrationSheet, sid)
+    row.inputs = {**copy.deepcopy(row.inputs), "diluent_density_mg_ml": 0.9971}
+    session.commit()
+    assert _refused(client, session, rep["id"], 400, None, sheets=(sid,)) == (
+        f"The original sheet, {original['curve']['source_filename']}, has a diluent density outside 500 to 2000. "
+        "Correct it there.")
+
+
+def _poor_fit_warning(r2):
+    return (f"R squared is {r2:.4f}, below 0.99, so this curve was filed but not made active. Check the peak "
+            "areas against their levels. If the curve is right, star it on the Peptides page.")
+
+
+def _probe_order():
+    """Case 1 with its areas in the order that keeps the slope positive with the smallest r squared."""
+    inputs = _case(1)
+    areas = [L["peak_area"] for L in inputs["levels"]]
+    for L, j in zip(inputs["levels"], (1, 3, 5, 2, 4, 0)):
+        L["peak_area"] = areas[j]
+    return inputs
+
+
+def test_a_hopeless_fit_files_inactive_and_leaves_the_active_curve_alone(client, seeded, session):
+    others = _others(session, seeded)
+    active = _curve(session, seeded.peptide, seeded.inst, True)
+    inactive = _curve(session, seeded.peptide, seeded.inst, False)
+    before = {cid: _row(session, cid) for cid in (active, inactive)}
+    inputs = _probe_order()
+    fit = _REAL_WORK_OUT(inputs)["fit"]
+    assert fit["slope"] > 0 and fit["r2"] < 1e-4
+    out = _filed(client, _sheet(client, seeded, inputs)["id"])
+    assert out["activation"] == {"active": False, "reason": "poor_fit", "deactivated_ids": [],
+                                 "other_active_ids": [active]}
+    assert out["curve"]["is_active"] is False
+    assert out["warnings"] == [_poor_fit_warning(fit["r2"])]
+    assert {cid: _row(session, cid) for cid in before} == before
+    assert _others(session, seeded) == others
+
+
+def test_a_poor_fit_on_an_empty_slot_still_files_inactive(client, seeded, session):
+    out = _filed(client, _sheet(client, seeded, _probe_order())["id"])
+    assert out["activation"] == {"active": False, "reason": "poor_fit", "deactivated_ids": [],
+                                 "other_active_ids": []}
+
+
+@pytest.mark.parametrize("area,active", [(5147.0, True), (5170.0, False)], ids=["just above", "just below"])
+def test_the_r_squared_floor_is_0_99(client, seeded, session, area, active):
+    inputs = _case(1)
+    inputs["levels"][1]["peak_area"] = area
+    r2 = _REAL_WORK_OUT(inputs)["fit"]["r2"]
+    assert (r2 >= 0.99) is active and abs(r2 - 0.99) < 0.001
+    old = _curve(session, seeded.peptide, seeded.inst, True)
+    old_row = _row(session, old)
+    out = _filed(client, _sheet(client, seeded, inputs)["id"])
+    assert out["curve"]["is_active"] is active
+    assert out["activation"]["reason"] == ("replaced" if active else "poor_fit")
+    assert out["warnings"] == ([] if active else [_poor_fit_warning(r2)])
+    assert _row(session, old) == (old_row if not active else {**old_row, "is_active": False})
+
+
+def test_a_refile_below_the_floor_keeps_is_active_and_warns(client, seeded, session):
+    inputs = _case(1)
+    sheet = _sheet(client, seeded, inputs)
+    first = _filed(client, sheet["id"])
+    assert first["curve"]["is_active"] is True and first["warnings"] == []
+    inputs = _probe_order()
+    assert client.patch(f"/hplc-calibration-sheets/{sheet['id']}",
+                        json={"version": 1, "inputs": inputs}).status_code == 200
+    out = _filed(client, sheet["id"], version=2)
+    r2 = _REAL_WORK_OUT(inputs)["fit"]["r2"]
+    assert out["curve"]["id"] == first["curve"]["id"] and out["curve"]["is_active"] is True
+    assert out["activation"]["reason"] == "refiled"
+    assert out["warnings"] == [(f"R squared is {r2:.4f}, below 0.99, so check it: this curve is active and was "
+                                "updated in place.")]
 
 
 def test_text_too_long_for_the_curve_is_refused(client, seeded, session):

@@ -7583,6 +7583,9 @@ class CalFileIn(BaseModel):
 _CAL_NEEDS_AREAS = ("Type the peak areas of at least two levels first. The sheet is saved; "
                     "file it once they are in.")
 _CAL_CANNOT_FILE = "These numbers cannot be worked out. Correct the sheet, save it and file it again."
+# The lab's number to set: a first filing whose fit is below it files INACTIVE and switches
+# no other curve off (Task 5 fix round 2). A two-point fit has r squared exactly 1.
+CAL_MIN_R2_TO_ACTIVATE = 0.99
 _CAL_SLOPE_NOT_POSITIVE = ("The fit's slope is not positive, so this is not a usable curve. Check that each peak "
                            "area is typed against its own level.")
 _CAL_NET_PARTS = ("assay", "counterion", "water")
@@ -7599,17 +7602,24 @@ def _cal_finite(x) -> bool:
     return not isinstance(x, float) or math.isfinite(x)
 
 
-def _cal_curve_fields(db: Session, sheet, effective: dict, worked: dict, name: str, now: datetime) -> dict:
+def _cal_curve_fields(db: Session, sheet, effective: dict, worked: dict, name: str, now: datetime,
+                      original_name: Optional[str] = None) -> dict:
     """Every column "File curve" writes, except is_active, replicate_of_id and the user columns.
     A 400 (nothing written) when the fit is missing or anything about to be written is not a
-    finite number: the module's guarantee is checked here, not trusted."""
+    finite number: the module's guarantee is checked here, not trusted. original_name: the
+    replicate's original, named when its density (the original's box) is the cause."""
     from copy import deepcopy
 
     from hplc_calibration import standard_data_for
+    # A sheet saved before the band existed, or a direct write (text, a list): never filed at the default.
     typed_density = effective.get("diluent_density_mg_ml")
-    if isinstance(typed_density, (int, float)) and not isinstance(typed_density, bool) and \
-            not _CAL_DENSITY_RANGE[0] <= typed_density <= _CAL_DENSITY_RANGE[1]:
-        raise HTTPException(400, _cal_density_refusal())  # a sheet saved before the band existed
+    if typed_density is not None and not (
+            isinstance(typed_density, (int, float)) and not isinstance(typed_density, bool)
+            and math.isfinite(typed_density) and _CAL_DENSITY_RANGE[0] <= typed_density <= _CAL_DENSITY_RANGE[1]):
+        lo, hi = _CAL_DENSITY_RANGE
+        raise HTTPException(400, _cal_density_refusal() if original_name is None else
+                            f"The original sheet, {original_name}, has a diluent density outside {lo} to {hi}. "
+                            "Correct it there.")
     fit = worked.get("fit") or {}
     if fit.get("slope") is None or fit.get("intercept") is None or fit.get("r2") is None:
         # With no net factor there is no stock and no fit, though the areas are typed.
@@ -7728,13 +7738,8 @@ def file_calibration_curve(sheet_id: int, data: CalFileIn, db: Session = Depends
             raise HTTPException(400, " ".join(w["text"] for w in worked["warnings"] if w["code"] in worked["blocking"]))
         now = datetime.utcnow()
         name = curve_name(db, sheet)  # after the locks: two duplicates of one original never share -Inj2
-        fields = _cal_curve_fields(db, sheet, effective, worked, name, now)
-        warnings = []
-        default_density = HPLC_RUN_PARAM_DEFAULTS["diluent_density_mg_ml"]
-        if abs(fields["diluent_density"] - default_density) > 1e-6:
-            warnings.append(f"This curve is filed with a diluent density of {fields['diluent_density']:.15g} mg/mL. "
-                            f"The prep worksheet works with {default_density:.15g} unless its method says otherwise, "
-                            "and it refuses to promote a prep while the two differ.")
+        fields = _cal_curve_fields(db, sheet, effective, worked, name, now,
+                                   original_name=curve_name(db, original) if original is not None else None)
 
         # An original re-files each injection that has a curve, with the corrected preparation.
         jobs = []  # (replicate sheet, its curve fields)
@@ -7795,7 +7800,12 @@ def file_calibration_curve(sheet_id: int, data: CalFileIn, db: Session = Depends
                                                CalibrationCurve.is_active == True)  # noqa: E712
                 .order_by(CalibrationCurve.id).with_for_update(of=CalibrationCurve)
                 .execution_options(populate_existing=True)).scalars().all()
-            if not active_now:
+            if fields["r_squared"] < CAL_MIN_R2_TO_ACTIVATE:
+                # Areas partly out of order still fit a positive slope: file it, switch nothing.
+                activation = {"active": False, "reason": "poor_fit", "deactivated_ids": [],
+                              "other_active_ids": [c.id for c in active_now]}
+                active_now = []
+            elif not active_now:
                 activation = {"active": True, "reason": "first_active", **none}
             elif len(active_now) == 1:
                 activation = {"active": True, "reason": "replaced", "deactivated_ids": [active_now[0].id],
@@ -7803,6 +7813,22 @@ def file_calibration_curve(sheet_id: int, data: CalFileIn, db: Session = Depends
             else:  # two or more: never pre-empt the Handler's ruling (Review Focus 3)
                 activation = {"active": False, "reason": "several_active", "deactivated_ids": [],
                               "other_active_ids": [c.id for c in active_now]}
+
+        warnings = []
+        r2 = fields["r_squared"]
+        if r2 < CAL_MIN_R2_TO_ACTIVATE:
+            floor = f"{CAL_MIN_R2_TO_ACTIVATE:g}"
+            warnings.append(
+                f"R squared is {r2:.4f}, below {floor}, so check it: this curve is "
+                f"{'active' if activation['active'] else 'not active'} and was updated in place."
+                if activation["reason"] == "refiled" else
+                f"R squared is {r2:.4f}, below {floor}, so this curve was filed but not made active. Check the "
+                "peak areas against their levels. If the curve is right, star it on the Peptides page.")
+        default_density = HPLC_RUN_PARAM_DEFAULTS["diluent_density_mg_ml"]
+        if abs(fields["diluent_density"] - default_density) > 1e-6:
+            warnings.append(f"This curve is filed with a diluent density of {fields['diluent_density']:.15g} mg/mL. "
+                            f"The prep worksheet works with its method's density ({default_density:.15g} unless the "
+                            "method sets another) and refuses to promote a prep while the curve's differs.")
 
         # Every query is done; from here on only changes, then one flush and one commit.
         user_id, email = getattr(current_user, "id", None), getattr(current_user, "email", None)
