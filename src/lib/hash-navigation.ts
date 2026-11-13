@@ -237,6 +237,8 @@ export function buildHash(state: {
  * Call once inside MainWindow (or any component that lives for the entire
  * authenticated session).
  */
+// Sanctioned lib/ hook: see the note in .ast-grep/rules/architecture/hooks-in-hooks-dir.yml
+// ast-grep-ignore: hooks-in-hooks-dir
 export function useHashNavigation() {
   useEffect(() => {
     // 1. Restore navigation state from hash on page load/refresh
