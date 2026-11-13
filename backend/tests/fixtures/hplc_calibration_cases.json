@@ -12708,6 +12708,556 @@
     ],
     "blocking": []
    }
+  },
+  {
+   "name": "Other with a vanishing mass",
+   "inputs": {
+    "standard_id": "P-0129",
+    "cas": "2381089-83-2",
+    "supplier": "Cayman Chemical",
+    "lot": "39747",
+    "coa_weight_mg": 5,
+    "diluent_density_mg_ml": null,
+    "level_volume_ul": null,
+    "analyst": "DN",
+    "date": "2026-02-05",
+    "notes": "",
+    "net": {
+     "counterion": "Other",
+     "counterion_mw": 1e-300,
+     "equivalents": 2,
+     "free_mw": 4731.3,
+     "stated_fw": 1000000000000,
+     "ms_mz": null,
+     "ms_ion": null,
+     "assay_pct": null,
+     "water_pct": 0,
+     "assumption": "lean 2, undeclared on the CoA",
+     "override_factor": null,
+     "override_reason": null
+    },
+    "stock": {
+     "vial_mg": 15727.09,
+     "vial_standard_mg": 15729.14,
+     "vial_diluent_mg": 16727.24
+    },
+    "stock_as_top": false,
+    "top_aliquot_ul": null,
+    "levels": [
+     {
+      "target": 1000,
+      "vial_mg": 2794.62,
+      "vial_diluent_mg": 3546.08,
+      "vial_diluent_std_mg": 4268.25,
+      "peak_area": 8588.495,
+      "purity": 99.832,
+      "rt": 6.349
+     },
+     {
+      "target": 500,
+      "vial_mg": 2790.84,
+      "vial_diluent_mg": 3532.48,
+      "vial_diluent_std_mg": 4273.52,
+      "peak_area": 4325.233,
+      "purity": 99.782,
+      "rt": 6.387
+     },
+     {
+      "target": 250,
+      "vial_mg": 2766.75,
+      "vial_diluent_mg": 3508.98,
+      "vial_diluent_std_mg": 4252.6,
+      "peak_area": 2175.431,
+      "purity": 99.815,
+      "rt": 6.398
+     },
+     {
+      "target": 100,
+      "vial_mg": 2794.6,
+      "vial_diluent_mg": 3686.36,
+      "vial_diluent_std_mg": 4279.47,
+      "peak_area": 869.562,
+      "purity": 99.821,
+      "rt": 6.403
+     },
+     {
+      "target": 10,
+      "vial_mg": 2802.83,
+      "vial_diluent_mg": 4149.12,
+      "vial_diluent_std_mg": 4297.18,
+      "peak_area": 83.014,
+      "purity": null,
+      "rt": 6.398
+     },
+     {
+      "target": 1,
+      "vial_mg": 2800.34,
+      "vial_diluent_mg": 4142.88,
+      "vial_diluent_std_mg": 4294.77,
+      "peak_area": 7.363,
+      "purity": null,
+      "rt": 6.414
+     }
+    ]
+   },
+   "expect": {
+    "density": 997.1,
+    "level_volume_ul": 1500,
+    "stock_weight_mg": 2.0499999999992724,
+    "stock_diluent_to_add_ul": 1000,
+    "stock_actual_diluent_ul": 1001.002908434462,
+    "stock_conc_as_weighed_ug_ml": 2047.9460975846812,
+    "net": {
+     "counterion": "Other",
+     "counterion_mw": 1e-300,
+     "equivalents": 2,
+     "free_mw": 4731.3,
+     "stated_fw": 1000000000000,
+     "assay_pct": null,
+     "water_pct": 0,
+     "fw_basis": "mismatch",
+     "f_counterion": 1,
+     "factor": 1,
+     "counterion_applied": false,
+     "assumed_fw": false,
+     "ms_m": null,
+     "parts_used": [
+      "water"
+     ]
+    },
+    "factor_applied": 1,
+    "factor_source": "computed",
+    "stock_net_weight_mg": 2.0499999999992724,
+    "stock_conc_ug_ml": 2047.9460975846812,
+    "stock_as_top": false,
+    "top_aliquot_ul": 150,
+    "stock_near_top": false,
+    "stock_remaining_ul": 276.73252432053164,
+    "levels": [
+     {
+      "target": 1000,
+      "problem": null,
+      "from_stock": false,
+      "made_from_ug_ml": 2047.9460975846812,
+      "planned_std_ul": 732.4411525132809,
+      "planned_diluent_ul": 767.5588474867191,
+      "actual_diluent_ul": 753.6455721592619,
+      "std_to_add_ul": 719.164443568494,
+      "actual_std_ul": 724.2703841139304,
+      "total_ul": 1477.9159562731923,
+      "actual_conc_ug_ml": 1003.6204700587863,
+      "peak_area": 8588.495,
+      "purity": 99.832,
+      "rt": 6.349,
+      "remaining_ul": 734.7206900010025,
+      "back_calc_ug_ml": 1001.9533161798582,
+      "back_calc_dev_pct": -0.16611397721196294
+     },
+     {
+      "target": 500,
+      "problem": null,
+      "from_stock": false,
+      "made_from_ug_ml": 1003.6204700587863,
+      "planned_std_ul": 747.2944428445838,
+      "planned_diluent_ul": 752.7055571554162,
+      "actual_diluent_ul": 743.7970113328652,
+      "std_to_add_ul": 738.4499395408251,
+      "actual_std_ul": 743.1952662721898,
+      "total_ul": 1486.9922776050548,
+      "actual_conc_ug_ml": 501.6071661669162,
+      "peak_area": 4325.233,
+      "purity": 99.782,
+      "rt": 6.387,
+      "remaining_ul": 741.2095075719585,
+      "back_calc_ug_ml": 504.00997103072115,
+      "back_calc_dev_pct": 0.47902123930290247
+     },
+     {
+      "target": 250,
+      "problem": null,
+      "from_stock": false,
+      "made_from_ug_ml": 501.6071661669162,
+      "planned_std_ul": 747.5969748709969,
+      "planned_diluent_ul": 752.4030251290031,
+      "actual_diluent_ul": 744.3887273091967,
+      "std_to_add_ul": 739.6338691873437,
+      "actual_std_ul": 745.7827700330963,
+      "total_ul": 1490.1714973422932,
+      "actual_conc_ug_ml": 251.03820769596007,
+      "peak_area": 2175.431,
+      "purity": 99.815,
+      "rt": 6.398,
+      "remaining_ul": 895.3364757797617,
+      "back_calc_ug_ml": 252.9159497652429,
+      "back_calc_dev_pct": 0.747990549533016
+     },
+     {
+      "target": 100,
+      "problem": null,
+      "from_stock": false,
+      "made_from_ug_ml": 251.03820769596007,
+      "planned_std_ul": 597.5186063376835,
+      "planned_diluent_ul": 902.4813936623165,
+      "actual_diluent_ul": 894.3536255139908,
+      "std_to_add_ul": 592.1373400526077,
+      "actual_std_ul": 594.8350215625314,
+      "total_ul": 1489.188647076522,
+      "actual_conc_ug_ml": 100.27360736397858,
+      "peak_area": 869.562,
+      "purity": 99.821,
+      "rt": 6.403,
+      "remaining_ul": 1340.698024270384,
+      "back_calc_ug_ml": 100.39218317839968,
+      "back_calc_dev_pct": 0.11825226750911562
+     },
+     {
+      "target": 10,
+      "problem": null,
+      "from_stock": false,
+      "made_from_ug_ml": 100.27360736397858,
+      "planned_std_ul": 149.59070880488207,
+      "planned_diluent_ul": 1350.409291195118,
+      "actual_diluent_ul": 1350.2055962290642,
+      "std_to_add_ul": 149.56814462782063,
+      "actual_std_ul": 148.4906228061382,
+      "total_ul": 1498.6962190352024,
+      "actual_conc_ug_ml": 9.935095731462312,
+      "peak_area": 83.014,
+      "purity": null,
+      "rt": 6.398,
+      "remaining_ul": 1346.3644569250828,
+      "back_calc_ug_ml": 8.52442036195457,
+      "back_calc_dev_pct": -14.198910686289972
+     },
+     {
+      "target": 1,
+      "problem": null,
+      "from_stock": false,
+      "made_from_ug_ml": 9.935095731462312,
+      "planned_std_ul": 150.97992415410982,
+      "planned_diluent_ul": 1349.0200758458902,
+      "actual_diluent_ul": 1346.4446895998394,
+      "std_to_add_ul": 150.69169151246254,
+      "actual_std_ul": 152.33176211011968,
+      "total_ul": 1498.776451709959,
+      "actual_conc_ug_ml": 1.0097774339726944,
+      "peak_area": 7.363,
+      "purity": null,
+      "rt": 6.414,
+      "remaining_ul": 1498.776451709959,
+      "back_calc_ug_ml": -0.3115160650999621,
+      "back_calc_dev_pct": -130.84997293654968
+     }
+    ],
+    "fit": {
+     "slope": 8.56174109270027,
+     "intercept": 10.030119895602638,
+     "r2": 0.9999789177265189,
+     "n": 6
+    },
+    "rt_avg": 6.3915,
+    "rt_rsd_pct": 0.35329680725207707,
+    "range": {
+     "low": 1.0097774339726944,
+     "high": 1003.6204700587863
+    },
+    "warnings": [
+     {
+      "code": "stock_under_min",
+      "level": null
+     },
+     {
+      "code": "net_fw_mismatch",
+      "level": null
+     },
+     {
+      "code": "net_counterion_partial",
+      "level": null
+     },
+     {
+      "code": "net_partial",
+      "level": null
+     }
+    ],
+    "blocking": []
+   }
+  },
+  {
+   "name": "two net warnings, in order",
+   "inputs": {
+    "standard_id": "P-0129",
+    "cas": "2381089-83-2",
+    "supplier": "Cayman Chemical",
+    "lot": "39747",
+    "coa_weight_mg": 5,
+    "diluent_density_mg_ml": null,
+    "level_volume_ul": null,
+    "analyst": "DN",
+    "date": "2026-02-05",
+    "notes": "",
+    "net": {
+     "counterion": "Other",
+     "counterion_mw": null,
+     "equivalents": null,
+     "free_mw": 4731.3,
+     "stated_fw": 4800,
+     "ms_mz": null,
+     "ms_ion": null,
+     "assay_pct": 99.3,
+     "water_pct": null,
+     "assumption": null,
+     "override_factor": null,
+     "override_reason": null
+    },
+    "stock": {
+     "vial_mg": 15727.09,
+     "vial_standard_mg": 15729.14,
+     "vial_diluent_mg": 16727.24
+    },
+    "stock_as_top": false,
+    "top_aliquot_ul": null,
+    "levels": [
+     {
+      "target": 1000,
+      "vial_mg": 2794.62,
+      "vial_diluent_mg": 3546.08,
+      "vial_diluent_std_mg": 4268.25,
+      "peak_area": 8588.495,
+      "purity": 99.832,
+      "rt": 6.349
+     },
+     {
+      "target": 500,
+      "vial_mg": 2790.84,
+      "vial_diluent_mg": 3532.48,
+      "vial_diluent_std_mg": 4273.52,
+      "peak_area": 4325.233,
+      "purity": 99.782,
+      "rt": 6.387
+     },
+     {
+      "target": 250,
+      "vial_mg": 2766.75,
+      "vial_diluent_mg": 3508.98,
+      "vial_diluent_std_mg": 4252.6,
+      "peak_area": 2175.431,
+      "purity": 99.815,
+      "rt": 6.398
+     },
+     {
+      "target": 100,
+      "vial_mg": 2794.6,
+      "vial_diluent_mg": 3686.36,
+      "vial_diluent_std_mg": 4279.47,
+      "peak_area": 869.562,
+      "purity": 99.821,
+      "rt": 6.403
+     },
+     {
+      "target": 10,
+      "vial_mg": 2802.83,
+      "vial_diluent_mg": 4149.12,
+      "vial_diluent_std_mg": 4297.18,
+      "peak_area": 83.014,
+      "purity": null,
+      "rt": 6.398
+     },
+     {
+      "target": 1,
+      "vial_mg": 2800.34,
+      "vial_diluent_mg": 4142.88,
+      "vial_diluent_std_mg": 4294.77,
+      "peak_area": 7.363,
+      "purity": null,
+      "rt": 6.414
+     }
+    ]
+   },
+   "expect": {
+    "density": 997.1,
+    "level_volume_ul": 1500,
+    "stock_weight_mg": 2.0499999999992724,
+    "stock_diluent_to_add_ul": 1000,
+    "stock_actual_diluent_ul": 1001.002908434462,
+    "stock_conc_as_weighed_ug_ml": 2047.9460975846812,
+    "net": {
+     "counterion": "Other",
+     "counterion_mw": null,
+     "equivalents": null,
+     "free_mw": 4731.3,
+     "stated_fw": 4800,
+     "assay_pct": 99.3,
+     "water_pct": null,
+     "fw_basis": "mismatch",
+     "f_counterion": 1,
+     "factor": 0.993,
+     "counterion_applied": false,
+     "assumed_fw": false,
+     "ms_m": null,
+     "parts_used": [
+      "assay"
+     ]
+    },
+    "factor_applied": 0.993,
+    "factor_source": "computed",
+    "stock_net_weight_mg": 2.0356499999992774,
+    "stock_conc_ug_ml": 2033.6104749015883,
+    "stock_as_top": false,
+    "top_aliquot_ul": 150,
+    "stock_near_top": false,
+    "stock_remaining_ul": 276.73252432053164,
+    "levels": [
+     {
+      "target": 1000,
+      "problem": null,
+      "from_stock": false,
+      "made_from_ug_ml": 2033.6104749015883,
+      "planned_std_ul": 737.6043831956505,
+      "planned_diluent_ul": 762.3956168043495,
+      "actual_diluent_ul": 753.6455721592619,
+      "std_to_add_ul": 729.1388685191273,
+      "actual_std_ul": 724.2703841139304,
+      "total_ul": 1477.9159562731923,
+      "actual_conc_ug_ml": 996.5951267683747,
+      "peak_area": 8588.495,
+      "purity": 99.832,
+      "rt": 6.349,
+      "remaining_ul": 734.7206900010025,
+      "back_calc_ug_ml": 994.9396429665989,
+      "back_calc_dev_pct": -0.16611397721199378
+     },
+     {
+      "target": 500,
+      "problem": null,
+      "from_stock": false,
+      "made_from_ug_ml": 996.5951267683747,
+      "planned_std_ul": 752.5623795010915,
+      "planned_diluent_ul": 747.4376204989085,
+      "actual_diluent_ul": 743.7970113328652,
+      "std_to_add_ul": 748.8968087274366,
+      "actual_std_ul": 743.1952662721898,
+      "total_ul": 1486.9922776050548,
+      "actual_conc_ug_ml": 498.09591600374773,
+      "peak_area": 4325.233,
+      "purity": 99.782,
+      "rt": 6.387,
+      "remaining_ul": 741.2095075719585,
+      "back_calc_ug_ml": 500.48190123350594,
+      "back_calc_dev_pct": 0.47902123930288415
+     },
+     {
+      "target": 250,
+      "problem": null,
+      "from_stock": false,
+      "made_from_ug_ml": 498.09591600374773,
+      "planned_std_ul": 752.8670441802587,
+      "planned_diluent_ul": 747.1329558197413,
+      "actual_diluent_ul": 744.3887273091967,
+      "std_to_add_ul": 750.1017542928357,
+      "actual_std_ul": 745.7827700330963,
+      "total_ul": 1490.1714973422932,
+      "actual_conc_ug_ml": 249.28094024208832,
+      "peak_area": 2175.431,
+      "purity": 99.815,
+      "rt": 6.398,
+      "remaining_ul": 895.3364757797617,
+      "back_calc_ug_ml": 251.14553811688617,
+      "back_calc_dev_pct": 0.7479905495330105
+     },
+     {
+      "target": 100,
+      "problem": null,
+      "from_stock": false,
+      "made_from_ug_ml": 249.28094024208832,
+      "planned_std_ul": 601.7307213873954,
+      "planned_diluent_ul": 898.2692786126046,
+      "actual_diluent_ul": 894.3536255139908,
+      "std_to_add_ul": 599.1077119849467,
+      "actual_std_ul": 594.8350215625314,
+      "total_ul": 1489.188647076522,
+      "actual_conc_ug_ml": 99.57169211243072,
+      "peak_area": 869.562,
+      "purity": 99.821,
+      "rt": 6.403,
+      "remaining_ul": 1340.698024270384,
+      "back_calc_ug_ml": 99.6894378961509,
+      "back_calc_dev_pct": 0.11825226750915262
+     },
+     {
+      "target": 10,
+      "problem": null,
+      "from_stock": false,
+      "made_from_ug_ml": 99.57169211243072,
+      "planned_std_ul": 150.64522538256003,
+      "planned_diluent_ul": 1349.35477461744,
+      "actual_diluent_ul": 1350.2055962290642,
+      "std_to_add_ul": 150.74021316179682,
+      "actual_std_ul": 148.4906228061382,
+      "total_ul": 1498.6962190352024,
+      "actual_conc_ug_ml": 9.865550061342075,
+      "peak_area": 83.014,
+      "purity": null,
+      "rt": 6.398,
+      "remaining_ul": 1346.3644569250828,
+      "back_calc_ug_ml": 8.464749419420938,
+      "back_calc_dev_pct": -14.198910686289468
+     },
+     {
+      "target": 1,
+      "problem": null,
+      "from_stock": false,
+      "made_from_ug_ml": 9.865550061342075,
+      "planned_std_ul": 152.04423379064434,
+      "planned_diluent_ul": 1347.9557662093557,
+      "actual_diluent_ul": 1346.4446895998394,
+      "std_to_add_ul": 151.87379015217172,
+      "actual_std_ul": 152.33176211011968,
+      "total_ul": 1498.776451709959,
+      "actual_conc_ug_ml": 1.0027089919348855,
+      "peak_area": 7.363,
+      "purity": null,
+      "rt": 6.414,
+      "remaining_ul": 1498.776451709959,
+      "back_calc_ug_ml": -0.3093354526442095,
+      "back_calc_dev_pct": -130.84997293654445
+     }
+    ],
+    "fit": {
+     "slope": 8.622095763041564,
+     "intercept": 10.030119895602184,
+     "r2": 0.9999789177265196,
+     "n": 6
+    },
+    "rt_avg": 6.3915,
+    "rt_rsd_pct": 0.35329680725207707,
+    "range": {
+     "low": 1.0027089919348855,
+     "high": 996.5951267683747
+    },
+    "warnings": [
+     {
+      "code": "stock_under_min",
+      "level": null
+     },
+     {
+      "code": "net_fw_mismatch_no_counterion",
+      "level": null
+     },
+     {
+      "code": "net_kf_missing",
+      "level": null
+     },
+     {
+      "code": "net_counterion_partial",
+      "level": null
+     },
+     {
+      "code": "net_partial",
+      "level": null
+     }
+    ],
+    "blocking": []
+   }
   }
  ]
 }

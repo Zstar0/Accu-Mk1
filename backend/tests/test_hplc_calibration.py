@@ -7,6 +7,7 @@ has to be there). Pure: no database."""
 import ast
 import copy
 import json
+import math
 from pathlib import Path
 
 import pytest
@@ -25,6 +26,7 @@ from hplc_calibration import (
     blank_replicate_inputs,
     default_curve_name,
     linear_fit,
+    net_peptide,
     replicate_prep,
     standard_data_for,
     work_out_sheet,
@@ -195,6 +197,104 @@ def test_a_counterion_fraction_that_cannot_be_worked_out_gives_no_curve(net):
     assert worked["range"] is None and standard_data_for(worked) == {"concentrations": [], "areas": []}
 
 
+def test_fmt_rounds_a_tie_up_as_javascript_does():
+    assert hplc_calibration._fmt(0.125, 2) == "0.13"
+    assert hplc_calibration._fmt(-0.125, 2) == "-0.13"
+    assert hplc_calibration._fmt(-0.001, 2) == "0.00"
+    assert hplc_calibration._fmt(1e300, 2) == "1e+300"
+    assert hplc_calibration._fmt(float("inf"), 2) == "" and hplc_calibration._fmt(float("nan"), 2) == ""
+
+
+def test_js_round_takes_a_non_finite_argument():
+    assert hplc_calibration._js_round(float("inf")) == float("inf")
+    assert hplc_calibration._js_round(float("-inf")) == float("-inf")
+    assert math.isnan(hplc_calibration._js_round(float("nan")))
+    assert hplc_calibration._js_round(2.5) == 3 and hplc_calibration._js_round(-2.5) == -2
+    assert hplc_calibration._js_round(0.49999999999999994) == 0
+
+
+def test_guarded_helpers_never_raise():
+    # sxx * syy underflows to 0 for tiny spreads: JavaScript divides to NaN, Python would raise
+    fit = linear_fit([(0, 0), (1e-160, 1e-160)])
+    assert fit["n"] == 2 and fit["r2"] is None
+    assert hplc_calibration._to_fixed6(1e22) == "1e+22"  # toFixed from 1e21 up is String(x)
+    assert hplc_calibration._to_fixed6(9.99e20) == "999000000000000000000.000000"
+    assert hplc_calibration._fmt(1.7976931348623157e308, 2) == "1.7976931348623157e+308"
+    assert hplc_calibration.ms_neutral_mass(1e12, "M+" + "9" * 5000 + "H") is None  # Infinity, not a raise
+
+
+def test_two_net_warnings_keep_the_sources_order():
+    codes = [w["code"] for w in BY_NAME["two net warnings, in order"]["expect"]["warnings"]]
+    net = [c for c in codes if c.startswith("net_") and c != "net_partial"]
+    assert len(net) >= 2
+
+
+def _walk_finite(x, where):
+    if isinstance(x, dict):
+        for k, v in x.items():
+            _walk_finite(v, f"{where}.{k}")
+    elif isinstance(x, list):
+        for i, v in enumerate(x):
+            _walk_finite(v, f"{where}[{i}]")
+    elif isinstance(x, float):
+        assert math.isfinite(x), f"{where}: {x!r}"
+
+
+# Every extreme the request layer could let through (a superset of today's route checks), and ordinary values.
+_EXTREMES = [5e-324, 1e-300, 1e-12, 1e12, 1e-6, 1.0, 0.0]
+_ORDINARY = [0.5, 2.0, 60.05, 99.3, 711.86, 1000.0, 2794.62, 4268.25, 15729.14]
+
+
+def _hammer_value(rng, weighing=False):
+    pick = rng.random()
+    if pick < 0.12:
+        return None
+    if pick < 0.6:
+        v = rng.choice(_EXTREMES)
+    elif pick < 0.85:
+        v = rng.choice(_ORDINARY)
+    else:
+        v = rng.uniform(0, 1e12 if not weighing else 1e9)
+    if weighing:
+        return min(v, 1e9)
+    return -v if rng.random() < 0.1 else v
+
+
+def _hammer_sheet(rng):
+    net = {k: _hammer_value(rng) for k in ("counterion_mw", "equivalents", "free_mw", "stated_fw", "ms_mz",
+                                           "assay_pct", "water_pct", "override_factor")}
+    net.update(counterion=rng.choice([None, "", "Other", *COUNTERIONS]), ms_ion=rng.choice([None, *MS_IONS]),
+               assumption=rng.choice([None, "", "lean 2"]), override_reason=rng.choice([None, "", "why"]))
+    levels = [{"target": _hammer_value(rng), "vial_mg": _hammer_value(rng, True),
+               "vial_diluent_mg": _hammer_value(rng, True), "vial_diluent_std_mg": _hammer_value(rng, True),
+               "peak_area": _hammer_value(rng), "purity": _hammer_value(rng), "rt": _hammer_value(rng)}
+              for _ in range(rng.randint(1, 12))]
+    return {**blank_inputs(), "net": net, "levels": levels,
+            "stock": {k: _hammer_value(rng, True) for k in ("vial_mg", "vial_standard_mg", "vial_diluent_mg")},
+            "diluent_density_mg_ml": _hammer_value(rng), "level_volume_ul": _hammer_value(rng),
+            "top_aliquot_ul": _hammer_value(rng), "stock_as_top": rng.choice([None, False, True])}
+
+
+def test_the_port_never_raises_and_never_returns_a_non_finite_number():
+    import random
+    for seed in range(5000):
+        rng = random.Random(seed)
+        try:
+            sheet = _hammer_sheet(rng)
+            if rng.random() < 0.25:
+                rep = {"notes": rng.choice([None, "Inj2"]),
+                       "levels": [{"peak_area": _hammer_value(rng), "purity": _hammer_value(rng),
+                                   "rt": _hammer_value(rng)} for _ in range(rng.randint(0, 12))]}
+                sheet = replicate_prep(sheet, rep)
+            worked = work_out_sheet(sheet)
+            _walk_finite(worked, "sheet")
+            _walk_finite(net_peptide(sheet["net"]), "net")
+            _walk_finite(standard_data_for(worked), "standard_data")
+            default_curve_name(rng.choice(["NAD+", "", "Reta"]), rng.choice(["1290A", "", None]), None)
+        except Exception as e:
+            raise AssertionError(f"seed {seed}: {e!r}") from e
+
+
 def test_to_fixed6_is_javascripts():
     assert hplc_calibration._to_fixed6(-0.0) == "0.000000"
     assert hplc_calibration._to_fixed6(-1e-7) == "-0.000000"
@@ -203,9 +303,9 @@ def test_to_fixed6_is_javascripts():
 
 # What the port may import, and which names it may use from those modules.
 ALLOWED_IMPORTS = {"copy", "math", "re", "decimal", "typing", "catalog.method_run_params"}
-ALLOWED_ATTRS = {"math": {"floor", "isfinite", "sqrt"}, "copy": {"deepcopy"},
+ALLOWED_ATTRS = {"math": {"floor", "isfinite", "sqrt", "copysign", "inf", "nan"}, "copy": {"deepcopy"},
                  "re": {"fullmatch", "sub", "IGNORECASE"}}
-ALLOWED_FROM = {"decimal": {"ROUND_HALF_UP", "Decimal"}, "typing": {"Optional"},
+ALLOWED_FROM = {"decimal": {"ROUND_HALF_UP", "Context", "Decimal"}, "typing": {"Optional"},
                 "catalog.method_run_params": {"HPLC_RUN_PARAM_DEFAULTS"}}
 
 
@@ -223,7 +323,8 @@ def test_no_sum_builtin_in_the_port():
                 assert a.asname is None and a.name in ALLOWED_FROM.get(node.module, set()), \
                     f"line {node.lineno}: from {node.module} import {a.name}"
         elif isinstance(node, ast.Call) and isinstance(node.func, ast.Name):
-            assert node.func.id not in {"sum", "fsum", "mean", "fmean", "reduce"}, f"line {node.lineno}"
+            assert node.func.id not in {"sum", "fsum", "mean", "fmean", "reduce", "__import__", "eval", "exec"}, \
+                f"line {node.lineno}"
         elif isinstance(node, ast.Attribute) and isinstance(node.value, ast.Name) \
                 and node.value.id in ALLOWED_ATTRS:
             assert node.attr in ALLOWED_ATTRS[node.value.id], f"line {node.lineno}: {node.value.id}.{node.attr}"
