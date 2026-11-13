@@ -14,10 +14,12 @@
 import { escapeHtml } from '@/lib/endo-bench-sheet'
 import {
   calculatePrep,
+  extractionWater,
   fmt2,
   metaHeaderRows,
   plateGrid,
   plateMapRows,
+  premixRows,
   PROTOCOL,
   toCsv,
   wellListRows,
@@ -230,45 +232,40 @@ function card(title: string, unit: string, body: string, cls = ''): string {
 
 function calcCardsHtml(pl: PcrPlate, overage: number): string {
   const c = calculatePrep(pl.n, overage)
+  const water = extractionWater(pl.n, overage)
+  // Card order pairs equal heights on paper (5|5 rows, then 4|4, then 5|5).
   return (
     '<div class="grid">' +
     card(
-      'Well Counts',
+      'Reactions',
       '',
-      kvHtml([
-        ['Wells on plate (N)', String(pl.n)],
-        ['Master mix wells', String(c.wells.mm)],
-        ['BAC wells', String(c.wells.bac)],
-        ['FUN wells', String(c.wells.fun)],
-        ['IPC wells', String(c.wells.ipc)],
-      ])
+      kvHtml(
+        [
+          ['Samples on plate', String(pl.sampleCount)],
+          ['Controls', String(pl.n - pl.sampleCount)],
+          ['Reactions per well set (N)', String(c.reactions.perSet)],
+          ['Reactions total, A + B', String(c.reactions.total)],
+        ],
+        ['Elution water, 65 °C', `${fmt2(water.pipette)} µL`]
+      )
     ) +
     card(
       'Volume per Well',
       '&micro;L',
       kvHtml(
         [
-          ['Master mix', fmt2(c.perWell.mm)],
-          ['Assay mix', fmt2(c.perWell.assayMix)],
+          ['Master mix 2.0 (2X)', fmt2(c.perWell.mm)],
+          ['Duplex assay mix (10X)', fmt2(c.perWell.assayMix)],
           ['IPC mix', fmt2(c.perWell.ipcMix)],
           ['Template', fmt2(c.perWell.template)],
         ],
         ['Total per well', fmt2(c.perWell.total)]
       )
     ) +
-    card('BAC Mix: 16S', '&micro;L', mixHtml(c.bac, overage)) +
-    card('FUN Mix: 18S', '&micro;L', mixHtml(c.fun, overage)) +
-    card(
-      'Bulk Volumes Needed',
-      '&micro;L',
-      kvHtml([
-        ['Master mix', fmt2(c.bulk.mm)],
-        ['BAC mix', fmt2(c.bulk.bac)],
-        ['FUN mix', fmt2(c.bulk.fun)],
-        ['IPC mix', fmt2(c.bulk.ipc)],
-      ])
-    ) +
-    card('IPC Mix', '&micro;L', mixHtml(c.ipc, overage)) +
+    card('Premix per Well Set', '&micro;L', mixHtml(premixRows(c), overage)) +
+    card('IPC Mix, per set', '&micro;L', mixHtml(c.ipc, overage)) +
+    card('Set A Assay Mix: 16S', '&micro;L', mixHtml(c.bac, overage)) +
+    card('Set B Assay Mix: 18S', '&micro;L', mixHtml(c.fun, overage)) +
     card('Reagent Reference', '', kvHtml(PROTOCOL.reagents), 'reag') +
     '</div>'
   )

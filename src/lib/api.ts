@@ -6721,14 +6721,16 @@ export interface WorksheetWellFreeze {
  *  never moves). Called before a print or a QuantStudio export. */
 export async function freezeWorksheetWells(
   worksheetId: number,
-  wells: WorksheetWellFreeze[]
+  wells: WorksheetWellFreeze[],
+  /** The well map the positions were drawn with; the server stamps it. */
+  layout: 'mid' | 'legacy'
 ): Promise<{ frozen: number }> {
   const response = await fetch(
     `${API_BASE_URL()}/worksheets/${worksheetId}/freeze-wells`,
     {
       method: 'POST',
       headers: getBearerHeaders('application/json'),
-      body: JSON.stringify({ wells }),
+      body: JSON.stringify({ wells, layout }),
     }
   )
   if (!response.ok) {

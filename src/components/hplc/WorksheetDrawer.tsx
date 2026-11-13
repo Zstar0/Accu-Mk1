@@ -318,7 +318,7 @@ export function WorksheetDrawer() {
                   updateItemMutation.mutate({ worksheetId: activeWorksheet.id, itemId, data })
                 }
                 onTickAll={data => bulkTicksMutation.mutate({ worksheetId: activeWorksheet.id, data })}
-                onFreeze={wells => freezeWellsMutation.mutateAsync({ worksheetId: activeWorksheet.id, wells })}
+                onFreeze={(wells, layout) => freezeWellsMutation.mutateAsync({ worksheetId: activeWorksheet.id, wells, layout })}
                 onUnfreeze={() => unfreezeWellsMutation.mutate(activeWorksheet.id)}
                 onAddNote={body => addNoteMutation.mutateAsync({ worksheetId: activeWorksheet.id, body })}
               />
