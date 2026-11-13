@@ -814,6 +814,32 @@ describe('CalculationVisuals two-step dilution', () => {
     expect(screen.queryByText(/not determined/)).not.toBeInTheDocument()
   })
 
+  it('Z4: lists the intermediate weighings from the prep record beside its volumes, with no "not kept" note', () => {
+    render(
+      <CalculationVisuals
+        trace={{ dilution: TWO_STEP_DILUTION }}
+        intermediateWeighings={{
+          empty_mg: 2500.5,
+          with_diluent_mg: 3955.12,
+          final_mg: 4001.03,
+        }}
+      />
+    )
+    const block = screen.getByTestId('two-step-factors')
+    expect(block).toHaveTextContent('Empty vial2500.50 mg')
+    expect(block).toHaveTextContent('+ Diluent3955.12 mg')
+    expect(block).toHaveTextContent('+ Diluent + Stock4001.03 mg')
+    expect(block).toHaveTextContent('1454.6 µL')
+    expect(block).not.toHaveTextContent(/not kept/)
+  })
+
+  it('Z4: without the weighings the card is as before', () => {
+    render(<CalculationVisuals trace={{ dilution: TWO_STEP_DILUTION }} />)
+    const block = screen.getByTestId('two-step-factors')
+    expect(block).not.toHaveTextContent('Empty vial')
+    expect(block).toHaveTextContent(/weighings are not kept/)
+  })
+
   it('keeps one problem line when the intermediate leg has the problem', () => {
     const { container } = render(
       <CalculationVisuals

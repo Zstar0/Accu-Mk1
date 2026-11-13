@@ -61,33 +61,150 @@ export interface HplcFailure {
 
 // Each sheet's undismissed failures, by worksheet id. Module state, so a
 // failure that answers after the technician left the page is still there
-// (listed, marking its box, blocking its row) when they come back.
+// (listed, marking its box, blocking its row) when they come back; the
+// server failures are also kept in localStorage, so a reload keeps them.
+// A refused value is a draft, gone once the page is left: never stored.
 const failureLists = new Map<number, HplcFailure[]>()
+const loaded = new Set<number>()
 const failureWatchers = new Set<() => void>()
 const NO_FAILURES: HplcFailure[] = []
 let failureSeq = 0
 
+const STORE_PREFIX = 'hplc-sheet-failures:'
+const sameFailure = (a: HplcFailure, b: Omit<HplcFailure, 'n'>) =>
+  a.text === b.text &&
+  !a.refused === !b.refused &&
+  a.keys.length === b.keys.length &&
+  a.keys.every(k => b.keys.includes(k))
+
+/** The stored server failures of one sheet; none when storage is off,
+ *  empty or not what was written. */
+function readStored(id: number): HplcFailure[] {
+  try {
+    const raw = window.localStorage.getItem(STORE_PREFIX + id)
+    const list: unknown = raw ? JSON.parse(raw) : []
+    if (!Array.isArray(list)) return []
+    const out: HplcFailure[] = []
+    for (const x of list)
+      if (
+        isPlain(x) &&
+        typeof x.text === 'string' &&
+        Array.isArray(x.keys) &&
+        x.keys.every(k => typeof k === 'string')
+      ) {
+        const f = { text: x.text, keys: x.keys as string[] }
+        if (!out.some(o => sameFailure(o, f)))
+          out.push({ ...f, n: ++failureSeq })
+      }
+    return out
+  } catch {
+    return []
+  }
+}
+
+function writeStored(id: number, list: HplcFailure[]) {
+  try {
+    const keep = list
+      .filter(f => !f.refused)
+      .map(f => ({ text: f.text, keys: f.keys }))
+    if (keep.length)
+      window.localStorage.setItem(STORE_PREFIX + id, JSON.stringify(keep))
+    else window.localStorage.removeItem(STORE_PREFIX + id)
+  } catch {
+    // storage off or full: the list still works for this visit
+  }
+}
+
 /** The failure lists. Every write reads the list as it is now, so a save
  *  started on an earlier mount of the page writes into the same list. */
 export const hplcFailures = {
-  get: (id: number): HplcFailure[] => failureLists.get(id) ?? NO_FAILURES,
+  get(id: number): HplcFailure[] {
+    if (!loaded.has(id)) {
+      loaded.add(id)
+      const stored = readStored(id)
+      if (stored.length) failureLists.set(id, stored)
+    }
+    return failureLists.get(id) ?? NO_FAILURES
+  },
   update(id: number, fn: (list: HplcFailure[]) => HplcFailure[]) {
     const next = fn(hplcFailures.get(id))
     if (next.length) failureLists.set(id, next)
     else failureLists.delete(id)
+    writeStored(id, next)
     failureWatchers.forEach(w => w())
   },
+  /** A failure. One already listed with the same reason for any of the same
+   *  boxes takes this one's boxes too (the new attempt wrote them all), so a
+   *  box and reason is never listed twice. */
   add(id: number, f: Omit<HplcFailure, 'n'>) {
-    hplcFailures.update(id, list => [...list, { ...f, n: ++failureSeq }])
+    const same = (x: HplcFailure) =>
+      x.text === f.text &&
+      !x.refused === !f.refused &&
+      (x.keys.length === 0
+        ? f.keys.length === 0
+        : x.keys.some(k => f.keys.includes(k)))
+    const list = hplcFailures.get(id)
+    const hit = list.find(same)
+    if (hit && f.keys.every(k => hit.keys.includes(k))) return
+    hplcFailures.update(id, now =>
+      hit
+        ? now.map(x =>
+            x.n === hit.n
+              ? { ...x, keys: [...new Set([...x.keys, ...f.keys])] }
+              : x
+          )
+        : [...now, { ...f, n: ++failureSeq }]
+    )
+  },
+  /** A save of these keys landed: each failure loses those keys, and goes
+   *  once it has none left. A failure holding other keys (a Form change that
+   *  also cleared the declared weight) stays for them. */
+  landed(id: number, keys: string[]) {
+    const hit = (f: HplcFailure) => f.keys.some(k => keys.includes(k))
+    if (!hplcFailures.get(id).some(hit)) return
+    hplcFailures.update(id, list =>
+      list.flatMap(f => {
+        if (!hit(f)) return [f]
+        const left = f.keys.filter(k => !keys.includes(k))
+        return left.length ? [{ ...f, keys: left }] : []
+      })
+    )
+  },
+  /** The sheet as read: a failure of a row no longer on it, or now
+   *  promoted, can never be saved again, so it goes. */
+  prune(id: number, rows: { item_id: number; promoted: boolean }[]) {
+    const live = new Set(rows.filter(r => !r.promoted).map(r => r.item_id))
+    const dead = (f: HplcFailure) =>
+      f.keys.length > 0 &&
+      f.keys.every(k => !live.has(Number(k.slice(0, k.indexOf(':')))))
+    if (hplcFailures.get(id).some(dead))
+      hplcFailures.update(id, list => list.filter(f => !dead(f)))
+  },
+  /** The page left: its refused values go (they were drafts). */
+  dropRefused(id: number) {
+    if (hplcFailures.get(id).some(f => f.refused))
+      hplcFailures.update(id, list => list.filter(f => !f.refused))
   },
   subscribe(watch: () => void) {
     failureWatchers.add(watch)
     return () => void failureWatchers.delete(watch)
   },
-  /** Tests: every list emptied. */
+  /** Tests: every list emptied, in memory and in storage. */
   reset() {
     failureLists.clear()
+    loaded.clear()
+    try {
+      for (const k of Object.keys(window.localStorage))
+        if (k.startsWith(STORE_PREFIX)) window.localStorage.removeItem(k)
+    } catch {
+      // no storage
+    }
     failureWatchers.forEach(w => w())
+  },
+  /** Tests: forget what is in memory, as a reload does. */
+  forgetMemory() {
+    failureLists.clear()
+    loaded.clear()
   },
 }
 

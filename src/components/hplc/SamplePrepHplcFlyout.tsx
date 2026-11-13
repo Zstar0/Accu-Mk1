@@ -137,6 +137,20 @@ function CalcRow({ label, value, unit }: { label: string; value: number | null |
   )
 }
 
+/** A two-step prep's intermediate weighings, from its record, for the
+ *  calculation card; none when the record holds none, or when the prep is
+ *  split across vials (the card can show any vial's trace, and the
+ *  top-level fields are not tied to one). */
+function intermediateWeighingsOf(prep: SamplePrep) {
+  if ((prep.vial_data?.length ?? 0) > 1) return undefined
+  const w = {
+    empty_mg: prep.int_vial_empty_mg,
+    with_diluent_mg: prep.int_vial_with_diluent_mg,
+    final_mg: prep.int_vial_final_mg,
+  }
+  return Object.values(w).some(v => v != null) ? w : undefined
+}
+
 function PrepDetailsSection({ prep }: { prep: SamplePrep }) {
   const isBlend = prep.is_blend && prep.vial_data && prep.vial_data.length > 0
 
@@ -2152,7 +2166,10 @@ export function SamplePrepHplcFlyout({ open, onClose, prep, match, readOnly = fa
               {/* ════ Right column — Calculation Trace ════════════════════ */}
               {!isStandard && result?.calculation_trace && (
                 <div className="w-100 shrink-0 sticky top-0 self-start space-y-4">
-                  <CalculationVisuals trace={result.calculation_trace} />
+                  <CalculationVisuals
+                    trace={result.calculation_trace}
+                    intermediateWeighings={intermediateWeighingsOf(prep)}
+                  />
                   <details className="group">
                     <summary className="cursor-pointer text-xs text-muted-foreground hover:text-foreground transition-colors">
                       Raw JSON

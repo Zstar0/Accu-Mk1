@@ -136,6 +136,20 @@ describe('WorksheetDrawerItems on an HPLC worksheet (D1)', () => {
     ).toBeDisabled()
   })
 
+  it('Z6: a promoted row keyed by the native instruments table has its select off too', async () => {
+    vi.mocked(getHplcSheet).mockResolvedValue(
+      makeSheet([makeRow({ promoted: true, instrument_name: 'HPLC 1290b' })])
+    )
+    // no peptide id: the select that writes instrument_id
+    renderItems([item({ peptide_id: null, instrument_id: 3 })])
+    expect(
+      await screen.findByText('final: the prep is promoted')
+    ).toBeInTheDocument()
+    expect(
+      screen.getByRole('combobox', { name: 'P-0120-S01, Instrument' })
+    ).toBeDisabled()
+  })
+
   it('rows of other benches never read the sheet and render as before', async () => {
     const endo = item({
       analyses: [

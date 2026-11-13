@@ -5,6 +5,7 @@ import type {
   HplcVialTarget,
 } from '@/lib/hplc-prep'
 import { DEFAULT_DILUENT } from '@/lib/hplc-prep-rules'
+import { targetsAboveStock } from '@/lib/hplc-promote'
 import { TD } from '@/components/hplc/EndoWorksheetTable'
 import type { SheetRowView, SheetSectionProps } from './HplcPrepSheet'
 import {
@@ -94,13 +95,14 @@ function DilutionCell({
     key: keyof HplcPrepVialInputs,
     placeholder?: string,
     hint?: string | null,
-    title?: string
+    title?: string,
+    off?: string
   ) => {
     const what = `${row.sample_id}, ${LABEL[col]}${many ? `, vial ${letter}` : ''}`
     // Target Conc: 0 or less means "the standard", as on the source sheet
     const clears = key === 'target_ug_ml'
     return (
-      <InputCell>
+      <InputCell off={off}>
         <NumberBox
           label={what}
           field={col}
@@ -109,7 +111,7 @@ function DilutionCell({
           placeholder={placeholder}
           disabled={locked}
           hint={hint}
-          title={title}
+          title={off ?? title}
           zeroClears={clears}
           onCommit={v =>
             onPatch(
@@ -154,7 +156,9 @@ function DilutionCell({
         'target_ug_ml',
         fmtDp(vial.target.value, 0),
         undefined,
-        TARGET_FROM[vial.target.source]
+        TARGET_FROM[vial.target.source],
+        // above what it dilutes from: the promote reason's own sentence
+        targetsAboveStock(vial).find(a => a.step === '3')?.text
       )
     case 'target_volume_ul':
       return box('target_volume_ul', String(row.params.target_volume_ul))

@@ -98,29 +98,36 @@ const above = (target: number | null, source: number | null) =>
   target > source * (1 + 1e-9) &&
   two(target) !== two(source)
 
-/** _above_the_stock: a target above what its step dilutes from. A capsule is
- *  injected neat, so it is never a reason. */
-function aboveTheStock(v: HplcVialComputed): string[] {
+/** _above_the_stock: a target above what its step dilutes from, by step
+ *  ('3a' the intermediate target, '3' the final one). A capsule is injected
+ *  neat, so it is never a reason. The sheet marks the Target cell with the
+ *  same sentence. */
+export function targetsAboveStock(
+  v: HplcVialComputed
+): { step: '3a' | '3'; text: string }[] {
   if (v.neat) return []
-  const out: string[] = []
+  const out: { step: '3a' | '3'; text: string }[] = []
   const letter = vialLetter(v.vial)
   const inter = v.two_step ? v.intermediate : null
   if (inter && above(inter.target_ug_ml, v.stock_conc_ug_ml))
-    out.push(
-      `Vial ${letter}, Step 3a: the intermediate target, ${two(inter.target_ug_ml as number)} ug/mL, ` +
+    out.push({
+      step: '3a',
+      text:
+        `Vial ${letter}, Step 3a: the intermediate target, ${two(inter.target_ug_ml as number)} ug/mL, ` +
         `is above the stock it is diluted from, ${two(v.stock_conc_ug_ml as number)} ug/mL; lower it ` +
-        'or check Step 2'
-    )
+        'or check Step 2',
+    })
   if (above(v.target.value, v.stock_for_final)) {
     const target = two(v.target.value)
     const source = two(v.stock_for_final as number)
-    out.push(
-      inter
+    out.push({
+      step: '3',
+      text: inter
         ? `Vial ${letter}, Step 3: the target, ${target} ug/mL, is above the intermediate it is ` +
-            `diluted from, ${source} ug/mL; lower the target or check Step 3a`
+          `diluted from, ${source} ug/mL; lower the target or check Step 3a`
         : `Vial ${letter}: the target, ${target} ug/mL, is above the stock it is diluted from, ` +
-            `${source} ug/mL; lower the target or check Step 2`
-    )
+          `${source} ug/mL; lower the target or check Step 2`,
+    })
   }
   return out
 }
@@ -211,7 +218,7 @@ export function promoteReasons(
             'check the weights'
         )
     }
-    reasons.push(...aboveTheStock(v))
+    reasons.push(...targetsAboveStock(v).map(a => a.text))
   }
   if (row.is_blend) {
     const names = new Map(

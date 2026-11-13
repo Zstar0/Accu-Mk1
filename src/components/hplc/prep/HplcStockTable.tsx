@@ -6,7 +6,7 @@ import {
   rowDiluent,
   rowInstrument,
 } from '@/lib/hplc-prep-rules'
-import { TD, TH } from '@/components/hplc/EndoWorksheetTable'
+import { TD } from '@/components/hplc/EndoWorksheetTable'
 import type {
   HplcPrepSheetProps,
   SheetRowView,
@@ -23,7 +23,12 @@ import {
   NumberBox,
   SheetRow,
 } from './HplcSheetCells'
-import { FORM_LABELS, STEP2_COLUMNS, type Step2Key } from './hplc-sheet-columns'
+import {
+  FORM_LABELS,
+  SAMPLE_PREP_HELP,
+  STEP2_COLUMNS,
+  type Step2Key,
+} from './hplc-sheet-columns'
 import { onSheetKey } from './hplc-sheet-keys'
 import { boxKey } from '@/services/hplc-worksheet'
 
@@ -47,7 +52,16 @@ export function HplcStockTable(props: SheetSectionProps) {
           {cols.map(c => (
             <HeadCell key={c.key} col={c} />
           ))}
-          {step2Trailing && <th className={TH}>{step2Trailing.header}</th>}
+          {step2Trailing && (
+            <HeadCell
+              col={{
+                key: 'sample_prep',
+                kind: 'text',
+                label: step2Trailing.header,
+                title: SAMPLE_PREP_HELP,
+              }}
+            />
+          )}
         </tr>
       </thead>
       <tbody>
@@ -421,9 +435,9 @@ function StockCell({
         ? computed.capsule_diluent_ul
         : row.params.sample_diluent_ul
       const target = computed.vials[0]?.target.value ?? null
-      // a liquid row has no box here (L4, as on the source); none of ours
-      // goes into a bac vial either, its box stays off
-      if (liquid) return <InputCell>{NOT_WEIGHED}</InputCell>
+      // a liquid or bac row has no box here (L4, Z10, as on the source):
+      // no diluent goes into either vial
+      if (liquid || bac) return <InputCell>{NOT_WEIGHED}</InputCell>
       return (
         <InputCell>
           <NumberBox
@@ -432,7 +446,7 @@ function StockCell({
             saveKey={keyOf('diluent_ul')}
             value={inputs.diluent_ul}
             placeholder={assumed === null ? undefined : fmtDp(assumed, 0)}
-            disabled={locked || bac}
+            disabled={locked}
             hint={
               !capsule
                 ? null

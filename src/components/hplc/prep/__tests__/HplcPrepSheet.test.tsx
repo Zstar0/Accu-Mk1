@@ -7,6 +7,7 @@ import {
   waitFor,
   within,
 } from '@testing-library/react'
+import userEvent from '@testing-library/user-event'
 import type { HplcSheetRow } from '@/lib/api'
 import type { HplcPrepRule } from '@/lib/hplc-prep-rules'
 import { HplcPrepSheet } from '../HplcPrepSheet'
@@ -58,6 +59,9 @@ const S2 = 'P-0121-S01'
 const VIAL = 'Wt Customer Sample vial and Septum (mg)'
 const VIAL_DIL = 'Wt Customer Sample vial and Septum + Diluent (mg)'
 const AS_VIAL = 'Wt Autosampler vial and cap (mg)'
+/** The stock vial column's help, each of its boxes' description (Z5). */
+const VIAL_HELP = STEP2_COLUMNS.find(c => c.key === 'stock_vial_mg')
+  ?.title as string
 const box = (name: string) => screen.getByRole('textbox', { name })
 const select = (name: string) => screen.getByRole('combobox', { name })
 
@@ -67,16 +71,25 @@ const tesaIpaBlend = () =>
     is_blend: true,
   })
 
-/** A column's help, as its header's tooltip card shows it on focus. */
+/** A column's help, as its header's tooltip card shows it on hover (Z5: the
+ *  header is no Tab stop). */
 async function help(header: HTMLElement): Promise<string> {
-  const trigger = header.querySelector<HTMLElement>('[tabindex="0"]')
+  const trigger = header.querySelector<HTMLElement>(
+    '[data-slot="tooltip-trigger"]'
+  )
   if (!trigger) throw new Error(`no help on ${header.textContent}`)
-  fireEvent.focus(trigger)
+  const user = userEvent.setup()
+  await user.hover(trigger)
   const text = (await screen.findByRole('tooltip')).textContent ?? ''
-  fireEvent.blur(trigger)
+  await user.unhover(trigger)
+  await user.keyboard('{Escape}')
   await waitFor(() => expect(screen.queryByRole('tooltip')).toBeNull())
   return text
 }
+
+/** A description that starts with this text (a box's column help follows). */
+const startsWith = (text: string) =>
+  new RegExp(`^${text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}`)
 
 /** Types into a box and leaves it, as a tech tabs on. */
 function typeAndLeave(el: HTMLElement, text: string) {
@@ -219,14 +232,56 @@ describe('HplcPrepSheet', () => {
     }
   })
 
-  it('every weighing header has help, reachable by keyboard (T1)', async () => {
+  it('every weighing header has help on hover, and is no Tab stop (T1, Z5)', async () => {
     renderSheet([makeRow()])
     for (const name of [VIAL, VIAL_DIL, AS_VIAL]) {
       const head = screen.getAllByRole('columnheader', { name })[0]
       const trigger = within(head as HTMLElement).getByText(name)
-      expect(trigger).toHaveAttribute('tabindex', '0')
+      expect(trigger).not.toHaveAttribute('tabindex')
       expect((await help(head as HTMLElement)).length).toBeGreaterThan(20)
     }
+    // no header of any table is in the Tab order
+    for (const h of screen.getAllByRole('columnheader'))
+      expect(h.querySelector('[tabindex]')).toBeNull()
+  })
+
+  it('Z5: each box carries its column help as its description', () => {
+    renderSheet([makeRow()])
+    for (const c of [...STEP2_COLUMNS, ...STEP3_COLUMNS]) {
+      if ((c.kind !== 'input' && c.kind !== 'select') || !c.title) continue
+      const el = screen.queryByRole(
+        c.kind === 'input' ? 'textbox' : 'combobox',
+        {
+          name: `${S1}, ${c.label}`,
+        }
+      )
+      if (!el) continue
+      expect(el).toHaveAccessibleDescription(c.title)
+    }
+    expect(box(`${S1}, Target Conc (ug/mL)`)).toHaveAccessibleDescription(
+      /^Blank = 200 ug\/mL/
+    )
+  })
+
+  it('Z5: the headers that had no help have it now', async () => {
+    renderSheet([tesaIpaBlend(), makeRow({ item_id: 312, sample_id: S2 })], {
+      rules: [],
+    })
+    const step2b = screen.getByRole('region', {
+      name: 'Step 2b Blend components',
+    })
+    for (const [region, name] of [
+      [step2(), 'Sample ID'],
+      [step2b, 'Sample ID'],
+      [step3(), 'Sample ID'],
+      [step2(), 'Diluent to add (uL)'],
+      [step2b, 'Component'],
+      [step3(), 'Target Conc (ug/mL)'],
+      [step3(), 'Target Total Vol (uL)'],
+    ] as const)
+      expect(
+        (await help(within(region).getByRole('columnheader', { name }))).length
+      ).toBeGreaterThan(10)
   })
 
   it('ArrowUp from the first box of a table stays in the body, never the header help', () => {
@@ -253,8 +308,9 @@ describe('HplcPrepSheet', () => {
       expect(select(`${s}, 2-step dilution`)).toBeInTheDocument()
       expect(box(`${s}, ${AS_VIAL}`)).toBeInTheDocument()
     }
+    // the hint, then the column help (Z5)
     expect(box(`${S1}, Declared Peptide Wt (mg)`)).toHaveAccessibleDescription(
-      'per capsule'
+      startsWith('per capsule What the order declares')
     )
   })
 
@@ -451,7 +507,7 @@ describe('HplcPrepSheet', () => {
     expect(screen.getByText('per capsule')).toBeInTheDocument()
     const total = fixtureCase(capsule).expect.declared_total_mg as number
     expect(box(`${S2}, Capsules used`)).toHaveAccessibleDescription(
-      `${total.toFixed(2)} mg of peptide in the stock`
+      startsWith(`${total.toFixed(2)} mg of peptide in the stock For a capsule`)
     )
   })
 
@@ -461,9 +517,11 @@ describe('HplcPrepSheet', () => {
     const { onPatch } = renderSheet([rowFromCase(name, { sample_bac: true })])
     // the left cell, named for its column, holds the full weighing
     const left = box(`${S1}, ${VIAL}`)
-    expect(left).toHaveAccessibleDescription('① full, as received: weigh first')
+    expect(left).toHaveAccessibleDescription(
+      `① full, as received: weigh first ${VIAL_HELP}`
+    )
     expect(box(`${S1}, ${VIAL_DIL}`)).toHaveAccessibleDescription(
-      '② emptied and dried: weigh after'
+      startsWith('② emptied and dried: weigh after The same vial')
     )
     typeAndLeave(left, '36000')
     expect(onPatch).toHaveBeenLastCalledWith(
@@ -480,10 +538,70 @@ describe('HplcPrepSheet', () => {
     expect(
       within(step2()).getByText(exp.declared_total_mg.toFixed(2))
     ).toBeInTheDocument()
-    expect(box(`${S1}, Diluent to add (uL)`)).toBeDisabled()
+    // Z10: no diluent goes into a bac vial, so a dash, as on the source
+    expect(
+      screen.queryByRole('textbox', { name: `${S1}, Diluent to add (uL)` })
+    ).not.toBeInTheDocument()
     expect(
       within(step2()).getByText('0.9% benzyl alcohol, fixed')
     ).toBeInTheDocument()
+  })
+
+  /** The td holding a Target box. */
+  const targetCell = (name: string) => box(name).closest('td') as HTMLElement
+
+  it('Z9: a Step 3 target above the stock marks its cell with the promote sentence', () => {
+    renderSheet([
+      makeRow({
+        hplc_prep: {
+          stock_vial_mg: 5000,
+          stock_vial_diluent_mg: 7991.3,
+          vials: { '1': { target_ug_ml: 5000 } },
+        },
+      }),
+    ])
+    const cell = targetCell(`${S1}, Target Conc (ug/mL)`)
+    expect(cell).toHaveAttribute('data-off', 'true')
+    expect(cell.className).toContain('bg-amber-500/20')
+    const said = cell.getAttribute('title') ?? ''
+    expect(said).toMatch(
+      /^Vial A: the target, 5000\.00 ug\/mL, is above the stock it is diluted from, \d+\.\d\d ug\/mL; lower the target or check Step 2$/
+    )
+    expect(box(`${S1}, Target Conc (ug/mL)`)).toHaveAttribute('title', said)
+  })
+
+  it('Z9: a Step 3a target above the stock marks its cell; a neat capsule vial is never marked', () => {
+    const neat = rowFromCase('capsule, 4 x 10 mg, weighed, neat', {
+      item_id: 312,
+      sample_id: S2,
+    })
+    neat.hplc_prep = {
+      ...neat.hplc_prep,
+      vials: {
+        ...neat.hplc_prep.vials,
+        '1': { ...neat.hplc_prep.vials?.['1'], target_ug_ml: 100000 },
+      },
+    }
+    renderSheet([
+      // a stock of 3333 ug/mL, an intermediate typed at 5000
+      makeRow({
+        hplc_prep: {
+          two_step: true,
+          stock_vial_mg: 5012.31,
+          stock_vial_diluent_mg: 8003.6,
+          vials: { '1': { int_target_ug_ml: 5000 } },
+        },
+      }),
+      neat,
+    ])
+    const inter = targetCell(`${S1}, Intermediate Target (ug/mL)`)
+    expect(inter).toHaveAttribute('data-off', 'true')
+    expect(inter.getAttribute('title')).toMatch(
+      /^Vial A, Step 3a: the intermediate target, .* is above the stock it is diluted from/
+    )
+    expect(targetCell(`${S2}, Target Conc (ug/mL)`)).not.toHaveAttribute(
+      'data-off'
+    )
   })
 
   it('a row with no HPLC prep form shows its identity and the note', () => {
@@ -667,14 +785,16 @@ describe('HplcPrepSheet', () => {
     expect(document.activeElement).toBe(el)
     expect(el).toHaveValue('-3')
     expect(el).toHaveAttribute('aria-invalid', 'true')
-    expect(el).toHaveAccessibleDescription('a number here cannot be below 0')
+    expect(el).toHaveAccessibleDescription(
+      `a number here cannot be below 0 ${VIAL_HELP}`
+    )
     expect(fireEvent.keyDown(el, { key: 'Tab' })).toBe(false)
     expect(document.activeElement).toBe(el)
     expect(onPatch).not.toHaveBeenCalled()
     // an acceptable value clears the message at once
     fireEvent.change(el, { target: { value: '5020' } })
     expect(el).not.toHaveAttribute('aria-invalid')
-    expect(el).toHaveAccessibleDescription('')
+    expect(el).toHaveAccessibleDescription(VIAL_HELP)
     fireEvent.keyDown(el, { key: 'Enter' })
     expect(document.activeElement).toBe(box(`${S2}, ${VIAL}`))
     expect(onPatch).toHaveBeenCalledTimes(1)
@@ -686,10 +806,10 @@ describe('HplcPrepSheet', () => {
     act(() => el.focus())
     fireEvent.change(el, { target: { value: 'abc' } })
     fireEvent.keyDown(el, { key: 'Enter' })
-    expect(el).toHaveAccessibleDescription('Type a number')
+    expect(el).toHaveAccessibleDescription(`Type a number ${VIAL_HELP}`)
     fireEvent.keyDown(el, { key: 'Escape' })
     expect(el).toHaveValue('5012.31')
-    expect(el).toHaveAccessibleDescription('')
+    expect(el).toHaveAccessibleDescription(VIAL_HELP)
     expect(onPatch).not.toHaveBeenCalled()
   })
 

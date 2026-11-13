@@ -412,12 +412,16 @@ function SortableItemRow({
         ) : isNativeItem ? (
           <Select
             value={item.instrument_id != null ? String(item.instrument_id) : ''}
+            disabled={promoted}
             onValueChange={value =>
               onUpdateItem(item.id, { instrument_id: Number(value) })
             }
           >
             <SelectTrigger
               size="sm"
+              aria-label={
+                sheetRow ? `${item.sample_id}, Instrument` : undefined
+              }
               className="h-6 text-[10px] border-transparent bg-transparent shadow-none hover:border-border"
             >
               <SelectValue placeholder="Instrument…" />

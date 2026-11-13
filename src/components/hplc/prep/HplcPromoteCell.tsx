@@ -25,6 +25,9 @@ const CONFIRM =
 
 const STILL_SAVING = 'Still saving. Press Promote again when it has finished.'
 
+const SAVED_DURING =
+  'A change was saved while Promote was checking. Press Promote again.'
+
 const OTHERS_PRESSING = 'Another row is being promoted. Wait for it to finish.'
 
 /** How the page's "a save of this row did not land" sentence starts. */
@@ -54,7 +57,8 @@ function planLines(
   const many = computed.vials.length > 1
   const nameOf = (id: number) => {
     const c = row.components.find(x => x.peptide_id === id)
-    return c?.abbreviation || c?.name || `peptide ${id}`
+    // as the sheet's Step 2b names it ("GHK-Cu", not its code "GHK-CU")
+    return c?.name || c?.abbreviation || `peptide ${id}`
   }
   return [
     ...computed.vials.map(
@@ -65,6 +69,22 @@ function planLines(
       ? [`Diluent ${computed.diluent.diluent}`]
       : []),
   ]
+}
+
+/** Reasons one per line, never joined into one sentence; a lone line with
+ *  no head is a plain sentence. */
+function ReasonList({ head, lines }: { head: string | null; lines: string[] }) {
+  if (!head && lines.length === 1) return <p>{lines[0]}</p>
+  return (
+    <>
+      {head && <p className="pb-1 font-semibold">{head}</p>}
+      <ul className="list-disc space-y-0.5 pl-4">
+        {lines.map(r => (
+          <li key={r}>{r}</li>
+        ))}
+      </ul>
+    </>
+  )
 }
 
 /**
@@ -239,10 +259,11 @@ export function HplcPromoteCell({
   }
 
   // a press stopped by a save that did not land: the line goes once the row
-  // has no such failure left (it was dismissed or saved)
-  const ownNow = (own ?? []).filter(
-    r => !r.startsWith(UNSAVED_LEAD) || unsaved !== null
-  )
+  // has no such failure left (it was dismissed or saved). "Still saving"
+  // holds only while a save is out; after it, the line asks for another press.
+  const ownNow = (own ?? [])
+    .filter(r => !r.startsWith(UNSAVED_LEAD) || unsaved !== null)
+    .map(r => (r === STILL_SAVING && !saving ? SAVED_DURING : r))
   const said = [...ownNow, ...(server ?? [])]
   const off = saving || busy !== null || reasons.length > 0 || othersPressing
   const others = othersOf(row)
@@ -286,24 +307,12 @@ export function HplcPromoteCell({
               </span>
             </TooltipTrigger>
             <TooltipContent className="max-w-sm">
-              {why.head ? (
-                <>
-                  <p className="pb-1 font-semibold">{why.head}</p>
-                  <ul className="list-disc space-y-0.5 pl-4">
-                    {why.lines.map(r => (
-                      <li key={r}>{r}</li>
-                    ))}
-                  </ul>
-                </>
-              ) : (
-                <p>{why.lines.join(' ')}</p>
-              )}
+              <ReasonList head={why.head} lines={why.lines} />
             </TooltipContent>
           </Tooltip>
-          <span id={reasonsId} className="sr-only">
-            {why.head ? `${why.head} ` : ''}
-            {why.lines.join('; ')}
-          </span>
+          <div id={reasonsId} className="sr-only">
+            <ReasonList head={why.head} lines={why.lines} />
+          </div>
         </>
       ) : (
         button

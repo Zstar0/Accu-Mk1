@@ -507,7 +507,13 @@ function IdentityVisual({ trace }: { trace: IdentityTrace }) {
 
 // ── Dilution Breakdown ─────────────────────────────────────────
 
-function DilutionBreakdown({ trace }: { trace: DilutionTrace }) {
+function DilutionBreakdown({
+  trace,
+  weighings,
+}: {
+  trace: DilutionTrace
+  weighings?: IntermediateWeighings
+}) {
   const rows: [string, string, string][] = [
     ['Diluent mass', fixed(trace.diluent_mass_mg, 2, ' mg'), fixed(trace.diluent_vol_ul, 1, ' µL')],
     ['Sample mass', fixed(trace.sample_mass_mg, 2, ' mg'), fixed(trace.sample_vol_ul, 1, ' µL')],
@@ -573,7 +579,11 @@ function DilutionBreakdown({ trace }: { trace: DilutionTrace }) {
           </div>
         </div>
         {trace.intermediate && (
-          <TwoStepFactors trace={trace} leg={trace.intermediate} />
+          <TwoStepFactors
+            trace={trace}
+            leg={trace.intermediate}
+            weighings={weighings}
+          />
         )}
         {trace.problem && (
           <p className="mt-3 text-xs text-amber-400">
@@ -591,14 +601,24 @@ function DilutionBreakdown({ trace }: { trace: DilutionTrace }) {
 function TwoStepFactors({
   trace,
   leg,
+  weighings,
 }: {
   trace: DilutionTrace
   leg: IntermediateLeg
+  weighings?: IntermediateWeighings
 }) {
   const rows: [string, string][] = [
     ['Diluent', fixed(leg.diluent_vol_ul, 1, ' µL')],
     ['Stock', fixed(leg.stock_vol_ul, 1, ' µL')],
     ['Total volume', fixed(leg.total_vol_ul, 1, ' µL')],
+    // the prep record keeps the intermediate vial's three weighings
+    ...(weighings
+      ? ([
+          ['Empty vial', fixed(weighings.empty_mg, 2, ' mg')],
+          ['+ Diluent', fixed(weighings.with_diluent_mg, 2, ' mg')],
+          ['+ Diluent + Stock', fixed(weighings.final_mg, 2, ' mg')],
+        ] as [string, string][])
+      : []),
   ]
   return (
     <div
@@ -639,8 +659,9 @@ function TwoStepFactors({
           </span>
         </div>
         <p className="text-[10px] text-muted-foreground leading-relaxed">
-          Total = intermediate factor × final vial factor. The intermediate
-          vial&apos;s weighings are not kept with the result, only its volumes.
+          Total = intermediate factor × final vial factor.
+          {!weighings &&
+            " The intermediate vial's weighings are not kept with the result, only its volumes."}
         </p>
       </div>
     </div>
@@ -649,17 +670,33 @@ function TwoStepFactors({
 
 // ── Main export ────────────────────────────────────────────────
 
-interface CalculationVisualsProps {
-  trace: Record<string, unknown>
+/** A two-step prep's intermediate vial weighings, from its prep record (the
+ *  trace keeps only the volumes). */
+export interface IntermediateWeighings {
+  empty_mg: number | null | undefined
+  with_diluent_mg: number | null | undefined
+  final_mg: number | null | undefined
 }
 
-export function CalculationVisuals({ trace }: CalculationVisualsProps) {
+interface CalculationVisualsProps {
+  trace: Record<string, unknown>
+  /** Shown beside the intermediate vial's volumes on a two-step card. */
+  intermediateWeighings?: IntermediateWeighings
+}
+
+export function CalculationVisuals({
+  trace,
+  intermediateWeighings,
+}: CalculationVisualsProps) {
   const parsed = trace as unknown as CalculationTrace
 
   return (
     <div className="flex flex-col gap-4">
       {isDilutionTrace(parsed.dilution) && (
-        <DilutionBreakdown trace={parsed.dilution} />
+        <DilutionBreakdown
+          trace={parsed.dilution}
+          weighings={intermediateWeighings}
+        />
       )}
       {isQuantityTrace(parsed.quantity) && (
         <QuantityChart trace={parsed.quantity} />

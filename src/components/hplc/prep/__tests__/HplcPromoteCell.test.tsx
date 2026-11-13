@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import {
   act,
+  cleanup,
   fireEvent,
   render,
   screen,
@@ -59,7 +60,7 @@ const worksheet = {
 } as unknown as WorksheetListItem
 
 function renderPage() {
-  render(
+  return render(
     <QueryClientProvider
       client={
         new QueryClient({
@@ -610,6 +611,82 @@ describe('Promote on the HPLC worksheet page', () => {
     expect(screen.queryByRole('dialog')).not.toBeInTheDocument()
   })
 
+  it('Z7: "Still saving" goes once the save has ended', async () => {
+    let reread: (s: ReturnType<typeof makeSheet>) => void = () => undefined
+    vi.mocked(getHplcSheet)
+      .mockResolvedValueOnce(makeSheet([ready()]))
+      .mockImplementationOnce(
+        () =>
+          new Promise(resolve => {
+            reread = resolve
+          })
+      )
+      .mockResolvedValue(makeSheet([ready()]))
+    let land: (r: HplcSheetRow) => void = () => undefined
+    vi.mocked(patchHplcRow).mockImplementation(
+      () =>
+        new Promise(resolve => {
+          land = resolve
+        })
+    )
+    renderPage()
+    const box = await screen.findByRole('textbox', { name: `${S1}, ${VIAL}` })
+    fireEvent.click(promoteButton())
+    await waitFor(() => expect(getHplcSheet).toHaveBeenCalledTimes(2))
+    typeAndLeave(box, '5001')
+    await act(async () => reread(makeSheet([ready()])))
+    await within(step2()).findByText(/^Still saving/)
+    await act(async () => land(ready()))
+    await waitFor(() =>
+      expect(within(step2()).queryByText(/^Still saving/)).toBeNull()
+    )
+    expect(
+      within(step2()).getByText(
+        'A change was saved while Promote was checking. Press Promote again.'
+      )
+    ).toBeInTheDocument()
+  })
+
+  it('Z8: a disabled Promote describes its reasons as a list, one per line, never joined', async () => {
+    vi.mocked(getHplcSheet).mockResolvedValue(
+      makeSheet([makeRow({ instrument_id: null, instrument_name: null })])
+    )
+    renderPage()
+    await screen.findByRole('textbox', { name: `${S1}, ${VIAL}` })
+    const wrapper = promoteButton().parentElement as HTMLElement
+    const desc = document.getElementById(
+      wrapper.getAttribute('aria-describedby') as string
+    ) as HTMLElement
+    const items = within(desc).getAllByRole('listitem')
+    expect(items.length).toBeGreaterThan(1)
+    expect(desc.textContent).not.toContain('; ')
+    expect(items[0]).toHaveTextContent(/^pick the instrument first/)
+  })
+
+  it('Z8: the confirm names the lead as the sheet does, not by its code', async () => {
+    const base = rowFromCase('blend Tesamorelin + Ipamorelin, split', {
+      identity: 'Tesamorelin + Ipamorelin',
+      is_blend: true,
+    })
+    vi.mocked(getHplcSheet).mockResolvedValue(
+      makeSheet([
+        {
+          ...base,
+          components: base.components.map(c => ({
+            ...c,
+            abbreviation: (c.name ?? '').toUpperCase(),
+          })),
+        },
+      ])
+    )
+    renderPage()
+    await screen.findByRole('region', { name: 'Step 2b Blend components' })
+    fireEvent.click(promoteButton())
+    const dialog = await screen.findByRole('dialog')
+    expect(dialog).toHaveTextContent(/lead Tesamorelin, Target Conc/)
+    expect(dialog).not.toHaveTextContent('TESAMORELIN')
+  })
+
   it('A9: a save that starts and finishes during the read-again stops the press', async () => {
     vi.mocked(getHplcSheet).mockResolvedValue(makeSheet([ready()]))
     let rulesAgain: (r: []) => void = () => undefined
@@ -632,11 +709,13 @@ describe('Promote on the HPLC worksheet page', () => {
     await waitFor(() => expect(patchHplcRow).toHaveBeenCalledTimes(1))
     await act(() => new Promise(r => setTimeout(r, 30)))
     await act(async () => rulesAgain([]))
+    // Z7: the save has ended, so not "still saving"
     expect(
       await within(step2()).findByText(
-        'Still saving. Press Promote again when it has finished.'
+        'A change was saved while Promote was checking. Press Promote again.'
       )
     ).toBeInTheDocument()
+    expect(within(step2()).queryByText(/^Still saving/)).toBeNull()
     expect(screen.queryByRole('dialog')).not.toBeInTheDocument()
   })
 
@@ -947,5 +1026,185 @@ describe('Promote on the HPLC worksheet page', () => {
     await act(async () => refuse(new Error('server down')))
     await within(step2()).findByText('server down')
     expect(document.activeElement).toBe(document.body)
+  })
+
+  const FORM = `${S1}, Form`
+  const DECLARED = `${S1}, Declared Peptide Wt (mg)`
+  const UNSAVED = /^A change to this row was not saved/
+
+  /** A Form change to capsule the server refused: one failure, three keys. */
+  async function failedFormChange() {
+    vi.mocked(getHplcSheet).mockResolvedValue(makeSheet([ready()]))
+    vi.mocked(patchHplcRow)
+      .mockRejectedValueOnce(new Error('form change refused'))
+      .mockResolvedValue(ready())
+    const page = renderPage()
+    const form = await screen.findByRole('combobox', { name: FORM })
+    fireEvent.change(form, { target: { value: 'capsule' } })
+    await screen.findByRole('alert')
+    expect(hplcFailures.get(7)[0]?.keys).toEqual([
+      '311:prep_form',
+      '311:hplc_prep.declared_mg',
+      '311:hplc_prep.capsules',
+    ])
+    return page
+  }
+
+  it('Z1: a declared weight that saves leaves a failed Form change listed, marked and blocking Promote', async () => {
+    await failedFormChange()
+    typeAndLeave(screen.getByRole('textbox', { name: DECLARED }), '12')
+    await waitFor(() => expect(patchHplcRow).toHaveBeenCalledTimes(2))
+    await waitFor(() =>
+      expect(hplcFailures.get(7)[0]?.keys).toEqual([
+        '311:prep_form',
+        '311:hplc_prep.capsules',
+      ])
+    )
+    expect(screen.getByRole('alert')).toHaveTextContent('form change refused')
+    expect(screen.getByRole('combobox', { name: FORM }).className).toContain(
+      'border-red-500'
+    )
+    fireEvent.click(promoteButton())
+    expect(await within(step2()).findByText(UNSAVED)).toBeInTheDocument()
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument()
+  })
+
+  it('Z3: the same Form change refused again after the declared weight saved is listed once and marks the declared box again', async () => {
+    await failedFormChange()
+    const declared = screen.getByRole('textbox', { name: DECLARED })
+    typeAndLeave(declared, '12')
+    await waitFor(() => expect(hplcFailures.get(7)[0]?.keys).toHaveLength(2))
+    vi.mocked(patchHplcRow).mockRejectedValueOnce(
+      new Error('form change refused')
+    )
+    fireEvent.change(screen.getByRole('combobox', { name: FORM }), {
+      target: { value: 'capsule' },
+    })
+    await waitFor(() => expect(patchHplcRow).toHaveBeenCalledTimes(3))
+    await waitFor(() => expect(hplcFailures.get(7)[0]?.keys).toHaveLength(3))
+    expect(screen.getAllByRole('alert')).toHaveLength(1)
+    expect(screen.getByRole('textbox', { name: DECLARED }).className).toContain(
+      'border-red-500'
+    )
+  })
+
+  it('Z1: saving the Form again clears its failure', async () => {
+    await failedFormChange()
+    fireEvent.change(screen.getByRole('combobox', { name: FORM }), {
+      target: { value: 'capsule' },
+    })
+    await waitFor(() => expect(patchHplcRow).toHaveBeenCalledTimes(2))
+    await waitFor(() =>
+      expect(screen.queryByRole('alert')).not.toBeInTheDocument()
+    )
+    expect(hplcFailures.get(7)).toHaveLength(0)
+  })
+
+  it('Z2: a failure kept in storage is listed, marks its box and blocks Promote on a fresh page; Dismiss takes it out of storage', async () => {
+    await failedFormChange()
+    const stored = window.localStorage.getItem('hplc-sheet-failures:7')
+    expect(stored).toContain('form change refused')
+    // a reload: memory gone, storage kept
+    cleanup()
+    hplcFailures.forgetMemory()
+    renderPage()
+    const alert = await screen.findByRole('alert')
+    expect(alert).toHaveTextContent('form change refused')
+    const form = await screen.findByRole('combobox', { name: FORM })
+    expect(form.className).toContain('border-red-500')
+    fireEvent.click(promoteButton())
+    expect(await within(step2()).findByText(UNSAVED)).toBeInTheDocument()
+    fireEvent.click(within(alert).getByRole('button', { name: 'Dismiss' }))
+    expect(window.localStorage.getItem('hplc-sheet-failures:7')).toBeNull()
+  })
+
+  it('Z2: a refused number is never stored and goes when the page is left', async () => {
+    vi.mocked(getHplcSheet).mockResolvedValue(makeSheet([ready()]))
+    const { unmount } = renderPage()
+    const box = await screen.findByRole('textbox', { name: `${S1}, ${VIAL}` })
+    typeAndLeave(box, '-3')
+    await screen.findByRole('alert')
+    expect(window.localStorage.getItem('hplc-sheet-failures:7')).toBeNull()
+    unmount()
+    expect(hplcFailures.get(7)).toHaveLength(0)
+  })
+
+  it('Z2: a storage that throws does not break the page', async () => {
+    const get = vi
+      .spyOn(Storage.prototype, 'getItem')
+      .mockImplementation(() => {
+        throw new Error('storage off')
+      })
+    const set = vi
+      .spyOn(Storage.prototype, 'setItem')
+      .mockImplementation(() => {
+        throw new Error('storage full')
+      })
+    try {
+      await failedFormChange()
+      expect(screen.getByRole('alert')).toHaveTextContent('form change refused')
+    } finally {
+      get.mockRestore()
+      set.mockRestore()
+    }
+  })
+
+  it('Z3: a stored failure of a row now promoted, or gone from the sheet, is dropped when the sheet is read', async () => {
+    window.localStorage.setItem(
+      'hplc-sheet-failures:7',
+      JSON.stringify([
+        {
+          text: `${S1}, ${VIAL}: weighing out of range`,
+          keys: ['311:hplc_prep.stock_vial_mg'],
+        },
+        { text: 'P-0999-S01, Form: refused', keys: ['999:prep_form'] },
+        {
+          text: `${S2}, ${VIAL}: weighing out of range`,
+          keys: ['312:hplc_prep.stock_vial_mg'],
+        },
+      ])
+    )
+    vi.mocked(getHplcSheet).mockResolvedValue(
+      makeSheet([promoted(), ready({ item_id: 312, sample_id: S2 })])
+    )
+    renderPage()
+    const alert = await screen.findByRole('alert')
+    await waitFor(() => expect(hplcFailures.get(7)).toHaveLength(1))
+    expect(alert).toHaveTextContent(`${S2}, ${VIAL}`)
+    expect(window.localStorage.getItem('hplc-sheet-failures:7')).not.toContain(
+      '999:'
+    )
+  })
+
+  it('Z5: the Sample prep header has help on hover and is no Tab stop', async () => {
+    vi.mocked(getHplcSheet).mockResolvedValue(makeSheet([ready()]))
+    renderPage()
+    await screen.findByRole('textbox', { name: `${S1}, ${VIAL}` })
+    const head = within(step2()).getByRole('columnheader', {
+      name: 'Sample prep',
+    })
+    const trigger = head.querySelector<HTMLElement>(
+      '[data-slot="tooltip-trigger"]'
+    ) as HTMLElement
+    expect(trigger).not.toHaveAttribute('tabindex')
+    await userEvent.setup().hover(trigger)
+    expect(await screen.findByRole('tooltip')).toHaveTextContent(
+      /^Promote files this row as a sample prep/
+    )
+  })
+
+  it('Z3: the same box and reason is listed once', async () => {
+    vi.mocked(getHplcSheet).mockResolvedValue(makeSheet([ready()]))
+    vi.mocked(patchHplcRow).mockRejectedValue(
+      new Error('weighing out of range')
+    )
+    renderPage()
+    const box = await screen.findByRole('textbox', { name: `${S1}, ${VIAL}` })
+    typeAndLeave(box, '6000')
+    await screen.findByRole('alert')
+    typeAndLeave(box, '6000')
+    await waitFor(() => expect(patchHplcRow).toHaveBeenCalledTimes(2))
+    await act(() => new Promise(r => setTimeout(r, 30)))
+    expect(screen.getAllByRole('alert')).toHaveLength(1)
   })
 })

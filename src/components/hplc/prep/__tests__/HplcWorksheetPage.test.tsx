@@ -23,6 +23,7 @@ import { useWorksheetDrawer } from '@/hooks/use-worksheet-drawer'
 import { hplcFailures } from '@/services/hplc-worksheet'
 import { useUIStore } from '@/store/ui-store'
 import { HplcWorksheetPage } from '../HplcWorksheetPage'
+import { STEP2_COLUMNS } from '../hplc-sheet-columns'
 import { makeRow, makeSheet } from './hplc-sheet-fixtures'
 
 vi.mock('@/lib/api', async importOriginal => ({
@@ -78,6 +79,9 @@ const SIGNAL = { signal: expect.any(AbortSignal) }
 const S1 = 'P-0120-S01'
 const VIAL = 'Wt Customer Sample vial and Septum (mg)'
 const VIAL_DIL = 'Wt Customer Sample vial and Septum + Diluent (mg)'
+/** The stock vial column's help, its boxes' description (Z5). */
+const VIAL_HELP = STEP2_COLUMNS.find(c => c.key === 'stock_vial_mg')
+  ?.title as string
 
 function typeAndLeave(el: HTMLElement, text: string) {
   fireEvent.focus(el)
@@ -425,11 +429,12 @@ describe('HplcWorksheetPage', () => {
     await waitFor(() => expect(patchHplcRow).toHaveBeenCalledTimes(1))
     await act(async () => saves.fail(0, 'weighing out of range'))
     await screen.findByRole('alert')
+    // the failure, then the column help (Z5)
     expect(box).toHaveAccessibleDescription(
-      `Not saved: ${S1}, ${VIAL}: weighing out of range`
+      `Not saved: ${S1}, ${VIAL}: weighing out of range ${VIAL_HELP}`
     )
     expect(box.className).toContain('border-red-500')
-    expect(other).toHaveAccessibleDescription('')
+    expect(other).not.toHaveAccessibleDescription(/Not saved/)
     expect(other.className).not.toContain('border-red-500')
     typeAndLeave(box, '6000')
     await waitFor(() => expect(patchHplcRow).toHaveBeenCalledTimes(2))
@@ -441,7 +446,7 @@ describe('HplcWorksheetPage', () => {
     await waitFor(() =>
       expect(screen.queryByRole('alert')).not.toBeInTheDocument()
     )
-    expect(box).toHaveAccessibleDescription('')
+    expect(box).toHaveAccessibleDescription(VIAL_HELP)
     expect(box.className).not.toContain('border-red-500')
   })
 
@@ -457,7 +462,7 @@ describe('HplcWorksheetPage', () => {
     expect(box.className).toContain('border-red-500')
     fireEvent.click(within(alert).getByRole('button', { name: 'Dismiss' }))
     expect(box.className).not.toContain('border-red-500')
-    expect(box).toHaveAccessibleDescription('')
+    expect(box).toHaveAccessibleDescription(VIAL_HELP)
   })
 
   it('A1: the failure list stays in view while the sheet scrolls', async () => {

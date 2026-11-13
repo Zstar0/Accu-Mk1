@@ -17,6 +17,13 @@ export interface SheetColumn<K extends string = string> {
   kind: 'text' | 'input' | 'select' | 'computed'
 }
 
+/** Help for the columns the source leaves without any, one plain sentence. */
+const SAMPLE_ID_HELP =
+  'The sample this line is for, by its Accu-Mk1 ID; it stays in view while the table scrolls.'
+/** The Sample prep column (Step 2's last), which the page adds. */
+export const SAMPLE_PREP_HELP =
+  'Promote files this row as a sample prep for Process HPLC, from the values on the sheet; once promoted the prep is final and the row is locked.'
+
 /** The autosampler vials' letters: vial 1 is A (calc.js VIAL_LETTERS). */
 export const VIAL_LETTERS = 'ABCDEFG'
 
@@ -51,7 +58,7 @@ export type Step2Key =
   | 'two_step'
 
 export const STEP2_COLUMNS: SheetColumn<Step2Key>[] = [
-  { key: 'sample_id', kind: 'text', label: 'Sample ID' },
+  { key: 'sample_id', kind: 'text', label: 'Sample ID', title: SAMPLE_ID_HELP },
   {
     key: 'identity',
     kind: 'text',
@@ -109,7 +116,13 @@ export const STEP2_COLUMNS: SheetColumn<Step2Key>[] = [
     title:
       'The customer sample vial with its septum, before the diluent. Bacteriostatic water: the vial full, as received, weighed first. Capsule: the vial and cap with the capsules emptied in.',
   },
-  { key: 'diluent_ul', kind: 'input', label: 'Diluent to add (uL)' },
+  {
+    key: 'diluent_ul',
+    kind: 'input',
+    label: 'Diluent to add (uL)',
+    title:
+      "How much diluent to put into the customer vial. A capsule's is worked out: the water that makes the stock the row's target, so Step 3 takes it neat.",
+  },
   {
     key: 'stock_vial_diluent_mg',
     kind: 'input',
@@ -159,8 +172,13 @@ export type Step2bKey =
   | 'actual_final_ug_ml'
 
 export const STEP2B_COLUMNS: SheetColumn<Step2bKey>[] = [
-  { key: 'sample_id', kind: 'text', label: 'Sample ID' },
-  { key: 'component', kind: 'text', label: 'Component' },
+  { key: 'sample_id', kind: 'text', label: 'Sample ID', title: SAMPLE_ID_HELP },
+  {
+    key: 'component',
+    kind: 'text',
+    label: 'Component',
+    title: 'From the Sample Identity in Step 2',
+  },
   {
     key: 'mg',
     kind: 'input',
@@ -238,7 +256,7 @@ export type Step3aKey =
   | 'actual_conc_ug_ml'
 
 export const STEP3A_COLUMNS: SheetColumn<Step3aKey>[] = [
-  { key: 'sample_id', kind: 'text', label: 'Sample ID' },
+  { key: 'sample_id', kind: 'text', label: 'Sample ID', title: SAMPLE_ID_HELP },
   {
     key: 'identity',
     kind: 'text',
@@ -361,7 +379,7 @@ export type Step3Key =
   | 'dilution_factor_total'
 
 export const STEP3_COLUMNS: SheetColumn<Step3Key>[] = [
-  { key: 'sample_id', kind: 'text', label: 'Sample ID' },
+  { key: 'sample_id', kind: 'text', label: 'Sample ID', title: SAMPLE_ID_HELP },
   {
     key: 'identity',
     kind: 'text',
@@ -384,8 +402,20 @@ export const STEP3_COLUMNS: SheetColumn<Step3Key>[] = [
     title:
       'The stock this row dilutes: Peptide Stock Conc from Step 2, or for a two-step sample the Actual Intermediate Conc from Step 3a (its target until it is weighed)',
   },
-  { key: 'target_ug_ml', kind: 'input', label: 'Target Conc (ug/mL)' },
-  { key: 'target_volume_ul', kind: 'input', label: 'Target Total Vol (uL)' },
+  {
+    key: 'target_ug_ml',
+    kind: 'input',
+    label: 'Target Conc (ug/mL)',
+    title:
+      'Blank = 200 ug/mL, or the target the HPLC Prep Rules give a peptide in the Sample Identity (the box says which). Type a value to use another for this vial.',
+  },
+  {
+    key: 'target_volume_ul',
+    kind: 'input',
+    label: 'Target Total Vol (uL)',
+    title:
+      "The volume the autosampler vial is made up to. Blank = the method's volume; type a value to use another for this vial.",
+  },
   {
     key: 'vial_mg',
     kind: 'input',

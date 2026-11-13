@@ -81,11 +81,15 @@ export function HplcWorksheetPage({
     if (!mounted.current) toast.error(`Not saved: ${text}`)
     hplcFailures.add(id, { text, keys })
   }
-  /** A save of these keys landed: every line for them goes. */
-  const clearKeys = (keys: string[]) => {
-    if (hplcFailures.get(id).some(f => f.keys.some(k => keys.includes(k))))
-      setFailures(f => f.filter(x => !x.keys.some(k => keys.includes(k))))
-  }
+  /** A save of these keys landed: each line loses them, and goes once it
+   *  has none left. */
+  const clearKeys = (keys: string[]) => hplcFailures.landed(id, keys)
+  // refused values are drafts: they go when the page is left
+  useEffect(() => () => hplcFailures.dropRefused(id), [id])
+  // a stored failure of a row gone from the sheet, or promoted, goes
+  useEffect(() => {
+    if (sheet.data) hplcFailures.prune(id, sheet.data.rows)
+  }, [id, sheet.data])
   const onNumberRefused = (
     what: string,
     reason: string | null,

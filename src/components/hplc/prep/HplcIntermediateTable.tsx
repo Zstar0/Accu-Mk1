@@ -4,6 +4,7 @@ import type {
   HplcRowComputed,
   HplcVialComputed,
 } from '@/lib/hplc-prep'
+import { targetsAboveStock } from '@/lib/hplc-promote'
 import type { SheetRowView, SheetSectionProps } from './HplcPrepSheet'
 import { DiluentCell, VialIdentityCell } from './HplcDilutionTable'
 import {
@@ -91,13 +92,17 @@ function IntermediateCell({
   const letter = VIAL_LETTERS[vial.vial - 1] ?? n
   const many = computed.vials.length > 1
   const typed: HplcPrepVialInputs = row.hplc_prep.vials?.[n] ?? {}
-  const box = (key: keyof HplcPrepVialInputs, placeholder?: string) => {
+  const box = (
+    key: keyof HplcPrepVialInputs,
+    placeholder?: string,
+    off?: string
+  ) => {
     const what = `${row.sample_id}, ${LABEL[col]}${many ? `, vial ${letter}` : ''}`
     // the target and volume: 0 or less means "the standard", as on the
     // source sheet
     const clears = key === 'int_target_ug_ml' || key === 'int_volume_ul'
     return (
-      <InputCell>
+      <InputCell off={off}>
         <NumberBox
           label={what}
           field={col}
@@ -105,6 +110,7 @@ function IntermediateCell({
           value={typed[key]}
           placeholder={placeholder}
           disabled={locked}
+          title={off}
           zeroClears={clears}
           onCommit={v =>
             onPatch(
@@ -140,7 +146,9 @@ function IntermediateCell({
     case 'int_target_ug_ml':
       return box(
         'int_target_ug_ml',
-        inter.target_ug_ml === null ? undefined : fmtDp(inter.target_ug_ml, 0)
+        inter.target_ug_ml === null ? undefined : fmtDp(inter.target_ug_ml, 0),
+        // above the stock: the promote reason's own sentence
+        targetsAboveStock(vial).find(a => a.step === '3a')?.text
       )
     case 'int_volume_ul':
       return box('int_volume_ul', String(row.params.intermediate_volume_ul))

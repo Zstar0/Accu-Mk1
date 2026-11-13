@@ -19,7 +19,36 @@ import {
   TH,
   TH_CALC,
 } from '@/components/hplc/EndoWorksheetTable'
-import type { SheetColumn } from './hplc-sheet-columns'
+import {
+  STEP2_COLUMNS,
+  STEP2B_COLUMNS,
+  STEP3_COLUMNS,
+  STEP3A_COLUMNS,
+  type SheetColumn,
+} from './hplc-sheet-columns'
+
+/** Each box's column help, by its field (the column key; the typed and
+ *  picked columns' keys are unique across the four tables). */
+const BOX_HELP = new Map(
+  [...STEP2_COLUMNS, ...STEP2B_COLUMNS, ...STEP3A_COLUMNS, ...STEP3_COLUMNS]
+    .filter(c => (c.kind === 'input' || c.kind === 'select') && c.title)
+    .map(c => [c.key as string, c.title as string])
+)
+
+/** A box's column help as a hidden description: its id (undefined when the
+ *  column has none) and the node that carries it. */
+function useBoxHelp(field: string | undefined) {
+  const id = useId()
+  const help = field ? BOX_HELP.get(field) : undefined
+  return {
+    id: help ? id : undefined,
+    note: help ? (
+      <span id={id} className="sr-only">
+        {help}
+      </span>
+    ) : null,
+  }
+}
 
 /** The lab tool's fmt: dp places, "-0.00" read as zero; a dash for null. */
 // The tables format with it too; Fast Refresh on this file only.
@@ -186,6 +215,7 @@ export function NumberBox({
     reported.current = null
   }
   const hintId = useId()
+  const help = useBoxHelp(field)
   const shown = value === null || value === undefined ? '' : String(value)
 
   // a row promoted while a box was being typed in: the box shows the stored
@@ -254,7 +284,8 @@ export function NumberBox({
         inputMode="decimal"
         aria-label={label}
         aria-describedby={
-          [hint ? hintId : null, mark.id].filter(Boolean).join(' ') || undefined
+          [hint ? hintId : null, mark.id, help.id].filter(Boolean).join(' ') ||
+          undefined
         }
         data-field={field}
         aria-invalid={bad ? true : undefined}
@@ -289,6 +320,7 @@ export function NumberBox({
       />
       {hint && <Hint id={hintId}>{hint}</Hint>}
       {mark.note}
+      {help.note}
     </>
   )
 }
@@ -323,11 +355,14 @@ export function CellSelect({
   onChange: (v: string) => void
 }) {
   const mark = useFailMark(saveKey)
+  const help = useBoxHelp(field)
   return (
     <>
       <NativeSelect
         aria-label={label}
-        aria-describedby={mark.id}
+        aria-describedby={
+          [mark.id, help.id].filter(Boolean).join(' ') || undefined
+        }
         data-field={field}
         value={value}
         disabled={disabled}
@@ -341,9 +376,13 @@ export function CellSelect({
         ))}
       </NativeSelect>
       {mark.note}
+      {help.note}
     </>
   )
 }
+
+/** The off mark, on a worked-out cell off plan or a typed one off. */
+const OFF = '!bg-amber-500/20 font-semibold text-amber-700 dark:text-amber-300'
 
 /** A worked-out cell: its figure at dp places, marked when off plan. */
 export function ComputedCell({
@@ -363,7 +402,7 @@ export function ComputedCell({
 }) {
   return (
     <td
-      className={`${TD_CALC} ${mark ? '!bg-amber-500/20 font-semibold text-amber-700 dark:text-amber-300' : ''}`}
+      className={`${TD_CALC} ${mark ? OFF : ''}`}
       title={mark ? markTitle : title}
     >
       {fmtDp(value, dp)}
@@ -372,8 +411,24 @@ export function ComputedCell({
   )
 }
 
-export function InputCell({ children }: { children: ReactNode }) {
-  return <td className={`${TD} px-1 text-right`}>{children}</td>
+/** A typed cell; `off` marks it as a computed cell off plan, with its
+ *  sentence as the tooltip. */
+export function InputCell({
+  children,
+  off,
+}: {
+  children: ReactNode
+  off?: string
+}) {
+  return (
+    <td
+      className={`${TD} px-1 text-right ${off ? OFF : ''}`}
+      title={off}
+      data-off={off ? 'true' : undefined}
+    >
+      {children}
+    </td>
+  )
 }
 
 /** The Sample ID column stays in view while the table scrolls right. Its
@@ -392,15 +447,11 @@ export function HeadCell({ col }: { col: SheetColumn }) {
       className={`${sticky ? TH_STICKY : TH} ${col.kind === 'computed' ? TH_CALC : ''} ${sticky ? '' : 'whitespace-normal'}`}
     >
       {col.title ? (
-        // the column's help in the app's tooltip card, on hover or focus;
-        // the header is outside the table body, so the arrow keys never
-        // stop here
+        // the column's help in the app's tooltip card, on hover; never a
+        // Tab stop (each box carries the same help as its description)
         <Tooltip>
           <TooltipTrigger asChild>
-            <span
-              tabIndex={0}
-              className="cursor-help underline decoration-dotted underline-offset-2 focus:outline-none focus-visible:ring-2 focus-visible:ring-teal-500/40"
-            >
+            <span className="cursor-help underline decoration-dotted underline-offset-2">
               {col.label}
             </span>
           </TooltipTrigger>

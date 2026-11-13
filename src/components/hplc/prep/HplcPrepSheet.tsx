@@ -49,7 +49,7 @@ export interface HplcPrepSheetProps {
     what: string
   ) => void
   /** A column after Step 2's last (the Sample prep column). */
-  step2Trailing?: { header: ReactNode; cell: (v: SheetRowView) => ReactNode }
+  step2Trailing?: { header: string; cell: (v: SheetRowView) => ReactNode }
   /** A box refused a number the server would refuse (`reason`), or holds
    *  one it takes again (null); `what` names it, `key` is its boxKey. */
   onNumberRefused?: SheetSaves['refused']
