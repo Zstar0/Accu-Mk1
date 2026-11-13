@@ -16,6 +16,7 @@ import WorksheetsListPage from '@/components/hplc/WorksheetsListPage'
 import { WorksheetPage } from '@/components/hplc/WorksheetPage'
 import { EndoPrepRulesPage } from '@/components/hplc/endo/EndoPrepRulesPage'
 import { HplcPrepRulesPage } from '@/components/hplc/prep/HplcPrepRulesPage'
+import { HplcCalibrationSheetPage } from '@/components/hplc/calibration/HplcCalibrationSheetPage'
 import { OrderDashboard } from '@/components/dashboard/OrderDashboard'
 import { AnalyticsDashboard } from '@/components/dashboard/AnalyticsDashboard'
 import { SenaiteDashboard } from '@/components/senaite/SenaiteDashboard'
@@ -90,6 +91,8 @@ export function MainWindowContent({
         if (activeSubSection === 'worksheet') return <WorksheetPage />
         if (activeSubSection === 'endo-prep-rules') return <EndoPrepRulesPage />
         if (activeSubSection === 'hplc-prep-rules') return <HplcPrepRulesPage />
+        if (activeSubSection === 'hplc-calibration')
+          return <HplcCalibrationSheetPage />
         return <HPLCAnalysis />
       case 'reports':
         if (activeSubSection === 'sync-debug') return <ReportsSyncDebug />
