@@ -1,6 +1,13 @@
-import { useState, type ReactNode } from 'react'
+import { useId, useState, type ReactNode } from 'react'
 import { NativeSelect, NativeSelectOption } from '@/components/ui/native-select'
-import { MONO, TD, TD_CALC } from '@/components/hplc/EndoWorksheetTable'
+import {
+  MONO,
+  TD,
+  TD_CALC,
+  TH,
+  TH_CALC,
+} from '@/components/hplc/EndoWorksheetTable'
+import type { SheetColumn } from './hplc-sheet-columns'
 
 /** The lab tool's fmt: dp places, "-0.00" read as zero; a dash for null. */
 // The tables format with it too; Fast Refresh on this file only.
@@ -14,8 +21,12 @@ export function fmtDp(n: number | null | undefined, dp: number): string {
 const HINT = 'block text-[10px] font-normal leading-tight text-muted-foreground'
 
 /** A small line under a cell, saying where its number comes from. */
-export function Hint({ children }: { children: ReactNode }) {
-  return <span className={HINT}>{children}</span>
+export function Hint({ id, children }: { id?: string; children: ReactNode }) {
+  return (
+    <span id={id} className={HINT}>
+      {children}
+    </span>
+  )
 }
 
 /**
@@ -27,6 +38,7 @@ export function Hint({ children }: { children: ReactNode }) {
  */
 export function NumberBox({
   label,
+  field,
   value,
   placeholder,
   integer = false,
@@ -34,7 +46,10 @@ export function NumberBox({
   hint,
   onCommit,
 }: {
+  /** The accessible name: <sample id>, <column label>. */
   label: string
+  /** The column, for the keyboard walk. */
+  field: string
   value: number | null | undefined
   placeholder?: string
   integer?: boolean
@@ -44,6 +59,7 @@ export function NumberBox({
 }) {
   const [draft, setDraft] = useState<string | null>(null)
   const [bad, setBad] = useState(false)
+  const hintId = useId()
   const shown = value === null || value === undefined ? '' : String(value)
 
   function commit() {
@@ -68,6 +84,8 @@ export function NumberBox({
         type="text"
         inputMode="decimal"
         aria-label={label}
+        aria-describedby={hint ? hintId : undefined}
+        data-field={field}
         aria-invalid={bad || undefined}
         title={
           bad ? (integer ? 'Type a whole number' : 'Type a number') : undefined
@@ -83,7 +101,7 @@ export function NumberBox({
         }}
         className={`w-[84px] rounded-md border bg-card px-1.5 py-[3px] text-right ${MONO} placeholder:text-muted-foreground/60 focus:border-teal-500 focus:outline-none focus:ring-2 focus:ring-teal-500/20 disabled:cursor-default disabled:opacity-50 ${bad ? 'border-red-500' : ''}`}
       />
-      {hint && <Hint>{hint}</Hint>}
+      {hint && <Hint id={hintId}>{hint}</Hint>}
     </>
   )
 }
@@ -91,12 +109,14 @@ export function NumberBox({
 /** A compact native select; '' is its "not set" choice. */
 export function CellSelect({
   label,
+  field,
   value,
   options,
   disabled,
   onChange,
 }: {
   label: string
+  field?: string
   value: string
   options: [string, string][]
   disabled: boolean
@@ -105,13 +125,14 @@ export function CellSelect({
   return (
     <NativeSelect
       aria-label={label}
+      data-field={field}
       value={value}
       disabled={disabled}
       onChange={e => onChange(e.target.value)}
       className="h-auto rounded-md bg-card py-[3px] pl-1.5 pr-7 text-[12.5px] dark:bg-card"
     >
-      {options.map(([v, text]) => (
-        <NativeSelectOption key={v} value={v}>
+      {options.map(([v, text], i) => (
+        <NativeSelectOption key={i} value={v}>
           {text}
         </NativeSelectOption>
       ))}
@@ -125,18 +146,20 @@ export function ComputedCell({
   dp,
   mark,
   markTitle,
+  title,
   children,
 }: {
   value: number | null | undefined
   dp: number
   mark?: boolean
   markTitle?: string
+  title?: string
   children?: ReactNode
 }) {
   return (
     <td
       className={`${TD_CALC} ${mark ? '!bg-amber-500/20 font-semibold text-amber-700 dark:text-amber-300' : ''}`}
-      title={mark ? markTitle : undefined}
+      title={mark ? markTitle : title}
     >
       {fmtDp(value, dp)}
       {children}
@@ -146,4 +169,41 @@ export function ComputedCell({
 
 export function InputCell({ children }: { children: ReactNode }) {
   return <td className={`${TD} px-1 text-right`}>{children}</td>
+}
+
+/** The Sample ID column stays in view while the table scrolls right. */
+const STICKY = 'sticky left-0 z-10 bg-card'
+
+export function HeadCell({ col }: { col: SheetColumn }) {
+  return (
+    <th
+      title={col.title}
+      className={`${TH} ${col.kind === 'computed' ? TH_CALC : ''} ${col.key === 'sample_id' ? STICKY : ''} whitespace-normal`}
+    >
+      {col.label}
+    </th>
+  )
+}
+
+export function IdCell({ children }: { children: ReactNode }) {
+  return <td className={`${TD} ${MONO} ${STICKY}`}>{children}</td>
+}
+
+/** A sheet row; shaded when on another instrument than the sheet's first,
+ *  as the source shades its 1290B rows. */
+export function SheetRow({
+  shaded,
+  children,
+}: {
+  shaded: boolean
+  children: ReactNode
+}) {
+  return (
+    <tr
+      data-shaded={String(shaded)}
+      className={shaded ? 'bg-sky-500/[0.07]' : ''}
+    >
+      {children}
+    </tr>
+  )
 }

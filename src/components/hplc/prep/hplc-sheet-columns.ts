@@ -54,7 +54,7 @@ export const STEP2_COLUMNS: SheetColumn<Step2Key>[] = [
     kind: 'text',
     label: 'Sample Identity',
     title:
-      'What the sample is, as Accu-Mk1 names it. May name the instrument too ("Retatrutide * 1290A"), which then sets the dropdown. A blend lists its peptides joined with " + " ("BPC-157 + TB500"), or is a nickname from the Lab rules: Blend shorthand ("KLOW" = its four peptides); Step 2b then asks for each one\'s weight.',
+      'What the sample is, as Accu-Mk1 names it. A blend lists its peptides joined with " + " ("BPC-157 + TB500"), or is a nickname from the Lab rules → Blend shorthand ("KLOW" = its four peptides); Step 2b then asks for each one\'s weight.',
   },
   {
     key: 'declared_mg',
@@ -97,7 +97,7 @@ export const STEP2_COLUMNS: SheetColumn<Step2Key>[] = [
     kind: 'select',
     label: 'Diluent',
     title:
-      'What the stock (and its dilutions) are made in. Water, unless a peptide in the Sample Identity is listed under Lab rules: Diluent by peptide (GHK-Cu, GLOW and KLOW take water + 0.1% TFA). Pick one to use another for this row; the first choice goes back to the rule.',
+      'What the stock (and its dilutions) are made in. Water, unless a peptide in the Sample Identity is listed under Lab rules → Diluent by peptide (GHK-Cu, GLOW and KLOW take water + 0.1% TFA). Pick one to use another for this row; the first choice goes back to the rule.',
   },
   {
     key: 'stock_vial_mg',
@@ -256,6 +256,6 @@ export const STEP3_COLUMNS: SheetColumn<Step3Key>[] = [
     dp: 4,
     label: 'Total Dilution Factor',
     title:
-      "Stock to final vial. One step: Actual Total Volume ÷ Actual Stock Vol added. Two steps: that, times the intermediate step's own factor.",
+      "Stock → final vial. One step: Actual Total Volume ÷ Actual Stock Vol added. Two steps: that, times the intermediate step's own factor.",
   },
 ]
