@@ -25370,14 +25370,13 @@ def update_worksheet(
         ws.notes = data.notes
     if data.bench_config is not None:
         # The plate's well map belongs to the server (stamped by freeze-wells):
-        # a settings save from a page that never saw it must not drop it, or
-        # the locked wells would redraw under the other map.
+        # a settings save can neither drop it nor set it, or the locked wells
+        # would redraw under the other map. Only freeze and unfreeze touch it.
         kept = (ws.bench_config or {}).get("layout")
-        ws.bench_config = (
-            {**data.bench_config, "layout": kept}
-            if kept and "layout" not in data.bench_config
-            else data.bench_config
-        )
+        ws.bench_config = {
+            **{k: v for k, v in data.bench_config.items() if k != "layout"},
+            **({"layout": kept} if kept else {}),
+        }
     for field, operation in (("endo_prep", "endo_prep_set"),
                              ("cartridge_type_id", "endo_cartridge_set")):
         new = getattr(data, field)
@@ -26475,7 +26474,11 @@ def freeze_worksheet_wells(
     taken = {(it.plate_no, it.well_pos) for it in items.values() if it.well_pos is not None}
     if data.layout is not None and data.layout not in _WELL_MAPS:
         raise HTTPException(400, "Unknown well map")
-    stamped = (ws.bench_config or {}).get("layout") or ("legacy" if taken else None)
+    # No stamp but a locked well or an issued-well record (its only locked
+    # sample may have been removed since): a plate is out under the old map.
+    stamped = (ws.bench_config or {}).get("layout") or (
+        "legacy" if taken or ws.well_high_water else None
+    )
     if data.layout and stamped and data.layout != stamped:
         raise HTTPException(
             409,
