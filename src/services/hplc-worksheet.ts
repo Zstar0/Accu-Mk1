@@ -108,9 +108,11 @@ function readStored(id: number): HplcFailure[] | null {
 /** This sheet's list as storage holds it now (every tab's server
  *  failures) plus this tab's own refused values; this tab's memory when
  *  storage cannot be read. */
-function current(id: number): HplcFailure[] {
+function current(
+  id: number,
+  stored: HplcFailure[] | null = readStored(id)
+): HplcFailure[] {
   const mine = failureLists.get(id) ?? NO_FAILURES
-  const stored = readStored(id)
   if (stored === null) return mine
   // a server failure recorded here stays until this tab's own landed save,
   // dismiss or prune, whatever storage holds now (R4, R5)
@@ -144,11 +146,26 @@ function sync(id: number, list: HplcFailure[]) {
 
 // Another tab wrote a sheet's failures: take them, so a failure there marks
 // and blocks here too, and a dismiss there clears it here (unless this tab
-// recorded it itself: R5).
+// recorded it itself: R5). A failure this tab recorded that the other tab's
+// write left out goes straight back into storage (R6), so a reload of this
+// tab before its next write still finds it.
 if (typeof window !== 'undefined')
   window.addEventListener('storage', e => {
     if (e.key !== null && !e.key.startsWith(STORE_PREFIX)) return
-    for (const id of loaded) sync(id, current(id))
+    for (const id of loaded) {
+      const stored = readStored(id)
+      const now = current(id, stored)
+      sync(id, now)
+      const own = recorded.get(id)
+      if (
+        stored !== null &&
+        own &&
+        now.some(
+          f => !f.refused && own.has(f.n) && !stored.some(s => s.n === f.n)
+        )
+      )
+        writeStored(id, now)
+    }
   })
 
 /** Writes the server failures; a write storage will not take is skipped
@@ -241,13 +258,16 @@ export const hplcFailures = {
       })
     })
   },
-  /** The sheet as read: a failure of a row no longer on it, or now
-   *  promoted, can never be saved again, so it goes. */
+  /** The sheet as read: a failure of a row that is on it and promoted can
+   *  never be saved again, so it goes. A failure of a row NOT on this sheet
+   *  stays (R6): this tab's sheet may simply be older than the row, added in
+   *  another tab, and dropping it here would take it out of storage for
+   *  every tab. A row really removed keeps its line until it is dismissed. */
   prune(id: number, rows: { item_id: number; promoted: boolean }[]) {
-    const live = new Set(rows.filter(r => !r.promoted).map(r => r.item_id))
+    const final = new Set(rows.filter(r => r.promoted).map(r => r.item_id))
     const dead = (f: HplcFailure) =>
       f.keys.length > 0 &&
-      f.keys.every(k => !live.has(Number(k.slice(0, k.indexOf(':')))))
+      f.keys.every(k => final.has(Number(k.slice(0, k.indexOf(':')))))
     hplcFailures.update(id, list =>
       list.some(dead) ? list.filter(f => !dead(f)) : list
     )

@@ -1224,7 +1224,7 @@ describe('Promote on the HPLC worksheet page', () => {
       .map(b => b.closest('[role="alert"]') as HTMLElement)
       .find(a => a.textContent?.includes(text))
 
-  it('R5: another tab writing over a failure this tab recorded does not take it from here, and this tab puts it back in storage', async () => {
+  it('R5/R6: another tab writing over a failure this tab recorded does not take it from here, and this tab puts it back in storage at once', async () => {
     const box = await recordF('fail')
     // the other tab read storage a moment before F was stored, and writes
     // its own list over it
@@ -1235,8 +1235,11 @@ describe('Promote on the HPLC worksheet page', () => {
     fireEvent.click(promoteButton())
     expect(await within(step2()).findByText(UNSAVED)).toBeInTheDocument()
     expect(screen.queryByRole('dialog')).not.toBeInTheDocument()
-    expect(window.localStorage.getItem(STORE_KEY)).not.toContain('timed out')
-    // this tab's next write restores it in storage
+    // R6: back in storage on the event itself, so a reload of this tab
+    // before its next write still finds it; the other tab's entry is kept
+    const restored = window.localStorage.getItem(STORE_KEY) ?? ''
+    expect(restored).toContain(': timed out"')
+    expect(restored).toContain(OTHER_G.text)
     typeAndLeave(
       screen.getByRole('textbox', { name: `${S1}, ${VIAL_DIL}` }),
       '8000'
@@ -1245,10 +1248,39 @@ describe('Promote on the HPLC worksheet page', () => {
     const stored = window.localStorage.getItem(STORE_KEY) ?? ''
     expect(stored).toContain(': timed out"')
     expect(stored).toContain(OTHER_G.text)
-    // and an event that empties storage still leaves it here
+    // an event that empties storage still leaves both of this tab's here,
+    // and both go straight back into storage
     otherTabWrites(null)
     await waitFor(() => expect(dismissButtons()).toHaveLength(2))
     expect(box.className).toContain('border-red-500')
+    const again = window.localStorage.getItem(STORE_KEY) ?? ''
+    expect(again).toContain(': timed out"')
+    expect(again).toContain('timed out again')
+    expect(again).not.toContain(OTHER_G.text)
+  })
+
+  it("R6: a failure for a row this tab's sheet does not show is never pruned by this tab", async () => {
+    // another tab added sample 400 after this tab read the sheet, typed a
+    // weighing there, and the save failed
+    const ROW_400 = {
+      text: 'P-0400-S01, Vial and septum (mg): timed out',
+      keys: ['400:hplc_prep.stock_vial_mg'],
+    }
+    vi.mocked(getHplcSheet).mockResolvedValue(makeSheet([ready()]))
+    vi.mocked(patchHplcRow).mockResolvedValue(ready())
+    renderPage()
+    const box = await screen.findByRole('textbox', {
+      name: `${S1}, ${VIAL_DIL}`,
+    })
+    otherTabWrites([ROW_400])
+    await waitFor(() => expect(dismissButtons()).toHaveLength(1))
+    // this tab types in a box of its own; the save lands and the sheet it
+    // holds (which has no row 400) changes
+    typeAndLeave(box, '8000')
+    await waitFor(() => expect(patchHplcRow).toHaveBeenCalledTimes(1))
+    await act(() => new Promise(r => setTimeout(r, 30)))
+    expect(window.localStorage.getItem(STORE_KEY)).toContain('400:')
+    expect(listed('P-0400-S01')).toBeDefined()
   })
 
   it("R5: this tab's own landed save of the box clears its failure here and in storage", async () => {
@@ -1364,7 +1396,7 @@ describe('Promote on the HPLC worksheet page', () => {
     }
   })
 
-  it('Z3: a stored failure of a row now promoted, or gone from the sheet, is dropped when the sheet is read', async () => {
+  it('Z3/R6: a stored failure of a row now promoted is dropped when the sheet is read; one for a row not on this sheet stays', async () => {
     window.localStorage.setItem(
       'hplc-sheet-failures:7',
       JSON.stringify([
@@ -1383,12 +1415,18 @@ describe('Promote on the HPLC worksheet page', () => {
       makeSheet([promoted(), ready({ item_id: 312, sample_id: S2 })])
     )
     renderPage()
-    const alert = await screen.findByRole('alert')
-    await waitFor(() => expect(hplcFailures.get(7)).toHaveLength(1))
-    expect(alert).toHaveTextContent(`${S2}, ${VIAL}`)
-    expect(window.localStorage.getItem('hplc-sheet-failures:7')).not.toContain(
-      '999:'
-    )
+    await screen.findAllByRole('alert')
+    // the promoted row's line goes; row 999 is not on this sheet, which may
+    // only mean another tab added it after this sheet was read, so it stays
+    await waitFor(() => expect(hplcFailures.get(7)).toHaveLength(2))
+    const texts = hplcFailures.get(7).map(f => f.text)
+    expect(texts).toEqual([
+      'P-0999-S01, Form: refused',
+      `${S2}, ${VIAL}: weighing out of range`,
+    ])
+    const stored = window.localStorage.getItem('hplc-sheet-failures:7') ?? ''
+    expect(stored).toContain('999:')
+    expect(stored).not.toContain('311:')
   })
 
   it('Z5: the Sample prep header has help on hover and is no Tab stop', async () => {

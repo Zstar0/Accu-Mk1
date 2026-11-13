@@ -86,7 +86,8 @@ export function HplcWorksheetPage({
   const clearKeys = (keys: string[]) => hplcFailures.landed(id, keys)
   // refused values are drafts: they go when the page is left
   useEffect(() => () => hplcFailures.dropRefused(id), [id])
-  // a stored failure of a row gone from the sheet, or promoted, goes
+  // a stored failure of a row now promoted goes; one for a row this sheet
+  // does not show stays (another tab may have added that row)
   useEffect(() => {
     if (sheet.data) hplcFailures.prune(id, sheet.data.rows)
   }, [id, sheet.data])
