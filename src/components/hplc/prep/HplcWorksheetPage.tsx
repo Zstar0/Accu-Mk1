@@ -12,6 +12,7 @@ import {
 import { displayName } from '@/lib/user-display'
 import { parseWorksheetNotes, withNotesText } from '@/lib/worksheet-notes'
 import { useWorksheetDrawer } from '@/hooks/use-worksheet-drawer'
+import type { HplcPrepRule } from '@/lib/hplc-prep-rules'
 import { useHplcPrepRules } from '@/services/hplc-prep-rules'
 import {
   HPLC_SHEET_KEY,
@@ -25,6 +26,7 @@ import { HplcPrepSheet } from './HplcPrepSheet'
 import { CellSelect } from './HplcSheetCells'
 
 const FIVE_MINUTES = 5 * 60 * 1000
+const NO_RULES: HplcPrepRule[] = []
 
 /**
  * The HPLC prep worksheet as a page (plan 2026-11-12-hplc-prep-worksheet):
@@ -54,7 +56,8 @@ export function HplcWorksheetPage({
   const patch = usePatchHplcRow(id, onFailure)
   const instrument = useSetHplcInstrument(id, onFailure)
   // A first load that failed leaves every row on the method standard.
-  const { data: rules = [] } = useHplcPrepRules()
+  // One empty list, so the sheet's row views stay memoised while it loads.
+  const rules = useHplcPrepRules().data ?? NO_RULES
   const { data: users = [] } = useQuery({
     queryKey: ['worksheet-users'],
     queryFn: getWorksheetUsers,
@@ -161,7 +164,7 @@ export function HplcWorksheetPage({
 
       {sheet.isLoading ? (
         <Skeleton className="h-40 w-full" />
-      ) : sheet.isError || !sheet.data ? (
+      ) : !sheet.data ? (
         <p className="flex items-center gap-3 text-sm text-muted-foreground">
           Could not load the HPLC sheet.
           <Button
@@ -173,16 +176,33 @@ export function HplcWorksheetPage({
           </Button>
         </p>
       ) : (
-        <HplcPrepSheet
-          sheet={sheet.data}
-          rules={rules}
-          readOnly={isCompleted}
-          instruments={instruments.filter(i => i.active)}
-          onPatch={(itemId, body, what) => patch.mutate({ itemId, body, what })}
-          onSetInstrument={(itemId, instrumentId, what) =>
-            instrument.mutate({ itemId, instrumentId, what })
-          }
-        />
+        <>
+          {/* A read-again that failed keeps the sheet, and every draft in it. */}
+          {sheet.isError && (
+            <p className="flex items-center gap-3 rounded-[5px] border border-amber-500/40 bg-amber-500/10 px-3 py-1.5 text-sm text-amber-800 dark:text-amber-200">
+              Could not refresh the sheet; what you see may be out of date
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => void sheet.refetch()}
+              >
+                Retry
+              </Button>
+            </p>
+          )}
+          <HplcPrepSheet
+            sheet={sheet.data}
+            rules={rules}
+            readOnly={isCompleted}
+            instruments={instruments.filter(i => i.active)}
+            onPatch={(itemId, body, what) =>
+              patch.mutate({ itemId, body, what })
+            }
+            onSetInstrument={(itemId, instrumentId, what) =>
+              instrument.mutate({ itemId, instrumentId, what })
+            }
+          />
+        </>
       )}
 
       <section>

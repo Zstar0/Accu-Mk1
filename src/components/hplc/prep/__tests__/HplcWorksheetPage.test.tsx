@@ -49,7 +49,13 @@ function renderPage() {
   render(
     <QueryClientProvider
       client={
-        new QueryClient({ defaultOptions: { queries: { retry: false } } })
+        new QueryClient({
+          defaultOptions: {
+            queries: { retry: false },
+            // the app's default (src/lib/query-client.ts), without the wait
+            mutations: { retry: 1, retryDelay: 0 },
+          },
+        })
       }
     >
       <HplcWorksheetPage worksheet={worksheet} />
@@ -144,26 +150,57 @@ describe('HplcWorksheetPage', () => {
     expect(screen.queryByRole('alert')).not.toBeInTheDocument()
   })
 
-  it('responses that come back out of order leave the newest value', async () => {
+  it('two saves to one key reach the server in call order, the second after the first answered', async () => {
     const at = (mg: number) =>
       makeSheet([makeRow({ hplc_prep: { stock_vial_mg: mg } })])
+    let readAgain: (s: ReturnType<typeof at>) => void = () => undefined
     vi.mocked(getHplcSheet)
       .mockResolvedValueOnce(at(5012.31))
-      .mockResolvedValue(at(7000))
+      .mockImplementationOnce(
+        () =>
+          new Promise(resolve => {
+            readAgain = resolve
+          })
+      )
     const saves = queueSaves()
     renderPage()
     const box = await screen.findByRole('textbox', { name: `${S1}, ${VIAL}` })
     typeAndLeave(box, '6000')
     typeAndLeave(box, '7000')
-    await waitFor(() => expect(patchHplcRow).toHaveBeenCalledTimes(2))
-    // the newer answers first, the older last
-    await act(async () => saves.ok(1, at(7000).rows[0]))
+    await waitFor(() => expect(patchHplcRow).toHaveBeenCalledTimes(1))
+    expect(patchHplcRow).toHaveBeenLastCalledWith(7, 311, {
+      hplc_prep: { stock_vial_mg: 6000 },
+    })
+    expect(box).toHaveValue('7000')
+    // the older answer never replaces the newer typing
     await act(async () => saves.ok(0, at(6000).rows[0]))
+    await waitFor(() => expect(patchHplcRow).toHaveBeenCalledTimes(2))
+    expect(patchHplcRow).toHaveBeenLastCalledWith(7, 311, {
+      hplc_prep: { stock_vial_mg: 7000 },
+    })
+    expect(box).toHaveValue('7000')
+    await act(async () => saves.ok(1, at(7000).rows[0]))
     await waitFor(() => expect(getHplcSheet).toHaveBeenCalledTimes(2))
-    await waitFor(() => expect(box).toHaveValue('7000'))
+    // the read-again is still open: the box shows what the last save stored
+    expect(box).toHaveValue('7000')
+    await act(async () => readAgain(at(7000)))
+    expect(box).toHaveValue('7000')
   })
 
-  it('a save that fails after a later one succeeded leaves the later value', async () => {
+  it('a failed save is not retried', async () => {
+    vi.mocked(getHplcSheet).mockResolvedValue(makeSheet([makeRow()]))
+    const saves = queueSaves()
+    renderPage()
+    const box = await screen.findByRole('textbox', { name: `${S1}, ${VIAL}` })
+    typeAndLeave(box, '6000')
+    await waitFor(() => expect(patchHplcRow).toHaveBeenCalledTimes(1))
+    await act(async () => saves.fail(0, 'timed out'))
+    expect(await screen.findByRole('alert')).toHaveTextContent('timed out')
+    await act(() => new Promise(r => setTimeout(r, 50)))
+    expect(patchHplcRow).toHaveBeenCalledTimes(1)
+  })
+
+  it('a save that fails while a later one to the same key waits leaves the later value', async () => {
     const at = (mg: number) =>
       makeSheet([makeRow({ hplc_prep: { stock_vial_mg: mg } })])
     vi.mocked(getHplcSheet)
@@ -174,10 +211,11 @@ describe('HplcWorksheetPage', () => {
     const box = await screen.findByRole('textbox', { name: `${S1}, ${VIAL}` })
     typeAndLeave(box, '6000')
     typeAndLeave(box, '7000')
-    await waitFor(() => expect(patchHplcRow).toHaveBeenCalledTimes(2))
-    await act(async () => saves.ok(1, at(7000).rows[0]))
+    await waitFor(() => expect(patchHplcRow).toHaveBeenCalledTimes(1))
     await act(async () => saves.fail(0, 'timed out'))
     expect(box).toHaveValue('7000')
+    await waitFor(() => expect(patchHplcRow).toHaveBeenCalledTimes(2))
+    await act(async () => saves.ok(1, at(7000).rows[0]))
     await waitFor(() => expect(getHplcSheet).toHaveBeenCalledTimes(2))
     expect(box).toHaveValue('7000')
   })
@@ -193,24 +231,56 @@ describe('HplcWorksheetPage', () => {
     const second = screen.getByRole('textbox', { name: `${S1}, ${VIAL_DIL}` })
     typeAndLeave(first, '6000')
     typeAndLeave(second, '8003.6')
-    await waitFor(() => expect(patchHplcRow).toHaveBeenCalledTimes(2))
-    await act(async () =>
-      saves.ok(
-        1,
-        makeRow({
-          hplc_prep: { stock_vial_mg: 6000, stock_vial_diluent_mg: 8003.6 },
-        })
-      )
-    )
+    await waitFor(() => expect(patchHplcRow).toHaveBeenCalledTimes(1))
     await act(async () => saves.fail(0, 'weighing out of range'))
     const alert = await screen.findByRole('alert')
     expect(alert).toHaveTextContent(
       `Not saved: ${S1}, ${VIAL}: weighing out of range`
     )
     expect(first).toHaveValue('5012.31')
-    // dismissible
+    expect(second).toHaveValue('8003.6')
+    await waitFor(() => expect(patchHplcRow).toHaveBeenCalledTimes(2))
+    await act(async () =>
+      saves.ok(
+        1,
+        makeRow({
+          hplc_prep: { stock_vial_mg: 5012.31, stock_vial_diluent_mg: 8003.6 },
+        })
+      )
+    )
+    // a later save that lands keeps the failure up; it is dismissible
+    expect(screen.getByRole('alert')).toBe(alert)
     fireEvent.click(within(alert).getByRole('button', { name: 'Dismiss' }))
     expect(screen.queryByRole('alert')).not.toBeInTheDocument()
+  })
+
+  it('a failed read-again keeps the sheet and a box being typed in, and says so', async () => {
+    vi.mocked(getHplcSheet)
+      .mockResolvedValueOnce(makeSheet([makeRow()]))
+      .mockRejectedValue(new Error('network down'))
+    const saves = queueSaves()
+    renderPage()
+    const box = await screen.findByRole('textbox', { name: `${S1}, ${VIAL}` })
+    typeAndLeave(box, '6000')
+    await waitFor(() => expect(patchHplcRow).toHaveBeenCalledTimes(1))
+    // the tech is typing in the next box, not yet left
+    const next = screen.getByRole('textbox', { name: `${S1}, ${VIAL_DIL}` })
+    fireEvent.focus(next)
+    fireEvent.change(next, { target: { value: '80' } })
+    await act(async () =>
+      saves.ok(0, makeRow({ hplc_prep: { stock_vial_mg: 6000 } }))
+    )
+    await waitFor(() => expect(getHplcSheet).toHaveBeenCalledTimes(2))
+    expect(
+      await screen.findByText(
+        'Could not refresh the sheet; what you see may be out of date'
+      )
+    ).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Retry' })).toBeInTheDocument()
+    expect(screen.queryByText(/Could not load the HPLC sheet/)).toBeNull()
+    expect(next).toBeInTheDocument()
+    expect(next).toHaveValue('80')
+    expect(box).toHaveValue('6000')
   })
 
   it('a completed sheet is read-only on the page', async () => {

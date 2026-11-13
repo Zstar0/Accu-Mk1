@@ -44,11 +44,7 @@ interface SaveVars {
   instrumentId?: number | null
 }
 
-/** The order saves were made in, across the sheet. */
-let saveSeq = 0
-
 interface SaveCtx {
-  seq: number
   before: HplcSheetRow | undefined
 }
 
@@ -73,28 +69,33 @@ function valueAt(row: unknown, path: string): unknown {
   return x
 }
 
-/** The other saves on this sheet for this row: pending ones, and those made
- *  after `mine` that did not fail (a save still starting has no order yet
- *  and counts as later). */
-function others(qc: QueryClient, id: number, itemId: number, mine: number) {
+/** The leaves the other pending saves for this row write. The saves run one
+ *  at a time in call order, so while one settles every other pending save
+ *  is a later one, its optimistic value already in the cache. */
+function laterPaths(
+  qc: QueryClient,
+  id: number,
+  itemId: number,
+  mine: SaveCtx
+) {
   return qc
     .getMutationCache()
-    .findAll({ mutationKey: SAVE_KEY(id) })
-    .filter(m => (m.state.variables as SaveVars | undefined)?.itemId === itemId)
-    .map(m => ({
-      seq: (m.state.context as SaveCtx | undefined)?.seq ?? Infinity,
-      status: m.state.status,
-      paths: pathsOf(m.state.variables as SaveVars),
-    }))
-    .filter(m => m.seq !== mine)
+    .findAll({ mutationKey: SAVE_KEY(id), status: 'pending' })
+    .filter(
+      m =>
+        m.state.context !== mine &&
+        (m.state.variables as SaveVars | undefined)?.itemId === itemId
+    )
+    .flatMap(m => pathsOf(m.state.variables as SaveVars))
 }
 
 /**
- * A sheet's saves. Each is optimistic. A server row replaces the cached
- * one only when no other save for that row is in flight or came later, and
- * the sheet is refetched once the last save on it settles, so answers that
- * come back out of order never leave a stale figure. A failure puts back
- * only the leaves it wrote that no later save has written since, and is
+ * A sheet's saves. Each is optimistic at once; the requests run one at a
+ * time in call order (one mutation scope for the sheet, never retried), so
+ * the server applies them in the order they were typed. A server row
+ * replaces the cached one only when no later save for that row is waiting,
+ * and the sheet is read again once the last save on it settles. A failure
+ * puts back only the leaves it wrote that no later save has written, and is
  * reported through `onFailure` (a mutate call's own callbacks fire only for
  * the latest call, so a failure before it would go unseen).
  */
@@ -117,25 +118,23 @@ function useSheetSave(
     )
   return useMutation({
     mutationKey: SAVE_KEY(id),
+    scope: { id: `hplc-sheet-save-${id}` },
+    // a retry could land after a later save; a failure is shown instead
+    retry: 0,
     mutationFn: send,
     onMutate: async (v: SaveVars): Promise<SaveCtx> => {
-      const seq = ++saveSeq
       await qc.cancelQueries({ queryKey: key })
       const before = qc
         .getQueryData<HplcSheet>(key)
         ?.rows.find(r => r.item_id === v.itemId)
       setRow(v.itemId, row => apply(row, v))
-      return { seq, before }
+      return { before }
     },
     onError: (err, v, ctx) => {
       onFailure?.(v.what, err instanceof Error ? err.message : 'Save failed')
       const before = ctx?.before
       if (!ctx || !before) return
-      const later = new Set(
-        others(qc, id, v.itemId, ctx.seq)
-          .filter(m => m.seq > ctx.seq && m.status !== 'error')
-          .flatMap(m => m.paths)
-      )
+      const later = new Set(laterPaths(qc, id, v.itemId, ctx))
       const undo = pathsOf(v).filter(p => !later.has(p))
       if (!undo.length) return
       setRow(v.itemId, row => {
@@ -166,10 +165,8 @@ function useSheetSave(
     },
     onSuccess: (data, v, ctx) => {
       if (v.instrumentId !== undefined || !ctx) return
-      const busy = others(qc, id, v.itemId, ctx.seq).some(
-        m => m.status === 'pending' || m.seq > ctx.seq
-      )
-      if (!busy) setRow(v.itemId, () => data as HplcSheetRow)
+      if (!laterPaths(qc, id, v.itemId, ctx).length)
+        setRow(v.itemId, () => data as HplcSheetRow)
     },
     onSettled: (_d, _e, v) => {
       if (v.instrumentId !== undefined)

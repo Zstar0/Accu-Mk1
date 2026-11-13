@@ -81,6 +81,14 @@ function goTo(box: Box) {
   box.focus()
   if (box instanceof HTMLInputElement) box.select()
   box.dataset.navFresh = '1'
+  // a click puts the caret where the tech wants it: Left and Right move it
+  // again (the source clears the flag on mousedown); one listener per box
+  box.addEventListener('mousedown', clearFresh)
+}
+
+function clearFresh(e: Event) {
+  if (e.currentTarget instanceof HTMLElement)
+    e.currentTarget.dataset.navFresh = ''
 }
 
 /** Left and Right stay inside the text while editing it; they move on when
