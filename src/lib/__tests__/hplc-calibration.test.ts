@@ -18,6 +18,7 @@ import {
   replicatePrep,
   workOutSheet,
   type CalInputs,
+  type CalLevelInputs,
   type CalReplicateInputs,
 } from '@/lib/hplc-calibration'
 import { HPLC_RUN_PARAM_DEFAULTS } from '@/lib/hplc-run-params'
@@ -142,6 +143,139 @@ describe('a counterion fraction that cannot be worked out', () => {
     expect(worked.stock_conc_ug_ml).toBeNull()
     expect(worked.fit.n).toBe(0)
     expect(worked.fit.slope).toBeNull()
+  })
+})
+
+describe('extreme input never throws and never leaves a non-finite number', () => {
+  /** Every number finite, or null; undefined anywhere is a failure. */
+  function walkFinite(x: unknown, where: string): void {
+    if (x === undefined) throw new Error(`${where}: undefined`)
+    if (Array.isArray(x)) x.forEach((v, i) => walkFinite(v, `${where}[${i}]`))
+    else if (isObject(x))
+      for (const [k, v] of Object.entries(x)) walkFinite(v, `${where}.${k}`)
+    else if (typeof x === 'number' && !Number.isFinite(x))
+      throw new Error(`${where}: ${x}`)
+  }
+
+  /** mulberry32: a small seeded generator, so a failing seed replays. */
+  function seeded(seed: number): () => number {
+    let a = seed >>> 0
+    return () => {
+      a = (a + 0x6d2b79f5) >>> 0
+      let t = a
+      t = Math.imul(t ^ (t >>> 15), t | 1)
+      t ^= t + Math.imul(t ^ (t >>> 7), t | 61)
+      return ((t ^ (t >>> 14)) >>> 0) / 4294967296
+    }
+  }
+
+  // As the Python hammer: the extremes, ordinary values, and their mixes.
+  const EXTREMES = [5e-324, 1e-300, 1e-12, 1e12, 1e-6, 1, 0]
+  const ORDINARY = [
+    0.5, 2, 60.05, 99.3, 711.86, 1000, 2794.62, 4268.25, 15729.14,
+  ]
+
+  function pickers(rnd: () => number) {
+    const pickOf = <T>(xs: readonly T[]): T =>
+      xs[Math.floor(rnd() * xs.length)] as T
+    const value = (weighing = false): number | null => {
+      const pick = rnd()
+      if (pick < 0.12) return null
+      const v =
+        pick < 0.6
+          ? pickOf(EXTREMES)
+          : pick < 0.85
+            ? pickOf(ORDINARY)
+            : rnd() * (weighing ? 1e9 : 1e12)
+      if (weighing) return Math.min(v, 1e9)
+      return rnd() < 0.1 ? -v : v
+    }
+    return { pickOf, value }
+  }
+
+  function hammerSheet(rnd: () => number): CalInputs {
+    const { pickOf, value } = pickers(rnd)
+    const levels: CalLevelInputs[] = []
+    const nLevels = 1 + Math.floor(rnd() * 12)
+    for (let i = 0; i < nLevels; i++)
+      levels.push({
+        target: value(),
+        vial_mg: value(true),
+        vial_diluent_mg: value(true),
+        vial_diluent_std_mg: value(true),
+        peak_area: value(),
+        purity: value(),
+        rt: value(),
+      })
+    return {
+      ...blankCalInputs(),
+      net: {
+        counterion_mw: value(),
+        equivalents: value(),
+        free_mw: value(),
+        stated_fw: value(),
+        ms_mz: value(),
+        assay_pct: value(),
+        water_pct: value(),
+        override_factor: value(),
+        counterion: pickOf([null, '', 'Other', ...Object.keys(COUNTERIONS)]),
+        ms_ion: pickOf([null, ...MS_IONS]),
+        assumption: pickOf([null, '', 'lean 2']),
+        override_reason: pickOf([null, '', 'why']),
+      },
+      levels,
+      stock: {
+        vial_mg: value(true),
+        vial_standard_mg: value(true),
+        vial_diluent_mg: value(true),
+      },
+      diluent_density_mg_ml: value(),
+      level_volume_ul: value(),
+      top_aliquot_ul: value(),
+      stock_as_top: pickOf([null, false, true]),
+    }
+  }
+
+  it('5,000 seeded sheets', () => {
+    for (let seed = 0; seed < 5000; seed++) {
+      try {
+        const rnd = seeded(seed)
+        let sheet = hammerSheet(rnd)
+        if (rnd() < 0.25) {
+          const { pickOf, value } = pickers(rnd)
+          const levels: CalReplicateInputs['levels'] = []
+          const n = Math.floor(rnd() * 13)
+          for (let i = 0; i < n; i++)
+            levels.push({ peak_area: value(), purity: value(), rt: value() })
+          sheet = replicatePrep(sheet, {
+            notes: pickOf([null, 'Inj2']),
+            levels,
+          })
+          walkFinite(sheet, 'replicate')
+        }
+        const worked = workOutSheet(sheet)
+        walkFinite(worked, 'sheet')
+        walkFinite(netPeptide(sheet.net), 'net')
+        for (const w of worked.warnings) {
+          if (typeof w.text !== 'string' || w.text.trim() === '')
+            throw new Error(`${w.code}: empty text`)
+          if (/Infinity|NaN/.test(w.text))
+            throw new Error(`${w.code}: ${w.text}`)
+        }
+      } catch (e) {
+        throw new Error(`seed ${seed}: ${String(e)}`)
+      }
+    }
+  })
+
+  it('the edges the Python pins', () => {
+    const fit = linearFit([
+      [0, 0],
+      [1e-160, 1e-160],
+    ])
+    expect(fit.n).toBe(2)
+    expect(fit.r2).toBeNull()
+    expect(msNeutralMass(1e12, 'M+' + '9'.repeat(5000) + 'H')).toBeNull()
   })
 })
 

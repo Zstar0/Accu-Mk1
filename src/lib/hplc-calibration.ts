@@ -248,9 +248,24 @@ function volumeUl(massMg: number | null, density: number): number | null {
   return d === null ? null : d * 1000
 }
 
-/** calc.js fmt (5562), for warning text only. */
+/** The last step of every public result: a non-finite number (from
+ *  Infinity arithmetic, carried as the source carries it) is null. Builds a
+ *  new structure; mutates nothing. */
+function finite<T>(x: T): T {
+  if (typeof x === 'number') return (Number.isFinite(x) ? x : null) as T
+  if (Array.isArray(x)) return x.map(v => finite(v as unknown)) as T
+  if (x !== null && typeof x === 'object') {
+    const out: Record<string, unknown> = {}
+    for (const [k, v] of Object.entries(x)) out[k] = finite(v)
+    return out as T
+  }
+  return x
+}
+
+/** calc.js fmt (5562), for warning text only: blank for null and non-finite,
+ *  "-0.00" reads "0.00". */
 function fmt(v: number | null, dp = 2): string {
-  if (v === null) return ''
+  if (v === null || !Number.isFinite(v)) return ''
   const t = v.toFixed(dp)
   return /^-0(\.0*)?$/.test(t) ? t.slice(1) : t
 }
@@ -259,11 +274,14 @@ function text(v: unknown): string {
   return (v ? String(v) : '').trim()
 }
 
-/** calc.js volumeOff (880): [pct, over], signed, as a share of the plan. */
+/** calc.js volumeOff (880): [pct, over], signed, as a share of the plan;
+ *  num() drops a non-finite volume, as the source does. */
 function volumeOff(
-  planned: number | null,
-  actual: number | null
+  plannedIn: number | null,
+  actualIn: number | null
 ): [number | null, boolean] {
+  const planned = num(plannedIn)
+  const actual = num(actualIn)
   if (planned === null || actual === null || planned <= 0) return [null, false]
   const pct = ((actual - planned) / planned) * 100
   return [pct, Math.abs(pct) > VOLUME_TOLERANCE_PCT]
@@ -332,20 +350,33 @@ export function blankReplicateInputs(nLevels: number): CalReplicateInputs {
 
 // ---------------------------------------------------------------- pieces
 
-/** calc.js msNeutralMass (2717): z x m/z minus (or plus) z protons. */
-export function msNeutralMass(mz: unknown, ion: unknown): number | null {
+/** calc.js msNeutralMass (2717), unguarded: Infinity stays Infinity for the
+ *  checks that follow. */
+function msMass(mz: unknown, ion: unknown): number | null {
   const v = num(mz)
   if (v === null || !ion) return null
   if (ion === 'M') return v
   const m = /^M([+-])([0-9]*)H$/.exec(String(ion))
   if (!m) return null
-  const z = m[2] ? parseInt(m[2], 10) : 1
+  const z = m[2] ? Number(m[2]) : 1 // a long run of digits is Infinity
   return z * v - (m[1] === '+' ? 1 : -1) * z * PROTON_DA
+}
+
+/** calc.js msNeutralMass (2717): z x m/z minus (or plus) z protons. */
+export function msNeutralMass(mz: unknown, ion: unknown): number | null {
+  return finite(msMass(mz, ion))
 }
 
 /** calc.js linearFit (1087): centred least squares, a pair with a blank is
  *  ignored; r2 null when every y is equal. */
 export function linearFit(points: [unknown, unknown][]): CalFit {
+  return finite(linearFitRaw(points))
+}
+
+/** calc.js linearFit (1087), unguarded: a non-finite slope stays for the
+ *  back-calculation's check; an r2 whose sxx * syy underflows to 0 is
+ *  NaN or Infinity here, as in the source. */
+function linearFitRaw(points: [unknown, unknown][]): CalFit {
   const pts: [number, number][] = []
   for (const [x0, y0] of points) {
     const x = num(x0)
@@ -434,7 +465,7 @@ function netWorked(net: CalNetInputs | null | undefined): [CalNet, NetLine[]] {
       ])
     }
   }
-  const msM = msNeutralMass(n0.ms_mz, n0.ms_ion)
+  const msM = msMass(n0.ms_mz, n0.ms_ion)
   if (
     msM !== null &&
     free !== null &&
@@ -516,7 +547,7 @@ function netWorked(net: CalNetInputs | null | undefined): [CalNet, NetLine[]] {
 
 /** calc.js netPeptide (2741), basis always net; parts_used is Mk1's (decision 16). */
 export function netPeptide(net: CalNetInputs | null | undefined): CalNet {
-  return netWorked(net)[0]
+  return finite(netWorked(net)[0])
 }
 
 /** calc.js replicatePrep (2862) over CAL_REP_LEVEL_OWN: the original's
@@ -539,7 +570,9 @@ export function replicatePrep(
     levels.push(x)
   }
   out.levels = levels
-  return out
+  // the Python copies as is; a non-finite number here is a key JSON would
+  // store as null anyway, and every read of it is num()'s null
+  return finite(out)
 }
 
 /** calc.js calDuplicateWeighings (2958): [kind, level, value], same-row per
@@ -727,7 +760,12 @@ export function workOutSheet(inputs: CalInputs | null | undefined): CalWorked {
       ? (Math.abs(stockConc - top) / top) * 100 <= CAL_STOCK_AS_TOP_PCT
       : false
 
-  const fit = linearFit(levels.map(L => [L.actual_conc_ug_ml, L.peak_area]))
+  // Infinity and NaN are carried as JavaScript carries them (truthiness,
+  // Math.min) and turned into null only in the result, so every decision
+  // below is the source's.
+  const fit = linearFitRaw(
+    levels.map((L): [unknown, unknown] => [L.actual_conc_ug_ml, L.peak_area])
+  )
   for (const L of levels) {
     if (fit.slope && L.peak_area !== null) {
       const back = (L.peak_area - (fit.intercept as number)) / fit.slope
@@ -865,7 +903,11 @@ export function workOutSheet(inputs: CalInputs | null | undefined): CalWorked {
         'curve is filed.'
     )
 
-  return {
+  // a range whose ends are both NaN (NaN levels count as fitted at calc.js
+  // 1258) is no range
+  const rangeOut =
+    range && Number.isNaN(range.low) && Number.isNaN(range.high) ? null : range
+  return finite({
     density,
     level_volume_ul: targetTotal,
     stock_weight_mg: stockWeight,
@@ -885,8 +927,8 @@ export function workOutSheet(inputs: CalInputs | null | undefined): CalWorked {
     fit,
     rt_avg: rtAvg,
     rt_rsd_pct: rtRsd,
-    range,
+    range: rangeOut,
     warnings,
     blocking: warnings.map(w => w.code).filter(c => BLOCKING.includes(c)),
-  }
+  })
 }
