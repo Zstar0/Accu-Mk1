@@ -31,7 +31,7 @@ from models import (
     instrument_methods,
     peptide_methods,
 )
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 from worksheets_endo import _number
 
@@ -237,6 +237,33 @@ def _analytes(parent) -> tuple[list[tuple[int, Optional[float]]], bool]:
     return out, unresolved
 
 
+def _analysis_peptides(db: Session, parent_pks) -> dict[int, set[int]]:
+    """parent pk -> the set of catalog peptides its live analyses (its own and its vials') name:
+    the set-valued twin of coa.spec_rules.sample_peptide_ids, same anchor and joins, with
+    coa.iu_display's wider dead states (a rejected or cancelled row is no second peptide).
+    One query, none without pks."""
+    from coa.iu_display import _DEAD_STATES
+    from models import AnalysisService, LimsAnalysis
+
+    pks = set(parent_pks)
+    out: dict[int, set[int]] = {pk: set() for pk in pks}
+    if not pks:
+        return out
+    anchor = func.coalesce(LimsAnalysis.peptide_id, AnalysisService.peptide_id)
+    for host_pk, vial_parent_pk, peptide_id in db.execute(
+            select(LimsAnalysis.lims_sample_pk, LimsSubSample.parent_sample_pk, anchor)
+            .select_from(AnalysisService)
+            .join(LimsAnalysis, LimsAnalysis.analysis_service_id == AnalysisService.id)
+            .outerjoin(LimsSubSample, LimsSubSample.id == LimsAnalysis.lims_sub_sample_pk)
+            .where(anchor.is_not(None), LimsAnalysis.review_state.not_in(_DEAD_STATES),
+                   LimsAnalysis.lims_sample_pk.in_(pks) | LimsSubSample.parent_sample_pk.in_(pks))
+            .distinct()).all():
+        for pk in (host_pk, vial_parent_pk):
+            if pk in out:
+                out[pk].add(peptide_id)
+    return out
+
+
 def sheet_rows(db: Session, worksheet, items=None) -> list[dict]:
     """The row facts of every HPLC-bench item (the plan's "Row facts"), in the worksheet's item
     order, one row per item. `items` defaults to the worksheet's own. A fixed number of queries
@@ -262,10 +289,25 @@ def sheet_rows(db: Session, worksheet, items=None) -> list[dict]:
     forms = {f.id: f for f in db.execute(
         select(LimsSampleForm).where(LimsSampleForm.id.in_(form_ids))).scalars()} if form_ids else {}
 
-    # A blend: the catalog blend whose components are exactly the analytes' peptides, the
-    # lowest id when several are. Every blend holding any of those peptides, in one query.
-    wanted = {frozenset(p for p, _ in a) for a, _ in analytes.values() if len(a) > 1}
+    # The sample's own analytes when a slot carries a catalog peptide; else (a sample born in
+    # the older LIMS has none) the peptide set of its live analyses, in one query.
+    fallback = {parents[it.sample_id].id for it in items
+                if not analytes[it.id][0] and it.sample_id in parents}
+    by_analyses = _analysis_peptides(db, fallback) if fallback else {}
+    source, row_ids = {}, {}
+    for it in items:
+        parent = parents.get(it.sample_id)
+        if analytes[it.id][0]:
+            source[it.id], row_ids[it.id] = "analytes", [p for p, _ in analytes[it.id][0]]
+        else:
+            found = sorted(by_analyses.get(parent.id, ())) if parent is not None else []
+            source[it.id], row_ids[it.id] = ("analyses" if found else None), found
+
+    # A blend: the catalog blend whose components are exactly those peptides, the lowest id
+    # when several are. Every blend holding any of those peptides, in one query.
+    wanted = {frozenset(ids) for ids in row_ids.values() if len(ids) > 1}
     blends: dict[int, dict[int, int]] = {}
+    blend_order: dict[int, list[int]] = {}
     if wanted:
         holding = select(blend_components.c.blend_id).where(
             blend_components.c.component_id.in_(set().union(*wanted)))
@@ -273,19 +315,22 @@ def sheet_rows(db: Session, worksheet, items=None) -> list[dict]:
                 select(blend_components.c.blend_id, blend_components.c.component_id,
                        blend_components.c.vial_number)
                 .join(Peptide, Peptide.id == blend_components.c.blend_id)
-                .where(Peptide.is_blend.is_(True), blend_components.c.blend_id.in_(holding))).all():
+                .where(Peptide.is_blend.is_(True), blend_components.c.blend_id.in_(holding))
+                .order_by(blend_components.c.blend_id, blend_components.c.display_order,
+                          blend_components.c.component_id)).all():
             blends.setdefault(bid, {})[cid] = vial
+            blend_order.setdefault(bid, []).append(cid)
     blend_for = {s: min((b for b, comps in blends.items() if set(comps) == s), default=None)
                  for s in wanted}
-    peptide_ids = {p for a, _ in analytes.values() for p, _ in a} | (set(blend_for.values()) - {None})
+    peptide_ids = {p for ids in row_ids.values() for p in ids} | (set(blend_for.values()) - {None})
     peptides = {p.id: p for p in db.execute(
         select(Peptide).where(Peptide.id.in_(peptide_ids))).scalars()} if peptide_ids else {}
 
     # Each row's catalog peptide, components and problems with it.
     resolved = {}
     for it in items:
-        slots, unresolved = analytes[it.id]
-        ids = [p for p, _ in slots]
+        unresolved = source[it.id] == "analytes" and analytes[it.id][1]
+        ids = row_ids[it.id]
         peptide_id, blend, problem = None, None, None
         if unresolved or any(p not in peptides for p in ids):
             problem = "an analyte of the sample has no catalog peptide" if ids else \
@@ -329,7 +374,11 @@ def sheet_rows(db: Session, worksheet, items=None) -> list[dict]:
         peptide_id, blend, problem, is_blend = resolved[it.id]
         components = []
         if peptide_id:
-            for pid, mg in analytes[it.id][0]:
+            # From the analytes: their order and parsed quantities. From the analyses: a
+            # blend in its own display order, the split unknown (typed in Step 2b).
+            listed = (analytes[it.id][0] if source[it.id] == "analytes" else
+                      [(pid, None) for pid in (blend_order[peptide_id] if blend else row_ids[it.id])])
+            for pid, mg in listed:
                 pep = peptides[pid]
                 components.append({
                     "peptide_id": pid, "name": pep.name, "abbreviation": pep.abbreviation,
@@ -349,14 +398,12 @@ def sheet_rows(db: Session, worksheet, items=None) -> list[dict]:
         else:
             form = "bac" if sample_bac else (sample_form or {}).get("hplc_prep")
         hplc_prep = it.hplc_prep or {}
+        # A missing declared weight is no problem: the sheet has a box for it (ruling, fix 1).
         problems = []
         if not rider_only:
             problems += [problem] if problem else []
             if form is None:
                 problems.append("no HPLC prep for this sample form")
-            elif (form != "bac" and facts["declared_weight_mg"] is None
-                  and hplc_prep.get("declared_mg") is None):
-                problems.append("no declared weight")
         rows.append({
             "item_id": it.id, "sample_id": it.sample_id,
             "parent_sample_id": parent.sample_id if parent is not None else None,
@@ -364,6 +411,7 @@ def sheet_rows(db: Session, worksheet, items=None) -> list[dict]:
             "peptide_id": peptide_id,
             "peptide_name": peptides[peptide_id].name if peptide_id else None,
             "is_blend": is_blend, "components": components,
+            "components_source": source[it.id],
             "declared_mg": facts["declared_weight_mg"],
             "sample_form": sample_form, "sample_bac": sample_bac, "form": form,
             "rider_only": rider_only,

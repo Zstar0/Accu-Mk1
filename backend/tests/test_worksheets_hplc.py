@@ -29,6 +29,7 @@ from main import app
 from models import (
     HplcMethod,
     Instrument,
+    LimsAnalysis,
     LimsSample,
     LimsSampleForm,
     LimsSubSample,
@@ -44,6 +45,7 @@ from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import StaticPool
 from tests.test_endo_v2_worksheets import _count_sql
+from tests.test_spec_rules import _mk_identity_service
 
 # --- the merge, pure -------------------------------------------------------------------
 
@@ -237,16 +239,31 @@ def _form(db, name="Lyophilized Powder", hplc_prep="powder"):
 
 
 def _sample(db, sample_id, analytes, *, declared="10.00", form=None, sample_type_title="Peptide"):
-    """A parent sample; analytes are (peptide or None, name, declared_quantity) slots."""
+    """A parent sample; analytes are (peptide or None, name, declared_quantity) slots, or None
+    for a sample born in the older LIMS (no analytes column at all)."""
     parent = LimsSample(
         sample_id=sample_id, external_lims_uid=f"SEN-{sample_id}", declared_total_quantity=declared,
         sample_type_title=sample_type_title, client_order_number="WP-5541",
         sample_form_id=form.id if form else None,
-        analytes=json.dumps([{"name": name, "declared_quantity": qty,
-                              "peptide_id": pep.id if pep else None} for pep, name, qty in analytes]))
+        analytes=None if analytes is None else json.dumps([
+            {"name": name, "declared_quantity": qty, "peptide_id": pep.id if pep else None}
+            for pep, name, qty in analytes]))
     db.add(parent)
     db.flush()
     return parent
+
+
+def _analysis(db, peptide, *, parent=None, item=None, state="assigned"):
+    """A live (or dead, by `state`) analysis on a peptide-linked service, on the parent or on
+    the item's vial: what the analyses fallback reads."""
+    svc = _mk_identity_service(db, peptide.id, f"{peptide.abbreviation}-PURITY-{next(_IDS)}")
+    vial_pk = (db.query(LimsSubSample).filter_by(sample_id=item.sample_id).one().id
+               if item is not None else None)
+    db.add(LimsAnalysis(lims_sample_pk=parent.id if parent is not None else None,
+                        lims_sub_sample_pk=vial_pk, analysis_service_id=svc.id,
+                        keyword=svc.keyword, title=svc.title, review_state=state,
+                        provenance="canonical"))
+    db.flush()
 
 
 def _item(db, ws, parent, n=1, *, role="hplc", **columns):
@@ -271,7 +288,7 @@ def _method(db, peptide, instrument, run_parameters, name="HPLC M1"):
 
 _ROW_KEYS = {
     "item_id", "sample_id", "parent_sample_id", "order_number", "identity", "peptide_id",
-    "peptide_name", "is_blend", "components", "declared_mg", "sample_form", "sample_bac", "form",
+    "peptide_name", "is_blend", "components", "components_source", "declared_mg", "sample_form", "sample_bac", "form",
     "rider_only", "instrument_id", "instrument_name", "params", "prep_form", "hplc_prep",
     "promoted", "prep", "problems",
 }
@@ -303,6 +320,7 @@ def test_sheet_rows_serve_a_solo_peptide_row(db):
         "peptide_id": bpc.id, "peptide_name": "BPC-157", "is_blend": False,
         "components": [{"peptide_id": bpc.id, "name": "BPC-157", "abbreviation": "BPC-157",
                         "declared_mg": 10.0, "vial": 1}],
+        "components_source": "analytes",
         "declared_mg": 10.0,
         "sample_form": {"id": form.id, "name": "Lyophilized Powder", "hplc_prep": "powder"},
         "sample_bac": False, "form": "powder", "rider_only": False,
@@ -350,6 +368,7 @@ def test_a_blend_row_carries_its_components_with_their_default_vials(db):
             {"peptide_id": tb.id, "name": "Thymosin Beta-4", "abbreviation": "TB-500",
              "declared_mg": 5.0, "vial": 2},
         ],
+        "components_source": "analytes",
         "declared_mg": 10.0,
         "sample_form": {"id": form.id, "name": "Lyophilized Powder", "hplc_prep": "powder"},
         "sample_bac": False, "form": "powder", "rider_only": False,
@@ -375,18 +394,21 @@ def test_a_blend_missing_from_the_catalog_says_so(db):
 @pytest.mark.parametrize("analytes, problem", [
     ([(None, "BPC-157", "10")], "the sample has no catalog peptide"),
     ([], "the sample has no catalog peptide"),
+    (None, "the sample has no catalog peptide"),  # no analytes and no analysis peptide either
     # one slot resolved and one not: never served as a solo row of the whole weight
     ([("bpc", "BPC-157", "5"), (None, "Mystery", "5")], "an analyte of the sample has no catalog peptide"),
 ])
 def test_a_sample_without_catalog_peptides_says_so(db, analytes, problem):
     bpc = _peptide(db, "BPC-157")
-    slots = [(bpc if pep == "bpc" else pep, name, qty) for pep, name, qty in analytes]
+    slots = None if analytes is None else [
+        (bpc if pep == "bpc" else pep, name, qty) for pep, name, qty in analytes]
     parent = _sample(db, "P-0132", slots, form=_form(db))
     ws = _ws(db)
     _item(db, ws, parent)
     db.commit()
     [row] = _rows(db, ws)
     assert (row["peptide_id"], row["components"], row["problems"]) == (None, [], [problem])
+    assert row["components_source"] == ("analytes" if analytes and analytes[0][0] else None)
 
 
 def test_the_row_form_wins_then_bac_then_the_sample_form(db):
@@ -426,17 +448,114 @@ def test_a_form_with_no_hplc_prep_serves_a_null_form(db):
         assert row["problems"] == ["no HPLC prep for this sample form"]
 
 
-def test_no_declared_weight_is_a_problem_until_one_is_typed(db):
+def test_no_declared_weight_is_no_problem(db):
+    # the sheet has a Declared Peptide Wt (mg) box for it (fix round 1 ruling)
     bpc = _peptide(db, "BPC-157")
     parent = _sample(db, "P-0155", [(bpc, "BPC-157", None)], declared=None, form=_form(db))
     ws = _ws(db)
-    item = _item(db, ws, parent)
+    _item(db, ws, parent)
     db.commit()
     [row] = _rows(db, ws)
-    assert row["declared_mg"] is None and row["problems"] == ["no declared weight"]
-    item.hplc_prep = {"declared_mg": 9.8}
+    assert row["declared_mg"] is None and row["components"][0]["declared_mg"] is None
+    assert row["problems"] == []
+
+
+# --- the analyses fallback: a sample born in the older LIMS has no analytes ------------------
+
+
+def test_a_sample_without_analytes_takes_its_one_analysis_peptide(db):
+    bpc = _peptide(db, "BPC-157")
+    form = _form(db)
+    parent = _sample(db, "P-0076", None, declared=None, form=form)
+    ws = _ws(db)
+    item = _item(db, ws, parent)
+    _analysis(db, bpc, item=item)  # on the vial
+    _analysis(db, bpc, parent=parent)  # and on the parent: still one peptide
     db.commit()
-    assert _rows(db, ws)[0]["problems"] == []
+    assert _rows(db, ws) == [{
+        "item_id": item.id, "sample_id": "P-0076-S01", "parent_sample_id": "P-0076",
+        "order_number": "WP-5541", "identity": None,
+        "peptide_id": bpc.id, "peptide_name": "BPC-157", "is_blend": False,
+        "components": [{"peptide_id": bpc.id, "name": "BPC-157", "abbreviation": "BPC-157",
+                        "declared_mg": None, "vial": 1}],
+        "components_source": "analyses",
+        "declared_mg": None,
+        "sample_form": {"id": form.id, "name": "Lyophilized Powder", "hplc_prep": "powder"},
+        "sample_bac": False, "form": "powder", "rider_only": False,
+        "instrument_id": None, "instrument_name": None, "params": HPLC_RUN_PARAM_DEFAULTS,
+        "prep_form": None, "hplc_prep": {}, "promoted": False, "prep": None, "problems": [],
+    }]
+
+
+def test_a_sample_without_analytes_takes_the_blend_its_analyses_name(db):
+    bpc, tb = _peptide(db, "BPC-157"), _peptide(db, "TB-500", "Thymosin Beta-4")
+    # the blend's own order: TB-500 first
+    blend = _peptide(db, "BPC/TB", "BPC-157 + TB-500", blend_of=((tb, 2), (bpc, 1)))
+    form = _form(db)
+    parent = _sample(db, "P-0077", None, declared="10", form=form)
+    ws = _ws(db)
+    item = _item(db, ws, parent)
+    _analysis(db, bpc, parent=parent)
+    _analysis(db, tb, item=item)
+    db.commit()
+    assert _rows(db, ws) == [{
+        "item_id": item.id, "sample_id": "P-0077-S01", "parent_sample_id": "P-0077",
+        "order_number": "WP-5541", "identity": None,
+        "peptide_id": blend.id, "peptide_name": "BPC-157 + TB-500", "is_blend": True,
+        "components": [
+            {"peptide_id": tb.id, "name": "Thymosin Beta-4", "abbreviation": "TB-500",
+             "declared_mg": None, "vial": 2},
+            {"peptide_id": bpc.id, "name": "BPC-157", "abbreviation": "BPC-157",
+             "declared_mg": None, "vial": 1},
+        ],
+        "components_source": "analyses",
+        "declared_mg": 10.0,
+        "sample_form": {"id": form.id, "name": "Lyophilized Powder", "hplc_prep": "powder"},
+        "sample_bac": False, "form": "powder", "rider_only": False,
+        "instrument_id": None, "instrument_name": None, "params": HPLC_RUN_PARAM_DEFAULTS,
+        "prep_form": None, "hplc_prep": {}, "promoted": False, "prep": None, "problems": [],
+    }]
+
+
+def test_analysis_peptides_that_are_no_catalog_blend_say_so(db):
+    bpc, ghk = _peptide(db, "BPC-157"), _peptide(db, "GHK-Cu")
+    tb = _peptide(db, "TB-500")
+    _peptide(db, "BPC/TB", blend_of=((bpc, 1), (tb, 2)))
+    parent = _sample(db, "P-0078", None, form=_form(db))
+    ws = _ws(db)
+    item = _item(db, ws, parent)
+    _analysis(db, bpc, item=item)
+    _analysis(db, ghk, item=item)
+    db.commit()
+    [row] = _rows(db, ws)
+    assert (row["peptide_id"], row["is_blend"], row["components"], row["components_source"]) == (
+        None, True, [], "analyses")
+    assert row["problems"] == ["this blend is not in the catalog"]
+
+
+def test_dead_analysis_rows_are_not_counted(db):
+    bpc, tb, ghk, sema = (_peptide(db, a) for a in ("BPC-157", "TB-500", "GHK-Cu", "Semaglutide"))
+    parent = _sample(db, "P-0079", None, form=_form(db))
+    ws = _ws(db)
+    item = _item(db, ws, parent)
+    _analysis(db, bpc, item=item)
+    for pep, state in ((tb, "retracted"), (ghk, "rejected"), (sema, "cancelled")):
+        _analysis(db, pep, item=item, state=state)
+    db.commit()
+    [row] = _rows(db, ws)
+    assert (row["peptide_id"], row["is_blend"], row["components_source"]) == (bpc.id, False, "analyses")
+
+
+def test_the_samples_own_analytes_win_over_its_analyses(db):
+    bpc, tb = _peptide(db, "BPC-157"), _peptide(db, "TB-500")
+    parent = _sample(db, "P-0080", [(bpc, "BPC-157", "10")], form=_form(db))
+    ws = _ws(db)
+    item = _item(db, ws, parent)
+    _analysis(db, tb, item=item)
+    db.commit()
+    [row] = _rows(db, ws)
+    assert (row["peptide_id"], row["components_source"]) == (bpc.id, "analytes")
+    assert [c["peptide_id"] for c in row["components"]] == [bpc.id]
 
 
 def test_a_rider_only_item_has_no_prep(db):
@@ -478,21 +597,31 @@ def test_sheet_rows_run_a_fixed_number_of_queries(db):
     db.add(inst)
     db.flush()
     _method(db, bpc, inst, {"hplc": {}})
-    # one row of each kind against three: the blend lookup runs only when a blend row exists
+    # one row of each kind against three: the blend and analyses lookups run only when a row
+    # needs them. Kinds: a solo and a blend from analytes, a solo and a blend from analyses.
+    def rows_of_each_kind(ws, tag):
+        _item(db, ws, _sample(db, f"P-1{tag}", [(bpc, "BPC-157", "10")], form=form),
+              instrument_id=inst.id)
+        _item(db, ws, _sample(db, f"P-2{tag}", [(bpc, "BPC-157", "5"), (tb, "TB-500", "5")], form=form))
+        old_solo = _item(db, ws, _sample(db, f"P-3{tag}", None, form=form), instrument_id=inst.id)
+        _analysis(db, bpc, item=old_solo)
+        old_blend = _item(db, ws, _sample(db, f"P-4{tag}", None, form=form))
+        _analysis(db, bpc, item=old_blend)
+        _analysis(db, tb, item=old_blend)
+
     ws_one, ws_many = _ws(db), _ws(db)
-    _item(db, ws_one, _sample(db, "P-0190", [(bpc, "BPC-157", "10")], form=form), instrument_id=inst.id)
-    _item(db, ws_one, _sample(db, "P-0290", [(bpc, "BPC-157", "5"), (tb, "TB-500", "5")], form=form))
+    rows_of_each_kind(ws_one, "000")
     for n in range(3):
-        solo = _sample(db, f"P-019{n + 1}", [(bpc, "BPC-157", "10")], form=form)
-        blend = _sample(db, f"P-029{n + 1}", [(bpc, "BPC-157", "5"), (tb, "TB-500", "5")], form=form)
-        _item(db, ws_many, solo, instrument_id=inst.id)
-        _item(db, ws_many, blend)
+        rows_of_each_kind(ws_many, f"10{n}")
     db.commit()
+    db.refresh(ws_one)
+    db.refresh(ws_many)
     with _count_sql(db) as one:
         worksheets_hplc.sheet_rows(db, ws_one)
     with _count_sql(db) as many:
         rows = worksheets_hplc.sheet_rows(db, ws_many)
-    assert len(rows) == 6 and len(many) == len(one)
+    assert len(rows) == 12 and all(r["peptide_id"] for r in rows)
+    assert len(many) == len(one) == 10
 
 
 # --- the routes ----------------------------------------------------------------------------
