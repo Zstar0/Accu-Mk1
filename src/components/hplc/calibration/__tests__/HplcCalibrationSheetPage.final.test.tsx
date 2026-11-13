@@ -270,6 +270,69 @@ describe('Part A: in the app shell', () => {
     expect(fileCalSheet).toHaveBeenCalledTimes(1)
   })
 
+  it('I2: with nothing filed from this page, a sheet reopened through the list is read again (staleTime 0)', async () => {
+    const rep = copySheet()
+    const corrected = structuredClone(rep.effective_inputs as CalInputs)
+    corrected.stock = { ...(corrected.stock ?? {}), vial_mg: 1234.5 }
+    vi.mocked(getCalSheet).mockResolvedValue(rep)
+    vi.mocked(listCalSheets).mockResolvedValue([listRow(rep)])
+    renderInApp(9)
+    await screen.findByTestId('replicate-note')
+    const stock = () =>
+      box('Stock, Stock Vial + cap (mg)').getAttribute('value') ?? ''
+    expect(stock()).not.toBe('1234.5')
+    // the original is corrected and filed elsewhere
+    vi.mocked(getCalSheet).mockResolvedValue({
+      ...rep,
+      effective_inputs: corrected,
+    })
+    fireEvent.click(listLink())
+    await screen.findByText(`${NAME}-Inj2`)
+    fireEvent.click(screen.getByRole('button', { name: `Open ${NAME}-Inj2` }))
+    await screen.findByTestId('replicate-note')
+    await waitFor(() => expect(stock()).toBe('1234.5'))
+  })
+
+  it('I1: File, then Duplicate the filed sheet: the copy gets its own notice, the copy line', async () => {
+    const sheet = makeSheet(fixtureCase(1).inputs as CalInputs)
+    const filed = filedAs(sheet, 'first_active').sheet
+    const copy = copySheet()
+    vi.mocked(getCalSheet).mockImplementation(async id =>
+      id === 9 ? copy : filed
+    )
+    vi.mocked(fileCalSheet).mockResolvedValue(filedAs(sheet, 'first_active'))
+    vi.mocked(duplicateCalSheet).mockResolvedValue(copy)
+    renderInApp()
+    await screen.findByText('Curve name:', { exact: false })
+    fireEvent.click(fileBtn())
+    await waitFor(() => expect(notice().textContent).toContain('Filed'))
+    await waitFor(() => expect(dupBtn()).not.toBeDisabled())
+    fireEvent.click(dupBtn())
+    await waitFor(() =>
+      expect(useUIStore.getState().calibrationSheetPageId).toBe(9)
+    )
+    await screen.findByTestId('replicate-note')
+    expect(fileCalSheet).toHaveBeenCalledTimes(1)
+    await waitFor(() => expect(notice().textContent).toContain(COPY_LINE))
+    expect(notice().textContent).not.toContain('now the active curve')
+  })
+
+  it('I1: a notice stays with its sheet: away to the list and back, it is gone', async () => {
+    const sheet = makeSheet(fixtureCase(1).inputs as CalInputs)
+    vi.mocked(getCalSheet).mockResolvedValue(sheet)
+    vi.mocked(listCalSheets).mockResolvedValue([listRow(sheet)])
+    vi.mocked(fileCalSheet).mockResolvedValue(filedAs(sheet, 'first_active'))
+    renderInApp()
+    await screen.findByText('Curve name:', { exact: false })
+    fireEvent.click(fileBtn())
+    await waitFor(() => expect(notice().textContent).toContain('Filed'))
+    fireEvent.click(listLink())
+    await screen.findByRole('heading', { name: 'Calibration worksheets' })
+    act(() => useUIStore.getState().navigateToCalibrationSheet(5))
+    await screen.findByText('Curve name:', { exact: false })
+    expect(screen.queryByTestId('cal-notice')).toBeNull()
+  })
+
   it('M2: the sheet page links back to the list', async () => {
     vi.mocked(getCalSheet).mockResolvedValue(
       makeSheet(fixtureCase(1).inputs as CalInputs)
