@@ -11,7 +11,13 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import type * as ApiModule from '@/lib/api'
 import type { HplcSheetRow, WorksheetListItem } from '@/lib/api'
 import type * as WorksheetDrawerHook from '@/hooks/use-worksheet-drawer'
-import { getHplcSheet, patchHplcRow, updateWorksheetItem } from '@/lib/api'
+import {
+  getHplcSheet,
+  getInstruments,
+  patchHplcRow,
+  updateWorksheetItem,
+} from '@/lib/api'
+import { toast } from 'sonner'
 import { useWorksheetDrawer } from '@/hooks/use-worksheet-drawer'
 import { HplcWorksheetPage } from '../HplcWorksheetPage'
 import { makeRow, makeSheet } from './hplc-sheet-fixtures'
@@ -46,7 +52,7 @@ const worksheet = {
 } as unknown as WorksheetListItem
 
 function renderPage() {
-  render(
+  return render(
     <QueryClientProvider
       client={
         new QueryClient({
@@ -401,6 +407,180 @@ describe('HplcWorksheetPage', () => {
       expect.stringMatching(/Capsules.*: that number is too large/),
     ])
     expect(patchHplcRow).not.toHaveBeenCalled()
+  })
+
+  it('A1: a failed save marks its box until that box saves, and its list entry goes with it', async () => {
+    vi.mocked(getHplcSheet).mockResolvedValue(
+      makeSheet([makeRow({ hplc_prep: { stock_vial_mg: 5012.31 } })])
+    )
+    const saves = queueSaves()
+    renderPage()
+    const box = await screen.findByRole('textbox', { name: `${S1}, ${VIAL}` })
+    const other = screen.getByRole('textbox', { name: `${S1}, ${VIAL_DIL}` })
+    typeAndLeave(box, '6000')
+    await waitFor(() => expect(patchHplcRow).toHaveBeenCalledTimes(1))
+    await act(async () => saves.fail(0, 'weighing out of range'))
+    await screen.findByRole('alert')
+    expect(box).toHaveAccessibleDescription(
+      `Not saved: ${S1}, ${VIAL}: weighing out of range`
+    )
+    expect(box.className).toContain('border-red-500')
+    expect(other).toHaveAccessibleDescription('')
+    expect(other.className).not.toContain('border-red-500')
+    typeAndLeave(box, '6000')
+    await waitFor(() => expect(patchHplcRow).toHaveBeenCalledTimes(2))
+    // still marked while the new save is out
+    expect(box.className).toContain('border-red-500')
+    await act(async () =>
+      saves.ok(1, makeRow({ hplc_prep: { stock_vial_mg: 6000 } }))
+    )
+    await waitFor(() =>
+      expect(screen.queryByRole('alert')).not.toBeInTheDocument()
+    )
+    expect(box).toHaveAccessibleDescription('')
+    expect(box.className).not.toContain('border-red-500')
+  })
+
+  it('A1: dismissing a failure takes the mark off its box', async () => {
+    vi.mocked(getHplcSheet).mockResolvedValue(makeSheet([makeRow()]))
+    const saves = queueSaves()
+    renderPage()
+    const box = await screen.findByRole('textbox', { name: `${S1}, ${VIAL}` })
+    typeAndLeave(box, '6000')
+    await waitFor(() => expect(patchHplcRow).toHaveBeenCalledTimes(1))
+    await act(async () => saves.fail(0, 'weighing out of range'))
+    const alert = await screen.findByRole('alert')
+    expect(box.className).toContain('border-red-500')
+    fireEvent.click(within(alert).getByRole('button', { name: 'Dismiss' }))
+    expect(box.className).not.toContain('border-red-500')
+    expect(box).toHaveAccessibleDescription('')
+  })
+
+  it('A1: the failure list stays in view while the sheet scrolls', async () => {
+    vi.mocked(getHplcSheet).mockResolvedValue(makeSheet([makeRow()]))
+    const saves = queueSaves()
+    renderPage()
+    const box = await screen.findByRole('textbox', { name: `${S1}, ${VIAL}` })
+    typeAndLeave(box, '6000')
+    await waitFor(() => expect(patchHplcRow).toHaveBeenCalledTimes(1))
+    await act(async () => saves.fail(0, 'weighing out of range'))
+    const holder = (await screen.findByRole('alert')).parentElement
+    expect(holder?.className).toMatch(/\bsticky\b/)
+    expect(holder?.className).toMatch(/\btop-0\b/)
+    // above the sticky Sample ID cells (z-10)
+    expect(holder?.className).toMatch(/\bz-20\b/)
+  })
+
+  it('A4: leaving the page asks first only while a save is out', async () => {
+    vi.mocked(getHplcSheet).mockResolvedValue(makeSheet([makeRow()]))
+    const saves = queueSaves()
+    renderPage()
+    const leave = () => {
+      const e = new Event('beforeunload', { cancelable: true })
+      window.dispatchEvent(e)
+      return e.defaultPrevented
+    }
+    const box = await screen.findByRole('textbox', { name: `${S1}, ${VIAL}` })
+    expect(leave()).toBe(false)
+    typeAndLeave(box, '6000')
+    await waitFor(() => expect(patchHplcRow).toHaveBeenCalledTimes(1))
+    expect(leave()).toBe(true)
+    await act(async () =>
+      saves.ok(0, makeRow({ hplc_prep: { stock_vial_mg: 6000 } }))
+    )
+    await waitFor(() => expect(leave()).toBe(false))
+  })
+
+  it('A4: a save that fails after the page is left shows a toast naming the box', async () => {
+    const error = vi.spyOn(toast, 'error')
+    vi.mocked(getHplcSheet).mockResolvedValue(makeSheet([makeRow()]))
+    const saves = queueSaves()
+    const { unmount } = renderPage()
+    const box = await screen.findByRole('textbox', { name: `${S1}, ${VIAL}` })
+    typeAndLeave(box, '6000')
+    await waitFor(() => expect(patchHplcRow).toHaveBeenCalledTimes(1))
+    unmount()
+    await act(async () => saves.fail(0, 'weighing out of range'))
+    await waitFor(() =>
+      expect(error).toHaveBeenCalledWith(
+        `Not saved: ${S1}, ${VIAL}: weighing out of range`
+      )
+    )
+    error.mockRestore()
+  })
+
+  it('A8: a refused number leaves the list as soon as the box holds one it takes', async () => {
+    vi.mocked(getHplcSheet).mockResolvedValue(makeSheet([makeRow()]))
+    vi.mocked(patchHplcRow).mockResolvedValue(makeRow())
+    renderPage()
+    const box = await screen.findByRole('textbox', { name: `${S1}, ${VIAL}` })
+    typeAndLeave(box, '-3')
+    expect(await screen.findByRole('alert')).toHaveTextContent(
+      'a number here cannot be below 0'
+    )
+    fireEvent.focus(box)
+    fireEvent.change(box, { target: { value: '-' } })
+    expect(screen.getByRole('alert')).toBeInTheDocument()
+    fireEvent.change(box, { target: { value: '5' } })
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument()
+    expect(box).not.toHaveAttribute('aria-invalid')
+  })
+
+  it('A8: Escape on a refused number takes it off the list', async () => {
+    vi.mocked(getHplcSheet).mockResolvedValue(makeSheet([makeRow()]))
+    renderPage()
+    const box = await screen.findByRole('textbox', { name: `${S1}, ${VIAL}` })
+    typeAndLeave(box, '2e12')
+    await screen.findByRole('alert')
+    fireEvent.keyDown(box, { key: 'Escape' })
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument()
+    expect(patchHplcRow).not.toHaveBeenCalled()
+  })
+
+  it('A14: picking an instrument goes through the save queue once and shows what the server stored', async () => {
+    vi.mocked(getInstruments).mockResolvedValueOnce([
+      { id: 3, name: 'HPLC 1290b', active: true },
+    ] as Awaited<ReturnType<typeof getInstruments>>)
+    vi.mocked(getHplcSheet)
+      .mockResolvedValueOnce(
+        makeSheet([makeRow({ instrument_id: null, instrument_name: null })])
+      )
+      .mockResolvedValue(
+        makeSheet([
+          makeRow({ instrument_id: 3, instrument_name: 'HPLC 1290b' }),
+        ])
+      )
+    const saves = queueSaves()
+    vi.mocked(updateWorksheetItem).mockResolvedValue({
+      status: 'ok',
+      item_id: 311,
+    })
+    renderPage()
+    const box = await screen.findByRole('textbox', { name: `${S1}, ${VIAL}` })
+    const select = await screen.findByRole('combobox', {
+      name: `${S1}, Instrument`,
+    })
+    await screen.findByRole('option', { name: 'HPLC 1290b' })
+    // a weighing goes out first: the instrument waits behind it
+    typeAndLeave(box, '6000')
+    await waitFor(() => expect(patchHplcRow).toHaveBeenCalledTimes(1))
+    fireEvent.change(select, { target: { value: '3' } })
+    await act(() => new Promise(r => setTimeout(r, 30)))
+    expect(updateWorksheetItem).not.toHaveBeenCalled()
+    await act(async () =>
+      saves.ok(0, makeRow({ hplc_prep: { stock_vial_mg: 6000 } }))
+    )
+    await waitFor(() =>
+      expect(updateWorksheetItem).toHaveBeenCalledWith(
+        7,
+        311,
+        { instrument_id: 3 },
+        SIGNAL
+      )
+    )
+    await waitFor(() => expect(getHplcSheet).toHaveBeenCalledTimes(2))
+    await waitFor(() => expect(select).toHaveValue('3'))
+    expect(updateWorksheetItem).toHaveBeenCalledTimes(1)
   })
 
   it('a completed sheet is read-only on the page', async () => {

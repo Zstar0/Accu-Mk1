@@ -443,6 +443,73 @@ describe('Promote on the HPLC worksheet page', () => {
     )
   })
 
+  it('A1: a row with a save that did not land refuses Promote before reading again; row B still promotes; dismissing frees row A', async () => {
+    vi.mocked(getHplcSheet).mockResolvedValue(
+      makeSheet([ready(), ready({ item_id: 312, sample_id: S2 })])
+    )
+    vi.mocked(patchHplcRow).mockRejectedValue(
+      new Error('weighing out of range')
+    )
+    renderPage()
+    const box = await screen.findByRole('textbox', { name: `${S1}, ${VIAL}` })
+    typeAndLeave(box, '5001')
+    const alert = await screen.findByRole('alert')
+    // the read-again after the failed save
+    await waitFor(() => expect(getHplcSheet).toHaveBeenCalledTimes(2))
+    await act(() => new Promise(r => setTimeout(r, 30)))
+    const reads = vi.mocked(getHplcSheet).mock.calls.length
+    const buttons = () =>
+      within(step2()).getAllByRole('button', { name: 'Promote' })
+    fireEvent.click(buttons()[0] as HTMLElement)
+    expect(
+      await within(step2()).findByText(
+        `A change to this row was not saved: ${S1}, ${VIAL}: weighing out of range. Type it again or dismiss it, then promote.`
+      )
+    ).toBeInTheDocument()
+    await act(() => new Promise(r => setTimeout(r, 30)))
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument()
+    expect(getHplcSheet).toHaveBeenCalledTimes(reads)
+    // a failure on row A does not stop row B
+    fireEvent.click(buttons()[1] as HTMLElement)
+    const dialog = await screen.findByRole('dialog')
+    expect(dialog).toHaveTextContent(`Promote ${S2}`)
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Cancel' }))
+    await waitFor(() =>
+      expect(screen.queryByRole('dialog')).not.toBeInTheDocument()
+    )
+    // dismissed: row A goes ahead
+    fireEvent.click(within(alert).getByRole('button', { name: 'Dismiss' }))
+    fireEvent.click(buttons()[0] as HTMLElement)
+    expect(await screen.findByRole('dialog')).toHaveTextContent(`Promote ${S1}`)
+    expect(promoteHplcRow).not.toHaveBeenCalled()
+  })
+
+  it('A1: a save that fails while the promote waits behind it stops the promote', async () => {
+    vi.mocked(getHplcSheet).mockResolvedValue(makeSheet([ready()]))
+    let refuse: (e: Error) => void = () => undefined
+    vi.mocked(patchHplcRow).mockImplementation(
+      () =>
+        new Promise((_, reject) => {
+          refuse = reject
+        })
+    )
+    renderPage()
+    const box = await screen.findByRole('textbox', { name: `${S1}, ${VIAL}` })
+    fireEvent.click(promoteButton())
+    const dialog = await screen.findByRole('dialog')
+    typeAndLeave(box, '5001')
+    await waitFor(() => expect(patchHplcRow).toHaveBeenCalledTimes(1))
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Promote' }))
+    await act(async () => refuse(new Error('weighing out of range')))
+    expect(
+      await within(step2()).findByText(
+        `A change to this row was not saved: ${S1}, ${VIAL}: weighing out of range. Type it again or dismiss it, then promote.`
+      )
+    ).toBeInTheDocument()
+    await act(() => new Promise(r => setTimeout(r, 30)))
+    expect(promoteHplcRow).not.toHaveBeenCalled()
+  })
+
   it('the read-again after a promote waits for the saves queued behind it', async () => {
     let answerPromote: (r: HplcPromoteResult) => void = () => undefined
     let answerSave: (row: HplcSheetRow) => void = () => undefined

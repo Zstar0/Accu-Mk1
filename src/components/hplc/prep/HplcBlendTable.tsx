@@ -20,6 +20,7 @@ import {
   type Step2bKey,
 } from './hplc-sheet-columns'
 import { onSheetKey } from './hplc-sheet-keys'
+import { boxKey } from '@/services/hplc-worksheet'
 
 const leadId = (row: HplcSheetRow, peptideId: number) =>
   `hplc-lead-${row.item_id}-${peptideId}`
@@ -145,11 +146,14 @@ function BlendCell({
       { hplc_prep: { components: { [id]: { [key]: v } } } },
       what
     )
+  const keyOf = (key: 'mg' | 'vial' | 'target') =>
+    boxKey(row.item_id, `hplc_prep.components.${id}.${key}`)
   const box = (key: 'mg' | 'target', placeholder?: string) => (
     <InputCell>
       <NumberBox
         label={what}
         field={col}
+        saveKey={keyOf(key)}
         value={typed[key]}
         placeholder={placeholder}
         disabled={locked}
@@ -191,6 +195,7 @@ function BlendCell({
           <CellSelect
             label={what}
             field={col}
+            saveKey={keyOf('vial')}
             value={letter}
             disabled={locked}
             options={letters.map(L => [L, L])}

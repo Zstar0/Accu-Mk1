@@ -11,7 +11,7 @@ import { HplcStockTable } from './HplcStockTable'
 import { HplcDilutionTable } from './HplcDilutionTable'
 import { HplcBlendTable } from './HplcBlendTable'
 import { HplcIntermediateTable } from './HplcIntermediateTable'
-import { NumberRefusedContext } from './HplcSheetCells'
+import { SheetSavesContext, type SheetSaves } from './HplcSheetCells'
 import {
   STEP2_SUB,
   STEP2_TITLE,
@@ -50,9 +50,15 @@ export interface HplcPrepSheetProps {
   ) => void
   /** A column after Step 2's last (the Sample prep column). */
   step2Trailing?: { header: ReactNode; cell: (v: SheetRowView) => ReactNode }
-  /** A box refused a number the server would refuse; `what` names it. */
-  onNumberRefused?: (what: string, reason: string) => void
+  /** A box refused a number the server would refuse (`reason`), or holds
+   *  one it takes again (null); `what` names it, `key` is its boxKey. */
+  onNumberRefused?: SheetSaves['refused']
+  /** The boxes whose save did not land, by boxKey, with the failure
+   *  sentence: each is marked until it saves or is dismissed. */
+  failed?: ReadonlyMap<string, string>
 }
+
+const NONE_FAILED: ReadonlyMap<string, string> = new Map()
 
 /** What every step table takes. */
 export type SheetSectionProps = HplcPrepSheetProps & {
@@ -126,13 +132,18 @@ const SECTIONS: {
  * (one merge patch per cell) or onSetInstrument.
  */
 export function HplcPrepSheet(props: HplcPrepSheetProps) {
-  const { sheet, rules, readOnly } = props
+  const { sheet, rules, readOnly, onNumberRefused } = props
+  const failed = props.failed ?? NONE_FAILED
   const rowViews = useMemo(
     () => sheetRowViews(sheet, rules, readOnly),
     [sheet, rules, readOnly]
   )
+  const saves = useMemo(
+    () => ({ refused: onNumberRefused, failed }),
+    [onNumberRefused, failed]
+  )
   return (
-    <NumberRefusedContext.Provider value={props.onNumberRefused}>
+    <SheetSavesContext.Provider value={saves}>
       <div className="space-y-6">
         <WarningsPanel views={rowViews} />
         {SECTIONS.filter(s => !s.show || s.show(rowViews)).map(
@@ -143,7 +154,7 @@ export function HplcPrepSheet(props: HplcPrepSheetProps) {
           )
         )}
       </div>
-    </NumberRefusedContext.Provider>
+    </SheetSavesContext.Provider>
   )
 }
 

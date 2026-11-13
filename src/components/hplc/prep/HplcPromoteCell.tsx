@@ -60,6 +60,7 @@ function planLines(computed: HplcRowComputed | null): string[] {
 export function HplcPromoteCell({
   view,
   reasons,
+  unsaved = null,
   saving,
   check,
   promote,
@@ -67,6 +68,9 @@ export function HplcPromoteCell({
   view: SheetRowView
   /** Why the row cannot be promoted, as the screen has it (empty: ready). */
   reasons: string[]
+  /** The sentence for a save of this row that did not land and is still on
+   *  the page's list (null: none): a press is refused with it. */
+  unsaved?: string | null
   /** A save on the sheet is pending. */
   saving: boolean
   /** The press's read-again; null when there is nothing to ask (a save went
@@ -109,6 +113,12 @@ export function HplcPromoteCell({
     )
 
   async function press() {
+    // a box of this row whose save did not land: its old value would be
+    // filed, so the press stops before it reads anything
+    if (unsaved) {
+      setSaid({ lines: [unsaved], server: false })
+      return
+    }
     setBusy('Checking...')
     try {
       const fresh = await check()

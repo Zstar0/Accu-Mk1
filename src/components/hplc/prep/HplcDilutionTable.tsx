@@ -23,6 +23,7 @@ import {
   type Step3Key,
 } from './hplc-sheet-columns'
 import { onSheetKey } from './hplc-sheet-keys'
+import { boxKey } from '@/services/hplc-worksheet'
 
 const LABEL = Object.fromEntries(
   STEP3_COLUMNS.map(c => [c.key, c.label])
@@ -103,6 +104,7 @@ function DilutionCell({
         <NumberBox
           label={what}
           field={col}
+          saveKey={boxKey(row.item_id, `hplc_prep.vials.${n}.${key}`)}
           value={typed[key]}
           placeholder={placeholder}
           disabled={locked}

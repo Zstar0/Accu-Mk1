@@ -36,12 +36,41 @@ export function Hint({ id, children }: { id?: string; children: ReactNode }) {
   )
 }
 
-/** Where a box reports a number the server would refuse: the page's failure
- *  list. `what` is the box's name, `reason` the sentence. */
+/** The page's failure list, as the boxes see it. */
+export interface SheetSaves {
+  /** A box refused a number the server would refuse (`reason`), or now
+   *  holds one it takes or its stored one again (null). `what` is the box's
+   *  name, `key` its boxKey. */
+  refused?: (what: string, reason: string | null, key?: string) => void
+  /** The boxes whose save did not land, by boxKey, with the failure
+   *  sentence ("<what>: <reason>"). */
+  failed: ReadonlyMap<string, string>
+}
+
 // eslint-disable-next-line react-refresh/only-export-components
-export const NumberRefusedContext = createContext<
-  ((what: string, reason: string) => void) | undefined
->(undefined)
+export const SheetSavesContext = createContext<SheetSaves>({
+  failed: new Map(),
+})
+
+/** A box's failure mark: its sentence (or null), the red outline, and the
+ *  hidden description that carries it. */
+function useFailMark(saveKey: string | undefined, bad: string | null = null) {
+  const { failed } = useContext(SheetSavesContext)
+  const fail = saveKey ? failed.get(saveKey) : undefined
+  const id = useId()
+  const text = [bad, fail ? `Not saved: ${fail}` : null]
+    .filter(Boolean)
+    .join('. ')
+  return {
+    id: text ? id : undefined,
+    outline: text ? 'border-red-500 ring-1 ring-red-500' : '',
+    note: text ? (
+      <span id={id} className="sr-only">
+        {text}
+      </span>
+    ) : null,
+  }
+}
 
 // The server's limits (worksheets_hplc: 0 to _MAX_NUMBER, a whole number 1
 // to _MAX_WHOLE): it answers 400 outside them, so they are refused here.
@@ -49,16 +78,23 @@ const MAX_NUMBER = 1e12
 const TOO_LARGE = 'that number is too large'
 
 /**
- * A number box that commits on blur or Enter. Empty sends null (never 0); a
- * value that is not a number (or not a whole number, for `integer`), or one
- * outside what the server takes (reported to NumberRefusedContext), is
- * refused and stays in the box, marked, until fixed or cleared. While the box is not being edited it shows
- * `value`, so a save the server refuses shows the rolled-back figure as soon
- * as the cache has it. A box that turns disabled drops its draft.
+ * A number box that commits on blur, Enter or Tab, and only once something
+ * was typed in it: a box merely visited sends nothing, even when its stored
+ * value changed under it. Empty sends null (never 0); a value that is not a
+ * number (or not a whole number, for `integer`), or one outside what the
+ * server takes (reported to SheetSavesContext), is refused: it stays in the
+ * box, marked with its reason, Enter and Tab do not move on, and the mark
+ * clears as soon as the box holds a value it takes or Escape gives the
+ * stored one back. While the box is not being typed in it shows `value`, so
+ * a save the server refuses shows the rolled-back figure as soon as the
+ * cache has it; the failure marks the box (by `saveKey`) until that box
+ * saves or the failure is dismissed. A box that turns disabled drops its
+ * draft.
  */
 export function NumberBox({
   label,
   field,
+  saveKey,
   value,
   placeholder,
   integer = false,
@@ -72,6 +108,8 @@ export function NumberBox({
   label: string
   /** The column, for the keyboard walk. */
   field: string
+  /** The value it writes, as boxKey(item id, path): its failed saves. */
+  saveKey?: string
   value: number | null | undefined
   placeholder?: string
   integer?: boolean
@@ -93,10 +131,15 @@ export function NumberBox({
     setDraftState(d)
   }
   const [bad, setBad] = useState<string | null>(null)
-  const refused = useContext(NumberRefusedContext)
-  // the text last reported as too large: Enter and the blur after it
-  // report it once
+  const { refused } = useContext(SheetSavesContext)
+  const mark = useFailMark(saveKey, bad)
+  // the text last reported to the list: Enter and the blur after it report
+  // it once; null when nothing of this box is on the list
   const reported = useRef<string | null>(null)
+  const unreport = () => {
+    if (reported.current !== null) refused?.(label, null, saveKey)
+    reported.current = null
+  }
   const hintId = useId()
   const shown = value === null || value === undefined ? '' : String(value)
 
@@ -112,41 +155,52 @@ export function NumberBox({
     }
   }
 
-  function commit() {
-    // a locked box never saves (a row promoted while it was being edited)
-    if (draftNow.current === null || disabled) return
-    const text = draftNow.current.trim()
-    const v = text === '' ? null : Number(text)
-    if (
-      v !== null &&
-      (!Number.isFinite(v) || (integer && !Number.isInteger(v)))
-    ) {
-      setBad(integer ? 'Type a whole number' : 'Type a number')
-      return
-    }
+  /** Why the box will not take this text (null: it takes it), and whether
+   *  the server would refuse it (those go on the page's list). */
+  function refusalOf(raw: string): { why: string; listed: boolean } | null {
+    const text = raw.trim()
+    if (text === '') return null
+    const v = Number(text)
+    if (!Number.isFinite(v) || (integer && !Number.isInteger(v)))
+      return {
+        why: integer ? 'Type a whole number' : 'Type a number',
+        listed: false,
+      }
     // what the server would answer 400 for, in a plain sentence
-    const refusal =
-      v === null
-        ? null
-        : Math.abs(v) > (integer ? Number.MAX_SAFE_INTEGER : MAX_NUMBER)
-          ? TOO_LARGE
-          : integer && v < 1
-            ? 'type a whole number of 1 or more'
-            : v < 0 && !zeroClears
-              ? 'a number here cannot be below 0'
-              : null
+    const why =
+      Math.abs(v) > (integer ? Number.MAX_SAFE_INTEGER : MAX_NUMBER)
+        ? TOO_LARGE
+        : integer && v < 1
+          ? 'type a whole number of 1 or more'
+          : v < 0 && !zeroClears
+            ? 'a number here cannot be below 0'
+            : null
+    return why ? { why, listed: true } : null
+  }
+
+  /** False when the box refused its text (focus stays). */
+  function commit(): boolean {
+    // a locked box never saves (a row promoted while it was being edited);
+    // a box nothing was typed in sends nothing
+    if (draftNow.current === null || disabled) return true
+    const text = draftNow.current.trim()
+    const refusal = refusalOf(text)
     if (refusal) {
-      setBad(refusal)
-      if (reported.current !== text) refused?.(label, refusal)
-      reported.current = text
-      return
+      setBad(refusal.why)
+      if (refusal.listed && reported.current !== text) {
+        refused?.(label, refusal.why, saveKey)
+        reported.current = text
+      }
+      return false
     }
+    const v = text === '' ? null : Number(text)
     setBad(null)
-    reported.current = null
+    unreport()
     setDraft(null)
     // 0 or less means "the standard" in a zeroClears box: the key is removed
     if (v !== (value ?? null))
       onCommit(zeroClears && v !== null && v <= 0 ? null : v)
+    return true
   }
 
   return (
@@ -155,37 +209,52 @@ export function NumberBox({
         type="text"
         inputMode="decimal"
         aria-label={label}
-        aria-describedby={hint ? hintId : undefined}
+        aria-describedby={
+          [hint ? hintId : null, mark.id].filter(Boolean).join(' ') || undefined
+        }
         data-field={field}
         aria-invalid={bad ? true : undefined}
         title={bad ?? title}
         disabled={disabled}
         placeholder={placeholder}
         value={draft ?? shown}
-        onFocus={() => setDraft(shown)}
-        onChange={e => setDraft(e.target.value)}
-        onBlur={commit}
+        onChange={e => {
+          setDraft(e.target.value)
+          // put right: the mark and the list entry go at once
+          if (bad && !refusalOf(e.target.value)) {
+            setBad(null)
+            unreport()
+          }
+        }}
+        onBlur={() => void commit()}
         onKeyDown={e => {
-          if (e.key === 'Enter') commit()
+          // a refused value keeps the box: Enter and Tab do not move on
+          if ((e.key === 'Enter' || e.key === 'Tab') && !commit()) {
+            e.preventDefault()
+            e.stopPropagation()
+          }
           // a mistyped value: Escape gives the stored one back, unsaved
           // (the source has no Escape for a number box)
           if (e.key === 'Escape') {
             setDraft(null)
             setBad(null)
-            reported.current = null
+            unreport()
           }
         }}
-        className={`w-[84px] rounded-md border bg-card px-1.5 py-[3px] text-right ${MONO} placeholder:text-muted-foreground/60 focus:border-teal-500 focus:outline-none focus:ring-2 focus:ring-teal-500/20 disabled:cursor-default disabled:opacity-50 ${bad ? 'border-red-500' : ''}`}
+        className={`w-[84px] rounded-md border bg-card px-1.5 py-[3px] text-right ${MONO} placeholder:text-muted-foreground/60 focus:border-teal-500 focus:outline-none focus:ring-2 focus:ring-teal-500/20 disabled:cursor-default disabled:opacity-50 ${mark.outline}`}
       />
       {hint && <Hint id={hintId}>{hint}</Hint>}
+      {mark.note}
     </>
   )
 }
 
-/** A compact native select; '' is its "not set" choice. */
+/** A compact native select; '' is its "not set" choice. A save of it that
+ *  did not land marks it (by `saveKey`), as a NumberBox. */
 export function CellSelect({
   label,
   field,
+  saveKey,
   value,
   options,
   disabled,
@@ -193,26 +262,32 @@ export function CellSelect({
 }: {
   label: string
   field?: string
+  saveKey?: string
   value: string
   options: [string, string][]
   disabled: boolean
   onChange: (v: string) => void
 }) {
+  const mark = useFailMark(saveKey)
   return (
-    <NativeSelect
-      aria-label={label}
-      data-field={field}
-      value={value}
-      disabled={disabled}
-      onChange={e => onChange(e.target.value)}
-      className="h-auto rounded-md bg-card py-[3px] pl-1.5 pr-7 text-[12.5px] dark:bg-card"
-    >
-      {options.map(([v, text], i) => (
-        <NativeSelectOption key={i} value={v}>
-          {text}
-        </NativeSelectOption>
-      ))}
-    </NativeSelect>
+    <>
+      <NativeSelect
+        aria-label={label}
+        aria-describedby={mark.id}
+        data-field={field}
+        value={value}
+        disabled={disabled}
+        onChange={e => onChange(e.target.value)}
+        className={`h-auto rounded-md bg-card py-[3px] pl-1.5 pr-7 text-[12.5px] dark:bg-card ${mark.outline}`}
+      >
+        {options.map(([v, text], i) => (
+          <NativeSelectOption key={i} value={v}>
+            {text}
+          </NativeSelectOption>
+        ))}
+      </NativeSelect>
+      {mark.note}
+    </>
   )
 }
 

@@ -505,6 +505,69 @@ describe('HplcPrepSheet', () => {
     expect(onPatch).toHaveBeenCalledTimes(1)
   })
 
+  it('A6: a box only visited while its stored value changed sends nothing; typing sends once', () => {
+    const props = {
+      rules: [],
+      readOnly: false,
+      instruments: INSTRUMENTS,
+      onPatch: vi.fn(),
+      onSetInstrument: vi.fn(),
+    }
+    const at = (mg: number) =>
+      makeSheet([makeRow({ hplc_prep: { stock_vial_mg: mg } })])
+    const { rerender } = render(<HplcPrepSheet sheet={at(5000)} {...props} />)
+    const el = box(`${S1}, ${VIAL}`)
+    act(() => el.focus())
+    // a read-again lands while the box has focus
+    rerender(<HplcPrepSheet sheet={at(6000)} {...props} />)
+    expect(el).toHaveValue('6000')
+    fireEvent.keyDown(el, { key: 'Tab' })
+    fireEvent.blur(el)
+    expect(props.onPatch).not.toHaveBeenCalled()
+    typeAndLeave(el, '6100')
+    expect(props.onPatch).toHaveBeenCalledTimes(1)
+    expect(props.onPatch).toHaveBeenLastCalledWith(
+      311,
+      { hplc_prep: { stock_vial_mg: 6100 } },
+      `${S1}, ${VIAL}`
+    )
+  })
+
+  it('A8: a refused number keeps focus on Enter and Tab, says why, and clears once it is fixed', () => {
+    const { onPatch } = renderSheet(twoRows())
+    const el = box(`${S1}, ${VIAL}`)
+    act(() => el.focus())
+    fireEvent.change(el, { target: { value: '-3' } })
+    expect(fireEvent.keyDown(el, { key: 'Enter' })).toBe(false)
+    expect(document.activeElement).toBe(el)
+    expect(el).toHaveValue('-3')
+    expect(el).toHaveAttribute('aria-invalid', 'true')
+    expect(el).toHaveAccessibleDescription('a number here cannot be below 0')
+    expect(fireEvent.keyDown(el, { key: 'Tab' })).toBe(false)
+    expect(document.activeElement).toBe(el)
+    expect(onPatch).not.toHaveBeenCalled()
+    // an acceptable value clears the message at once
+    fireEvent.change(el, { target: { value: '5020' } })
+    expect(el).not.toHaveAttribute('aria-invalid')
+    expect(el).toHaveAccessibleDescription('')
+    fireEvent.keyDown(el, { key: 'Enter' })
+    expect(document.activeElement).toBe(box(`${S2}, ${VIAL}`))
+    expect(onPatch).toHaveBeenCalledTimes(1)
+  })
+
+  it('A8: Escape on a refused number gives back the stored one and clears the message', () => {
+    const { onPatch } = renderSheet(twoRows())
+    const el = box(`${S1}, ${VIAL}`)
+    act(() => el.focus())
+    fireEvent.change(el, { target: { value: 'abc' } })
+    fireEvent.keyDown(el, { key: 'Enter' })
+    expect(el).toHaveAccessibleDescription('Type a number')
+    fireEvent.keyDown(el, { key: 'Escape' })
+    expect(el).toHaveValue('5012.31')
+    expect(el).toHaveAccessibleDescription('')
+    expect(onPatch).not.toHaveBeenCalled()
+  })
+
   it('0 or less in Target Conc clears it, as the source does', () => {
     const { onPatch } = renderSheet([makeRow()])
     const what = `${S1}, Target Conc (ug/mL)`

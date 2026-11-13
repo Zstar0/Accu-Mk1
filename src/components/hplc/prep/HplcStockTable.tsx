@@ -25,6 +25,7 @@ import {
 } from './HplcSheetCells'
 import { FORM_LABELS, STEP2_COLUMNS, type Step2Key } from './hplc-sheet-columns'
 import { onSheetKey } from './hplc-sheet-keys'
+import { boxKey } from '@/services/hplc-worksheet'
 
 const LABEL = Object.fromEntries(
   STEP2_COLUMNS.map(c => [c.key, c.label])
@@ -99,6 +100,7 @@ function FormSelect({
     <CellSelect
       label={what}
       field="form"
+      saveKey={boxKey(row.item_id, 'prep_form')}
       value={row.prep_form ?? ''}
       disabled={view.locked}
       options={[
@@ -168,6 +170,7 @@ function StockCell({
   const what = nameOf(row, col)
   const set = (key: string, v: unknown) =>
     onPatch(row.item_id, { hplc_prep: { [key]: v } }, what)
+  const keyOf = (key: string) => boxKey(row.item_id, `hplc_prep.${key}`)
   // The row's own rule line, as computeRow matches it, for the "by rule"
   // diluent and the usual instrument.
   const ruleQ = {
@@ -186,6 +189,7 @@ function StockCell({
     <NumberBox
       label={what}
       field={col}
+      saveKey={keyOf(key)}
       value={inputs[key]}
       disabled={locked || liquid}
       hint={hint}
@@ -225,6 +229,7 @@ function StockCell({
           <NumberBox
             label={what}
             field={col}
+            saveKey={keyOf('declared_mg')}
             value={inputs.declared_mg}
             placeholder={
               row.declared_mg === null ? undefined : String(row.declared_mg)
@@ -248,6 +253,7 @@ function StockCell({
             <NumberBox
               label={what}
               field={col}
+              saveKey={keyOf('declared_volume_ml')}
               value={inputs.declared_volume_ml}
               disabled={locked}
               hint={
@@ -267,6 +273,7 @@ function StockCell({
             <NumberBox
               label={what}
               field={col}
+              saveKey={keyOf('capsules')}
               integer
               value={inputs.capsules}
               disabled={locked}
@@ -291,6 +298,7 @@ function StockCell({
           <CellSelect
             label={what}
             field={col}
+            saveKey={boxKey(row.item_id, 'instrument_id')}
             value={row.instrument_id === null ? '' : String(row.instrument_id)}
             disabled={locked}
             options={[
@@ -332,6 +340,7 @@ function StockCell({
           <CellSelect
             label={what}
             field={col}
+            saveKey={keyOf('diluent')}
             value={typed}
             disabled={locked}
             options={[
@@ -381,6 +390,7 @@ function StockCell({
           <NumberBox
             label={what}
             field={col}
+            saveKey={keyOf('diluent_ul')}
             value={inputs.diluent_ul}
             placeholder={assumed === null ? undefined : fmtDp(assumed, 0)}
             // none of ours goes into a liquid or bac vial
@@ -434,6 +444,7 @@ function StockCell({
           <CellSelect
             label={what}
             field={col}
+            saveKey={keyOf('two_step')}
             value={
               typeof inputs.two_step === 'boolean'
                 ? String(inputs.two_step)

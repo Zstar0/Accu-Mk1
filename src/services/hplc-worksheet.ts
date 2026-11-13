@@ -34,8 +34,25 @@ export function useHplcSheet(id: number) {
   })
 }
 
-/** A save that did not land: which box ("<sample id>, <column>") and why. */
-export type HplcSaveFailure = (what: string, reason: string) => void
+/** One stored value of one row, as a key: "<item id>:<path>", the path as a
+ *  save writes it ("hplc_prep.vials.1.vial_mg", "prep_form",
+ *  "instrument_id"). A box's failed saves are found by it. */
+export const boxKey = (itemId: number, path: string) => `${itemId}:${path}`
+
+/** True when the key is one of this row's. */
+export const isRowKey = (key: string, itemId: number) =>
+  key.startsWith(`${itemId}:`)
+
+/** A save that did not land: which box ("<sample id>, <column>"), why, and
+ *  the keys of the values it wrote (boxKey). */
+export type HplcSaveFailure = (
+  what: string,
+  reason: string,
+  keys: string[]
+) => void
+
+/** A save that landed: the keys of the values it wrote. */
+export type HplcSaveLanded = (keys: string[]) => void
 
 type Plain = Record<string, unknown>
 const isPlain = (x: unknown): x is Plain =>
@@ -140,8 +157,10 @@ function useSheetSave(
   id: number,
   send: (v: SaveVars, signal: AbortSignal) => Promise<unknown>,
   apply: (row: HplcSheetRow, v: SaveVars) => HplcSheetRow,
-  onFailure?: HplcSaveFailure
+  onFailure?: HplcSaveFailure,
+  onLanded?: HplcSaveLanded
 ) {
+  const keysOf = (v: SaveVars) => pathsOf(v).map(p => boxKey(v.itemId, p))
   const qc = useQueryClient()
   const key = HPLC_SHEET_KEY(id)
   const setRow = (itemId: number, fn: (row: HplcSheetRow) => HplcSheetRow) =>
@@ -168,7 +187,11 @@ function useSheetSave(
       return { before }
     },
     onError: (err, v, ctx) => {
-      onFailure?.(v.what, err instanceof Error ? err.message : 'Save failed')
+      onFailure?.(
+        v.what,
+        err instanceof Error ? err.message : 'Save failed',
+        keysOf(v)
+      )
       const before = ctx?.before
       if (!ctx || !before) return
       const later = new Set(laterPaths(qc, id, v.itemId, ctx))
@@ -201,6 +224,7 @@ function useSheetSave(
       })
     },
     onSuccess: (data, v, ctx) => {
+      onLanded?.(keysOf(v))
       if (v.instrumentId !== undefined || !ctx) return
       if (!laterPaths(qc, id, v.itemId, ctx).length)
         setRow(v.itemId, () => data as HplcSheetRow)
@@ -232,12 +256,17 @@ function applied(row: HplcSheetRow, v: SaveVars): HplcSheetRow {
 }
 
 /** One cell's save: a merge patch for its one key. */
-export function usePatchHplcRow(id: number, onFailure?: HplcSaveFailure) {
+export function usePatchHplcRow(
+  id: number,
+  onFailure?: HplcSaveFailure,
+  onLanded?: HplcSaveLanded
+) {
   return useSheetSave(
     id,
     (v, signal) => patchHplcRow(id, v.itemId, v.body ?? {}, { signal }),
     applied,
-    onFailure
+    onFailure,
+    onLanded
   )
 }
 
@@ -255,15 +284,23 @@ export function useHplcSheetSaving(id: number) {
  * the server has them now, or null when a save is pending before or after
  * the read (a save cancels the read, which then answers the cached sheet).
  */
-export function usePromoteHplcRow(id: number) {
+export function usePromoteHplcRow(
+  id: number,
+  /** Why this row must not be promoted now (a save of it did not land), read
+   *  when the request is about to go, after every save queued before it. */
+  blocked?: (itemId: number) => string | null
+) {
   const qc = useQueryClient()
   const saving = () => qc.isMutating({ mutationKey: SAVE_KEY(id) }) > 0
   const promote = useMutation({
     mutationKey: ['hplc-sheet-promote', id],
     scope: { id: `hplc-sheet-save-${id}` },
     retry: 0,
-    mutationFn: (itemId: number) =>
-      withTimeout(() => promoteHplcRow(id, itemId), PROMOTE_TIMED_OUT),
+    mutationFn: (itemId: number) => {
+      const why = blocked?.(itemId)
+      if (why) return Promise.reject(new Error(why))
+      return withTimeout(() => promoteHplcRow(id, itemId), PROMOTE_TIMED_OUT)
+    },
     onSettled: () =>
       saving()
         ? undefined
@@ -292,7 +329,11 @@ export function usePromoteHplcRow(id: number) {
 }
 
 /** The row's instrument, through the existing item PATCH. */
-export function useSetHplcInstrument(id: number, onFailure?: HplcSaveFailure) {
+export function useSetHplcInstrument(
+  id: number,
+  onFailure?: HplcSaveFailure,
+  onLanded?: HplcSaveLanded
+) {
   return useSheetSave(
     id,
     (v, signal) =>
@@ -307,6 +348,7 @@ export function useSetHplcInstrument(id: number, onFailure?: HplcSaveFailure) {
       instrument_id: v.instrumentId ?? null,
       instrument_name: null,
     }),
-    onFailure
+    onFailure,
+    onLanded
   )
 }
