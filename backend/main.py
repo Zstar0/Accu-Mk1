@@ -7047,7 +7047,9 @@ _CAL_MAX_LEVELS = 12
 _CAL_WEIGHINGS = {"coa_weight_mg", "vial_mg", "vial_standard_mg", "vial_diluent_mg", "vial_diluent_std_mg"}
 # Typo stoppers with a physical floor (fix round 1): "above 0" let 1e-300 through to the arithmetic.
 _CAL_AT_LEAST_ONE = {"free_mw", "stated_fw", "counterion_mw", "ms_mz"}  # g/mol, m/z
-_CAL_AT_LEAST_TINY = {"target", "diluent_density_mg_ml", "level_volume_ul", "top_aliquot_ul"}  # >= 1e-6
+_CAL_AT_LEAST_TINY = {"target", "level_volume_ul", "top_aliquot_ul"}  # >= 1e-6
+# Water is 997.1 mg/mL: this band only stops a unit slip (0.9971 typed in g/mL), Task 5 fix round 1.
+_CAL_DENSITY_RANGE = (500, 2000)
 _CAL_TINY = 1e-6
 _CAL_LONG_TEXT = {"notes", "assumption"}
 # Labels as the source sheet writes them (calibration.html, cal.js STOCK_COLS, DIL_COLS, PEAK_COLS).
@@ -7160,6 +7162,11 @@ class CalSheetPatchIn(BaseModel):
     inputs: Any = None
 
 
+def _cal_density_refusal() -> str:
+    lo, hi = _CAL_DENSITY_RANGE
+    return f"{_CAL_LABELS['sheet']['diluent_density_mg_ml']}: must be from {lo} to {hi}."
+
+
 def _cal_check_fields(prefix: str, section: str, values: dict) -> None:
     from hplc_calibration import COUNTERIONS, MS_IONS
     for key, v in values.items():
@@ -7195,6 +7202,8 @@ def _cal_check_fields(prefix: str, section: str, values: dict) -> None:
             raise HTTPException(400, f"{label}: that number is far too large. Check it.")
         if key == "rt" and v < 0:
             raise HTTPException(400, f"{label}: must be 0 or more.")
+        if key == "diluent_density_mg_ml" and not _CAL_DENSITY_RANGE[0] <= v <= _CAL_DENSITY_RANGE[1]:
+            raise HTTPException(400, _cal_density_refusal())
         if key == "assay_pct" and not 0 < v <= 150:
             raise HTTPException(400, f"{label}: must be more than 0 and no more than 150.")
         if key == "water_pct" and not 0 <= v < 100:
@@ -7574,6 +7583,8 @@ class CalFileIn(BaseModel):
 _CAL_NEEDS_AREAS = ("Type the peak areas of at least two levels first. The sheet is saved; "
                     "file it once they are in.")
 _CAL_CANNOT_FILE = "These numbers cannot be worked out. Correct the sheet, save it and file it again."
+_CAL_SLOPE_NOT_POSITIVE = ("The fit's slope is not positive, so this is not a usable curve. Check that each peak "
+                           "area is typed against its own level.")
 _CAL_NET_PARTS = ("assay", "counterion", "water")
 # Curve text columns narrower than the 200 characters a sheet saves: column -> sheet input key.
 _CAL_CURVE_TEXT = {"source_sample_id": "standard_id", "cas_number": "cas", "vendor": "supplier",
@@ -7595,12 +7606,16 @@ def _cal_curve_fields(db: Session, sheet, effective: dict, worked: dict, name: s
     from copy import deepcopy
 
     from hplc_calibration import standard_data_for
+    typed_density = effective.get("diluent_density_mg_ml")
+    if isinstance(typed_density, (int, float)) and not isinstance(typed_density, bool) and \
+            not _CAL_DENSITY_RANGE[0] <= typed_density <= _CAL_DENSITY_RANGE[1]:
+        raise HTTPException(400, _cal_density_refusal())  # a sheet saved before the band existed
     fit = worked.get("fit") or {}
     if fit.get("slope") is None or fit.get("intercept") is None or fit.get("r2") is None:
         # With no net factor there is no stock and no fit, though the areas are typed.
         raise HTTPException(400, _CAL_CANNOT_FILE if worked.get("factor_applied") is None else _CAL_NEEDS_AREAS)
-    if fit["slope"] == 0:  # a flat curve gives every sample the same quantity
-        raise HTTPException(400, _CAL_CANNOT_FILE)
+    if not fit["slope"] > 0:  # flat or falling (areas typed in reverse): every sample's quantity wrong; NaN too
+        raise HTTPException(400, _CAL_SLOPE_NOT_POSITIVE)
     std = standard_data_for(worked)
     ref_rt = None
     if std.get("rts"):
@@ -7678,6 +7693,7 @@ def file_calibration_curve(sheet_id: int, data: CalFileIn, db: Session = Depends
     then the curve rows. Every query runs before the first change, so the sheet's updated_at is
     stamped once, with filed_at, in the one flush (onupdate would otherwise read "changed since
     filed" the moment a curve is filed). Filing is not a save: the sheet's version is unchanged."""
+    from catalog.method_run_params import HPLC_RUN_PARAM_DEFAULTS
     from models import HplcCalibrationSheet
     try:
         if data.version > _CAL_MAX_WHOLE:
@@ -7713,6 +7729,12 @@ def file_calibration_curve(sheet_id: int, data: CalFileIn, db: Session = Depends
         now = datetime.utcnow()
         name = curve_name(db, sheet)  # after the locks: two duplicates of one original never share -Inj2
         fields = _cal_curve_fields(db, sheet, effective, worked, name, now)
+        warnings = []
+        default_density = HPLC_RUN_PARAM_DEFAULTS["diluent_density_mg_ml"]
+        if abs(fields["diluent_density"] - default_density) > 1e-6:
+            warnings.append(f"This curve is filed with a diluent density of {fields['diluent_density']:.15g} mg/mL. "
+                            f"The prep worksheet works with {default_density:.15g} unless its method says otherwise, "
+                            "and it refuses to promote a prep while the two differ.")
 
         # An original re-files each injection that has a curve, with the corrected preparation.
         jobs = []  # (replicate sheet, its curve fields)
@@ -7735,19 +7757,22 @@ def file_calibration_curve(sheet_id: int, data: CalFileIn, db: Session = Depends
             select(CalibrationCurve).where(CalibrationCurve.id.in_(curve_ids)).order_by(CalibrationCurve.id)
             .with_for_update(of=CalibrationCurve).execution_options(populate_existing=True)).scalars()} \
             if curve_ids else {}
-        # A curve that analyses have used is part of their record: never re-filed (Review Focus 2).
-        # ponytail: an analysis started between this count and the commit is not seen; Task 8 territory.
-        used = dict(db.execute(select(HPLCAnalysis.calibration_curve_id, func.count()).where(
-            HPLCAnalysis.calibration_curve_id.in_(curve_ids)).group_by(HPLCAnalysis.calibration_curve_id)).all()) \
-            if curve_ids else {}
+        # A curve that analyses or prep sessions have used is part of their record: never re-filed
+        # (Review Focus 2). A wizard session works its quantity out again from the curve on every read.
+        # ponytail: one started between this count and the commit is not seen; Task 8 territory.
+        def uses(column):
+            return dict(db.execute(select(column, func.count()).where(column.in_(curve_ids))
+                                   .group_by(column)).all()) if curve_ids else {}
+        analyses, preps = uses(HPLCAnalysis.calibration_curve_id), uses(WizardSession.calibration_curve_id)
         for target, target_fields in [(sheet, fields), *jobs]:
             curve = curves.get(target.calibration_curve_id)
             if curve is None:
                 continue
-            n = used.get(curve.id, 0)
-            if n:
+            n, m = analyses.get(curve.id, 0), preps.get(curve.id, 0)
+            if n or m:
                 raise HTTPException(409, f"Curve {curve.source_filename} has been used by {n} "
-                                         f"{'analysis' if n == 1 else 'analyses'}, so its numbers are part of their "
+                                         f"{'analysis' if n == 1 else 'analyses'} and {m} "
+                                         f"prep session{'' if m == 1 else 's'}, so its numbers are part of their "
                                          "record. Start a new worksheet to file a corrected curve.")
             if (curve.peptide_id, curve.instrument_id) != (target_fields["peptide_id"], target_fields["instrument_id"]):
                 raise HTTPException(409, f"Curve {curve.source_filename} has been moved to another peptide or "
@@ -7821,7 +7846,7 @@ def file_calibration_curve(sheet_id: int, data: CalFileIn, db: Session = Depends
         raise
     return {"sheet": _cal_sheet_out(db, sheet, full=True),
             "curve": _cal_to_response(curve).model_dump(mode="json"),
-            "activation": activation, "refiled_curve_ids": [rc.id for rc, _ in refiled]}
+            "activation": activation, "refiled_curve_ids": [rc.id for rc, _ in refiled], "warnings": warnings}
 
 
 # --- Full HPLC Analysis Endpoint ---

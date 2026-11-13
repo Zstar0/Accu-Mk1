@@ -237,8 +237,11 @@ REFUSALS = [
     ("negative coa weight", _at(("coa_weight_mg",), -0.5), "Weight from COA (mg): a balance reading"),
     ("zero target", _at(("levels", 0, "target"), 0), "Level 1, Target (ug/mL): must be at least 0.000001."),
     ("tiny target", _at(("levels", 0, "target"), 9e-7), "Level 1, Target (ug/mL): must be at least 0.000001."),
-    ("negative density", _at(("diluent_density_mg_ml",), -997.1), "Diluent density (mg/mL): must be at least 0.000001."),
-    ("tiny density", _at(("diluent_density_mg_ml",), 9e-7), "Diluent density (mg/mL): must be at least 0.000001."),
+    ("negative density", _at(("diluent_density_mg_ml",), -997.1), "Diluent density (mg/mL): must be from 500 to 2000."),
+    ("tiny density", _at(("diluent_density_mg_ml",), 9e-7), "Diluent density (mg/mL): must be from 500 to 2000."),
+    ("density in g/mL", _at(("diluent_density_mg_ml",), 0.9971), "Diluent density (mg/mL): must be from 500 to 2000."),
+    ("density under 500", _at(("diluent_density_mg_ml",), 499.99), "Diluent density (mg/mL): must be from 500 to 2000."),
+    ("density over 2000", _at(("diluent_density_mg_ml",), 2000.01), "Diluent density (mg/mL): must be from 500 to 2000."),
     ("zero level volume", _at(("level_volume_ul",), 0), "Level volume (uL): must be at least 0.000001."),
     ("tiny level volume", _at(("level_volume_ul",), 9e-7), "Level volume (uL): must be at least 0.000001."),
     ("zero aliquot", _at(("top_aliquot_ul",), 0), "Aliquot (uL): must be at least 0.000001."),
@@ -311,7 +314,8 @@ ACCEPTED_BOUNDS = [
     (("net", "free_mw"), 1), (("net", "stated_fw"), 1), (("net", "counterion_mw"), 1), (("net", "ms_mz"), 1),
     (("net", "equivalents"), 0.01), (("net", "equivalents"), 100),
     (("net", "override_factor"), 2), (("net", "override_factor"), 1e-9),
-    (("levels", 0, "target"), 1e-6), (("diluent_density_mg_ml",), 1e-6), (("level_volume_ul",), 1e-6),
+    (("levels", 0, "target"), 1e-6), (("diluent_density_mg_ml",), 500), (("diluent_density_mg_ml",), 2000),
+    (("level_volume_ul",), 1e-6),
     (("top_aliquot_ul",), 1e-6), (("stock", "vial_mg"), 0), (("net", "assay_pct"), 150), (("net", "water_pct"), 0),
 ]
 

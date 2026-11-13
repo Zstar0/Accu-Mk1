@@ -30,6 +30,7 @@ from models import (
     Peptide,
     PeptideAnalyte,
     User,
+    WizardSession,
 )
 
 CASES = json.loads((Path(__file__).parent / "fixtures" / "hplc_calibration_cases.json").read_text())["cases"]
@@ -39,7 +40,11 @@ NO_PEPTIDE = "Pick the compound first. The curve is filed under it."
 NO_INSTRUMENT = "Pick the instrument. A curve belongs to the instrument that ran it."
 BLEND = "A curve is for one peptide. A blend's components each have their own."
 STALE = "Someone else saved this sheet. It has been reloaded."
-RESPONSE_KEYS = {"sheet", "curve", "activation", "refiled_curve_ids"}
+RESPONSE_KEYS = {"sheet", "curve", "activation", "refiled_curve_ids", "warnings"}
+SLOPE_NOT_POSITIVE = ("The fit's slope is not positive, so this is not a usable curve. Check that each peak area "
+                      "is typed against its own level.")
+DENSITY_RANGE = "Diluent density (mg/mL): must be from 500 to 2000."
+DEFAULT_DENSITY = hplc_calibration.HPLC_RUN_PARAM_DEFAULTS["diluent_density_mg_ml"]
 SERIAL_KEYS = ("stock", "levels", "level_volume_ul", "stock_as_top", "top_aliquot_ul", "diluent_density_mg_ml")
 CURVE_COLUMNS = [c.name for c in CalibrationCurve.__table__.columns]
 _REAL_WORK_OUT = hplc_calibration.work_out_sheet
@@ -128,6 +133,7 @@ def _filed(client, sheet_id, version=None):
     assert res.status_code == 200, res.text
     out = res.json()
     assert set(out) == RESPONSE_KEYS
+    assert isinstance(out["warnings"], list)
     return out
 
 
@@ -182,6 +188,12 @@ def _analysis(session, seeded, curve_id):
     session.add(HPLCAnalysis(sample_id_label="P-T5", peptide_id=seeded.peptide, dil_vial_empty=1.0,
                              dil_vial_with_diluent=2.0, dil_vial_with_diluent_and_sample=3.0,
                              calibration_curve_id=curve_id))
+    session.commit()
+
+
+def _session(session, seeded, curve_id):
+    """A prep wizard session on the curve (wizard_sessions.calibration_curve_id)."""
+    session.add(WizardSession(peptide_id=seeded.peptide, calibration_curve_id=curve_id))
     session.commit()
 
 
@@ -388,8 +400,45 @@ def test_nothing_non_finite_is_ever_filed(client, seeded, session, monkeypatch, 
     sheet = _sheet(client, seeded, _case(1))
     monkeypatch.setattr(hplc_calibration, "work_out_sheet", _poisoned(path, value))
     detail = _refused(client, session, sheet["id"], 400, None)
-    if path != ("net", "parts_used"):
-        assert detail == CANNOT
+    assert detail == (SLOPE_NOT_POSITIVE if path == ("fit", "slope") else CANNOT)
+
+
+def test_reversed_peak_areas_give_a_negative_slope_and_are_refused(client, seeded, session):
+    # Review C1: areas typed bottom to top fitted a negative slope, filed it and switched off
+    # the working active curve.
+    others = _others(session, seeded)
+    active = _curve(session, seeded.peptide, seeded.inst, True)
+    inputs = _case(1)
+    areas = [L["peak_area"] for L in inputs["levels"]][::-1]
+    for L, a in zip(inputs["levels"], areas):
+        L["peak_area"] = a
+    sheet = _sheet(client, seeded, inputs)
+    detail = _refused(client, session, sheet["id"], 400, None)
+    assert detail == SLOPE_NOT_POSITIVE
+    assert _row(session, active)["is_active"] is True
+    assert _others(session, seeded) == others
+
+
+@pytest.mark.parametrize("density", [0.9971, 499.9, 2000.1])
+def test_a_stored_density_outside_the_range_is_refused_at_filing(client, seeded, session, density):
+    # The save refuses it now; a sheet saved before that can still hold one.
+    sheet = _sheet(client, seeded, _case(1))
+    row = session.get(HplcCalibrationSheet, sheet["id"])
+    row.inputs = {**copy.deepcopy(row.inputs), "diluent_density_mg_ml": density}
+    session.commit()
+    assert _refused(client, session, sheet["id"], 400, None) == DENSITY_RANGE
+
+
+def test_a_typed_density_files_with_a_warning(client, seeded, session):
+    blank = _filed(client, _sheet(client, seeded, _case(1))["id"])
+    assert blank["warnings"] == [] and blank["curve"]["diluent_density"] == DEFAULT_DENSITY
+    inputs = _case(1)
+    inputs["diluent_density_mg_ml"] = 1000.0
+    out = _filed(client, _sheet(client, seeded, inputs, instrument=seeded.inst2)["id"])
+    assert out["curve"]["diluent_density"] == 1000.0 and out["curve"]["is_active"] is True
+    assert out["warnings"] == [(
+        "This curve is filed with a diluent density of 1000 mg/mL. The prep worksheet works with "
+        f"{DEFAULT_DENSITY:.15g} unless its method says otherwise, and it refuses to promote a prep while the two differ.")]
 
 
 def test_text_too_long_for_the_curve_is_refused(client, seeded, session):
@@ -523,10 +572,40 @@ def test_refiling_a_used_curve_is_refused(client, seeded, session):
     assert client.patch(f"/hplc-calibration-sheets/{sheet['id']}",
                         json={"version": 1, "inputs": inputs}).status_code == 200
     detail = _refused(client, session, sheet["id"], 409, None, version=2)
-    assert detail == (f"Curve {first['curve']['source_filename']} has been used by 1 analysis, so its numbers are "
-                      "part of their record. Start a new worksheet to file a corrected curve.")
+    assert detail == (f"Curve {first['curve']['source_filename']} has been used by 1 analysis and 0 prep sessions, "
+                      "so its numbers are part of their record. Start a new worksheet to file a corrected curve.")
     _analysis(session, seeded, first["curve"]["id"])
-    assert "used by 2 analyses" in _refused(client, session, sheet["id"], 409, None, version=2)
+    assert "used by 2 analyses and 0 prep sessions" in _refused(client, session, sheet["id"], 409, None, version=2)
+
+
+def test_refiling_a_curve_a_prep_session_uses_is_refused(client, seeded, session):
+    # Review I2: a wizard session works its quantity out again from the curve on every read.
+    inputs = _case(1)
+    sheet = _sheet(client, seeded, inputs)
+    first = _filed(client, sheet["id"])
+    _session(session, seeded, first["curve"]["id"])
+    inputs["levels"][0]["peak_area"] = 8600.0
+    assert client.patch(f"/hplc-calibration-sheets/{sheet['id']}",
+                        json={"version": 1, "inputs": inputs}).status_code == 200
+    detail = _refused(client, session, sheet["id"], 409, None, version=2)
+    assert detail == (f"Curve {first['curve']['source_filename']} has been used by 0 analyses and 1 prep session, "
+                      "so its numbers are part of their record. Start a new worksheet to file a corrected curve.")
+    _session(session, seeded, first["curve"]["id"])
+    _analysis(session, seeded, first["curve"]["id"])
+    assert "used by 1 analysis and 2 prep sessions" in _refused(client, session, sheet["id"], 409, None, version=2)
+
+
+def test_refiling_an_original_with_a_replicate_a_prep_session_uses_is_refused_whole(client, seeded, session):
+    inputs = _case(1)
+    original = _filed(client, _sheet(client, seeded, inputs)["id"])
+    sid = original["sheet"]["id"]
+    rep = _replicate(client, sid)
+    rep_curve = _filed(client, rep["id"])["curve"]
+    _session(session, seeded, rep_curve["id"])
+    inputs["stock"]["vial_standard_mg"] = 15729.5
+    assert client.patch(f"/hplc-calibration-sheets/{sid}", json={"version": 1, "inputs": inputs}).status_code == 200
+    detail = _refused(client, session, sid, 409, None, version=2, sheets=(rep["id"],))
+    assert detail.startswith(f"Curve {rep_curve['source_filename']} has been used by 0 analyses and 1 prep session")
 
 
 def test_refiling_an_original_refiles_its_replicates(client, seeded, session):
@@ -569,7 +648,7 @@ def test_refiling_an_original_with_a_used_replicate_is_refused_whole(client, see
     inputs["stock"]["vial_standard_mg"] = 15729.5
     assert client.patch(f"/hplc-calibration-sheets/{sid}", json={"version": 1, "inputs": inputs}).status_code == 200
     detail = _refused(client, session, sid, 409, None, version=2, sheets=(rep["id"],))
-    assert detail.startswith(f"Curve {rep_curve['source_filename']} has been used by 1 analysis")
+    assert detail.startswith(f"Curve {rep_curve['source_filename']} has been used by 1 analysis and 0 prep sessions")
 
 
 def test_a_replicate_that_cannot_follow_the_corrected_original_is_refused_whole(client, seeded, session):
