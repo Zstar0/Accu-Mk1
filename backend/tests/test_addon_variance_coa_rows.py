@@ -302,6 +302,25 @@ def test_hm_two_digests_print_run_by_run(db, monkeypatch):
     assert [r["keyword"] for r in rows] == HM_KW * 2
 
 
+def test_run_rows_say_the_form_factor_and_a_digest_stays_a_digest(db, monkeypatch):
+    # Handler, 2026-11-13: a run row names one unit of the sample by its
+    # dosage form ("Pen 1"), from the form's icon type (coa.sample_units).
+    from models import LimsSampleForm
+    pen = LimsSampleForm(name="Pen", route="injectable", icon="pen")
+    db.add(pen)
+    db.flush()
+    w = _endo_world(db, monkeypatch, "P-7410", n=2)
+    w.parent.sample_form_id = pen.id
+    db.commit()
+    assert _names(build_native_sections(db, w.parent), ENDO_KEY) == [
+        f"{ENDO_NAME}, Pen 1", f"{ENDO_NAME}, Pen 2"]
+    h = _hm_world(db, monkeypatch, "P-7411")
+    h.parent.sample_form_id = pen.id
+    db.commit()
+    assert _names(build_native_sections(db, h.parent), HM_KEY)[::4] == [
+        "Hm-Pb, Digest 1", "Hm-Pb, Digest 2"]
+
+
 def test_replicate_loq_is_its_own(db, monkeypatch):
     prof, [svc] = _profile(db, ENDO_KEY, "endo85", ENDO_KW, max_value="100")
     parent = _parent(db, "P-7404")

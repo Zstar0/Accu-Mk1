@@ -11,6 +11,7 @@ import logging
 from coa.legacy_rows import build_legacy_rows
 from coa.native_sections import build_native_sections
 from coa.sample_meta import build_sample_meta
+from coa.sample_units import build_sample_units
 from coa.source_setting import coa_generation_source
 
 log = logging.getLogger(__name__)
@@ -37,7 +38,25 @@ def build_coa_wire_document(db, parent, *, trace=None) -> dict:
     if coa_generation_source(db) == "mk1":
         doc["legacy_rows"] = _legacy_block(db, parent, doc["sections"])
         doc["sample_meta"] = build_sample_meta(db, parent)
+    _attach_sample_units(db, parent, doc)
     return doc
+
+
+def _attach_sample_units(db, parent, doc, *, single_vial: bool = False) -> None:
+    """Add the header's unit block (form icon, word, count). Best-effort: it
+    is cosmetic, so a failure logs and leaves the key off (COABuilder then
+    prints the old header row) and never blocks a certificate. Read-only,
+    inside a savepoint so a failed query cannot poison the caller's session."""
+    sp = None
+    try:
+        sp = db.begin_nested()
+        doc["sample_units"] = build_sample_units(db, parent, doc, single_vial=single_vial)
+    except Exception:  # noqa: BLE001 - see the docstring
+        log.warning("sample_units build failed for %s; the certificate keeps the "
+                    "old header row", getattr(parent, "sample_id", "?"), exc_info=True)
+    finally:
+        if sp is not None:
+            sp.rollback()
 
 
 def build_vial_wire_document(db, parent, vial=None, vial_parent_ids=None):
@@ -60,6 +79,7 @@ def build_vial_wire_document(db, parent, vial=None, vial_parent_ids=None):
         doc = {"sample_id": parent.sample_id, "ordered_profiles": [], "sections": []}
     doc["legacy_rows"] = _legacy_block(db, parent)
     doc["sample_meta"] = build_sample_meta(db, parent, vial=vial)
+    _attach_sample_units(db, parent, doc, single_vial=True)
     return doc
 
 

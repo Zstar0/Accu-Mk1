@@ -40,6 +40,7 @@ from sqlalchemy.orm import Session
 
 from coa.spec_rules import (SpecRuleError, effective_unit, evaluate, normalize_matrix,
                             resolve_spec, sample_peptide_id)
+from coa.sample_units import unit_words
 from coa.text_macros import format_lod, resolve
 from sub_samples.service import fetch_sample_services, variance_plan_for_parent
 from sub_samples.variance_tests import (DEAD_ROW_STATES, VariancePlan,
@@ -495,6 +496,9 @@ def _build_from_services(db: Session, parent, raw, services, *, vial_parent_ids,
         sample_form_id = None        # the form tier is peptide-family only (resolve_spec)
     # The form tier is only "consulted" when the sample has a form.
     form_tier = f"form={sample_form_id!r}, " if sample_form_id is not None else ""
+    # The word a Variance run row uses for one unit of this sample ("Vial",
+    # "Pen"): the dosage form's, whatever the matrix (Handler, 2026-11-13).
+    unit_word = unit_words(db, parent)[0]
     # Add-on test Variance: resolved once, from the merged services (they
     # carry `variance`), for the parent document only. None (no four-key
     # entry, every sample today) prints exactly today's rows; the per-vial
@@ -634,8 +638,11 @@ def _build_from_services(db: Session, parent, raw, services, *, vial_parent_ids,
                     f"native sections: '{prof.key}' bought {rv.n} runs, {k} replicate "
                     f"runs carry results on {sample_id}; {tail}"
                 )
+            # A pooled run is a "Digest" whatever the form; any other run is
+            # one unit of the sample, named by its form factor.
+            run_word = rv.run_label if rv.pooled else unit_word
             for row_out, svc in zip(rows, printed):
-                row_out["name"] = f"{svc.title}, {rv.run_label} 1"
+                row_out["name"] = f"{svc.title}, {run_word} 1"
             traced = [_trace_row(1, row, row_out) for row_out, row in zip(rows, printed_rows)]
             for i, run in runs:
                 for svc, rep in run:
@@ -643,7 +650,7 @@ def _build_from_services(db: Session, parent, raw, services, *, vial_parent_ids,
                         db, prof, svc, rep, sample_id=sample_id, matrix=matrix,
                         peptide_id=peptide_id, sample_form_id=sample_form_id,
                         form_tier=form_tier)
-                    row_out["name"] = f"{svc.title}, {rv.run_label} {i}"
+                    row_out["name"] = f"{svc.title}, {run_word} {i}"
                     traced.append(_trace_row(i, rep, row_out))
                     rows.append(row_out)
                     limits.append(limit)

@@ -108,7 +108,10 @@ def test_coa_sections_endpoint_returns_document(client, db_session):
                return_value={"sample_id": "P-8001", "ordered_profiles": [], "sections": []}):
         r = client.get("/samples/P-8001/coa-sections", headers=SVC_TOKEN_HEADER)
     assert r.status_code == 200
-    assert r.json() == {"sample_id": "P-8001", "ordered_profiles": [], "sections": []}
+    # sample_units (2026-11-13): the header's unit block rides every document;
+    # with no vials to count it carries the word only.
+    assert r.json() == {"sample_id": "P-8001", "ordered_profiles": [], "sections": [],
+                        "sample_units": {"one": "Vial", "many": "Vials"}}
 
 
 def test_coa_sections_endpoint_502_on_builder_failure(client, db_session):
