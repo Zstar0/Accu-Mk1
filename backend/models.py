@@ -1056,6 +1056,32 @@ class CalibrationCurve(Base):
     updated_by_user_id: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
     updated_by_email: Mapped[Optional[str]] = mapped_column(String(320), nullable=True)
 
+    # --- Calibration Curve Worksheet (plan 2026-11-13, Task 1): written only by "File
+    # curve". All nullable, no backfill: a curve with no net_factor_applied reads as
+    # "net, entered by hand" (decision 15). Both keys SET NULL, because existing routes
+    # delete curves (re-sync, wipe-all).
+    cas_number: Mapped[Optional[str]] = mapped_column(String(40), nullable=True)
+    net_counterion: Mapped[Optional[str]] = mapped_column(String(40), nullable=True)  # '' none, a table name, or Other
+    net_counterion_mw: Mapped[Optional[float]] = mapped_column(Float, nullable=True)  # the mass USED
+    net_equivalents: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    net_free_mw: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    net_stated_fw: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    net_ms_mz: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    net_ms_ion: Mapped[Optional[str]] = mapped_column(String(10), nullable=True)
+    net_assay_pct: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    net_water_pct: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    net_assumption: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    net_factor_computed: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    net_factor_applied: Mapped[Optional[float]] = mapped_column(Float, nullable=True)  # override, else computed
+    net_override_reason: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    net_parts_used: Mapped[Optional[list]] = mapped_column(JSON, nullable=True)  # subset of assay, counterion, water
+    serial_dilution: Mapped[Optional[dict]] = mapped_column(JSON, nullable=True)  # the weighings at filing
+    calibration_sheet_id: Mapped[Optional[int]] = mapped_column(
+        ForeignKey("hplc_calibration_sheets.id", ondelete="SET NULL"), nullable=True)
+    replicate_of_id: Mapped[Optional[int]] = mapped_column(
+        ForeignKey("calibration_curves.id", ondelete="SET NULL"), nullable=True)
+    injection: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)  # 2, 3 ... same-instrument replicate
+
     # Relationships
     peptide: Mapped["Peptide"] = relationship("Peptide", back_populates="calibration_curves")
     analyte: Mapped[Optional["PeptideAnalyte"]] = relationship("PeptideAnalyte")
@@ -1063,6 +1089,40 @@ class CalibrationCurve(Base):
 
     def __repr__(self) -> str:
         return f"<CalibrationCurve(id={self.id}, peptide_id={self.peptide_id}, slope={self.slope})>"
+
+
+class HplcCalibrationSheet(Base):
+    """A Calibration Curve Worksheet (plan 2026-11-13, Task 1). The typed inputs live in
+    one JSON column because a sheet is weighed days before it has peak areas, and a curve
+    row needs a slope. "File curve" mints or re-files calibration_curve_id. Every key to a
+    curve, a peptide, another sheet or a user is SET NULL: existing routes delete curves
+    and peptides, and a sheet must survive that with its weighings."""
+    __tablename__ = "hplc_calibration_sheets"
+
+    id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
+    peptide_id: Mapped[Optional[int]] = mapped_column(
+        ForeignKey("peptides.id", ondelete="SET NULL"), nullable=True)
+    instrument_id: Mapped[Optional[int]] = mapped_column(ForeignKey("instruments.id"), nullable=True)
+    # Set on a "Duplicate for another injection" sheet.
+    replicate_of_sheet_id: Mapped[Optional[int]] = mapped_column(
+        ForeignKey("hplc_calibration_sheets.id", ondelete="SET NULL"), nullable=True)
+    inputs: Mapped[dict] = mapped_column(JSON, nullable=False)
+    # Bumped by every save; a save carrying an old one is a 409.
+    version: Mapped[int] = mapped_column(Integer, nullable=False, default=1, server_default="1")
+    calibration_curve_id: Mapped[Optional[int]] = mapped_column(
+        ForeignKey("calibration_curves.id", ondelete="SET NULL"), nullable=True)
+    filed_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
+    # Nullable as the boot CREATE makes them, so create_all and the boot agree.
+    created_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True, default=datetime.utcnow)
+    updated_at: Mapped[Optional[datetime]] = mapped_column(
+        DateTime, nullable=True, default=datetime.utcnow, onupdate=datetime.utcnow)
+    created_by_id: Mapped[Optional[int]] = mapped_column(
+        ForeignKey("users.id", ondelete="SET NULL"), nullable=True)
+    updated_by_id: Mapped[Optional[int]] = mapped_column(
+        ForeignKey("users.id", ondelete="SET NULL"), nullable=True)
+
+    def __repr__(self) -> str:
+        return f"<HplcCalibrationSheet(id={self.id}, peptide_id={self.peptide_id})>"
 
 
 class HPLCAnalysis(Base):

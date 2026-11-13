@@ -2335,6 +2335,28 @@ export interface CalibrationCurve {
   created_by_email: string | null
   updated_by_user_id: number | null
   updated_by_email: string | null
+  // Calibration Curve Worksheet: written only by "File curve"; null on every other curve
+  cas_number: string | null
+  net_counterion: string | null
+  net_counterion_mw: number | null
+  net_equivalents: number | null
+  net_free_mw: number | null
+  net_stated_fw: number | null
+  net_ms_mz: number | null
+  net_ms_ion: string | null
+  net_assay_pct: number | null
+  net_water_pct: number | null
+  net_assumption: string | null
+  net_factor_computed: number | null
+  net_factor_applied: number | null
+  net_override_reason: string | null
+  net_parts_used: string[] | null
+  serial_dilution: unknown | null
+  calibration_sheet_id: number | null
+  replicate_of_id: number | null
+  injection: number | null
+  // Computed by the backend: 'worksheet' when net_factor_applied is set
+  net_basis: 'entered_by_hand' | 'worksheet'
 }
 
 export interface InstrumentSummary {

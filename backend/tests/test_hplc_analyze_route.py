@@ -735,7 +735,8 @@ class _FakeSession:
 
 def _run_check_main(monkeypatch, capsys, *, stock_nullable="YES", forms_column=True,
                     constraints=("ck_lims_sample_forms_hplc_prep",), rows=_FORMS_ROWS,
-                    rules_table=True, rules_over=None, preps_table=True, preps_index=True, items_column=True):
+                    rules_table=True, rules_over=None, preps_table=True, preps_index=True, items_column=True,
+                    sheets_table=True, curve_columns=True):
     """(exit code, output lines) of check_hplc_columns.main() over canned query results."""
     from scripts import check_hplc_columns as check
 
@@ -750,6 +751,10 @@ def _run_check_main(monkeypatch, capsys, *, stock_nullable="YES", forms_column=T
         ) | (rules_over or {}),
         "sample_preps": {name: ("integer", "YES") for name in check.PREPS_EXPECTED} if preps_table else {},
         "worksheet_items": {name: ("json", "YES") for name in check.ITEMS_EXPECTED} if items_column else {},
+        "hplc_calibration_sheets": (
+            {name: ("integer", want) for name, want in check.SHEETS_EXPECTED.items()} if sheets_table else {}
+        ),
+        "calibration_curves": {name: ("integer", "YES") for name in check.CURVES_EXPECTED} if curve_columns else {},
     }
     indexes = (
         {check.PREPS_INDEX: (
@@ -782,9 +787,11 @@ def test_the_column_check_script_exits_zero_only_when_both_tables_are_right(monk
         {"preps_table": False},  # sample_preps: ensure_sample_preps_table never ran on this image
         {"preps_index": False},  # sample_preps: the worksheet-item unique index is missing
         {"items_column": False},  # worksheet_items: the hplc_prep ADD COLUMN that never applied
+        {"sheets_table": False},  # hplc_calibration_sheets: the CREATE TABLE that never ran
+        {"curve_columns": False},  # calibration_curves: the worksheet ADD COLUMNs that never applied
     ],
     ids=["hplc_analyses", "no_column", "no_check", "backfill", "hplc_prep_rules", "sample_preps", "preps_index",
-         "items_column"],
+         "items_column", "calibration_sheets", "curve_columns"],
 )
 def test_the_column_check_script_exits_one_for_a_failure_on_either_table(monkeypatch, capsys, broken):
     # The three lims_sample_forms cases are what pin main() adding that table's problems to

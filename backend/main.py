@@ -3662,9 +3662,41 @@ class CalibrationCurveResponse(BaseModel):
     created_by_email: Optional[str] = None
     updated_by_user_id: Optional[int] = None
     updated_by_email: Optional[str] = None
+    # Calibration Curve Worksheet (plan 2026-11-13, Task 1): written only by "File curve".
+    cas_number: Optional[str] = None
+    net_counterion: Optional[str] = None
+    net_counterion_mw: Optional[float] = None
+    net_equivalents: Optional[float] = None
+    net_free_mw: Optional[float] = None
+    net_stated_fw: Optional[float] = None
+    net_ms_mz: Optional[float] = None
+    net_ms_ion: Optional[str] = None
+    net_assay_pct: Optional[float] = None
+    net_water_pct: Optional[float] = None
+    net_assumption: Optional[str] = None
+    net_factor_computed: Optional[float] = None
+    net_factor_applied: Optional[float] = None
+    net_override_reason: Optional[str] = None
+    net_parts_used: Optional[list[str]] = None
+    serial_dilution: Optional[dict] = None
+    calibration_sheet_id: Optional[int] = None
+    replicate_of_id: Optional[int] = None
+    injection: Optional[int] = None
+    # Set by _cal_to_response from net_factor_applied, never stored (decision 15).
+    net_basis: Literal["entered_by_hand", "worksheet"] = "entered_by_hand"
 
     class Config:
         from_attributes = True
+
+
+# The worksheet columns, copied by name in _cal_to_response's list branch, which builds
+# the response field by field (a key left out there vanishes from the Peptides page list).
+_CAL_WORKSHEET_FIELDS = (
+    "cas_number", "net_counterion", "net_counterion_mw", "net_equivalents", "net_free_mw",
+    "net_stated_fw", "net_ms_mz", "net_ms_ion", "net_assay_pct", "net_water_pct",
+    "net_assumption", "net_factor_computed", "net_factor_applied", "net_override_reason",
+    "net_parts_used", "serial_dilution", "calibration_sheet_id", "replicate_of_id", "injection",
+)
 
 
 class InstrumentSummary(BaseModel):
@@ -3759,9 +3791,11 @@ def _cal_to_response(cal: CalibrationCurve, include_blobs: bool = True) -> Calib
             notes=cal.notes,
             created_by_user_id=cal.created_by_user_id, created_by_email=cal.created_by_email,
             updated_by_user_id=cal.updated_by_user_id, updated_by_email=cal.updated_by_email,
+            **{name: getattr(cal, name) for name in _CAL_WORKSHEET_FIELDS},
         )
     else:
         resp = CalibrationCurveResponse.model_validate(cal)
+    resp.net_basis = "worksheet" if cal.net_factor_applied is not None else "entered_by_hand"
     # Prefer stored webUrl from Graph API; fall back to computed URL for legacy records
     if cal.sharepoint_url:
         resp.sharepoint_url = cal.sharepoint_url
