@@ -38,7 +38,12 @@ function dateOf(s: CalSheetListItem) {
 
 /** Every calibration worksheet, newest save first (the server's order), with
  *  a compound filter and New. */
-export function HplcCalSheetList() {
+export function HplcCalSheetList({
+  onOpened,
+}: {
+  /** New is about to open a sheet: focus goes to its heading (round 2). */
+  onOpened?: (id: number) => void
+} = {}) {
   const [peptideId, setPeptideId] = useState<number | undefined>(undefined)
   const list = useCalSheets(peptideId)
   const sheets = list.data?.pages.flat() ?? []
@@ -69,9 +74,10 @@ export function HplcCalSheetList() {
       if (
         alive.current &&
         useUIStore.getState().calibrationSheetPageId === null
-      )
+      ) {
+        onOpened?.(s.id)
         open(s.id)
-      else
+      } else
         toast.success(
           `Made ${s.proposed_name}. It is under Calibration worksheets.`
         )

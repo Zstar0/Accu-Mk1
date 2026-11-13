@@ -275,6 +275,15 @@ describe('HplcCalTables, fix round 1', () => {
     )
   })
 
+  it('round 2: the Average RT help says the filed RT can differ, not only in the last digits', async () => {
+    open(fixtureCase(1).inputs as CalInputs)
+    fireEvent.focus(await screen.findByText('Average RT'))
+    const help = await screen.findAllByText(
+      "The workbook's N27: the mean retention time over every level with an RT typed. The curve is filed with the mean over the levels in the fit, which can differ when a level has an RT but no peak area."
+    )
+    expect(help.length).toBeGreaterThan(0)
+  })
+
   it('I1: every bound equals the server, field by field', () => {
     const cases: [string, number, string | null][] = [
       ['rt', -0.01, 'must be 0 or more'],
@@ -284,11 +293,8 @@ describe('HplcCalTables, fix round 1', () => {
       ['diluent_density_mg_ml', 500, null],
       ['diluent_density_mg_ml', 2000, null],
       ['diluent_density_mg_ml', 2000.1, 'must be from 500 to 2000'],
-      [
-        'coa_weight_mg',
-        -1,
-        'a balance reading is between 0 and 1,000,000,000 mg',
-      ],
+      // round 2: Weight from COA is a weight, not a balance reading
+      ['coa_weight_mg', -1, 'a weight is between 0 and 1,000,000,000 mg'],
       ['vial_mg', 1e9, null],
       [
         'vial_mg',

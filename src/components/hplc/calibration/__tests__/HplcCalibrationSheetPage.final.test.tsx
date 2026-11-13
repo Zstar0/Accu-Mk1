@@ -3,8 +3,18 @@
 // the app-shaped wrapper (renderInApp): the page keyed on navigationKey, with
 // the app's own query defaults.
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
-import { act, fireEvent, screen, waitFor, within } from '@testing-library/react'
+import {
+  act,
+  fireEvent,
+  render,
+  screen,
+  waitFor,
+  within,
+} from '@testing-library/react'
+import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { toast } from 'sonner'
+import { queryClient as appQueryClient } from '@/lib/query-client'
+import { HplcCalibrationSheetPage } from '../HplcCalibrationSheetPage'
 import type * as ApiModule from '@/lib/api'
 import {
   CalSheetError,
@@ -695,5 +705,310 @@ describe('Part B: the save hook', () => {
       )
       expect(await screen.findByText(RELOADED_NOTHING_LOST)).toBeTruthy()
     })
+  })
+})
+
+// --- Round 2: the re-review's N1 to N3 and the browser pass ---
+
+const DUP_CHANGED =
+  'Duplicate did not go: this sheet was saved again since the page last read it. Check it and try again.'
+const NOT_TAKEN_LINE =
+  'Not saved: the server did not answer or could not take the save. Your changes are still on this page.'
+const KEYS =
+  'Tab and Enter go down a column, then to the top of the next one; Shift+Tab and Shift+Enter go back up. The arrow keys move along a row (Left, Right) and between rows (Up, Down); while you edit a value, Left and Right first move through its text.'
+const WORKED_OUT =
+  'This sheet cannot be worked out as stored. Check the values below.'
+
+describe('Round 2: N1, a 409 from the file-first step of Duplicate', () => {
+  const filedChanged = () =>
+    makeSheet(fixtureCase(1).inputs as CalInputs, {
+      curve_id: 70,
+      curve_name: NAME,
+      changed_since_filed: true,
+    })
+
+  it('a stale-version 409 (someone else saved) stops with the changed sentence and makes no copy (probe PR1, stale)', async () => {
+    const sheet = filedChanged()
+    const copy = copySheet()
+    let now = sheet
+    vi.mocked(getCalSheet).mockImplementation(async id =>
+      id === 9 ? copy : now
+    )
+    vi.mocked(fileCalSheet).mockImplementation(async () => {
+      now = { ...sheet, version: 2, inputs: { ...sheet.inputs, lot: 'B2' } }
+      throw stale409()
+    })
+    vi.mocked(duplicateCalSheet).mockResolvedValue(copy)
+    renderInApp()
+    await screen.findByText('Curve name:', { exact: false })
+    fireEvent.click(dupBtn())
+    await waitFor(() => expect(notice().textContent).toContain(DUP_CHANGED))
+    expect(duplicateCalSheet).not.toHaveBeenCalled()
+    expect(useUIStore.getState().calibrationSheetPageId).toBe(5)
+  })
+
+  it('any other 409 on the page own version (a deadlock) still makes the copy, with both lines (probe PR1, deadlock, as ruled)', async () => {
+    const sheet = filedChanged()
+    const copy = copySheet()
+    vi.mocked(getCalSheet).mockImplementation(async id =>
+      id === 9 ? copy : sheet
+    )
+    const said =
+      'Someone changed one of these curves at the same moment, so nothing was filed. Try again.'
+    vi.mocked(fileCalSheet).mockRejectedValue(new CalSheetError(said, 409))
+    vi.mocked(duplicateCalSheet).mockResolvedValue(copy)
+    renderInApp()
+    await screen.findByText('Curve name:', { exact: false })
+    fireEvent.click(dupBtn())
+    await waitFor(() =>
+      expect(useUIStore.getState().calibrationSheetPageId).toBe(9)
+    )
+    await screen.findByTestId('replicate-note')
+    const lines = within(notice())
+      .getAllByText(/./, { selector: 'p' })
+      .map(p => p.textContent)
+    expect(lines).toEqual([said, COPY_LINE])
+  })
+})
+
+describe('Round 2: N2, a read sent before a write never puts the older copy back', () => {
+  function inAppWith(cached: CalSheet) {
+    const qc = new QueryClient({
+      defaultOptions: appQueryClient.getDefaultOptions(),
+    })
+    qc.setQueryData(CAL_SHEET_KEY(5), cached)
+    const read = held<CalSheet>()
+    vi.mocked(getCalSheet).mockReturnValue(read.promise)
+    useUIStore.setState({
+      activeSection: 'hplc-analysis',
+      activeSubSection: 'hplc-calibration',
+      calibrationSheetPageId: 5,
+    })
+    render(
+      <QueryClientProvider client={qc}>
+        <HplcCalibrationSheetPage />
+      </QueryClientProvider>
+    )
+    return { qc, read }
+  }
+
+  it('the save 200 (probe PR2): the mount read answering last leaves the saved copy in the cache', async () => {
+    const v1 = makeSheet(fixtureCase(1).inputs as CalInputs, {
+      blocking: ['cannot_be_worked_out'],
+    })
+    const v2 = makeSheet(
+      { ...(fixtureCase(1).inputs as CalInputs), lot: 'L7' },
+      { version: 2, blocking: [] }
+    )
+    vi.mocked(saveCalSheet).mockResolvedValue(v2)
+    const { qc, read } = inAppWith(v1)
+    await screen.findByText('Curve name:', { exact: false })
+    expect(getCalSheet).toHaveBeenCalledTimes(1) // the mount read is out
+    expect(screen.queryByText(WORKED_OUT)).not.toBeNull()
+    typeAndLeave(box('Lot #'), 'L7')
+    await waitFor(() =>
+      expect(qc.getQueryData<CalSheet>(CAL_SHEET_KEY(5))?.version).toBe(2)
+    )
+    await waitFor(() => expect(screen.queryByText(WORKED_OUT)).toBeNull())
+    await act(async () => read.resolve(v1))
+    await act(async () => {
+      await new Promise(r => setTimeout(r, 20))
+    })
+    expect(qc.getQueryData<CalSheet>(CAL_SHEET_KEY(5))?.version).toBe(2)
+    expect(screen.queryByText(WORKED_OUT)).toBeNull()
+  })
+
+  it('the File success: the mount read answering last leaves the filed copy in the cache', async () => {
+    const v1 = makeSheet(fixtureCase(1).inputs as CalInputs)
+    vi.mocked(fileCalSheet).mockResolvedValue(filedAs(v1, 'first_active'))
+    const { qc, read } = inAppWith(v1)
+    await screen.findByText('Curve name:', { exact: false })
+    await waitFor(() => expect(fileBtn()).not.toBeDisabled())
+    fireEvent.click(fileBtn())
+    await waitFor(() => expect(notice().textContent).toContain('Filed'))
+    expect(qc.getQueryData<CalSheet>(CAL_SHEET_KEY(5))?.curve_id).toBe(70)
+    await act(async () => read.resolve(v1))
+    await act(async () => {
+      await new Promise(r => setTimeout(r, 20))
+    })
+    expect(qc.getQueryData<CalSheet>(CAL_SHEET_KEY(5))?.curve_id).toBe(70)
+  })
+})
+
+describe('Round 2: N3, the way back from every state of the sheet', () => {
+  it('a sheet that could not be opened shows the link back to the list', async () => {
+    vi.mocked(getCalSheet).mockRejectedValue(
+      new CalSheetError('Calibration sheet not found', 404)
+    )
+    renderSheet()
+    await screen.findByText(/This sheet could not be opened/)
+    fireEvent.click(listLink())
+    expect(useUIStore.getState().calibrationSheetPageId).toBeNull()
+  })
+
+  it('a sheet still loading shows the link back to the list', async () => {
+    vi.mocked(getCalSheet).mockReturnValue(new Promise(() => undefined))
+    renderSheet()
+    await screen.findByText('Loading the sheet...')
+    expect(listLink()).toBeInTheDocument()
+  })
+})
+
+describe('Round 2: the browser pass', () => {
+  it('I-1: one line above each of the Step 3 and Step 4 tables says what Tab, Enter and the arrows do', async () => {
+    await openCase1()
+    const hints = screen.getAllByTestId('keys-hint')
+    expect(hints.map(h => h.textContent)).toEqual([KEYS, KEYS])
+    expect(
+      screen.queryByText(/Enter goes down a column\./, { exact: false })
+    ).toBeNull()
+  })
+
+  it('I-2: a 5xx answer to a save reads as no answer, never the raw status, and still counts as may have landed', async () => {
+    const saves = queueSaves()
+    await openCase1()
+    typeAndLeave(box('Lot #'), 'L7')
+    await waitFor(() => expect(saves.count()).toBe(1))
+    await saves.fail(
+      0,
+      new CalSheetError('Save calibration sheet failed: 500', 500)
+    )
+    const line = await screen.findByTestId('save-line')
+    expect(line.textContent).toContain(NOT_TAKEN_LINE)
+    expect(line.textContent).not.toContain('500')
+    expect(within(line).getByRole('button', { name: 'Retry' })).toBeTruthy()
+    // the body may have landed: the page checks, as for no answer
+    expect(checking()).not.toBeNull()
+  })
+
+  it('I-2: a 4xx keeps the server sentence', async () => {
+    const saves = queueSaves()
+    await openCase1()
+    typeAndLeave(box('Lot #'), 'L7')
+    await waitFor(() => expect(saves.count()).toBe(1))
+    await saves.fail(0, new CalSheetError('Lot is too long.', 400))
+    expect((await screen.findByTestId('save-line')).textContent).toContain(
+      'Not saved: Lot is too long. Your changes are still on this page.'
+    )
+  })
+
+  it('a quiet Saved shows while saved, announced politely, and gives way to Saving', async () => {
+    const saves = queueSaves()
+    const { sheet } = await openCase1()
+    const savedLine = () => screen.queryByText('Saved', { exact: true })
+    await waitFor(() => expect(savedLine()).not.toBeNull())
+    expect(savedLine()?.closest('[role="status"]')).not.toBeNull()
+    expect(savedLine()?.closest('[role="alert"]')).toBeNull()
+    typeAndLeave(box('Lot #'), 'L7')
+    await waitFor(() => expect(saves.count()).toBe(1))
+    expect(savedLine()).toBeNull()
+    expect(screen.getByTestId('save-line').textContent).toContain('Saving...')
+    await saves.ok(
+      0,
+      makeSheet({ ...(sheet.inputs as CalInputs), lot: 'L7' }, { version: 2 })
+    )
+    await waitFor(() => expect(savedLine()).not.toBeNull())
+  })
+
+  it('the bar with the toolbar and the save status sticks to the top of the page', async () => {
+    await openCase1()
+    const bar = screen.getByTestId('status-bar')
+    expect(bar.className).toContain('sticky')
+    expect(bar.className).toContain('top-0')
+    expect(within(bar).getByRole('group', { name: 'Worksheet' })).toBeTruthy()
+    expect(within(bar).getByText('Saved', { exact: true })).toBeTruthy()
+  })
+
+  describe('an injection says what its original needs before File', () => {
+    async function openInjection(original: Partial<CalSheet>) {
+      const orig = makeSheet(fixtureCase(1).inputs as CalInputs, {
+        curve_name: NAME,
+        ...original,
+      })
+      vi.mocked(getCalSheet).mockImplementation(async id =>
+        id === 9 ? copySheet() : orig
+      )
+      renderSheet(9)
+      await screen.findByTestId('replicate-note')
+    }
+
+    it('an original changed since filing', async () => {
+      await openInjection({ curve_id: 70, changed_since_filed: true })
+      const line = await screen.findByTestId('original-state')
+      expect(line.textContent).toBe(
+        `The original worksheet, ${NAME}, has been changed since it was filed. If its preparation changed, file it before this one.`
+      )
+      expect(
+        within(screen.getByTestId('replicate-note')).getByRole('button', {
+          name: `Open ${NAME}`,
+        })
+      ).toBeTruthy()
+    })
+
+    it('an original that is not filed', async () => {
+      await openInjection({ curve_id: null })
+      expect((await screen.findByTestId('original-state')).textContent).toBe(
+        `The original worksheet, ${NAME}, is not filed. File it first, then file this one.`
+      )
+    })
+
+    it('an original filed as it stands: no line', async () => {
+      await openInjection({ curve_id: 70, changed_since_filed: false })
+      await waitFor(() => expect(getCalSheet).toHaveBeenCalledWith(5))
+      await act(async () => {
+        await new Promise(r => setTimeout(r, 20))
+      })
+      expect(screen.queryByTestId('original-state')).toBeNull()
+    })
+  })
+
+  it('File with no answer on a sheet that already had a curve: says pressing File again updates the same curve, not the Filed mark', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true })
+    await openCase1({ curve_id: 70, curve_name: NAME })
+    vi.mocked(fileCalSheet).mockImplementation(
+      () => new Promise(() => undefined)
+    )
+    fireEvent.click(fileBtn())
+    await later(SAVE_TIMEOUT_MS + 10)
+    await waitFor(() =>
+      expect(notice().textContent).toBe(
+        'File curve: the server did not answer, so the curve may or may not have been updated. Pressing File curve again is safe: it updates the same curve.Dismiss'
+      )
+    )
+  })
+
+  it('the injection File sentence names the Set Active button', async () => {
+    const sheet = makeSheet(fixtureCase(1).inputs as CalInputs)
+    vi.mocked(getCalSheet).mockResolvedValue(sheet)
+    vi.mocked(fileCalSheet).mockResolvedValue(filedAs(sheet, 'replicate'))
+    renderSheet()
+    await screen.findByText('Curve name:', { exact: false })
+    await waitFor(() => expect(fileBtn()).not.toBeDisabled())
+    fireEvent.click(fileBtn())
+    await waitFor(() =>
+      expect(notice().textContent).toContain(
+        `Filed ${NAME}, another injection of the same vials. To use it, press Set Active on its curve on the Peptides page.`
+      )
+    )
+    expect(notice().textContent).not.toContain('Star')
+  })
+
+  it('New from the list page puts focus on the new sheet heading, as from the toolbar', async () => {
+    const made = makeSheet(fixtureCase(21).inputs as CalInputs, {
+      id: 12,
+      proposed_name: 'NEW-SHEET',
+    })
+    vi.mocked(createCalSheet).mockResolvedValue(made)
+    vi.mocked(getCalSheet).mockResolvedValue(made)
+    renderInApp(null)
+    await screen.findByRole('heading', { name: 'Calibration worksheets' })
+    fireEvent.click(
+      screen.getByRole('button', { name: 'New calibration worksheet' })
+    )
+    await waitFor(() =>
+      expect(document.activeElement).toBe(
+        screen.getByRole('heading', { name: 'Calibration Curve Worksheet' })
+      )
+    )
   })
 })

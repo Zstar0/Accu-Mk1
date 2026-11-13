@@ -128,9 +128,11 @@ export function applyNavToStore(nav: ParsedNav) {
   } else if (
     subSection === 'hplc-calibration' &&
     targetId &&
-    !Number.isNaN(Number(targetId))
+    Number.isInteger(Number(targetId)) &&
+    Number(targetId) > 0
   ) {
-    // a calibration worksheet; a non-numeric id falls through to the list
+    // a calibration worksheet; any id but a positive whole number (-3, 1.5,
+    // 1e400, a blank) falls through to the list (round 2 N3)
     store.navigateToCalibrationSheet(Number(targetId))
   } else if (subSection === 'worksheet-detail' && targetId) {
     store.openWorksheetDrawer(Number(targetId))

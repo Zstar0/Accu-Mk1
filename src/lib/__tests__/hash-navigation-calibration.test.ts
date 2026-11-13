@@ -54,6 +54,27 @@ describe('the calibration worksheet page in the hash (M2)', () => {
     expect(currentHash()).toBe(LIST)
   })
 
+  it('N3: an id that is not a positive whole number is the list', () => {
+    // as ruled, Number.isInteger(n) && n > 0: 0x10 and 1e3 are whole
+    // numbers (16, 1000) and open that sheet
+    const whole: Record<string, number> = { '0x10': 16, '1e3': 1000 }
+    for (const raw of ['-3', '1.5', '1e400', '%20', '0', '0x10', '1e3']) {
+      useUIStore.setState({
+        activeSection: 'dashboard',
+        activeSubSection: 'orders',
+        calibrationSheetPageId: null,
+      })
+      applyHash(`${LIST}?id=${raw}`)
+      const s = useUIStore.getState()
+      expect([raw, s.activeSubSection, s.calibrationSheetPageId]).toEqual([
+        raw,
+        'hplc-calibration',
+        whole[raw] ?? null,
+      ])
+    }
+    expect(currentHash()).toBe(`${LIST}?id=1000`)
+  })
+
   it('opening a sheet pushes a history entry, and Back returns to the list', () => {
     window.history.replaceState(null, '', LIST)
     applyHash(LIST)

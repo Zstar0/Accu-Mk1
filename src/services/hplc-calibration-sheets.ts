@@ -65,6 +65,8 @@ export interface CalDraft {
 /** How long a save may go unanswered before it counts as failed. */
 export const SAVE_TIMEOUT_MS = 15_000
 export const NO_ANSWER = 'the server did not answer'
+/** A save answered with a 5xx: the server could not take it (round 2 I-2). */
+export const NOT_TAKEN = 'the server did not answer or could not take the save'
 /** While a sent save is unaccounted for, the sheet is read again this often. */
 export const CHECK_EVERY_MS = 5_000
 /** A save still unaccounted for this long after it was sent, with the
@@ -277,6 +279,10 @@ function pump(id: number) {
         e.confirmed = sent
         e.error = null
         e.name = res.curve_name ?? res.proposed_name
+        // a read of this sheet sent before the save would land after it and
+        // put the older copy back (round 2 N2): stop it first. The cancel
+        // reverts synchronously, so the write below is the last one.
+        void e.qc.cancelQueries({ queryKey: CAL_SHEET_KEY(id), exact: true })
         e.qc.setQueryData(CAL_SHEET_KEY(id), res)
         void e.qc.invalidateQueries({
           queryKey: [...CAL_SHEETS_KEY, 'list'],
@@ -287,7 +293,13 @@ function pump(id: number) {
         // only a refusal is the server's answer; anything else (a timeout,
         // "Failed to fetch") may have landed, and reads as no answer
         const refused = err instanceof CalSheetError
-        const msg = refused ? err.message : NO_ANSWER
+        // a 5xx reads as no answer, never a raw status (round 2 I-2); the
+        // wording only: it still counts as may have landed, below
+        const msg = !refused
+          ? NO_ANSWER
+          : err.status >= 500
+            ? NOT_TAKEN
+            : err.message
         // a 4xx was not stored; a 5xx (a gateway timing out) may have been
         if (refused && err.status < 500)
           e.unanswered = e.unanswered.filter(b => b !== sent)
@@ -605,7 +617,11 @@ export function useFileCalSheet(id: number) {
     }
     const held = qc.getQueryData<CalSheet>(CAL_SHEET_KEY(id))
     if (held && held.version > res.sheet.version) reread()
-    else qc.setQueryData(CAL_SHEET_KEY(id), res.sheet)
+    else {
+      // as the save's answer: a read sent before File never lands over it (N2)
+      void qc.cancelQueries({ queryKey: CAL_SHEET_KEY(id), exact: true })
+      qc.setQueryData(CAL_SHEET_KEY(id), res.sheet)
+    }
     // every other sheet and the list: an original's File re-files its
     // injections (I2). Not this sheet's own key: it was just set from the
     // answer (or is being read again), and a second read adds nothing.

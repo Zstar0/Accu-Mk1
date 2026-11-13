@@ -424,7 +424,11 @@ const WEIGHING: CalBound = {
 const TINY: CalBound = { min: 1e-6, say: 'must be at least 0.000001' }
 const ONE: CalBound = { min: 1, say: 'must be at least 1' }
 export const CAL_BOUNDS: Record<string, CalBound> = {
-  coa_weight_mg: WEIGHING,
+  // the certificate's weight, not a balance reading (round 2)
+  coa_weight_mg: {
+    ...WEIGHING,
+    say: 'a weight is between 0 and 1,000,000,000 mg',
+  },
   vial_mg: WEIGHING,
   vial_standard_mg: WEIGHING,
   vial_diluent_mg: WEIGHING,

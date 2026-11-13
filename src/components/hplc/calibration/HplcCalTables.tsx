@@ -83,6 +83,16 @@ const levelValue = (L: CalLevelWorked, key: string) =>
 const TABLE = 'w-full border-collapse'
 const WRAP = 'overflow-x-auto rounded-md border'
 
+/** What the keys do in the Step 3 and 4 tables (onSheetKey): the order goes
+ *  down a column, as the lab tool's does (round 2 I-1). */
+const KEYS_HINT =
+  'Tab and Enter go down a column, then to the top of the next one; Shift+Tab and Shift+Enter go back up. The arrow keys move along a row (Left, Right) and between rows (Up, Down); while you edit a value, Left and Right first move through its text.'
+const KeysHint = () => (
+  <p className="mb-2 text-xs text-muted-foreground" data-testid="keys-hint">
+    {KEYS_HINT}
+  </p>
+)
+
 /** Steps 2, 3 and 4, and the curve line. */
 export function HplcCalTables({
   inputs,
@@ -153,7 +163,7 @@ export function HplcCalTables({
       <Step
         no="Step 3"
         title="Serial dilution"
-        sub="Each level is made from the one above it (the first from the stock). Weigh the vial, add the planned diluent and weigh, add the standard (Std to add) and weigh. Enter goes down a column."
+        sub="Each level is made from the one above it (the first from the stock). Weigh the vial, add the planned diluent and weigh, add the standard (Std to add) and weigh."
         extra={
           <span className="flex flex-wrap items-center gap-3 text-xs">
             <label className="inline-flex items-center gap-1.5">
@@ -209,6 +219,7 @@ export function HplcCalTables({
             {`The stock is ${fmtDp(worked.stock_conc_ug_ml, 2)} ug/mL, within ${CAL_STOCK_AS_TOP_PCT} % of the ${fmtDp(worked.levels[0]?.target, 0)} ug/mL level: tick "Stock is the top level" to use it directly (an aliquot, no weighings) and dilute the next level from the stock.`}
           </p>
         )}
+        <KeysHint />
         <div className={WRAP}>
           <table className={TABLE} onKeyDown={onSheetKey}>
             <thead>
@@ -301,6 +312,7 @@ export function HplcCalTables({
         title="Peak areas and the curve"
         sub="From the run: the peak area, purity and retention time of each level. The curve is peak area against the actual concentration."
       >
+        <KeysHint />
         <div className={WRAP}>
           <table className={TABLE} onKeyDown={onSheetKey}>
             <thead>
@@ -369,7 +381,7 @@ export function HplcCalTables({
               [
                 'Average RT',
                 worked.rt_avg !== null ? `${fmtDp(worked.rt_avg, 4)} min` : '-',
-                "The workbook's N27: the mean retention time over every level with an RT typed. The curve is filed with the mean over the levels in the fit, which can differ in the last digits when a level has an RT but no peak area.",
+                "The workbook's N27: the mean retention time over every level with an RT typed. The curve is filed with the mean over the levels in the fit, which can differ when a level has an RT but no peak area.",
               ],
               ['RT %RSD', fmtDp(worked.rt_rsd_pct, 3), ''],
             ] as [string, string, string][]

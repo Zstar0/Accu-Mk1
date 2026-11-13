@@ -949,12 +949,12 @@ describe('Task 7: File, Duplicate and New', () => {
     [
       'several_active',
       {},
-      `Filed ${NAME}, not starred: 1290C already has 2 active curves for this peptide (81, 90). The lab has to choose which stays first. Star the one to use on the Peptides page.`,
+      `Filed ${NAME}, not starred: 1290C already has 2 active curves for this peptide (81, 90). The lab has to choose which stays first: press Set Active on that one on the Peptides page.`,
     ],
     [
       'replicate',
       {},
-      `Filed ${NAME}, another injection of the same vials. Star it on the Peptides page to use it.`,
+      `Filed ${NAME}, another injection of the same vials. To use it, press Set Active on its curve on the Peptides page.`,
     ],
     [
       'poor_fit',

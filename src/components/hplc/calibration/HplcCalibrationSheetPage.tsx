@@ -66,9 +66,11 @@ import {
 import { HplcCalTables } from './HplcCalTables'
 
 /** The page root: isolate (the app's fixed sidebar is z-10), contain
- *  inline-size (wide tables scroll inside their own box), dark controls. */
+ *  inline-size (wide tables scroll inside their own box), dark controls.
+ *  scroll-pt-28: a box reached by Tab or the arrows scrolls clear of the
+ *  sticky status bar (round 2). */
 const ROOT =
-  'isolate h-full min-h-0 space-y-4 overflow-y-auto bg-muted/30 px-6 pb-8 pt-5 [contain:inline-size] dark:[color-scheme:dark]'
+  'isolate h-full min-h-0 scroll-pt-28 space-y-4 overflow-y-auto bg-muted/30 px-6 pb-8 pt-5 [contain:inline-size] dark:[color-scheme:dark]'
 
 const REPLICATE_OWN = new Set(['peak_area', 'purity', 'rt'])
 
@@ -119,6 +121,19 @@ function replicateNote(sheet: CalSheet, original: CalSheet | undefined) {
   return `Another injection of the same vials as ${sheet.replicate_of_name ?? 'the original sheet'}, ${where}. Steps 1 to 3 are that sheet's (read-only here): open it to correct a weighing, and every injection follows. Choose this injection's Instrument above, and type its peak areas, purity and RT in Step 4.`
 }
 
+/** What the original needs before this injection can be filed, from the
+ *  original as this page last read it (round 2); null when nothing. The
+ *  server refuses the injection's File in both cases. */
+function originalLine(sheet: CalSheet, original: CalSheet | undefined) {
+  if (!original) return null
+  const name = sheet.replicate_of_name ?? original.proposed_name
+  if (original.curve_id === null)
+    return `The original worksheet, ${name}, is not filed. File it first, then file this one.`
+  if (original.changed_since_filed)
+    return `The original worksheet, ${name}, has been changed since it was filed. If its preparation changed, file it before this one.`
+  return null
+}
+
 // --- The Worksheet toolbar (calibration.html:57 to 61, Task 7) ---
 
 /** A message that stays until dismissed or replaced: what filing did, and
@@ -164,11 +179,11 @@ function filedMessage(res: CalFileResult): string {
     case 'replaced':
       return `Filed ${name}. It replaces curve ${a.deactivated_ids.join(', ')} as the active curve on ${on}.`
     case 'several_active':
-      return `Filed ${name}, not starred: ${on} already has ${a.other_active_ids.length} active curves for this peptide (${a.other_active_ids.join(', ')}). The lab has to choose which stays first. Star the one to use on the Peptides page.`
+      return `Filed ${name}, not starred: ${on} already has ${a.other_active_ids.length} active curves for this peptide (${a.other_active_ids.join(', ')}). The lab has to choose which stays first: press Set Active on that one on the Peptides page.`
     case 'poor_fit':
       return `Filed ${name}, not made active: no curve on ${on} was switched on or off.`
     case 'replicate':
-      return `Filed ${name}, another injection of the same vials. Star it on the Peptides page to use it.`
+      return `Filed ${name}, another injection of the same vials. To use it, press Set Active on its curve on the Peptides page.`
     case 'refiled': {
       const n = res.refiled_curve_ids.length
       const inj = n ? ` and its ${n} injection${n === 1 ? '' : 's'}` : ''
@@ -184,6 +199,10 @@ function filedMessage(res: CalFileResult): string {
  *  the one re-read, so this promises nothing it cannot see (fix round 2). */
 const FILE_NO_ANSWER =
   'File curve: the server did not answer, so the curve may or may not have been filed. This page has read the sheet again once: a Filed mark beside the curve name means it was. Pressing File curve again is safe: it files the sheet if it was not filed, and updates the same curve if it was.'
+/** The same, for a sheet that had a curve before the press: its Filed mark
+ *  was there already, so it proves nothing (round 2). */
+const FILE_NO_ANSWER_REFILE =
+  'File curve: the server did not answer, so the curve may or may not have been updated. Pressing File curve again is safe: it updates the same curve.'
 const DUP_NO_ANSWER =
   'Duplicate: the server did not answer, so the copy may have been made. Look under Calibration worksheets before trying again.'
 
@@ -423,12 +442,15 @@ function SheetToolbar({
   const onFile = () =>
     void run('Filing...', async () => {
       refocus.current = fileRef
+      // read before the press: the no-answer sentence depends on it
+      const noAnswer =
+        state.latest.curve_id !== null ? FILE_NO_ANSWER_REFILE : FILE_NO_ANSWER
       try {
         // the version the hook holds, not a query copy that may lag (rule 2)
         const res = await file(state.version)
         say('ok', [filedMessage(res)], res.warnings)
       } catch (e) {
-        say('bad', [refusalOf(e, FILE_NO_ANSWER)])
+        say('bad', [refusalOf(e, noAnswer)])
       }
     })
 
@@ -470,7 +492,25 @@ function SheetToolbar({
             e instanceof CalSheetError &&
             e.status === 409
           if (!inUse) {
-            say('bad', [refusalOf(e, FILE_NO_ANSWER)])
+            say('bad', [
+              refusalOf(
+                e,
+                fresh.curve_id !== null ? FILE_NO_ANSWER_REFILE : FILE_NO_ANSWER
+              ),
+            ])
+            return
+          }
+          // a 409 can also be a stale version (someone else saved): read
+          // again, and copy only the sheet this page holds (round 2 N1)
+          let now: CalSheet
+          try {
+            now = await inTime(() => getCalSheet(id))
+          } catch {
+            say('bad', [DUP_UNREAD])
+            return
+          }
+          if (now.version !== state.version) {
+            say('bad', [DUP_CHANGED])
             return
           }
           lines = [e.message]
@@ -601,14 +641,34 @@ function SheetView({
     staleTime: 0, // read on every open, as the sheet itself (I2)
   })
 
+  // the way back to the list, on every state of the sheet (round 2 N3)
+  const back = (
+    <Button
+      variant="link"
+      size="sm"
+      className="mb-1 h-auto gap-1 p-0 text-xs"
+      onClick={() => useUIStore.getState().navigateToCalibrationSheet(null)}
+    >
+      <ArrowLeft className="h-3 w-3" aria-hidden />
+      Calibration worksheets
+    </Button>
+  )
   if (!sheet && save.loadError)
     return (
-      <p role="alert" className="text-sm text-destructive">
-        {`This sheet could not be opened: ${save.loadError.message}`}
-      </p>
+      <div>
+        {back}
+        <p role="alert" className="text-sm text-destructive">
+          {`This sheet could not be opened: ${save.loadError.message}`}
+        </p>
+      </div>
     )
   if (!sheet || !state)
-    return <p className="text-sm text-muted-foreground">Loading the sheet...</p>
+    return (
+      <div>
+        {back}
+        <p className="text-sm text-muted-foreground">Loading the sheet...</p>
+      </div>
+    )
 
   const replicate = sheet.replicate_of_sheet_id !== null
   const local = state.local
@@ -627,17 +687,7 @@ function SheetView({
     <div className="space-y-4" data-saved={String(save.saved)}>
       <div className="flex flex-wrap items-end justify-between gap-4">
         <div className="min-w-0">
-          <Button
-            variant="link"
-            size="sm"
-            className="mb-1 h-auto gap-1 p-0 text-xs"
-            onClick={() =>
-              useUIStore.getState().navigateToCalibrationSheet(null)
-            }
-          >
-            <ArrowLeft className="h-3 w-3" aria-hidden />
-            Calibration worksheets
-          </Button>
+          {back}
           <h2
             ref={headingRef}
             tabIndex={-1}
@@ -687,14 +737,52 @@ function SheetView({
         </div>
       </div>
 
-      <SheetToolbar
-        id={id}
-        sheet={sheet}
-        state={state}
-        blocking={blocking.map(w => w.text)}
-        onNotice={onNotice}
-        onOpened={onOpened}
-      />
+      {/* the toolbar and the save status stay in view while Step 4 is typed
+          (round 2): sticky inside the page's own scroll area, which is
+          isolated, so it never slides over the docked sidebar */}
+      <div
+        data-testid="status-bar"
+        className="sticky top-0 z-10 -mx-6 space-y-2 border-b bg-background/95 px-6 py-2 backdrop-blur"
+      >
+        <div className="flex flex-wrap items-center gap-x-4 gap-y-2">
+          <SheetToolbar
+            id={id}
+            sheet={sheet}
+            state={state}
+            blocking={blocking.map(w => w.text)}
+            onNotice={onNotice}
+            onOpened={onOpened}
+          />
+          {/* one polite live region: Saving, Checking, or a quiet Saved */}
+          <div role="status" className="text-xs text-muted-foreground">
+            {state.error === null && state.saving && (
+              <span data-testid="save-line">Saving...</span>
+            )}
+            {state.checking && <span>{CHECKING}</span>}
+            {save.saved && !state.checking && <span>Saved</span>}
+          </div>
+        </div>
+        {state.error !== null && (
+          <div
+            role="alert"
+            data-testid="save-line"
+            className="flex flex-wrap items-center gap-3 rounded-md border border-red-500/60 bg-red-500/10 px-3 py-2 text-sm"
+          >
+            <span>
+              {`Not saved: ${(state.error || NO_ANSWER).replace(/\.$/, '')}. Your changes are still on this page.`}
+              {state.saving && ' Saving...'}
+            </span>
+            <Button
+              size="sm"
+              variant="outline"
+              disabled={state.saving}
+              onClick={save.retry}
+            >
+              Retry
+            </Button>
+          </div>
+        )}
+      </div>
       {state.latest.curve_id !== null && state.latest.changed_since_filed && (
         <p role="status" className="text-xs text-amber-800 dark:text-amber-200">
           {CHANGED_LINE}
@@ -752,41 +840,6 @@ function SheetView({
           </Button>
         </div>
       )}
-      {state.error !== null ? (
-        <div
-          role="alert"
-          data-testid="save-line"
-          className="flex flex-wrap items-center gap-3 rounded-md border border-red-500/60 bg-red-500/10 px-3 py-2 text-sm"
-        >
-          <span>
-            {`Not saved: ${(state.error || NO_ANSWER).replace(/\.$/, '')}. Your changes are still on this page.`}
-            {state.saving && ' Saving...'}
-          </span>
-          <Button
-            size="sm"
-            variant="outline"
-            disabled={state.saving}
-            onClick={save.retry}
-          >
-            Retry
-          </Button>
-        </div>
-      ) : (
-        state.saving && (
-          <div
-            role="status"
-            data-testid="save-line"
-            className="text-xs text-muted-foreground"
-          >
-            Saving...
-          </div>
-        )
-      )}
-      {state.checking && (
-        <div role="status" className="text-xs text-muted-foreground">
-          {CHECKING}
-        </div>
-      )}
       {sheet.blocking.includes('cannot_be_worked_out') && (
         <div
           role="alert"
@@ -801,6 +854,14 @@ function SheetView({
           data-testid="replicate-note"
         >
           {replicateNote(sheet, original)}{' '}
+          {originalLine(sheet, original) && (
+            <span
+              className="mt-1 block font-medium"
+              data-testid="original-state"
+            >
+              {originalLine(sheet, original)}
+            </span>
+          )}
           <Button
             variant="link"
             size="sm"
@@ -906,7 +967,7 @@ export function HplcCalibrationSheetPage() {
   return (
     <div data-testid="hplc-calibration-page" className={ROOT}>
       {id === null ? (
-        <HplcCalSheetList />
+        <HplcCalSheetList onOpened={setOpened} />
       ) : (
         <SheetView
           key={id}
