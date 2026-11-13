@@ -25668,6 +25668,25 @@ def _worksheet_for_update(db: Session, worksheet_id: int) -> Optional["Worksheet
                       .execution_options(populate_existing=True)).scalar_one_or_none()
 
 
+def _promoted_hplc_rows_locked(db: Session, worksheet_id: int, items) -> set[int]:
+    """The promoted HPLC rows among `items` (worksheets_hplc.promoted_hplc_item_ids), judged
+    under row locks: when any item is an HPLC row, the worksheet row, then those rows' vial
+    analyses and items (endo_prep_rules.lock_items_for_update), each re-read, so a promote that
+    committed meanwhile is seen and the caller reads the locked item. No lock and no mk1_db
+    query when none is an HPLC row. Taking them again in a request that holds them is a no-op.
+    For every route that writes an item's instrument (HPLC fix round 2, A); the route goes
+    under @_rollback_on_error."""
+    from endo_prep_rules import lock_items_for_update
+    from worksheets_hplc import hplc_rows, promoted_hplc_item_ids
+
+    hplc = hplc_rows(db, items)
+    if not hplc:
+        return set()
+    ws = _worksheet_for_update(db, worksheet_id)
+    lock_items_for_update(db, ws, [it.id for it in hplc])
+    return promoted_hplc_item_ids(db, hplc)
+
+
 def _rollback_on_error(endpoint):
     """For a sync route that takes row locks (endo slice 5 final review C1):
     any exception rolls the session back before it leaves the route. FastAPI
@@ -26408,11 +26427,16 @@ def bulk_bench_ticks(
         select(WorksheetItem).where(WorksheetItem.worksheet_id == worksheet_id)
     ).scalars().all()
     wanted = set(data.item_ids) if data.item_ids is not None else None
+    items = [it for it in items if wanted is None or it.id in wanted]
+    # A Ran tick may stamp an instrument, never onto a promoted HPLC row (HPLC fix round 2, A),
+    # judged under the locks; the lock re-reads ws, so its status is judged again.
+    promoted = _promoted_hplc_rows_locked(db, worksheet_id, items) if data.ran is True else set()
+    if ws.status == "completed":
+        raise HTTPException(409, "Worksheet is completed")
     changed = sum(
         1 for it in items
-        if (wanted is None or it.id in wanted)
-        and _apply_bench_ticks(db, worksheet_id, it, made=data.made, ran=data.ran,
-                               user_id=_current_user.id)
+        if _apply_bench_ticks(db, worksheet_id, it, made=data.made, ran=data.ran,
+                              user_id=_current_user.id, stamp_instrument=it.id not in promoted)
     )
     db.commit()
     return {"status": "updated", "changed": changed}
@@ -27032,22 +27056,20 @@ def update_worksheet_item(
 
     # HPLC prep worksheet: a promoted HPLC row's form and instrument are final, as the
     # HPLC route has them (its inputs live only there; this route's other prep fields are
-    # endo's and the HPLC sheet never reads them). Judged only when one would change ("" and
-    # 0 clear, as below), and under the worksheet then item locks (re-read), so a promote
-    # that commits meanwhile is seen. Other requests keep the locking above.
-    def _hplc_final_change() -> bool:
-        return (("instrument_id" in data.model_fields_set and (data.instrument_id or None) != item.instrument_id)
+    # endo's and the HPLC sheet never reads them). A request that SENDS an instrument, a form
+    # or a Ran tick (which may stamp an instrument) takes the worksheet then item locks on an
+    # HPLC row, and the locked re-read is judged: a change ("" and 0 clear, as below) is
+    # refused, and the tick stamps nothing. Other requests keep the locking above.
+    promoted_hplc = False
+    if ("instrument_id" in data.model_fields_set or data.instrument_uid is not None
+            or "prep_form" in data.model_fields_set or data.ran is True):
+        promoted_hplc = item.id in _promoted_hplc_rows_locked(db, worksheet_id, [item])
+        if promoted_hplc and (
+                ("instrument_id" in data.model_fields_set and (data.instrument_id or None) != item.instrument_id)
                 or (data.instrument_uid is not None and (data.instrument_uid or None) != item.instrument_uid)
-                or ("prep_form" in data.model_fields_set and data.prep_form != item.prep_form))
-
-    if _hplc_final_change():
-        from worksheets_hplc import PREP_FINAL as HPLC_PREP_FINAL, is_hplc_row, is_promoted_hplc_row
-        if is_hplc_row(db, item):
-            if not (endo_values or weight_sent):  # those took both locks above
-                ws = _worksheet_for_update(db, worksheet_id)
-                lock_items_for_update(db, ws, [item.id])
-            if _hplc_final_change() and is_promoted_hplc_row(db, item):
-                raise HTTPException(409, HPLC_PREP_FINAL)
+                or ("prep_form" in data.model_fields_set and data.prep_form != item.prep_form)):
+            from worksheets_hplc import PREP_FINAL as HPLC_PREP_FINAL
+            raise HTTPException(409, HPLC_PREP_FINAL)
 
     resolved_method = None
     if data.instrument_uid is not None:
@@ -27117,7 +27139,7 @@ def update_worksheet_item(
 
     _apply_bench_ticks(db, worksheet_id, item, made=data.made, ran=data.ran,
                        user_id=_current_user.id,
-                       stamp_instrument="instrument_id" not in data.model_fields_set)
+                       stamp_instrument="instrument_id" not in data.model_fields_set and not promoted_hplc)
 
     if endo_values:
         apply_item_endo_fields(db, ws, item, endo_values, _current_user.id)
@@ -27196,6 +27218,7 @@ class WorksheetApplyMethodInstrument(BaseModel):
 
 
 @app.post("/worksheets/{worksheet_id}/apply-method-instrument")
+@_rollback_on_error
 def apply_worksheet_method_instrument(
     worksheet_id: int,
     data: WorksheetApplyMethodInstrument,
@@ -27239,6 +27262,11 @@ def apply_worksheet_method_instrument(
 
     from lims_analyses.worksheet_stamping import apply_method_instrument_to_worksheet
 
+    # A promoted HPLC row's instrument is final (HPLC fix round 2, A): judged under the locks,
+    # those rows are skipped and reported in skipped_promoted.
+    items = db.execute(select(WorksheetItem).where(WorksheetItem.worksheet_id == worksheet_id)).scalars().all()
+    promoted = _promoted_hplc_rows_locked(
+        db, worksheet_id, [it for it in items if data.item_ids is None or it.id in set(data.item_ids)])
     result = apply_method_instrument_to_worksheet(
         db,
         worksheet=ws,
@@ -27246,6 +27274,7 @@ def apply_worksheet_method_instrument(
         instrument_id=data.instrument_id,
         item_ids=data.item_ids,
         user_id=getattr(current_user, "id", None),
+        promoted_item_ids=promoted,
     )
     db.commit()
     return result

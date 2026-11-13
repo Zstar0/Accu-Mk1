@@ -50,6 +50,10 @@ _VIAL_NUMBERS = ("target_ug_ml", "target_volume_ul", "vial_mg", "vial_diluent_mg
                  "int_target_ug_ml", "int_volume_ul", "int_vial_mg", "int_vial_diluent_mg",
                  "int_vial_all_mg")
 _MAP_KEY = re.compile(r"[1-9][0-9]*")  # "1", "36"; never "01", "+1", "1.0"
+# Ceilings that keep the Python and TypeScript sides reading the same value (fix round 2, D1):
+# above 2**53 - 1 JavaScript rounds a whole number; no balance or pipette reads 1e12.
+_MAX_WHOLE = 2**53 - 1
+_MAX_NUMBER = 1e12
 # A declared quantity as stored ("10 mg", "10", "0.5mg"): its leading number.
 _LEADING_NUMBER = re.compile(r"\s*([0-9]*\.?[0-9]+)")
 
@@ -70,26 +74,27 @@ def _check_object(value, path: str, numbers=(), wholes=None, others=None) -> Non
         if v is None:
             continue
         if key in numbers:
-            if not (_number(v) and v >= 0):
-                raise ValueError(f"{where} must be a number of at least 0")
+            if not (_number(v) and 0 <= v <= _MAX_NUMBER):
+                raise ValueError(f"{where} must be a number from 0 to {_MAX_NUMBER:.0f}")
         elif key in (wholes or {}):
             lo, hi = wholes[key]
-            if not (_number(v) and isinstance(v, int) and lo <= v and (hi is None or v <= hi)):
-                bound = f"from {lo} to {hi}" if hi else f"of at least {lo}"
-                raise ValueError(f"{where} must be a whole number {bound}")
+            if not (_number(v) and isinstance(v, int) and lo <= v <= hi):
+                raise ValueError(f"{where} must be a whole number from {lo} to {hi}")
         elif key in (others or {}):
             others[key](v, where)
         else:
             raise ValueError(f"{path} has an unknown key {ascii(key)}")
 
 
-def _check_map(entry_check):
+def _check_map(entry_check, max_key=None):
     def check(value, path: str) -> None:
         if not isinstance(value, dict):
             raise ValueError(f"{path} must be an object or null")
         for key in sorted(value, key=str):
             if not (isinstance(key, str) and _MAP_KEY.fullmatch(key)):
                 raise ValueError(f"{path} key {ascii(key)} is not a positive whole number")
+            if max_key is not None and int(key) > max_key:
+                raise ValueError(f"{path} key {ascii(key)} is not from 1 to {max_key}")
             if value[key] is not None:
                 entry_check(value[key], f"{path}.{key}")
     return check
@@ -100,7 +105,7 @@ def _check_component(value, path: str) -> None:
 
 
 def _check_vial(value, path: str) -> None:
-    _check_object(value, path, _VIAL_NUMBERS, {"lead_id": (1, None)})
+    _check_object(value, path, _VIAL_NUMBERS, {"lead_id": (1, _MAX_WHOLE)})
 
 
 def _check_diluent(value, path: str) -> None:
@@ -116,15 +121,17 @@ def _check_bool(value, path: str) -> None:
 def validate_hplc_prep_patch(patch) -> dict:
     """A merge patch in the hplc_prep shape, returned as is. Raises ValueError naming the key
     for an unknown key at any level, a number that is not finite (or a string, or a bool), a
-    weight, volume or target below zero, a capsules or lead_id that is not a whole number of
-    at least 1, a vial outside 1 to 7, a components or vials key that is not a positive whole
-    number, a two_step that is not a boolean, or a diluent outside HPLC_DILUENTS. null is
-    always allowed, and removes the key; the patch itself must be an object."""
+    weight, volume or target below zero or above 1e12, a capsules or lead_id that is not a
+    whole number from 1 to 2**53 - 1, a vial outside 1 to 7, a components key that is not a
+    positive whole number, a vials key outside 1 to 7, a two_step that is not a boolean, or a
+    diluent outside HPLC_DILUENTS. null is always allowed, and removes the key; the patch
+    itself must be an object."""
     if not isinstance(patch, dict):
         raise ValueError("hplc_prep must be an object")
-    _check_object(patch, "hplc_prep", _ROW_NUMBERS, {"capsules": (1, None)}, {
+    _check_object(patch, "hplc_prep", _ROW_NUMBERS, {"capsules": (1, _MAX_WHOLE)}, {
         "diluent": _check_diluent, "two_step": _check_bool,
-        "components": _check_map(_check_component), "vials": _check_map(_check_vial)})
+        "components": _check_map(_check_component),
+        "vials": _check_map(_check_vial, max_key=MAX_VIALS)})
     return patch
 
 
@@ -197,14 +204,22 @@ def _preps_by_item(item_ids) -> dict[int, dict]:
 _preps_table_ready = False
 
 
-def is_hplc_row(db: Session, item) -> bool:
-    """The item is on the HPLC bench (main._bench_kind_for_item). One query."""
-    return bool(_hplc_items(db, [item])[0])
+def _is_rider(vials: dict, item) -> bool:
+    """A rider rides the run (assignment_role "fentanyl"): it has no prep of its own."""
+    return item.sample_id in vials and vials[item.sample_id].assignment_role == "fentanyl"
 
 
-def is_promoted_hplc_row(db: Session, item) -> bool:
-    """The item is an HPLC row with a sample_preps row: its form, prep and instrument are final."""
-    return is_hplc_row(db, item) and item.id in _preps_by_item([item.id])
+def hplc_rows(db: Session, items) -> list:
+    """The HPLC-bench items among `items`, in the order given. One query."""
+    return _hplc_items(db, list(items))[0]
+
+
+def promoted_hplc_item_ids(db: Session, items) -> set[int]:
+    """The ids of the HPLC rows among `items` that have a sample_preps row: their form, prep and
+    instrument are final. One query, plus one mk1_db query only when any item is an HPLC row.
+    The one rule every writer of an item's instrument follows (fix round 2, A2); callers
+    judge it under the worksheet then item locks (main._promoted_hplc_rows_locked)."""
+    return set(_preps_by_item({it.id for it in hplc_rows(db, items)}))
 
 
 def _declared(quantity) -> Optional[float]:
@@ -303,16 +318,19 @@ def sheet_rows(db: Session, worksheet, items=None) -> list[dict]:
             found = sorted(by_analyses.get(parent.id, ())) if parent is not None else []
             source[it.id], row_ids[it.id] = ("analyses" if found else None), found
 
-    # A blend: the catalog blend whose components are exactly those peptides, the lowest id
-    # when several are. Every blend holding any of those peptides, in one query.
+    # A blend: the catalog blend whose components are exactly those peptides; an active one
+    # before a retired one, then the lowest id. A retired blend that is the only match is
+    # still the match: the sample is what it is (fix round 2, B). Every blend holding any of
+    # those peptides, in one query.
     wanted = {frozenset(ids) for ids in row_ids.values() if len(ids) > 1}
     blends: dict[int, dict[int, int]] = {}
     blend_order: dict[int, list[int]] = {}
+    retired: set[int] = set()
     if wanted:
         holding = select(blend_components.c.blend_id).where(
             blend_components.c.component_id.in_(set().union(*wanted)))
-        for bid, cid, vial in db.execute(
-                select(blend_components.c.blend_id, blend_components.c.component_id,
+        for bid, active, cid, vial in db.execute(
+                select(blend_components.c.blend_id, Peptide.active, blend_components.c.component_id,
                        blend_components.c.vial_number)
                 .join(Peptide, Peptide.id == blend_components.c.blend_id)
                 .where(Peptide.is_blend.is_(True), blend_components.c.blend_id.in_(holding))
@@ -320,7 +338,10 @@ def sheet_rows(db: Session, worksheet, items=None) -> list[dict]:
                           blend_components.c.component_id)).all():
             blends.setdefault(bid, {})[cid] = vial
             blend_order.setdefault(bid, []).append(cid)
-    blend_for = {s: min((b for b, comps in blends.items() if set(comps) == s), default=None)
+            if active is False:  # NULL counts as active, as the column's default has it
+                retired.add(bid)
+    blend_for = {s: min((b for b, comps in blends.items() if set(comps) == s), default=None,
+                        key=lambda b: (b in retired, b))
                  for s in wanted}
     peptide_ids = {p for ids in row_ids.values() for p in ids} | (set(blend_for.values()) - {None})
     peptides = {p.id: p for p in db.execute(
@@ -333,8 +354,9 @@ def sheet_rows(db: Session, worksheet, items=None) -> list[dict]:
         ids = row_ids[it.id]
         peptide_id, blend, problem = None, None, None
         if unresolved or any(p not in peptides for p in ids):
-            problem = "an analyte of the sample has no catalog peptide" if ids else \
-                "the sample has no catalog peptide"
+            problem = ("the sample has no catalog peptide" if not ids else
+                       "an analyte of the sample has no catalog peptide" if source[it.id] == "analytes"
+                       else "a test ordered on the sample has no catalog peptide")
         elif not ids:
             problem = "the sample has no catalog peptide"
         elif len(ids) == 1:
@@ -390,7 +412,7 @@ def sheet_rows(db: Session, worksheet, items=None) -> list[dict]:
         sample_form = ({"id": form_row.id, "name": form_row.name, "hplc_prep": form_row.hplc_prep}
                        if form_row is not None else None)
         sample_bac = _sample_is_bac(it, parent, names.get(it.id, []))
-        rider_only = vials[it.sample_id].assignment_role == "fentanyl" if it.sample_id in vials else False
+        rider_only = _is_rider(vials, it)
         if rider_only:  # a rider rides the run: it has no prep of its own
             form = None
         elif it.prep_form in HPLC_FORMS:
@@ -407,7 +429,10 @@ def sheet_rows(db: Session, worksheet, items=None) -> list[dict]:
         rows.append({
             "item_id": it.id, "sample_id": it.sample_id,
             "parent_sample_id": parent.sample_id if parent is not None else None,
-            "order_number": facts["client_order_number"], "identity": facts["sample_identity"],
+            # the customer's declaration, as _sample_is_bac reads it: the parent's identity,
+            # else the served peptide names; never the catalog's name (fix round 2, C)
+            "order_number": facts["client_order_number"],
+            "identity": facts["sample_identity"] or ", ".join(names.get(it.id, [])) or None,
             "peptide_id": peptide_id,
             "peptide_name": peptides[peptide_id].name if peptide_id else None,
             "is_blend": is_blend, "components": components,
@@ -432,7 +457,8 @@ def apply_patch(db: Session, worksheet, item, *, prep_form=_UNSET, hplc_prep=_UN
     Raises Refused: 404 for an item that is not an HPLC row, 409 on a completed worksheet,
     400 with the reason for a bad patch or form, 409 PREP_FINAL when the row is promoted and
     this would change anything. Callers lock the rows first and commit after."""
-    if not _hplc_items(db, [item])[0]:
+    hplc, vials = _hplc_items(db, [item])
+    if not hplc:
         raise Refused(404, "This item is not an HPLC row")
     if worksheet.status == "completed":
         raise Refused(409, "Worksheet is completed")
@@ -442,6 +468,8 @@ def apply_patch(db: Session, worksheet, item, *, prep_form=_UNSET, hplc_prep=_UN
             raise Refused(400, f"prep_form must be one of {', '.join(HPLC_FORMS)}, or null")
         form_after = prep_form
     if hplc_prep is not _UNSET:
+        if _is_rider(vials, item):
+            raise Refused(400, "this row has no prep")
         try:
             prep_after = merge_hplc_prep(item.hplc_prep, validate_hplc_prep_patch(hplc_prep))
         except ValueError as exc:

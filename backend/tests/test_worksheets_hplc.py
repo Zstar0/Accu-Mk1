@@ -14,8 +14,10 @@ import copy
 import itertools
 import json
 import re
+import types
 from unittest.mock import MagicMock
 
+import main
 import mk1_db
 import psycopg2
 import pytest
@@ -106,6 +108,11 @@ def test_validate_accepts_the_stored_shape_zero_and_null_everywhere():
              "components": {"1": {"mg": 0, "target": 0, "vial": 7}}, "two_step": False,
              "diluent": "Water"}
     assert worksheets_hplc.validate_hplc_prep_patch(zeros) == zeros
+    # the ceilings themselves are allowed (D1)
+    tops = {"capsules": 2**53 - 1, "declared_mg": 1e12, "diluent_ul": 10**12,
+            "components": {"36": {"mg": 1e12, "target": 1e12}},
+            "vials": {"1": {"lead_id": 2**53 - 1, "vial_all_mg": 1e12}}}
+    assert worksheets_hplc.validate_hplc_prep_patch(tops) == tops
 
 
 @pytest.mark.parametrize("patch, key", [
@@ -149,6 +156,18 @@ def test_validate_accepts_the_stored_shape_zero_and_null_everywhere():
     ({"vials": [1]}, "vials"),                                      # maps and entries are objects
     ({"components": {"36": "x"}}, "components.36"),
     ({"vials": {"1": 5}}, "vials.1"),
+    # fix round 2, D1: past 2**53 - 1 JavaScript rounds a whole number, and no balance reads 1e12
+    ({"capsules": 2**53}, "capsules"),
+    ({"vials": {"1": {"lead_id": 2**53}}}, "lead_id"),
+    ({"declared_mg": 1e12 * 1.5}, "declared_mg"),
+    ({"diluent_ul": 10**13}, "diluent_ul"),
+    ({"components": {"36": {"mg": 2e12}}}, "mg"),
+    ({"components": {"36": {"target": 2e12}}}, "target"),
+    ({"vials": {"1": {"target_ug_ml": 2e12}}}, "target_ug_ml"),
+    ({"vials": {"1": {"int_vial_all_mg": 2e12}}}, "int_vial_all_mg"),
+    # D2: a vial is 1 to 7, as a component's vial is
+    ({"vials": {"8": {}}}, "8"),
+    ({"vials": {"36": None}}, "36"),
 ])
 def test_validate_names_the_bad_key(patch, key):
     with pytest.raises(ValueError, match=re.escape(key)):
@@ -346,12 +365,24 @@ def test_a_solo_component_takes_the_row_weight(db, quantity):
         None, None, HPLC_RUN_PARAM_DEFAULTS)
 
 
-def test_a_blend_row_carries_its_components_with_their_default_vials(db):
+@pytest.mark.parametrize("decoy_first, decoy_active", [
+    (True, False),   # a retired blend of the same set, the LOWER id: the active one wins
+    (False, True),   # both active: the lowest id wins
+])
+def test_a_blend_row_carries_its_components_with_their_default_vials(db, decoy_first, decoy_active):
     bpc, tb = _peptide(db, "BPC-157"), _peptide(db, "TB-500", "Thymosin Beta-4")
     ghk = _peptide(db, "GHK-Cu")
+
+    def decoy():
+        pep = _peptide(db, "BPC/TB 2", blend_of=((tb, 1), (bpc, 1)))  # the same set
+        pep.active = decoy_active
+
+    if decoy_first:
+        decoy()
     blend = _peptide(db, "BPC/TB", "BPC-157 + TB-500", blend_of=((bpc, 1), (tb, 2)))
     _peptide(db, "BPC/TB/GHK", blend_of=((bpc, 1), (tb, 1), (ghk, 1)))  # a superset: no match
-    _peptide(db, "BPC/TB 2", blend_of=((tb, 1), (bpc, 1)))  # the same set, a higher id: not taken
+    if not decoy_first:
+        decoy()
     form = _form(db)
     parent = _sample(db, "P-0130", [(bpc, "BPC-157", "5 mg"), (tb, "TB-500", "5")],
                      declared="10", form=form)
@@ -375,6 +406,19 @@ def test_a_blend_row_carries_its_components_with_their_default_vials(db):
         "instrument_id": None, "instrument_name": None, "params": HPLC_RUN_PARAM_DEFAULTS,
         "prep_form": None, "hplc_prep": {}, "promoted": False, "prep": None, "problems": [],
     }]
+
+
+def test_an_inactive_blend_is_still_the_match_when_it_is_the_only_one(db):
+    # the sample is what it is: a retired blend still names it, and that is no problem
+    bpc, tb = _peptide(db, "BPC-157"), _peptide(db, "TB-500")
+    retired = _peptide(db, "BPC/TB", blend_of=((bpc, 1), (tb, 2)))
+    retired.active = False
+    parent = _sample(db, "P-0133", [(bpc, "BPC-157", "5"), (tb, "TB-500", "5")], form=_form(db))
+    ws = _ws(db)
+    _item(db, ws, parent)
+    db.commit()
+    [row] = _rows(db, ws)
+    assert (row["peptide_id"], row["is_blend"], row["problems"]) == (retired.id, True, [])
 
 
 def test_a_blend_missing_from_the_catalog_says_so(db):
@@ -818,3 +862,160 @@ def test_an_endo_row_is_not_an_hplc_row(client, db):
     item.worksheet_id = staging.id
     db.commit()
     assert client.patch(f"/worksheets/{staging.id}/items/{item.id}/hplc", json={}).status_code == 404
+
+
+# --- fix round 2 ---------------------------------------------------------------------------
+
+# C: the identity is the customer's: the parent's identity, else the served peptide names.
+
+
+def test_the_identity_is_the_parents_peptide_name_without_analytes(db):
+    parent = _sample(db, "P-0079", None, form=_form(db))
+    parent.peptide_name = "BPC-157 (client label)"
+    ws = _ws(db)
+    _item(db, ws, parent, analyses_json=json.dumps([{"peptide_name": "BPC-157"}]))
+    db.commit()
+    assert _rows(db, ws)[0]["identity"] == "BPC-157 (client label)"
+
+
+def test_the_identity_falls_back_to_the_served_peptide_names(db):
+    _peptide(db, "BPC-157", "Catalog BPC")  # never the catalog's name
+    form = _form(db)
+    parent = _sample(db, "P-0080", None, form=form)
+    ws = _ws(db)
+    _item(db, ws, parent, analyses_json=json.dumps(
+        [{"peptide_name": "BPC-157"}, {"peptide_name": "TB-500"}, {"peptide_name": "BPC-157"}]))
+    bare = _item(db, ws, _sample(db, "P-0081", None, form=form), 2)
+    db.commit()
+    rows = {r["item_id"]: r for r in _rows(db, ws)}
+    assert [r["identity"] for r in rows.values() if r["item_id"] != bare.id] == ["BPC-157, TB-500"]
+    assert rows[bare.id]["identity"] is None  # nothing declared, nothing served
+
+
+# D3, D4, D5
+
+
+def test_a_rider_only_row_refuses_an_hplc_prep_patch(client, db):
+    ws, _ = _world(db)
+    parent = db.query(LimsSample).filter_by(sample_id="P-0200").one()
+    rider = _item(db, ws, parent, 2, role="fentanyl")
+    db.commit()
+    r = client.patch(f"/worksheets/{ws.id}/items/{rider.id}/hplc", json={"hplc_prep": {"declared_mg": 1}})
+    assert r.status_code == 400 and r.json()["detail"] == "this row has no prep"
+    db.expire_all()
+    assert db.get(WorksheetItem, rider.id).hplc_prep is None
+
+
+def test_an_analysis_peptide_missing_from_the_catalog_names_the_ordered_test(db):
+    bpc = _peptide(db, "BPC-157")
+    parent = _sample(db, "P-0082", None, form=_form(db))
+    ws = _ws(db)
+    item = _item(db, ws, parent)
+    _analysis(db, bpc, item=item)
+    _analysis(db, types.SimpleNamespace(id=987_654_321, abbreviation="GONE"), item=item)
+    db.commit()
+    [row] = _rows(db, ws)
+    assert (row["peptide_id"], row["components"], row["components_source"]) == (None, [], "analyses")
+    assert row["problems"] == ["a test ordered on the sample has no catalog peptide"]
+
+
+def test_an_analyte_naming_no_catalog_peptide_says_so(db):
+    gone = types.SimpleNamespace(id=987_654_321)
+    parent = _sample(db, "P-0083", [(gone, "Mystery", "10")], form=_form(db))
+    ws = _ws(db)
+    _item(db, ws, parent)
+    db.commit()
+    [row] = _rows(db, ws)
+    assert (row["peptide_id"], row["components"], row["components_source"]) == (None, [], "analytes")
+    assert row["problems"] == ["an analyte of the sample has no catalog peptide"]
+
+
+# A: a promoted HPLC row's instrument never changes, by any route.
+
+
+@pytest.fixture
+def sole_instrument(db, monkeypatch):
+    """The catalog leaves one instrument for every item, so a Ran tick would stamp it."""
+    inst = Instrument(name="HPLC 1290a")
+    db.add(inst)
+    db.flush()
+    monkeypatch.setattr(main, "_sole_instrument_for_item", lambda _db, _it, prefer=None: (inst.id, []))
+    return inst
+
+
+def _promoted_and_plain(db, promote, **columns):
+    ws, item = _world(db, **columns)
+    parent = db.query(LimsSample).filter_by(sample_id="P-0200").one()
+    plain = _item(db, ws, parent, 2, **columns)
+    db.commit()
+    promote(item)
+    return ws, item, plain
+
+
+def _instruments(db, *items):
+    db.expire_all()
+    return [(db.get(WorksheetItem, it.id).instrument_id, db.get(WorksheetItem, it.id).ran_at is not None)
+            for it in items]
+
+
+def test_a_ran_tick_never_stamps_an_instrument_on_a_promoted_row(client, db, promote, sole_instrument):
+    ws, item, plain = _promoted_and_plain(db, promote)
+    for row in (item, plain):
+        r = client.patch(f"/worksheets/{ws.id}/items/{row.id}", json={"ran": True})
+        assert r.status_code == 200, r.text
+    assert _instruments(db, item, plain) == [(None, True), (sole_instrument.id, True)]
+
+
+def test_bulk_ran_ticks_never_stamp_an_instrument_on_a_promoted_row(client, db, promote, sole_instrument):
+    ws, item, plain = _promoted_and_plain(db, promote)
+    r = client.post(f"/worksheets/{ws.id}/bench-ticks", json={"ran": True})
+    assert r.status_code == 200 and r.json()["changed"] == 2, r.text
+    assert _instruments(db, item, plain) == [(None, True), (sole_instrument.id, True)]
+
+
+def test_apply_method_instrument_skips_a_promoted_row_and_says_so(client, db, promote):
+    one, two = Instrument(name="HPLC 1290a"), Instrument(name="HPLC 1290b")
+    db.add_all([one, two])
+    db.flush()
+    ws, item, plain = _promoted_and_plain(db, promote, instrument_id=one.id)
+    method = HplcMethod(name="HPLC M2")
+    db.add(method)
+    db.flush()
+    db.execute(instrument_methods.insert().values(instrument_id=two.id, method_id=method.id))
+    db.commit()
+    r = client.post(f"/worksheets/{ws.id}/apply-method-instrument",
+                    json={"method_id": method.id, "instrument_id": two.id})
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["items_updated"] == 1
+    assert body["skipped_promoted"] == [{"item_id": item.id, "sample_id": item.sample_id}]
+    assert [i for i, _ in _instruments(db, item, plain)] == [one.id, two.id]
+
+
+def test_the_item_route_locks_an_hplc_row_whenever_an_instrument_or_form_is_sent(client, db, monkeypatch):
+    # A3: the locks are taken on what the request SENDS, then the locked re-read is judged;
+    # a value equal to the first, unlocked read still takes them
+    import endo_prep_rules
+
+    one = Instrument(name="HPLC 1290a")
+    db.add(one)
+    db.flush()
+    ws, item = _world(db, instrument_id=one.id, prep_form="powder")
+    parent = db.query(LimsSample).filter_by(sample_id="P-0200").one()
+    endo = _item(db, ws, parent, 2, role="endo85")
+    db.commit()
+    locked = []
+    real = endo_prep_rules.lock_items_for_update
+    monkeypatch.setattr(endo_prep_rules, "lock_items_for_update",
+                        lambda _db, _ws, ids: (locked.append(sorted(ids)), real(_db, _ws, ids))[1])
+    url = f"/worksheets/{ws.id}/items/{item.id}"
+    for body in ({"instrument_id": one.id}, {"prep_form": "powder"}, {"ran": True}):
+        locked.clear()
+        assert client.patch(url, json=body).status_code == 200, body
+        # (a form is also an endo field, whose path locks too: taking a held lock is a no-op)
+        assert locked and all(ids == [item.id] for ids in locked), body
+    # no instrument, form or Ran tick sent, or not an HPLC row: no locks, as before
+    for row, body in ((item, {"prep_status": "in_progress"}), (endo, {"instrument_id": one.id})):
+        locked.clear()
+        assert client.patch(f"/worksheets/{ws.id}/items/{row.id}", json=body).status_code == 200
+        assert locked == [], body
