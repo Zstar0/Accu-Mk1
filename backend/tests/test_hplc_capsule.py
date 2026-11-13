@@ -16,7 +16,9 @@ from dataclasses import replace
 import pytest
 
 from calculations.hplc_processor import (
+    MAX_CAPSULES,
     PREP_FORMS,
+    QUANTITY_MG_PLACES,
     AnalysisInput,
     CalibrationParams,
     PeptideParams,
@@ -82,9 +84,14 @@ def test_capsule_quantity_is_per_capsule():
 def test_the_per_capsule_figure_is_rounded_once_from_the_unrounded_total():
     # Divided before rounding: rounding the total first and dividing that would be off by
     # up to 0.00005 / n, and the brief puts the division ahead of the rounding.
-    per = _quantity("capsule", 3)
+    n = 2
     mass_mg = (198_830.0 / 10.0) * 1.0 * round(NEAT_STOCK_ML, 6) / 1000  # conc * factor * stock
-    assert per["quantity_mg"] == round(mass_mg / 3, 4)
+    once = round(mass_mg / n, QUANTITY_MG_PLACES)
+    twice = round(round(mass_mg, QUANTITY_MG_PLACES) / n, QUANTITY_MG_PLACES)
+    # The inputs must tell the two orders apart, or this test goes blind (for this total
+    # only n = 2 does: 20.0006 against 20.0007).
+    assert once != twice, (mass_mg, n)
+    assert _quantity("capsule", n)["quantity_mg"] == once
 
 
 def test_a_capsule_row_is_otherwise_a_powder_row():
@@ -122,6 +129,15 @@ def test_a_capsule_with_no_usable_count_reports_nothing_never_the_stock_total():
         assert result["calculation_trace"]["quantity"] == {"quantity_mg": None, "error": "no_capsule_count"}, bad
 
 
+def test_a_count_above_the_cap_reports_nothing_and_never_raises():
+    assert MAX_CAPSULES == 1000
+    assert _quantity("capsule", MAX_CAPSULES)["quantity_mg"] is not None  # the cap itself is a count
+    # 2**31 overflows the INTEGER column; 10**400 overflows a float in the division.
+    for bad in (MAX_CAPSULES + 1, 2**31, 10**400):
+        result = _quantity("capsule", bad)
+        assert result["calculation_trace"]["quantity"] == {"quantity_mg": None, "error": "no_capsule_count"}
+
+
 def test_a_count_on_any_other_form_changes_nothing():
     for form in ("powder", "bac"):
         assert _quantity(form, 4) == _quantity(form, None)
@@ -155,6 +171,16 @@ def test_route_requires_a_count_for_a_capsule():
     for bad in (0, -1, True, 2.5, "3"):
         errors = _errors(_body(prep_form="capsule", capsules_used=bad))
         assert [e["loc"] for e in errors] == [("capsules_used",)], bad
+
+
+def test_route_caps_the_count_at_max_capsules(api):
+    (error,) = _errors(_body(prep_form="capsule", capsules_used=MAX_CAPSULES + 1))
+    assert error["loc"] == ("capsules_used",)
+    over = _post(api, prep_form="capsule", capsules_used=MAX_CAPSULES + 1)
+    assert over.status_code == 422 and over.json()["detail"][0]["loc"][-1] == "capsules_used"
+    at_cap = _post(api, prep_form="capsule", capsules_used=MAX_CAPSULES)
+    assert at_cap.status_code == 201, at_cap.text
+    assert at_cap.json()["capsules_used"] == MAX_CAPSULES
 
 
 def test_route_refuses_a_count_on_a_powder():

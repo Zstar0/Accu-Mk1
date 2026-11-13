@@ -74,10 +74,15 @@ class AnalysisInput:
     capsules_used: Optional[int] = None
 
 
+# No real stock holds more than a bottle of capsules, and the bound keeps the count inside
+# INTEGER (the stored column) and float range (the division).
+MAX_CAPSULES = 1000
+
+
 def _is_capsule_count(value) -> bool:
-    """A count of capsules: an int of at least 1. A bool is an int in Python and is not a
-    count, and a float is refused even when whole, so no 2.0 reaches the stored row."""
-    return isinstance(value, int) and not isinstance(value, bool) and value >= 1
+    """A count of capsules: an int from 1 to MAX_CAPSULES. A bool is an int in Python and is
+    not a count, and a float is refused even when whole, so no 2.0 reaches the stored row."""
+    return isinstance(value, int) and not isinstance(value, bool) and 1 <= value <= MAX_CAPSULES
 
 
 def _round_or_none(value: Optional[float], places: int) -> Optional[float]:
@@ -598,7 +603,7 @@ def calculate_quantity(
        reported, not the stock total. "mass_ug" stays the mass in the stock, and the
        trace adds "capsule_total_mg" (that mass in mg, rounded to 4) and "capsules_used".
        Neither key exists when capsules_used is None, so no other form's trace changes.
-       A count that is not a whole number of at least 1 raises ValueError: the request
+       A count that is not a whole number from 1 to MAX_CAPSULES raises ValueError: the request
        layer refuses it, and process_hplc_analysis refuses a capsule row without one.
 
     The rounding order is load-bearing and pinned by the golden fixture: the total and
@@ -641,7 +646,7 @@ def calculate_quantity(
     nothing in it could be reported, and a recapture cannot use it either.
     """
     if capsules_used is not None and not _is_capsule_count(capsules_used):
-        raise ValueError(f"capsules_used must be a whole number of at least 1, not {capsules_used!r}")
+        raise ValueError(f"capsules_used must be a whole number from 1 to {MAX_CAPSULES}, not {capsules_used!r}")
 
     areas = []
     for inj in injections:

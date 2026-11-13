@@ -96,7 +96,7 @@ from parsers.peakdata_csv_parser import parse_hplc_files, calculate_purity
 from calculations import CalculationEngine
 from calculations.calibration import calculate_calibration_curve
 from calculations.hplc_processor import (
-    PREP_FORMS, process_hplc_analysis, AnalysisInput, IntermediateWeights, WeightInputs,
+    MAX_CAPSULES, PREP_FORMS, process_hplc_analysis, AnalysisInput, IntermediateWeights, WeightInputs,
     CalibrationParams, PeptideParams,
 )
 from file_watcher import FileWatcher
@@ -7065,7 +7065,7 @@ class HPLCAnalyzeRequest(BaseModel):
     # How many capsules went into the stock vial: required for a capsule prep, whose
     # quantity is reported per capsule, and refused on any other form. Strict, so a JSON
     # true or "3" is not read as a count.
-    capsules_used: Annotated[Optional[int], Field(ge=1, strict=True)] = None
+    capsules_used: Annotated[Optional[int], Field(ge=1, le=MAX_CAPSULES, strict=True)] = None
     # Provenance fields (Phase 10.5)
     sample_prep_id: Optional[int] = None
     instrument_id: Optional[int] = None
