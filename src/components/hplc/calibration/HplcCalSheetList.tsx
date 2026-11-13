@@ -36,7 +36,8 @@ function dateOf(s: CalSheetListItem) {
  *  a compound filter and New. */
 export function HplcCalSheetList() {
   const [peptideId, setPeptideId] = useState<number | undefined>(undefined)
-  const { data: sheets = [], error, isLoading } = useCalSheets(peptideId)
+  const list = useCalSheets(peptideId)
+  const sheets = list.data?.pages.flat() ?? []
   const { data: peptides = [] } = useQuery({
     queryKey: ['peptides'],
     queryFn: () => getPeptides(),
@@ -96,8 +97,23 @@ export function HplcCalSheetList() {
           {`A new worksheet could not be made: ${failed}`}
         </p>
       )}
-      {error && <p className="text-sm text-destructive">{error.message}</p>}
-      {!isLoading && !error && sheets.length === 0 ? (
+      {list.isPending ? (
+        <p className="text-sm text-muted-foreground">Loading...</p>
+      ) : list.isError && sheets.length === 0 ? (
+        <p
+          role="alert"
+          className="flex flex-wrap items-center gap-3 text-sm text-destructive"
+        >
+          {`The worksheets could not be loaded: ${list.error.message.replace(/\.$/, '')}.`}
+          <Button
+            size="sm"
+            variant="outline"
+            onClick={() => void list.refetch()}
+          >
+            Try again
+          </Button>
+        </p>
+      ) : sheets.length === 0 ? (
         <p className="text-sm text-muted-foreground">
           No calibration worksheets yet.
         </p>
@@ -140,6 +156,11 @@ export function HplcCalSheetList() {
                 >
                   {status}
                 </Badge>
+                {s.blocking.includes('cannot_be_worked_out') && (
+                  <span className="text-xs text-red-700 dark:text-red-300">
+                    Cannot be worked out
+                  </span>
+                )}
                 <span className="w-24 text-xs text-muted-foreground">
                   {dateOf(s)}
                 </span>
@@ -155,6 +176,21 @@ export function HplcCalSheetList() {
             )
           })}
         </ul>
+      )}
+      {list.isFetchNextPageError && (
+        <p role="alert" className="text-sm text-destructive">
+          {`The next worksheets could not be loaded: ${list.error?.message.replace(/\.$/, '') ?? 'the server did not answer'}.`}
+        </p>
+      )}
+      {list.hasNextPage && (
+        <Button
+          variant="outline"
+          size="sm"
+          disabled={list.isFetchingNextPage}
+          onClick={() => void list.fetchNextPage()}
+        >
+          {list.isFetchingNextPage ? 'Loading...' : 'Show more'}
+        </Button>
       )}
     </>
   )

@@ -3591,6 +3591,9 @@ export interface CalSheetListItem {
   updated_at: string | null
   updated_by_email: string | null
   changed_since_filed: boolean
+  /** The filed curve was changed on the Peptides page since this sheet was
+   *  filed. Single-sheet answers only; null on list rows. Only true counts. */
+  curve_changed_since_filed?: boolean | null
   proposed_name: string
   /** Blocking warning codes, or ["cannot_be_worked_out"]. */
   blocking: string[]

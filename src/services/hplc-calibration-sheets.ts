@@ -1,5 +1,6 @@
 import { useEffect, useState, useSyncExternalStore } from 'react'
 import {
+  useInfiniteQuery,
   useQuery,
   useQueryClient,
   type QueryClient,
@@ -22,10 +23,19 @@ import type { CalInputs, CalReplicateInputs } from '@/lib/hplc-calibration'
 export const CAL_SHEETS_KEY = ['hplc-calibration-sheets'] as const
 export const CAL_SHEET_KEY = (id: number) => [...CAL_SHEETS_KEY, id] as const
 
+/** The server's page size for the list (its default and its maximum). */
+export const CAL_LIST_PAGE = 100
+
+/** The list, a page of CAL_LIST_PAGE at a time (M5): a full page means
+ *  there may be more. */
 export function useCalSheets(peptideId?: number) {
-  return useQuery({
+  return useInfiniteQuery({
     queryKey: [...CAL_SHEETS_KEY, 'list', peptideId ?? null],
-    queryFn: () => listCalSheets(peptideId),
+    queryFn: ({ pageParam }) =>
+      listCalSheets(peptideId, { limit: CAL_LIST_PAGE, offset: pageParam }),
+    initialPageParam: 0,
+    getNextPageParam: (last, all) =>
+      last.length === CAL_LIST_PAGE ? all.length * CAL_LIST_PAGE : undefined,
   })
 }
 
@@ -102,6 +112,9 @@ export interface CalSaveState {
   /** A save went out and was never answered, and nothing is out now: the
    *  sheet is read again to see whether it landed (H1). */
   checking: boolean
+  /** The newest copy of the sheet this page has seen (a save's answer, a
+   *  re-read, a filing): a lagging query copy never replaces it. */
+  latest: CalSheet
 }
 
 interface Entry {
@@ -120,6 +133,14 @@ interface Entry {
    *  next newer copy of the sheet tells it from someone else's save. Cleared
    *  when the version moves, or as lost after LOST_AFTER_MS. */
   unanswered: CalDraft[]
+  /** Bodies cleared from `unanswered` as lost after LOST_AFTER_MS: one may
+   *  still land, so only the own-or-foreign match reads them (I1). Emptied
+   *  when the version moves. No effect on saved or checking. */
+  lost: CalDraft[]
+  /** A checking re-read is out: the next tick waits (I2). */
+  reading: boolean
+  /** See CalSaveState.latest. */
+  latest: CalSheet
   seq: number
   mounted: number
   state: CalSaveState
@@ -153,6 +174,7 @@ function stateOf(e: Entry): CalSaveState {
     version: e.version,
     refused: [...e.refused],
     checking: !e.inFlight && e.unanswered.length > 0,
+    latest: e.latest,
   }
 }
 
@@ -174,6 +196,9 @@ function newEntry(qc: QueryClient, s: CalSheet): Entry {
     reloaded: null,
     refused: new Set(),
     unanswered: [],
+    lost: [],
+    reading: false,
+    latest: s,
     seq: 0,
     mounted: 0,
     state: null as unknown as CalSaveState,
@@ -221,6 +246,8 @@ function pump(id: number) {
         // accounted for (H1).
         e.unanswered =
           res.version > version ? [] : e.unanswered.filter(b => b !== sent)
+        if (res.version > version) e.lost = []
+        e.latest = res
         e.version = res.version
         e.confirmed = sent
         e.error = null
@@ -258,7 +285,9 @@ function pump(id: number) {
 
 /** A request that counts as unanswered after SAVE_TIMEOUT_MS (and is then
  *  aborted). */
-function inTime<T>(start: (signal: AbortSignal) => Promise<T>): Promise<T> {
+export function inTime<T>(
+  start: (signal: AbortSignal) => Promise<T>
+): Promise<T> {
   const controller = new AbortController()
   let timer: ReturnType<typeof setTimeout> | undefined
   const timeout = new Promise<never>((_, reject) => {
@@ -292,6 +321,7 @@ async function conflict(
   if (fresh.version <= sentVersion) {
     e.error = msg
     leftWith(e, msg)
+    if (fresh.version >= e.latest.version) e.latest = fresh
   } else settle(e, fresh, msg)
   e.qc.setQueryData(CAL_SHEET_KEY(id), fresh)
 }
@@ -305,8 +335,12 @@ async function conflict(
  *  older version, so none can land now. */
 function settle(e: Entry, fresh: CalSheet, said: string) {
   const server = draftOf(fresh)
+  // a body cleared as lost can still land (I1); a copy equal to what is on
+  // screen differs from nothing this page holds
   const own =
-    e.unanswered.some(b => sameJson(b, server)) || sameJson(server, e.confirmed)
+    [...e.unanswered, ...e.lost].some(b => sameJson(b, server)) ||
+    sameJson(server, e.confirmed) ||
+    sameJson(server, e.local)
   // anything typed, refused or in the air that the reload throws away
   const lost =
     e.inFlight ||
@@ -317,6 +351,8 @@ function settle(e: Entry, fresh: CalSheet, said: string) {
   e.replicate = fresh.replicate_of_sheet_id !== null
   e.error = null
   e.unanswered = []
+  e.lost = []
+  e.latest = fresh
   if (own) {
     e.confirmed = server
     return
@@ -333,12 +369,18 @@ function settle(e: Entry, fresh: CalSheet, said: string) {
  *  last of those bodies went out, means they were lost (H1). */
 async function check(id: number) {
   const e = entries.get(id)
-  if (!e || e.inFlight || e.unanswered.length === 0) return
+  if (!e || e.inFlight || e.reading || e.unanswered.length === 0) return
+  // the time the question was asked, not answered: a read that began before
+  // the limit never clears the list (I2)
+  const asked = Date.now()
   let fresh: CalSheet
+  e.reading = true
   try {
     fresh = await inTime(() => getCalSheet(id))
   } catch {
     return // no answer proves nothing; the next re-read tries again
+  } finally {
+    e.reading = false
   }
   if (entries.get(id) !== e || e.inFlight || e.unanswered.length === 0) return
   if (fresh.version > e.version) {
@@ -346,7 +388,8 @@ async function check(id: number) {
     e.qc.setQueryData(CAL_SHEET_KEY(id), fresh)
   } else {
     const last = Math.max(...e.unanswered.map(b => sentAt.get(b) ?? 0))
-    if (Date.now() - last < LOST_AFTER_MS) return
+    if (asked - last < LOST_AFTER_MS) return
+    e.lost.push(...e.unanswered)
     e.unanswered = []
     // nothing typed is waiting: the "did not answer" line has nothing to retry
     if (e.error === NO_ANSWER && sameJson(e.local, e.confirmed)) e.error = null
@@ -399,7 +442,14 @@ export function useSaveCalSheet(id: number) {
   const saving = state?.saving ?? false
   useEffect(() => {
     const e = entries.get(id)
-    if (!data || !e || e.inFlight || data.version <= e.version) return
+    if (!data || !e) return
+    // the same version or newer is the freshest copy (a filing keeps the
+    // version); an older one is a lagging refetch
+    if (data !== e.latest && data.version >= e.latest.version) {
+      e.latest = data
+      changed(id, e)
+    }
+    if (e.inFlight || data.version <= e.version) return
     settle(e, data, RELOADED)
 
     changed(id, e)
@@ -489,7 +539,8 @@ export function useSaveCalSheet(id: number) {
  * while the filing ran, the cache already holds a newer sheet: read it again
  * instead of putting an older one back. A refusal or no answer also reads the
  * sheet again: a 409 says "It has been reloaded", and a filing that landed
- * without an answer then shows as filed.
+ * without an answer then shows as filed. Unanswered after SAVE_TIMEOUT_MS
+ * counts as no answer (M3).
  */
 export function useFileCalSheet(id: number) {
   const qc = useQueryClient()
@@ -498,7 +549,7 @@ export function useFileCalSheet(id: number) {
   return async (version: number): Promise<CalFileResult> => {
     let res: CalFileResult
     try {
-      res = await fileCalSheet(id, version)
+      res = await inTime(() => fileCalSheet(id, version))
     } catch (e) {
       reread()
       throw e
@@ -511,11 +562,12 @@ export function useFileCalSheet(id: number) {
   }
 }
 
-/** Duplicate for another injection: the copy goes into the cache, ready to open. */
+/** Duplicate for another injection: the copy goes into the cache, ready to
+ *  open. Unanswered after SAVE_TIMEOUT_MS counts as no answer (M3). */
 export function useDuplicateCalSheet() {
   const qc = useQueryClient()
   return async (id: number): Promise<CalSheet> => {
-    const copy = await duplicateCalSheet(id)
+    const copy = await inTime(() => duplicateCalSheet(id))
     qc.setQueryData(CAL_SHEET_KEY(copy.id), copy)
     void qc.invalidateQueries({ queryKey: [...CAL_SHEETS_KEY, 'list'] })
     return copy

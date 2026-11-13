@@ -9,6 +9,7 @@ import {
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import type * as ApiModule from '@/lib/api'
 import {
+  CalSheetError,
   createCalSheet,
   getCalSheet,
   getInstruments,
@@ -135,7 +136,82 @@ describe('HplcCalSheetList', () => {
     const filter = screen.getByLabelText('Compound') as HTMLSelectElement
     await waitFor(() => expect(filter.options.length).toBe(3))
     fireEvent.change(filter, { target: { value: '12' } })
-    await waitFor(() => expect(listCalSheets).toHaveBeenLastCalledWith(12))
+    await waitFor(() =>
+      expect(listCalSheets).toHaveBeenLastCalledWith(12, {
+        limit: 100,
+        offset: 0,
+      })
+    )
+  })
+
+  it('M5 (a): a full page of 100 offers Show more, which appends the next page', async () => {
+    const page1 = Array.from({ length: 100 }, (_, i) =>
+      row({ id: 1000 - i, proposed_name: `SHEET-${i}` })
+    )
+    const page2 = [row({ id: 1, proposed_name: 'SHEET-LAST' })]
+    vi.mocked(listCalSheets).mockImplementation(async (_p, pg) =>
+      pg?.offset ? page2 : page1
+    )
+    renderList()
+    await screen.findByText('SHEET-0')
+    fireEvent.click(screen.getByRole('button', { name: 'Show more' }))
+    await screen.findByText('SHEET-LAST')
+    expect(listCalSheets).toHaveBeenLastCalledWith(undefined, {
+      limit: 100,
+      offset: 100,
+    })
+    expect(document.querySelectorAll('[data-testid="sheet-name"]').length).toBe(
+      101
+    )
+    expect(screen.queryByRole('button', { name: 'Show more' })).toBeNull()
+  })
+
+  it('M5 (a): a short page has no Show more', async () => {
+    renderList()
+    await screen.findByText('1290C-20261113-RETA')
+    expect(screen.queryByRole('button', { name: 'Show more' })).toBeNull()
+  })
+
+  it('M5 (b): loading says so, and no empty box shows', async () => {
+    vi.mocked(listCalSheets).mockImplementation(
+      () => new Promise(() => undefined)
+    )
+    renderList()
+    expect(await screen.findByText('Loading...')).toBeInTheDocument()
+    expect(document.querySelector('ul')).toBeNull()
+    expect(screen.queryByText('No calibration worksheets yet.')).toBeNull()
+  })
+
+  it('M5 (b): a failed load says so with Try again', async () => {
+    vi.mocked(listCalSheets).mockRejectedValueOnce(
+      new CalSheetError('Load calibration sheets failed: 500', 500)
+    )
+    renderList()
+    expect(
+      await screen.findByText(
+        'The worksheets could not be loaded: Load calibration sheets failed: 500.'
+      )
+    ).toBeInTheDocument()
+    expect(document.querySelector('ul')).toBeNull()
+    fireEvent.click(screen.getByRole('button', { name: 'Try again' }))
+    expect(await screen.findByText('1290C-20261113-RETA')).toBeInTheDocument()
+  })
+
+  it('M5 (c): a row that cannot be worked out says so beside its status', async () => {
+    vi.mocked(listCalSheets).mockResolvedValue([
+      row({
+        id: 4,
+        proposed_name: 'BROKEN',
+        blocking: ['cannot_be_worked_out'],
+      }),
+      row({ id: 3, proposed_name: 'FINE', blocking: ['some_warning'] }),
+    ])
+    renderList()
+    await screen.findByText('BROKEN')
+    expect(
+      within(rowOf('BROKEN')).getByText('Cannot be worked out')
+    ).toBeInTheDocument()
+    expect(within(rowOf('FINE')).queryByText('Cannot be worked out')).toBeNull()
   })
 
   it('New calibration worksheet makes one and opens it', async () => {

@@ -225,5 +225,28 @@ describe('CalibrationPanel: the way into the worksheet', () => {
     expect(btn).toHaveAccessibleDescription(
       "A curve is for one peptide. A blend's components each have their own."
     )
+    // M6: the disabled button's reason shows on hover, through a wrapper
+    const wrapper = btn.parentElement as HTMLElement
+    expect(wrapper.dataset.slot).toBe('tooltip-trigger')
+    expect(wrapper.tabIndex).toBe(0)
+    fireEvent.focus(wrapper)
+    expect((await screen.findByRole('tooltip')).textContent).toContain(
+      "A curve is for one peptide. A blend's components each have their own."
+    )
+  })
+
+  it('M6: a single peptide has no hover wrapper in the tab order', async () => {
+    vi.mocked(getCalibrations).mockResolvedValue([])
+    render(
+      <CalibrationPanel
+        peptide={PEPTIDE}
+        onUpdated={vi.fn()}
+        instrumentFilter="all"
+      />
+    )
+    await screen.findByText('No calibration curves yet')
+    const btn = screen.getByRole('button', { name: 'Calibration worksheet' })
+    expect(btn).not.toBeDisabled()
+    expect(btn.parentElement?.tabIndex).not.toBe(0)
   })
 })

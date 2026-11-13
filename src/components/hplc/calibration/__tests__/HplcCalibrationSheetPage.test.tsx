@@ -386,6 +386,11 @@ const later = async (ms: number) =>
   act(async () => {
     await vi.advanceTimersByTimeAsync(ms)
   })
+/** react-query notifies on a setTimeout(0): let the page re-render. */
+const flush = async () =>
+  act(async () => {
+    await new Promise(r => setTimeout(r, 20))
+  })
 
 describe('HplcCalibrationSheetPage, fix round 1', () => {
   beforeEach(() => {
@@ -992,6 +997,7 @@ describe('Task 7: File, Duplicate and New', () => {
   })
 
   it('every warning the server sends stays on the page, one per line, until dismissed', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true })
     const { sheet } = await openCase1()
     const warnings = [
       'R squared is 0.9898, below 0.99, so this curve was filed but not made active. Check the peak areas against their levels. If the curve is right, star it on the Peptides page.',
@@ -1005,10 +1011,10 @@ describe('Task 7: File, Duplicate and New', () => {
       expect(within(notice()).getByText(warnings[0] as string)).toBeTruthy()
     )
     expect(within(notice()).getByText(warnings[1] as string).tagName).toBe('LI')
-    await act(async () => {
-      await new Promise(r => setTimeout(r, 50))
-    })
-    expect(notice()).toBeInTheDocument()
+    // no timer takes it away: well past a toast's five seconds
+    await later(6_000)
+    expect(within(notice()).getByText(warnings[0] as string)).toBeTruthy()
+    expect(within(notice()).getByText(warnings[1] as string)).toBeTruthy()
     fireEvent.click(within(notice()).getByRole('button', { name: 'Dismiss' }))
     expect(screen.queryByTestId('cal-notice')).toBeNull()
   })
@@ -1035,6 +1041,9 @@ describe('Task 7: File, Duplicate and New', () => {
     await waitFor(() => expect(fileBtn()).not.toBeDisabled())
     // a lagging copy in the cache (an older refetch landing late)
     act(() => view.qc.setQueryData(CAL_SHEET_KEY(5), sheet))
+    // react-query notifies on a setTimeout(0): let the page re-render with it
+    await flush()
+    expect((view.qc.getQueryData(CAL_SHEET_KEY(5)) as CalSheet).version).toBe(1)
     vi.mocked(fileCalSheet).mockResolvedValue(
       filedAs({ ...sheet, version: 2 }, 'first_active')
     )
@@ -1337,5 +1346,561 @@ describe('H1: a save that changes nothing does not forget one that can still lan
     expect(screen.queryByText('Loading the sheet...')).toBeNull()
     expect(box('Weight from COA (mg)').value).toBe(w0)
     expect(saved()).toBe('false')
+  })
+})
+
+// --- Task 7, fix round 1 (task-7-fix1-brief.md) ---
+
+describe('fix round 1: the save hook (I1, I2, M2, M7)', () => {
+  const saved = () => page().dataset.saved
+  const checking = () =>
+    screen.queryByText('Checking that the last save went through...')
+  const stale409 = () =>
+    new CalSheetError(
+      'Someone else saved this sheet. It has been reloaded.',
+      409
+    )
+  const noLine = () => {
+    expect(screen.queryByText(RELOADED)).toBeNull()
+    expect(screen.queryByText(RELOADED_NOTHING_LOST)).toBeNull()
+  }
+
+  beforeEach(() => {
+    vi.clearAllMocks()
+    resetCalSaves()
+    vi.mocked(getPeptides).mockResolvedValue([])
+    vi.mocked(getInstruments).mockResolvedValue([])
+    vi.mocked(listCalSheets).mockResolvedValue([])
+  })
+  afterEach(() => {
+    vi.useRealTimers()
+    act(() => useUIStore.setState({ calibrationSheetPageId: null }))
+  })
+
+  it('I1 (probe R1): an edit typed after the 60 s clear survives the late landing of the cleared save', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true })
+    const saves = queueSaves()
+    const { sheet } = await openCase1()
+    const base = sheet.inputs as CalInputs
+    typeAndLeave(box('Weight from COA (mg)'), '6') // A on v1
+    await waitFor(() => expect(saves.count()).toBe(1))
+    await later(SAVE_TIMEOUT_MS + 10)
+    await waitFor(() => expect(checking()).not.toBeNull())
+    await later(50_000) // past 60 s after A went out: A is cleared as lost
+    await waitFor(() => expect(checking()).toBeNull())
+    expect(saved()).toBe('false') // the Not saved line stays: A is still typed
+    // A lands now, as v2
+    vi.mocked(getCalSheet).mockResolvedValue(
+      makeSheet({ ...base, coa_weight_mg: 6 }, { version: 2 })
+    )
+    typeAndLeave(box('Lot #'), 'C9') // A and C9, on v1
+    await waitFor(() => expect(saves.count()).toBe(2))
+    expect(body(1).version).toBe(1)
+    await saves.fail(1, stale409())
+    // the 409's re-read finds A: the page's own, so C9 goes again on v2
+    await waitFor(() => expect(saves.count()).toBe(3))
+    expect(body(2).version).toBe(2)
+    expect(inputsOf(2).lot).toBe('C9')
+    expect(String(inputsOf(2).coa_weight_mg)).toBe('6')
+    expect(box('Lot #').value).toBe('C9')
+    noLine()
+    await saves.ok(
+      2,
+      makeSheet({ ...base, coa_weight_mg: 6, lot: 'C9' }, { version: 3 })
+    )
+    await waitFor(() => expect(saved()).toBe('true'))
+    noLine()
+  })
+
+  it('I2 (probe R6): with 12 s re-reads, a save landing at second 55 is the page own, and re-reads never overlap', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true })
+    const saves = queueSaves()
+    const { sheet } = await openCase1()
+    const base = sheet.inputs as CalInputs
+    const t0 = Date.now()
+    typeAndLeave(box('Weight from COA (mg)'), '6') // A on v1
+    await waitFor(() => expect(saves.count()).toBe(1))
+    const landed = makeSheet({ ...base, coa_weight_mg: 6 }, { version: 2 })
+    let out = 0
+    let most = 0
+    vi.mocked(getCalSheet).mockImplementation(() => {
+      const copy = Date.now() - t0 >= 55_000 ? landed : sheet
+      most = Math.max(most, ++out)
+      return new Promise(r =>
+        setTimeout(() => {
+          out--
+          r(copy)
+        }, 12_000)
+      )
+    })
+    await later(SAVE_TIMEOUT_MS + 10)
+    for (let i = 0; i < 20; i++) await later(5_000)
+    expect(most).toBe(1)
+    expect(checking()).toBeNull()
+    expect(saved()).toBe('true')
+    noLine()
+    expect(box('Weight from COA (mg)').value).toBe('6')
+    expect(saves.count()).toBe(1) // A landed: nothing to send again
+  })
+
+  // M2, RULED (fix round 1): accepted, not fixed. Someone else reverting the
+  // sheet to exactly the page's confirmed inputs, while a body of this page is
+  // unanswered, is taken as the page's own: no line, and what is on this page
+  // is sent over the revert.
+  it('M2 (probe R5, ruled): a revert equal to the confirmed inputs is taken as own, and A is sent again over it', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true })
+    const saves = queueSaves()
+    const { sheet } = await openCase1()
+    typeAndLeave(box('Weight from COA (mg)'), '6') // A
+    await waitFor(() => expect(saves.count()).toBe(1))
+    await later(SAVE_TIMEOUT_MS + 10)
+    vi.mocked(getCalSheet).mockResolvedValue({ ...sheet, version: 3 })
+    await later(5_010)
+    await waitFor(() => expect(saves.count()).toBe(2))
+    expect(body(1).version).toBe(3)
+    expect(String(inputsOf(1).coa_weight_mg)).toBe('6')
+    noLine()
+  })
+
+  // RULED, documented: a save by someone else whose values equal a body this
+  // page sent and never heard back about cannot be told from that body
+  // landing, so it is taken as the page's own.
+  it('a foreign save equal to an unanswered body is taken as own (ruled)', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true })
+    const saves = queueSaves()
+    const { sheet, view } = await openCase1()
+    const base = sheet.inputs as CalInputs
+    typeAndLeave(box('Weight from COA (mg)'), '6') // A, never answered
+    await waitFor(() => expect(saves.count()).toBe(1))
+    await later(SAVE_TIMEOUT_MS + 10)
+    act(() =>
+      view.qc.setQueryData(
+        CAL_SHEET_KEY(5),
+        makeSheet({ ...base, coa_weight_mg: 6 }, { version: 2 })
+      )
+    )
+    await waitFor(() => expect(saved()).toBe('true'))
+    noLine()
+    expect(box('Weight from COA (mg)').value).toBe('6')
+    expect(saves.count()).toBe(1)
+  })
+
+  it('probe R3: no re-reads while the page is closed', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true })
+    const saves = queueSaves()
+    await openCase1()
+    typeAndLeave(box('Weight from COA (mg)'), '6')
+    await waitFor(() => expect(saves.count()).toBe(1))
+    await later(SAVE_TIMEOUT_MS + 10)
+    await waitFor(() => expect(checking()).not.toBeNull())
+    act(() => useUIStore.setState({ calibrationSheetPageId: null }))
+    const n = vi.mocked(getCalSheet).mock.calls.length
+    await later(30_000)
+    expect(vi.mocked(getCalSheet).mock.calls.length).toBe(n)
+  })
+
+  it('probe R4: A then B time out on v1, B lands: own, kept, saved', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true })
+    const saves = queueSaves()
+    const { sheet } = await openCase1()
+    const base = sheet.inputs as CalInputs
+    typeAndLeave(box('Weight from COA (mg)'), '6') // A
+    await waitFor(() => expect(saves.count()).toBe(1))
+    await later(SAVE_TIMEOUT_MS + 10)
+    typeAndLeave(box('Lot #'), 'B1') // B = A and the lot, on v1
+    await waitFor(() => expect(saves.count()).toBe(2))
+    expect(body(1).version).toBe(1)
+    await later(SAVE_TIMEOUT_MS + 10)
+    vi.mocked(getCalSheet).mockResolvedValue(
+      makeSheet({ ...base, coa_weight_mg: 6, lot: 'B1' }, { version: 2 })
+    )
+    await later(5_010)
+    await waitFor(() => expect(saved()).toBe('true'))
+    noLine()
+    expect(box('Lot #').value).toBe('B1')
+    expect(saves.count()).toBe(2)
+  })
+
+  it('the 60 s clock counts from the newest unanswered body', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true })
+    const saves = queueSaves()
+    await openCase1()
+    typeAndLeave(box('Weight from COA (mg)'), '6') // A at 0 s
+    await waitFor(() => expect(saves.count()).toBe(1))
+    await later(SAVE_TIMEOUT_MS + 10)
+    await later(20_000)
+    typeAndLeave(box('Lot #'), 'B1') // B at about 35 s
+    await waitFor(() => expect(saves.count()).toBe(2))
+    await later(SAVE_TIMEOUT_MS + 10)
+    await later(20_000) // about 70 s: past A's 60, not B's
+    expect(checking()).not.toBeNull()
+    await later(30_000) // about 100 s: past B's 60
+    await waitFor(() => expect(checking()).toBeNull())
+  })
+
+  it('no re-read while a save is out', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true })
+    const saves = queueSaves()
+    await openCase1()
+    typeAndLeave(box('Weight from COA (mg)'), '6') // A, unanswered
+    await waitFor(() => expect(saves.count()).toBe(1))
+    await later(SAVE_TIMEOUT_MS + 10)
+    await waitFor(() => expect(checking()).not.toBeNull())
+    typeAndLeave(box('Lot #'), 'B1') // B goes out
+    await waitFor(() => expect(saves.count()).toBe(2))
+    const n = vi.mocked(getCalSheet).mock.calls.length
+    await later(12_000) // B is still out (15 s)
+    expect(vi.mocked(getCalSheet).mock.calls.length).toBe(n)
+    expect(checking()).toBeNull()
+  })
+})
+
+describe('fix round 1: File, Duplicate and New (M1, M3, M4)', () => {
+  const saved = () => page().dataset.saved
+  const newBtn = () =>
+    screen.getByRole('button', {
+      name: /^(New calibration worksheet|Start a blank one\? Click again|Opening a new one\.\.\.)$/,
+    })
+  const FILE_NO_ANSWER =
+    'File curve: the server did not answer. The sheet is read again: if it now shows a curve name, the filing went through.'
+  const DUP_NO_ANSWER =
+    'Duplicate: the server did not answer, so the copy may have been made. Look under Calibration worksheets before trying again.'
+  const NEW_NO_ANSWER =
+    'New calibration worksheet: the server did not answer, so it may have been made. Look under Calibration worksheets before trying again.'
+
+  beforeEach(() => {
+    vi.clearAllMocks()
+    resetCalSaves()
+    vi.mocked(getPeptides).mockResolvedValue([])
+    vi.mocked(getInstruments).mockResolvedValue([])
+    vi.mocked(listCalSheets).mockResolvedValue([])
+  })
+  afterEach(() => {
+    vi.useRealTimers()
+    act(() => useUIStore.setState({ calibrationSheetPageId: null }))
+  })
+
+  /** Filed on v1; a save makes it v2 with changes since filing; then an
+   *  older refetch puts the filed, unchanged v1 back in the cache. */
+  async function laggingCopy() {
+    const saves = queueSaves()
+    const { sheet, view } = await openCase1({ curve_id: 70, curve_name: NAME })
+    typeAndLeave(box('Lot #'), 'L2')
+    await waitFor(() => expect(saves.count()).toBe(1))
+    const v2: CalSheet = {
+      ...sheet,
+      version: 2,
+      inputs: inputsOf(0),
+      changed_since_filed: true,
+    }
+    await saves.ok(0, v2)
+    await waitFor(() => expect(saved()).toBe('true'))
+    act(() => view.qc.setQueryData(CAL_SHEET_KEY(5), sheet))
+    await flush()
+    expect(
+      (view.qc.getQueryData(CAL_SHEET_KEY(5)) as CalSheet).changed_since_filed
+    ).toBe(false)
+    return { sheet, v2, view }
+  }
+
+  it('M1 (probe R2): Duplicate reads a lagging copy again and files first when the fresh one changed since filing', async () => {
+    const { v2 } = await laggingCopy()
+    const copy = copySheet({ id: 9, replicate_of_sheet_id: 5 })
+    vi.mocked(getCalSheet).mockImplementation(async id =>
+      id === 9 ? copy : v2
+    )
+    vi.mocked(fileCalSheet).mockResolvedValue(filedAs(v2, 'refiled'))
+    vi.mocked(duplicateCalSheet).mockResolvedValue(copy)
+    const reads = vi.mocked(getCalSheet).mock.calls.length
+    fireEvent.click(dupBtn())
+    await waitFor(() =>
+      expect(useUIStore.getState().calibrationSheetPageId).toBe(9)
+    )
+    expect(vi.mocked(getCalSheet).mock.calls[reads]?.[0]).toBe(5)
+    expect(fileCalSheet).toHaveBeenCalledWith(5, 2)
+    expect(vi.mocked(fileCalSheet).mock.invocationCallOrder[0]).toBeLessThan(
+      vi.mocked(duplicateCalSheet).mock.invocationCallOrder[0] ?? 0
+    )
+  })
+
+  it('M1: when the fresh copy still differs from the version held, Duplicate stops and asks to try again', async () => {
+    const { v2 } = await laggingCopy()
+    vi.mocked(getCalSheet).mockResolvedValue({ ...v2, version: 3 })
+    fireEvent.click(dupBtn())
+    await waitFor(() =>
+      expect(notice().textContent).toContain(
+        'Duplicate did not go: this sheet was saved again since the page last read it. Check it and try again.'
+      )
+    )
+    expect(fileCalSheet).not.toHaveBeenCalled()
+    expect(duplicateCalSheet).not.toHaveBeenCalled()
+    expect(useUIStore.getState().calibrationSheetPageId).toBe(5)
+    await waitFor(() => expect(document.activeElement).toBe(dupBtn()))
+  })
+
+  it('M3: a File with no answer in 15 s says so and reads the sheet again', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true })
+    await openCase1()
+    vi.mocked(fileCalSheet).mockImplementation(
+      () => new Promise(() => undefined)
+    )
+    const reads = vi.mocked(getCalSheet).mock.calls.length
+    fireEvent.click(fileBtn())
+    await later(SAVE_TIMEOUT_MS + 10)
+    await waitFor(() => expect(notice().textContent).toContain(FILE_NO_ANSWER))
+    await waitFor(() =>
+      expect(vi.mocked(getCalSheet).mock.calls.length).toBeGreaterThan(reads)
+    )
+    await waitFor(() => expect(document.activeElement).toBe(fileBtn()))
+  })
+
+  it('M3: a File answered with a 502 is no answer, never the raw status', async () => {
+    await openCase1()
+    vi.mocked(fileCalSheet).mockRejectedValue(
+      new CalSheetError('File curve failed: 502', 502)
+    )
+    const reads = vi.mocked(getCalSheet).mock.calls.length
+    fireEvent.click(fileBtn())
+    await waitFor(() => expect(notice().textContent).toContain(FILE_NO_ANSWER))
+    expect(notice().textContent).not.toContain('502')
+    await waitFor(() =>
+      expect(vi.mocked(getCalSheet).mock.calls.length).toBeGreaterThan(reads)
+    )
+  })
+
+  it('M3 and M4: a Duplicate answered with a 503 may have gone through; focus comes back to Duplicate', async () => {
+    await openCase1({ curve_id: 70, curve_name: NAME })
+    vi.mocked(duplicateCalSheet).mockRejectedValue(
+      new CalSheetError('Duplicate calibration sheet failed: 503', 503)
+    )
+    fireEvent.click(dupBtn())
+    await waitFor(() => expect(notice().textContent).toContain(DUP_NO_ANSWER))
+    expect(notice().textContent).not.toContain('503')
+    await waitFor(() => expect(document.activeElement).toBe(dupBtn()))
+  })
+
+  it('M3: a Duplicate with no answer in 15 s may have gone through', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true })
+    await openCase1({ curve_id: 70, curve_name: NAME })
+    vi.mocked(duplicateCalSheet).mockImplementation(
+      () => new Promise(() => undefined)
+    )
+    fireEvent.click(dupBtn())
+    await later(SAVE_TIMEOUT_MS + 10)
+    await waitFor(() => expect(notice().textContent).toContain(DUP_NO_ANSWER))
+  })
+
+  it('M4: a refused Duplicate puts focus back on Duplicate', async () => {
+    await openCase1()
+    vi.mocked(fileCalSheet).mockRejectedValue(
+      new CalSheetError(
+        'Type the peak areas of at least two levels first.',
+        400
+      )
+    )
+    fireEvent.click(dupBtn())
+    await waitFor(() =>
+      expect(notice().textContent).toContain('Type the peak areas')
+    )
+    await waitFor(() => expect(document.activeElement).toBe(dupBtn()))
+  })
+
+  it('M3 and M4: a New answered with a 500 may have gone through; focus comes back to New', async () => {
+    await openCase1()
+    vi.mocked(createCalSheet).mockRejectedValue(
+      new CalSheetError('Create calibration sheet failed: 500', 500)
+    )
+    fireEvent.click(newBtn())
+    fireEvent.click(newBtn())
+    await waitFor(() => expect(notice().textContent).toContain(NEW_NO_ANSWER))
+    expect(notice().textContent).not.toContain('500')
+    await waitFor(() => expect(document.activeElement).toBe(newBtn()))
+  })
+
+  it('M3: a New with no answer in 15 s may have gone through', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true })
+    await openCase1()
+    vi.mocked(createCalSheet).mockImplementation(
+      () => new Promise(() => undefined)
+    )
+    fireEvent.click(newBtn())
+    fireEvent.click(newBtn())
+    await later(SAVE_TIMEOUT_MS + 10)
+    await waitFor(() => expect(notice().textContent).toContain(NEW_NO_ANSWER))
+  })
+
+  it('M4: a Duplicate that opens the copy puts focus on its notice', async () => {
+    const { sheet } = await openCase1({ curve_id: 70, curve_name: NAME })
+    const copy = copySheet({ id: 9, replicate_of_sheet_id: 5 })
+    vi.mocked(duplicateCalSheet).mockResolvedValue(copy)
+    vi.mocked(getCalSheet).mockImplementation(async id =>
+      id === 9 ? copy : sheet
+    )
+    fireEvent.click(dupBtn())
+    await waitFor(() =>
+      expect(useUIStore.getState().calibrationSheetPageId).toBe(9)
+    )
+    await waitFor(() => expect(document.activeElement).toBe(notice()))
+  })
+
+  it('backend wave: an injection refused until its original is filed shows the sentence and links to the original', async () => {
+    const said = `File the original worksheet, ${NAME}, first. Filing it also re-files its injections.`
+    vi.mocked(getCalSheet).mockResolvedValue(
+      copySheet({ id: 5, replicate_of_sheet_id: 4, replicate_of_name: NAME })
+    )
+    renderSheet()
+    await screen.findByText('Curve name:', { exact: false })
+    vi.mocked(fileCalSheet).mockRejectedValue(new CalSheetError(said, 409))
+    fireEvent.click(fileBtn())
+    await waitFor(() => expect(notice().textContent).toContain(said))
+    const link = within(screen.getByTestId('replicate-note')).getByRole(
+      'button',
+      { name: `Open ${NAME}` }
+    )
+    fireEvent.click(link)
+    expect(useUIStore.getState().calibrationSheetPageId).toBe(4)
+  })
+
+  it('backend wave: a compound change refused with a 409 shows the sentence and stores nothing', async () => {
+    const saves = queueSaves()
+    vi.mocked(getPeptides).mockResolvedValue([
+      { id: 11, name: 'Retatrutide', abbreviation: 'RETA' },
+      { id: 12, name: 'BPC-157', abbreviation: 'BPC' },
+    ] as Awaited<ReturnType<typeof getPeptides>>)
+    const { sheet } = await openCase1()
+    const said =
+      'Injections duplicated from this sheet carry the same compound, so the compound cannot change here. Start a new calibration worksheet for the other compound.'
+    const picker = (await waitFor(() => {
+      const el = screen.getByLabelText('Compound') as HTMLSelectElement
+      expect(el.options.length).toBeGreaterThan(2)
+      return el
+    })) as HTMLSelectElement
+    fireEvent.change(picker, { target: { value: '12' } })
+    await waitFor(() => expect(saves.count()).toBe(1))
+    expect(body(0).peptide_id).toBe(12)
+    vi.mocked(getCalSheet).mockResolvedValue(sheet) // the same version
+    await saves.fail(0, new CalSheetError(said, 409))
+    await waitFor(() =>
+      expect(screen.getByTestId('save-line').textContent).toContain(
+        said.replace(/\.$/, '')
+      )
+    )
+    expect(page().dataset.saved).toBe('false')
+    expect(screen.queryByText(RELOADED)).toBeNull()
+    // what the page does today (fix round 1 report): the picker keeps the
+    // chemist's choice, with Retry, until it is set back by hand
+    expect((screen.getByLabelText('Compound') as HTMLSelectElement).value).toBe(
+      '12'
+    )
+  })
+
+  it('backend wave: the curve deadlock 409 is shown and File stays on', async () => {
+    await openCase1({ curve_id: 70, curve_name: NAME })
+    const said =
+      'Someone changed one of these curves at the same moment, so nothing was filed. Try again.'
+    vi.mocked(fileCalSheet).mockRejectedValue(new CalSheetError(said, 409))
+    fireEvent.click(fileBtn())
+    await waitFor(() => expect(notice().textContent).toContain(said))
+    await waitFor(() => expect(fileBtn()).not.toBeDisabled())
+  })
+
+  it('M4: a New that opens a sheet puts focus on its heading', async () => {
+    await openCase1()
+    const fresh = makeSheet(fixtureCase(21).inputs as CalInputs, { id: 12 })
+    vi.mocked(createCalSheet).mockResolvedValue(fresh)
+    vi.mocked(getCalSheet).mockResolvedValue(fresh)
+    fireEvent.click(newBtn())
+    fireEvent.click(newBtn())
+    await waitFor(() =>
+      expect(useUIStore.getState().calibrationSheetPageId).toBe(12)
+    )
+    await waitFor(() =>
+      expect(document.activeElement).toBe(
+        screen.getByRole('heading', { name: 'Calibration Curve Worksheet' })
+      )
+    )
+  })
+})
+
+describe('fix round 1: the changed-since-filed lines', () => {
+  const CHANGED =
+    'Changed since filed: the curve still has the numbers it was filed with. File curve updates it.'
+  const ELSEWHERE =
+    'The filed curve was changed on the Peptides page after this sheet was filed. Filing again replaces those changes.'
+
+  beforeEach(() => {
+    vi.clearAllMocks()
+    resetCalSaves()
+    vi.mocked(getPeptides).mockResolvedValue([])
+    vi.mocked(getInstruments).mockResolvedValue([])
+    vi.mocked(listCalSheets).mockResolvedValue([])
+  })
+  afterEach(() => {
+    act(() => useUIStore.setState({ calibrationSheetPageId: null }))
+  })
+
+  it('a filed sheet changed since filing says so politely, until it is filed again', async () => {
+    const { sheet } = await openCase1({
+      curve_id: 70,
+      curve_name: NAME,
+      changed_since_filed: true,
+    })
+    const line = screen.getByText(CHANGED)
+    expect(line.closest('[role="status"]')).not.toBeNull()
+    vi.mocked(fileCalSheet).mockResolvedValue(filedAs(sheet, 'refiled'))
+    fireEvent.click(fileBtn())
+    await waitFor(() => expect(screen.queryByText(CHANGED)).toBeNull())
+  })
+
+  it('a draft, or a filed sheet with no changes, has no such line', async () => {
+    await openCase1({ changed_since_filed: true })
+    expect(screen.queryByText(CHANGED)).toBeNull()
+    act(() => useUIStore.setState({ calibrationSheetPageId: null }))
+    resetCalSaves()
+    await openCase1({ curve_id: 70, curve_name: NAME })
+    expect(screen.queryByText(CHANGED)).toBeNull()
+    expect(screen.queryByText(ELSEWHERE)).toBeNull()
+  })
+
+  it('the line follows the save answer, not a lagging copy', async () => {
+    const saves = queueSaves()
+    const { sheet, view } = await openCase1({ curve_id: 70, curve_name: NAME })
+    expect(screen.queryByText(CHANGED)).toBeNull()
+    typeAndLeave(box('Lot #'), 'L2')
+    await waitFor(() => expect(saves.count()).toBe(1))
+    await saves.ok(0, {
+      ...sheet,
+      version: 2,
+      inputs: inputsOf(0),
+      changed_since_filed: true,
+    })
+    expect(await screen.findByText(CHANGED)).toBeInTheDocument()
+    act(() => view.qc.setQueryData(CAL_SHEET_KEY(5), sheet))
+    await flush()
+    expect(screen.getByText(CHANGED)).toBeInTheDocument()
+  })
+
+  it('a curve changed on the Peptides page after filing says so politely, until filed again', async () => {
+    const { sheet } = await openCase1({
+      curve_id: 70,
+      curve_name: NAME,
+      curve_changed_since_filed: true,
+    })
+    const line = screen.getByText(ELSEWHERE)
+    expect(line.closest('[role="status"]')).not.toBeNull()
+    vi.mocked(fileCalSheet).mockResolvedValue(
+      filedAs({ ...sheet, curve_changed_since_filed: false }, 'refiled')
+    )
+    fireEvent.click(fileBtn())
+    await waitFor(() => expect(screen.queryByText(ELSEWHERE)).toBeNull())
+  })
+
+  it('only true counts: null leaves the line off', async () => {
+    await openCase1({
+      curve_id: 70,
+      curve_name: NAME,
+      curve_changed_since_filed: null,
+    })
+    expect(screen.queryByText(ELSEWHERE)).toBeNull()
   })
 })

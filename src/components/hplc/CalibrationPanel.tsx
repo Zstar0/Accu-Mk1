@@ -163,19 +163,38 @@ export function CalibrationPanel({
             </CardDescription>
           </div>
           <div className="flex items-center gap-2">
-            <Button
-              variant="outline"
-              size="sm"
-              className="gap-1.5"
-              disabled={peptide.is_blend || opening}
-              aria-describedby={
-                peptide.is_blend ? `cal-ws-blend-${peptide.id}` : undefined
-              }
-              onClick={() => void openWorksheet()}
-            >
-              <NotebookPen className="h-3.5 w-3.5" />
-              Calibration worksheet
-            </Button>
+            {/* a disabled button fires no hover: the wrapper carries the
+                reason (M6, as on the worksheet page) */}
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <span
+                  tabIndex={peptide.is_blend ? 0 : undefined}
+                  className="inline-block"
+                >
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    className="gap-1.5"
+                    disabled={peptide.is_blend || opening}
+                    aria-describedby={
+                      peptide.is_blend
+                        ? `cal-ws-blend-${peptide.id}`
+                        : undefined
+                    }
+                    onClick={() => void openWorksheet()}
+                  >
+                    <NotebookPen className="h-3.5 w-3.5" />
+                    Calibration worksheet
+                  </Button>
+                </span>
+              </TooltipTrigger>
+              {peptide.is_blend && (
+                <TooltipContent className="max-w-xs">
+                  A curve is for one peptide. A blend&apos;s components each
+                  have their own.
+                </TooltipContent>
+              )}
+            </Tooltip>
             {peptide.is_blend && (
               <span id={`cal-ws-blend-${peptide.id}`} className="sr-only">
                 A curve is for one peptide. A blend&apos;s components each have

@@ -1,4 +1,12 @@
-import { useEffect, useId, useRef, useState, type Ref } from 'react'
+import {
+  useCallback,
+  useEffect,
+  useId,
+  useRef,
+  useState,
+  type Ref,
+  type RefObject,
+} from 'react'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { Button } from '@/components/ui/button'
 import {
@@ -27,6 +35,7 @@ import {
   CAL_SHEET_KEY,
   CHECKING,
   NO_ANSWER,
+  inTime,
   useDuplicateCalSheet,
   useFileCalSheet,
   useSaveCalSheet,
@@ -166,14 +175,28 @@ function filedMessage(res: CalFileResult): string {
   }
 }
 
-/** The server's sentence, or what no answer means for that action. */
+/** The server's sentence, or what no answer means for that action: a
+ *  timeout, a network failure, or a 5xx (a gateway may have timed out on a
+ *  request that went through) is no answer (M3). */
 function refusalOf(e: unknown, noAnswer: string): string {
-  return e instanceof CalSheetError ? e.message : noAnswer
+  return e instanceof CalSheetError && e.status < 500 ? e.message : noAnswer
 }
 const FILE_NO_ANSWER =
   'File curve: the server did not answer. The sheet is read again: if it now shows a curve name, the filing went through.'
 const DUP_NO_ANSWER =
-  'Duplicate: the server did not answer. Look under Calibration worksheets for the copy before trying again.'
+  'Duplicate: the server did not answer, so the copy may have been made. Look under Calibration worksheets before trying again.'
+const NEW_NO_ANSWER =
+  'New calibration worksheet: the server did not answer, so it may have been made. Look under Calibration worksheets before trying again.'
+/** Duplicate's check of a lagging copy (M1): nothing was filed or copied. */
+const DUP_CHANGED =
+  'Duplicate did not go: this sheet was saved again since the page last read it. Check it and try again.'
+const DUP_UNREAD =
+  'Duplicate did not go: the sheet could not be read again to check it. Try again.'
+/** The two lines near File (fix round 1). */
+const CHANGED_LINE =
+  'Changed since filed: the curve still has the numbers it was filed with. File curve updates it.'
+const ELSEWHERE_LINE =
+  'The filed curve was changed on the Peptides page after this sheet was filed. Filing again replaces those changes.'
 
 /** A refused box's label, as the page shows it, when the key names one. */
 function boxName(key: string): string | null {
@@ -302,12 +325,15 @@ function SheetToolbar({
   state,
   blocking,
   onNotice,
+  onOpened,
 }: {
   id: number
   sheet: CalSheet
   state: CalSaveState
   blocking: string[]
   onNotice: (n: CalNotice | null) => void
+  /** A sheet is about to open from here: focus goes to it (M4). */
+  onOpened: (id: number) => void
 }) {
   const qc = useQueryClient()
   const file = useFileCalSheet(id)
@@ -318,18 +344,21 @@ function SheetToolbar({
   const [busy, setBusy] = useState<string | null>(null)
   const [asking, setAsking] = useState(false)
   const fileRef = useRef<HTMLButtonElement>(null)
-  const refocus = useRef(false)
+  const dupRef = useRef<HTMLButtonElement>(null)
+  const newRef = useRef<HTMLButtonElement>(null)
+  // the button that gets focus back once nothing runs (it was disabled
+  // meanwhile); a run that opens another sheet unmounts this first (M4)
+  const refocus = useRef<RefObject<HTMLButtonElement | null> | null>(null)
 
   useEffect(() => {
     if (!asking) return
     const t = setTimeout(() => setAsking(false), ARMED_MS)
     return () => clearTimeout(t)
   }, [asking])
-  // after a filing, focus goes back to File (it was disabled meanwhile)
   useEffect(() => {
     if (busy === null && refocus.current) {
-      refocus.current = false
-      fileRef.current?.focus()
+      refocus.current.current?.focus()
+      refocus.current = null
     }
   }, [busy])
 
@@ -354,7 +383,7 @@ function SheetToolbar({
 
   const onFile = () =>
     void run('Filing...', async () => {
-      refocus.current = true
+      refocus.current = fileRef
       try {
         // the version the hook holds, not a query copy that may lag (rule 2)
         const res = await file(state.version)
@@ -366,11 +395,29 @@ function SheetToolbar({
 
   const onDuplicate = () =>
     void run('Duplicating...', async () => {
+      refocus.current = dupRef
       let lines: string[] = []
       let warnings: string[] = []
+      // the query copy can lag the hook (M1): read the sheet again and
+      // decide from that; still out of step, stop rather than guess (a
+      // needless filing writes an audit row and can be refused)
+      let fresh = sheet
+      if (sheet.version !== state.version) {
+        try {
+          fresh = await inTime(() => getCalSheet(id))
+        } catch {
+          say('bad', [DUP_UNREAD])
+          return
+        }
+        qc.setQueryData(CAL_SHEET_KEY(id), fresh)
+        if (fresh.version !== state.version) {
+          say('bad', [DUP_CHANGED])
+          return
+        }
+      }
       // files first when there is no curve yet or the sheet changed since
       // (rule 5); a refusal stops here, so the route's 400 is never hit
-      if (sheet.curve_id === null || sheet.changed_since_filed) {
+      if (fresh.curve_id === null || fresh.changed_since_filed) {
         try {
           const res = await file(state.version)
           lines = [filedMessage(res)]
@@ -399,6 +446,7 @@ function SheetToolbar({
         ],
         warnings,
       })
+      onOpened(copy.id)
       useUIStore.getState().navigateToCalibrationSheet(copy.id)
     })
 
@@ -409,17 +457,15 @@ function SheetToolbar({
     }
     setAsking(false)
     void run('Opening a new one...', async () => {
+      refocus.current = newRef
       try {
-        const s = await createCalSheet({})
+        const s = await inTime(() => createCalSheet({}))
         qc.setQueryData(CAL_SHEET_KEY(s.id), s)
         void qc.invalidateQueries({ queryKey: [...CAL_SHEETS_KEY, 'list'] })
+        onOpened(s.id)
         useUIStore.getState().navigateToCalibrationSheet(s.id)
       } catch (e) {
-        say('bad', [
-          e instanceof CalSheetError
-            ? e.message
-            : 'A new worksheet could not be made: the server did not answer.',
-        ])
+        say('bad', [refusalOf(e, NEW_NO_ANSWER)])
       }
     })
   }
@@ -445,12 +491,14 @@ function SheetToolbar({
         help={DUP_HELP}
         reasons={reasons}
         onClick={onDuplicate}
+        buttonRef={dupRef}
       />
       <ActionButton
         label={asking ? NEW_ASK : NEW_LABEL}
         help={NEW_HELP}
         reasons={busy ? [busy] : []}
         onClick={onNew}
+        buttonRef={newRef}
       />
     </div>
   )
@@ -460,13 +508,28 @@ function SheetView({
   id,
   notice,
   onNotice,
+  focusOnOpen,
+  onOpened,
+  onFocused,
 }: {
   id: number
   notice: CalNotice | null
   onNotice: (n: CalNotice | null) => void
+  /** Opened from File, Duplicate or New: focus its notice or heading (M4). */
+  focusOnOpen: boolean
+  onOpened: (id: number) => void
+  onFocused: () => void
 }) {
   const save = useSaveCalSheet(id)
   const { sheet, state } = save
+  const headingRef = useRef<HTMLHeadingElement>(null)
+  const noticeRef = useRef<HTMLDivElement>(null)
+  const loaded = !!sheet && !!state
+  useEffect(() => {
+    if (!focusOnOpen || !loaded) return
+    ;(noticeRef.current ?? headingRef.current)?.focus()
+    onFocused()
+  }, [focusOnOpen, loaded, onFocused])
   const { data: peptides = [] } = useQuery({
     queryKey: ['peptides'],
     queryFn: () => getPeptides(),
@@ -512,7 +575,11 @@ function SheetView({
     <div className="space-y-4" data-saved={String(save.saved)}>
       <div className="flex flex-wrap items-end justify-between gap-4">
         <div className="min-w-0">
-          <h2 className="text-[23px] font-semibold leading-tight tracking-tight">
+          <h2
+            ref={headingRef}
+            tabIndex={-1}
+            className="text-[23px] font-semibold leading-tight tracking-tight outline-none"
+          >
             Calibration Curve Worksheet
           </h2>
           <p className="text-sm">
@@ -553,9 +620,22 @@ function SheetView({
         state={state}
         blocking={blocking.map(w => w.text)}
         onNotice={onNotice}
+        onOpened={onOpened}
       />
+      {state.latest.curve_id !== null && state.latest.changed_since_filed && (
+        <p role="status" className="text-xs text-amber-800 dark:text-amber-200">
+          {CHANGED_LINE}
+        </p>
+      )}
+      {state.latest.curve_changed_since_filed === true && (
+        <p role="status" className="text-xs text-amber-800 dark:text-amber-200">
+          {ELSEWHERE_LINE}
+        </p>
+      )}
       {notice && notice.sheetId === id && (
         <div
+          ref={noticeRef}
+          tabIndex={-1}
           role={notice.tone === 'bad' ? 'alert' : 'status'}
           data-testid="cal-notice"
           className={`flex flex-wrap items-start gap-3 rounded-md border px-3 py-2 text-sm ${notice.tone === 'bad' ? 'border-red-500/60 bg-red-500/10' : 'border-emerald-500/50 bg-emerald-500/10'}`}
@@ -636,7 +716,19 @@ function SheetView({
           className="rounded-md border border-sky-500/50 bg-sky-500/10 px-3 py-2 text-sm"
           data-testid="replicate-note"
         >
-          {replicateNote(sheet, original)}
+          {replicateNote(sheet, original)}{' '}
+          <Button
+            variant="link"
+            size="sm"
+            className="h-auto p-0"
+            onClick={() =>
+              useUIStore
+                .getState()
+                .navigateToCalibrationSheet(sheet.replicate_of_sheet_id ?? id)
+            }
+          >
+            {`Open ${sheet.replicate_of_name ?? 'the original sheet'}`}
+          </Button>
         </p>
       )}
       {worked.warnings.length > 0 && (
@@ -716,12 +808,23 @@ export function HplcCalibrationSheetPage() {
   // held here, not in the sheet view: a Duplicate's message must survive
   // the move to the copy it opens
   const [notice, setNotice] = useState<CalNotice | null>(null)
+  // the sheet File, Duplicate or New is opening, for its focus (M4)
+  const [opened, setOpened] = useState<number | null>(null)
+  const focused = useCallback(() => setOpened(null), [])
   return (
     <div data-testid="hplc-calibration-page" className={ROOT}>
       {id === null ? (
         <HplcCalSheetList />
       ) : (
-        <SheetView key={id} id={id} notice={notice} onNotice={setNotice} />
+        <SheetView
+          key={id}
+          id={id}
+          notice={notice}
+          onNotice={setNotice}
+          focusOnOpen={opened === id}
+          onOpened={setOpened}
+          onFocused={focused}
+        />
       )}
     </div>
   )
