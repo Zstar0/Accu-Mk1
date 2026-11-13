@@ -15,6 +15,7 @@
  *  - lims/peptide-config            → peptideConfigTargetId
  *  - reports/documents              → documentViewerTargetId
  *  - hplc-analysis/worksheet       → worksheetPageId
+ *  - hplc-analysis/hplc-calibration → calibrationSheetPageId
  */
 
 import { useEffect } from 'react'
@@ -124,6 +125,13 @@ export function applyNavToStore(nav: ParsedNav) {
   ) {
     // The endo worksheet page; a non-numeric id falls through to a plain navigate.
     store.navigateToWorksheet(Number(targetId))
+  } else if (
+    subSection === 'hplc-calibration' &&
+    targetId &&
+    !Number.isNaN(Number(targetId))
+  ) {
+    // a calibration worksheet; a non-numeric id falls through to the list
+    store.navigateToCalibrationSheet(Number(targetId))
   } else if (subSection === 'worksheet-detail' && targetId) {
     store.openWorksheetDrawer(Number(targetId))
   } else if (
@@ -183,6 +191,7 @@ export function buildHash(state: {
   documentsSpaceSlug: string | null
   boardTargetSlug: string | null
   worksheetPageId: number | null
+  calibrationSheetPageId?: number | null
 }): string {
   let hash = `#${state.activeSection}/${state.activeSubSection}`
 
@@ -228,6 +237,11 @@ export function buildHash(state: {
     state.worksheetPageId != null
   ) {
     hash += `?id=${encodeURIComponent(String(state.worksheetPageId))}`
+  } else if (
+    state.activeSubSection === 'hplc-calibration' &&
+    state.calibrationSheetPageId != null
+  ) {
+    hash += `?id=${encodeURIComponent(String(state.calibrationSheetPageId))}`
   }
 
   return hash
@@ -263,7 +277,8 @@ export function useHashNavigation() {
         state.documentViewerTargetId !== prev.documentViewerTargetId ||
         state.documentsSpaceSlug !== prev.documentsSpaceSlug ||
         state.boardTargetSlug !== prev.boardTargetSlug ||
-        state.worksheetPageId !== prev.worksheetPageId
+        state.worksheetPageId !== prev.worksheetPageId ||
+        state.calibrationSheetPageId !== prev.calibrationSheetPageId
       ) {
         const newHash = buildHash(state)
         if (window.location.hash !== newHash) {

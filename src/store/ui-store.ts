@@ -584,7 +584,14 @@ export const useUIStore = create<UIState>()(
             activeSection: 'hplc-analysis',
             activeSubSection: 'hplc-calibration',
             calibrationSheetPageId: id,
-            navigationKey: state.navigationKey + 1,
+            // already on the calibration page (list or sheet): keep it
+            // mounted, so what it holds (a filing's notice) survives the move;
+            // its sheet view is keyed by sheet id (final review I1)
+            navigationKey:
+              state.activeSection === 'hplc-analysis' &&
+              state.activeSubSection === 'hplc-calibration'
+                ? state.navigationKey
+                : state.navigationKey + 1,
           }),
           undefined,
           'navigateToCalibrationSheet'
