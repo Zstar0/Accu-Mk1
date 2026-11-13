@@ -732,7 +732,8 @@ class _FakeSession:
 
 
 def _run_check_main(monkeypatch, capsys, *, stock_nullable="YES", forms_column=True,
-                    constraints=("ck_lims_sample_forms_hplc_prep",), rows=_FORMS_ROWS):
+                    constraints=("ck_lims_sample_forms_hplc_prep",), rows=_FORMS_ROWS,
+                    rules_table=True):
     """(exit code, output lines) of check_hplc_columns.main() over canned query results."""
     from scripts import check_hplc_columns as check
 
@@ -742,7 +743,9 @@ def _run_check_main(monkeypatch, capsys, *, stock_nullable="YES", forms_column=T
             "stock_vial_empty": ("double precision", stock_nullable),
         },
         "lims_sample_forms": _FORMS_COLUMN if forms_column else {},
-        "hplc_prep_rules": {name: ("integer", want) for name, want in check.RULES_EXPECTED.items()},
+        "hplc_prep_rules": (
+            {name: ("integer", want) for name, want in check.RULES_EXPECTED.items()} if rules_table else {}
+        ),
     }
     session = _FakeSession(tables, constraints, rows)
     monkeypatch.setattr(database, "SessionLocal", lambda: session)
@@ -763,8 +766,9 @@ def test_the_column_check_script_exits_zero_only_when_both_tables_are_right(monk
         {"forms_column": False},  # lims_sample_forms: the ADD COLUMN that never applied
         {"constraints": ()},  # lims_sample_forms: the CHECK that never landed
         {"rows": [(1, "Lyophilized Powder", "injectable", None)] + _FORMS_ROWS[1:]},  # backfill missed a row
+        {"rules_table": False},  # hplc_prep_rules: the CREATE TABLE that never ran
     ],
-    ids=["hplc_analyses", "no_column", "no_check", "backfill"],
+    ids=["hplc_analyses", "no_column", "no_check", "backfill", "hplc_prep_rules"],
 )
 def test_the_column_check_script_exits_one_for_a_failure_on_either_table(monkeypatch, capsys, broken):
     # The three lims_sample_forms cases are what pin main() adding that table's problems to
