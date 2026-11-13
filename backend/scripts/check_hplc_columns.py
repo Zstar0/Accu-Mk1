@@ -4,7 +4,7 @@ hplc_analyses columns exist, and are the two stock-vial weighings nullable? Task
 lims_sample_forms: does hplc_prep exist, is its CHECK there, and did the backfill fill the
 two built-in forms that have a prep kind? The HPLC prep rules plan (2026-11-12, Task 2)
 adds hplc_prep_rules: does the table exist with every column, nullable as its CREATE
-TABLE statement makes it?
+TABLE statement makes it (created_at and updated_at either way)?
 
 _run_migrations runs each ALTER on its own and LOGS a failure instead of raising, so a
 column can silently fail to exist in production, and a DROP NOT NULL that failed leaves
@@ -67,6 +67,9 @@ RULES_EXPECTED = {
         "lead_component_id", "lead_priority", "floor_ug_ml", "diluent",
         "default_instrument_id", "note", "created_at", "updated_at", "updated_by_id")},
 }
+# ...but a fresh database, where SQLAlchemy's create_all made the table, has these two NOT
+# NULL. Both are a working table, so either nullability passes for them.
+RULES_EITHER_NULLABLE = ("created_at", "updated_at")
 FORMS_CHECK = "ck_lims_sample_forms_hplc_prep"
 FORMS_PREP = {
     "lyophilized powder": "powder",
@@ -78,15 +81,16 @@ FORMS_PREP = {
 }
 
 
-def evaluate(found, expected=EXPECTED):
+def evaluate(found, expected=EXPECTED, either_nullable=()):
     """(report lines, number of problems) for `found`, a {column: (data_type, is_nullable)}.
-    Pure, so the pass and fail paths can be checked without a database."""
+    A column in `either_nullable` passes whatever its nullability. Pure, so the pass and
+    fail paths can be checked without a database."""
     lines, bad = [], 0
     for name, want in expected.items():
         got = found.get(name)
         if got is None:
             status = "MISSING"
-        elif got[1] != want:
+        elif got[1] != want and name not in either_nullable:
             status = f"WRONG nullable={got[1]}, want {want}"
         else:
             status = "ok"
@@ -179,13 +183,19 @@ def main():
             if "hplc_prep" in forms_found
             else None
         )
-    lines, bad = evaluate(found)
+    lines, analyses_bad = evaluate(found)
     forms_lines, forms_bad, not_found = evaluate_sample_forms(forms_found, constraints, rows)
-    rules_lines, rules_bad = evaluate(rules_found, RULES_EXPECTED)
+    rules_lines, rules_bad = evaluate(rules_found, RULES_EXPECTED, RULES_EITHER_NULLABLE)
     print("\n".join(lines + forms_lines + ["hplc_prep_rules:"] + rules_lines))
-    bad += forms_bad + rules_bad
+    bad = analyses_bad + forms_bad + rules_bad
     if bad:
-        closing = f"{bad} PROBLEM(S): do not ship a liquid prep or read hplc_prep until fixed"
+        # Name only what failed, so a rules-table problem does not read as a liquid-prep one.
+        failed = [why for count, why in (
+            (analyses_bad, "do not ship a liquid prep until hplc_analyses is fixed"),
+            (forms_bad, "do not read hplc_prep until lims_sample_forms is fixed"),
+            (rules_bad, "do not use the HPLC prep rules until hplc_prep_rules is fixed"),
+        ) if count]
+        closing = f"{bad} PROBLEM(S): {'; '.join(failed)}"
     elif not_found:
         # Still exit 0, but never a bare "ALL PRESENT" under a NOTICE: a deployer who reads
         # only the last line must learn that a built-in form may hold a NULL prep kind.

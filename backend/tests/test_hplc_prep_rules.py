@@ -155,6 +155,23 @@ def test_the_post_deploy_check_wants_every_column_as_the_create_makes_it():
     assert evaluate({}, RULES_EXPECTED)[1] == len(COLUMNS)
 
 
+def test_the_post_deploy_check_takes_either_nullability_for_the_two_timestamps(db_session):
+    # create_all (a fresh database) makes created_at and updated_at NOT NULL, the boot
+    # CREATE TABLE leaves them nullable: both are a working table. Nothing else bends.
+    from scripts.check_hplc_columns import RULES_EITHER_NULLABLE, RULES_EXPECTED, evaluate
+
+    assert set(RULES_EITHER_NULLABLE) == {"created_at", "updated_at"}
+    insp = inspect(db_session.get_bind())
+    made = {c["name"]: ("timestamp", "YES" if c["nullable"] else "NO")
+            for c in insp.get_columns("hplc_prep_rules")}
+    assert made["created_at"][1] == "NO"
+    assert evaluate(made, RULES_EXPECTED, RULES_EITHER_NULLABLE)[1] == 0
+    assert evaluate(made, RULES_EXPECTED)[1] == 2
+    found = {name: ("integer", want) for name, want in RULES_EXPECTED.items()}
+    assert evaluate({**found, "note": ("text", "NO")}, RULES_EXPECTED,
+                    RULES_EITHER_NULLABLE)[1] == 1
+
+
 def test_the_table_has_every_column_and_its_foreign_keys(db_session):
     insp = inspect(db_session.get_bind())
     assert {c["name"] for c in insp.get_columns("hplc_prep_rules")} == COLUMNS
