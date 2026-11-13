@@ -20,7 +20,9 @@ import {
   type PeptideRecord,
 } from '@/lib/api'
 import { SAVE_TIMEOUT_MS } from '@/services/hplc-calibration-sheets'
+import { queryClient } from '@/lib/query-client'
 import { useUIStore } from '@/store/ui-store'
+import { toast } from 'sonner'
 import { CalibrationPanel } from '../CalibrationPanel'
 
 vi.mock('@/lib/api', async importOriginal => ({
@@ -286,5 +288,63 @@ describe('CalibrationPanel: the way into the worksheet', () => {
     const btn = screen.getByRole('button', { name: 'Calibration worksheet' })
     expect(btn).not.toBeDisabled()
     expect(btn.parentElement?.tabIndex).not.toBe(0)
+  })
+
+  it('final review M5: a sheet made here tells the worksheet list to read again', async () => {
+    vi.mocked(getCalibrations).mockResolvedValue([])
+    vi.mocked(createCalSheet).mockResolvedValue({ id: 23 } as CalSheet)
+    const spy = vi.spyOn(queryClient, 'invalidateQueries')
+    try {
+      render(
+        <CalibrationPanel
+          peptide={PEPTIDE}
+          onUpdated={vi.fn()}
+          instrumentFilter="all"
+        />
+      )
+      await screen.findByText('No calibration curves yet')
+      fireEvent.click(
+        screen.getByRole('button', { name: 'Calibration worksheet' })
+      )
+      await waitFor(() =>
+        expect(useUIStore.getState().calibrationSheetPageId).toBe(23)
+      )
+      expect(spy).toHaveBeenCalledWith({
+        queryKey: ['hplc-calibration-sheets', 'list'],
+      })
+    } finally {
+      spy.mockRestore()
+    }
+  })
+
+  it('final review M3: an answer that lands after the panel is gone does not drag the chemist to the sheet', async () => {
+    vi.mocked(getCalibrations).mockResolvedValue([])
+    let answer: (s: CalSheet) => void = () => undefined
+    vi.mocked(createCalSheet).mockImplementation(
+      () =>
+        new Promise<CalSheet>(r => {
+          answer = r
+        })
+    )
+    const { unmount } = render(
+      <CalibrationPanel
+        peptide={PEPTIDE}
+        onUpdated={vi.fn()}
+        instrumentFilter="all"
+      />
+    )
+    await screen.findByText('No calibration curves yet')
+    fireEvent.click(
+      screen.getByRole('button', { name: 'Calibration worksheet' })
+    )
+    await waitFor(() => expect(createCalSheet).toHaveBeenCalled())
+    unmount() // the chemist went elsewhere
+    await act(async () =>
+      answer({ id: 24, proposed_name: '1290C-20261113-RETA' } as CalSheet)
+    )
+    expect(useUIStore.getState().calibrationSheetPageId).toBeNull()
+    expect(toast.success).toHaveBeenCalledWith(
+      'Made 1290C-20261113-RETA. It is under Calibration worksheets.'
+    )
   })
 })

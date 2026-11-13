@@ -8,6 +8,9 @@ import {
   type RefObject,
 } from 'react'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
+import { ArrowLeft } from 'lucide-react'
+import { toast } from 'sonner'
+import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import {
   Tooltip,
@@ -15,6 +18,7 @@ import {
   TooltipTrigger,
 } from '@/components/ui/tooltip'
 import {
+  CalSheetError,
   createCalSheet,
   getCalSheet,
   getInstruments,
@@ -179,7 +183,7 @@ function filedMessage(res: CalFileResult): string {
 /** The time limit ends the wait, not the request: a filing can land after
  *  the one re-read, so this promises nothing it cannot see (fix round 2). */
 const FILE_NO_ANSWER =
-  'File curve: the server did not answer, so the curve may or may not have been filed. This page has read the sheet again once: a curve name means it was. Pressing File curve again is safe: it files the sheet if it was not filed, and updates the same curve if it was.'
+  'File curve: the server did not answer, so the curve may or may not have been filed. This page has read the sheet again once: a Filed mark beside the curve name means it was. Pressing File curve again is safe: it files the sheet if it was not filed, and updates the same curve if it was.'
 const DUP_NO_ANSWER =
   'Duplicate: the server did not answer, so the copy may have been made. Look under Calibration worksheets before trying again.'
 
@@ -248,7 +252,12 @@ function notReady(
   else if (sheet.blocking.length)
     r.push('A warning must be fixed before filing. Check the warnings above.')
   if (state.local.peptide_id === null)
-    r.push('Pick the compound first. The curve is filed under it.')
+    r.push(
+      // an injection's picker is disabled: the compound is the original's (M7)
+      sheet.replicate_of_sheet_id !== null
+        ? `The original worksheet, ${sheet.replicate_of_name ?? 'the original sheet'}, has no compound. An injection is filed under its original's compound.`
+        : 'Pick the compound first. The curve is filed under it.'
+    )
   if (state.local.instrument_id === null)
     r.push(
       'Pick the instrument. A curve belongs to the instrument that ran it.'
@@ -369,11 +378,45 @@ function SheetToolbar({
       setBusy(null)
     }
   }
+  // an answer can land after the chemist has moved on (M3): this sheet is
+  // still on screen only while this toolbar is mounted and the store shows it
+  const alive = useRef(true)
+  useEffect(() => {
+    alive.current = true
+    return () => {
+      alive.current = false
+    }
+  }, [])
+  const here = () =>
+    alive.current && useUIStore.getState().calibrationSheetPageId === id
+  const name = sheet.curve_name ?? sheet.proposed_name
+  // what a run says: in the notice while this sheet shows, else one toast
+  // (never another sheet's notice)
   const say = (
     tone: CalNotice['tone'],
     lines: string[],
     warnings: string[] = []
-  ) => onNotice({ sheetId: id, tone, lines, warnings })
+  ) => {
+    if (here()) onNotice({ sheetId: id, tone, lines, warnings })
+    else
+      (tone === 'bad' ? toast.error : toast.success)(
+        `Calibration sheet ${name}: ${[...lines, ...warnings].join(' ')}`
+      )
+  }
+  /** A sheet made from here opens, with its notice, only while the chemist
+   *  is still here; else one toast names it, with what filing said (M3). */
+  const openMade = (made: CalSheet, n: CalNotice | null, said: string[]) => {
+    if (!here()) {
+      toast.success(
+        `Made ${made.proposed_name}. It is under Calibration worksheets.`,
+        said.length ? { description: said.join(' ') } : undefined
+      )
+      return
+    }
+    if (n) onNotice(n)
+    onOpened(made.id)
+    useUIStore.getState().navigateToCalibrationSheet(made.id)
+  }
 
   const reasons = notReady(state, sheet, blocking, busy)
 
@@ -411,16 +454,27 @@ function SheetToolbar({
           return
         }
       }
+      let tone: CalNotice['tone'] = 'ok'
       // files first when there is no curve yet or the sheet changed since
-      // (rule 5); a refusal stops here, so the route's 400 is never hit
+      // (rule 5); a refusal stops here, so the route's 400 is never hit.
+      // With a curve, a 409 (most often: the curve is used by analyses) does
+      // not stop the copy: the server decides at the copy's own File (M1).
       if (fresh.curve_id === null || fresh.changed_since_filed) {
         try {
           const res = await file(state.version)
           lines = [filedMessage(res)]
           warnings = res.warnings
         } catch (e) {
-          say('bad', [refusalOf(e, FILE_NO_ANSWER)])
-          return
+          const inUse =
+            fresh.curve_id !== null &&
+            e instanceof CalSheetError &&
+            e.status === 409
+          if (!inUse) {
+            say('bad', [refusalOf(e, FILE_NO_ANSWER)])
+            return
+          }
+          lines = [e.message]
+          tone = 'bad'
         }
       }
       let copy: CalSheet
@@ -433,17 +487,19 @@ function SheetToolbar({
       const where = copy.instrument_name
         ? `it files as ${copy.proposed_name} on the ${copy.instrument_name}`
         : `it files as ${copy.proposed_name} once its Instrument is chosen`
-      onNotice({
-        sheetId: copy.id,
-        tone: 'ok',
-        lines: [
-          ...lines,
-          `Opened a copy of ${copy.replicate_of_name ?? sheet.curve_name ?? sheet.proposed_name}: the same vials. Choose its Instrument (${where}), type its peak areas in Step 4, then File curve.`,
-        ],
-        warnings,
-      })
-      onOpened(copy.id)
-      useUIStore.getState().navigateToCalibrationSheet(copy.id)
+      openMade(
+        copy,
+        {
+          sheetId: copy.id,
+          tone,
+          lines: [
+            ...lines,
+            `Opened a copy of ${copy.replicate_of_name ?? sheet.curve_name ?? sheet.proposed_name}: the same vials. Choose its Instrument (${where}), type its peak areas in Step 4, then File curve.`,
+          ],
+          warnings,
+        },
+        [...lines, ...warnings]
+      )
     })
 
   const onNew = () => {
@@ -458,8 +514,7 @@ function SheetToolbar({
         const s = await inTime(() => createCalSheet({}))
         qc.setQueryData(CAL_SHEET_KEY(s.id), s)
         void qc.invalidateQueries({ queryKey: [...CAL_SHEETS_KEY, 'list'] })
-        onOpened(s.id)
-        useUIStore.getState().navigateToCalibrationSheet(s.id)
+        openMade(s, null, [])
       } catch (e) {
         say('bad', [refusalOf(e, NEW_NO_ANSWER)])
       }
@@ -543,6 +598,7 @@ function SheetView({
     queryFn: () => getCalSheet(originalId ?? 0),
     enabled: originalId !== null,
     refetchOnWindowFocus: false,
+    staleTime: 0, // read on every open, as the sheet itself (I2)
   })
 
   if (!sheet && save.loadError)
@@ -571,6 +627,17 @@ function SheetView({
     <div className="space-y-4" data-saved={String(save.saved)}>
       <div className="flex flex-wrap items-end justify-between gap-4">
         <div className="min-w-0">
+          <Button
+            variant="link"
+            size="sm"
+            className="mb-1 h-auto gap-1 p-0 text-xs"
+            onClick={() =>
+              useUIStore.getState().navigateToCalibrationSheet(null)
+            }
+          >
+            <ArrowLeft className="h-3 w-3" aria-hidden />
+            Calibration worksheets
+          </Button>
           <h2
             ref={headingRef}
             tabIndex={-1}
@@ -583,6 +650,16 @@ function SheetView({
             <code className="font-mono" data-testid="curve-name">
               {sheet.proposed_name}
             </code>
+            {/* from the freshest copy, as the two lines near File (M-N1) */}
+            {state.latest.curve_id !== null && (
+              <Badge
+                role="img"
+                aria-label="Filed: this sheet is filed as a curve"
+                className="ml-2 px-1.5 py-0 align-middle text-[10px]"
+              >
+                Filed
+              </Badge>
+            )}
           </p>
         </div>
         <div className="flex flex-wrap items-end gap-3 text-xs">
@@ -813,8 +890,16 @@ function SheetView({
 export function HplcCalibrationSheetPage() {
   const id = useUIStore(s => s.calibrationSheetPageId)
   // held here, not in the sheet view: a Duplicate's message must survive
-  // the move to the copy it opens
+  // the move to the copy it opens (the page stays mounted between sheets, I1)
   const [notice, setNotice] = useState<CalNotice | null>(null)
+  // moving to another sheet or the list drops a notice for another sheet,
+  // so coming back later never shows an old one again (set during render,
+  // as React's "adjusting state when a prop changes")
+  const [noticeFor, setNoticeFor] = useState(id)
+  if (noticeFor !== id) {
+    setNoticeFor(id)
+    if (notice && notice.sheetId !== id) setNotice(null)
+  }
   // the sheet File, Duplicate or New is opening, for its focus (M4)
   const [opened, setOpened] = useState<number | null>(null)
   const focused = useCallback(() => setOpened(null), [])

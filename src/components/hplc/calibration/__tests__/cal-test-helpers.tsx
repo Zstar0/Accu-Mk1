@@ -3,6 +3,7 @@ import { resolve } from 'node:path'
 import { fireEvent, render } from '@testing-library/react'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import type { CalSheet } from '@/lib/api'
+import { queryClient as appQueryClient } from '@/lib/query-client'
 import type { CalInputs, CalReplicateInputs } from '@/lib/hplc-calibration'
 import { useUIStore } from '@/store/ui-store'
 import { HplcCalibrationSheetPage } from '../HplcCalibrationSheetPage'
@@ -67,6 +68,43 @@ export function renderSheet(id = 5) {
   const view = render(
     <QueryClientProvider client={qc}>
       <HplcCalibrationSheetPage />
+    </QueryClientProvider>
+  )
+  return Object.assign(view, { qc })
+}
+
+/** What MainWindowContent.tsx does: the page shows only on its sub-section,
+ *  under a div keyed on navigationKey (every navigateTo* may bump it). */
+// eslint-disable-next-line react-refresh/only-export-components -- a test helper, never hot-reloaded
+function AsInTheApp() {
+  const key = useUIStore(s => s.navigationKey)
+  const sub = useUIStore(s => s.activeSubSection)
+  return (
+    <div key={key} className="contents">
+      {sub === 'hplc-calibration' ? (
+        <HplcCalibrationSheetPage />
+      ) : (
+        <p>{`Elsewhere: ${sub}`}</p>
+      )}
+    </div>
+  )
+}
+
+/** The page as the app shows it: on the calibration sub-section, keyed on
+ *  navigationKey, with a client built from the app's own query defaults
+ *  (staleTime 5 minutes, retry 1, no refetch on focus). */
+export function renderInApp(id: number | null = 5) {
+  useUIStore.setState({
+    activeSection: 'hplc-analysis',
+    activeSubSection: 'hplc-calibration',
+    calibrationSheetPageId: id,
+  })
+  const qc = new QueryClient({
+    defaultOptions: appQueryClient.getDefaultOptions(),
+  })
+  const view = render(
+    <QueryClientProvider client={qc}>
+      <AsInTheApp />
     </QueryClientProvider>
   )
   return Object.assign(view, { qc })

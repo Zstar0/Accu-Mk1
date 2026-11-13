@@ -1,6 +1,7 @@
-import { useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { Star } from 'lucide-react'
+import { toast } from 'sonner'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { createCalSheet, getPeptides, type CalSheetListItem } from '@/lib/api'
@@ -49,6 +50,14 @@ export function HplcCalSheetList() {
   const qc = useQueryClient()
   const [busy, setBusy] = useState(false)
   const [failed, setFailed] = useState<string | null>(null)
+  // a slow answer opens the new sheet only while the list still shows (M3)
+  const alive = useRef(true)
+  useEffect(() => {
+    alive.current = true
+    return () => {
+      alive.current = false
+    }
+  }, [])
 
   async function create() {
     setBusy(true)
@@ -57,7 +66,15 @@ export function HplcCalSheetList() {
       const s = await inTime(() => createCalSheet({}))
       qc.setQueryData(CAL_SHEET_KEY(s.id), s)
       void qc.invalidateQueries({ queryKey: [...CAL_SHEETS_KEY, 'list'] })
-      open(s.id)
+      if (
+        alive.current &&
+        useUIStore.getState().calibrationSheetPageId === null
+      )
+        open(s.id)
+      else
+        toast.success(
+          `Made ${s.proposed_name}. It is under Calibration worksheets.`
+        )
     } catch (e) {
       setFailed(refusalOf(e, NEW_NO_ANSWER))
     } finally {

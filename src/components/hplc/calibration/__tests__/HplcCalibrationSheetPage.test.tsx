@@ -1563,7 +1563,7 @@ describe('fix round 1: File, Duplicate and New (M1, M3, M4)', () => {
       name: /^(New calibration worksheet|Start a blank one\? Click again|Opening a new one\.\.\.)$/,
     })
   const FILE_NO_ANSWER =
-    'File curve: the server did not answer, so the curve may or may not have been filed. This page has read the sheet again once: a curve name means it was. Pressing File curve again is safe: it files the sheet if it was not filed, and updates the same curve if it was.'
+    'File curve: the server did not answer, so the curve may or may not have been filed. This page has read the sheet again once: a Filed mark beside the curve name means it was. Pressing File curve again is safe: it files the sheet if it was not filed, and updates the same curve if it was.'
   const DUP_NO_ANSWER =
     'Duplicate: the server did not answer, so the copy may have been made. Look under Calibration worksheets before trying again.'
   const NEW_NO_ANSWER =

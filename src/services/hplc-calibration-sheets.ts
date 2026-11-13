@@ -18,6 +18,7 @@ import {
   type CalSheetSave,
 } from '@/lib/api'
 import type { CalInputs, CalReplicateInputs } from '@/lib/hplc-calibration'
+import { withTimeout } from '@/services/hplc-worksheet'
 
 /** Every calibration sheet query starts with this key. */
 export const CAL_SHEETS_KEY = ['hplc-calibration-sheets'] as const
@@ -36,6 +37,8 @@ export function useCalSheets(peptideId?: number) {
     initialPageParam: 0,
     getNextPageParam: (last, all) =>
       last.length === CAL_LIST_PAGE ? all.length * CAL_LIST_PAGE : undefined,
+    // every visit reads the server: another bench's new sheets show (M5)
+    staleTime: 0,
   })
 }
 
@@ -44,6 +47,11 @@ export function useCalSheet(id: number) {
     queryKey: CAL_SHEET_KEY(id),
     queryFn: () => getCalSheet(id),
     refetchOnWindowFocus: false,
+    // every open reads the server, never the app's 5 minute copy: an
+    // injection reopened after its original was re-filed shows the new
+    // preparation (final review I2). A newer copy goes through the hook's
+    // own-or-foreign match; the same version only moves `latest`.
+    staleTime: 0,
   })
 }
 
@@ -287,7 +295,14 @@ function pump(id: number) {
           await conflict(id, e, version, msg, sent)
           return
         }
-        if (refused && err.status < 500) refuse(e, sent, msg)
+        // a plain 4xx is about a picker only when the inputs are the stored
+        // ones; otherwise the inputs may be what was refused (I-N1)
+        if (
+          refused &&
+          err.status < 500 &&
+          sameJson(sent.inputs, e.confirmed.inputs)
+        )
+          refuse(e, sent, msg)
         else {
           e.error = msg
           leftWith(e, msg)
@@ -304,22 +319,9 @@ function pump(id: number) {
 }
 
 /** A request that counts as unanswered after SAVE_TIMEOUT_MS (and is then
- *  aborted). */
-export function inTime<T>(
-  start: (signal: AbortSignal) => Promise<T>
-): Promise<T> {
-  const controller = new AbortController()
-  let timer: ReturnType<typeof setTimeout> | undefined
-  const timeout = new Promise<never>((_, reject) => {
-    timer = setTimeout(() => {
-      reject(new Error(NO_ANSWER))
-      controller.abort()
-    }, SAVE_TIMEOUT_MS)
-  })
-  return Promise.race([start(controller.signal), timeout]).finally(() =>
-    clearTimeout(timer)
-  )
-}
+ *  aborted): the prep sheet's own time limit (M6). */
+export const inTime = <T>(start: (signal: AbortSignal) => Promise<T>) =>
+  withTimeout(start, NO_ANSWER)
 
 /** A 409: the sheet as the server has it decides. The same version is a
  *  refusal of this save (a filed curve's instrument). A newer version goes
@@ -402,7 +404,8 @@ function settle(e: Entry, fresh: CalSheet, said: string) {
   e.local = server
   e.confirmed = structuredClone(server)
   e.reloaded = lost ? RELOADED : RELOADED_NOTHING_LOST
-  toast.error(lost ? said : RELOADED_NOTHING_LOST)
+  // the page closed: leftWith's toast alone says it, once (M-N2)
+  if (e.mounted > 0 || !lost) toast.error(lost ? said : RELOADED_NOTHING_LOST)
   if (lost) leftWith(e, RELOADED)
 }
 
@@ -603,7 +606,13 @@ export function useFileCalSheet(id: number) {
     const held = qc.getQueryData<CalSheet>(CAL_SHEET_KEY(id))
     if (held && held.version > res.sheet.version) reread()
     else qc.setQueryData(CAL_SHEET_KEY(id), res.sheet)
-    void qc.invalidateQueries({ queryKey: [...CAL_SHEETS_KEY, 'list'] })
+    // every other sheet and the list: an original's File re-files its
+    // injections (I2). Not this sheet's own key: it was just set from the
+    // answer (or is being read again), and a second read adds nothing.
+    void qc.invalidateQueries({
+      queryKey: CAL_SHEETS_KEY,
+      predicate: q => q.queryKey[1] !== id,
+    })
     return res
   }
 }

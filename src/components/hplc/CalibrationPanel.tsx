@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from 'react'
+import { useState, useEffect, useCallback, useRef } from 'react'
 import {
   Loader2,
   ChevronDown,
@@ -62,10 +62,14 @@ import {
 import { getApiBaseUrl } from '@/lib/config'
 import { getAuthToken } from '@/store/auth-store'
 import {
+  CAL_SHEETS_KEY,
   NEW_NO_ANSWER,
   inTime,
   refusalOf,
 } from '@/services/hplc-calibration-sheets'
+// the app's client, as hash-navigation.ts uses it: this panel is not always
+// under a QueryClientProvider (its tests render it bare)
+import { queryClient } from '@/lib/query-client'
 import { useUIStore } from '@/store/ui-store'
 import { toast } from 'sonner'
 
@@ -132,10 +136,19 @@ export function CalibrationPanel({
   // the filtered instrument when that is one instrument still in service.
   const [opening, setOpening] = useState(false)
   const [openFailed, setOpenFailed] = useState<string | null>(null)
+  // the peptide this panel shows, null once it is gone (M3)
+  const shown = useRef<number | null>(peptide.id)
+  useEffect(() => {
+    shown.current = peptide.id
+    return () => {
+      shown.current = null
+    }
+  }, [peptide.id])
   const openWorksheet = async () => {
     const inst = instruments.find(
       i => String(i.id) === instrumentFilter && i.active
     )
+    const asked = peptide.id
     setOpening(true)
     setOpenFailed(null)
     try {
@@ -145,7 +158,17 @@ export function CalibrationPanel({
           ...(inst ? { instrument_id: inst.id } : {}),
         })
       )
-      useUIStore.getState().navigateToCalibrationSheet(sheet.id)
+      // the list shows it on the next visit (M5)
+      void queryClient.invalidateQueries({
+        queryKey: [...CAL_SHEETS_KEY, 'list'],
+      })
+      // a slow answer opens the sheet only while this peptide still shows
+      if (shown.current === asked)
+        useUIStore.getState().navigateToCalibrationSheet(sheet.id)
+      else
+        toast.success(
+          `Made ${sheet.proposed_name}. It is under Calibration worksheets.`
+        )
     } catch (err) {
       // a timeout or a 5xx may have made one (fix round 2)
       setOpenFailed(refusalOf(err, NEW_NO_ANSWER))
