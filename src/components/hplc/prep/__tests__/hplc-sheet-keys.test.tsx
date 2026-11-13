@@ -23,7 +23,56 @@ function renderGrid() {
 const box = (name: string) =>
   screen.getByRole('textbox', { name }) as HTMLInputElement
 
+/** Vial select, Lead radio, Own Target box: Step 2b's shape. */
+function renderRadioGrid() {
+  render(
+    <table onKeyDown={onSheetKey}>
+      <tbody>
+        {['a', 'b'].map(r => (
+          <tr key={r}>
+            <td>
+              <select aria-label={`${r} vial`} defaultValue="A">
+                <option>A</option>
+                <option>B</option>
+              </select>
+            </td>
+            <td>
+              <input type="radio" name="lead" aria-label={`${r} lead`} />
+            </td>
+            <td>
+              <input aria-label={`${r} target`} defaultValue="200" />
+            </td>
+          </tr>
+        ))}
+      </tbody>
+    </table>
+  )
+}
+const sel = (name: string) => screen.getByRole('combobox', { name })
+
 describe('onSheetKey', () => {
+  it('Tab, Enter and the arrows walk past a radio column, never onto it', () => {
+    renderRadioGrid()
+    act(() => sel('a vial').focus())
+    fireEvent.keyDown(sel('a vial'), { key: 'Tab' })
+    expect(document.activeElement).toBe(sel('b vial'))
+    // the last select: Tab goes to the top of the next typed column
+    fireEvent.keyDown(sel('b vial'), { key: 'Tab' })
+    expect(document.activeElement).toBe(box('a target'))
+    fireEvent.keyDown(box('a target'), { key: 'Enter' })
+    expect(document.activeElement).toBe(box('b target'))
+    fireEvent.keyDown(box('b target'), { key: 'Tab', shiftKey: true })
+    expect(document.activeElement).toBe(box('a target'))
+    fireEvent.keyDown(box('a target'), { key: 'Tab', shiftKey: true })
+    expect(document.activeElement).toBe(sel('b vial'))
+    // ArrowRight from a select skips the radio
+    fireEvent.keyDown(sel('b vial'), { key: 'ArrowRight' })
+    expect(document.activeElement).toBe(box('b target'))
+    fireEvent.keyDown(box('b target'), { key: 'ArrowLeft' })
+    expect(document.activeElement).toBe(sel('b vial'))
+    for (const r of screen.getAllByRole('radio')) expect(r).not.toBeChecked()
+  })
+
   it('a click into a box arrived at by keyboard puts Left and Right back on the caret', () => {
     renderGrid()
     act(() => box('b1').focus())

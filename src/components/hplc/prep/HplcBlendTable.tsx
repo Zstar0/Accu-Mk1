@@ -13,10 +13,16 @@ import {
   NumberBox,
   SheetRow,
 } from './HplcSheetCells'
-import { STEP2B_COLUMNS, type Step2bKey } from './hplc-sheet-columns'
+import type { HplcSheetRow } from '@/lib/api'
+import {
+  STEP2B_COLUMNS,
+  VIAL_LETTERS,
+  type Step2bKey,
+} from './hplc-sheet-columns'
 import { onSheetKey } from './hplc-sheet-keys'
 
-const VIAL_LETTERS = 'ABCDEFG'
+const leadId = (row: HplcSheetRow, peptideId: number) =>
+  `hplc-lead-${row.item_id}-${peptideId}`
 
 const COL = Object.fromEntries(STEP2B_COLUMNS.map(c => [c.key, c])) as Record<
   Step2bKey,
@@ -37,11 +43,17 @@ const mg = (x: number | null) =>
   x === null ? '-' : String(Number(x.toFixed(3)))
 
 /** The split's own state, shown under the sample id; null when it is whole. */
-function splitState(computed: HplcRowComputed): string | null {
+function splitState(
+  computed: HplcRowComputed,
+  row: HplcSheetRow
+): string | null {
   const comps = computed.components
   if (computed.warnings.some(w => w.code === 'split_mismatch')) {
     const sum = comps.reduce((a, c) => a + (c.declared_mg ?? 0), 0)
-    return `the weights add up to ${mg(sum)}, the vial says ${mg(computed.declared_total_mg)}`
+    // the row's own declared weight, per capsule on a capsule row, as
+    // computeRow compares the split against it
+    const declared = row.hplc_prep.declared_mg ?? row.declared_mg
+    return `the weights add up to ${mg(sum)}, the vial says ${mg(declared)}`
   }
   const typed = comps.filter(c => c.declared_mg !== null).length
   if (typed === 0) return 'split not typed yet'
@@ -141,13 +153,15 @@ function BlendCell({
         value={typed[key]}
         placeholder={placeholder}
         disabled={locked}
-        onCommit={v => sendComponent(key, v)}
+        // 0 or less means "the standard", as on the source sheet: the key
+        // is cleared and the box goes back to its placeholder
+        onCommit={v => sendComponent(key, v !== null && v <= 0 ? null : v)}
       />
     </InputCell>
   )
   switch (col) {
     case 'sample_id': {
-      const state = first ? splitState(computed) : null
+      const state = first ? splitState(computed, row) : null
       return (
         <IdCell>
           {first && row.sample_id}
@@ -197,10 +211,21 @@ function BlendCell({
           { hplc_prep: { vials: { [n]: { lead_id: lead } } } },
           label
         )
+      // the vial's radios sit on separate lines: its first line carries the
+      // group, which owns them all
+      const ids = vial?.component_ids ?? []
       return (
         <td className={TD}>
+          {ids[0] === c.peptide_id && (
+            <span
+              role="radiogroup"
+              aria-label={`${row.sample_id}, Lead for vial ${letter}`}
+              aria-owns={ids.map(p => leadId(row, p)).join(' ')}
+            />
+          )}
           <input
             type="radio"
+            id={leadId(row, c.peptide_id)}
             name={`lead-${row.item_id}-${n}`}
             aria-label={what}
             data-field={col}

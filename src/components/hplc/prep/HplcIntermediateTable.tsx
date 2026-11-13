@@ -15,10 +15,12 @@ import {
   NumberBox,
   SheetRow,
 } from './HplcSheetCells'
-import { STEP3A_COLUMNS, type Step3aKey } from './hplc-sheet-columns'
+import {
+  STEP3A_COLUMNS,
+  VIAL_LETTERS,
+  type Step3aKey,
+} from './hplc-sheet-columns'
 import { onSheetKey } from './hplc-sheet-keys'
-
-const VIAL_LETTERS = 'ABCDEFG'
 
 const LABEL = Object.fromEntries(
   STEP3A_COLUMNS.map(c => [c.key, c.label])

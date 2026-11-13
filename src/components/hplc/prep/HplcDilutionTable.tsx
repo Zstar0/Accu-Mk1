@@ -16,10 +16,12 @@ import {
   NumberBox,
   SheetRow,
 } from './HplcSheetCells'
-import { STEP3_COLUMNS, type Step3Key } from './hplc-sheet-columns'
+import {
+  STEP3_COLUMNS,
+  VIAL_LETTERS,
+  type Step3Key,
+} from './hplc-sheet-columns'
 import { onSheetKey } from './hplc-sheet-keys'
-
-const VIAL_LETTERS = 'ABCDEFG'
 
 const LABEL = Object.fromEntries(
   STEP3_COLUMNS.map(c => [c.key, c.label])
@@ -104,6 +106,14 @@ function DilutionCell({
   }
   const warn = (code: string) =>
     computed.warnings.find(w => w.code === code && w.vial === vial.vial)?.text
+  // an off-plan mark's numbers: the final vial's volume_off warning
+  const offText = (what: 'stock' | 'diluent') =>
+    computed.warnings.find(
+      w =>
+        w.code === 'volume_off' &&
+        w.vial === vial.vial &&
+        w.text.includes(`the ${what} added to the final vial`)
+    )?.text
   switch (col) {
     case 'sample_id':
       return (
@@ -149,7 +159,7 @@ function DilutionCell({
           value={vial.actual.actual_diluent_ul}
           dp={2}
           mark={vial.off.diluent}
-          markTitle={warn('step3_diluent')}
+          markTitle={warn('step3_diluent') ?? offText('diluent')}
         />
       )
     case 'actual_stock_ul':
@@ -158,7 +168,7 @@ function DilutionCell({
           value={vial.actual.actual_stock_ul}
           dp={2}
           mark={vial.off.stock}
-          markTitle={warn('step3_stock')}
+          markTitle={warn('step3_stock') ?? offText('stock')}
         />
       )
     case 'actual_total_ul':

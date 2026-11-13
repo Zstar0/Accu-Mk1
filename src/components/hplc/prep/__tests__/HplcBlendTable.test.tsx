@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { cleanup, fireEvent, screen, within } from '@testing-library/react'
+import { act, cleanup, fireEvent, screen, within } from '@testing-library/react'
 import type { HplcSheetRow } from '@/lib/api'
 import { makeRow, rowFromCase } from './hplc-sheet-fixtures'
 import {
@@ -135,6 +135,14 @@ describe('Step 2b, blend components', () => {
     const { onPatch } = renderLive([tesaIpa()])
     const tesa = line('Tesamorelin').getByRole('radio')
     const ipa = line('Ipamorelin').getByRole('radio')
+    // each vial's radios are one named group for a screen reader
+    const group = screen.getByRole('radiogroup', {
+      name: `${S1}, Lead for vial A`,
+    })
+    expect(group.getAttribute('aria-owns')?.split(' ')).toEqual([
+      tesa.id,
+      ipa.id,
+    ])
     // by the usual rule the heaviest leads, shown checked, greyed, with why
     expect(tesa).toBeChecked()
     expect(tesa).toBeEnabled()
@@ -298,5 +306,111 @@ describe('Step 2b, blend components', () => {
     const r = within(region(STEP2B))
     expect(r.getByText('this blend is not in the catalog')).toBeInTheDocument()
     expect(r.queryAllByRole('textbox')).toHaveLength(0)
+  })
+
+  it('the keyboard walk never lands on a Lead radio and never changes the lead', () => {
+    const { onPatch } = renderLive([tesaIpa()])
+    const vialA = screen.getByRole('combobox', {
+      name: `${S1}, Vial, Tesamorelin`,
+    })
+    const vialB = screen.getByRole('combobox', {
+      name: `${S1}, Vial, Ipamorelin`,
+    })
+    const target = (c: string) =>
+      screen.getByRole('textbox', { name: `${S1}, Own Target (ug/mL), ${c}` })
+    act(() => vialA.focus())
+    fireEvent.keyDown(vialA, { key: 'ArrowRight' })
+    expect(document.activeElement).toBe(target('Tesamorelin'))
+    fireEvent.keyDown(target('Tesamorelin'), { key: 'ArrowDown' })
+    expect(document.activeElement).toBe(target('Ipamorelin'))
+    fireEvent.keyDown(target('Ipamorelin'), { key: 'ArrowLeft' })
+    expect(document.activeElement).toBe(vialB)
+    fireEvent.keyDown(vialB, { key: 'Tab' })
+    expect(document.activeElement).toBe(target('Tesamorelin'))
+    fireEvent.keyDown(target('Tesamorelin'), { key: 'Tab', shiftKey: true })
+    expect(document.activeElement).toBe(vialB)
+    fireEvent.keyDown(vialB, { key: 'ArrowUp' })
+    expect(document.activeElement).toBe(vialA)
+    const leads = onPatch.mock.calls.filter(([, p]) =>
+      JSON.stringify(p).includes('lead_id')
+    )
+    expect(leads).toEqual([])
+    expect(line('Tesamorelin').getByRole('radio')).toBeChecked()
+  })
+
+  it('a share or own target of 0 goes back to the standard (sent as null)', () => {
+    const { onPatch } = renderLive([
+      tesaIpa({
+        hplc_prep: {
+          ...tesaIpa().hplc_prep,
+          components: { '11': { target: 250 } },
+        },
+      }),
+    ])
+    const target = screen.getByRole('textbox', {
+      name: `${S1}, Own Target (ug/mL), Tesamorelin`,
+    })
+    typeAndLeave(target, '0')
+    expect(onPatch).toHaveBeenLastCalledWith(
+      311,
+      { hplc_prep: { components: { '11': { target: null } } } },
+      `${S1}, Own Target (ug/mL), Tesamorelin`
+    )
+    expect(target).toHaveValue('')
+    expect(target).toHaveAttribute('placeholder', '200')
+    const mg = screen.getByRole('textbox', {
+      name: `${S1}, Declared Wt (mg), Ipamorelin`,
+    })
+    typeAndLeave(mg, '0')
+    expect(onPatch).toHaveBeenLastCalledWith(
+      311,
+      { hplc_prep: { components: { '4': { mg: null } } } },
+      `${S1}, Declared Wt (mg), Ipamorelin`
+    )
+    expect(mg).toHaveValue('')
+  })
+
+  it('a capsule blend checks its split against the per-capsule weight', () => {
+    const capsule = (over: Partial<HplcSheetRow>) =>
+      makeRow({
+        identity: 'BPC-157 + Tesamorelin',
+        peptide_id: 22,
+        is_blend: true,
+        form: 'capsule',
+        declared_mg: 10,
+        components: [
+          { peptide_id: 10, name: 'BPC-157', declared_mg: 5, vial: 1 },
+          { peptide_id: 11, name: 'Tesamorelin', declared_mg: 5, vial: 1 },
+        ],
+        hplc_prep: { capsules: 3 },
+        ...over,
+      })
+    renderLive([
+      capsule({}),
+      capsule({
+        item_id: 312,
+        sample_id: 'P-0121-S01',
+        hplc_prep: { capsules: 3, components: { '10': { mg: 4 } } },
+      }),
+    ])
+    const r = within(region(STEP2B))
+    expect(r.queryByText(/the weights add up to 10\b/)).toBeNull()
+    expect(
+      r.getByText('the weights add up to 9, the vial says 10')
+    ).toBeInTheDocument()
+  })
+
+  it('a promoted blend row has every Step 2b control off and sends nothing', () => {
+    const { onPatch } = renderLive([tesaIpa({ promoted: true })])
+    const r = within(region(STEP2B))
+    const controls = [
+      ...r.getAllByRole('textbox'),
+      ...r.getAllByRole('combobox'),
+      ...r.getAllByRole('radio'),
+    ]
+    expect(controls).toHaveLength(8)
+    for (const el of controls) expect(el).toBeDisabled()
+    fireEvent.click(line('Ipamorelin').getByRole('radio'))
+    expect(onPatch).not.toHaveBeenCalled()
   })
 })

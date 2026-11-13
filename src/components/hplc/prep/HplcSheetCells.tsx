@@ -70,7 +70,8 @@ export function NumberBox({
   const shown = value === null || value === undefined ? '' : String(value)
 
   function commit() {
-    if (draftNow.current === null) return
+    // a locked box never saves (a row promoted while it was being edited)
+    if (draftNow.current === null || disabled) return
     const text = draftNow.current.trim()
     const v = text === '' ? null : Number(text)
     if (

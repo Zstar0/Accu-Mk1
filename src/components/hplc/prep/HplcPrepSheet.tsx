@@ -193,7 +193,10 @@ function Section({
         </h3>
         <p className="text-xs text-muted-foreground">{sub}</p>
       </div>
-      <div className="overflow-x-auto">{children}</div>
+      {/* the sticky Sample ID column is about 7rem wide ("P-0120-S01 A" in
+          12.5px mono plus the cell padding): a box the walk scrolls to is
+          kept clear of it */}
+      <div className="overflow-x-auto scroll-pl-28">{children}</div>
     </section>
   )
 }

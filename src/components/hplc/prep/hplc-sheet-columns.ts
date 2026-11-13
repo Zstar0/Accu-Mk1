@@ -17,6 +17,9 @@ export interface SheetColumn<K extends string = string> {
   kind: 'text' | 'input' | 'select' | 'computed'
 }
 
+/** The autosampler vials' letters: vial 1 is A (calc.js VIAL_LETTERS). */
+export const VIAL_LETTERS = 'ABCDEFG'
+
 export const STEP2_TITLE = 'Peptide sample stock preparation'
 export const STEP2_SUB =
   'What is in the customer sample vial and which instrument. Weigh that vial with its septum, add the diluent, weigh again.'

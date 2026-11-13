@@ -16,6 +16,15 @@ type Box = HTMLInputElement | HTMLSelectElement
 const isBox = (el: unknown): el is Box =>
   el instanceof HTMLInputElement || el instanceof HTMLSelectElement
 
+/** A box the walk stops in: not disabled, and not a radio, checkbox or
+ *  hidden input (the source's typable; the Lead radio is left to the mouse).
+ *  The source's "not displayed" check is left out: the sheet never renders
+ *  a hidden box, and jsdom has no layout. */
+const typable = (el: unknown): el is Box =>
+  isBox(el) &&
+  !el.disabled &&
+  !['radio', 'checkbox', 'hidden'].includes(el.type)
+
 /** The table's boxes as a grid: grid[row][col], or null for a cell without
  *  a live box. */
 function sheetGrid(table: HTMLTableElement): (Box | null)[][] {
@@ -24,7 +33,7 @@ function sheetGrid(table: HTMLTableElement): (Box | null)[][] {
   return [...body.rows].map(r =>
     [...r.cells].map(cell => {
       const box = cell.querySelector('input, select')
-      return isBox(box) && !box.disabled ? box : null
+      return typable(box) ? box : null
     })
   )
 }

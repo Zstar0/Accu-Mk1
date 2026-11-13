@@ -1,6 +1,8 @@
 import { describe, it, expect } from 'vitest'
 import { fireEvent, screen, within } from '@testing-library/react'
-import { fixtureCase, rowFromCase } from './hplc-sheet-fixtures'
+import { computeRow } from '@/lib/hplc-prep'
+import { fmtDp } from '../HplcSheetCells'
+import { fixtureCase, makeRow, rowFromCase } from './hplc-sheet-fixtures'
 import { region, renderLive, STEP3, STEP3A } from './hplc-sheet-live'
 
 const S1 = 'P-0120-S01'
@@ -136,5 +138,80 @@ describe('Step 3a, the intermediate dilution', () => {
     expect(marked[0]?.title).toMatch(
       /^Vial 1: the stock added to the intermediate is .* uL against .* uL planned/
     )
+  })
+
+  it('a Step 3 final volume off its plan shows the warning on hover', () => {
+    renderLive([rowFromCase('powder, pipetted volume 20 % off plan')])
+    const marked = within(region(STEP3))
+      .getAllByRole('cell')
+      .filter(td => td.className.includes('bg-amber'))
+    expect(marked).toHaveLength(1)
+    expect(marked[0]?.title).toMatch(
+      /^Vial 1: the stock added to the final vial is .* uL against .* uL planned/
+    )
+  })
+
+  it('the intermediate volume box sends its own key', () => {
+    const { onPatch } = renderLive([heavyRow()])
+    const what = `${S1}, Intermediate Target Vol (uL)`
+    typeAndLeave(box(what), '1000')
+    expect(onPatch).toHaveBeenLastCalledWith(
+      311,
+      { hplc_prep: { vials: { '1': { int_volume_ul: 1000 } } } },
+      what
+    )
+    // 5000 x 1000 / the stock: the plan follows the typed volume
+    expect(within(region(STEP3A)).getByText('30.00')).toBeInTheDocument()
+  })
+
+  it('a promoted two-step row has every Step 3a box off and sends nothing', () => {
+    const { onPatch } = renderLive([{ ...heavyRow(), promoted: true }])
+    const boxes = within(region(STEP3A)).getAllByRole('textbox')
+    expect(boxes).toHaveLength(5)
+    for (const b of boxes) expect(b).toBeDisabled()
+    typeAndLeave(boxes[0] as HTMLElement, '4000')
+    expect(onPatch).not.toHaveBeenCalled()
+  })
+
+  it('a blend split across two vials with one vial two-step: one Step 3a line, two Step 3 lines', () => {
+    const row = makeRow({
+      identity: 'NAD+ + Tesamorelin',
+      peptide_id: 23,
+      is_blend: true,
+      declared_mg: 610,
+      components: [
+        { peptide_id: 2, name: 'NAD+', declared_mg: 600, vial: 1 },
+        { peptide_id: 11, name: 'Tesamorelin', declared_mg: 10, vial: 2 },
+      ],
+      hplc_prep: { stock_vial_mg: 5012.31, stock_vial_diluent_mg: 8003.6 },
+    })
+    const c = computeRow(row, row.hplc_prep, [], row.params)
+    const [a, b] = c.vials
+    expect(a?.two_step).toBe(true)
+    expect(b?.two_step).toBe(false)
+    renderLive([row])
+    const s3a = within(region(STEP3A))
+    expect(s3a.getAllByRole('row')).toHaveLength(2) // head + vial A
+    expect(s3a.getByText(`${S1} A`)).toBeInTheDocument()
+    expect(s3a.getByText('NAD+')).toBeInTheDocument()
+    expect(
+      s3a.getByText(fmtDp(a?.intermediate?.plan.stock_vol_ul, 2))
+    ).toBeInTheDocument()
+    expect(
+      box(`${S1}, Intermediate Target (ug/mL), vial A`)
+    ).toBeInTheDocument()
+    const s3 = within(region(STEP3))
+    expect(s3.getAllByRole('row')).toHaveLength(3)
+    for (const v of [a, b]) {
+      const id = within(
+        s3
+          .getByText(`${S1} ${v?.vial === 1 ? 'A' : 'B'}`, {
+            exact: false,
+          })
+          .closest('tr') as HTMLElement
+      )
+      expect(id.getByText(fmtDp(v?.stock_for_final, 2))).toBeInTheDocument()
+      expect(id.getByText(fmtDp(v?.plan.stock_vol_ul, 2))).toBeInTheDocument()
+    }
   })
 })
