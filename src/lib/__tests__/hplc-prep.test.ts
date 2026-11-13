@@ -140,6 +140,13 @@ describe('mergeHplcPrep', () => {
       two_step: false,
       vials: { '1': { vial_mg: 2500.1, vial_diluent_mg: 3800.2 } },
     })
+    // an undefined key is not sent (JSON.stringify drops it): it stays
+    expect(
+      mergeHplcPrep(stored, {
+        declared_mg: undefined,
+        vials: { '1': { vial_mg: undefined } },
+      })
+    ).toEqual(stored)
   })
 
   it('an emptied vial or component entry is removed, and so is an emptied map', () => {

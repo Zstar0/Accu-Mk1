@@ -892,9 +892,12 @@ const isPlain = (x: unknown): x is Plain =>
 function mergeObject(stored: Plain, patch: Plain): Plain {
   const out: Plain = {}
   for (const key of new Set([...Object.keys(stored), ...Object.keys(patch)])) {
-    const value = key in patch ? patch[key] : stored[key]
+    // sent = present and not undefined (JSON.stringify drops undefined, so the
+    // server never sees it); only an explicit null removes
+    const sent = Object.hasOwn(patch, key) && patch[key] !== undefined
+    const value = sent ? patch[key] : stored[key]
     if (value === null || value === undefined) continue
-    if (key in patch && isPlain(value)) {
+    if (sent && isPlain(value)) {
       const base = stored[key]
       const merged = mergeObject(isPlain(base) ? base : {}, value)
       if (Object.keys(merged).length > 0) out[key] = merged
