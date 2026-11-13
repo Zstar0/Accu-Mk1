@@ -7032,6 +7032,446 @@ async def delete_calibration(
     return Response(status_code=204)
 
 
+# --- Calibration Curve Worksheet: the sheet routes (plan 2026-11-13, Task 4) ---
+# A sheet's typed inputs live in hplc_calibration_sheets.inputs; hplc_calibration.work_out_sheet
+# works them out and does not refuse nonsense, so these request models and _cal_check_* are the
+# trust boundary. A misspelled key or a wrong type is a 422 (extra="forbid", strict types); a
+# value out of range is a 400 with a sentence naming the field. Plain dicts, no response_model.
+from pydantic import Strict, StrictBool, StrictInt  # noqa: E402
+
+_CalNum = Optional[Annotated[float, Strict()]]
+_CAL_MAX_NUMBER = 1e12
+_CAL_MAX_WHOLE = 2 ** 53 - 1
+_CAL_MAX_ID = 2 ** 31 - 1  # the id columns are int4: a larger id is simply not on file
+_CAL_MAX_LEVELS = 12
+_CAL_WEIGHINGS = {"coa_weight_mg", "vial_mg", "vial_standard_mg", "vial_diluent_mg", "vial_diluent_std_mg"}
+_CAL_ABOVE_ZERO = {"target", "diluent_density_mg_ml", "level_volume_ul", "top_aliquot_ul", "override_factor",
+                   "free_mw", "stated_fw", "counterion_mw", "equivalents", "ms_mz"}
+_CAL_LONG_TEXT = {"notes", "assumption"}
+# Labels as the source sheet writes them (calibration.html, cal.js STOCK_COLS, DIL_COLS, PEAK_COLS).
+_CAL_LABELS = {
+    "sheet": {"standard_id": "LIMS Sample # / Standard", "cas": "CAS number", "supplier": "Standard Supplier",
+              "lot": "Lot #", "coa_weight_mg": "Weight from COA (mg)",
+              "diluent_density_mg_ml": "Diluent density (mg/mL)", "level_volume_ul": "Level volume (uL)",
+              "analyst": "Analyst", "date": "Date", "notes": "Notes", "top_aliquot_ul": "Aliquot (uL)"},
+    "net": {"counterion": "Counterion", "counterion_mw": "Counterion mass (g/mol per eq)",
+            "equivalents": "Equivalents (n)", "free_mw": "Free-peptide MW (g/mol)",
+            "stated_fw": "Stated FW on the CoA (g/mol)", "ms_mz": "Mass spec on the CoA (m/z)", "ms_ion": "Ion",
+            "assay_pct": "CoA assay (%)", "water_pct": "Water, Karl Fischer (%)",
+            "assumption": "Counterion assumption, in words", "override_factor": "Net factor, entered by hand",
+            "override_reason": "Why the factor is entered by hand"},
+    "stock": {"vial_mg": "Stock Vial + cap (mg)", "vial_standard_mg": "Stock Vial + cap + Standard (mg)",
+              "vial_diluent_mg": "Stock Vial + cap + Standard + Diluent (mg)"},
+    "level": {"target": "Target (ug/mL)", "vial_mg": "Vial and cap (mg)",
+              "vial_diluent_mg": "Vial, cap and Diluent (mg)", "vial_diluent_std_mg": "Vial, cap, Diluent and Std (mg)",
+              "peak_area": "Peak Area", "purity": "Purity (%)", "rt": "RT (min)"},
+}
+_CAL_STALE = "Someone else saved this sheet. It has been reloaded."
+_CAL_BLEND = "A curve is for one peptide. A blend's components each have their own."
+_CAL_NO_PEPTIDE = "That peptide is not on file. Pick it again from the list."
+_CAL_NO_INSTRUMENT = "That instrument is not on file or is no longer in use. Pick another."
+
+
+class CalNetIn(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    counterion: Optional[str] = None
+    counterion_mw: _CalNum = None
+    equivalents: _CalNum = None
+    free_mw: _CalNum = None
+    stated_fw: _CalNum = None
+    ms_mz: _CalNum = None
+    ms_ion: Optional[str] = None
+    assay_pct: _CalNum = None
+    water_pct: _CalNum = None
+    assumption: Optional[str] = None
+    override_factor: _CalNum = None
+    override_reason: Optional[str] = None
+
+
+class CalStockIn(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    vial_mg: _CalNum = None
+    vial_standard_mg: _CalNum = None
+    vial_diluent_mg: _CalNum = None
+
+
+class CalLevelIn(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    target: _CalNum = None
+    vial_mg: _CalNum = None
+    vial_diluent_mg: _CalNum = None
+    vial_diluent_std_mg: _CalNum = None
+    peak_area: _CalNum = None
+    purity: _CalNum = None
+    rt: _CalNum = None
+
+
+class CalInputsIn(BaseModel):
+    """hplc_calibration.blank_inputs()'s shape; model_dump() is what is stored."""
+    model_config = ConfigDict(extra="forbid")
+    standard_id: Optional[str] = None
+    cas: Optional[str] = None
+    supplier: Optional[str] = None
+    lot: Optional[str] = None
+    coa_weight_mg: _CalNum = None
+    diluent_density_mg_ml: _CalNum = None
+    level_volume_ul: _CalNum = None
+    analyst: Optional[str] = None
+    date: Optional[str] = None
+    notes: Optional[str] = None
+    net: CalNetIn = Field(default_factory=CalNetIn)
+    stock: CalStockIn = Field(default_factory=CalStockIn)
+    stock_as_top: Optional[StrictBool] = None
+    top_aliquot_ul: _CalNum = None
+    # A null entry is declared so it reaches _cal_check_levels as a 400 naming the level.
+    levels: Optional[list[Optional[CalLevelIn]]] = None
+
+
+class CalReplicateLevelIn(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    peak_area: _CalNum = None
+    purity: _CalNum = None
+    rt: _CalNum = None
+
+
+class CalReplicateInputsIn(BaseModel):
+    """A replicate's own fields (hplc_calibration.blank_replicate_inputs): its run results."""
+    model_config = ConfigDict(extra="forbid")
+    notes: Optional[str] = None
+    levels: list[Optional[CalReplicateLevelIn]] = Field(default_factory=list)
+
+
+class CalSheetCreateIn(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    peptide_id: Optional[StrictInt] = None
+    instrument_id: Optional[StrictInt] = None
+    inputs: Any = None  # CalInputsIn, checked in the route (null = blank_inputs())
+
+
+class CalSheetPatchIn(BaseModel):
+    """Only the fields sent change; inputs REPLACES the stored inputs whole. inputs is checked
+    in the route against CalInputsIn or CalReplicateInputsIn, by the kind of sheet."""
+    model_config = ConfigDict(extra="forbid")
+    version: StrictInt
+    peptide_id: Optional[StrictInt] = None
+    instrument_id: Optional[StrictInt] = None
+    inputs: Any = None
+
+
+def _cal_check_fields(prefix: str, section: str, values: dict) -> None:
+    from hplc_calibration import COUNTERIONS, MS_IONS
+    for key, v in values.items():
+        if v is None or isinstance(v, (bool, dict, list)):
+            continue
+        label = prefix + _CAL_LABELS[section][key]
+        if isinstance(v, str):
+            limit = 2000 if key in _CAL_LONG_TEXT else 200
+            if len(v) > limit:
+                raise HTTPException(400, f"{label}: at most {limit} characters.")
+            if key == "date":
+                try:
+                    ok = bool(re.fullmatch(r"\d{4}-\d{2}-\d{2}", v)) and date.fromisoformat(v) is not None
+                except ValueError:
+                    ok = False
+                if not ok:
+                    raise HTTPException(400, f"{label}: write it as YYYY-MM-DD, for example 2026-02-05.")
+            if key == "counterion" and v not in (*COUNTERIONS, "Other", ""):
+                raise HTTPException(400, f"{label}: pick one of {', '.join(COUNTERIONS)} or Other, "
+                                         "or leave it blank.")
+            if key == "ms_ion" and v not in MS_IONS:
+                raise HTTPException(400, f"{label}: pick one of {', '.join(i for i in MS_IONS if i)}, "
+                                         "or leave it blank.")
+            continue
+        if not math.isfinite(v):
+            raise HTTPException(400, f"{label}: that is not a number. Type it again.")
+        if key in _CAL_WEIGHINGS:
+            if not 0 <= v <= MAX_WEIGHING_MG:
+                raise HTTPException(400, f"{label}: a balance reading is between 0 and "
+                                         f"{MAX_WEIGHING_MG:,.0f} mg. Check the number.")
+            continue
+        if abs(v) > _CAL_MAX_NUMBER:
+            raise HTTPException(400, f"{label}: that number is far too large. Check it.")
+        if key == "assay_pct" and not 0 < v <= 150:
+            raise HTTPException(400, f"{label}: must be more than 0 and no more than 150.")
+        if key == "water_pct" and not 0 <= v < 100:
+            raise HTTPException(400, f"{label}: must be 0 or more and less than 100.")
+        if key in _CAL_ABOVE_ZERO and v <= 0:
+            raise HTTPException(400, f"{label}: must be more than 0.")
+
+
+def _cal_check_levels(levels: list) -> None:
+    if len(levels) > _CAL_MAX_LEVELS:
+        raise HTTPException(400, f"A sheet holds at most {_CAL_MAX_LEVELS} levels.")
+    for i, level in enumerate(levels):
+        if level is None:
+            raise HTTPException(400, f"Level {i + 1}: the row is empty. Every level is a row of boxes, "
+                                     "even when they are blank.")
+        _cal_check_fields(f"Level {i + 1}, ", "level", level)
+
+
+def _cal_validation_422(exc: ValidationError) -> HTTPException:
+    # Never echo the input: a NaN in it cannot be encoded and would surface as a 500.
+    return HTTPException(422, [{**e, "loc": ["body", "inputs", *e["loc"]]} for e in
+                               exc.errors(include_input=False, include_url=False, include_context=False)])
+
+
+def _cal_inputs(raw) -> dict:
+    """An original sheet's inputs, checked, in the full stored shape."""
+    try:
+        inputs = CalInputsIn.model_validate(raw).model_dump()
+    except ValidationError as exc:
+        raise _cal_validation_422(exc)
+    _cal_check_fields("", "sheet", inputs)
+    _cal_check_fields("", "net", inputs["net"])
+    _cal_check_fields("", "stock", inputs["stock"])
+    if not inputs["levels"]:
+        raise HTTPException(400, "The sheet needs at least one level.")
+    _cal_check_levels(inputs["levels"])
+    return inputs
+
+
+def _cal_replicate_inputs(raw, refusal: str) -> dict:
+    """A replicate's inputs: its run results only. Anything of the original's (a weighing, the
+    standard) is the 400 that points at the original; any other bad key is a 422."""
+    try:
+        inputs = CalReplicateInputsIn.model_validate(raw).model_dump()
+    except ValidationError as exc:
+        try:
+            CalInputsIn.model_validate(raw)
+        except ValidationError:
+            raise _cal_validation_422(exc)
+        raise HTTPException(400, refusal)
+    _cal_check_fields("", "sheet", {"notes": inputs["notes"]})
+    _cal_check_levels(inputs["levels"])
+    return inputs
+
+
+def _cal_check_peptide(db: Session, peptide_id: int) -> None:
+    pep = db.get(Peptide, peptide_id) if 1 <= peptide_id <= _CAL_MAX_ID else None
+    if pep is None:
+        raise HTTPException(400, _CAL_NO_PEPTIDE)
+    if pep.is_blend:
+        raise HTTPException(400, _CAL_BLEND)
+
+
+def _cal_check_instrument(db: Session, instrument_id: int) -> None:
+    inst = db.get(Instrument, instrument_id) if 1 <= instrument_id <= _CAL_MAX_ID else None
+    if inst is None or not inst.active:
+        raise HTTPException(400, _CAL_NO_INSTRUMENT)
+
+
+def _cal_original(db: Session, sheet):
+    from models import HplcCalibrationSheet
+    return db.get(HplcCalibrationSheet, sheet.replicate_of_sheet_id) if sheet.replicate_of_sheet_id else None
+
+
+def _cal_effective_inputs(sheet, original) -> dict:
+    """What the sheet works out from: a replicate takes the original's preparation as it is
+    now and its own run results (calc.js replicatePrep)."""
+    from hplc_calibration import replicate_prep
+    return replicate_prep(original.inputs, sheet.inputs) if original is not None else sheet.inputs
+
+
+def curve_name(db: Session, sheet) -> str:
+    """calc.js calSheetName (2880) over calibration_curves.source_filename. Filed: the curve's own
+    name. A replicate with no instrument or the original's: <original's name>-Inj<n>, n the first
+    free from 2. Anything else: default_curve_name, then -2, -3 ... until no curve carries it."""
+    from hplc_calibration import default_curve_name
+    curve = db.get(CalibrationCurve, sheet.calibration_curve_id) if sheet.calibration_curve_id else None
+    if curve is not None and curve.source_filename:
+        return curve.source_filename
+
+    def taken(name: str) -> bool:
+        return db.execute(select(CalibrationCurve.id).where(
+            CalibrationCurve.source_filename == name).limit(1)).first() is not None
+
+    original = _cal_original(db, sheet)
+    if original is not None and (sheet.instrument_id is None or sheet.instrument_id == original.instrument_id):
+        base, n = curve_name(db, original), 2
+        while taken(f"{base}-Inj{n}"):
+            n += 1
+        return f"{base}-Inj{n}"
+    pep = db.get(Peptide, sheet.peptide_id) if sheet.peptide_id else None
+    inst = db.get(Instrument, sheet.instrument_id) if sheet.instrument_id else None
+    base = default_curve_name(pep.abbreviation if pep else None, inst.name if inst else None,
+                              _cal_effective_inputs(sheet, original).get("date"))
+    name, n = base, 2
+    while taken(name):
+        name, n = f"{base}-{n}", n + 1
+    return name
+
+
+def _cal_sheet_out(db: Session, sheet, *, full: bool) -> dict:
+    """The sheet read model. Every key is always present; a list row leaves out the inputs."""
+    from hplc_calibration import work_out_sheet
+    pep = db.get(Peptide, sheet.peptide_id) if sheet.peptide_id else None
+    inst = db.get(Instrument, sheet.instrument_id) if sheet.instrument_id else None
+    curve = db.get(CalibrationCurve, sheet.calibration_curve_id) if sheet.calibration_curve_id else None
+    user = db.get(User, sheet.updated_by_id) if sheet.updated_by_id else None
+    original = _cal_original(db, sheet)
+    effective = _cal_effective_inputs(sheet, original)
+    out = {
+        "id": sheet.id, "version": sheet.version,
+        "peptide_id": sheet.peptide_id, "peptide_name": pep.name if pep else None,
+        "peptide_abbreviation": pep.abbreviation if pep else None,
+        "instrument_id": sheet.instrument_id, "instrument_name": inst.name if inst else None,
+        "replicate_of_sheet_id": sheet.replicate_of_sheet_id,
+        "replicate_of_name": curve_name(db, original) if original is not None else None,
+        "curve_id": sheet.calibration_curve_id, "curve_name": curve.source_filename if curve else None,
+        "curve_is_active": curve.is_active if curve else None,
+        "filed_at": sheet.filed_at, "updated_at": sheet.updated_at,
+        "updated_by_email": user.email if user else None,
+        "changed_since_filed": bool(sheet.filed_at is not None and sheet.updated_at is not None
+                                    and sheet.updated_at > sheet.filed_at),
+        "proposed_name": curve_name(db, sheet),
+        "blocking": work_out_sheet(effective)["blocking"],
+    }
+    if full:
+        out["inputs"] = sheet.inputs
+        out["effective_inputs"] = effective
+    return out
+
+
+def _cal_sheet_get(db: Session, sheet_id: int, *, lock: bool = False):
+    from models import HplcCalibrationSheet
+    if not 1 <= sheet_id <= _CAL_MAX_ID:
+        raise HTTPException(404, "Calibration sheet not found")
+    q = select(HplcCalibrationSheet).where(HplcCalibrationSheet.id == sheet_id)
+    if lock:
+        q = q.with_for_update().execution_options(populate_existing=True)
+    sheet = db.execute(q).scalar_one_or_none()
+    if sheet is None:
+        raise HTTPException(404, "Calibration sheet not found")
+    return sheet
+
+
+def _cal_audit(db: Session, operation: str, sheet, user_id) -> None:
+    db.add(AuditLog(operation=operation, entity_type="hplc_calibration_sheet", entity_id=str(sheet.id),
+                    details={"user_id": user_id, "version": sheet.version}))
+
+
+@app.get("/hplc-calibration-sheets")
+def list_calibration_sheets(peptide_id: Optional[int] = None, db: Session = Depends(get_db),
+                            _current_user=Depends(get_current_user)):
+    """Every sheet (or one peptide's), newest save first, without the inputs."""
+    from models import HplcCalibrationSheet
+    q = select(HplcCalibrationSheet).order_by(HplcCalibrationSheet.updated_at.desc().nulls_last(),
+                                              HplcCalibrationSheet.id.desc())
+    if peptide_id is not None:
+        q = q.where(HplcCalibrationSheet.peptide_id == peptide_id)
+    # ponytail: a few lookups per row; batch them if the list ever runs to hundreds of sheets
+    return [_cal_sheet_out(db, s, full=False) for s in db.execute(q).scalars().all()]
+
+
+@app.post("/hplc-calibration-sheets", status_code=201)
+def create_calibration_sheet(data: CalSheetCreateIn, db: Session = Depends(get_db),
+                             current_user=Depends(get_current_user)):
+    """A new sheet: six blank levels at the workbook targets unless inputs are sent."""
+    from hplc_calibration import blank_inputs
+    from models import HplcCalibrationSheet
+    inputs = blank_inputs() if data.inputs is None else _cal_inputs(data.inputs)
+    if data.peptide_id is not None:
+        _cal_check_peptide(db, data.peptide_id)
+    if data.instrument_id is not None:
+        _cal_check_instrument(db, data.instrument_id)
+    user_id = getattr(current_user, "id", None)
+    sheet = HplcCalibrationSheet(peptide_id=data.peptide_id, instrument_id=data.instrument_id, inputs=inputs,
+                                 version=1, created_by_id=user_id, updated_by_id=user_id)
+    try:
+        db.add(sheet)
+        db.flush()
+        _cal_audit(db, "hplc_calibration_sheet_created", sheet, user_id)
+        db.commit()
+    except Exception:
+        db.rollback()
+        raise
+    return _cal_sheet_out(db, sheet, full=True)
+
+
+@app.get("/hplc-calibration-sheets/{sheet_id}")
+def get_calibration_sheet(sheet_id: int, db: Session = Depends(get_db),
+                          _current_user=Depends(get_current_user)):
+    return _cal_sheet_out(db, _cal_sheet_get(db, sheet_id), full=True)
+
+
+@app.patch("/hplc-calibration-sheets/{sheet_id}")
+def save_calibration_sheet(sheet_id: int, data: CalSheetPatchIn, db: Session = Depends(get_db),
+                           current_user=Depends(get_current_user)):
+    """Save under the row lock: a stale version is a 409 and writes nothing. The peptide or the
+    instrument of a sheet whose curve is filed cannot change (Review Focus 4); a replicate takes
+    its preparation from the original and saves only its run results and its own instrument.
+    A field sent as null clears it (inputs excepted: a sheet always has inputs)."""
+    try:
+        sheet = _cal_sheet_get(db, sheet_id, lock=True)
+        if data.version > _CAL_MAX_WHOLE:
+            raise HTTPException(400, "version: that number is far too large.")
+        if data.version != sheet.version:
+            raise HTTPException(409, _CAL_STALE)
+        sent = data.model_fields_set
+        original = _cal_original(db, sheet)
+        refusal = None if original is None else (
+            f"This sheet is another injection of {curve_name(db, original)}. Change the standard or a "
+            "weighing there, and every injection follows.")
+        if refusal and "peptide_id" in sent:
+            raise HTTPException(400, refusal)
+        inputs = None
+        if "inputs" in sent:
+            if data.inputs is None:
+                raise HTTPException(400, "A sheet always keeps its inputs. Send them whole, or leave them out.")
+            inputs = _cal_inputs(data.inputs) if refusal is None else _cal_replicate_inputs(data.inputs, refusal)
+        changes = {f: getattr(data, f) for f in ("peptide_id", "instrument_id")
+                   if f in sent and getattr(data, f) != getattr(sheet, f)}
+        if changes and sheet.calibration_curve_id is not None:
+            inst = db.get(Instrument, sheet.instrument_id) if sheet.instrument_id else None
+            raise HTTPException(409, f"This curve is filed on {inst.name if inst else 'no instrument'}. To run "
+                                     "the same vials on another instrument, use Duplicate for another injection.")
+        # Checked only when changed, so an instrument retired later never locks a sheet's weighings.
+        if changes.get("peptide_id") is not None:
+            _cal_check_peptide(db, changes["peptide_id"])
+        if changes.get("instrument_id") is not None:
+            _cal_check_instrument(db, changes["instrument_id"])
+        for f, v in changes.items():
+            setattr(sheet, f, v)
+        if inputs is not None:
+            sheet.inputs = inputs
+        user_id = getattr(current_user, "id", None)
+        sheet.version += 1
+        sheet.updated_by_id = user_id
+        _cal_audit(db, "hplc_calibration_sheet_saved", sheet, user_id)
+        db.commit()
+    except Exception:
+        db.rollback()  # free the row lock before the response (see _rollback_on_error)
+        raise
+    return _cal_sheet_out(db, sheet, full=True)
+
+
+@app.post("/hplc-calibration-sheets/{sheet_id}/duplicate", status_code=201)
+def duplicate_calibration_sheet(sheet_id: int, db: Session = Depends(get_db),
+                                current_user=Depends(get_current_user)):
+    """Duplicate for another injection (calc.js duplicateCalSheet): a new sheet on the ORIGINAL's
+    vials, its run results blank, named after the original's filed curve."""
+    from hplc_calibration import blank_replicate_inputs
+    from models import HplcCalibrationSheet
+    sheet = _cal_sheet_get(db, sheet_id)
+    original = _cal_original(db, sheet) or sheet
+    if original.calibration_curve_id is None:
+        raise HTTPException(400, "File the curve first. The copy is named after it.")
+    user_id = getattr(current_user, "id", None)
+    copy_ = HplcCalibrationSheet(
+        peptide_id=original.peptide_id, instrument_id=original.instrument_id, replicate_of_sheet_id=original.id,
+        inputs=blank_replicate_inputs(len(original.inputs.get("levels") or [])), version=1,
+        created_by_id=user_id, updated_by_id=user_id)
+    try:
+        db.add(copy_)
+        db.flush()
+        _cal_audit(db, "hplc_calibration_sheet_created", copy_, user_id)
+        db.commit()
+    except Exception:
+        db.rollback()
+        raise
+    return _cal_sheet_out(db, copy_, full=True)
+
+
 # --- Full HPLC Analysis Endpoint ---
 
 # A balance reading is in milligrams. These ceilings are typo guards, not calibration
