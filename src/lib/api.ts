@@ -6645,7 +6645,8 @@ export async function getHplcSheet(worksheetId: number): Promise<HplcSheet> {
 export async function patchHplcRow(
   worksheetId: number,
   itemId: number,
-  body: HplcRowPatch
+  body: HplcRowPatch,
+  opts: { signal?: AbortSignal } = {}
 ): Promise<HplcSheetRow> {
   const response = await fetch(
     `${API_BASE_URL()}/worksheets/${worksheetId}/items/${itemId}/hplc`,
@@ -6653,6 +6654,7 @@ export async function patchHplcRow(
       method: 'PATCH',
       headers: getBearerHeaders('application/json'),
       body: JSON.stringify(body),
+      signal: opts.signal,
     }
   )
   if (!response.ok)
@@ -6959,7 +6961,9 @@ export async function unfreezeWorksheetWells(
 export async function updateWorksheetItem(
   worksheetId: number,
   itemId: number,
-  data: WorksheetItemPatch
+  data: WorksheetItemPatch,
+  /** Optional: a signal to abort the request (the HPLC sheet's 15 s cut). */
+  opts: { signal?: AbortSignal } = {}
 ): Promise<{
   status: string
   item_id: number
@@ -6970,6 +6974,7 @@ export async function updateWorksheetItem(
     method: 'PATCH',
     headers: getBearerHeaders('application/json'),
     body: JSON.stringify(data),
+    ...(opts.signal ? { signal: opts.signal } : {}),
   })
   if (!response.ok)
     throw new Error(

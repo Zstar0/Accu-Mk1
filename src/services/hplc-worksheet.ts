@@ -44,6 +44,32 @@ interface SaveVars {
   instrumentId?: number | null
 }
 
+/** How long a save may go unanswered. The saves on a sheet queue behind
+ *  each other, so one that never answers would hold up every later one. */
+const SAVE_TIMEOUT_MS = 15_000
+const TIMED_OUT = 'the save timed out; check the value and try again'
+
+/** The request, aborted after SAVE_TIMEOUT_MS; it then fails as any other
+ *  save does (alert, rollback, the queue moves on), even if the request
+ *  ignores the abort. */
+async function withTimeout<T>(
+  send: (signal: AbortSignal) => Promise<T>
+): Promise<T> {
+  const controller = new AbortController()
+  let timer: ReturnType<typeof setTimeout> | undefined
+  const timedOut = new Promise<never>((_, reject) => {
+    timer = setTimeout(() => {
+      controller.abort()
+      reject(new Error(TIMED_OUT))
+    }, SAVE_TIMEOUT_MS)
+  })
+  try {
+    return await Promise.race([send(controller.signal), timedOut])
+  } finally {
+    clearTimeout(timer)
+  }
+}
+
 interface SaveCtx {
   before: HplcSheetRow | undefined
 }
@@ -101,7 +127,7 @@ function laterPaths(
  */
 function useSheetSave(
   id: number,
-  send: (v: SaveVars) => Promise<unknown>,
+  send: (v: SaveVars, signal: AbortSignal) => Promise<unknown>,
   apply: (row: HplcSheetRow, v: SaveVars) => HplcSheetRow,
   onFailure?: HplcSaveFailure
 ) {
@@ -121,7 +147,7 @@ function useSheetSave(
     scope: { id: `hplc-sheet-save-${id}` },
     // a retry could land after a later save; a failure is shown instead
     retry: 0,
-    mutationFn: send,
+    mutationFn: (v: SaveVars) => withTimeout(signal => send(v, signal)),
     onMutate: async (v: SaveVars): Promise<SaveCtx> => {
       await qc.cancelQueries({ queryKey: key })
       const before = qc
@@ -198,7 +224,7 @@ function applied(row: HplcSheetRow, v: SaveVars): HplcSheetRow {
 export function usePatchHplcRow(id: number, onFailure?: HplcSaveFailure) {
   return useSheetSave(
     id,
-    v => patchHplcRow(id, v.itemId, v.body ?? {}),
+    (v, signal) => patchHplcRow(id, v.itemId, v.body ?? {}, { signal }),
     applied,
     onFailure
   )
@@ -208,10 +234,13 @@ export function usePatchHplcRow(id: number, onFailure?: HplcSaveFailure) {
 export function useSetHplcInstrument(id: number, onFailure?: HplcSaveFailure) {
   return useSheetSave(
     id,
-    v =>
-      updateWorksheetItem(id, v.itemId, {
-        instrument_id: v.instrumentId ?? null,
-      }),
+    (v, signal) =>
+      updateWorksheetItem(
+        id,
+        v.itemId,
+        { instrument_id: v.instrumentId ?? null },
+        { signal }
+      ),
     (row, v) => ({
       ...row,
       instrument_id: v.instrumentId ?? null,

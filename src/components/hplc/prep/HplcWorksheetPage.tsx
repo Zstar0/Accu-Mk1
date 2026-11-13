@@ -179,7 +179,10 @@ export function HplcWorksheetPage({
         <>
           {/* A read-again that failed keeps the sheet, and every draft in it. */}
           {sheet.isError && (
-            <p className="flex items-center gap-3 rounded-[5px] border border-amber-500/40 bg-amber-500/10 px-3 py-1.5 text-sm text-amber-800 dark:text-amber-200">
+            <p
+              role="status"
+              className="flex items-center gap-3 rounded-[5px] border border-amber-500/40 bg-amber-500/10 px-3 py-1.5 text-sm text-amber-800 dark:text-amber-200"
+            >
               Could not refresh the sheet; what you see may be out of date
               <Button
                 variant="outline"

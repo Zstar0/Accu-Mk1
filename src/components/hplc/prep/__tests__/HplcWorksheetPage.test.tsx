@@ -11,7 +11,7 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import type * as ApiModule from '@/lib/api'
 import type { HplcSheetRow, WorksheetListItem } from '@/lib/api'
 import type * as WorksheetDrawerHook from '@/hooks/use-worksheet-drawer'
-import { getHplcSheet, patchHplcRow } from '@/lib/api'
+import { getHplcSheet, patchHplcRow, updateWorksheetItem } from '@/lib/api'
 import { useWorksheetDrawer } from '@/hooks/use-worksheet-drawer'
 import { HplcWorksheetPage } from '../HplcWorksheetPage'
 import { makeRow, makeSheet } from './hplc-sheet-fixtures'
@@ -62,6 +62,9 @@ function renderPage() {
     </QueryClientProvider>
   )
 }
+
+/** Every sheet save carries the 15 second abort signal. */
+const SIGNAL = { signal: expect.any(AbortSignal) }
 
 const S1 = 'P-0120-S01'
 const VIAL = 'Wt Customer Sample vial and Septum (mg)'
@@ -115,9 +118,14 @@ describe('HplcWorksheetPage', () => {
     expect(box).toHaveValue('5012.31')
     typeAndLeave(box, '6000')
     await waitFor(() =>
-      expect(patchHplcRow).toHaveBeenCalledWith(7, 311, {
-        hplc_prep: { stock_vial_mg: 6000 },
-      })
+      expect(patchHplcRow).toHaveBeenCalledWith(
+        7,
+        311,
+        {
+          hplc_prep: { stock_vial_mg: 6000 },
+        },
+        SIGNAL
+      )
     )
     // optimistic: the sheet works from the new weighing at once
     expect(await screen.findByDisplayValue('6000')).toBe(box)
@@ -168,16 +176,26 @@ describe('HplcWorksheetPage', () => {
     typeAndLeave(box, '6000')
     typeAndLeave(box, '7000')
     await waitFor(() => expect(patchHplcRow).toHaveBeenCalledTimes(1))
-    expect(patchHplcRow).toHaveBeenLastCalledWith(7, 311, {
-      hplc_prep: { stock_vial_mg: 6000 },
-    })
+    expect(patchHplcRow).toHaveBeenLastCalledWith(
+      7,
+      311,
+      {
+        hplc_prep: { stock_vial_mg: 6000 },
+      },
+      SIGNAL
+    )
     expect(box).toHaveValue('7000')
     // the older answer never replaces the newer typing
     await act(async () => saves.ok(0, at(6000).rows[0]))
     await waitFor(() => expect(patchHplcRow).toHaveBeenCalledTimes(2))
-    expect(patchHplcRow).toHaveBeenLastCalledWith(7, 311, {
-      hplc_prep: { stock_vial_mg: 7000 },
-    })
+    expect(patchHplcRow).toHaveBeenLastCalledWith(
+      7,
+      311,
+      {
+        hplc_prep: { stock_vial_mg: 7000 },
+      },
+      SIGNAL
+    )
     expect(box).toHaveValue('7000')
     await act(async () => saves.ok(1, at(7000).rows[0]))
     await waitFor(() => expect(getHplcSheet).toHaveBeenCalledTimes(2))
@@ -276,11 +294,74 @@ describe('HplcWorksheetPage', () => {
         'Could not refresh the sheet; what you see may be out of date'
       )
     ).toBeInTheDocument()
+    // announced, without taking focus
+    expect(screen.getByRole('status')).toHaveTextContent(
+      'Could not refresh the sheet; what you see may be out of date'
+    )
     expect(screen.getByRole('button', { name: 'Retry' })).toBeInTheDocument()
     expect(screen.queryByText(/Could not load the HPLC sheet/)).toBeNull()
     expect(next).toBeInTheDocument()
     expect(next).toHaveValue('80')
     expect(box).toHaveValue('6000')
+  })
+
+  it('a save that never answers times out after 15 seconds, says so, and the next save goes', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true })
+    try {
+      const before = makeRow({ hplc_prep: { stock_vial_mg: 5012.31 } })
+      vi.mocked(getHplcSheet).mockResolvedValue(makeSheet([before]))
+      // never answers, and ignores the abort: the queue must move on anyway
+      queueSaves()
+      renderPage()
+      const first = await screen.findByRole('textbox', {
+        name: `${S1}, ${VIAL}`,
+      })
+      const second = screen.getByRole('textbox', {
+        name: `${S1}, ${VIAL_DIL}`,
+      })
+      typeAndLeave(first, '6000')
+      typeAndLeave(second, '8003.6')
+      await waitFor(() => expect(patchHplcRow).toHaveBeenCalledTimes(1))
+      await act(() => vi.advanceTimersByTimeAsync(14_000))
+      expect(screen.queryByRole('alert')).not.toBeInTheDocument()
+      expect(patchHplcRow).toHaveBeenCalledTimes(1)
+      await act(() => vi.advanceTimersByTimeAsync(1_500))
+      expect(await screen.findByRole('alert')).toHaveTextContent(
+        `Not saved: ${S1}, ${VIAL}: the save timed out; check the value and try again`
+      )
+      expect(first).toHaveValue('5012.31')
+      await waitFor(() => expect(patchHplcRow).toHaveBeenCalledTimes(2))
+      expect(patchHplcRow).toHaveBeenLastCalledWith(
+        7,
+        311,
+        { hplc_prep: { stock_vial_diluent_mg: 8003.6 } },
+        SIGNAL
+      )
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('the instrument save carries the 15 second abort signal', async () => {
+    vi.mocked(getHplcSheet).mockResolvedValue(makeSheet([makeRow()]))
+    vi.mocked(updateWorksheetItem).mockResolvedValue({
+      status: 'ok',
+      item_id: 311,
+    })
+    renderPage()
+    const select = await screen.findByRole('combobox', {
+      name: `${S1}, Instrument`,
+    })
+    // the instruments list is empty here: the one choice left is not set
+    fireEvent.change(select, { target: { value: '' } })
+    await waitFor(() =>
+      expect(updateWorksheetItem).toHaveBeenCalledWith(
+        7,
+        311,
+        { instrument_id: null },
+        SIGNAL
+      )
+    )
   })
 
   it('a completed sheet is read-only on the page', async () => {
