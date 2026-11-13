@@ -18,7 +18,7 @@ import psycopg2.errors
 import worksheets_hplc
 from calculations.hplc_processor import BAC_STOCK_UG_ML, BENZYL_ALCOHOL_DENSITY, MAX_CAPSULES
 from endo_prep_rules import _iso_now
-from hplc_prep import compute_row
+from hplc_prep import compute_row, vial_letter
 from hplc_prep_rules import load_rules
 from models import CalibrationCurve, HplcMethod, LimsSubSample, Peptide, instrument_methods, peptide_methods
 from sqlalchemy import select
@@ -43,6 +43,13 @@ REASON_STOCK_BACKWARDS = ("Step 2: the vial and septum + diluent is not more tha
                           "check the two weights")
 REASON_SOLO_BLEND = ("the sample names a catalog blend as one peptide; record the blend's components "
                      "on the sample so each one is quantified on its own curve")
+# B2: compute_row works a capsule blend's component stocks out per capsule, as the source tool
+# does (calc.js 1837, 1877; hplc_prep 241, 269), so promote refuses one until the source is fixed.
+REASON_CAPSULE_BLEND = ("A blend in capsules cannot be promoted from the sheet yet: its component concentrations "
+                        "are being corrected in the working-out. Prep this one in the wizard.")
+# B3: the 500's words; the database's own text (host, user, SQL) goes to the log only
+PROMOTE_FAILED = ("The prep could not be saved. Nothing was written. Try again, and tell an admin if it keeps "
+                  "happening.")
 _FORM_PROBLEM = "no HPLC prep for this sample form"  # sheet_rows' wording for a null form
 # compute_row's words for a flagged weighing (hplc_prep._warnings)
 _FLAGGED = {"diluent": "the vial + diluent weight is less than the empty vial",
@@ -87,7 +94,8 @@ def _missing(weighed: dict, names, skip=()) -> list:
 def num(x) -> str:
     """A number as the sentences print it: the shortest text that reads back as the same float,
     an integer without ".0". Python's repr and JavaScript's String(x) agree on this for every
-    value from 1e-4 up to 1e16 (outside it both switch to exponents, in different spellings),
+    value from 1e-4 up to 2**53 (whole numbers print as integers on both sides to there; past
+    it, and below 1e-4, the two spell some numbers differently),
     so the browser's copy can print it identically; "%g" cannot be ported (it keeps six figures
     and prints 997.1 and 997.1004 alike)."""
     x = float(x)
@@ -114,6 +122,8 @@ def promote_reasons(row: dict, computed: Optional[dict], blend_cap: int) -> list
     if n > blend_cap:
         reasons.append(f"this blend has {n} components and the cap is {blend_cap}; "
                        "a partial blend is never filed")
+    if row["form"] == "capsule" and row["is_blend"]:
+        reasons.append(REASON_CAPSULE_BLEND)
     if row["instrument_id"] is None:
         reasons.append(REASON_NO_INSTRUMENT)
     if computed is None:
@@ -157,10 +167,11 @@ def promote_reasons(row: dict, computed: Optional[dict], blend_cap: int) -> list
         for label, names, skip, actual in steps:
             missing = _missing(weighed, names, skip)
             if missing:
-                reasons.append(f"Vial {v['vial']}, Step {label}: weigh {_and(missing)}")
+                reasons.append(f"Vial {vial_letter(v['vial'])}, Step {label}: weigh {_and(missing)}")
             elif actual["problem"]:
-                reasons.append(f"Vial {v['vial']}, Step {label}: {_FLAGGED[actual['problem']]}; "
+                reasons.append(f"Vial {vial_letter(v['vial'])}, Step {label}: {_FLAGGED[actual['problem']]}; "
                                "check the weights")
+        reasons += _above_the_stock(v)
     if row["is_blend"]:
         names = {c["peptide_id"]: c["abbreviation"] or c["name"] for c in row["components"]}
         reasons += [f"type the weight of {names[c['peptide_id']]} in the blend split (Step 2b)"
@@ -173,8 +184,36 @@ def promote_reasons(row: dict, computed: Optional[dict], blend_cap: int) -> list
             reasons.append("the stock volume cannot be worked out from these numbers; check Step 2")
         for v in computed["vials"]:
             if v["dilution_factor_total"] is None or v["stock_conc_ug_ml"] is None:
-                reasons.append(f"Vial {v['vial']} cannot be worked out from these numbers; check the row")
+                reasons.append(f"Vial {vial_letter(v['vial'])} cannot be worked out from these numbers; "
+                               "check the row")
     return reasons
+
+
+def _above(target, source) -> bool:
+    # strictly above, past float noise: a target typed equal to a worked-out stock is no reason
+    return target is not None and source is not None and target > source * (1 + 1e-9)
+
+
+def _above_the_stock(v: dict) -> list[str]:
+    """B5 (spec section 7): a target above what its step dilutes from. compute_row plans that
+    as a negative diluent volume and warns of nothing. A capsule is injected neat: its plan
+    dilutes the stock to itself, so it is never a reason."""
+    if v["neat"]:
+        return []
+    out, letter = [], vial_letter(v["vial"])
+    inter = v["intermediate"] if v["two_step"] else None
+    if inter is not None and _above(inter["target_ug_ml"], v["stock_conc_ug_ml"]):
+        out.append(f"Vial {letter}, Step 3a: the intermediate target, {inter['target_ug_ml']:.2f} ug/mL, is above "
+                   f"the stock it is diluted from, {v['stock_conc_ug_ml']:.2f} ug/mL; lower it or check Step 2")
+    if _above(v["target"]["value"], v["stock_for_final"]):
+        if inter is not None:
+            out.append(f"Vial {letter}, Step 3: the target, {v['target']['value']:.2f} ug/mL, is above the "
+                       f"intermediate it is diluted from, {v['stock_for_final']:.2f} ug/mL; lower the target "
+                       "or check Step 3a")
+        else:
+            out.append(f"Vial {letter}: the target, {v['target']['value']:.2f} ug/mL, is above the stock it is "
+                       f"diluted from, {v['stock_for_final']:.2f} ug/mL; lower the target or check Step 2")
+    return out
 
 
 def _vial_columns(v: dict, weighed: dict, stock_pair: tuple) -> dict:
@@ -247,6 +286,7 @@ def density_check(db: Session, row: dict) -> tuple[list, list]:
                                "worked out with the curve's. A lab admin has to make them agree before "
                                "this row can be promoted.")
     return reasons, notes
+
 
 def _prep_data(db: Session, current_user, worksheet, item, row: dict, computed: dict,
                extra_notes=()) -> dict:
@@ -355,10 +395,6 @@ def _stamp_analyses(db: Session, item, row: dict, user_id) -> None:
         log.exception("hplc_promote_stamp_failed item=%s sample=%s", item.id, item.sample_id)
 
 
-def _first_line(exc: Exception) -> str:
-    return (str(exc).strip().splitlines() or [type(exc).__name__])[0]
-
-
 def _computed_row(db: Session, worksheet, item, *, peptide_check: bool) -> tuple[dict, Optional[dict]]:
     row = worksheets_hplc.sheet_rows(db, worksheet, [item])[0]
     if peptide_check and row["peptide_id"] and not row["is_blend"]:
@@ -374,13 +410,15 @@ def _already(db: Session, current_user, worksheet, item, prep: dict) -> dict:
     """A row promoted before: its prep, and the promote stamp written when a half commit lost
     it (the prep committed, the item's stamp did not). Ends the transaction either way, so the
     worksheet and item locks are not held into the session's close."""
+    row = worksheets_hplc.sheet_rows(db, worksheet, [item])[0]
     if (item.prep_rule or {}).get("event") != "promote":
         stored = mk1_db.get_sample_prep(prep["id"])
         if stored is not None:
-            row = worksheets_hplc.sheet_rows(db, worksheet, [item])[0]
             item.prep_rule = _healed_stamp(stored, current_user.id)
             db.commit()
-            _stamp_analyses(db, item, row, current_user.id)
+    # B6: every press re-stamps the vial's analyses, so a bench stamp lost after a good promote
+    # heals; it fills only NULLs, so a repeat changes nothing
+    _stamp_analyses(db, item, row, current_user.id)
     out = {"prep": prep, "already": True, "row": worksheets_hplc.sheet_rows(db, worksheet, [item])[0]}
     db.rollback()  # the read above began a transaction; nothing in it is kept
     return out
@@ -436,7 +474,7 @@ def promote_row(db: Session, current_user, worksheet, item) -> dict:
             return _already(db, current_user, worksheet, item, found[item.id])
     except psycopg2.Error as exc:
         log.exception("hplc_promote_mk1_db_failed item=%s", item.id)
-        raise Refused(500, f"The prep was not saved: {_first_line(exc)}")
+        raise Refused(500, PROMOTE_FAILED) from exc
     item.prep_rule = _promote_stamp(computed, current_user.id)
     db.commit()
     _stamp_analyses(db, item, row, current_user.id)

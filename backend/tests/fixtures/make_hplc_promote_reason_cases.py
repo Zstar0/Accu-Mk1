@@ -25,11 +25,12 @@ ABOUT = (
     "row is the row facts exactly as GET /worksheets/{id}/hplc serves them; computed is "
     "hplc_prep.compute_row(row's declared_mg, form, peptide_id, components; row.hplc_prep; no rules; "
     "row.params), or null when the row has a null form or no components and is never computed; "
-    "reasons is the answer, in order. Not in this file, because the server decides them outside "
-    "promote_reasons: the completed worksheet (promote_row), a single peptide that is a catalog blend "
-    "(promote_row adds peptide_is_blend from the catalog, which the sheet does not serve), the curve "
-    "density check (needs the calibration curves), and the backstop (no real compute_row output reaches "
-    "it). Regenerate: C:/tmp/hplc-build/venv/Scripts/python.exe "
+    "reasons is the answer, in order. The two backstop cases take a real compute_row answer with one "
+    "value set to null by hand (no real input reaches the backstop). Not in this file, because the server "
+    "decides them outside the rows the sheet serves: the completed worksheet (promote_row), a single "
+    "peptide that is a catalog blend (decided on the server: promote_row adds the row key "
+    "peptide_is_blend from the catalog, a key the sheet never serves), and the curve density check "
+    "(needs the calibration curves). Regenerate: C:/tmp/hplc-build/venv/Scripts/python.exe "
     "backend/tests/fixtures/make_hplc_promote_reason_cases.py"
 )
 PARAMS = hplc_run_params(None)
@@ -60,7 +61,7 @@ def row(**over):
         "sample_bac": False, "form": "powder", "rider_only": False,
         "instrument_id": 2, "instrument_name": "HPLC 1290a", "params": PARAMS,
         "prep_form": None, "hplc_prep": {**STOCK, "vials": {"1": dict(VIAL)}},
-        "promoted": False, "prep": None, "problems": [],
+        "promoted": False, "prep": None, "problems": [], "other_preps": [],
     }
     out.update(over)
     if not out["is_blend"]:  # sheet_rows: a solo component carries the row's weight
@@ -79,7 +80,20 @@ def _vials(*weighed):
 
 BPC_TB = [_component(10, "BPC-157", 5.0, 1), _component(11, "TB-500", 5.0, 2, "Thymosin Beta-4")]
 
-# (name, row, blend_cap, expected count: 0 clean, 1 isolated, None many)
+TWO_VIALS = _vials({"vial_mg": 2500.0, "vial_diluent_mg": 3800.0, "vial_all_mg": 3996.0},
+                   {"vial_mg": 2600.0, "vial_diluent_mg": 3900.0, "vial_all_mg": 4100.0})
+
+
+def _no_stock_volume(computed):
+    computed["stock"]["total_diluent_ml"] = None
+
+
+def _no_factor(computed):
+    computed["vials"][0]["dilution_factor_total"] = None
+
+
+# (name, row, blend_cap, expected count: 0 clean, 1 isolated, None many[, a change made to
+# compute_row's answer by hand, for what no real input reaches])
 CASES = [
     ("clean powder", row(), 4, 0),
     ("clean powder two-step", row(hplc_prep={**STOCK, "declared_mg": 600.0, "vials": {"1": TWO_STEP_VIAL}}), 4, 0),
@@ -138,6 +152,26 @@ CASES = [
     ("everything missing at once", row(instrument_id=None, instrument_name=None, declared_mg=None,
                                        components=[_component(10, "BPC-157", None)],
                                        hplc_prep={"vials": {"1": {"vial_mg": 2500.0}}}), 4, None),
+    # fix wave B2: a blend in capsules is refused until the source tool's per-capsule stock is fixed
+    ("capsule blend", blend(BPC_TB, form="capsule", prep_form="capsule", hplc_prep={
+        **STOCK, "capsules": 4, "vials": _vials({"vial_mg": 2500.0, "vial_all_mg": 3995.0},
+                                                {"vial_mg": 2600.0, "vial_all_mg": 4100.0})}), 4, 1),
+    # fix wave B5: a target above what it is diluted from
+    ("one-step target above the stock", row(hplc_prep={**STOCK, "vials": {"1": {**VIAL, "target_ug_ml": 5000}}}), 4, 1),
+    ("Step 3a target above the stock", row(hplc_prep={**STOCK, "declared_mg": 600.0, "vials": {"1": {
+        **TWO_STEP_VIAL, "int_target_ug_ml": 300000}}}), 4, 1),
+    ("Step 3 target above the intermediate", row(hplc_prep={**STOCK, "declared_mg": 600.0, "vials": {"1": {
+        **TWO_STEP_VIAL, "target_ug_ml": 10000}}}), 4, 1),
+    ("target equal to the stock is not a reason", row(hplc_prep={**STOCK, "declared_mg": 0.6, "vials": {"1": {
+        **VIAL, "target_ug_ml": 200}}}), 4, 0),
+    ("a neat capsule under the vial target is not a reason", row(form="capsule", prep_form="capsule", hplc_prep={
+        **CAPSULE, "stock_vial_diluent_mg": 71466.0}), 4, 0),
+    # fix wave B18: a vial named by its letter
+    ("vial B weighing missing", blend(BPC_TB, hplc_prep={**STOCK, "vials": {
+        "1": TWO_VIALS["1"], "2": {"vial_mg": 2600.0}}}), 4, 1),
+    # fix wave B14: the backstop
+    ("backstop: no stock volume", row(), 4, 1, _no_stock_volume),
+    ("backstop: no factor", row(), 4, 1, _no_factor),
 ]
 
 
@@ -150,8 +184,10 @@ def _computed(r):
 
 def build() -> dict:
     cases = []
-    for name, r, cap, count in CASES:
+    for name, r, cap, count, *change in CASES:
         computed = _computed(r)
+        for edit in change:
+            edit(computed)
         reasons = promote_reasons(r, computed, cap)
         if count is not None and len(reasons) != count:
             raise AssertionError(f"case {name!r}: expected {count} reason(s), got {reasons}")

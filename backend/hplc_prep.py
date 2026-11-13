@@ -17,6 +17,12 @@ from hplc_prep_rules import component_target, match_rule, pick_lead, row_diluent
 MAX_VIALS = 7  # calc.js VIAL_LETTERS 'ABCDEFG'
 
 
+def vial_letter(n: int) -> str:
+    """An autosampler vial as the bench names it: 1 is A, 2 is B, up to 7 is G (calc.js
+    VIAL_LETTERS). Only words use it; the vials stay keyed by number everywhere else."""
+    return "ABCDEFG"[n - 1]
+
+
 def _div(a, b):
     # calc.js div (154): None when either side is missing or the divisor is 0
     return None if a is None or b is None or b == 0 else a / b
@@ -318,7 +324,7 @@ def _warnings(form, stock_problem, vials, components, inputs, comps, declared, i
             [("3", "step3", v["actual"])]
         for label, code, actual in steps:
             if actual["problem"]:
-                warn(f"{code}_{actual['problem']}", f"Vial {v['vial']}, Step {label}: "
+                warn(f"{code}_{actual['problem']}", f"Vial {vial_letter(v['vial'])}, Step {label}: "
                      f"{weighing[actual['problem']]}. Check the weights; no concentration is worked out.",
                      v["vial"])
     tol = params["volume_tolerance_pct"]
@@ -330,12 +336,12 @@ def _warnings(form, stock_problem, vials, components, inputs, comps, declared, i
         for where, what, plan, actual in checks:
             planned, got = plan[f"{what}_vol_ul"], actual[f"actual_{what}_ul"]
             if volume_off(planned, got, params):
-                warn("volume_off", f"Vial {v['vial']}: the {what} added to the {where} is {got:.2f} uL "
+                warn("volume_off", f"Vial {vial_letter(v['vial'])}: the {what} added to the {where} is {got:.2f} uL "
                      f"against {planned:.2f} uL planned, more than {tol:g}% off. Remake the vial, or call it out.",
                      v["vial"])
     for c in components:
         if c["below_floor"]:
-            warn("below_floor", f"This peptide lands at {c['planned_final_ug_ml']:.2f} ug/mL in vial {c['vial']}, "
+            warn("below_floor", f"This peptide lands at {c['planned_final_ug_ml']:.2f} ug/mL in vial {vial_letter(c['vial'])}, "
                  f"under the {floor:g} ug/mL floor. Consider giving it its own vial.", c["vial"], c["peptide_id"])
     if form == "capsule" and not (inputs.get("capsules") is not None and inputs["capsules"] > 0):
         warn("capsule_no_count", "Type how many capsules went into the stock. Nothing is planned until then.")

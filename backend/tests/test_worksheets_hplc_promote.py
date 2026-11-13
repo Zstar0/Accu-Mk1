@@ -182,16 +182,16 @@ def test_reasons_lists_every_gap_at_once():
         promote_mod.REASON_NO_INSTRUMENT,
         "type the declared weight: the stock concentration is worked out from it",
         "weigh the stock vial: Step 2 needs both of its weighings",
-        "Vial 1, Step 3: the vial + diluent weight is less than the empty vial; check the weights",
+        "Vial A, Step 3: the vial + diluent weight is less than the empty vial; check the weights",
     ]
 
 
 def test_reasons_name_every_missing_weighing_of_a_two_step_vial():
     inputs = {**_STOCK, "declared_mg": 600.0, "vials": {"1": {"vial_mg": 2500.0}}}
     assert _reasons(_facts(hplc_prep=inputs)) == [
-        "Vial 1, Step 3a: weigh the empty intermediate vial, the intermediate vial + diluent and "
+        "Vial A, Step 3a: weigh the empty intermediate vial, the intermediate vial + diluent and "
         "the intermediate vial with diluent + stock",
-        "Vial 1, Step 3: weigh the vial + diluent and the vial with diluent + stock",
+        "Vial A, Step 3: weigh the vial + diluent and the vial with diluent + stock",
     ]
 
 
@@ -199,7 +199,7 @@ def test_a_flagged_intermediate_weighing_is_a_reason():
     inputs = {**_STOCK, "declared_mg": 600.0, "vials": {"1": {
         **_INPUTS["two_step"]["vials"]["1"], "int_vial_all_mg": 3858.0}}}
     assert _reasons(_facts(hplc_prep=inputs)) == [
-        "Vial 1, Step 3a: the last weight (vial, diluent + stock) is not more than the vial + diluent "
+        "Vial A, Step 3a: the last weight (vial, diluent + stock) is not more than the vial + diluent "
         "weight, so no stock went in; check the weights"]
 
 
@@ -220,7 +220,7 @@ def test_capsule_liquid_and_rider_reasons():
     # a capsule's blank "+ diluent" is fine; a powder's is not
     assert _reasons(_facts(form="capsule", hplc_prep=_INPUTS["capsule"])) == []
     assert _reasons(_facts(hplc_prep={**_STOCK, "vials": {"1": {"vial_mg": 2500.0, "vial_all_mg": 3995.0}}})) == [
-        "Vial 1, Step 3: weigh the vial + diluent"]
+        "Vial A, Step 3: weigh the vial + diluent"]
     assert _reasons(_facts(rider_only=True, form=None)) == [promote_mod.REASON_RIDER]
 
 
@@ -565,7 +565,7 @@ def test_a_row_that_cannot_be_promoted_answers_409_with_every_reason(client, db)
     assert detail["reasons"] == [
         promote_mod.REASON_NO_INSTRUMENT,
         "weigh the stock vial: Step 2 needs both of its weighings",
-        "Vial 1, Step 3: weigh the vial + diluent and the vial with diluent + stock"]
+        "Vial A, Step 3: weigh the vial + diluent and the vial with diluent + stock"]
     assert mk1_db.list_sample_preps_for_worksheet_items([item.id]) == []
     db.expire_all()
     assert db.get(WorksheetItem, item.id).prep_rule is None
@@ -667,7 +667,9 @@ def test_with_mk1_db_down_nothing_is_written_on_either_side(client, db, monkeypa
     monkeypatch.setattr(mk1_db, "create_sample_prep", down)
     r = client.post(_url(ws, item))
     assert r.status_code == 500
-    assert "could not connect to server" in r.json()["detail"]
+    # B3: a fixed sentence, never the database's own text (host, user, SQL)
+    assert r.json()["detail"] == ("The prep could not be saved. Nothing was written. Try again, and tell "
+                                  "an admin if it keeps happening.") == promote_mod.PROMOTE_FAILED
     db.expire_all()
     assert db.get(WorksheetItem, item.id).prep_rule is None
     assert mk1_db.list_sample_preps_for_worksheet_items([item.id]) == []
@@ -675,7 +677,7 @@ def test_with_mk1_db_down_nothing_is_written_on_either_side(client, db, monkeypa
     monkeypatch.setattr(worksheets_hplc, "_preps_by_item",
                         lambda _ids: (_ for _ in ()).throw(psycopg2.OperationalError("no route to host")))
     r = client.post(_url(ws, item))
-    assert r.status_code == 500 and "no route to host" in r.json()["detail"]
+    assert r.status_code == 500 and r.json()["detail"] == promote_mod.PROMOTE_FAILED
 
 
 # --- through the engine -------------------------------------------------------------------
@@ -764,7 +766,7 @@ def test_the_backstop_refuses_a_vial_with_no_factor():
     computed = compute_row({k: row[k] for k in ("declared_mg", "form", "peptide_id", "components")},
                            row["hplc_prep"], [], PARAMS)
     computed["vials"][0]["dilution_factor_total"] = None  # what no listed reason catches
-    assert promote_reasons(row, computed, 4) == ["Vial 1 cannot be worked out from these numbers; check the row"]
+    assert promote_reasons(row, computed, 4) == ["Vial A cannot be worked out from these numbers; check the row"]
 
 
 def test_a_blend_with_its_split_typed_and_no_total_says_so_in_blend_words():
@@ -929,6 +931,7 @@ def test_with_no_active_curve_an_inactive_one_that_agrees_promotes_with_no_note(
     assert client.post(_url(ws, item)).status_code == 200
     assert _stored(item)["notes"] is None
 
+
 def test_a_curve_on_another_instrument_is_not_this_rows(client, db):
     ws, item, bpc, _inst = _solo(db)
     _curve(db, bpc, _instrument(db, "HPLC 1290b"), 1000.0)
@@ -978,6 +981,7 @@ def test_a_healed_blend_stamp_names_a_lead_only_for_a_one_component_vial(client,
     leads = [v["lead"] for v in rule["vials"]]
     assert leads == ([bpc.id, tb.id] if vials == (1, 2) else [None])
     assert rule["floor_ug_ml"] is None and rule["healed"] is True
+
 
 def test_a_failed_read_after_the_commit_answers_the_prep_without_the_row(client, db, monkeypatch):
     ws, item, _bpc, _inst = _solo(db)
@@ -1096,3 +1100,204 @@ def test_the_reason_cases_file_is_what_promote_reasons_answers_today():
 def test_no_reason_in_the_cases_file_holds_an_em_dash():
     text = (_FIXTURES / "hplc_promote_reason_cases.json").read_text(encoding="utf-8")
     assert "\u2014" not in text and "\\u2014" not in text
+
+# --- fix wave (backend) ----------------------------------------------------------------------
+
+
+def _blend_facts(**over):
+    comps = [{"peptide_id": 10, "name": "BPC-157", "abbreviation": "BPC-157", "declared_mg": 5.0, "vial": 1},
+             {"peptide_id": 11, "name": "Thymosin Beta-4", "abbreviation": "TB-500", "declared_mg": 5.0, "vial": 2}]
+    vials = {"1": {"vial_mg": 2500.0, "vial_diluent_mg": 3800.0, "vial_all_mg": 3996.0},
+             "2": {"vial_mg": 2600.0, "vial_diluent_mg": 3900.0, "vial_all_mg": 4100.0}}
+    return _facts(**{"peptide_id": 3, "is_blend": True, "components": comps,
+                     "hplc_prep": {**_STOCK, "vials": vials}, **over})
+
+
+def test_b2_a_capsule_blend_is_refused_with_a_sentence_a_tech_can_act_on():
+    row = _blend_facts(form="capsule", prep_form="capsule", hplc_prep={
+        **_STOCK, "capsules": 4, "vials": {"1": {"vial_mg": 2500.0, "vial_all_mg": 3995.0},
+                                           "2": {"vial_mg": 2600.0, "vial_all_mg": 4100.0}}})
+    assert _reasons(row) == [promote_mod.REASON_CAPSULE_BLEND] == [
+        "A blend in capsules cannot be promoted from the sheet yet: its component concentrations are being "
+        "corrected in the working-out. Prep this one in the wizard."]
+    # even when the row cannot be computed
+    assert promote_reasons(row, None, 4) == [promote_mod.REASON_CAPSULE_BLEND]
+    # a capsule of one peptide and a powder blend are not refused for it
+    assert _reasons(_facts(form="capsule", hplc_prep=_INPUTS["capsule"])) == []
+    assert _reasons(_blend_facts()) == []
+
+
+def test_b5_a_one_step_target_above_its_stock_is_a_reason_with_both_numbers():
+    row = _facts(hplc_prep={**_STOCK, "vials": {"1": {**_VIAL, "target_ug_ml": 5000}}})
+    assert _reasons(row) == ["Vial A: the target, 5000.00 ug/mL, is above the stock it is diluted from, "
+                             "3333.33 ug/mL; lower the target or check Step 2"]
+
+
+def test_b5_each_step_of_a_two_step_vial_is_checked_against_what_it_dilutes_from():
+    two = _INPUTS["two_step"]
+    row = _facts(hplc_prep={**two, "vials": {"1": {**two["vials"]["1"], "int_target_ug_ml": 300000}}})
+    [reason] = _reasons(row)
+    assert reason.startswith("Vial A, Step 3a: the intermediate target, 300000.00 ug/mL, is above the stock "
+                             "it is diluted from, 200000.") and reason.endswith(" ug/mL; lower it or check Step 2")
+    row = _facts(hplc_prep={**two, "vials": {"1": {**two["vials"]["1"], "target_ug_ml": 10000}}})
+    [reason] = _reasons(row)
+    assert reason.startswith("Vial A, Step 3: the target, 10000.00 ug/mL, is above the intermediate it is "
+                             "diluted from, ") and reason.endswith(" ug/mL; lower the target or check Step 3a")
+
+
+def test_b5_a_target_equal_to_the_stock_and_a_neat_capsule_are_not_reasons():
+    row = _facts(hplc_prep={**_STOCK, "declared_mg": 0.6, "vials": {"1": {**_VIAL, "target_ug_ml": 200}}})
+    computed = _computed_pure(row)
+    assert computed["vials"][0]["stock_conc_ug_ml"] == pytest.approx(200.0)
+    assert _reasons(row) == []
+    # a capsule is injected neat: a stock under the vial's target is no reason
+    weak = {**_INPUTS["capsule"], "stock_vial_diluent_mg": 71466.0}
+    computed = _computed_pure(_facts(form="capsule", hplc_prep=weak))
+    assert computed["vials"][0]["stock_conc_ug_ml"] < computed["vials"][0]["target"]["value"]
+    assert _reasons(_facts(form="capsule", hplc_prep=weak)) == []
+
+
+def _computed_pure(row):
+    return compute_row({k: row[k] for k in ("declared_mg", "form", "peptide_id", "components")},
+                       row["hplc_prep"], [], row["params"])
+
+
+def test_b18_vials_are_named_by_letter_in_reasons_and_warnings():
+    row = _blend_facts(hplc_prep={**_STOCK, "vials": {"1": _blend_facts()["hplc_prep"]["vials"]["1"],
+                                                      "2": {"vial_mg": 2600.0}}})
+    assert _reasons(row) == ["Vial B, Step 3: weigh the vial + diluent and the vial with diluent + stock"]
+    floor = _blend_facts(components=[
+        {"peptide_id": 10, "name": "BPC-157", "abbreviation": "BPC-157", "declared_mg": 9.0, "vial": 1},
+        {"peptide_id": 11, "name": "TB-500", "abbreviation": "TB-500", "declared_mg": 1.0, "vial": 1}])
+    texts = [w["text"] for w in _computed_pure(floor)["warnings"] if w["code"] == "below_floor"]
+    assert len(texts) == 1 and " in vial A, " in texts[0] and "vial 1" not in texts[0]
+    assert promote_mod.vial_letter(1) == "A" and promote_mod.vial_letter(7) == "G"
+
+
+def test_b6_a_lost_bench_stamp_is_stamped_by_the_next_press(client, db, monkeypatch):
+    import lims_analyses.prep_bridge as bridge
+
+    ws, item, bpc, inst = _solo(db)
+    method = _method(db, bpc, inst, {"hplc": {}})
+    vial = db.query(LimsSubSample).filter_by(sample_id=item.sample_id).one()
+    svc = AnalysisService(title="BPC-157 purity", keyword="PUR_BPC157_B6")
+    db.add(svc)
+    db.flush()
+    row = LimsAnalysis(lims_sub_sample_pk=vial.id, analysis_service_id=svc.id, keyword=svc.keyword,
+                       title=svc.title, review_state="unassigned")
+    db.add(row)
+    db.commit()
+    real = bridge.stamp_prep_assignment
+    monkeypatch.setattr(bridge, "stamp_prep_assignment", lambda *_a, **_k: (_ for _ in ()).throw(RuntimeError("x")))
+    assert client.post(_url(ws, item)).status_code == 200
+    db.expire_all()
+    assert db.get(LimsAnalysis, row.id).instrument_id is None
+    monkeypatch.setattr(bridge, "stamp_prep_assignment", real)
+    r = client.post(_url(ws, item))
+    assert r.status_code == 200 and r.json()["already"] is True
+    db.expire_all()
+    stamped = db.get(LimsAnalysis, row.id)
+    assert (stamped.instrument_id, stamped.method_id) == (inst.id, method.id)
+
+
+def test_b8_a_wizard_prep_on_the_vial_is_shown_in_the_promote_answer_and_never_refuses(client, db):
+    ws, item, _bpc, _inst = _solo(db)
+    vial = db.query(LimsSubSample).filter_by(sample_id=item.sample_id).one()
+    wizard = mk1_db.create_sample_prep({"peptide_id": 1, "status": "awaiting_hplc", "lims_sub_sample_pk": vial.id})
+    try:
+        r = client.post(_url(ws, item))
+        assert r.status_code == 200, r.text
+        assert r.json()["row"]["other_preps"] == [
+            {"id": wizard["id"], "sample_id": wizard["sample_id"], "status": "awaiting_hplc"}]
+    finally:
+        mk1_db.delete_sample_prep(wizard["id"])
+
+
+# B17: promote, then the real POST /hplc/analyze with the flyout's body from the STORED prep.
+
+_INJECTIONS = [{"peaks": [{"area": 1000.0, "area_percent": 99.0, "retention_time": 10.0}], "main_peak_index": 0}]
+_SLOPE, _INTERCEPT = 10.0, 0.0
+_CONC_UG_ML = (1000.0 - _INTERCEPT) / _SLOPE  # the curve: area 1000 -> 100 ug/mL
+
+
+def _analyze_curve(db, peptide, inst):
+    curve = CalibrationCurve(peptide_id=peptide.id, instrument_id=inst.id, slope=_SLOPE, intercept=_INTERCEPT,
+                             r_squared=0.999, is_active=True, reference_rt=10.0, rt_tolerance=0.5,
+                             diluent_density=DENSITY)
+    db.add(curve)
+    db.commit()
+    return curve
+
+
+def _prep_analyze_fields(prep, vial_number=None):
+    """src/lib/hplc-analyze-fields.ts prepAnalyzeFields, line for line, for a prep with a form."""
+    vial = next((v for v in prep["vial_data"] or [] if v["vial_number"] == vial_number), None) \
+        if vial_number is not None else None
+    src = vial or prep
+    weights = {"stock_vial_empty": src.get("stock_vial_empty_mg"),
+               "stock_vial_with_diluent": src.get("stock_vial_loaded_mg"),
+               "dil_vial_empty": src.get("dil_vial_empty_mg"),
+               "dil_vial_with_diluent": src.get("dil_vial_with_diluent_mg"),
+               "dil_vial_with_diluent_and_sample": src.get("dil_vial_final_mg")}
+    ints = [src.get("int_vial_empty_mg"), src.get("int_vial_with_diluent_mg"), src.get("int_vial_final_mg")]
+    if any(v is not None for v in ints):
+        weights.update(int_vial_empty=ints[0], int_vial_with_diluent=ints[1], int_vial_with_diluent_and_sample=ints[2])
+    fields = {"weights": weights, "prep_form": prep["prep_form"]}
+    if prep["prep_form"] == "liquid" and prep["declared_volume_ml"] is not None:
+        fields["declared_volume_ml"] = prep["declared_volume_ml"]
+    if prep["prep_form"] == "capsule" and prep["capsules_used"] is not None:
+        fields["capsules_used"] = prep["capsules_used"]
+    return fields
+
+
+def _analyze(client, prep, peptide, curve, vial_number=None):
+    body = {"sample_id_label": prep["senaite_sample_id"], "peptide_id": peptide.id, "injections": _INJECTIONS,
+            "instrument_id": prep["instrument_id"], "calibration_curve_id": curve.id,
+            **_prep_analyze_fields(prep, vial_number)}
+    r = client.post("/hplc/analyze", json=body)
+    # the route's declared status is 201 Created (main.run_hplc_analysis), not 200
+    assert r.status_code == 201, r.text
+    return r.json()
+
+
+def _expected_quantity(v, stock_ml, capsules):
+    """quantity_mg = conc (ug/mL) x total dilution factor x stock volume (mL) / 1000 [/ capsules],
+    with conc = (area - intercept) / slope, the factor and the volume as the engine rounds them
+    (6 places) and the product rounded to 4 places."""
+    return round(_CONC_UG_ML * _sheet_total(v) * round(stock_ml, 6) / 1000 / (capsules or 1), 4)
+
+
+@pytest.mark.parametrize("kind", list(_INPUTS))
+def test_b17_a_promoted_prep_through_the_real_analyze_route_reports_the_sheets_quantity(client, db, kind):
+    ws, item, bpc, inst = _solo(db, kind)
+    curve = _analyze_curve(db, bpc, inst)
+    r = client.post(_url(ws, item))
+    assert r.status_code == 200, r.text
+    computed = _computed(db, r.json()["row"])
+    v, stock_ml = computed["vials"][0], computed["stock"]["total_diluent_ml"]
+    prep = _stored(item)
+    out = _analyze(client, prep, bpc, curve)
+    assert out["dilution_factor"] == pytest.approx(_sheet_total(v), abs=1e-9)
+    assert out["stock_volume_ml"] == pytest.approx(round(stock_ml, 6), abs=1e-9)
+    capsules = prep["capsules_used"] if kind == "capsule" else None
+    assert out["quantity_mg"] == pytest.approx(_expected_quantity(v, stock_ml, capsules), abs=1.5e-4)
+    assert (out["prep_form"], out["capsules_used"]) == (_FORMS[kind], capsules)
+
+
+def test_b17_each_vial_of_a_split_blend_through_the_real_analyze_route(client, db):
+    ws, item, (bpc, tb, _blend_pep), inst = _blend(db)
+    curves = {p.id: (p, _analyze_curve(db, p, inst)) for p in (bpc, tb)}
+    r = client.post(_url(ws, item))
+    assert r.status_code == 200, r.text
+    computed = _computed(db, r.json()["row"])
+    prep = _stored(item)
+    vial_of = {c["id"]: c["vial_number"] for c in prep["components_json"]}
+    assert sorted(vial_of.values()) == [1, 2]
+    for v in computed["vials"]:
+        for pid in v["component_ids"]:
+            peptide, curve = curves[pid]
+            out = _analyze(client, prep, peptide, curve, vial_of[pid])
+            stock_ml = computed["stock"]["total_diluent_ml"]
+            assert out["dilution_factor"] == pytest.approx(_sheet_total(v), abs=1e-9)
+            assert out["stock_volume_ml"] == pytest.approx(round(stock_ml, 6), abs=1e-9)
+            assert out["quantity_mg"] == pytest.approx(_expected_quantity(v, stock_ml, None), abs=1.5e-4)

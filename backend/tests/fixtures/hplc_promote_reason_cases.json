@@ -1,5 +1,5 @@
 {
- "about": "promote_reasons(row, computed, blend_cap) from backend/worksheets_hplc_promote.py over fixed rows. row is the row facts exactly as GET /worksheets/{id}/hplc serves them; computed is hplc_prep.compute_row(row's declared_mg, form, peptide_id, components; row.hplc_prep; no rules; row.params), or null when the row has a null form or no components and is never computed; reasons is the answer, in order. Not in this file, because the server decides them outside promote_reasons: the completed worksheet (promote_row), a single peptide that is a catalog blend (promote_row adds peptide_is_blend from the catalog, which the sheet does not serve), the curve density check (needs the calibration curves), and the backstop (no real compute_row output reaches it). Regenerate: C:/tmp/hplc-build/venv/Scripts/python.exe backend/tests/fixtures/make_hplc_promote_reason_cases.py",
+ "about": "promote_reasons(row, computed, blend_cap) from backend/worksheets_hplc_promote.py over fixed rows. row is the row facts exactly as GET /worksheets/{id}/hplc serves them; computed is hplc_prep.compute_row(row's declared_mg, form, peptide_id, components; row.hplc_prep; no rules; row.params), or null when the row has a null form or no components and is never computed; reasons is the answer, in order. The two backstop cases take a real compute_row answer with one value set to null by hand (no real input reaches the backstop). Not in this file, because the server decides them outside the rows the sheet serves: the completed worksheet (promote_row), a single peptide that is a catalog blend (decided on the server: promote_row adds the row key peptide_is_blend from the catalog, a key the sheet never serves), and the curve density check (needs the calibration curves). Regenerate: C:/tmp/hplc-build/venv/Scripts/python.exe backend/tests/fixtures/make_hplc_promote_reason_cases.py",
  "cases": [
   {
    "name": "clean powder",
@@ -62,7 +62,8 @@
     },
     "promoted": false,
     "prep": null,
-    "problems": []
+    "problems": [],
+    "other_preps": []
    },
    "computed": {
     "form": "powder",
@@ -208,7 +209,8 @@
     },
     "promoted": false,
     "prep": null,
-    "problems": []
+    "problems": [],
+    "other_preps": []
    },
    "computed": {
     "form": "powder",
@@ -373,7 +375,8 @@
     },
     "promoted": false,
     "prep": null,
-    "problems": []
+    "problems": [],
+    "other_preps": []
    },
    "computed": {
     "form": "liquid",
@@ -515,7 +518,8 @@
     },
     "promoted": false,
     "prep": null,
-    "problems": []
+    "problems": [],
+    "other_preps": []
    },
    "computed": {
     "form": "bac",
@@ -658,7 +662,8 @@
     },
     "promoted": false,
     "prep": null,
-    "problems": []
+    "problems": [],
+    "other_preps": []
    },
    "computed": {
     "form": "capsule",
@@ -812,7 +817,8 @@
     },
     "promoted": false,
     "prep": null,
-    "problems": []
+    "problems": [],
+    "other_preps": []
    },
    "computed": {
     "form": "powder",
@@ -1017,7 +1023,8 @@
     },
     "promoted": false,
     "prep": null,
-    "problems": []
+    "problems": [],
+    "other_preps": []
    },
    "computed": {
     "form": "powder",
@@ -1115,7 +1122,7 @@
       "code": "below_floor",
       "vial": 1,
       "peptide_id": 11,
-      "text": "This peptide lands at 22.22 ug/mL in vial 1, under the 60 ug/mL floor. Consider giving it its own vial."
+      "text": "This peptide lands at 22.22 ug/mL in vial A, under the 60 ug/mL floor. Consider giving it its own vial."
      }
     ]
    },
@@ -1183,7 +1190,8 @@
     },
     "promoted": false,
     "prep": null,
-    "problems": []
+    "problems": [],
+    "other_preps": []
    },
    "computed": null,
    "blend_cap": 4,
@@ -1254,7 +1262,8 @@
     "prep": null,
     "problems": [
      "no HPLC prep for this sample form"
-    ]
+    ],
+    "other_preps": []
    },
    "computed": null,
    "blend_cap": 4,
@@ -1317,7 +1326,8 @@
     "prep": null,
     "problems": [
      "the sample has no catalog peptide"
-    ]
+    ],
+    "other_preps": []
    },
    "computed": null,
    "blend_cap": 4,
@@ -1380,7 +1390,8 @@
     "prep": null,
     "problems": [
      "an analyte of the sample has no catalog peptide"
-    ]
+    ],
+    "other_preps": []
    },
    "computed": null,
    "blend_cap": 4,
@@ -1443,7 +1454,8 @@
     "prep": null,
     "problems": [
      "a test ordered on the sample has no catalog peptide"
-    ]
+    ],
+    "other_preps": []
    },
    "computed": null,
    "blend_cap": 4,
@@ -1506,7 +1518,8 @@
     "prep": null,
     "problems": [
      "this blend is not in the catalog"
-    ]
+    ],
+    "other_preps": []
    },
    "computed": null,
    "blend_cap": 4,
@@ -1603,7 +1616,8 @@
     },
     "promoted": false,
     "prep": null,
-    "problems": []
+    "problems": [],
+    "other_preps": []
    },
    "computed": {
     "form": "powder",
@@ -1752,13 +1766,13 @@
       "code": "volume_off",
       "vial": 1,
       "peptide_id": null,
-      "text": "Vial 1: the stock added to the final vial is 90.26 uL against 450.00 uL planned, more than 15% off. Remake the vial, or call it out."
+      "text": "Vial A: the stock added to the final vial is 90.26 uL against 450.00 uL planned, more than 15% off. Remake the vial, or call it out."
      },
      {
       "code": "volume_off",
       "vial": 1,
       "peptide_id": null,
-      "text": "Vial 1: the diluent added to the final vial is 1410.09 uL against 1050.00 uL planned, more than 15% off. Remake the vial, or call it out."
+      "text": "Vial A: the diluent added to the final vial is 1410.09 uL against 1050.00 uL planned, more than 15% off. Remake the vial, or call it out."
      }
     ]
    },
@@ -1828,7 +1842,8 @@
     },
     "promoted": false,
     "prep": null,
-    "problems": []
+    "problems": [],
+    "other_preps": []
    },
    "computed": {
     "form": "powder",
@@ -1972,7 +1987,8 @@
     },
     "promoted": false,
     "prep": null,
-    "problems": []
+    "problems": [],
+    "other_preps": []
    },
    "computed": {
     "form": "powder",
@@ -2136,7 +2152,8 @@
     },
     "promoted": false,
     "prep": null,
-    "problems": []
+    "problems": [],
+    "other_preps": []
    },
    "computed": {
     "form": "powder",
@@ -2337,7 +2354,8 @@
     },
     "promoted": false,
     "prep": null,
-    "problems": []
+    "problems": [],
+    "other_preps": []
    },
    "computed": {
     "form": "powder",
@@ -2488,7 +2506,8 @@
     },
     "promoted": false,
     "prep": null,
-    "problems": []
+    "problems": [],
+    "other_preps": []
    },
    "computed": {
     "form": "capsule",
@@ -2640,7 +2659,8 @@
     },
     "promoted": false,
     "prep": null,
-    "problems": []
+    "problems": [],
+    "other_preps": []
    },
    "computed": {
     "form": "capsule",
@@ -2791,7 +2811,8 @@
     },
     "promoted": false,
     "prep": null,
-    "problems": []
+    "problems": [],
+    "other_preps": []
    },
    "computed": {
     "form": "bac",
@@ -2935,7 +2956,8 @@
     },
     "promoted": false,
     "prep": null,
-    "problems": []
+    "problems": [],
+    "other_preps": []
    },
    "computed": {
     "form": "bac",
@@ -3077,7 +3099,8 @@
     },
     "promoted": false,
     "prep": null,
-    "problems": []
+    "problems": [],
+    "other_preps": []
    },
    "computed": {
     "form": "liquid",
@@ -3220,7 +3243,8 @@
     },
     "promoted": false,
     "prep": null,
-    "problems": []
+    "problems": [],
+    "other_preps": []
    },
    "computed": {
     "form": "powder",
@@ -3364,7 +3388,8 @@
     },
     "promoted": false,
     "prep": null,
-    "problems": []
+    "problems": [],
+    "other_preps": []
    },
    "computed": {
     "form": "powder",
@@ -3514,7 +3539,8 @@
     },
     "promoted": false,
     "prep": null,
-    "problems": []
+    "problems": [],
+    "other_preps": []
    },
    "computed": {
     "form": "powder",
@@ -3594,7 +3620,7 @@
    },
    "blend_cap": 4,
    "reasons": [
-    "Vial 1, Step 3: weigh the vial + diluent"
+    "Vial A, Step 3: weigh the vial + diluent"
    ]
   },
   {
@@ -3656,7 +3682,8 @@
     },
     "promoted": false,
     "prep": null,
-    "problems": []
+    "problems": [],
+    "other_preps": []
    },
    "computed": {
     "form": "powder",
@@ -3736,7 +3763,7 @@
    },
    "blend_cap": 4,
    "reasons": [
-    "Vial 1, Step 3: weigh the vial + diluent and the vial with diluent + stock"
+    "Vial A, Step 3: weigh the vial + diluent and the vial with diluent + stock"
    ]
   },
   {
@@ -3800,7 +3827,8 @@
     },
     "promoted": false,
     "prep": null,
-    "problems": []
+    "problems": [],
+    "other_preps": []
    },
    "computed": {
     "form": "powder",
@@ -3881,25 +3909,25 @@
       "code": "step3_diluent",
       "vial": 1,
       "peptide_id": null,
-      "text": "Vial 1, Step 3: the vial + diluent weight is less than the empty vial. Check the weights; no concentration is worked out."
+      "text": "Vial A, Step 3: the vial + diluent weight is less than the empty vial. Check the weights; no concentration is worked out."
      },
      {
       "code": "volume_off",
       "vial": 1,
       "peptide_id": null,
-      "text": "Vial 1: the stock added to the final vial is 1600.64 uL against 90.00 uL planned, more than 15% off. Remake the vial, or call it out."
+      "text": "Vial A: the stock added to the final vial is 1600.64 uL against 90.00 uL planned, more than 15% off. Remake the vial, or call it out."
      },
      {
       "code": "volume_off",
       "vial": 1,
       "peptide_id": null,
-      "text": "Vial 1: the diluent added to the final vial is -100.29 uL against 1410.00 uL planned, more than 15% off. Remake the vial, or call it out."
+      "text": "Vial A: the diluent added to the final vial is -100.29 uL against 1410.00 uL planned, more than 15% off. Remake the vial, or call it out."
      }
     ]
    },
    "blend_cap": 4,
    "reasons": [
-    "Vial 1, Step 3: the vial + diluent weight is less than the empty vial; check the weights"
+    "Vial A, Step 3: the vial + diluent weight is less than the empty vial; check the weights"
    ]
   },
   {
@@ -3963,7 +3991,8 @@
     },
     "promoted": false,
     "prep": null,
-    "problems": []
+    "problems": [],
+    "other_preps": []
    },
    "computed": {
     "form": "powder",
@@ -4044,19 +4073,19 @@
       "code": "step3_stock",
       "vial": 1,
       "peptide_id": null,
-      "text": "Vial 1, Step 3: the last weight (vial, diluent + stock) is not more than the vial + diluent weight, so no stock went in. Check the weights; no concentration is worked out."
+      "text": "Vial A, Step 3: the last weight (vial, diluent + stock) is not more than the vial + diluent weight, so no stock went in. Check the weights; no concentration is worked out."
      },
      {
       "code": "volume_off",
       "vial": 1,
       "peptide_id": null,
-      "text": "Vial 1: the stock added to the final vial is 0.00 uL against 90.00 uL planned, more than 15% off. Remake the vial, or call it out."
+      "text": "Vial A: the stock added to the final vial is 0.00 uL against 90.00 uL planned, more than 15% off. Remake the vial, or call it out."
      }
     ]
    },
    "blend_cap": 4,
    "reasons": [
-    "Vial 1, Step 3: the last weight (vial, diluent + stock) is not more than the vial + diluent weight, so no stock went in; check the weights"
+    "Vial A, Step 3: the last weight (vial, diluent + stock) is not more than the vial + diluent weight, so no stock went in; check the weights"
    ]
   },
   {
@@ -4121,7 +4150,8 @@
     },
     "promoted": false,
     "prep": null,
-    "problems": []
+    "problems": [],
+    "other_preps": []
    },
    "computed": {
     "form": "powder",
@@ -4225,7 +4255,7 @@
    },
    "blend_cap": 4,
    "reasons": [
-    "Vial 1, Step 3a: weigh the empty intermediate vial, the intermediate vial + diluent and the intermediate vial with diluent + stock"
+    "Vial A, Step 3a: weigh the empty intermediate vial, the intermediate vial + diluent and the intermediate vial with diluent + stock"
    ]
   },
   {
@@ -4293,7 +4323,8 @@
     },
     "promoted": false,
     "prep": null,
-    "problems": []
+    "problems": [],
+    "other_preps": []
    },
    "computed": {
     "form": "powder",
@@ -4398,25 +4429,25 @@
       "code": "step3a_diluent",
       "vial": 1,
       "peptide_id": null,
-      "text": "Vial 1, Step 3a: the vial + diluent weight is less than the empty vial. Check the weights; no concentration is worked out."
+      "text": "Vial A, Step 3a: the vial + diluent weight is less than the empty vial. Check the weights; no concentration is worked out."
      },
      {
       "code": "volume_off",
       "vial": 1,
       "peptide_id": null,
-      "text": "Vial 1: the stock added to the intermediate is 1600.24 uL against 37.50 uL planned, more than 15% off. Remake the vial, or call it out."
+      "text": "Vial A: the stock added to the intermediate is 1600.24 uL against 37.50 uL planned, more than 15% off. Remake the vial, or call it out."
      },
      {
       "code": "volume_off",
       "vial": 1,
       "peptide_id": null,
-      "text": "Vial 1: the diluent added to the intermediate is -100.29 uL against 1462.50 uL planned, more than 15% off. Remake the vial, or call it out."
+      "text": "Vial A: the diluent added to the intermediate is -100.29 uL against 1462.50 uL planned, more than 15% off. Remake the vial, or call it out."
      }
     ]
    },
    "blend_cap": 4,
    "reasons": [
-    "Vial 1, Step 3a: the vial + diluent weight is less than the empty vial; check the weights"
+    "Vial A, Step 3a: the vial + diluent weight is less than the empty vial; check the weights"
    ]
   },
   {
@@ -4484,7 +4515,8 @@
     },
     "promoted": false,
     "prep": null,
-    "problems": []
+    "problems": [],
+    "other_preps": []
    },
    "computed": {
     "form": "powder",
@@ -4589,19 +4621,19 @@
       "code": "step3a_stock",
       "vial": 1,
       "peptide_id": null,
-      "text": "Vial 1, Step 3a: the last weight (vial, diluent + stock) is not more than the vial + diluent weight, so no stock went in. Check the weights; no concentration is worked out."
+      "text": "Vial A, Step 3a: the last weight (vial, diluent + stock) is not more than the vial + diluent weight, so no stock went in. Check the weights; no concentration is worked out."
      },
      {
       "code": "volume_off",
       "vial": 1,
       "peptide_id": null,
-      "text": "Vial 1: the stock added to the intermediate is 0.00 uL against 37.50 uL planned, more than 15% off. Remake the vial, or call it out."
+      "text": "Vial A: the stock added to the intermediate is 0.00 uL against 37.50 uL planned, more than 15% off. Remake the vial, or call it out."
      }
     ]
    },
    "blend_cap": 4,
    "reasons": [
-    "Vial 1, Step 3a: the last weight (vial, diluent + stock) is not more than the vial + diluent weight, so no stock went in; check the weights"
+    "Vial A, Step 3a: the last weight (vial, diluent + stock) is not more than the vial + diluent weight, so no stock went in; check the weights"
    ]
   },
   {
@@ -4672,7 +4704,8 @@
     },
     "promoted": false,
     "prep": null,
-    "problems": []
+    "problems": [],
+    "other_preps": []
    },
    "computed": {
     "form": "powder",
@@ -4770,7 +4803,7 @@
       "code": "volume_off",
       "vial": 1,
       "peptide_id": null,
-      "text": "Vial 1: the stock added to the final vial is 90.26 uL against 180.00 uL planned, more than 15% off. Remake the vial, or call it out."
+      "text": "Vial A: the stock added to the final vial is 90.26 uL against 180.00 uL planned, more than 15% off. Remake the vial, or call it out."
      }
     ]
    },
@@ -4836,7 +4869,8 @@
     },
     "promoted": false,
     "prep": null,
-    "problems": []
+    "problems": [],
+    "other_preps": []
    },
    "computed": {
     "form": "powder",
@@ -4919,7 +4953,1538 @@
     "pick the instrument first: a curve is checked against the run's instrument, and a prep without one cannot be checked",
     "type the declared weight: the stock concentration is worked out from it",
     "weigh the stock vial: Step 2 needs both of its weighings",
-    "Vial 1, Step 3: weigh the vial + diluent and the vial with diluent + stock"
+    "Vial A, Step 3: weigh the vial + diluent and the vial with diluent + stock"
+   ]
+  },
+  {
+   "name": "capsule blend",
+   "row": {
+    "item_id": 1999990001,
+    "sample_id": "P-0600-S01",
+    "parent_sample_id": "P-0600",
+    "order_number": "WP-5541",
+    "identity": "BPC-157, TB-500",
+    "peptide_id": 3,
+    "peptide_name": "BPC-157 + TB-500",
+    "is_blend": true,
+    "components": [
+     {
+      "peptide_id": 10,
+      "name": "BPC-157",
+      "abbreviation": "BPC-157",
+      "declared_mg": 5.0,
+      "vial": 1
+     },
+     {
+      "peptide_id": 11,
+      "name": "Thymosin Beta-4",
+      "abbreviation": "TB-500",
+      "declared_mg": 5.0,
+      "vial": 2
+     }
+    ],
+    "components_source": "analytes",
+    "declared_mg": 10.0,
+    "sample_form": {
+     "id": 1,
+     "name": "Lyophilized Powder",
+     "hplc_prep": "powder"
+    },
+    "sample_bac": false,
+    "form": "capsule",
+    "rider_only": false,
+    "instrument_id": 2,
+    "instrument_name": "HPLC 1290a",
+    "params": {
+     "default_target_ug_ml": 200,
+     "intermediate_target_ug_ml": 5000,
+     "intermediate_volume_ul": 1500,
+     "two_step_threshold_mg": 500,
+     "bac_stock_ug_ml": 9000.0,
+     "bac_target_ug_ml": 500,
+     "capsule_neat_max_ug_ml": 350,
+     "diluent_density_mg_ml": 997.1,
+     "benzyl_alcohol_density_mg_ml": 1034.72,
+     "floor_ug_ml": 60,
+     "target_volume_ul": 1500,
+     "sample_diluent_ul": 3000,
+     "volume_tolerance_pct": 15
+    },
+    "prep_form": "capsule",
+    "hplc_prep": {
+     "stock_vial_mg": 5000.0,
+     "stock_vial_diluent_mg": 7991.3,
+     "capsules": 4,
+     "vials": {
+      "1": {
+       "vial_mg": 2500.0,
+       "vial_all_mg": 3995.0
+      },
+      "2": {
+       "vial_mg": 2600.0,
+       "vial_all_mg": 4100.0
+      }
+     }
+    },
+    "promoted": false,
+    "prep": null,
+    "problems": [],
+    "other_preps": []
+   },
+   "computed": {
+    "form": "capsule",
+    "declared_total_mg": 40.0,
+    "diluent": {
+     "diluent": "Water",
+     "rule_id": null,
+     "typed": false
+    },
+    "stock": {
+     "total_diluent_ml": 3.0,
+     "problem": null
+    },
+    "capsule_diluent_ul": 200000.0,
+    "floor_ug_ml": 60,
+    "components": [
+     {
+      "peptide_id": 10,
+      "declared_mg": 5.0,
+      "vial": 1,
+      "lead": true,
+      "target": {
+       "value": 200,
+       "source": "default",
+       "rule_id": null,
+       "typed": false
+      },
+      "stock_conc_ug_ml": 1666.6666666666667,
+      "planned_final_ug_ml": 200.0,
+      "actual_final_ug_ml": 1666.6666666666667,
+      "below_floor": false
+     },
+     {
+      "peptide_id": 11,
+      "declared_mg": 5.0,
+      "vial": 2,
+      "lead": true,
+      "target": {
+       "value": 200,
+       "source": "default",
+       "rule_id": null,
+       "typed": false
+      },
+      "stock_conc_ug_ml": 1666.6666666666667,
+      "planned_final_ug_ml": 200.0,
+      "actual_final_ug_ml": 1666.6666666666667,
+      "below_floor": false
+     }
+    ],
+    "vials": [
+     {
+      "vial": 1,
+      "component_ids": [
+       10
+      ],
+      "lead": {
+       "peptide_id": 10,
+       "why": "heaviest"
+      },
+      "target": {
+       "value": 200,
+       "source": "default",
+       "typed": false
+      },
+      "target_volume_ul": 1500,
+      "stock_conc_ug_ml": 1666.6666666666667,
+      "two_step": false,
+      "neat": true,
+      "intermediate": null,
+      "stock_for_final": 1666.6666666666667,
+      "plan": {
+       "stock_vol_ul": 1500.0,
+       "diluent_vol_ul": 0.0,
+       "stock_half_ul": 750.0,
+       "diluent_half_ul": 0.0
+      },
+      "actual": {
+       "actual_diluent_ul": 0.0,
+       "actual_stock_ul": 1499.3481095176012,
+       "actual_total_ul": 1499.3481095176012,
+       "actual_conc_ug_ml": 1666.6666666666667,
+       "dilution_factor": 1.0,
+       "problem": null
+      },
+      "dilution_factor_total": 1.0,
+      "off": {
+       "diluent": false,
+       "stock": false
+      }
+     },
+     {
+      "vial": 2,
+      "component_ids": [
+       11
+      ],
+      "lead": {
+       "peptide_id": 11,
+       "why": "heaviest"
+      },
+      "target": {
+       "value": 200,
+       "source": "default",
+       "typed": false
+      },
+      "target_volume_ul": 1500,
+      "stock_conc_ug_ml": 1666.6666666666667,
+      "two_step": false,
+      "neat": true,
+      "intermediate": null,
+      "stock_for_final": 1666.6666666666667,
+      "plan": {
+       "stock_vol_ul": 1500.0,
+       "diluent_vol_ul": 0.0,
+       "stock_half_ul": 750.0,
+       "diluent_half_ul": 0.0
+      },
+      "actual": {
+       "actual_diluent_ul": 0.0,
+       "actual_stock_ul": 1504.3626516899008,
+       "actual_total_ul": 1504.3626516899008,
+       "actual_conc_ug_ml": 1666.6666666666667,
+       "dilution_factor": 1.0,
+       "problem": null
+      },
+      "dilution_factor_total": 1.0,
+      "off": {
+       "diluent": false,
+       "stock": false
+      }
+     }
+    ],
+    "warnings": [
+     {
+      "code": "capsule_over_neat",
+      "vial": null,
+      "peptide_id": null,
+      "text": "The capsule stock is 1666.67 ug/mL. It is injected neat, so it must be 350 ug/mL or lower: add water."
+     }
+    ]
+   },
+   "blend_cap": 4,
+   "reasons": [
+    "A blend in capsules cannot be promoted from the sheet yet: its component concentrations are being corrected in the working-out. Prep this one in the wizard."
+   ]
+  },
+  {
+   "name": "one-step target above the stock",
+   "row": {
+    "item_id": 1999990001,
+    "sample_id": "P-0600-S01",
+    "parent_sample_id": "P-0600",
+    "order_number": "WP-5541",
+    "identity": "BPC-157",
+    "peptide_id": 10,
+    "peptide_name": "BPC-157",
+    "is_blend": false,
+    "components": [
+     {
+      "peptide_id": 10,
+      "name": "BPC-157",
+      "abbreviation": "BPC-157",
+      "declared_mg": 10.0,
+      "vial": 1
+     }
+    ],
+    "components_source": "analytes",
+    "declared_mg": 10.0,
+    "sample_form": {
+     "id": 1,
+     "name": "Lyophilized Powder",
+     "hplc_prep": "powder"
+    },
+    "sample_bac": false,
+    "form": "powder",
+    "rider_only": false,
+    "instrument_id": 2,
+    "instrument_name": "HPLC 1290a",
+    "params": {
+     "default_target_ug_ml": 200,
+     "intermediate_target_ug_ml": 5000,
+     "intermediate_volume_ul": 1500,
+     "two_step_threshold_mg": 500,
+     "bac_stock_ug_ml": 9000.0,
+     "bac_target_ug_ml": 500,
+     "capsule_neat_max_ug_ml": 350,
+     "diluent_density_mg_ml": 997.1,
+     "benzyl_alcohol_density_mg_ml": 1034.72,
+     "floor_ug_ml": 60,
+     "target_volume_ul": 1500,
+     "sample_diluent_ul": 3000,
+     "volume_tolerance_pct": 15
+    },
+    "prep_form": null,
+    "hplc_prep": {
+     "stock_vial_mg": 5000.0,
+     "stock_vial_diluent_mg": 7991.3,
+     "vials": {
+      "1": {
+       "vial_mg": 2500.0,
+       "vial_diluent_mg": 3906.0,
+       "vial_all_mg": 3996.0,
+       "target_ug_ml": 5000
+      }
+     }
+    },
+    "promoted": false,
+    "prep": null,
+    "problems": [],
+    "other_preps": []
+   },
+   "computed": {
+    "form": "powder",
+    "declared_total_mg": 10.0,
+    "diluent": {
+     "diluent": "Water",
+     "rule_id": null,
+     "typed": false
+    },
+    "stock": {
+     "total_diluent_ml": 3.0,
+     "problem": null
+    },
+    "capsule_diluent_ul": null,
+    "floor_ug_ml": 60,
+    "components": [
+     {
+      "peptide_id": 10,
+      "declared_mg": 10.0,
+      "vial": 1,
+      "lead": true,
+      "target": {
+       "value": 200,
+       "source": "default",
+       "rule_id": null,
+       "typed": false
+      },
+      "stock_conc_ug_ml": 3333.3333333333335,
+      "planned_final_ug_ml": 5000.0,
+      "actual_final_ug_ml": 200.53475935828882,
+      "below_floor": false
+     }
+    ],
+    "vials": [
+     {
+      "vial": 1,
+      "component_ids": [
+       10
+      ],
+      "lead": {
+       "peptide_id": 10,
+       "why": "heaviest"
+      },
+      "target": {
+       "value": 5000,
+       "source": "typed",
+       "typed": true
+      },
+      "target_volume_ul": 1500,
+      "stock_conc_ug_ml": 3333.3333333333335,
+      "two_step": false,
+      "neat": false,
+      "intermediate": null,
+      "stock_for_final": 3333.3333333333335,
+      "plan": {
+       "stock_vol_ul": 2250.0,
+       "diluent_vol_ul": -750.0,
+       "stock_half_ul": 1125.0,
+       "diluent_half_ul": -375.0
+      },
+      "actual": {
+       "actual_diluent_ul": 1410.0892588506667,
+       "actual_stock_ul": 90.26175910139405,
+       "actual_total_ul": 1500.3510179520608,
+       "actual_conc_ug_ml": 200.53475935828882,
+       "dilution_factor": 16.62222222222222,
+       "problem": null
+      },
+      "dilution_factor_total": 16.62222222222222,
+      "off": {
+       "diluent": false,
+       "stock": true
+      }
+     }
+    ],
+    "warnings": [
+     {
+      "code": "volume_off",
+      "vial": 1,
+      "peptide_id": null,
+      "text": "Vial A: the stock added to the final vial is 90.26 uL against 2250.00 uL planned, more than 15% off. Remake the vial, or call it out."
+     }
+    ]
+   },
+   "blend_cap": 4,
+   "reasons": [
+    "Vial A: the target, 5000.00 ug/mL, is above the stock it is diluted from, 3333.33 ug/mL; lower the target or check Step 2"
+   ]
+  },
+  {
+   "name": "Step 3a target above the stock",
+   "row": {
+    "item_id": 1999990001,
+    "sample_id": "P-0600-S01",
+    "parent_sample_id": "P-0600",
+    "order_number": "WP-5541",
+    "identity": "BPC-157",
+    "peptide_id": 10,
+    "peptide_name": "BPC-157",
+    "is_blend": false,
+    "components": [
+     {
+      "peptide_id": 10,
+      "name": "BPC-157",
+      "abbreviation": "BPC-157",
+      "declared_mg": 10.0,
+      "vial": 1
+     }
+    ],
+    "components_source": "analytes",
+    "declared_mg": 10.0,
+    "sample_form": {
+     "id": 1,
+     "name": "Lyophilized Powder",
+     "hplc_prep": "powder"
+    },
+    "sample_bac": false,
+    "form": "powder",
+    "rider_only": false,
+    "instrument_id": 2,
+    "instrument_name": "HPLC 1290a",
+    "params": {
+     "default_target_ug_ml": 200,
+     "intermediate_target_ug_ml": 5000,
+     "intermediate_volume_ul": 1500,
+     "two_step_threshold_mg": 500,
+     "bac_stock_ug_ml": 9000.0,
+     "bac_target_ug_ml": 500,
+     "capsule_neat_max_ug_ml": 350,
+     "diluent_density_mg_ml": 997.1,
+     "benzyl_alcohol_density_mg_ml": 1034.72,
+     "floor_ug_ml": 60,
+     "target_volume_ul": 1500,
+     "sample_diluent_ul": 3000,
+     "volume_tolerance_pct": 15
+    },
+    "prep_form": null,
+    "hplc_prep": {
+     "stock_vial_mg": 5000.0,
+     "stock_vial_diluent_mg": 7991.3,
+     "declared_mg": 600.0,
+     "vials": {
+      "1": {
+       "vial_mg": 2500.0,
+       "vial_diluent_mg": 3936.0,
+       "vial_all_mg": 3996.2,
+       "int_vial_mg": 2400.0,
+       "int_vial_diluent_mg": 3858.0,
+       "int_vial_all_mg": 3895.6,
+       "int_target_ug_ml": 300000
+      }
+     }
+    },
+    "promoted": false,
+    "prep": null,
+    "problems": [],
+    "other_preps": []
+   },
+   "computed": {
+    "form": "powder",
+    "declared_total_mg": 600.0,
+    "diluent": {
+     "diluent": "Water",
+     "rule_id": null,
+     "typed": false
+    },
+    "stock": {
+     "total_diluent_ml": 3.0,
+     "problem": null
+    },
+    "capsule_diluent_ul": null,
+    "floor_ug_ml": 60,
+    "components": [
+     {
+      "peptide_id": 10,
+      "declared_mg": 600.0,
+      "vial": 1,
+      "lead": true,
+      "target": {
+       "value": 200,
+       "source": "default",
+       "rule_id": null,
+       "typed": false
+      },
+      "stock_conc_ug_ml": 200000.0,
+      "planned_final_ug_ml": 200.0,
+      "actual_final_ug_ml": 202.30621506014296,
+      "below_floor": false
+     }
+    ],
+    "vials": [
+     {
+      "vial": 1,
+      "component_ids": [
+       10
+      ],
+      "lead": {
+       "peptide_id": 10,
+       "why": "heaviest"
+      },
+      "target": {
+       "value": 200,
+       "source": "default",
+       "typed": false
+      },
+      "target_volume_ul": 1500,
+      "stock_conc_ug_ml": 200000.0,
+      "two_step": true,
+      "neat": false,
+      "intermediate": {
+       "target_ug_ml": 300000,
+       "volume_ul": 1500,
+       "target_defaulted": false,
+       "plan": {
+        "stock_vol_ul": 2250.0,
+        "diluent_vol_ul": -750.0,
+        "stock_half_ul": 1125.0,
+        "diluent_half_ul": -375.0
+       },
+       "actual": {
+        "actual_diluent_ul": 1462.2404974425835,
+        "actual_stock_ul": 37.70935713569342,
+        "actual_total_ul": 1499.949854578277,
+        "actual_conc_ug_ml": 5028.082374966557,
+        "dilution_factor": 39.77659574468094,
+        "problem": null
+       },
+       "weighed": true,
+       "conc_for_final": 5028.082374966557,
+       "off": {
+        "diluent": false,
+        "stock": true
+       }
+      },
+      "stock_for_final": 5028.082374966557,
+      "plan": {
+       "stock_vol_ul": 59.66489361702141,
+       "diluent_vol_ul": 1440.3351063829787,
+       "stock_half_ul": 29.832446808510706,
+       "diluent_half_ul": 720.1675531914893
+      },
+      "actual": {
+       "actual_diluent_ul": 1440.1765118844648,
+       "actual_stock_ul": 60.375087754487836,
+       "actual_total_ul": 1500.5515996389527,
+       "actual_conc_ug_ml": 202.30621506014296,
+       "dilution_factor": 24.853820598006713,
+       "problem": null
+      },
+      "dilution_factor_total": 988.6003746377373,
+      "off": {
+       "diluent": false,
+       "stock": false
+      }
+     }
+    ],
+    "warnings": [
+     {
+      "code": "volume_off",
+      "vial": 1,
+      "peptide_id": null,
+      "text": "Vial A: the stock added to the intermediate is 37.71 uL against 2250.00 uL planned, more than 15% off. Remake the vial, or call it out."
+     }
+    ]
+   },
+   "blend_cap": 4,
+   "reasons": [
+    "Vial A, Step 3a: the intermediate target, 300000.00 ug/mL, is above the stock it is diluted from, 200000.00 ug/mL; lower it or check Step 2"
+   ]
+  },
+  {
+   "name": "Step 3 target above the intermediate",
+   "row": {
+    "item_id": 1999990001,
+    "sample_id": "P-0600-S01",
+    "parent_sample_id": "P-0600",
+    "order_number": "WP-5541",
+    "identity": "BPC-157",
+    "peptide_id": 10,
+    "peptide_name": "BPC-157",
+    "is_blend": false,
+    "components": [
+     {
+      "peptide_id": 10,
+      "name": "BPC-157",
+      "abbreviation": "BPC-157",
+      "declared_mg": 10.0,
+      "vial": 1
+     }
+    ],
+    "components_source": "analytes",
+    "declared_mg": 10.0,
+    "sample_form": {
+     "id": 1,
+     "name": "Lyophilized Powder",
+     "hplc_prep": "powder"
+    },
+    "sample_bac": false,
+    "form": "powder",
+    "rider_only": false,
+    "instrument_id": 2,
+    "instrument_name": "HPLC 1290a",
+    "params": {
+     "default_target_ug_ml": 200,
+     "intermediate_target_ug_ml": 5000,
+     "intermediate_volume_ul": 1500,
+     "two_step_threshold_mg": 500,
+     "bac_stock_ug_ml": 9000.0,
+     "bac_target_ug_ml": 500,
+     "capsule_neat_max_ug_ml": 350,
+     "diluent_density_mg_ml": 997.1,
+     "benzyl_alcohol_density_mg_ml": 1034.72,
+     "floor_ug_ml": 60,
+     "target_volume_ul": 1500,
+     "sample_diluent_ul": 3000,
+     "volume_tolerance_pct": 15
+    },
+    "prep_form": null,
+    "hplc_prep": {
+     "stock_vial_mg": 5000.0,
+     "stock_vial_diluent_mg": 7991.3,
+     "declared_mg": 600.0,
+     "vials": {
+      "1": {
+       "vial_mg": 2500.0,
+       "vial_diluent_mg": 3936.0,
+       "vial_all_mg": 3996.2,
+       "int_vial_mg": 2400.0,
+       "int_vial_diluent_mg": 3858.0,
+       "int_vial_all_mg": 3895.6,
+       "target_ug_ml": 10000
+      }
+     }
+    },
+    "promoted": false,
+    "prep": null,
+    "problems": [],
+    "other_preps": []
+   },
+   "computed": {
+    "form": "powder",
+    "declared_total_mg": 600.0,
+    "diluent": {
+     "diluent": "Water",
+     "rule_id": null,
+     "typed": false
+    },
+    "stock": {
+     "total_diluent_ml": 3.0,
+     "problem": null
+    },
+    "capsule_diluent_ul": null,
+    "floor_ug_ml": 60,
+    "components": [
+     {
+      "peptide_id": 10,
+      "declared_mg": 600.0,
+      "vial": 1,
+      "lead": true,
+      "target": {
+       "value": 200,
+       "source": "default",
+       "rule_id": null,
+       "typed": false
+      },
+      "stock_conc_ug_ml": 200000.0,
+      "planned_final_ug_ml": 10000.0,
+      "actual_final_ug_ml": 202.30621506014296,
+      "below_floor": false
+     }
+    ],
+    "vials": [
+     {
+      "vial": 1,
+      "component_ids": [
+       10
+      ],
+      "lead": {
+       "peptide_id": 10,
+       "why": "heaviest"
+      },
+      "target": {
+       "value": 10000,
+       "source": "typed",
+       "typed": true
+      },
+      "target_volume_ul": 1500,
+      "stock_conc_ug_ml": 200000.0,
+      "two_step": true,
+      "neat": false,
+      "intermediate": {
+       "target_ug_ml": null,
+       "volume_ul": 1500,
+       "target_defaulted": true,
+       "plan": {
+        "stock_vol_ul": null,
+        "diluent_vol_ul": null,
+        "stock_half_ul": null,
+        "diluent_half_ul": null
+       },
+       "actual": {
+        "actual_diluent_ul": 1462.2404974425835,
+        "actual_stock_ul": 37.70935713569342,
+        "actual_total_ul": 1499.949854578277,
+        "actual_conc_ug_ml": 5028.082374966557,
+        "dilution_factor": 39.77659574468094,
+        "problem": null
+       },
+       "weighed": true,
+       "conc_for_final": 5028.082374966557,
+       "off": {
+        "diluent": false,
+        "stock": false
+       }
+      },
+      "stock_for_final": 5028.082374966557,
+      "plan": {
+       "stock_vol_ul": 2983.244680851071,
+       "diluent_vol_ul": -1483.2446808510708,
+       "stock_half_ul": 1491.6223404255354,
+       "diluent_half_ul": -741.6223404255354
+      },
+      "actual": {
+       "actual_diluent_ul": 1440.1765118844648,
+       "actual_stock_ul": 60.375087754487836,
+       "actual_total_ul": 1500.5515996389527,
+       "actual_conc_ug_ml": 202.30621506014296,
+       "dilution_factor": 24.853820598006713,
+       "problem": null
+      },
+      "dilution_factor_total": 988.6003746377373,
+      "off": {
+       "diluent": false,
+       "stock": true
+      }
+     }
+    ],
+    "warnings": [
+     {
+      "code": "volume_off",
+      "vial": 1,
+      "peptide_id": null,
+      "text": "Vial A: the stock added to the final vial is 60.38 uL against 2983.24 uL planned, more than 15% off. Remake the vial, or call it out."
+     }
+    ]
+   },
+   "blend_cap": 4,
+   "reasons": [
+    "Vial A, Step 3: the target, 10000.00 ug/mL, is above the intermediate it is diluted from, 5028.08 ug/mL; lower the target or check Step 3a"
+   ]
+  },
+  {
+   "name": "target equal to the stock is not a reason",
+   "row": {
+    "item_id": 1999990001,
+    "sample_id": "P-0600-S01",
+    "parent_sample_id": "P-0600",
+    "order_number": "WP-5541",
+    "identity": "BPC-157",
+    "peptide_id": 10,
+    "peptide_name": "BPC-157",
+    "is_blend": false,
+    "components": [
+     {
+      "peptide_id": 10,
+      "name": "BPC-157",
+      "abbreviation": "BPC-157",
+      "declared_mg": 10.0,
+      "vial": 1
+     }
+    ],
+    "components_source": "analytes",
+    "declared_mg": 10.0,
+    "sample_form": {
+     "id": 1,
+     "name": "Lyophilized Powder",
+     "hplc_prep": "powder"
+    },
+    "sample_bac": false,
+    "form": "powder",
+    "rider_only": false,
+    "instrument_id": 2,
+    "instrument_name": "HPLC 1290a",
+    "params": {
+     "default_target_ug_ml": 200,
+     "intermediate_target_ug_ml": 5000,
+     "intermediate_volume_ul": 1500,
+     "two_step_threshold_mg": 500,
+     "bac_stock_ug_ml": 9000.0,
+     "bac_target_ug_ml": 500,
+     "capsule_neat_max_ug_ml": 350,
+     "diluent_density_mg_ml": 997.1,
+     "benzyl_alcohol_density_mg_ml": 1034.72,
+     "floor_ug_ml": 60,
+     "target_volume_ul": 1500,
+     "sample_diluent_ul": 3000,
+     "volume_tolerance_pct": 15
+    },
+    "prep_form": null,
+    "hplc_prep": {
+     "stock_vial_mg": 5000.0,
+     "stock_vial_diluent_mg": 7991.3,
+     "declared_mg": 0.6,
+     "vials": {
+      "1": {
+       "vial_mg": 2500.0,
+       "vial_diluent_mg": 3906.0,
+       "vial_all_mg": 3996.0,
+       "target_ug_ml": 200
+      }
+     }
+    },
+    "promoted": false,
+    "prep": null,
+    "problems": [],
+    "other_preps": []
+   },
+   "computed": {
+    "form": "powder",
+    "declared_total_mg": 0.6,
+    "diluent": {
+     "diluent": "Water",
+     "rule_id": null,
+     "typed": false
+    },
+    "stock": {
+     "total_diluent_ml": 3.0,
+     "problem": null
+    },
+    "capsule_diluent_ul": null,
+    "floor_ug_ml": 60,
+    "components": [
+     {
+      "peptide_id": 10,
+      "declared_mg": 0.6,
+      "vial": 1,
+      "lead": true,
+      "target": {
+       "value": 200,
+       "source": "default",
+       "rule_id": null,
+       "typed": false
+      },
+      "stock_conc_ug_ml": 200.0,
+      "planned_final_ug_ml": 200.0,
+      "actual_final_ug_ml": 12.032085561497329,
+      "below_floor": false
+     }
+    ],
+    "vials": [
+     {
+      "vial": 1,
+      "component_ids": [
+       10
+      ],
+      "lead": {
+       "peptide_id": 10,
+       "why": "heaviest"
+      },
+      "target": {
+       "value": 200,
+       "source": "typed",
+       "typed": true
+      },
+      "target_volume_ul": 1500,
+      "stock_conc_ug_ml": 200.0,
+      "two_step": false,
+      "neat": false,
+      "intermediate": null,
+      "stock_for_final": 200.0,
+      "plan": {
+       "stock_vol_ul": 1500.0,
+       "diluent_vol_ul": 0.0,
+       "stock_half_ul": 750.0,
+       "diluent_half_ul": 0.0
+      },
+      "actual": {
+       "actual_diluent_ul": 1410.0892588506667,
+       "actual_stock_ul": 90.26175910139405,
+       "actual_total_ul": 1500.3510179520608,
+       "actual_conc_ug_ml": 12.032085561497329,
+       "dilution_factor": 16.62222222222222,
+       "problem": null
+      },
+      "dilution_factor_total": 16.62222222222222,
+      "off": {
+       "diluent": false,
+       "stock": true
+      }
+     }
+    ],
+    "warnings": [
+     {
+      "code": "volume_off",
+      "vial": 1,
+      "peptide_id": null,
+      "text": "Vial A: the stock added to the final vial is 90.26 uL against 1500.00 uL planned, more than 15% off. Remake the vial, or call it out."
+     }
+    ]
+   },
+   "blend_cap": 4,
+   "reasons": []
+  },
+  {
+   "name": "a neat capsule under the vial target is not a reason",
+   "row": {
+    "item_id": 1999990001,
+    "sample_id": "P-0600-S01",
+    "parent_sample_id": "P-0600",
+    "order_number": "WP-5541",
+    "identity": "BPC-157",
+    "peptide_id": 10,
+    "peptide_name": "BPC-157",
+    "is_blend": false,
+    "components": [
+     {
+      "peptide_id": 10,
+      "name": "BPC-157",
+      "abbreviation": "BPC-157",
+      "declared_mg": 10.0,
+      "vial": 1
+     }
+    ],
+    "components_source": "analytes",
+    "declared_mg": 10.0,
+    "sample_form": {
+     "id": 1,
+     "name": "Lyophilized Powder",
+     "hplc_prep": "powder"
+    },
+    "sample_bac": false,
+    "form": "capsule",
+    "rider_only": false,
+    "instrument_id": 2,
+    "instrument_name": "HPLC 1290a",
+    "params": {
+     "default_target_ug_ml": 200,
+     "intermediate_target_ug_ml": 5000,
+     "intermediate_volume_ul": 1500,
+     "two_step_threshold_mg": 500,
+     "bac_stock_ug_ml": 9000.0,
+     "bac_target_ug_ml": 500,
+     "capsule_neat_max_ug_ml": 350,
+     "diluent_density_mg_ml": 997.1,
+     "benzyl_alcohol_density_mg_ml": 1034.72,
+     "floor_ug_ml": 60,
+     "target_volume_ul": 1500,
+     "sample_diluent_ul": 3000,
+     "volume_tolerance_pct": 15
+    },
+    "prep_form": "capsule",
+    "hplc_prep": {
+     "declared_mg": 2.5,
+     "capsules": 4,
+     "stock_vial_mg": 5000.0,
+     "stock_vial_diluent_mg": 71466.0,
+     "vials": {
+      "1": {
+       "vial_mg": 2500.0,
+       "vial_all_mg": 3995.0
+      }
+     }
+    },
+    "promoted": false,
+    "prep": null,
+    "problems": [],
+    "other_preps": []
+   },
+   "computed": {
+    "form": "capsule",
+    "declared_total_mg": 10.0,
+    "diluent": {
+     "diluent": "Water",
+     "rule_id": null,
+     "typed": false
+    },
+    "stock": {
+     "total_diluent_ml": 66.65931200481396,
+     "problem": null
+    },
+    "capsule_diluent_ul": 50000.0,
+    "floor_ug_ml": 60,
+    "components": [
+     {
+      "peptide_id": 10,
+      "declared_mg": 2.5,
+      "vial": 1,
+      "lead": true,
+      "target": {
+       "value": 200,
+       "source": "default",
+       "rule_id": null,
+       "typed": false
+      },
+      "stock_conc_ug_ml": 150.01654981494298,
+      "planned_final_ug_ml": 200.0,
+      "actual_final_ug_ml": 150.01654981494298,
+      "below_floor": false
+     }
+    ],
+    "vials": [
+     {
+      "vial": 1,
+      "component_ids": [
+       10
+      ],
+      "lead": {
+       "peptide_id": 10,
+       "why": "heaviest"
+      },
+      "target": {
+       "value": 200,
+       "source": "default",
+       "typed": false
+      },
+      "target_volume_ul": 1500,
+      "stock_conc_ug_ml": 150.01654981494298,
+      "two_step": false,
+      "neat": true,
+      "intermediate": null,
+      "stock_for_final": 150.01654981494298,
+      "plan": {
+       "stock_vol_ul": 1500.0,
+       "diluent_vol_ul": 0.0,
+       "stock_half_ul": 750.0,
+       "diluent_half_ul": 0.0
+      },
+      "actual": {
+       "actual_diluent_ul": 0.0,
+       "actual_stock_ul": 1499.3481095176012,
+       "actual_total_ul": 1499.3481095176012,
+       "actual_conc_ug_ml": 150.01654981494298,
+       "dilution_factor": 1.0,
+       "problem": null
+      },
+      "dilution_factor_total": 1.0,
+      "off": {
+       "diluent": false,
+       "stock": false
+      }
+     }
+    ],
+    "warnings": []
+   },
+   "blend_cap": 4,
+   "reasons": []
+  },
+  {
+   "name": "vial B weighing missing",
+   "row": {
+    "item_id": 1999990001,
+    "sample_id": "P-0600-S01",
+    "parent_sample_id": "P-0600",
+    "order_number": "WP-5541",
+    "identity": "BPC-157, TB-500",
+    "peptide_id": 3,
+    "peptide_name": "BPC-157 + TB-500",
+    "is_blend": true,
+    "components": [
+     {
+      "peptide_id": 10,
+      "name": "BPC-157",
+      "abbreviation": "BPC-157",
+      "declared_mg": 5.0,
+      "vial": 1
+     },
+     {
+      "peptide_id": 11,
+      "name": "Thymosin Beta-4",
+      "abbreviation": "TB-500",
+      "declared_mg": 5.0,
+      "vial": 2
+     }
+    ],
+    "components_source": "analytes",
+    "declared_mg": 10.0,
+    "sample_form": {
+     "id": 1,
+     "name": "Lyophilized Powder",
+     "hplc_prep": "powder"
+    },
+    "sample_bac": false,
+    "form": "powder",
+    "rider_only": false,
+    "instrument_id": 2,
+    "instrument_name": "HPLC 1290a",
+    "params": {
+     "default_target_ug_ml": 200,
+     "intermediate_target_ug_ml": 5000,
+     "intermediate_volume_ul": 1500,
+     "two_step_threshold_mg": 500,
+     "bac_stock_ug_ml": 9000.0,
+     "bac_target_ug_ml": 500,
+     "capsule_neat_max_ug_ml": 350,
+     "diluent_density_mg_ml": 997.1,
+     "benzyl_alcohol_density_mg_ml": 1034.72,
+     "floor_ug_ml": 60,
+     "target_volume_ul": 1500,
+     "sample_diluent_ul": 3000,
+     "volume_tolerance_pct": 15
+    },
+    "prep_form": null,
+    "hplc_prep": {
+     "stock_vial_mg": 5000.0,
+     "stock_vial_diluent_mg": 7991.3,
+     "vials": {
+      "1": {
+       "vial_mg": 2500.0,
+       "vial_diluent_mg": 3800.0,
+       "vial_all_mg": 3996.0
+      },
+      "2": {
+       "vial_mg": 2600.0
+      }
+     }
+    },
+    "promoted": false,
+    "prep": null,
+    "problems": [],
+    "other_preps": []
+   },
+   "computed": {
+    "form": "powder",
+    "declared_total_mg": 10.0,
+    "diluent": {
+     "diluent": "Water",
+     "rule_id": null,
+     "typed": false
+    },
+    "stock": {
+     "total_diluent_ml": 3.0,
+     "problem": null
+    },
+    "capsule_diluent_ul": null,
+    "floor_ug_ml": 60,
+    "components": [
+     {
+      "peptide_id": 10,
+      "declared_mg": 5.0,
+      "vial": 1,
+      "lead": true,
+      "target": {
+       "value": 200,
+       "source": "default",
+       "rule_id": null,
+       "typed": false
+      },
+      "stock_conc_ug_ml": 1666.6666666666667,
+      "planned_final_ug_ml": 200.0,
+      "actual_final_ug_ml": 218.3600713012478,
+      "below_floor": false
+     },
+     {
+      "peptide_id": 11,
+      "declared_mg": 5.0,
+      "vial": 2,
+      "lead": true,
+      "target": {
+       "value": 200,
+       "source": "default",
+       "rule_id": null,
+       "typed": false
+      },
+      "stock_conc_ug_ml": 1666.6666666666667,
+      "planned_final_ug_ml": 200.0,
+      "actual_final_ug_ml": null,
+      "below_floor": false
+     }
+    ],
+    "vials": [
+     {
+      "vial": 1,
+      "component_ids": [
+       10
+      ],
+      "lead": {
+       "peptide_id": 10,
+       "why": "heaviest"
+      },
+      "target": {
+       "value": 200,
+       "source": "default",
+       "typed": false
+      },
+      "target_volume_ul": 1500,
+      "stock_conc_ug_ml": 1666.6666666666667,
+      "two_step": false,
+      "neat": false,
+      "intermediate": null,
+      "stock_for_final": 1666.6666666666667,
+      "plan": {
+       "stock_vol_ul": 180.0,
+       "diluent_vol_ul": 1320.0,
+       "stock_half_ul": 90.0,
+       "diluent_half_ul": 660.0
+      },
+      "actual": {
+       "actual_diluent_ul": 1303.7809647979138,
+       "actual_stock_ul": 196.57005315414702,
+       "actual_total_ul": 1500.3510179520608,
+       "actual_conc_ug_ml": 218.3600713012478,
+       "dilution_factor": 7.632653061224489,
+       "problem": null
+      },
+      "dilution_factor_total": 7.632653061224489,
+      "off": {
+       "diluent": false,
+       "stock": false
+      }
+     },
+     {
+      "vial": 2,
+      "component_ids": [
+       11
+      ],
+      "lead": {
+       "peptide_id": 11,
+       "why": "heaviest"
+      },
+      "target": {
+       "value": 200,
+       "source": "default",
+       "typed": false
+      },
+      "target_volume_ul": 1500,
+      "stock_conc_ug_ml": 1666.6666666666667,
+      "two_step": false,
+      "neat": false,
+      "intermediate": null,
+      "stock_for_final": 1666.6666666666667,
+      "plan": {
+       "stock_vol_ul": 180.0,
+       "diluent_vol_ul": 1320.0,
+       "stock_half_ul": 90.0,
+       "diluent_half_ul": 660.0
+      },
+      "actual": {
+       "actual_diluent_ul": null,
+       "actual_stock_ul": null,
+       "actual_total_ul": null,
+       "actual_conc_ug_ml": null,
+       "dilution_factor": null,
+       "problem": null
+      },
+      "dilution_factor_total": null,
+      "off": {
+       "diluent": false,
+       "stock": false
+      }
+     }
+    ],
+    "warnings": []
+   },
+   "blend_cap": 4,
+   "reasons": [
+    "Vial B, Step 3: weigh the vial + diluent and the vial with diluent + stock"
+   ]
+  },
+  {
+   "name": "backstop: no stock volume",
+   "row": {
+    "item_id": 1999990001,
+    "sample_id": "P-0600-S01",
+    "parent_sample_id": "P-0600",
+    "order_number": "WP-5541",
+    "identity": "BPC-157",
+    "peptide_id": 10,
+    "peptide_name": "BPC-157",
+    "is_blend": false,
+    "components": [
+     {
+      "peptide_id": 10,
+      "name": "BPC-157",
+      "abbreviation": "BPC-157",
+      "declared_mg": 10.0,
+      "vial": 1
+     }
+    ],
+    "components_source": "analytes",
+    "declared_mg": 10.0,
+    "sample_form": {
+     "id": 1,
+     "name": "Lyophilized Powder",
+     "hplc_prep": "powder"
+    },
+    "sample_bac": false,
+    "form": "powder",
+    "rider_only": false,
+    "instrument_id": 2,
+    "instrument_name": "HPLC 1290a",
+    "params": {
+     "default_target_ug_ml": 200,
+     "intermediate_target_ug_ml": 5000,
+     "intermediate_volume_ul": 1500,
+     "two_step_threshold_mg": 500,
+     "bac_stock_ug_ml": 9000.0,
+     "bac_target_ug_ml": 500,
+     "capsule_neat_max_ug_ml": 350,
+     "diluent_density_mg_ml": 997.1,
+     "benzyl_alcohol_density_mg_ml": 1034.72,
+     "floor_ug_ml": 60,
+     "target_volume_ul": 1500,
+     "sample_diluent_ul": 3000,
+     "volume_tolerance_pct": 15
+    },
+    "prep_form": null,
+    "hplc_prep": {
+     "stock_vial_mg": 5000.0,
+     "stock_vial_diluent_mg": 7991.3,
+     "vials": {
+      "1": {
+       "vial_mg": 2500.0,
+       "vial_diluent_mg": 3906.0,
+       "vial_all_mg": 3996.0
+      }
+     }
+    },
+    "promoted": false,
+    "prep": null,
+    "problems": [],
+    "other_preps": []
+   },
+   "computed": {
+    "form": "powder",
+    "declared_total_mg": 10.0,
+    "diluent": {
+     "diluent": "Water",
+     "rule_id": null,
+     "typed": false
+    },
+    "stock": {
+     "total_diluent_ml": null,
+     "problem": null
+    },
+    "capsule_diluent_ul": null,
+    "floor_ug_ml": 60,
+    "components": [
+     {
+      "peptide_id": 10,
+      "declared_mg": 10.0,
+      "vial": 1,
+      "lead": true,
+      "target": {
+       "value": 200,
+       "source": "default",
+       "rule_id": null,
+       "typed": false
+      },
+      "stock_conc_ug_ml": 3333.3333333333335,
+      "planned_final_ug_ml": 200.0,
+      "actual_final_ug_ml": 200.53475935828882,
+      "below_floor": false
+     }
+    ],
+    "vials": [
+     {
+      "vial": 1,
+      "component_ids": [
+       10
+      ],
+      "lead": {
+       "peptide_id": 10,
+       "why": "heaviest"
+      },
+      "target": {
+       "value": 200,
+       "source": "default",
+       "typed": false
+      },
+      "target_volume_ul": 1500,
+      "stock_conc_ug_ml": 3333.3333333333335,
+      "two_step": false,
+      "neat": false,
+      "intermediate": null,
+      "stock_for_final": 3333.3333333333335,
+      "plan": {
+       "stock_vol_ul": 90.0,
+       "diluent_vol_ul": 1410.0,
+       "stock_half_ul": 45.0,
+       "diluent_half_ul": 705.0
+      },
+      "actual": {
+       "actual_diluent_ul": 1410.0892588506667,
+       "actual_stock_ul": 90.26175910139405,
+       "actual_total_ul": 1500.3510179520608,
+       "actual_conc_ug_ml": 200.53475935828882,
+       "dilution_factor": 16.62222222222222,
+       "problem": null
+      },
+      "dilution_factor_total": 16.62222222222222,
+      "off": {
+       "diluent": false,
+       "stock": false
+      }
+     }
+    ],
+    "warnings": []
+   },
+   "blend_cap": 4,
+   "reasons": [
+    "the stock volume cannot be worked out from these numbers; check Step 2"
+   ]
+  },
+  {
+   "name": "backstop: no factor",
+   "row": {
+    "item_id": 1999990001,
+    "sample_id": "P-0600-S01",
+    "parent_sample_id": "P-0600",
+    "order_number": "WP-5541",
+    "identity": "BPC-157",
+    "peptide_id": 10,
+    "peptide_name": "BPC-157",
+    "is_blend": false,
+    "components": [
+     {
+      "peptide_id": 10,
+      "name": "BPC-157",
+      "abbreviation": "BPC-157",
+      "declared_mg": 10.0,
+      "vial": 1
+     }
+    ],
+    "components_source": "analytes",
+    "declared_mg": 10.0,
+    "sample_form": {
+     "id": 1,
+     "name": "Lyophilized Powder",
+     "hplc_prep": "powder"
+    },
+    "sample_bac": false,
+    "form": "powder",
+    "rider_only": false,
+    "instrument_id": 2,
+    "instrument_name": "HPLC 1290a",
+    "params": {
+     "default_target_ug_ml": 200,
+     "intermediate_target_ug_ml": 5000,
+     "intermediate_volume_ul": 1500,
+     "two_step_threshold_mg": 500,
+     "bac_stock_ug_ml": 9000.0,
+     "bac_target_ug_ml": 500,
+     "capsule_neat_max_ug_ml": 350,
+     "diluent_density_mg_ml": 997.1,
+     "benzyl_alcohol_density_mg_ml": 1034.72,
+     "floor_ug_ml": 60,
+     "target_volume_ul": 1500,
+     "sample_diluent_ul": 3000,
+     "volume_tolerance_pct": 15
+    },
+    "prep_form": null,
+    "hplc_prep": {
+     "stock_vial_mg": 5000.0,
+     "stock_vial_diluent_mg": 7991.3,
+     "vials": {
+      "1": {
+       "vial_mg": 2500.0,
+       "vial_diluent_mg": 3906.0,
+       "vial_all_mg": 3996.0
+      }
+     }
+    },
+    "promoted": false,
+    "prep": null,
+    "problems": [],
+    "other_preps": []
+   },
+   "computed": {
+    "form": "powder",
+    "declared_total_mg": 10.0,
+    "diluent": {
+     "diluent": "Water",
+     "rule_id": null,
+     "typed": false
+    },
+    "stock": {
+     "total_diluent_ml": 3.0,
+     "problem": null
+    },
+    "capsule_diluent_ul": null,
+    "floor_ug_ml": 60,
+    "components": [
+     {
+      "peptide_id": 10,
+      "declared_mg": 10.0,
+      "vial": 1,
+      "lead": true,
+      "target": {
+       "value": 200,
+       "source": "default",
+       "rule_id": null,
+       "typed": false
+      },
+      "stock_conc_ug_ml": 3333.3333333333335,
+      "planned_final_ug_ml": 200.0,
+      "actual_final_ug_ml": 200.53475935828882,
+      "below_floor": false
+     }
+    ],
+    "vials": [
+     {
+      "vial": 1,
+      "component_ids": [
+       10
+      ],
+      "lead": {
+       "peptide_id": 10,
+       "why": "heaviest"
+      },
+      "target": {
+       "value": 200,
+       "source": "default",
+       "typed": false
+      },
+      "target_volume_ul": 1500,
+      "stock_conc_ug_ml": 3333.3333333333335,
+      "two_step": false,
+      "neat": false,
+      "intermediate": null,
+      "stock_for_final": 3333.3333333333335,
+      "plan": {
+       "stock_vol_ul": 90.0,
+       "diluent_vol_ul": 1410.0,
+       "stock_half_ul": 45.0,
+       "diluent_half_ul": 705.0
+      },
+      "actual": {
+       "actual_diluent_ul": 1410.0892588506667,
+       "actual_stock_ul": 90.26175910139405,
+       "actual_total_ul": 1500.3510179520608,
+       "actual_conc_ug_ml": 200.53475935828882,
+       "dilution_factor": 16.62222222222222,
+       "problem": null
+      },
+      "dilution_factor_total": null,
+      "off": {
+       "diluent": false,
+       "stock": false
+      }
+     }
+    ],
+    "warnings": []
+   },
+   "blend_cap": 4,
+   "reasons": [
+    "Vial A cannot be worked out from these numbers; check the row"
    ]
   }
  ]
