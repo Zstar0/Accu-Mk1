@@ -399,4 +399,71 @@ describe('MethodPanel', () => {
     expect(await screen.findByText('PUR-HPLC')).toBeInTheDocument()
     expect(screen.queryByText('Run parameters (endotoxin)')).toBeNull()
   })
+
+  it('shows the HPLC constants on a method with technique HPLC', async () => {
+    vi.mocked(getMethodServices).mockReset().mockResolvedValue([])
+    render(
+      <MethodPanel method={method({ technique: 'HPLC' })} onUpdated={vi.fn()} />
+    )
+    expect(await screen.findByText('Run parameters (HPLC)')).toBeInTheDocument()
+    expect(screen.queryByText('Run parameters (endotoxin)')).toBeNull()
+  })
+
+  it('shows the HPLC constants on a method with no technique and no endotoxin service', async () => {
+    vi.mocked(getMethodServices).mockReset().mockResolvedValue([])
+    render(
+      <MethodPanel method={method({ technique: null })} onUpdated={vi.fn()} />
+    )
+    expect(await screen.findByText('Run parameters (HPLC)')).toBeInTheDocument()
+    expect(screen.queryByText('Run parameters (endotoxin)')).toBeNull()
+  })
+
+  it('shows neither run parameter section while the services are loading', async () => {
+    let arrive: (
+      links: Awaited<ReturnType<typeof getMethodServices>>
+    ) => void = () => undefined
+    vi.mocked(getMethodServices)
+      .mockReset()
+      .mockReturnValue(new Promise(resolve => (arrive = resolve)))
+    // An endotoxin method with a blank technique and no stored endotoxin block.
+    render(
+      <MethodPanel method={method({ technique: null })} onUpdated={vi.fn()} />
+    )
+    await waitFor(() => expect(getMethodServices).toHaveBeenCalled())
+    await waitFor(() => expect(getMethodAttachments).toHaveBeenCalled())
+    expect(screen.queryByText('Run parameters (HPLC)')).toBeNull()
+    expect(screen.queryByText('Run parameters (endotoxin)')).toBeNull()
+    arrive([
+      {
+        analysis_service_id: 5,
+        keyword: 'ENDO-LAL',
+        title: 'Endotoxin',
+        is_default: true,
+      },
+    ])
+    expect(
+      await screen.findByText('Run parameters (endotoxin)')
+    ).toBeInTheDocument()
+    expect(screen.queryByText('Run parameters (HPLC)')).toBeNull()
+  })
+
+  it('shows neither run parameter section on a PCR method', async () => {
+    vi.mocked(getMethodServices)
+      .mockReset()
+      .mockResolvedValue([
+        {
+          analysis_service_id: 8,
+          keyword: 'PCR-ID',
+          title: 'PCR',
+          is_default: true,
+        },
+      ])
+    render(
+      <MethodPanel method={method({ technique: 'PCR' })} onUpdated={vi.fn()} />
+    )
+    expect(await screen.findByText('PCR-ID')).toBeInTheDocument()
+    expect(screen.queryByText('Run parameters (HPLC)')).toBeNull()
+    expect(screen.queryByText('Run parameters (endotoxin)')).toBeNull()
+    expect(screen.queryByText(/^Consumables \(/)).toBeNull()
+  })
 })

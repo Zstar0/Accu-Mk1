@@ -185,7 +185,7 @@ def test_new_revision_logs_the_run_parameters_and_links_it_copies(client, db):
 
 
 @pytest.mark.parametrize("value", [
-    [], "x", {"hplc": {}}, {"endotoxin": []}, {"endotoxin": {"water": 2}},
+    [], "x", {"pcr": {}}, {"endotoxin": []}, {"endotoxin": {"water": 2}},
     {"endotoxin": {"std_total_dilution": 0}}, {"endotoxin": {"recon_water_ml": -2}},
     {"endotoxin": {"cv_limit_pct": True}}, {"endotoxin": {"cv_limit_pct": "25"}},
     {"endotoxin": {"cv_limit_pct": float("inf")}},

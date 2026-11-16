@@ -73,6 +73,9 @@ export function MethodPanel({ method, onUpdated, onSelectMethod }: MethodPanelPr
   const [allPeptides, setAllPeptides] = useState<PeptideRecord[]>([])
   const [assigningPeptide, setAssigningPeptide] = useState(false)
   const [services, setServices] = useState<MethodServiceLink[]>([])
+  // The method whose services `services` holds: they load after mount, and
+  // until they arrive an endotoxin method cannot be told from an HPLC one.
+  const [servicesFor, setServicesFor] = useState<number | null>(null)
   const [allServices, setAllServices] = useState<AnalysisServiceRecord[]>([])
   const [mutatingServices, setMutatingServices] = useState(false)
   const [allMethods, setAllMethods] = useState<HplcMethod[]>([])
@@ -90,6 +93,12 @@ export function MethodPanel({ method, onUpdated, onSelectMethod }: MethodPanelPr
   const isEndoMethod =
     services.some(s => /ENDO/i.test(s.keyword ?? '')) ||
     method.run_parameters?.endotoxin != null
+  // technique is nullable free text; methods that predate the column are HPLC.
+  // Held until this method's services have loaded (a failed load keeps it held).
+  const isHplcMethod =
+    servicesFor === method.id &&
+    !isEndoMethod &&
+    (!(method.technique ?? '').trim() || /hplc/i.test(method.technique ?? ''))
   const predecessor =
     method.supersedes_id != null
       ? allMethods.find(m => m.id === method.supersedes_id) ?? null
@@ -108,7 +117,12 @@ export function MethodPanel({ method, onUpdated, onSelectMethod }: MethodPanelPr
   }, [])
 
   const loadServices = useCallback(() => {
-    getMethodServices(method.id).then(setServices).catch(console.error)
+    getMethodServices(method.id)
+      .then(links => {
+        setServices(links)
+        setServicesFor(method.id)
+      })
+      .catch(console.error)
   }, [method.id])
 
   const loadAllMethods = useCallback(() => {
@@ -836,6 +850,13 @@ export function MethodPanel({ method, onUpdated, onSelectMethod }: MethodPanelPr
           <MethodConsumablesSection method={method} onUpdated={onUpdated} />
           <MethodRunParamsSection method={method} onUpdated={onUpdated} />
         </>
+      )}
+      {isHplcMethod && (
+        <MethodRunParamsSection
+          method={method}
+          onUpdated={onUpdated}
+          block="hplc"
+        />
       )}
 
       {/* Revision history section */}

@@ -112,7 +112,7 @@ describe('MethodsPage / MethodPanel — catalog fields + covered services', () =
     await user.click(await screen.findByText('Elemental Impurities by ICP-MS'))
     expect(await screen.findByText(/covered services/i)).toBeInTheDocument()
     expect(screen.getByText('LEAD-PPM')).toBeInTheDocument()
-    expect(screen.getByText(/default/i)).toBeInTheDocument()
+    expect(screen.getByText(/^default$/i)).toBeInTheDocument()
   })
 
   it('fix round 1: a covered-services mutation refreshes the parent methods list (onUpdated wiring)', async () => {

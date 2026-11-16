@@ -2881,6 +2881,30 @@ def _run_migrations():
         # the table, so existing ones need this. Nullable, no backfill, so
         # every stored line keeps the standard until someone fills it in.
         "ALTER TABLE endo_prep_rules ADD COLUMN IF NOT EXISTS recon_water_ml DOUBLE PRECISION",
+        # HPLC prep rules (plan 2026-11-12-hplc-prep-rules, Task 2): the same
+        # shape as models.HplcPrepRule, which is the source of truth. Kept
+        # above the retest_of_sample_id statement, which tests pin as the
+        # list's last.
+        """CREATE TABLE IF NOT EXISTS hplc_prep_rules (
+        id                      SERIAL PRIMARY KEY,
+        peptide_id              INTEGER NOT NULL REFERENCES peptides(id),
+        min_mg                  DOUBLE PRECISION,
+        max_mg                  DOUBLE PRECISION,
+        target_conc_ug_ml       DOUBLE PRECISION,
+        blend_target_conc_ug_ml DOUBLE PRECISION,
+        lead_component_id       INTEGER REFERENCES peptides(id),
+        lead_priority           INTEGER,
+        floor_ug_ml             DOUBLE PRECISION,
+        diluent                 VARCHAR(40),
+        default_instrument_id   INTEGER REFERENCES instruments(id),
+        status                  VARCHAR(10) NOT NULL DEFAULT 'trial',
+        note                    TEXT,
+        active                  BOOLEAN NOT NULL DEFAULT TRUE,
+        sort_order              INTEGER NOT NULL DEFAULT 0,
+        created_at              TIMESTAMP,
+        updated_at              TIMESTAMP,
+        updated_by_id           INTEGER REFERENCES users(id) ON DELETE SET NULL
+    )""",
         # HPLC-native slice 6 (M8): links a retest's sample row back to the
         # original Mk1 row it was retested from (from signal meta
         # RetestOfSampleId). Nullable, no FK — the original may be a

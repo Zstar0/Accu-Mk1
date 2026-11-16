@@ -14,6 +14,48 @@ Teaching `hplc_processor` the real prep (decision 13) and closing the manual cur
 (decision 18) are both production-behaviour changes to the HPLC results engine, so this slice
 carries a sign-off. Re-identification (decision 20) is new scope on top.
 
+## Amendments, 2026-11-12 (Handler rulings and a re-read of the source)
+
+Read these before the sections they change. They win over any older text below.
+
+**A1. Capsule quantity is per capsule (Handler, 2026-11-12).** The S4 table's capsule row
+("unstated whether quantity is per capsule or total") is settled: the reported quantity for a
+capsule row is the mass found in the stock divided by capsules used, compared against the
+per-capsule declared weight. `lims_sample_forms.hplc_prep` therefore gains the value
+`capsule`, the seeded Capsule form maps to it, and the engine's `PREP_FORMS` gains `capsule`.
+This also fixes finding B1 of the source tool's own 2026-11-11 review, where recovery divided
+a total by a per-capsule weight.
+
+**A2. Eloralintide takes plain Water (Handler, 2026-11-12, following upstream `4b1c787`).**
+S3's "Expect GHK-Cu and Eloralintide on TFA" is superseded. Water + 0.1% TFA is GHK-Cu, GLOW
+and KLOW only.
+
+**A3. The source is read from upstream, not from the 2026-10-16 checkout.** Every `calc.js`
+reference from here on is to `origin/main` of `tools-dennis` at `39a1afe8` (2026-11-12),
+exported to `C:/tmp/tools-dennis-upstream/`. The line numbers in S4's decision-14 table were
+read from the older checkout and have moved: `stockPrep` is `calc.js:182`, `dilutionActual`
+`:341`, `singleStepEquivalent` `:387`, `intermediateStep` `:1064`.
+
+**A4. `intermediate_target_ug_ml` is 5000, not 1500.** S2 listed 1500 for both the intermediate
+target and the intermediate volume. The source has `intermediateVolumeUl: 1500` and
+`intermediateTargetUgPerMl: 5000` (5000 since 2026-09-29; 3000 before that). The volume is
+1500 uL; the target is 5000 ug/mL.
+
+**A5. Three method constants S2 left out, all needed to plan a row:** `target_volume_ul` 1500
+(the autosampler vial), `sample_diluent_ul` 3000 (the stock's planned diluent) and
+`volume_tolerance_pct` 15 (how far a pipetted volume may sit from the plan before the sheet
+flags it).
+
+**A6. The rule line carries more than S3 listed.** Reading the source's Lab rules tables
+against S3's three scopes shows one peptide needs two targets (Ipamorelin is 150 alone and 175
+in a blend; GHK-Cu 125 and 350), so a single `target_conc_ug_ml` cannot hold both. The line
+gains `blend_target_conc_ug_ml` (NULL = the same as alone), `lead_priority` (the source's
+`preferredLeads` list, lower leads first), `diluent` (NULL = Water) and
+`default_instrument_id` (the source's `instrumentByPeptide`, NULL = none). `diluent` on the
+rule line settles S3's UNVERIFIED `diluentByPeptide` question without leaning on
+`hplc_methods.dissolution`: the check S3 asked for was never run against production, and a
+method serving two peptides with different diluents would break the derivation.
+
 ## 1. Problem
 
 HPLC sample prep in Mk1 today is the **prep wizard**: a modal flow over `wizard_sessions`

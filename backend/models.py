@@ -813,6 +813,54 @@ class EndoPrepRule(Base):
         return f"<EndoPrepRule(id={self.id}, peptide_id={self.peptide_id})>"
 
 
+class HplcPrepRule(Base):
+    """An HPLC prep rule (plan 2026-11-12-hplc-prep-rules, Task 2). For one
+    peptide (a solo peptide, a blend component or a blend) and a weight band
+    (weight > min_mg and <= max_mg, a null bound meaning none) it sets the
+    autosampler vial's target concentration, the peptide's target as a blend
+    component, the blend's lead, the floor, the diluent and the usual
+    instrument; a null value means the method default. status is a label
+    only. Never deleted: active=False retires a line. Matching reads
+    hplc_prep_rules.snapshot(), never this row."""
+    __tablename__ = "hplc_prep_rules"
+
+    id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
+    # No ON DELETE, as endo_prep_rules.peptide_id: a peptide that has a rule
+    # cannot be deleted.
+    peptide_id: Mapped[int] = mapped_column(ForeignKey("peptides.id"), nullable=False)
+    min_mg: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    max_mg: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    # The target alone; on a blend line, the lead's target in this blend.
+    target_conc_ug_ml: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    # This peptide's target as a blend component; NULL = the same as alone.
+    blend_target_conc_ug_ml: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    # Blend lines only: which component leads.
+    lead_component_id: Mapped[Optional[int]] = mapped_column(
+        ForeignKey("peptides.id"), nullable=True)
+    # Component lines only: lower leads first when no lead is named.
+    lead_priority: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    floor_ug_ml: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    # NULL = Water (hplc_prep_rules.DEFAULT_DILUENT).
+    diluent: Mapped[Optional[str]] = mapped_column(String(40), nullable=True)
+    default_instrument_id: Mapped[Optional[int]] = mapped_column(
+        ForeignKey("instruments.id"), nullable=True)
+    status: Mapped[str] = mapped_column(String(10), nullable=False, default="trial",
+                                        server_default="trial")
+    note: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True,
+                                         server_default=text("true"))
+    sort_order: Mapped[int] = mapped_column(Integer, nullable=False, default=0,
+                                            server_default="0")
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow,
+                                                 onupdate=datetime.utcnow)
+    updated_by_id: Mapped[Optional[int]] = mapped_column(
+        ForeignKey("users.id", ondelete="SET NULL"), nullable=True)
+
+    def __repr__(self) -> str:
+        return f"<HplcPrepRule(id={self.id}, peptide_id={self.peptide_id})>"
+
+
 class MethodAttachment(Base):
     """Controlled-document file on a method revision (slice 3). storage='s3'
     only (R0) — via photo_storage, which is filesystem-backed in dev/tests.
