@@ -142,8 +142,10 @@ def test_migrations_add_hplc_prep_then_its_check_then_fill_only_null_values():
     assert "'reconstituted solution'" in sqls[i_fill].lower()
 
 
-def test_the_backfill_leaves_the_other_four_built_in_forms_alone():
-    sqls = _captured()
-    fill = _index_of(sqls, "UPDATE lims_sample_forms SET hplc_prep")
-    for name in ("'pen'", "'nasal spray'", "'capsule'", "'tablet'"):
-        assert name not in sqls[fill].lower()   # the quoted literal, not a bare word
+def test_the_backfill_leaves_the_other_three_built_in_forms_alone():
+    # Capsule left this list when it was ruled (2026-11-12); it has its own fill now.
+    fills = [s for s in _captured() if "UPDATE lims_sample_forms SET hplc_prep" in s]
+    assert fills
+    for fill in fills:
+        for name in ("'pen'", "'nasal spray'", "'tablet'"):
+            assert name not in fill.lower()   # the quoted literal, not a bare word

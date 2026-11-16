@@ -663,7 +663,7 @@ _FORMS_ROWS = [
     (2, "Reconstituted Solution", "injectable", "liquid"),
     (3, "Pen", "injectable", None),
     (4, "Nasal Spray", "nasal_inhaled", None),
-    (5, "Capsule", "oral", None),
+    (5, "Capsule", "oral", "capsule"),
     (6, "Tablet", "oral", None),
 ]
 
@@ -682,10 +682,10 @@ def test_the_sample_forms_check_wants_the_column_the_constraint_and_the_two_back
     assert run({"hplc_prep": ("character varying", "NO")})[1] == 1
     # The DO block that never added the CHECK:
     assert run(constraints=())[1] == 1
-    # The backfill that never ran (both fills missing):
-    assert run(rows=[(i, n, r, None) for i, n, r, _ in _FORMS_ROWS])[1] == 2
+    # The backfill that never ran (all three fills missing):
+    assert run(rows=[(i, n, r, None) for i, n, r, _ in _FORMS_ROWS])[1] == 3
     # Every one of the six built-ins is judged: each holding a value other than its own fails,
-    # so none of the names (least of all the four that must stay NULL) can drop out of the
+    # so none of the names (least of all the three that must stay NULL) can drop out of the
     # expectations unnoticed.
     for at, (_, name, _, prep) in enumerate(_FORMS_ROWS):
         other = "liquid" if prep == "powder" else "powder"
@@ -704,10 +704,10 @@ def test_the_sample_forms_check_wants_the_column_the_constraint_and_the_two_back
 
 
 class _FakeSession:
-    """Canned stand-in for database.SessionLocal(): answers the four queries main() makes."""
+    """Canned stand-in for database.SessionLocal(): answers the five queries main() makes."""
 
-    def __init__(self, tables, constraints, rows):
-        self.tables, self.constraints, self.rows = tables, constraints, rows
+    def __init__(self, tables, constraints, rows, indexes=()):
+        self.tables, self.constraints, self.rows, self.indexes = tables, constraints, rows, indexes
 
     def __enter__(self):
         return self
@@ -724,6 +724,8 @@ class _FakeSession:
             return [(name, *table[name]) for name in params["names"] if name in table]
         if "pg_constraint" in sql:
             return [(name,) for name in self.constraints]
+        if "pg_indexes" in sql:
+            return [(self.indexes[params["name"]],)] if params["name"] in self.indexes else []
         if "FROM lims_sample_forms" in sql:
             if "hplc_prep" not in self.tables["lims_sample_forms"]:
                 raise RuntimeError("column hplc_prep does not exist")  # Postgres would abort the transaction
@@ -733,7 +735,7 @@ class _FakeSession:
 
 def _run_check_main(monkeypatch, capsys, *, stock_nullable="YES", forms_column=True,
                     constraints=("ck_lims_sample_forms_hplc_prep",), rows=_FORMS_ROWS,
-                    rules_table=True, rules_over=None):
+                    rules_table=True, rules_over=None, preps_table=True, preps_index=True, items_column=True):
     """(exit code, output lines) of check_hplc_columns.main() over canned query results."""
     from scripts import check_hplc_columns as check
 
@@ -746,8 +748,18 @@ def _run_check_main(monkeypatch, capsys, *, stock_nullable="YES", forms_column=T
         "hplc_prep_rules": (
             {name: ("integer", want) for name, want in check.RULES_EXPECTED.items()} if rules_table else {}
         ) | (rules_over or {}),
+        "sample_preps": {name: ("integer", "YES") for name in check.PREPS_EXPECTED} if preps_table else {},
+        "worksheet_items": {name: ("json", "YES") for name in check.ITEMS_EXPECTED} if items_column else {},
     }
-    session = _FakeSession(tables, constraints, rows)
+    indexes = (
+        {check.PREPS_INDEX: (
+            "CREATE UNIQUE INDEX uq_sample_preps_worksheet_item ON public.sample_preps "
+            "USING btree (worksheet_item_id) WHERE (worksheet_item_id IS NOT NULL)"
+        )}
+        if preps_index
+        else {}
+    )
+    session = _FakeSession(tables, constraints, rows, indexes)
     monkeypatch.setattr(database, "SessionLocal", lambda: session)
     with pytest.raises(SystemExit) as exit_info:
         check.main()
@@ -767,8 +779,12 @@ def test_the_column_check_script_exits_zero_only_when_both_tables_are_right(monk
         {"constraints": ()},  # lims_sample_forms: the CHECK that never landed
         {"rows": [(1, "Lyophilized Powder", "injectable", None)] + _FORMS_ROWS[1:]},  # backfill missed a row
         {"rules_table": False},  # hplc_prep_rules: the CREATE TABLE that never ran
+        {"preps_table": False},  # sample_preps: ensure_sample_preps_table never ran on this image
+        {"preps_index": False},  # sample_preps: the worksheet-item unique index is missing
+        {"items_column": False},  # worksheet_items: the hplc_prep ADD COLUMN that never applied
     ],
-    ids=["hplc_analyses", "no_column", "no_check", "backfill", "hplc_prep_rules"],
+    ids=["hplc_analyses", "no_column", "no_check", "backfill", "hplc_prep_rules", "sample_preps", "preps_index",
+         "items_column"],
 )
 def test_the_column_check_script_exits_one_for_a_failure_on_either_table(monkeypatch, capsys, broken):
     # The three lims_sample_forms cases are what pin main() adding that table's problems to
@@ -783,6 +799,10 @@ def test_the_closing_line_names_only_what_failed(monkeypatch, capsys):
     assert "liquid prep" not in lines[-1] and "lims_sample_forms" not in lines[-1]
     code, lines = _run_check_main(monkeypatch, capsys, stock_nullable="NO")
     assert code == 1 and "liquid prep" in lines[-1] and "hplc_prep_rules" not in lines[-1]
+    code, lines = _run_check_main(monkeypatch, capsys, preps_index=False)
+    assert code == 1 and "sample_preps" in lines[-1] and "worksheet_items" not in lines[-1]
+    code, lines = _run_check_main(monkeypatch, capsys, items_column=False)
+    assert code == 1 and "worksheet_items" in lines[-1] and "sample_preps" not in lines[-1]
 
 
 def test_the_rules_timestamps_pass_as_create_all_makes_them(monkeypatch, capsys):

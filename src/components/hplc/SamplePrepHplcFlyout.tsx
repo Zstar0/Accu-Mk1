@@ -80,6 +80,7 @@ import { useAuthStore } from '@/store/auth-store'
 import { User, Cpu, Calendar, Download } from 'lucide-react'
 import { toast } from 'sonner'
 import { SampleIdBadge } from '@/components/samples/SampleIdBadge'
+import { prepAnalyzeFields } from '@/lib/hplc-analyze-fields'
 
 // ─── Injection tabs ───────────────────────────────────────────────────────────
 
@@ -134,6 +135,20 @@ function CalcRow({ label, value, unit }: { label: string; value: number | null |
       </span>
     </div>
   )
+}
+
+/** A two-step prep's intermediate weighings, from its record, for the
+ *  calculation card; none when the record holds none, or when the prep is
+ *  split across vials (the card can show any vial's trace, and the
+ *  top-level fields are not tied to one). */
+function intermediateWeighingsOf(prep: SamplePrep) {
+  if ((prep.vial_data?.length ?? 0) > 1) return undefined
+  const w = {
+    empty_mg: prep.int_vial_empty_mg,
+    with_diluent_mg: prep.int_vial_with_diluent_mg,
+    final_mg: prep.int_vial_final_mg,
+  }
+  return Object.values(w).some(v => v != null) ? w : undefined
 }
 
 function PrepDetailsSection({ prep }: { prep: SamplePrep }) {
@@ -1251,14 +1266,6 @@ export function SamplePrepHplcFlyout({ open, onClose, prep, match, readOnly = fa
         }
       : undefined
 
-    const defaultWeights = {
-      stock_vial_empty:                 prep.stock_vial_empty_mg   ?? 0,
-      stock_vial_with_diluent:          prep.stock_vial_loaded_mg  ?? 0,
-      dil_vial_empty:                   prep.dil_vial_empty_mg     ?? 0,
-      dil_vial_with_diluent:            prep.dil_vial_with_diluent_mg ?? 0,
-      dil_vial_with_diluent_and_sample: prep.dil_vial_final_mg     ?? 0,
-    }
-
     // Phase 13: build standard injection RT lookup from parse result
     const stdInjRts: Record<string, { rt: number; source_sample_id: string }> | undefined =
       parseResult.standard_injections && parseResult.standard_injections.length > 0
@@ -1307,28 +1314,14 @@ export function SamplePrepHplcFlyout({ open, onClose, prep, match, readOnly = fa
           )
           if (filteredInj.length === 0) continue
 
-          // Per-vial weight routing: find this component's vial in vial_data
-          let weights = defaultWeights
-          if (prep.vial_data && prep.vial_data.length > 0) {
-            const compBrief = blendComponents.find(c => c.id === comp.id)
-            const vialNum = compBrief?.vial_number ?? 1
-            const vial = prep.vial_data.find(v => v.vial_number === vialNum)
-            if (vial) {
-              weights = {
-                stock_vial_empty:                 vial.stock_vial_empty_mg   ?? 0,
-                stock_vial_with_diluent:          vial.stock_vial_loaded_mg  ?? 0,
-                dil_vial_empty:                   vial.dil_vial_empty_mg     ?? 0,
-                dil_vial_with_diluent:            vial.dil_vial_with_diluent_mg ?? 0,
-                dil_vial_with_diluent_and_sample: vial.dil_vial_final_mg     ?? 0,
-              }
-            }
-          }
+          // Per-vial weight routing: this component's vial in vial_data, else the row
+          const vialNum = blendComponents.find(c => c.id === comp.id)?.vial_number ?? 1
 
           const res = await runHPLCAnalysis({
             sample_id_label: prep.senaite_sample_id ?? prep.sample_id,
             peptide_id: comp.id,
             calibration_curve_id: calId,
-            weights,
+            ...prepAnalyzeFields(prep, vialNum),
             injections: filteredInj as unknown as Record<string, unknown>[],
             // Phase 10.5: provenance
             sample_prep_id: prep.id,
@@ -1356,7 +1349,7 @@ export function SamplePrepHplcFlyout({ open, onClose, prep, match, readOnly = fa
             sample_id_label: prep.senaite_sample_id ?? prep.sample_id,
             peptide_id: prep.peptide_id,
             calibration_curve_id: selectedCalId ?? 0,
-            weights: defaultWeights,
+            ...prepAnalyzeFields(prep),
             injections: filteredInj as unknown as Record<string, unknown>[],
             // Phase 10.5: provenance
             sample_prep_id: prep.id,
@@ -2173,7 +2166,10 @@ export function SamplePrepHplcFlyout({ open, onClose, prep, match, readOnly = fa
               {/* ════ Right column — Calculation Trace ════════════════════ */}
               {!isStandard && result?.calculation_trace && (
                 <div className="w-100 shrink-0 sticky top-0 self-start space-y-4">
-                  <CalculationVisuals trace={result.calculation_trace} />
+                  <CalculationVisuals
+                    trace={result.calculation_trace}
+                    intermediateWeighings={intermediateWeighingsOf(prep)}
+                  />
                   <details className="group">
                     <summary className="cursor-pointer text-xs text-muted-foreground hover:text-foreground transition-colors">
                       Raw JSON

@@ -13,7 +13,7 @@ import AnalysisProfilesPage from '@/components/hplc/AnalysisProfilesPage'
 import VialRolesPage from '@/components/hplc/VialRolesPage'
 import WorksheetsInboxPage from '@/components/hplc/WorksheetsInboxPage'
 import WorksheetsListPage from '@/components/hplc/WorksheetsListPage'
-import { EndoWorksheetPage } from '@/components/hplc/endo/EndoWorksheetPage'
+import { WorksheetPage } from '@/components/hplc/WorksheetPage'
 import { EndoPrepRulesPage } from '@/components/hplc/endo/EndoPrepRulesPage'
 import { HplcPrepRulesPage } from '@/components/hplc/prep/HplcPrepRulesPage'
 import { OrderDashboard } from '@/components/dashboard/OrderDashboard'
@@ -87,7 +87,7 @@ export function MainWindowContent({
       case 'hplc-analysis':
         if (activeSubSection === 'inbox') return <WorksheetsInboxPage />
         if (activeSubSection === 'worksheets') return <WorksheetsListPage />
-        if (activeSubSection === 'worksheet') return <EndoWorksheetPage />
+        if (activeSubSection === 'worksheet') return <WorksheetPage />
         if (activeSubSection === 'endo-prep-rules') return <EndoPrepRulesPage />
         if (activeSubSection === 'hplc-prep-rules') return <HplcPrepRulesPage />
         return <HPLCAnalysis />

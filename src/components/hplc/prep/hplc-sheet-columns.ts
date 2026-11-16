@@ -1,0 +1,505 @@
+/**
+ * The HPLC prep sheet's columns, as data: the lab tool's own labels, tooltips
+ * and decimal places (tools-dennis hplc-peptide-quant app.js, STEP1 for Step
+ * 2 and STEP2 for Step 3), with the micro sign written "u", long dashes and
+ * the minus sign written plainly, and nothing it built for typing numbers
+ * into Accu-Mk1. Each `key` names the cell the sheet renders for it.
+ */
+
+export interface SheetColumn<K extends string = string> {
+  key: K
+  label: string
+  title?: string
+  /** Decimal places of a computed cell. */
+  dp?: number
+  /** Shown only when a row on the sheet needs it. */
+  only?: 'liquid' | 'capsule'
+  kind: 'text' | 'input' | 'select' | 'computed'
+}
+
+/** Help for the columns the source leaves without any, one plain sentence. */
+const SAMPLE_ID_HELP =
+  'The sample this line is for, by its Accu-Mk1 ID; it stays in view while the table scrolls.'
+/** The Sample prep column (Step 2's last), which the page adds. */
+export const SAMPLE_PREP_HELP =
+  'Promote files this row as a sample prep for Process HPLC, from the values on the sheet; once promoted the prep is final and the row is locked.'
+
+/** The autosampler vials' letters: vial 1 is A (calc.js VIAL_LETTERS). */
+export const VIAL_LETTERS = 'ABCDEFG'
+
+export const STEP2_TITLE = 'Peptide sample stock preparation'
+export const STEP2_SUB =
+  'What is in the customer sample vial and which instrument. Weigh that vial with its septum, add the diluent, weigh again.'
+export const STEP3_TITLE = 'Peptide dilution into the autosampler vial'
+export const STEP3_SUB =
+  'Add diluent and stock each in two halves; weigh after each. A two-step sample dilutes from its intermediate vial. A blend split across vials has one row per vial, each from the same stock.'
+
+export const FORM_LABELS: Record<string, string> = {
+  powder: 'Lyophilized Powder',
+  liquid: 'Liquid (Reconstituted)',
+  bac: 'Bacteriostatic Water',
+  capsule: 'Capsule',
+}
+
+export type Step2Key =
+  | 'sample_id'
+  | 'identity'
+  | 'declared_mg'
+  | 'form'
+  | 'declared_volume_ml'
+  | 'capsules'
+  | 'instrument'
+  | 'diluent'
+  | 'stock_vial_mg'
+  | 'diluent_ul'
+  | 'stock_vial_diluent_mg'
+  | 'total_diluent_ml'
+  | 'stock_conc'
+  | 'two_step'
+
+export const STEP2_COLUMNS: SheetColumn<Step2Key>[] = [
+  { key: 'sample_id', kind: 'text', label: 'Sample ID', title: SAMPLE_ID_HELP },
+  {
+    key: 'identity',
+    kind: 'text',
+    label: 'Sample Identity',
+    title:
+      'What the sample is, as Accu-Mk1 names it. A blend lists its peptides joined with " + " ("BPC-157 + TB500"), or is a blend\'s short name ("KLOW" = its four peptides); Step 2b then asks for each one\'s weight.',
+  },
+  {
+    key: 'declared_mg',
+    kind: 'input',
+    label: 'Declared Peptide Wt (mg)',
+    title:
+      "What the order declares is in the vial. For a blend this is the whole vial; the stock is worked from the lead component's share in Step 2b.",
+  },
+  {
+    key: 'form',
+    kind: 'select',
+    label: 'Form',
+    title:
+      "How the vial arrived. Lyophilized powder (the usual) is weighed and dissolved here in Step 2. Liquid (reconstituted) means the customer's declared volume is the stock: type it in the next box; the weighing boxes switch off. Bacteriostatic water: weigh the vial full (① the left weighing box), then emptied and dried (② the right box); the stock is 9000 ug/mL (0.9% benzyl alcohol) and the declared weight is worked out. Capsule: the declared weight is per capsule and Capsules used says how many went in; empty the capsules into a vial, cap it and weigh (the left weighing box), add water and weigh again (the right box): the difference is the water added, worked out as for a powder.",
+  },
+  {
+    key: 'declared_volume_ml',
+    kind: 'input',
+    only: 'liquid',
+    label: 'Declared Liquid Vol (mL)',
+    title:
+      'For a liquid vial only: the volume the customer declares, taken as is, the vial is never weighed as a check (that is the disclaimer).',
+  },
+  {
+    key: 'capsules',
+    kind: 'input',
+    only: 'capsule',
+    label: 'Capsules used',
+    title:
+      'For a capsule row only: how many capsules were emptied to make this stock. The Declared Peptide Wt is per capsule, so the peptide in the stock = declared × capsules.',
+  },
+  {
+    key: 'instrument',
+    kind: 'select',
+    label: 'Instrument',
+    title: 'Which HPLC instrument this vial runs on',
+  },
+  {
+    key: 'diluent',
+    kind: 'select',
+    label: 'Diluent',
+    title:
+      'What the stock (and its dilutions) are made in. Water, unless the HPLC Prep Rules give a peptide in the Sample Identity another (GHK-Cu, GLOW and KLOW take water + 0.1% TFA). Pick one to use another for this row; the first choice goes back to the rule.',
+  },
+  {
+    key: 'stock_vial_mg',
+    kind: 'input',
+    label: 'Wt Customer Sample vial and Septum (mg)',
+    title:
+      'The customer sample vial with its septum, before the diluent. Bacteriostatic water: the vial full, as received, weighed first. Capsule: the vial and cap with the capsules emptied in.',
+  },
+  {
+    key: 'diluent_ul',
+    kind: 'input',
+    label: 'Diluent to add (uL)',
+    title:
+      "How much diluent to put into the customer vial. A capsule's is worked out: the water that makes the stock the row's target, so Step 3 takes it neat.",
+  },
+  {
+    key: 'stock_vial_diluent_mg',
+    kind: 'input',
+    label: 'Wt Customer Sample vial and Septum + Diluent (mg)',
+    title:
+      'The same vial after the diluent goes in. Bacteriostatic water: the vial emptied and dried, weighed after. Capsule: the same vial after the water.',
+  },
+  {
+    key: 'total_diluent_ml',
+    kind: 'computed',
+    dp: 4,
+    label: 'Total Diluent added (mL)',
+    title:
+      '(Wt Customer Sample vial and Septum + Diluent - Wt Customer Sample vial and Septum) ÷ Diluent density. For a pre-dissolved vial: the Declared Liquid Vol, as declared.',
+  },
+  {
+    key: 'stock_conc',
+    kind: 'computed',
+    dp: 2,
+    label: 'Peptide Stock Conc (ug/mL)',
+    title:
+      "Declared Peptide Wt × 1000 ÷ Total Diluent added. For a blend: the lead component's weight (Step 2b) × 1000 ÷ Total Diluent added.",
+  },
+  {
+    key: 'two_step',
+    kind: 'select',
+    label: '2-step dilution',
+    title:
+      "Auto: on when the declared weight is 500 mg or more (there is a limit to how much diluent the vial takes); for a blend, decided per dilution vial on its lead's weight. Set yes or no to override for every vial of this row.",
+  },
+]
+
+export const STEP2B_TITLE = 'Blend components'
+export const STEP2B_NOTE = 'samples with more than one peptide'
+export const STEP2B_SUB =
+  "One stock, one dilution per vial. Split the declared weight across the peptides and pick the lead: the Step 3 plan hits the lead's target and the others land where that dilution puts them. A peptide that would land under 60 ug/mL gets its own vial: choose B in the Vial column and Step 3 gains a row for it from the same stock."
+
+export type Step2bKey =
+  | 'sample_id'
+  | 'component'
+  | 'mg'
+  | 'vial'
+  | 'lead'
+  | 'stock_conc_ug_ml'
+  | 'target'
+  | 'planned_final_ug_ml'
+  | 'actual_final_ug_ml'
+
+export const STEP2B_COLUMNS: SheetColumn<Step2bKey>[] = [
+  { key: 'sample_id', kind: 'text', label: 'Sample ID', title: SAMPLE_ID_HELP },
+  {
+    key: 'component',
+    kind: 'text',
+    label: 'Component',
+    title: 'From the Sample Identity in Step 2',
+  },
+  {
+    key: 'mg',
+    kind: 'input',
+    label: 'Declared Wt (mg)',
+    title:
+      "This component's share of the row's Declared Peptide Wt (Step 2). The shares should add up to it.",
+  },
+  {
+    key: 'vial',
+    kind: 'select',
+    label: 'Vial',
+    title:
+      'Which autosampler vial this peptide is read from. All start in A; choose B for the peptides that need their own dilution: Step 3 then gets a row per vial from the same stock.',
+  },
+  {
+    key: 'lead',
+    kind: 'input',
+    label: 'Lead',
+    title:
+      "The component the Step 3 plan hits the Target Conc for, in its vial. The others in that vial land where that same dilution puts them. Blank = the blend's lead from the HPLC Prep Rules, else the heaviest.",
+  },
+  {
+    key: 'stock_conc_ug_ml',
+    kind: 'computed',
+    dp: 2,
+    label: 'Component Stock Conc (ug/mL)',
+    title:
+      'Declared Wt × 1000 ÷ Total Diluent added (Step 2), the same diluent for every component',
+  },
+  {
+    key: 'target',
+    kind: 'input',
+    label: 'Own Target (ug/mL)',
+    title:
+      "What this peptide is diluted to on its own: blank = 200, or its target from the HPLC Prep Rules (greyed in). Type a value to use another. The lead's is the target its vial is diluted to in Step 3 unless one is typed there; the others' are what they would be on their own.",
+  },
+  {
+    key: 'planned_final_ug_ml',
+    kind: 'computed',
+    dp: 2,
+    label: 'Planned Final Conc (ug/mL)',
+    title:
+      "In its vial: Target Conc (Step 3) × Component Stock Conc ÷ the vial lead's Component Stock Conc. Under 60 ug/mL and not the lead: put it in its own vial.",
+  },
+  {
+    key: 'actual_final_ug_ml',
+    kind: 'computed',
+    dp: 2,
+    label: 'Actual Final Conc (ug/mL)',
+    title:
+      "In its vial: Actual Conc (Step 3) × Component Stock Conc ÷ the vial lead's Component Stock Conc",
+  },
+]
+
+export const STEP3A_TITLE = 'Intermediate dilution'
+export const STEP3A_NOTE = 'samples declared at 500 mg or more'
+export const STEP3A_SUB =
+  'Too much peptide for one step: dilute the stock into an intermediate vial first, then Step 3 dilutes from that. Same routine: diluent, then stock, weigh after each.'
+
+export type Step3aKey =
+  | 'sample_id'
+  | 'identity'
+  | 'diluent'
+  | 'int_target_ug_ml'
+  | 'int_volume_ul'
+  | 'int_vial_mg'
+  | 'diluent_vol_ul'
+  | 'diluent_half_ul'
+  | 'int_vial_diluent_mg'
+  | 'stock_vol_ul'
+  | 'stock_half_ul'
+  | 'int_vial_all_mg'
+  | 'actual_diluent_ul'
+  | 'actual_stock_ul'
+  | 'actual_conc_ug_ml'
+
+export const STEP3A_COLUMNS: SheetColumn<Step3aKey>[] = [
+  { key: 'sample_id', kind: 'text', label: 'Sample ID', title: SAMPLE_ID_HELP },
+  {
+    key: 'identity',
+    kind: 'text',
+    label: 'Sample Identity',
+    title:
+      'Copied from Step 2, change it there. A blend split across vials also says which peptides this vial holds.',
+  },
+  {
+    key: 'diluent',
+    kind: 'text',
+    label: 'Diluent',
+    title:
+      'From Step 2: what the stock and this dilution are made in (Water, or water + 0.1% TFA for GHK by the HPLC Prep Rules; a row can pick its own there).',
+  },
+  {
+    key: 'int_target_ug_ml',
+    kind: 'input',
+    label: 'Intermediate Target (ug/mL)',
+    title:
+      'Blank = 5000 ug/mL, the intermediate the lab makes. Type a value to use a different one for this row.',
+  },
+  {
+    key: 'int_volume_ul',
+    kind: 'input',
+    label: 'Intermediate Target Vol (uL)',
+    title: 'Blank = 1500 uL',
+  },
+  {
+    key: 'int_vial_mg',
+    kind: 'input',
+    label: 'Wt Intermediate vial and cap (mg)',
+    title: 'The empty intermediate vial with its cap, weighed first.',
+  },
+  {
+    key: 'diluent_vol_ul',
+    kind: 'computed',
+    dp: 2,
+    label: 'Diluent Vol to Add (uL), total',
+    title: 'Intermediate Vol - Stock Vol to Add',
+  },
+  {
+    key: 'diluent_half_ul',
+    kind: 'computed',
+    dp: 2,
+    label: 'half',
+    title: 'Half of Diluent Vol to Add',
+  },
+  {
+    key: 'int_vial_diluent_mg',
+    kind: 'input',
+    label: 'Wt Intermediate vial and cap + Diluent (mg)',
+    title: 'The intermediate vial after the diluent goes in (both halves).',
+  },
+  {
+    key: 'stock_vol_ul',
+    kind: 'computed',
+    dp: 2,
+    label: 'Stock Vol to Add (uL), total',
+    title:
+      'Intermediate Target × Intermediate Target Vol ÷ Peptide Stock Conc (from Step 2)',
+  },
+  {
+    key: 'stock_half_ul',
+    kind: 'computed',
+    dp: 2,
+    label: 'half',
+    title: 'Half of Stock Vol to Add',
+  },
+  {
+    key: 'int_vial_all_mg',
+    kind: 'input',
+    label: 'Wt Intermediate vial, cap, Diluent + Stock (mg)',
+    title:
+      'The intermediate vial after the stock goes in (both halves), on top of the diluent.',
+  },
+  {
+    key: 'actual_diluent_ul',
+    kind: 'computed',
+    dp: 2,
+    label: 'Actual Diluent added (uL)',
+    title:
+      '(Wt vial and cap + Diluent - Wt vial and cap) ÷ Diluent density × 1000',
+  },
+  {
+    key: 'actual_stock_ul',
+    kind: 'computed',
+    dp: 2,
+    label: 'Actual Stock added (uL)',
+    title:
+      '(Wt vial, cap, Diluent + Stock - Wt vial and cap + Diluent) ÷ Diluent density × 1000',
+  },
+  {
+    key: 'actual_conc_ug_ml',
+    kind: 'computed',
+    dp: 2,
+    label: 'Actual Intermediate Conc (ug/mL)',
+    title:
+      'Peptide Stock Conc × Actual Stock added ÷ (Actual Stock added + Actual Diluent added). Step 3 dilutes from this.',
+  },
+]
+
+export type Step3Key =
+  | 'sample_id'
+  | 'identity'
+  | 'diluent'
+  | 'stock_for_final'
+  | 'target_ug_ml'
+  | 'target_volume_ul'
+  | 'vial_mg'
+  | 'diluent_vol_ul'
+  | 'diluent_half_ul'
+  | 'vial_diluent_mg'
+  | 'stock_vol_ul'
+  | 'stock_half_ul'
+  | 'vial_all_mg'
+  | 'actual_diluent_ul'
+  | 'actual_stock_ul'
+  | 'actual_total_ul'
+  | 'actual_conc_ug_ml'
+  | 'dilution_factor_total'
+
+export const STEP3_COLUMNS: SheetColumn<Step3Key>[] = [
+  { key: 'sample_id', kind: 'text', label: 'Sample ID', title: SAMPLE_ID_HELP },
+  {
+    key: 'identity',
+    kind: 'text',
+    label: 'Sample Identity',
+    title:
+      'Copied from Step 2, change it there. A blend split across vials also says which peptides this vial holds.',
+  },
+  {
+    key: 'diluent',
+    kind: 'text',
+    label: 'Diluent',
+    title:
+      'From Step 2: what the stock and this dilution are made in (Water, or water + 0.1% TFA for GHK by the HPLC Prep Rules; a row can pick its own there).',
+  },
+  {
+    key: 'stock_for_final',
+    kind: 'computed',
+    dp: 2,
+    label: 'Diluting from (ug/mL)',
+    title:
+      'The stock this row dilutes: Peptide Stock Conc from Step 2, or for a two-step sample the Actual Intermediate Conc from Step 3a (its target until it is weighed)',
+  },
+  {
+    key: 'target_ug_ml',
+    kind: 'input',
+    label: 'Target Conc (ug/mL)',
+    title:
+      'Blank = 200 ug/mL, or the target the HPLC Prep Rules give a peptide in the Sample Identity (the box says which). Type a value to use another for this vial.',
+  },
+  {
+    key: 'target_volume_ul',
+    kind: 'input',
+    label: 'Target Total Vol (uL)',
+    title:
+      "The volume the autosampler vial is made up to. Blank = the method's volume; type a value to use another for this vial.",
+  },
+  {
+    key: 'vial_mg',
+    kind: 'input',
+    label: 'Wt Autosampler vial and cap (mg)',
+    title: 'The empty autosampler vial with its cap, weighed first.',
+  },
+  {
+    key: 'diluent_vol_ul',
+    kind: 'computed',
+    dp: 2,
+    label: 'Diluent Vol to Add (uL), total',
+    title: 'Target Total Vol - Stock Vol to Add',
+  },
+  {
+    key: 'diluent_half_ul',
+    kind: 'computed',
+    dp: 2,
+    label: 'half',
+    title: 'Half of Diluent Vol to Add: the diluent goes in as two halves',
+  },
+  {
+    key: 'vial_diluent_mg',
+    kind: 'input',
+    label: 'Wt Autosampler vial and cap + Diluent (mg)',
+    title:
+      'The autosampler vial after the diluent goes in (both halves). A neat capsule vial takes no diluent: blank = the vial weight.',
+  },
+  {
+    key: 'stock_vol_ul',
+    kind: 'computed',
+    dp: 2,
+    label: 'Stock Vol to Add (uL), total',
+    title: 'Target Conc × Target Total Vol ÷ Diluting from',
+  },
+  {
+    key: 'stock_half_ul',
+    kind: 'computed',
+    dp: 2,
+    label: 'half',
+    title: 'Half of Stock Vol to Add: the stock goes in as two halves',
+  },
+  {
+    key: 'vial_all_mg',
+    kind: 'input',
+    label: 'Wt of Vial, cap, Diluent + Sample (mg)',
+    title:
+      'The autosampler vial after the stock goes in (both halves), on top of the diluent.',
+  },
+  {
+    key: 'actual_diluent_ul',
+    kind: 'computed',
+    dp: 2,
+    label: 'Actual Diluent Volume added (uL)',
+    title:
+      '(Wt Autosampler vial and cap + Diluent - Wt Autosampler vial and cap) ÷ Diluent density × 1000',
+  },
+  {
+    key: 'actual_stock_ul',
+    kind: 'computed',
+    dp: 2,
+    label: 'Actual Stock Vol added (uL)',
+    title:
+      '(Wt of Vial, cap, Diluent + Sample - Wt Autosampler vial and cap + Diluent) ÷ Diluent density × 1000',
+  },
+  {
+    key: 'actual_total_ul',
+    kind: 'computed',
+    dp: 2,
+    label: 'Actual Total Volume (uL)',
+    title: 'Actual Stock Vol added + Actual Diluent Volume added',
+  },
+  {
+    key: 'actual_conc_ug_ml',
+    kind: 'computed',
+    dp: 2,
+    label: 'Actual Conc (ug/mL)',
+    title: 'Diluting from × Actual Stock Vol added ÷ Actual Total Volume',
+  },
+  {
+    key: 'dilution_factor_total',
+    kind: 'computed',
+    dp: 4,
+    label: 'Total Dilution Factor',
+    title:
+      "Stock → final vial. One step: Actual Total Volume ÷ Actual Stock Vol added. Two steps: that, times the intermediate step's own factor.",
+  },
+]

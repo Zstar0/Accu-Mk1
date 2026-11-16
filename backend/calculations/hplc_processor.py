@@ -69,6 +69,20 @@ class AnalysisInput:
     # computes exactly as it always did.
     form: str = "powder"
     declared_volume_ml: Optional[float] = None
+    # How many capsules were emptied into the stock vial. Read only for form "capsule",
+    # whose reported quantity is per capsule; every other form ignores it.
+    capsules_used: Optional[int] = None
+
+
+# No real stock holds more than a bottle of capsules, and the bound keeps the count inside
+# INTEGER (the stored column) and float range (the division).
+MAX_CAPSULES = 1000
+
+
+def _is_capsule_count(value) -> bool:
+    """A count of capsules: an int from 1 to MAX_CAPSULES. A bool is an int in Python and is
+    not a count, and a float is refused even when whole, so no 2.0 reaches the stored row."""
+    return isinstance(value, int) and not isinstance(value, bool) and 1 <= value <= MAX_CAPSULES
 
 
 def _round_or_none(value: Optional[float], places: int) -> Optional[float]:
@@ -114,11 +128,12 @@ def _volume_survives_rounding(volume: Optional[float]) -> bool:
     return _finite(volume) and round(volume, STOCK_VOLUME_PLACES) > 0
 
 
-# The prep forms the engine understands. The endo bench accepts the same three
+# The prep forms the engine understands. The endo bench accepts the first three
 # (worksheets_endo.ENDO_FORMS); a test pins that set(ENDO_FORMS) <= set(PREP_FORMS)
 # instead of importing the tuple, because worksheets_endo imports models and this
-# module is the lower layer.
-PREP_FORMS = ("powder", "liquid", "bac")
+# module is the lower layer. "capsule" is a powder prep of several emptied capsules,
+# reported per capsule (calculate_quantity's capsules_used).
+PREP_FORMS = ("powder", "liquid", "bac", "capsule")
 
 DILUENT_DENSITY_MG_ML = 997.1     # calc.js DEFAULTS.diluentDensityMgPerMl
 BENZYL_ALCOHOL_DENSITY = 1034.72  # calc.js benzylAlcoholDensity() default
@@ -171,6 +186,7 @@ def stock_volume_ml(
     only in how the volume is obtained (calc.js stockPrep):
 
         "powder"  weighed: (stock vial with diluent - stock vial empty) / density
+        "capsule" exactly as powder: the emptied capsules are the powder
         "bac"     the same mass, density corrected for 0.9 % benzyl alcohol
         "liquid"  the customer's declared volume, taken as declared. The stock vial
                   is never weighed, so its weighings are not read at all
@@ -322,8 +338,8 @@ def calculate_dilution_factor(
         diluent_vol = (dil_vial_with_diluent - dil_vial_empty) / density * 1000 [µL]
         sample_vol = (dil_vial_full - dil_vial_with_diluent) / density * 1000 [µL]
         DF = (diluent_vol + sample_vol) / sample_vol
-        stock_vol = stock_volume_ml(form, ...) [mL]: weighed for "powder", density
-            corrected for "bac", the declared volume for "liquid"
+        stock_vol = stock_volume_ml(form, ...) [mL]: weighed for "powder" and
+            "capsule", density corrected for "bac", the declared volume for "liquid"
 
     Returns dict with all intermediate values for audit trace, plus "problem":
     None when every weighing is usable, else which one is not. The checks are by
@@ -404,7 +420,8 @@ def calculate_dilution_factor(
     has no "actual_conc_ug_ml" key. Its absence means "not computed here", not
     "unknown for this row".
 
-    "form" echoes the prep form that produced the row ("powder", "bac" or "liquid"), as
+    "form" echoes the prep form that produced the row ("powder", "bac", "liquid" or
+    "capsule"), as
     a fact of the row like "problem". A reader that needs to know which measurements
     exist for the row (a liquid row has no stock vial mass) reads it here instead of
     inferring it from which values are None. A trace stored before this key existed
@@ -567,6 +584,8 @@ def calculate_quantity(
     injections: list[dict],
     calibration: CalibrationParams,
     dilution: dict,
+    *,
+    capsules_used: Optional[int] = None,
 ) -> dict:
     """
     Calculate quantity (mass in mg) from peak areas.
@@ -578,6 +597,14 @@ def calculate_quantity(
        dilution["dilution_factor_total"], stock vial to final vial (both steps when
        the prep has an intermediate), the same factor calc.js sends to Mk1
     4. Calculate mass: mass_mg = undiluted_conc * stock_vol / 1000
+    5. With capsules_used (a capsule prep), divide by it: the reported quantity is per
+       capsule. The division comes BEFORE the rounding and before the
+       quantity_below_precision check, so both judge the per-capsule figure that is
+       reported, not the stock total. "mass_ug" stays the mass in the stock, and the
+       trace adds "capsule_total_mg" (that mass in mg, rounded to 4) and "capsules_used".
+       Neither key exists when capsules_used is None, so no other form's trace changes.
+       A count that is not a whole number from 1 to MAX_CAPSULES raises ValueError: the request
+       layer refuses it, and process_hplc_analysis refuses a capsule row without one.
 
     The rounding order is load-bearing and pinned by the golden fixture: the total and
     the stock volume arrive already rounded to 6 places, are multiplied as they are, and
@@ -601,6 +628,7 @@ def calculate_quantity(
         "quantity_not_finite"            the concentration, the undiluted concentration
                                          or the mass overflowed
         "quantity_below_precision"       the concentration is above zero but the mass
+                                         (per capsule for a capsule row)
                                          rounds away at SUBMITTED_MG_PLACES, the precision
                                          the consumer that carries it uses, so there is no
                                          number to report. NOT a weighing code: the
@@ -617,6 +645,9 @@ def calculate_quantity(
     before any of that with just {"quantity_mg": None, "error": "quantity_not_finite"}:
     nothing in it could be reported, and a recapture cannot use it either.
     """
+    if capsules_used is not None and not _is_capsule_count(capsules_used):
+        raise ValueError(f"capsules_used must be a whole number from 1 to {MAX_CAPSULES}, not {capsules_used!r}")
+
     areas = []
     for inj in injections:
         main_idx = inj.get("main_peak_index", -1)
@@ -650,16 +681,21 @@ def calculate_quantity(
     if not error and not (_finite(total) and total > 0 and _finite(stock_vol) and stock_vol > 0):
         error = "dilution_incomplete"
 
-    undiluted_conc = mass_ug = None
+    undiluted_conc = mass_ug = mass_mg = None
     if not error:
         # Apply the total dilution factor
         undiluted_conc = concentration * total  # µg/mL in stock
 
         # Mass = undiluted_conc (µg/mL) * stock_volume (mL) / 1000 (µg→mg)
         mass_ug = undiluted_conc * stock_vol
+        # The figure that is reported. A capsule prep reports per capsule, divided HERE,
+        # before the check below and the rounding at the return: a total that survives
+        # rounding can still be a per-capsule figure that does not, and rounding the total
+        # first would put a second rounding into every capsule result.
+        mass_mg = mass_ug / 1000 if capsules_used is None else mass_ug / 1000 / capsules_used
         if not all(_finite(v) for v in (concentration, undiluted_conc, mass_ug)):
             error = "quantity_not_finite"
-        elif round(mass_ug / 1000, SUBMITTED_MG_PLACES) == 0 and concentration > 0:
+        elif round(mass_mg, SUBMITTED_MG_PLACES) == 0 and concentration > 0:
             # The gate above guards the INPUTS, and both can be tiny and still survive
             # their own rounding (1e-6 mL is enough), so the mass they multiply out to can
             # still round away. At SUBMITTED_MG_PLACES, not the engine's own four: a mass of
@@ -669,6 +705,14 @@ def calculate_quantity(
             # Only for a POSITIVE concentration; a negative one is a real reading whose
             # small negative mass is a result, as the fixture's own negative row is.
             error = "quantity_below_precision"
+
+    # A capsule row says how many capsules and what the stock held, so a tech can see
+    # the total behind a per-capsule figure, or behind one too small to report. Only on
+    # the capsule path: no other form's trace gains a key.
+    capsule = {} if capsules_used is None else {
+        "capsules_used": capsules_used,
+        "capsule_total_mg": round(mass_ug / 1000, QUANTITY_MG_PLACES) if _finite(mass_ug) else None,
+    }
 
     if error:
         # No total or no stock volume, an overflow, or a mass that rounds away: there is
@@ -681,9 +725,9 @@ def calculate_quantity(
             "concentration_ug_ml": round(concentration, 4) if _finite(concentration) else None,
             "calibration_slope": calibration.slope,
             "calibration_intercept": calibration.intercept,
+            **capsule,
         }
 
-    mass_mg = mass_ug / 1000
     intermediate = dilution.get("intermediate")
 
     return {
@@ -701,6 +745,7 @@ def calculate_quantity(
         },
         "calibration_slope": calibration.slope,
         "calibration_intercept": calibration.intercept,
+        **capsule,
     }
 
 
@@ -796,10 +841,18 @@ def process_hplc_analysis(input_data: AnalysisInput) -> dict:
     purity = calculate_purity_from_injections(input_data.injections)
     trace["purity"] = purity
 
-    # Step 3: Quantity (calibration curve + dilution)
-    quantity = calculate_quantity(
-        input_data.injections, input_data.calibration, dilution
-    )
+    # Step 3: Quantity (calibration curve + dilution). A capsule row is reported per
+    # capsule, so it needs its count. Without a usable one there is no quantity at all,
+    # never the stock total, which would report N capsules as one. Refused with a code
+    # rather than raised, as a liquid row without a declared volume is. Every other form
+    # ignores a count, as powder ignores a declared volume.
+    capsules_used = input_data.capsules_used if input_data.form == "capsule" else None
+    if input_data.form == "capsule" and not _is_capsule_count(capsules_used):
+        quantity = {"quantity_mg": None, "error": "no_capsule_count"}
+    else:
+        quantity = calculate_quantity(
+            input_data.injections, input_data.calibration, dilution, capsules_used=capsules_used
+        )
     trace["quantity"] = quantity
 
     # Step 4: Identity (RT matching)

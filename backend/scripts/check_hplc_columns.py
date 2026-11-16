@@ -2,9 +2,16 @@
 docs/superpowers/plans/2026-10-31-hplc-results-engine.md, Task 6): do the new
 hplc_analyses columns exist, and are the two stock-vial weighings nullable? Task 8 adds
 lims_sample_forms: does hplc_prep exist, is its CHECK there, and did the backfill fill the
-two built-in forms that have a prep kind? The HPLC prep rules plan (2026-11-12, Task 2)
+built-in forms that have a prep kind (three since the HPLC prep worksheet plan added
+capsule, with hplc_analyses.capsules_used)? The HPLC prep rules plan (2026-11-12, Task 2)
 adds hplc_prep_rules: does the table exist with every column, nullable as its CREATE
-TABLE statement makes it (created_at and updated_at either way)?
+TABLE statement makes it (created_at and updated_at either way)? The HPLC prep worksheet plan (2026-11-12, Task 2) adds eight
+nullable sample_preps columns and the unique partial index uq_sample_preps_worksheet_item.
+sample_preps is not created by database.py or _run_migrations: mk1_db.ensure_sample_preps_table()
+creates and alters it, and the /sample-preps routes (and others) call it before they touch the
+table, so a fresh deploy gets the columns on the first such request. Run this check after one
+(open the Sample Preps page): a miss before that is expected, a miss after it is not. Task 5
+adds worksheet_items.hplc_prep, nullable (an HPLC row's typed prep inputs).
 
 _run_migrations runs each ALTER on its own and LOGS a failure instead of raising, so a
 column can silently fail to exist in production, and a DROP NOT NULL that failed leaves
@@ -38,11 +45,13 @@ import sys
 if "__file__" in globals():
     sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-# column -> is_nullable. The first five are new; the two stock weighings were NOT NULL
-# until a liquid prep (which never weighs its stock vial) needed them blank.
+# column -> is_nullable. The first six are new (capsules_used from the HPLC prep worksheet
+# plan, 2026-11-12, Task 1); the two stock weighings were NOT NULL until a liquid prep
+# (which never weighs its stock vial) needed them blank.
 EXPECTED = {
     "prep_form": "YES",
     "declared_volume_ml": "YES",
+    "capsules_used": "YES",
     "int_vial_empty": "YES",
     "int_vial_with_diluent": "YES",
     "int_vial_with_diluent_and_sample": "YES",
@@ -53,8 +62,10 @@ EXPECTED = {
 
 # lims_sample_forms (Task 8): the new column stays nullable (NULL = no HPLC prep maths), its
 # CHECK is added by a DO block that only logs on failure, and the backfill matches the six
-# built-in names as lower(btrim(name)). Only the first two have a prep kind; the other four
-# stay NULL until capsule is ruled. A form the Handler added or renamed is not judged.
+# built-in names as lower(btrim(name)). Three have a prep kind (capsule since its 2026-11-12
+# ruling: its fill runs after a DO block that widens the CHECK and also only logs on failure,
+# so a Capsule row still NULL is how a failed widen shows here); the other three stay NULL.
+# A form the Handler added or renamed is not judged.
 FORMS_EXPECTED = {"hplc_prep": "YES"}
 
 # hplc_prep_rules (HPLC prep rules plan, Task 2): the boot CREATE TABLE IF NOT EXISTS runs
@@ -70,13 +81,26 @@ RULES_EXPECTED = {
 # ...but a fresh database, where SQLAlchemy's create_all made the table, has these two NOT
 # NULL. Both are a working table, so either nullability passes for them.
 RULES_EITHER_NULLABLE = ("created_at", "updated_at")
+# sample_preps (HPLC prep worksheet plan, Task 2): all eight nullable, and one prep per
+# worksheet item through a unique partial index.
+PREPS_EXPECTED = {
+    name: "YES"
+    for name in (
+        "prep_form", "declared_volume_ml", "capsules_used", "diluent",
+        "int_vial_empty_mg", "int_vial_with_diluent_mg", "int_vial_final_mg",
+        "worksheet_item_id",
+    )
+}
+PREPS_INDEX = "uq_sample_preps_worksheet_item"
+# worksheet_items (HPLC prep worksheet plan, Task 5): the row's typed inputs, nullable.
+ITEMS_EXPECTED = {"hplc_prep": "YES"}
 FORMS_CHECK = "ck_lims_sample_forms_hplc_prep"
 FORMS_PREP = {
     "lyophilized powder": "powder",
     "reconstituted solution": "liquid",
     "pen": None,
     "nasal spray": None,
-    "capsule": None,
+    "capsule": "capsule",
     "tablet": None,
 }
 
@@ -140,6 +164,16 @@ def evaluate_sample_forms(found, constraints, rows):
     return lines, bad, not_found
 
 
+def evaluate_sample_preps(found, indexdef):
+    """(report lines, number of problems) for the sample_preps columns and the worksheet-item
+    index, whose pg_indexes definition is `indexdef` (None when it is missing). Pure."""
+    lines, bad = evaluate(found, PREPS_EXPECTED)
+    ok = bool(indexdef) and "UNIQUE" in indexdef and "worksheet_item_id IS NOT NULL" in indexdef
+    bad += not ok
+    lines.append(f"{PREPS_INDEX:36} {'index':20} {'ok' if ok else 'MISSING' if not indexdef else 'WRONG ' + indexdef}")
+    return lines, bad
+
+
 def _columns(db, table, names):
     from sqlalchemy import text
 
@@ -165,6 +199,18 @@ def main():
         found = _columns(db, "hplc_analyses", EXPECTED)
         forms_found = _columns(db, "lims_sample_forms", FORMS_EXPECTED)
         rules_found = _columns(db, "hplc_prep_rules", RULES_EXPECTED)
+        preps_found = _columns(db, "sample_preps", PREPS_EXPECTED)
+        items_found = _columns(db, "worksheet_items", ITEMS_EXPECTED)
+        preps_index = next(
+            (
+                row[0]
+                for row in db.execute(
+                    text("SELECT indexdef FROM pg_indexes WHERE tablename = 'sample_preps' AND indexname = :name"),
+                    {"name": PREPS_INDEX},
+                )
+            ),
+            None,
+        )
         # to_regclass is NULL for a missing table, where a bare ::regclass cast would raise.
         constraints = {
             row[0]
@@ -186,14 +232,19 @@ def main():
     lines, analyses_bad = evaluate(found)
     forms_lines, forms_bad, not_found = evaluate_sample_forms(forms_found, constraints, rows)
     rules_lines, rules_bad = evaluate(rules_found, RULES_EXPECTED, RULES_EITHER_NULLABLE)
-    print("\n".join(lines + forms_lines + ["hplc_prep_rules:"] + rules_lines))
-    bad = analyses_bad + forms_bad + rules_bad
+    preps_lines, preps_bad = evaluate_sample_preps(preps_found, preps_index)
+    items_lines, items_bad = evaluate(items_found, ITEMS_EXPECTED)
+    print("\n".join(lines + forms_lines + ["hplc_prep_rules:"] + rules_lines + ["sample_preps:"] + preps_lines
+                    + ["worksheet_items:"] + items_lines))
+    bad = analyses_bad + forms_bad + rules_bad + preps_bad + items_bad
     if bad:
         # Name only what failed, so a rules-table problem does not read as a liquid-prep one.
         failed = [why for count, why in (
             (analyses_bad, "do not ship a liquid prep until hplc_analyses is fixed"),
             (forms_bad, "do not read hplc_prep until lims_sample_forms is fixed"),
             (rules_bad, "do not use the HPLC prep rules until hplc_prep_rules is fixed"),
+            (preps_bad, "do not use the HPLC prep worksheet until sample_preps is fixed"),
+            (items_bad, "do not use the HPLC prep worksheet until worksheet_items is fixed"),
         ) if count]
         closing = f"{bad} PROBLEM(S): {'; '.join(failed)}"
     elif not_found:

@@ -12,7 +12,11 @@ from models import LimsAnalysis, LimsSubSample, WorksheetItem, method_services
 
 
 def apply_method_instrument_to_worksheet(db: Session, *, worksheet, method_id: int,
-                                         instrument_id: int, item_ids, user_id) -> dict:
+                                         instrument_id: int, item_ids, user_id,
+                                         promoted_item_ids=frozenset()) -> dict:
+    """promoted_item_ids: promoted HPLC rows (main._promoted_hplc_rows_locked). Their
+    instrument and their analyses are final, so they are left untouched and reported in
+    skipped_promoted as {"item_id", "sample_id"}."""
     covered = {r[0] for r in db.execute(
         select(method_services.c.analysis_service_id)
         .where(method_services.c.method_id == method_id)).all()}
@@ -21,8 +25,11 @@ def apply_method_instrument_to_worksheet(db: Session, *, worksheet, method_id: i
     ).scalars().all() if item_ids is None or it.id in set(item_ids)]
 
     stamped, items_updated = 0, 0
-    skipped_state, skipped_uncovered = [], []
+    skipped_state, skipped_uncovered, skipped_promoted = [], [], []
     for it in items:
+        if it.id in promoted_item_ids:
+            skipped_promoted.append({"item_id": it.id, "sample_id": it.sample_id})
+            continue
         vial = db.execute(select(LimsSubSample).where(
             LimsSubSample.sample_id == it.sample_id)).scalar_one_or_none()
         if vial is None:
@@ -42,4 +49,5 @@ def apply_method_instrument_to_worksheet(db: Session, *, worksheet, method_id: i
         it.instrument_id = instrument_id
         items_updated += 1
     return {"stamped": stamped, "items_updated": items_updated,
-            "skipped_state": skipped_state, "skipped_uncovered": skipped_uncovered}
+            "skipped_state": skipped_state, "skipped_uncovered": skipped_uncovered,
+            "skipped_promoted": skipped_promoted}

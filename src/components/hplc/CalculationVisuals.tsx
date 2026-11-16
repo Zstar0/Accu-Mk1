@@ -70,6 +70,20 @@ interface DilutionTrace {
   // The prep form that produced the row. Absent on a trace stored before the engine
   // wrote it, which means "not known to be liquid", not "powder": see stockMassText.
   form?: string
+  // A two-step prep (hplc_processor.calculate_dilution_factor): the stock to
+  // intermediate leg, and the product of both factors. `dilution_factor` is then
+  // the final leg's alone. The engine keeps the intermediate's volumes, not its
+  // weighings. Null or absent on a one-step prep.
+  dilution_factor_total?: number | null
+  intermediate?: IntermediateLeg | null
+}
+
+interface IntermediateLeg {
+  diluent_vol_ul: number | null
+  stock_vol_ul: number | null
+  total_vol_ul: number | null
+  dilution_factor: number | null
+  problem?: string | null
 }
 
 interface CalculationTrace {
@@ -153,6 +167,8 @@ const PROBLEM_COPY: Record<string, string> = {
     'The calibration curve has no usable diluent density. This is not a weighing problem: the density needs setting on the curve.',
   no_declared_volume:
     'This liquid sample has no usable declared volume. This is not a weighing problem: the volume declared with the sample needs recording (it is taken as declared, not measured).',
+  no_capsule_count:
+    'This capsule sample has no usable capsule count. This is not a weighing problem: the number of capsules that went into the stock vial needs entering on the prep (the quantity is reported per capsule).',
   // These two codes are only ever the quantity panel's reason, never the dilution panel's.
   // A quantity can be refused on sound weighings: very small volumes work out to a mass with
   // no number left in it at the precision the result is carried onward in, which is coarser
@@ -491,7 +507,13 @@ function IdentityVisual({ trace }: { trace: IdentityTrace }) {
 
 // ── Dilution Breakdown ─────────────────────────────────────────
 
-function DilutionBreakdown({ trace }: { trace: DilutionTrace }) {
+function DilutionBreakdown({
+  trace,
+  weighings,
+}: {
+  trace: DilutionTrace
+  weighings?: IntermediateWeighings
+}) {
   const rows: [string, string, string][] = [
     ['Diluent mass', fixed(trace.diluent_mass_mg, 2, ' mg'), fixed(trace.diluent_vol_ul, 1, ' µL')],
     ['Sample mass', fixed(trace.sample_mass_mg, 2, ' mg'), fixed(trace.sample_vol_ul, 1, ' µL')],
@@ -529,7 +551,9 @@ function DilutionBreakdown({ trace }: { trace: DilutionTrace }) {
               </tbody>
             </table>
             <div className="mt-2 flex items-baseline justify-between rounded-md bg-blue-500/10 border border-blue-500/20 px-2 py-1.5">
-              <span className="text-xs text-slate-400">Dilution Factor</span>
+              <span className="text-xs text-slate-400">
+                {trace.intermediate ? 'Final vial factor' : 'Dilution Factor'}
+              </span>
               <span className="text-sm font-bold tabular-nums text-blue-400">{fixed(trace.dilution_factor, 2, '\u00d7')}</span>
             </div>
           </div>
@@ -554,6 +578,13 @@ function DilutionBreakdown({ trace }: { trace: DilutionTrace }) {
             </p>
           </div>
         </div>
+        {trace.intermediate && (
+          <TwoStepFactors
+            trace={trace}
+            leg={trace.intermediate}
+            weighings={weighings}
+          />
+        )}
         {trace.problem && (
           <p className="mt-3 text-xs text-amber-400">
             {undeterminedLabel(trace)} {NOT_DETERMINED}. {problemCopy(trace.problem)}
@@ -564,19 +595,108 @@ function DilutionBreakdown({ trace }: { trace: DilutionTrace }) {
   )
 }
 
+/** A two-step prep: the intermediate leg's volumes and factor, the final leg's
+ *  factor, and their product, which is the factor the result uses. Its problem,
+ *  if any, is the panel's one problem line. */
+function TwoStepFactors({
+  trace,
+  leg,
+  weighings,
+}: {
+  trace: DilutionTrace
+  leg: IntermediateLeg
+  weighings?: IntermediateWeighings
+}) {
+  const rows: [string, string][] = [
+    ['Diluent', fixed(leg.diluent_vol_ul, 1, ' µL')],
+    ['Stock', fixed(leg.stock_vol_ul, 1, ' µL')],
+    ['Total volume', fixed(leg.total_vol_ul, 1, ' µL')],
+    // the prep record keeps the intermediate vial's three weighings
+    ...(weighings
+      ? ([
+          ['Empty vial', fixed(weighings.empty_mg, 2, ' mg')],
+          ['+ Diluent', fixed(weighings.with_diluent_mg, 2, ' mg')],
+          ['+ Diluent + Stock', fixed(weighings.final_mg, 2, ' mg')],
+        ] as [string, string][])
+      : []),
+  ]
+  return (
+    <div
+      data-testid="two-step-factors"
+      className="mt-4 grid grid-cols-2 gap-4 border-t pt-3"
+    >
+      <div>
+        <p className="mb-2 text-xs font-medium text-muted-foreground">
+          Intermediate Vial (stock to intermediate)
+        </p>
+        <table className="w-full text-xs">
+          <tbody className="font-mono">
+            {rows.map(([label, vol]) => (
+              <tr key={label} className="border-b last:border-0">
+                <td className="py-1 font-sans text-muted-foreground">{label}</td>
+                <td className="py-1 text-right">{vol}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+        <div className="mt-2 flex items-baseline justify-between rounded-md bg-blue-500/10 border border-blue-500/20 px-2 py-1.5">
+          <span className="text-xs text-slate-400">Intermediate factor</span>
+          <span className="text-sm font-bold tabular-nums text-blue-400">
+            {fixed(leg.dilution_factor, 2, '×')}
+          </span>
+        </div>
+      </div>
+      <div className="space-y-2 text-xs">
+        <p className="mb-2 font-medium text-slate-400">Two steps</p>
+        <div className="flex justify-between">
+          <span className="text-slate-400">Final vial factor</span>
+          <span className="font-mono">{fixed(trace.dilution_factor, 2, '×')}</span>
+        </div>
+        <div className="flex items-baseline justify-between rounded-md bg-blue-500/10 border border-blue-500/20 px-2 py-1.5">
+          <span className="text-slate-400">Total Dilution Factor</span>
+          <span className="text-sm font-bold tabular-nums text-blue-400">
+            {fixed(trace.dilution_factor_total, 2, '×')}
+          </span>
+        </div>
+        <p className="text-[10px] text-muted-foreground leading-relaxed">
+          Total = intermediate factor × final vial factor.
+          {!weighings &&
+            " The intermediate vial's weighings are not kept with the result, only its volumes."}
+        </p>
+      </div>
+    </div>
+  )
+}
+
 // ── Main export ────────────────────────────────────────────────
+
+/** A two-step prep's intermediate vial weighings, from its prep record (the
+ *  trace keeps only the volumes). */
+export interface IntermediateWeighings {
+  empty_mg: number | null | undefined
+  with_diluent_mg: number | null | undefined
+  final_mg: number | null | undefined
+}
 
 interface CalculationVisualsProps {
   trace: Record<string, unknown>
+  /** Shown beside the intermediate vial's volumes on a two-step card. */
+  intermediateWeighings?: IntermediateWeighings
 }
 
-export function CalculationVisuals({ trace }: CalculationVisualsProps) {
+export function CalculationVisuals({
+  trace,
+  intermediateWeighings,
+}: CalculationVisualsProps) {
   const parsed = trace as unknown as CalculationTrace
 
   return (
     <div className="flex flex-col gap-4">
       {isDilutionTrace(parsed.dilution) && (
-        <DilutionBreakdown trace={parsed.dilution} />
+        <DilutionBreakdown
+          trace={parsed.dilution}
+          weighings={intermediateWeighings}
+        />
       )}
       {isQuantityTrace(parsed.quantity) && (
         <QuantityChart trace={parsed.quantity} />

@@ -3565,12 +3565,34 @@ export interface HPLCWeightsInput {
   dil_vial_with_diluent_and_sample: number
 }
 
+/** The weights POST /hplc/analyze accepts (HPLCWeightsInput in backend/main.py): any may be
+ *  null (not weighed); which are required depends on prep_form. The three int_vial_* are the
+ *  intermediate vial of a two-step dilution: all three or none. */
+export interface HPLCAnalyzeWeights {
+  stock_vial_empty: number | null
+  stock_vial_with_diluent: number | null
+  dil_vial_empty: number | null
+  dil_vial_with_diluent: number | null
+  dil_vial_with_diluent_and_sample: number | null
+  int_vial_empty?: number | null
+  int_vial_with_diluent?: number | null
+  int_vial_with_diluent_and_sample?: number | null
+}
+
+export type HPLCPrepForm = 'powder' | 'liquid' | 'bac' | 'capsule'
+
 export interface HPLCAnalyzeRequest {
   sample_id_label: string
   peptide_id: number
   calibration_curve_id?: number
-  weights: HPLCWeightsInput
+  weights: HPLCAnalyzeWeights
   injections: Record<string, unknown>[]
+  // How the stock volume is obtained; the server defaults to powder when omitted.
+  prep_form?: HPLCPrepForm
+  // Required for a liquid prep.
+  declared_volume_ml?: number
+  // Required for a capsule prep, refused on any other form.
+  capsules_used?: number
   // Phase 10.5: provenance fields
   sample_prep_id?: number
   instrument_id?: number
@@ -4120,6 +4142,10 @@ export interface VialData {
   actual_stock_vol_ul: number | null
   actual_total_vol_ul: number | null
   analyte_data?: AnalyteData[]
+  // HPLC prep worksheet: this vial's intermediate vial of a two-step dilution.
+  int_vial_empty_mg?: number | null
+  int_vial_with_diluent_mg?: number | null
+  int_vial_final_mg?: number | null
 }
 
 export interface SamplePrep {
@@ -4164,6 +4190,16 @@ export interface SamplePrep {
   created_by_email: string | null
   updated_by_user_id: number | null
   updated_by_email: string | null
+  // HPLC prep worksheet (a promoted row). NULL on every wizard-born prep; optional
+  // because a backend that predates them does not send them.
+  prep_form?: HPLCPrepForm | null
+  declared_volume_ml?: number | null
+  capsules_used?: number | null
+  diluent?: string | null
+  int_vial_empty_mg?: number | null
+  int_vial_with_diluent_mg?: number | null
+  int_vial_final_mg?: number | null
+  worksheet_item_id?: number | null
   /** Additive SLA context (v1.11.1) — the linked sample's received date,
    *  priority, live analysis keywords, and owning department. Absent when
    *  the prep has no resolvable lims linkage (indicator shows the none
@@ -6520,6 +6556,151 @@ export async function getWorksheet(worksheetId: number): Promise<WorksheetListIt
   return response.json()
 }
 
+// ---- HPLC prep worksheet (plan 2026-11-12-hplc-prep-worksheet, Task 7) ----
+
+type HplcPrepForm = import('@/lib/hplc-prep').HplcPrepForm
+type HplcPrepInputs = import('@/lib/hplc-prep').HplcPrepInputs
+
+/** One HPLC row as the server knows it before and after anything is typed
+ *  (the plan's "row facts"). `hplc_prep` is never null once read through
+ *  getHplcSheet or patchHplcRow: a null from the server is read as {}. */
+export interface HplcSheetRow {
+  item_id: number
+  sample_id: string
+  parent_sample_id: string | null
+  order_number: string | null
+  identity: string | null
+  peptide_id: number | null
+  peptide_name: string | null
+  is_blend: boolean
+  components: import('@/lib/hplc-prep').HplcRowFactsComponent[]
+  /** Where the components came from: the sample's own analytes (with
+   *  weights), the tests ordered on an older sample (a blend's weights are
+   *  then null, typed by the tech), or null with an empty list and a problem. */
+  components_source: 'analytes' | 'analyses' | null
+  /** Null is normal on an older sample: the tech types it. */
+  declared_mg: number | null
+  sample_form: { id: number; name: string; hplc_prep: HplcPrepForm | null } | null
+  sample_bac: boolean
+  /** The effective form; null = no HPLC prep for this form. */
+  form: HplcPrepForm | null
+  rider_only: boolean
+  instrument_id: number | null
+  instrument_name: string | null
+  params: import('@/lib/hplc-prep').HplcRunParams
+  prep_form: HplcPrepForm | null
+  hplc_prep: HplcPrepInputs
+  promoted: boolean
+  prep: { id: number; sample_id: string; status: string } | null
+  problems: string[]
+  /** Preps of this row's vial not made from this row (a wizard prep,
+   *  another worksheet's), newest first. Information only. */
+  other_preps: { id: number; sample_id: string; status: string }[]
+}
+
+export interface HplcSheet {
+  worksheet_id: number
+  status: string
+  blend_cap: number
+  rows: HplcSheetRow[]
+}
+
+/** PATCH body: `hplc_prep` is a merge patch (a key sent as null is removed). */
+export interface HplcRowPatch {
+  prep_form?: HplcPrepForm | null
+  hplc_prep?: HplcPrepInputs
+}
+
+export interface HplcPromoteResult {
+  prep: { id: number; sample_id: string; status: string }
+  already: boolean
+  /** Null when the prep was written but the read after it failed: read the
+   *  sheet again instead. */
+  row: HplcSheetRow | null
+}
+
+/** A promote the server refused (409): its sentence and each reason. */
+export class HplcPromoteRefused extends Error {
+  reasons: string[]
+  constructor(message: string, reasons: string[]) {
+    super(message)
+    this.name = 'HplcPromoteRefused'
+    this.reasons = reasons
+  }
+}
+
+function hplcRowIn(row: HplcSheetRow): HplcSheetRow {
+  return { ...row, hplc_prep: row.hplc_prep ?? {} }
+}
+
+export async function getHplcSheet(worksheetId: number): Promise<HplcSheet> {
+  const response = await fetch(`${API_BASE_URL()}/worksheets/${worksheetId}/hplc`, {
+    headers: getBearerHeaders(),
+  })
+  if (!response.ok)
+    throw new Error(
+      await extractErrorMessage(response, `Load HPLC worksheet failed: ${response.status}`)
+    )
+  const sheet = (await response.json()) as HplcSheet
+  return { ...sheet, rows: sheet.rows.map(hplcRowIn) }
+}
+
+/** 400 carries the reason a patch was refused; 409 a completed worksheet or
+ *  a promoted row. Returns the row's facts after the change. */
+export async function patchHplcRow(
+  worksheetId: number,
+  itemId: number,
+  body: HplcRowPatch,
+  opts: { signal?: AbortSignal } = {}
+): Promise<HplcSheetRow> {
+  const response = await fetch(
+    `${API_BASE_URL()}/worksheets/${worksheetId}/items/${itemId}/hplc`,
+    {
+      method: 'PATCH',
+      headers: getBearerHeaders('application/json'),
+      body: JSON.stringify(body),
+      signal: opts.signal,
+    }
+  )
+  if (!response.ok)
+    throw new Error(
+      await extractErrorMessage(response, `Save HPLC prep failed: ${response.status}`)
+    )
+  return hplcRowIn(await response.json())
+}
+
+/** A 409 throws HplcPromoteRefused with the server's message and reasons. */
+export async function promoteHplcRow(
+  worksheetId: number,
+  itemId: number
+): Promise<HplcPromoteResult> {
+  const response = await fetch(
+    `${API_BASE_URL()}/worksheets/${worksheetId}/items/${itemId}/hplc/promote`,
+    { method: 'POST', headers: getBearerHeaders() }
+  )
+  if (response.status === 409) {
+    const body = (await response.json().catch(() => null)) as {
+      detail?: { message?: string; reasons?: string[] } | string
+    } | null
+    const detail = body?.detail
+    if (detail && typeof detail === 'object')
+      throw new HplcPromoteRefused(
+        detail.message ?? 'Promote refused',
+        Array.isArray(detail.reasons) ? detail.reasons : []
+      )
+    throw new HplcPromoteRefused(
+      typeof detail === 'string' ? detail : 'Promote refused',
+      []
+    )
+  }
+  if (!response.ok)
+    throw new Error(
+      await extractErrorMessage(response, `Promote failed: ${response.status}`)
+    )
+  const result = (await response.json()) as HplcPromoteResult
+  return { ...result, row: result.row ? hplcRowIn(result.row) : null }
+}
+
 export async function removeWorksheetItem(
   worksheetId: number,
   itemId: number
@@ -6785,7 +6966,9 @@ export async function unfreezeWorksheetWells(
 export async function updateWorksheetItem(
   worksheetId: number,
   itemId: number,
-  data: WorksheetItemPatch
+  data: WorksheetItemPatch,
+  /** Optional: a signal to abort the request (the HPLC sheet's 15 s cut). */
+  opts: { signal?: AbortSignal } = {}
 ): Promise<{
   status: string
   item_id: number
@@ -6796,6 +6979,7 @@ export async function updateWorksheetItem(
     method: 'PATCH',
     headers: getBearerHeaders('application/json'),
     body: JSON.stringify(data),
+    ...(opts.signal ? { signal: opts.signal } : {}),
   })
   if (!response.ok)
     throw new Error(
@@ -7169,6 +7353,8 @@ export async function applyWorksheetMethodInstrument(
   items_updated: number
   skipped_state: { analysis_id: number; review_state: string }[]
   skipped_uncovered: { analysis_id: number; keyword: string }[]
+  /** HPLC rows already promoted keep their instrument. */
+  skipped_promoted?: { item_id: number; sample_id: string }[]
 }> {
   const response = await fetch(
     `${API_BASE_URL()}/worksheets/${worksheetId}/apply-method-instrument`,

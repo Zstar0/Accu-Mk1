@@ -467,12 +467,16 @@ def _run_migrations():
         # A swallowed failure here leaves the column missing in prod: check information_schema after deploy.
         "ALTER TABLE hplc_analyses ADD COLUMN IF NOT EXISTS prep_form VARCHAR(10)",
         "ALTER TABLE hplc_analyses ADD COLUMN IF NOT EXISTS declared_volume_ml DOUBLE PRECISION",
+        # HPLC prep worksheet (2026-11-12): a capsule row's count; quantity_mg is per capsule.
+        "ALTER TABLE hplc_analyses ADD COLUMN IF NOT EXISTS capsules_used INTEGER",
         "ALTER TABLE hplc_analyses ADD COLUMN IF NOT EXISTS int_vial_empty DOUBLE PRECISION",
         "ALTER TABLE hplc_analyses ADD COLUMN IF NOT EXISTS int_vial_with_diluent DOUBLE PRECISION",
         "ALTER TABLE hplc_analyses ADD COLUMN IF NOT EXISTS int_vial_with_diluent_and_sample DOUBLE PRECISION",
         # A liquid prep never weighs its stock vial, so those two weighings are NULL for it.
         "ALTER TABLE hplc_analyses ALTER COLUMN stock_vial_empty DROP NOT NULL",
         "ALTER TABLE hplc_analyses ALTER COLUMN stock_vial_with_diluent DROP NOT NULL",
+        # HPLC prep worksheet (2026-11-12, Task 5): an HPLC row's typed prep inputs.
+        "ALTER TABLE worksheet_items ADD COLUMN IF NOT EXISTS hplc_prep JSON",
         # Phase 17: Worksheet item SENAITE received date + prep status
         "ALTER TABLE worksheet_items ADD COLUMN IF NOT EXISTS date_received TIMESTAMP",
         "ALTER TABLE worksheet_items ADD COLUMN IF NOT EXISTS prep_status VARCHAR(20) DEFAULT 'ready'",
@@ -2298,6 +2302,29 @@ def _run_migrations():
                         CHECK (hplc_prep IN ('powder','liquid'));
             END IF;
         END $$""",
+        # Capsule ruled 2026-11-12 (reported per capsule), so the CHECK widens. The
+        # add-only block above is left as it shipped (the ck_analysis_service_specs_tier
+        # precedent): this one acts only while the definition lacks 'capsule', so it
+        # replaces the old CHECK once per database, creates the wide one where none
+        # exists, and does nothing on every later boot. An older image booting later
+        # cannot re-narrow it, since its add-only block skips on the existing name. No
+        # row can violate the wider CHECK. It MUST stay before the capsule backfill
+        # below: _run_migrations logs a failed statement and moves on, so a backfill
+        # run against the old CHECK would fail silently.
+        """DO $$ BEGIN
+            IF NOT EXISTS (
+                SELECT 1 FROM pg_constraint
+                WHERE conname = 'ck_lims_sample_forms_hplc_prep'
+                  AND conrelid = 'lims_sample_forms'::regclass
+                  AND pg_get_constraintdef(oid) LIKE '%capsule%'
+            ) THEN
+                ALTER TABLE lims_sample_forms
+                    DROP CONSTRAINT IF EXISTS ck_lims_sample_forms_hplc_prep;
+                ALTER TABLE lims_sample_forms
+                    ADD CONSTRAINT ck_lims_sample_forms_hplc_prep
+                        CHECK (hplc_prep IN ('powder','liquid','capsule'));
+            END IF;
+        END $$""",
         """
         INSERT INTO lims_sample_forms (name, route, is_default, active, sort_order, icon, created_at, updated_at)
         SELECT v.name, v.route, v.is_default, v.active, v.sort_order, v.icon, now(), now()
@@ -2326,9 +2353,9 @@ def _run_migrations():
         # The HPLC prep kind for the two built-in forms that have one. This MUST
         # stay after the seed above: the seed only fires into an empty table and
         # does not name hplc_prep, so on a fresh database these two rows are
-        # inserted NULL and only this UPDATE fills them. Pen, Nasal Spray,
-        # Capsule and Tablet are deliberately not listed, which leaves them NULL
-        # without a statement to undo when capsule is ruled. Guarded by
+        # inserted NULL and only this UPDATE fills them. Pen, Nasal Spray and
+        # Tablet are deliberately not listed, which leaves them NULL; Capsule has
+        # its own UPDATE below, since its ruling came later. Guarded by
         # IS NULL so a value set by hand is never overwritten on a later boot.
         """
         UPDATE lims_sample_forms SET hplc_prep = CASE lower(btrim(name))
@@ -2336,6 +2363,13 @@ def _run_migrations():
             WHEN 'reconstituted solution' THEN 'liquid' END
         WHERE hplc_prep IS NULL AND lower(btrim(name)) IN
             ('lyophilized powder','reconstituted solution')
+        """,
+        # The built-in Capsule form, once capsule was ruled (2026-11-12). Its own
+        # statement, after the widened CHECK: if the widen failed this one fails alone
+        # and leaves the two fills above standing. Guarded by IS NULL like them.
+        """
+        UPDATE lims_sample_forms SET hplc_prep = 'capsule'
+        WHERE hplc_prep IS NULL AND lower(btrim(name)) = 'capsule'
         """,
         "ALTER TABLE lims_samples ADD COLUMN IF NOT EXISTS sample_form_id "
         "INTEGER REFERENCES lims_sample_forms(id)",

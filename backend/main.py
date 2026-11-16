@@ -96,7 +96,7 @@ from parsers.peakdata_csv_parser import parse_hplc_files, calculate_purity
 from calculations import CalculationEngine
 from calculations.calibration import calculate_calibration_curve
 from calculations.hplc_processor import (
-    PREP_FORMS, process_hplc_analysis, AnalysisInput, IntermediateWeights, WeightInputs,
+    MAX_CAPSULES, PREP_FORMS, process_hplc_analysis, AnalysisInput, IntermediateWeights, WeightInputs,
     CalibrationParams, PeptideParams,
 )
 from file_watcher import FileWatcher
@@ -7054,7 +7054,7 @@ class HPLCAnalyzeRequest(BaseModel):
     calibration_curve_id: Optional[int] = None  # If provided, use this specific curve
     weights: HPLCWeightsInput
     injections: list[dict]  # Parsed injection data from /hplc/parse-files
-    # How the stock volume is obtained: powder and bac weigh the stock vial, liquid
+    # How the stock volume is obtained: powder, bac and capsule weigh the stock vial, liquid
     # declares its volume. The route does not resolve this from the sample; the caller says.
     prep_form: str = "powder"
     declared_volume_ml: Annotated[
@@ -7062,6 +7062,10 @@ class HPLCAnalyzeRequest(BaseModel):
         Field(gt=0, le=MAX_DECLARED_VOLUME_ML, allow_inf_nan=False),
         BeforeValidator(_text_if_not_finite),
     ] = None
+    # How many capsules went into the stock vial: required for a capsule prep, whose
+    # quantity is reported per capsule, and refused on any other form. Strict, so a JSON
+    # true or "3" is not read as a count.
+    capsules_used: Annotated[Optional[int], Field(ge=1, le=MAX_CAPSULES, strict=True)] = None
     # Provenance fields (Phase 10.5)
     sample_prep_id: Optional[int] = None
     instrument_id: Optional[int] = None
@@ -7088,8 +7092,8 @@ class HPLCAnalyzeRequest(BaseModel):
         buried in a calculation trace. The engine guards the same conditions on its own;
         this is the trust boundary in front of it.
 
-        powder and bac weigh a stock vial, so all five stock and dilution weighings are
-        needed. liquid never weighs its stock vial, so only the dilution vial's three are,
+        powder, bac and capsule weigh a stock vial, so all five stock and dilution weighings
+        are needed. A capsule also needs its count, and only a capsule may send one. liquid never weighs its stock vial, so only the dilution vial's three are,
         but it must declare its volume. The intermediate vial is all or nothing: a partly
         weighed one passed through as "no intermediate" would print a one-step quantity,
         too low by the intermediate factor.
@@ -7116,6 +7120,12 @@ class HPLCAnalyzeRequest(BaseModel):
             ]
         if self.prep_form == "liquid" and self.declared_volume_ml is None:
             errors.append((("declared_volume_ml",), "declared_volume_ml is required for a liquid prep"))
+        # A capsule without its count would report the whole stock as one capsule; a count
+        # on another form is a caller that thinks it is reporting per capsule and is not.
+        if self.prep_form == "capsule" and self.capsules_used is None:
+            errors.append((("capsules_used",), "capsules_used is required for a capsule prep"))
+        elif self.prep_form != "capsule" and self.capsules_used is not None:
+            errors.append((("capsules_used",), f"capsules_used is only for a capsule prep, not a {self.prep_form} prep"))
         if errors:
             raise ValidationError.from_exception_data(
                 type(self).__name__,
@@ -7160,6 +7170,7 @@ class HPLCAnalysisResponse(BaseModel):
     # dilution_factor_steps is None again for a row whose quantity was refused.
     prep_form: Optional[str] = None
     dilution_factor_steps: Optional[dict] = None  # {"intermediate": float | None, "final": float}
+    capsules_used: Optional[int] = None  # capsule rows only; quantity_mg is then per capsule
 
 
 def _analysis_to_response(analysis: "HPLCAnalysis", peptide_abbreviation: str) -> "HPLCAnalysisResponse":
@@ -7197,6 +7208,7 @@ def _analysis_to_response(analysis: "HPLCAnalysis", peptide_abbreviation: str) -
         # HPLC results engine: the per-step factors live in the trace, not in a column
         prep_form=analysis.prep_form,
         dilution_factor_steps=quantity_trace.get("dilution_factor_steps"),
+        capsules_used=analysis.capsules_used,
     )
 
 
@@ -7348,6 +7360,7 @@ async def run_hplc_analysis(
         intermediate=intermediate,
         form=request.prep_form,
         declared_volume_ml=request.declared_volume_ml,
+        capsules_used=request.capsules_used,
     )
 
     # Run analysis
@@ -7370,6 +7383,7 @@ async def run_hplc_analysis(
         dil_vial_with_diluent_and_sample=request.weights.dil_vial_with_diluent_and_sample,
         prep_form=request.prep_form,
         declared_volume_ml=request.declared_volume_ml if is_liquid else None,
+        capsules_used=request.capsules_used,  # the validator leaves it None on every other form
         int_vial_empty=request.weights.int_vial_empty,
         int_vial_with_diluent=request.weights.int_vial_with_diluent,
         int_vial_with_diluent_and_sample=request.weights.int_vial_with_diluent_and_sample,
@@ -25654,6 +25668,28 @@ def _worksheet_for_update(db: Session, worksheet_id: int) -> Optional["Worksheet
                       .execution_options(populate_existing=True)).scalar_one_or_none()
 
 
+def _promoted_hplc_rows_locked(db: Session, worksheet_id: int, items) -> set[int]:
+    """The promoted HPLC rows among `items` (worksheets_hplc.promoted_hplc_item_ids), judged
+    under row locks: when any item is an HPLC row, the worksheet row, then those rows' vial
+    analyses and items (endo_prep_rules.lock_items_for_update), each re-read, so a promote that
+    committed meanwhile is seen and the caller reads the locked item. No lock and no mk1_db
+    query when none is an HPLC row. Taking them again in a request that holds them is a no-op.
+    For every route that writes an item's instrument (HPLC fix round 2, A); the route goes
+    under @_rollback_on_error."""
+    import worksheets_hplc
+    from endo_prep_rules import lock_items_for_update
+
+    hplc = worksheets_hplc.hplc_rows(db, items)
+    if not hplc:
+        return set()
+    ws = _worksheet_for_update(db, worksheet_id)
+    if ws is None:  # deleted since the caller's first read
+        raise HTTPException(404, "Worksheet not found")
+    lock_items_for_update(db, ws, [it.id for it in hplc])
+    # the bench kind is read once, above: the locked rows go straight to the prep lookup
+    return set(worksheets_hplc._preps_by_item({it.id for it in hplc}))
+
+
 def _rollback_on_error(endpoint):
     """For a sync route that takes row locks (endo slice 5 final review C1):
     any exception rolls the session back before it leaves the route. FastAPI
@@ -26384,7 +26420,9 @@ def bulk_bench_ticks(
     _current_user=Depends(get_current_user),
 ):
     """Tick (or untick) Made / Ran down a whole worksheet in one request: the
-    bench sheet is worked on paper and keyed in afterwards, a run at a time."""
+    bench sheet is worked on paper and keyed in afterwards, a run at a time. A Ran tick over
+    HPLC rows reads sample_preps on the mk1_db connection, and answers 500 (writing nothing)
+    when that is down."""
     ws = db.execute(select(Worksheet).where(Worksheet.id == worksheet_id)).scalar_one_or_none()
     if not ws:
         raise HTTPException(404, "Worksheet not found")
@@ -26394,11 +26432,16 @@ def bulk_bench_ticks(
         select(WorksheetItem).where(WorksheetItem.worksheet_id == worksheet_id)
     ).scalars().all()
     wanted = set(data.item_ids) if data.item_ids is not None else None
+    items = [it for it in items if wanted is None or it.id in wanted]
+    # A Ran tick may stamp an instrument, never onto a promoted HPLC row (HPLC fix round 2, A),
+    # judged under the locks; the lock re-reads ws, so its status is judged again.
+    promoted = _promoted_hplc_rows_locked(db, worksheet_id, items) if data.ran is True else set()
+    if ws.status == "completed":
+        raise HTTPException(409, "Worksheet is completed")
     changed = sum(
         1 for it in items
-        if (wanted is None or it.id in wanted)
-        and _apply_bench_ticks(db, worksheet_id, it, made=data.made, ran=data.ran,
-                               user_id=_current_user.id)
+        if _apply_bench_ticks(db, worksheet_id, it, made=data.made, ran=data.ran,
+                              user_id=_current_user.id, stamp_instrument=it.id not in promoted)
     )
     db.commit()
     return {"status": "updated", "changed": changed}
@@ -26967,7 +27010,9 @@ def update_worksheet_item(
     db: Session = Depends(get_db),
     _current_user=Depends(get_current_user),
 ):
-    """Update a worksheet item's instrument assignment. Auto-resolves method when instrument changes."""
+    """Update a worksheet item's instrument assignment. Auto-resolves method when instrument changes.
+    On an HPLC row sent an instrument, a form or a Ran tick it reads sample_preps on the mk1_db
+    connection, and answers 500 (writing nothing) when that is down."""
     item = db.execute(
         select(WorksheetItem).where(
             WorksheetItem.id == item_id,
@@ -27016,12 +27061,31 @@ def update_worksheet_item(
                 and promoted_sample_ids(db, [item.sample_id])):
             raise HTTPException(409, PREP_FINAL)
 
+    # HPLC prep worksheet: a promoted HPLC row's form and instrument are final, as the
+    # HPLC route has them (its inputs live only there; this route's other prep fields are
+    # endo's and the HPLC sheet never reads them). A request that SENDS an instrument, a form
+    # or a Ran tick (which may stamp an instrument) takes the worksheet then item locks on an
+    # HPLC row, and the locked re-read is judged: a change ("" and 0 clear, as below) is
+    # refused, and the tick stamps nothing. Other requests keep the locking above.
+    promoted_hplc = False
+    if ("instrument_id" in data.model_fields_set or data.instrument_uid is not None
+            or "prep_form" in data.model_fields_set or data.ran is True):
+        promoted_hplc = item.id in _promoted_hplc_rows_locked(db, worksheet_id, [item])
+        if promoted_hplc and (
+                ("instrument_id" in data.model_fields_set and (data.instrument_id or None) != item.instrument_id)
+                or (data.instrument_uid is not None and (data.instrument_uid or None) != item.instrument_uid)
+                or ("prep_form" in data.model_fields_set and data.prep_form != item.prep_form)):
+            from worksheets_hplc import PREP_FINAL as HPLC_PREP_FINAL
+            raise HTTPException(409, HPLC_PREP_FINAL)
+
     resolved_method = None
     if data.instrument_uid is not None:
         item.instrument_uid = data.instrument_uid if data.instrument_uid else None
 
-        # Auto-resolve method: find instrument → get its hplc_method → match peptide
-        if data.instrument_uid and item.service_group_id:
+        # Auto-resolve method: find instrument → get its hplc_method → match peptide. Never on
+        # a promoted HPLC row: an instrument sent equal to the stored one passed the 409 above,
+        # and its analyses are final (HPLC fix wave B9).
+        if data.instrument_uid and item.service_group_id and not promoted_hplc:
             # Get peptide_id from service group's first analysis service
             svc_peptide = db.execute(
                 select(AnalysisService.peptide_id)
@@ -27084,7 +27148,7 @@ def update_worksheet_item(
 
     _apply_bench_ticks(db, worksheet_id, item, made=data.made, ran=data.ran,
                        user_id=_current_user.id,
-                       stamp_instrument="instrument_id" not in data.model_fields_set)
+                       stamp_instrument="instrument_id" not in data.model_fields_set and not promoted_hplc)
 
     if endo_values:
         apply_item_endo_fields(db, ws, item, endo_values, _current_user.id)
@@ -27103,6 +27167,89 @@ def update_worksheet_item(
     return out
 
 
+@app.get("/worksheets/{worksheet_id}/hplc")
+def get_worksheet_hplc(
+    worksheet_id: int,
+    db: Session = Depends(get_db),
+    _current_user=Depends(get_current_user),
+):
+    """The HPLC prep sheet (plan 2026-11-12-hplc-prep-worksheet, Task 5): each HPLC row's
+    facts and typed inputs; the browser computes. A plain dict, no response_model, so no
+    key is dropped."""
+    from worksheets_hplc import blend_cap, sheet_rows
+    ws = db.execute(select(Worksheet).where(Worksheet.id == worksheet_id)).scalar_one_or_none()
+    if not ws or ws.status == "staging":
+        raise HTTPException(404, "Worksheet not found")
+    return {"worksheet_id": ws.id, "status": ws.status, "blend_cap": blend_cap(db),
+            "rows": sheet_rows(db, ws)}
+
+
+class WorksheetItemHplcUpdate(BaseModel):
+    # Any, so a wrong type reaches worksheets_hplc and gets a 400 with the reason, not a 422.
+    # Sent = set (null clears the form); omitted = untouched (model_fields_set).
+    prep_form: Any = None
+    hplc_prep: Any = None
+
+
+@app.patch("/worksheets/{worksheet_id}/items/{item_id}/hplc")
+@_rollback_on_error
+def update_worksheet_item_hplc(
+    worksheet_id: int,
+    item_id: int,
+    data: WorksheetItemHplcUpdate,
+    db: Session = Depends(get_db),
+    _current_user=Depends(get_current_user),
+):
+    """One HPLC row's form and a merge patch of its typed inputs; returns the row's facts.
+    The worksheet row, then the item, under row locks (the lock order, _worksheet_for_update)."""
+    from worksheets_hplc import Refused, apply_patch
+    ws = _worksheet_for_update(db, worksheet_id)
+    if not ws or ws.status == "staging":
+        raise HTTPException(404, "Worksheet not found")
+    item = db.execute(select(WorksheetItem).where(
+        WorksheetItem.id == item_id, WorksheetItem.worksheet_id == worksheet_id)
+        .with_for_update().execution_options(populate_existing=True)).scalar_one_or_none()
+    if not item:
+        raise HTTPException(404, "Worksheet item not found")
+    sent = {f: getattr(data, f) for f in ("prep_form", "hplc_prep") if f in data.model_fields_set}
+    try:
+        out = apply_patch(db, ws, item, **sent)
+    except Refused as exc:
+        raise HTTPException(exc.status, str(exc))
+    db.commit()
+    return out
+
+
+@app.post("/worksheets/{worksheet_id}/items/{item_id}/hplc/promote")
+@_rollback_on_error
+def promote_worksheet_item_hplc(
+    worksheet_id: int,
+    item_id: int,
+    db: Session = Depends(get_db),
+    current_user=Depends(get_current_user),
+):
+    """A finished HPLC row becomes one sample_preps row (plan 2026-11-12, Task 6):
+    {"prep": {"id", "sample_id", "status"}, "already", "row"}. 409 with every reason at once
+    in {"detail": {"message", "reasons"}}. The worksheet row, then the row's vial analyses
+    and item, under row locks (the lock order, _worksheet_for_update), held until the prep
+    is written. A plain dict, no response_model, so no key is dropped."""
+    from endo_prep_rules import lock_items_for_update
+    from worksheets_hplc_promote import Refused, promote_row
+    ws = _worksheet_for_update(db, worksheet_id)
+    if not ws or ws.status == "staging":
+        raise HTTPException(404, "Worksheet not found")
+    item = db.execute(select(WorksheetItem).where(
+        WorksheetItem.id == item_id, WorksheetItem.worksheet_id == worksheet_id)).scalar_one_or_none()
+    if not item:
+        raise HTTPException(404, "Worksheet item not found")
+    lock_items_for_update(db, ws, [item.id])  # re-reads the item under its lock
+    try:
+        return promote_row(db, current_user, ws, item)
+    except Refused as exc:
+        raise HTTPException(exc.status, {"message": str(exc), "reasons": exc.reasons}
+                            if exc.reasons is not None else str(exc))
+
+
 class WorksheetApplyMethodInstrument(BaseModel):
     method_id: int
     instrument_id: int
@@ -27110,6 +27257,7 @@ class WorksheetApplyMethodInstrument(BaseModel):
 
 
 @app.post("/worksheets/{worksheet_id}/apply-method-instrument")
+@_rollback_on_error
 def apply_worksheet_method_instrument(
     worksheet_id: int,
     data: WorksheetApplyMethodInstrument,
@@ -27120,7 +27268,8 @@ def apply_worksheet_method_instrument(
     analyses (R6/R7/R8, slice 2 bench-stamping). Coverage-scoped: only rows whose
     service the method covers are touched; only STAMPABLE_STATES rows are
     stamped; everything else comes back in skipped_state/skipped_uncovered
-    rather than being silently dropped."""
+    rather than being silently dropped. Over HPLC rows it reads sample_preps on the mk1_db
+    connection, and answers 500 (writing nothing) when that is down."""
     ws = db.execute(
         select(Worksheet).where(Worksheet.id == worksheet_id)
     ).scalar_one_or_none()
@@ -27153,6 +27302,11 @@ def apply_worksheet_method_instrument(
 
     from lims_analyses.worksheet_stamping import apply_method_instrument_to_worksheet
 
+    # A promoted HPLC row's instrument is final (HPLC fix round 2, A): judged under the locks,
+    # those rows are skipped and reported in skipped_promoted.
+    items = db.execute(select(WorksheetItem).where(WorksheetItem.worksheet_id == worksheet_id)).scalars().all()
+    promoted = _promoted_hplc_rows_locked(
+        db, worksheet_id, [it for it in items if data.item_ids is None or it.id in set(data.item_ids)])
     result = apply_method_instrument_to_worksheet(
         db,
         worksheet=ws,
@@ -27160,6 +27314,7 @@ def apply_worksheet_method_instrument(
         instrument_id=data.instrument_id,
         item_ids=data.item_ids,
         user_id=getattr(current_user, "id", None),
+        promoted_item_ids=promoted,
     )
     db.commit()
     return result

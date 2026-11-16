@@ -144,6 +144,22 @@ export function WorksheetDrawer() {
   const isEndo = kind === 'endo'
   const isPcr = kind === 'pcr'
   const isBench = isEndo || isPcr
+  // An all-HPLC worksheet keeps the editable flyout (Start Prep, remove,
+  // reassign live there) and gains a way to its prep sheet page (plan
+  // 2026-11-12-hplc-prep-worksheet).
+  const openHplcPage = activeWorksheet && kind === 'hplc' && (
+    <Button
+      size="sm"
+      className="bg-teal-600 text-white hover:bg-teal-600/90"
+      onClick={() => {
+        const ui = useUIStore.getState()
+        ui.closeWorksheetDrawer()
+        ui.navigateToWorksheet(activeWorksheet.id)
+      }}
+    >
+      Open worksheet
+    </Button>
+  )
 
   // Parse notes JSON: separate user text from prep_started metadata
   const { userNotes, prepStartedItems } = useMemo(
@@ -166,6 +182,13 @@ export function WorksheetDrawer() {
           }
           if (res.skipped_uncovered.length) {
             message += `, ${res.skipped_uncovered.length} not covered by this method`
+          }
+          const promoted = res.skipped_promoted?.length ?? 0
+          if (promoted) {
+            message +=
+              promoted === 1
+                ? ', 1 promoted row kept its instrument'
+                : `, ${promoted} promoted rows kept their instrument`
           }
           toast.success(message)
         },
@@ -359,6 +382,7 @@ export function WorksheetDrawer() {
                     users={users}
                   />
                   <div className="flex-1" />
+                  {openHplcPage}
                   {completeAction}
                 </div>
               ) : (
@@ -367,6 +391,7 @@ export function WorksheetDrawer() {
                     View only — worksheet is completed
                   </span>
                   <div className="flex-1" />
+                  {openHplcPage}
                   <EndoWorksheetActions
                     worksheet={activeWorksheet}
                     users={users}
