@@ -13,6 +13,7 @@ import type {
 } from '@/lib/endo-prep-rules'
 import type { HplcPrepRule } from '@/lib/hplc-prep-rules'
 import type { HplcRunParamsWire } from '@/lib/hplc-run-params'
+import type { CalInputs, CalReplicateInputs } from '@/lib/hplc-calibration'
 
 // Helper to get current API base URL (called dynamically)
 export const API_BASE_URL = () => getApiBaseUrl()
@@ -2335,6 +2336,28 @@ export interface CalibrationCurve {
   created_by_email: string | null
   updated_by_user_id: number | null
   updated_by_email: string | null
+  // Calibration Curve Worksheet: written only by "File curve"; null on every other curve
+  cas_number: string | null
+  net_counterion: string | null
+  net_counterion_mw: number | null
+  net_equivalents: number | null
+  net_free_mw: number | null
+  net_stated_fw: number | null
+  net_ms_mz: number | null
+  net_ms_ion: string | null
+  net_assay_pct: number | null
+  net_water_pct: number | null
+  net_assumption: string | null
+  net_factor_computed: number | null
+  net_factor_applied: number | null
+  net_override_reason: string | null
+  net_parts_used: string[] | null
+  serial_dilution: unknown | null
+  calibration_sheet_id: number | null
+  replicate_of_id: number | null
+  injection: number | null
+  // Computed by the backend: 'worksheet' when net_factor_applied is set
+  net_basis: 'entered_by_hand' | 'worksheet'
 }
 
 export interface InstrumentSummary {
@@ -3536,6 +3559,155 @@ export async function getCalibration(
     throw new Error(err?.detail || `Fetch calibration failed: ${response.status}`)
   }
   return response.json()
+}
+
+// --- Calibration curve worksheets (plan 4, Tasks 4 to 6) ---
+
+/** A refusal from a calibration sheet route: the server's sentence, and the
+ *  status (409: someone else saved, or a filed curve's instrument). */
+export class CalSheetError extends Error {
+  status: number
+  constructor(message: string, status: number) {
+    super(message)
+    this.status = status
+  }
+}
+
+/** A sheet as listed (GET /hplc-calibration-sheets): no inputs. */
+export interface CalSheetListItem {
+  id: number
+  version: number
+  peptide_id: number | null
+  peptide_name: string | null
+  peptide_abbreviation: string | null
+  instrument_id: number | null
+  instrument_name: string | null
+  replicate_of_sheet_id: number | null
+  replicate_of_name: string | null
+  curve_id: number | null
+  curve_name: string | null
+  curve_is_active: boolean | null
+  filed_at: string | null
+  updated_at: string | null
+  updated_by_email: string | null
+  changed_since_filed: boolean
+  /** The filed curve was changed on the Peptides page since this sheet was
+   *  filed. Single-sheet answers only; null on list rows. Only true counts. */
+  curve_changed_since_filed?: boolean | null
+  proposed_name: string
+  /** Blocking warning codes, or ["cannot_be_worked_out"]. */
+  blocking: string[]
+}
+
+/** The full read model: an original's `inputs` are CalInputs; a
+ *  replicate's are only its run results, and `effective_inputs` the
+ *  original's preparation with them (null when it cannot be read). */
+export interface CalSheet extends CalSheetListItem {
+  inputs: CalInputs | CalReplicateInputs
+  effective_inputs: CalInputs | null
+}
+
+/** PATCH body: the WHOLE inputs and the version last read. A replicate never
+ *  sends peptide_id. */
+export interface CalSheetSave {
+  version: number
+  peptide_id?: number | null
+  instrument_id?: number | null
+  inputs?: CalInputs | CalReplicateInputs
+}
+
+/** POST /hplc-calibration-sheets/{id}/file (Task 5). */
+export interface CalFileResult {
+  sheet: CalSheet
+  curve: CalibrationCurve
+  activation: {
+    active: boolean
+    reason: string
+    deactivated_ids: number[]
+    other_active_ids: number[]
+  }
+  refiled_curve_ids: number[]
+  /** Sentences to show after filing (low R squared, a non-default density). */
+  warnings: string[]
+}
+
+async function calSheetFetch<T>(
+  path: string,
+  init: RequestInit,
+  fallback: string
+): Promise<T> {
+  const response = await fetch(
+    `${API_BASE_URL()}/hplc-calibration-sheets${path}`,
+    {
+      ...init,
+      headers: getBearerHeaders(init.body ? 'application/json' : undefined),
+    }
+  )
+  if (!response.ok)
+    throw new CalSheetError(
+      await extractErrorMessage(response, `${fallback}: ${response.status}`),
+      response.status
+    )
+  return response.json() as Promise<T>
+}
+
+export function listCalSheets(
+  peptideId?: number,
+  page: { limit?: number; offset?: number } = {}
+): Promise<CalSheetListItem[]> {
+  const qs = new URLSearchParams()
+  if (peptideId !== undefined) qs.set('peptide_id', String(peptideId))
+  if (page.limit !== undefined) qs.set('limit', String(page.limit))
+  if (page.offset !== undefined) qs.set('offset', String(page.offset))
+  const q = qs.toString()
+  return calSheetFetch(q ? `?${q}` : '', {}, 'Load calibration sheets failed')
+}
+
+export function createCalSheet(body: {
+  peptide_id?: number | null
+  instrument_id?: number | null
+  inputs?: CalInputs | null
+}): Promise<CalSheet> {
+  return calSheetFetch(
+    '',
+    { method: 'POST', body: JSON.stringify(body) },
+    'Create calibration sheet failed'
+  )
+}
+
+export function getCalSheet(id: number): Promise<CalSheet> {
+  return calSheetFetch(`/${id}`, {}, 'Load calibration sheet failed')
+}
+
+export function saveCalSheet(
+  id: number,
+  body: CalSheetSave,
+  opts: { signal?: AbortSignal } = {}
+): Promise<CalSheet> {
+  return calSheetFetch(
+    `/${id}`,
+    { method: 'PATCH', body: JSON.stringify(body), signal: opts.signal },
+    'Save calibration sheet failed'
+  )
+}
+
+export function duplicateCalSheet(id: number): Promise<CalSheet> {
+  return calSheetFetch(
+    `/${id}/duplicate`,
+    { method: 'POST' },
+    'Duplicate calibration sheet failed'
+  )
+}
+
+export function fileCalSheet(
+  id: number,
+  version: number
+): Promise<CalFileResult> {
+  return calSheetFetch(
+    `/${id}/file`,
+    { method: 'POST', body: JSON.stringify({ version }) },
+    'File curve failed'
+  )
 }
 
 export async function deleteCalibration(

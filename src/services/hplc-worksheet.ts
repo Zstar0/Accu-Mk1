@@ -345,7 +345,7 @@ const PROMOTE_TIMED_OUT =
 /** The request, aborted after SAVE_TIMEOUT_MS; it then fails as any other
  *  save does (alert, rollback, the queue moves on), even if the request
  *  ignores the abort. */
-async function withTimeout<T>(
+export async function withTimeout<T>(
   send: (signal: AbortSignal) => Promise<T>,
   message = TIMED_OUT
 ): Promise<T> {

@@ -53,6 +53,7 @@ export type HPLCAnalysisSubSection =
   | 'worksheet'
   | 'endo-prep-rules'
   | 'hplc-prep-rules'
+  | 'hplc-calibration'
 export type WorksheetSubSection = 'inbox' | 'worksheets' | 'worksheet-detail'
 export type AccuMarkToolsSubSection =
   | 'overview'
@@ -188,6 +189,8 @@ interface UIState {
   // Endo worksheet page (#hplc-analysis/worksheet?id=N, spec 2026-10-10
   // 6.1). Sticky like documentViewerTargetId; generic navigateTo clears it.
   worksheetPageId: number | null
+  // Calibration curve worksheet (plan 4): null shows the list of sheets.
+  calibrationSheetPageId: number | null
   // Flags on Support tickets / CRM items (2026-10-12): consume-once, read by
   // FlaggedItemOpener on the customer page to open the flagged item.
   pendingCustomerItem: PendingCustomerItem | null
@@ -253,6 +256,8 @@ interface UIState {
   navigateToDocumentSpace: (slug: string | null) => void
   /** The endo worksheet page; closes the worksheet flyout. */
   navigateToWorksheet: (id: number) => void
+  /** The calibration curve worksheet page; null opens its list. */
+  navigateToCalibrationSheet: (id: number | null) => void
   openDocumentForEditing: (id: number) => void
   consumeDocumentEditRequest: () => void
   clearDocumentViewer: () => void
@@ -389,6 +394,7 @@ export const useUIStore = create<UIState>()(
       boardTargetSlug: null,
       pendingBoardNode: null,
       worksheetPageId: null,
+      calibrationSheetPageId: null,
       pendingCustomerItem: null,
       customerListPage: 0,
       customerSearchTerm: '',
@@ -491,6 +497,7 @@ export const useUIStore = create<UIState>()(
             documentViewerEditRequested: false,
             boardTargetSlug: null,
             worksheetPageId: null,
+            calibrationSheetPageId: null,
             navigationKey: state.navigationKey + 1,
           }),
           undefined,
@@ -569,6 +576,25 @@ export const useUIStore = create<UIState>()(
           }),
           undefined,
           'navigateToWorksheet'
+        ),
+
+      navigateToCalibrationSheet: id =>
+        set(
+          state => ({
+            activeSection: 'hplc-analysis',
+            activeSubSection: 'hplc-calibration',
+            calibrationSheetPageId: id,
+            // already on the calibration page (list or sheet): keep it
+            // mounted, so what it holds (a filing's notice) survives the move;
+            // its sheet view is keyed by sheet id (final review I1)
+            navigationKey:
+              state.activeSection === 'hplc-analysis' &&
+              state.activeSubSection === 'hplc-calibration'
+                ? state.navigationKey
+                : state.navigationKey + 1,
+          }),
+          undefined,
+          'navigateToCalibrationSheet'
         ),
 
       openDocumentForEditing: id =>

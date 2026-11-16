@@ -11,7 +11,11 @@ sample_preps is not created by database.py or _run_migrations: mk1_db.ensure_sam
 creates and alters it, and the /sample-preps routes (and others) call it before they touch the
 table, so a fresh deploy gets the columns on the first such request. Run this check after one
 (open the Sample Preps page): a miss before that is expected, a miss after it is not. Task 5
-adds worksheet_items.hplc_prep, nullable (an HPLC row's typed prep inputs).
+adds worksheet_items.hplc_prep, nullable (an HPLC row's typed prep inputs). The Calibration
+Curve Worksheet plan (2026-11-13, Task 1) adds the hplc_calibration_sheets table (every
+column, nullable as its CREATE TABLE makes it) and nineteen nullable calibration_curves
+columns (the net peptide derivation, the serial dilution, the sheet and replicate links), and
+its foreign keys must be ON DELETE SET NULL (pg_constraint.confdeltype, final fix wave).
 
 _run_migrations runs each ALTER on its own and LOGS a failure instead of raising, so a
 column can silently fail to exist in production, and a DROP NOT NULL that failed leaves
@@ -94,6 +98,37 @@ PREPS_EXPECTED = {
 PREPS_INDEX = "uq_sample_preps_worksheet_item"
 # worksheet_items (HPLC prep worksheet plan, Task 5): the row's typed inputs, nullable.
 ITEMS_EXPECTED = {"hplc_prep": "YES"}
+# hplc_calibration_sheets (Calibration Curve Worksheet plan, Task 1): the model declares the
+# timestamps nullable too, so the boot CREATE and create_all agree and nothing bends.
+SHEETS_EXPECTED = {
+    **{name: "NO" for name in ("id", "inputs", "version")},
+    **{name: "YES" for name in (
+        "peptide_id", "instrument_id", "replicate_of_sheet_id", "calibration_curve_id",
+        "filed_at", "created_at", "updated_at", "created_by_id", "updated_by_id")},
+}
+# calibration_curves (same task): all nullable, no backfill.
+CURVES_EXPECTED = {
+    name: "YES"
+    for name in (
+        "cas_number", "net_counterion", "net_counterion_mw", "net_equivalents", "net_free_mw",
+        "net_stated_fw", "net_ms_mz", "net_ms_ion", "net_assay_pct", "net_water_pct",
+        "net_assumption", "net_factor_computed", "net_factor_applied", "net_override_reason",
+        "net_parts_used", "serial_dilution", "calibration_sheet_id", "replicate_of_id", "injection",
+    )
+}
+# The worksheet's keys that must be ON DELETE SET NULL (pg_constraint.confdeltype 'n'): the re-sync
+# behind "Add Curve" deletes every curve of a peptide and wipe-all deletes curves and peptides, and
+# with a restricting key both fail on a filed sheet. Every SET NULL key the two tables carry.
+FK_SET_NULL = (
+    ("hplc_calibration_sheets", "peptide_id"),
+    ("hplc_calibration_sheets", "replicate_of_sheet_id"),
+    ("hplc_calibration_sheets", "calibration_curve_id"),
+    ("hplc_calibration_sheets", "created_by_id"),
+    ("hplc_calibration_sheets", "updated_by_id"),
+    ("calibration_curves", "calibration_sheet_id"),
+    ("calibration_curves", "replicate_of_id"),
+)
+_DELETE_RULES = {"a": "NO ACTION", "r": "RESTRICT", "c": "CASCADE", "n": "SET NULL", "d": "SET DEFAULT"}
 FORMS_CHECK = "ck_lims_sample_forms_hplc_prep"
 FORMS_PREP = {
     "lyophilized powder": "powder",
@@ -174,6 +209,41 @@ def evaluate_sample_preps(found, indexdef):
     return lines, bad
 
 
+def evaluate_fk_rules(found):
+    """(report lines, number of problems) for FK_SET_NULL, `found` a {(table, column): confdeltype}.
+    A key that is missing, or deletes by any rule but SET NULL, is a problem. Pure."""
+    lines, bad = [], 0
+    for table, column in FK_SET_NULL:
+        rule = found.get((table, column))
+        if rule is None:
+            status = "MISSING"
+        elif rule != "n":
+            status = f"WRONG on delete {_DELETE_RULES.get(rule, rule)}, want SET NULL"
+        else:
+            status = "ok"
+        bad += status != "ok"
+        lines.append(f"{table + '.' + column:56} {'foreign key':20} {status}")
+    return lines, bad
+
+
+def _fk_rules(db):
+    """{(table, column): confdeltype} of the foreign keys on the two worksheet tables. to_regclass is
+    NULL for a missing table, where a bare ::regclass cast would raise."""
+    from sqlalchemy import text
+
+    return {
+        (table, column): rule
+        for table, column, rule in db.execute(
+            text(
+                "SELECT c.conrelid::regclass::text, a.attname, c.confdeltype FROM pg_constraint c "
+                "JOIN pg_attribute a ON a.attrelid = c.conrelid AND a.attnum = c.conkey[1] "
+                "WHERE c.contype = 'f' AND c.conrelid IN "
+                "(to_regclass('hplc_calibration_sheets'), to_regclass('calibration_curves'))"
+            )
+        )
+    }
+
+
 def _columns(db, table, names):
     from sqlalchemy import text
 
@@ -201,6 +271,9 @@ def main():
         rules_found = _columns(db, "hplc_prep_rules", RULES_EXPECTED)
         preps_found = _columns(db, "sample_preps", PREPS_EXPECTED)
         items_found = _columns(db, "worksheet_items", ITEMS_EXPECTED)
+        sheets_found = _columns(db, "hplc_calibration_sheets", SHEETS_EXPECTED)
+        curves_found = _columns(db, "calibration_curves", CURVES_EXPECTED)
+        fk_found = _fk_rules(db)
         preps_index = next(
             (
                 row[0]
@@ -234,9 +307,13 @@ def main():
     rules_lines, rules_bad = evaluate(rules_found, RULES_EXPECTED, RULES_EITHER_NULLABLE)
     preps_lines, preps_bad = evaluate_sample_preps(preps_found, preps_index)
     items_lines, items_bad = evaluate(items_found, ITEMS_EXPECTED)
+    sheets_lines, sheets_bad = evaluate(sheets_found, SHEETS_EXPECTED)
+    curves_lines, curves_bad = evaluate(curves_found, CURVES_EXPECTED)
+    fk_lines, fk_bad = evaluate_fk_rules(fk_found)
     print("\n".join(lines + forms_lines + ["hplc_prep_rules:"] + rules_lines + ["sample_preps:"] + preps_lines
-                    + ["worksheet_items:"] + items_lines))
-    bad = analyses_bad + forms_bad + rules_bad + preps_bad + items_bad
+                    + ["worksheet_items:"] + items_lines + ["hplc_calibration_sheets:"] + sheets_lines
+                    + ["calibration_curves:"] + curves_lines + ["worksheet delete rules:"] + fk_lines))
+    bad = analyses_bad + forms_bad + rules_bad + preps_bad + items_bad + sheets_bad + curves_bad + fk_bad
     if bad:
         # Name only what failed, so a rules-table problem does not read as a liquid-prep one.
         failed = [why for count, why in (
@@ -245,6 +322,12 @@ def main():
             (rules_bad, "do not use the HPLC prep rules until hplc_prep_rules is fixed"),
             (preps_bad, "do not use the HPLC prep worksheet until sample_preps is fixed"),
             (items_bad, "do not use the HPLC prep worksheet until worksheet_items is fixed"),
+            (sheets_bad, "do not use the Calibration Curve Worksheet until hplc_calibration_sheets is fixed"),
+            # The ORM selects every mapped column, so one missing column fails every curve read.
+            (curves_bad, ("every calibration curve read fails (Peptides page, analyses, prep) until "
+                          "calibration_curves is fixed: fix it now")),
+            (fk_bad, ("a curve or peptide delete (the re-sync behind Add Curve, wipe-all) fails on a filed sheet "
+                      "until those keys are ON DELETE SET NULL")),
         ) if count]
         closing = f"{bad} PROBLEM(S): {'; '.join(failed)}"
     elif not_found:

@@ -2939,6 +2939,48 @@ def _run_migrations():
         updated_at              TIMESTAMP,
         updated_by_id           INTEGER REFERENCES users(id) ON DELETE SET NULL
     )""",
+        # Calibration Curve Worksheet (plan 2026-11-13, Task 1): the sheet table, the same
+        # shape as models.HplcCalibrationSheet, then the curve's new nullable columns (no
+        # backfill: a curve with no net_factor_applied reads as "net, entered by hand").
+        # The sheet table comes first, since calibration_sheet_id references it. Every key
+        # to a curve, a peptide or a sheet is SET NULL: re-sync and wipe-all delete curves
+        # and peptides. Kept above the retest_of_sample_id statement, which tests pin as
+        # the list's last.
+        """CREATE TABLE IF NOT EXISTS hplc_calibration_sheets (
+        id                      SERIAL PRIMARY KEY,
+        peptide_id              INTEGER REFERENCES peptides(id) ON DELETE SET NULL,
+        instrument_id           INTEGER REFERENCES instruments(id),
+        replicate_of_sheet_id   INTEGER REFERENCES hplc_calibration_sheets(id) ON DELETE SET NULL,
+        inputs                  JSON NOT NULL,
+        version                 INTEGER NOT NULL DEFAULT 1,
+        calibration_curve_id    INTEGER REFERENCES calibration_curves(id) ON DELETE SET NULL,
+        filed_at                TIMESTAMP,
+        created_at              TIMESTAMP,
+        updated_at              TIMESTAMP,
+        created_by_id           INTEGER REFERENCES users(id) ON DELETE SET NULL,
+        updated_by_id           INTEGER REFERENCES users(id) ON DELETE SET NULL
+    )""",
+        "ALTER TABLE calibration_curves ADD COLUMN IF NOT EXISTS cas_number VARCHAR(40)",
+        "ALTER TABLE calibration_curves ADD COLUMN IF NOT EXISTS net_counterion VARCHAR(40)",
+        "ALTER TABLE calibration_curves ADD COLUMN IF NOT EXISTS net_counterion_mw DOUBLE PRECISION",
+        "ALTER TABLE calibration_curves ADD COLUMN IF NOT EXISTS net_equivalents DOUBLE PRECISION",
+        "ALTER TABLE calibration_curves ADD COLUMN IF NOT EXISTS net_free_mw DOUBLE PRECISION",
+        "ALTER TABLE calibration_curves ADD COLUMN IF NOT EXISTS net_stated_fw DOUBLE PRECISION",
+        "ALTER TABLE calibration_curves ADD COLUMN IF NOT EXISTS net_ms_mz DOUBLE PRECISION",
+        "ALTER TABLE calibration_curves ADD COLUMN IF NOT EXISTS net_ms_ion VARCHAR(10)",
+        "ALTER TABLE calibration_curves ADD COLUMN IF NOT EXISTS net_assay_pct DOUBLE PRECISION",
+        "ALTER TABLE calibration_curves ADD COLUMN IF NOT EXISTS net_water_pct DOUBLE PRECISION",
+        "ALTER TABLE calibration_curves ADD COLUMN IF NOT EXISTS net_assumption TEXT",
+        "ALTER TABLE calibration_curves ADD COLUMN IF NOT EXISTS net_factor_computed DOUBLE PRECISION",
+        "ALTER TABLE calibration_curves ADD COLUMN IF NOT EXISTS net_factor_applied DOUBLE PRECISION",
+        "ALTER TABLE calibration_curves ADD COLUMN IF NOT EXISTS net_override_reason TEXT",
+        "ALTER TABLE calibration_curves ADD COLUMN IF NOT EXISTS net_parts_used JSON",
+        "ALTER TABLE calibration_curves ADD COLUMN IF NOT EXISTS serial_dilution JSON",
+        "ALTER TABLE calibration_curves ADD COLUMN IF NOT EXISTS calibration_sheet_id INTEGER "
+        "REFERENCES hplc_calibration_sheets(id) ON DELETE SET NULL",
+        "ALTER TABLE calibration_curves ADD COLUMN IF NOT EXISTS replicate_of_id INTEGER "
+        "REFERENCES calibration_curves(id) ON DELETE SET NULL",
+        "ALTER TABLE calibration_curves ADD COLUMN IF NOT EXISTS injection INTEGER",
         # HPLC-native slice 6 (M8): links a retest's sample row back to the
         # original Mk1 row it was retested from (from signal meta
         # RetestOfSampleId). Nullable, no FK — the original may be a

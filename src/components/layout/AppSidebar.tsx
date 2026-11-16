@@ -123,6 +123,7 @@ const navItems: NavItem[] = [
       { id: 'worksheets', label: 'Worksheets' },
       { id: 'endo-prep-rules', label: 'Endo prep rules' },
       { id: 'hplc-prep-rules', label: 'HPLC prep rules' },
+      { id: 'hplc-calibration', label: 'Calibration worksheets' },
     ],
   },
   {

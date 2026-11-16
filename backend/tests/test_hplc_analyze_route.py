@@ -706,8 +706,9 @@ def test_the_sample_forms_check_wants_the_column_the_constraint_and_the_two_back
 class _FakeSession:
     """Canned stand-in for database.SessionLocal(): answers the five queries main() makes."""
 
-    def __init__(self, tables, constraints, rows, indexes=()):
+    def __init__(self, tables, constraints, rows, indexes=(), fk_rules=None):
         self.tables, self.constraints, self.rows, self.indexes = tables, constraints, rows, indexes
+        self.fk_rules = fk_rules or {}
 
     def __enter__(self):
         return self
@@ -722,6 +723,8 @@ class _FakeSession:
         if "information_schema.columns" in sql:
             table = self.tables[params["table"]]
             return [(name, *table[name]) for name in params["names"] if name in table]
+        if "confdeltype" in sql:  # the calibration worksheet keys' delete rules (final review M3)
+            return [(table, column, rule) for (table, column), rule in self.fk_rules.items()]
         if "pg_constraint" in sql:
             return [(name,) for name in self.constraints]
         if "pg_indexes" in sql:
@@ -735,10 +738,13 @@ class _FakeSession:
 
 def _run_check_main(monkeypatch, capsys, *, stock_nullable="YES", forms_column=True,
                     constraints=("ck_lims_sample_forms_hplc_prep",), rows=_FORMS_ROWS,
-                    rules_table=True, rules_over=None, preps_table=True, preps_index=True, items_column=True):
+                    rules_table=True, rules_over=None, preps_table=True, preps_index=True, items_column=True,
+                    sheets_table=True, curve_columns=True, fk_rules=None):
     """(exit code, output lines) of check_hplc_columns.main() over canned query results."""
     from scripts import check_hplc_columns as check
 
+    if fk_rules is None:
+        fk_rules = {key: "n" for key in check.FK_SET_NULL}
     tables = {
         "hplc_analyses": {
             **{name: ("double precision", "YES") for name in check.EXPECTED},
@@ -750,6 +756,10 @@ def _run_check_main(monkeypatch, capsys, *, stock_nullable="YES", forms_column=T
         ) | (rules_over or {}),
         "sample_preps": {name: ("integer", "YES") for name in check.PREPS_EXPECTED} if preps_table else {},
         "worksheet_items": {name: ("json", "YES") for name in check.ITEMS_EXPECTED} if items_column else {},
+        "hplc_calibration_sheets": (
+            {name: ("integer", want) for name, want in check.SHEETS_EXPECTED.items()} if sheets_table else {}
+        ),
+        "calibration_curves": {name: ("integer", "YES") for name in check.CURVES_EXPECTED} if curve_columns else {},
     }
     indexes = (
         {check.PREPS_INDEX: (
@@ -759,7 +769,7 @@ def _run_check_main(monkeypatch, capsys, *, stock_nullable="YES", forms_column=T
         if preps_index
         else {}
     )
-    session = _FakeSession(tables, constraints, rows, indexes)
+    session = _FakeSession(tables, constraints, rows, indexes, fk_rules)
     monkeypatch.setattr(database, "SessionLocal", lambda: session)
     with pytest.raises(SystemExit) as exit_info:
         check.main()
@@ -782,9 +792,12 @@ def test_the_column_check_script_exits_zero_only_when_both_tables_are_right(monk
         {"preps_table": False},  # sample_preps: ensure_sample_preps_table never ran on this image
         {"preps_index": False},  # sample_preps: the worksheet-item unique index is missing
         {"items_column": False},  # worksheet_items: the hplc_prep ADD COLUMN that never applied
+        {"sheets_table": False},  # hplc_calibration_sheets: the CREATE TABLE that never ran
+        {"curve_columns": False},  # calibration_curves: the worksheet ADD COLUMNs that never applied
+        {"fk_rules": {("calibration_curves", "replicate_of_id"): "a"}},  # keys not ON DELETE SET NULL
     ],
     ids=["hplc_analyses", "no_column", "no_check", "backfill", "hplc_prep_rules", "sample_preps", "preps_index",
-         "items_column"],
+         "items_column", "calibration_sheets", "curve_columns", "fk_rules"],
 )
 def test_the_column_check_script_exits_one_for_a_failure_on_either_table(monkeypatch, capsys, broken):
     # The three lims_sample_forms cases are what pin main() adding that table's problems to
@@ -803,6 +816,11 @@ def test_the_closing_line_names_only_what_failed(monkeypatch, capsys):
     assert code == 1 and "sample_preps" in lines[-1] and "worksheet_items" not in lines[-1]
     code, lines = _run_check_main(monkeypatch, capsys, items_column=False)
     assert code == 1 and "worksheet_items" in lines[-1] and "sample_preps" not in lines[-1]
+    # Deferred from Task 1: a missing curve column breaks every curve read, not only filing.
+    code, lines = _run_check_main(monkeypatch, capsys, curve_columns=False)
+    assert code == 1 and "every calibration curve read fails" in lines[-1]
+    code, lines = _run_check_main(monkeypatch, capsys, fk_rules={})
+    assert code == 1 and "ON DELETE SET NULL" in lines[-1] and "calibration curve read" not in lines[-1]
 
 
 def test_the_rules_timestamps_pass_as_create_all_makes_them(monkeypatch, capsys):
