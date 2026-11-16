@@ -120,7 +120,7 @@ describe('PcrSampleList per-row ticks', () => {
     expect(
       screen.getAllByRole('button', { name: 'Ran on QuantStudio' })
     ).toHaveLength(2)
-    expect(screen.getByText('No-template control')).toBeTruthy()
+    expect(screen.getByText('Negative process control')).toBeTruthy()
   })
 
   it('ticks and unticks one row at a time', () => {

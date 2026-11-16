@@ -246,3 +246,80 @@ def test_wells_are_locked_on_a_completed_worksheet(client, db):
     assert _freeze(client, ws, [{"item_id": a.id, "plate_no": 1, "well_pos": 0}]).status_code == 409
     assert client.delete(f"/worksheets/{ws.id}/frozen-wells").status_code == 409
     assert client.post("/worksheets/99999/freeze-wells", json={"wells": []}).status_code == 404
+
+
+# --- The well map a plate was locked with (2026-11-12) -----------------------
+
+
+def _freeze_as(client, ws, layout, wells):
+    return client.post(f"/worksheets/{ws.id}/freeze-wells",
+                       json={"wells": wells, "layout": layout})
+
+
+def _layout(client, ws):
+    return (client.get(f"/worksheets/{ws.id}").json()["bench_config"] or {}).get("layout")
+
+
+def test_the_first_freeze_stamps_the_well_map_and_a_settings_save_keeps_it(client, db):
+    ws, (a, b) = _seed(db)
+    assert _freeze_as(client, ws, "mid",
+                      [{"item_id": a.id, "plate_no": 1, "well_pos": 0}]).status_code == 200
+    assert _layout(client, ws) == "mid"
+    # A settings save from a page that never saw the stamp must not drop it.
+    client.put(f"/worksheets/{ws.id}", json={"bench_config": {"overage": 1.1}})
+    assert client.get(f"/worksheets/{ws.id}").json()["bench_config"] == {
+        "overage": 1.1, "layout": "mid"}
+    # Nor can a settings save set it: only freeze and unfreeze touch the map.
+    client.put(f"/worksheets/{ws.id}",
+               json={"bench_config": {"overage": 1.1, "layout": "legacy"}})
+    assert _layout(client, ws) == "mid"
+    # The other map is refused: position 1 would be a different well.
+    r = _freeze_as(client, ws, "legacy", [{"item_id": b.id, "plate_no": 1, "well_pos": 1}])
+    assert r.status_code == 409
+    db.refresh(b)
+    assert b.well_pos is None
+
+
+def test_a_plate_locked_before_the_stamp_existed_is_legacy(client, db):
+    ws, (a, b) = _seed(db)
+    _freeze(client, ws, [{"item_id": a.id, "plate_no": 1, "well_pos": 0}])
+    assert _layout(client, ws) is None
+    assert _freeze_as(client, ws, "mid",
+                      [{"item_id": b.id, "plate_no": 1, "well_pos": 1}]).status_code == 409
+    assert _freeze_as(client, ws, "legacy",
+                      [{"item_id": b.id, "plate_no": 1, "well_pos": 1}]).status_code == 200
+    assert _layout(client, ws) == "legacy"
+    assert _freeze_as(client, ws, "sideways", []).status_code == 400
+
+
+def test_an_issued_well_record_alone_still_means_the_old_map(client, db):
+    """The only locked sample was removed since: the wells are spent, the plate
+    is still out, and it was loaded under the old map."""
+    ws, (a, b) = _seed(db)
+    _freeze(client, ws, [{"item_id": a.id, "plate_no": 1, "well_pos": 0}])
+    a.plate_no = a.well_pos = None
+    db.commit()
+    assert _freeze_as(client, ws, "mid",
+                      [{"item_id": b.id, "plate_no": 1, "well_pos": 1}]).status_code == 409
+    # An unlocked worksheet cannot be handed a map by a settings save either.
+    fresh, _ = _seed_second(db)
+    client.put(f"/worksheets/{fresh.id}", json={"bench_config": {"layout": "legacy"}})
+    assert _layout(client, fresh) is None
+
+
+def _seed_second(db):
+    ws = Worksheet(title="PCR second", status="open")
+    db.add(ws)
+    db.commit()
+    return ws, []
+
+
+def test_unfreeze_forgets_the_well_map_and_keeps_the_settings(client, db):
+    ws, (a, _b) = _seed(db)
+    client.put(f"/worksheets/{ws.id}", json={"bench_config": {"overage": 1.1}})
+    _freeze_as(client, ws, "legacy", [{"item_id": a.id, "plate_no": 1, "well_pos": 0}])
+    client.delete(f"/worksheets/{ws.id}/frozen-wells")
+    assert client.get(f"/worksheets/{ws.id}").json()["bench_config"] == {"overage": 1.1}
+    assert _freeze_as(client, ws, "mid",
+                      [{"item_id": a.id, "plate_no": 1, "well_pos": 0}]).status_code == 200
+    assert _layout(client, ws) == "mid"

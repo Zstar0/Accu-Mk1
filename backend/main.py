@@ -25369,7 +25369,14 @@ def update_worksheet(
     if data.notes is not None:
         ws.notes = data.notes
     if data.bench_config is not None:
-        ws.bench_config = data.bench_config
+        # The plate's well map belongs to the server (stamped by freeze-wells):
+        # a settings save can neither drop it nor set it, or the locked wells
+        # would redraw under the other map. Only freeze and unfreeze touch it.
+        kept = (ws.bench_config or {}).get("layout")
+        ws.bench_config = {
+            **{k: v for k, v in data.bench_config.items() if k != "layout"},
+            **({"layout": kept} if kept else {}),
+        }
     for field, operation in (("endo_prep", "endo_prep_set"),
                              ("cartridge_type_id", "endo_cartridge_set")):
         new = getattr(data, field)
@@ -26421,10 +26428,19 @@ class WorksheetWellFreeze(BaseModel):
 
 class WorksheetFreezeWells(BaseModel):
     wells: list[WorksheetWellFreeze]
+    # The well map the client drew these positions with (see _WELL_MAPS).
+    layout: Optional[str] = None
 
 
-# 8 rows x 6 columns of the bacterial block; the fungal mirror is col + 6.
+# 8 rows x 6 columns of Well Set A; each has its pair in Well Set B.
 _PLATE_WELLS = 48
+# well_pos is a FILL POSITION, not a well: which well position 0 is depends on
+# the map the plate was drawn with. "legacy" fills column 1 first (0 = A1, pair
+# at column + 6); "mid" fills from the middle (0 = A6, pair at 13 - column;
+# Dennis, 2026-10-26). The first freeze stamps the map on the worksheet
+# (bench_config.layout) so a locked plate always redraws on the wells it was
+# loaded in. A worksheet locked before the stamp existed has none: legacy.
+_WELL_MAPS = ("legacy", "mid")
 
 
 @app.post("/worksheets/{worksheet_id}/freeze-wells")
@@ -26456,6 +26472,18 @@ def freeze_worksheet_wells(
         ).scalars()
     }
     taken = {(it.plate_no, it.well_pos) for it in items.values() if it.well_pos is not None}
+    if data.layout is not None and data.layout not in _WELL_MAPS:
+        raise HTTPException(400, "Unknown well map")
+    # No stamp but a locked well or an issued-well record (its only locked
+    # sample may have been removed since): a plate is out under the old map.
+    stamped = (ws.bench_config or {}).get("layout") or (
+        "legacy" if taken or ws.well_high_water else None
+    )
+    if data.layout and stamped and data.layout != stamped:
+        raise HTTPException(
+            409,
+            "This plate was locked with a different well map; reload the worksheet and try again",
+        )
     # Highest issued well per plate as it stood BEFORE this request: the stored
     # record, or the highest frozen well where the record is missing (a plate
     # frozen before the column existed). Judging every pin against this, not a
@@ -26490,6 +26518,8 @@ def freeze_worksheet_wells(
     if to_pin:
         # A new dict every time: a plain JSON column does not see in-place edits.
         ws.well_high_water = {str(p): v for p, v in sorted(issued.items())}
+        if data.layout and (ws.bench_config or {}).get("layout") != data.layout:
+            ws.bench_config = {**(ws.bench_config or {}), "layout": data.layout}
         db.add(AuditLog(
             operation="worksheet_wells_frozen",
             entity_type="worksheet",
@@ -26522,7 +26552,10 @@ def unfreeze_worksheet_wells(
         item.plate_no = None
         item.well_pos = None
     had_record = ws.well_high_water is not None
-    ws.well_high_water = None  # a re-layout starts the plate from A1 again
+    ws.well_high_water = None  # a re-layout starts the plate from its first well again
+    if (ws.bench_config or {}).get("layout"):
+        # ...and under the current map: the next freeze stamps it afresh.
+        ws.bench_config = {k: v for k, v in ws.bench_config.items() if k != "layout"}
     if items or had_record:
         db.add(AuditLog(
             operation="worksheet_wells_unfrozen",

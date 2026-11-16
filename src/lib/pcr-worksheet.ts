@@ -20,7 +20,9 @@ import {
   layoutPlates,
   PCR_SORT_KEYS,
   summarize,
+  WORKBOOK_OVERAGE,
   type PcrLayout,
+  type PcrLayoutKind,
   type PcrRunMeta,
   type PcrSample,
   type PcrSort,
@@ -81,9 +83,15 @@ export function pcrConfigOf(
 ): PcrConfig {
   const c = (ws.bench_config ?? {}) as Record<string, unknown>
   const overage = Number(c.overage)
+  // Before Rev E every settings save wrote the then-default 1.4 beside
+  // whatever was changed, so a 1.4 with no Rev E mark was never chosen: it
+  // reads as the current default (calc.js does the same once, DEFAULTS_REV).
+  const stale = c.rev !== 'E' && overage === WORKBOOK_OVERAGE
   return {
     overage:
-      Number.isFinite(overage) && overage > 0 ? overage : DEFAULT_OVERAGE,
+      Number.isFinite(overage) && overage > 0 && !stale
+        ? overage
+        : DEFAULT_OVERAGE,
     curve: typeof c.curve === 'string' ? c.curve : '',
     plateType: typeof c.plate_type === 'string' ? c.plate_type : '',
     sort: sortOf(c),
@@ -103,6 +111,8 @@ function sortOf(c: Record<string, unknown>): PcrSort {
 
 export function pcrConfigToWire(c: PcrConfig): Record<string, unknown> {
   return {
+    // Marks the overage as set under SOP-MICRO2601 Rev E (see pcrConfigOf).
+    rev: 'E',
     overage: c.overage,
     curve: c.curve,
     plate_type: c.plateType,
@@ -111,6 +121,26 @@ export function pcrConfigToWire(c: PcrConfig): Record<string, unknown> {
     // The older on/off switch, kept in step for any build that still reads it.
     sort_by_order: c.sort.key === 'order',
   }
+}
+
+/**
+ * The well map this worksheet's plate is drawn with. The server stamps it at
+ * the first lock (bench_config.layout). With no stamp: a plate locked or
+ * completed before the stamp existed was loaded column 1 first ('legacy');
+ * anything still unlocked takes the middle-out fill.
+ */
+export function pcrLayoutKindOf(
+  ws: Pick<
+    WorksheetListItem,
+    'bench_config' | 'well_high_water' | 'status' | 'items'
+  >
+): PcrLayoutKind {
+  const stamped = (ws.bench_config as Record<string, unknown> | null)?.layout
+  if (stamped === 'mid' || stamped === 'legacy') return stamped
+  const locked =
+    ws.items.some(i => i.plate_no != null && i.well_pos != null) ||
+    Object.keys(ws.well_high_water ?? {}).length > 0
+  return locked || ws.status === 'completed' ? 'legacy' : 'mid'
 }
 
 /** The date a run is judged against for overdue / due today: today in lab
@@ -202,6 +232,7 @@ export function buildPcrRunDoc(
   const layout = layoutPlates(samples, {
     sort: cfg.sort,
     highWater: highWaterOf(ws),
+    kind: pcrLayoutKindOf(ws),
   })
   return {
     title: ws.title,

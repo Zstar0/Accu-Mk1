@@ -14,10 +14,12 @@
 import { escapeHtml } from '@/lib/endo-bench-sheet'
 import {
   calculatePrep,
+  extractionWater,
   fmt2,
   metaHeaderRows,
   plateGrid,
   plateMapRows,
+  premixRows,
   PROTOCOL,
   toCsv,
   wellListRows,
@@ -81,7 +83,7 @@ const SHEET_CSS = [
   'table.kv tr.total td{background:#f2e8e1}',
   // The HTML parser wraps the rows in a <tbody>; it has to dissolve too, or
   // all ten pairs land on one row and push the page past the paper.
-  '.card.reag{grid-column:1/-1}.card.reag table.kv{display:grid;grid-template-columns:1fr auto 1fr auto}.card.reag table.kv tbody,.card.reag table.kv tr{display:contents}',
+  '.card.reag{grid-column:1/-1}.card.reag table.kv{display:grid;grid-template-columns:auto 1fr auto 1fr}.card.reag table.kv tbody,.card.reag table.kv tr{display:contents}',
   '.notes{margin-top:.3rem;font-size:.62rem;font-weight:700;text-transform:uppercase;letter-spacing:.03em;color:#595959}',
   '.notes div{font-weight:400;text-transform:none;letter-spacing:0;font-size:.7rem;color:#000;border:1px solid #808080;min-height:2rem;padding:.12rem .3rem;white-space:pre-wrap;margin-top:.2rem}',
   '.foot{margin-top:.25rem;font-size:.62rem;color:#595959;display:flex;justify-content:space-between}',
@@ -230,45 +232,40 @@ function card(title: string, unit: string, body: string, cls = ''): string {
 
 function calcCardsHtml(pl: PcrPlate, overage: number): string {
   const c = calculatePrep(pl.n, overage)
+  const water = extractionWater(pl.n, overage)
+  // Card order pairs equal heights on paper (5|5 rows, then 4|4, then 5|5).
   return (
     '<div class="grid">' +
     card(
-      'Well Counts',
+      'Reactions',
       '',
-      kvHtml([
-        ['Wells on plate (N)', String(pl.n)],
-        ['Master mix wells', String(c.wells.mm)],
-        ['BAC wells', String(c.wells.bac)],
-        ['FUN wells', String(c.wells.fun)],
-        ['IPC wells', String(c.wells.ipc)],
-      ])
+      kvHtml(
+        [
+          ['Samples on plate', String(pl.sampleCount)],
+          ['Controls', String(pl.n - pl.sampleCount)],
+          ['Reactions per well set (N)', String(c.reactions.perSet)],
+          ['Reactions total, A + B', String(c.reactions.total)],
+        ],
+        ['Elution water, 65 °C, µL', fmt2(water.pipette)]
+      )
     ) +
     card(
       'Volume per Well',
       '&micro;L',
       kvHtml(
         [
-          ['Master mix', fmt2(c.perWell.mm)],
-          ['Assay mix', fmt2(c.perWell.assayMix)],
+          ['Master mix 2.0 (2X)', fmt2(c.perWell.mm)],
+          ['Duplex assay mix (10X)', fmt2(c.perWell.assayMix)],
           ['IPC mix', fmt2(c.perWell.ipcMix)],
           ['Template', fmt2(c.perWell.template)],
         ],
         ['Total per well', fmt2(c.perWell.total)]
       )
     ) +
-    card('BAC Mix: 16S', '&micro;L', mixHtml(c.bac, overage)) +
-    card('FUN Mix: 18S', '&micro;L', mixHtml(c.fun, overage)) +
-    card(
-      'Bulk Volumes Needed',
-      '&micro;L',
-      kvHtml([
-        ['Master mix', fmt2(c.bulk.mm)],
-        ['BAC mix', fmt2(c.bulk.bac)],
-        ['FUN mix', fmt2(c.bulk.fun)],
-        ['IPC mix', fmt2(c.bulk.ipc)],
-      ])
-    ) +
-    card('IPC Mix', '&micro;L', mixHtml(c.ipc, overage)) +
+    card('Premix per Well Set', '&micro;L', mixHtml(premixRows(c), overage)) +
+    card('IPC Mix, per set', '&micro;L', mixHtml(c.ipc, overage)) +
+    card('Set A Assay Mix: 16S', '&micro;L', mixHtml(c.bac, overage)) +
+    card('Set B Assay Mix: 18S', '&micro;L', mixHtml(c.fun, overage)) +
     card('Reagent Reference', '', kvHtml(PROTOCOL.reagents), 'reag') +
     '</div>'
   )

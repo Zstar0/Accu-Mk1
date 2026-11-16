@@ -374,10 +374,12 @@ export function useWorksheetDrawer() {
     mutationFn: ({
       worksheetId,
       wells,
+      layout,
     }: {
       worksheetId: number
       wells: WorksheetWellFreeze[]
-    }) => freezeWorksheetWells(worksheetId, wells),
+      layout: 'mid' | 'legacy'
+    }) => freezeWorksheetWells(worksheetId, wells, layout),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['worksheets-list'] })
       queryClient.invalidateQueries({ queryKey: ['worksheet-by-id'] })
