@@ -83,7 +83,7 @@ const SHEET_CSS = [
   'table.kv tr.total td{background:#f2e8e1}',
   // The HTML parser wraps the rows in a <tbody>; it has to dissolve too, or
   // all ten pairs land on one row and push the page past the paper.
-  '.card.reag{grid-column:1/-1}.card.reag table.kv{display:grid;grid-template-columns:1fr auto 1fr auto}.card.reag table.kv tbody,.card.reag table.kv tr{display:contents}',
+  '.card.reag{grid-column:1/-1}.card.reag table.kv{display:grid;grid-template-columns:auto 1fr auto 1fr}.card.reag table.kv tbody,.card.reag table.kv tr{display:contents}',
   '.notes{margin-top:.3rem;font-size:.62rem;font-weight:700;text-transform:uppercase;letter-spacing:.03em;color:#595959}',
   '.notes div{font-weight:400;text-transform:none;letter-spacing:0;font-size:.7rem;color:#000;border:1px solid #808080;min-height:2rem;padding:.12rem .3rem;white-space:pre-wrap;margin-top:.2rem}',
   '.foot{margin-top:.25rem;font-size:.62rem;color:#595959;display:flex;justify-content:space-between}',
@@ -246,7 +246,7 @@ function calcCardsHtml(pl: PcrPlate, overage: number): string {
           ['Reactions per well set (N)', String(c.reactions.perSet)],
           ['Reactions total, A + B', String(c.reactions.total)],
         ],
-        ['Elution water, 65 °C', `${fmt2(water.pipette)} µL`]
+        ['Elution water, 65 °C, µL', fmt2(water.pipette)]
       )
     ) +
     card(
