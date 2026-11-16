@@ -29,13 +29,17 @@ interface PurityTrace {
 
 interface QuantityTrace {
   quantity_mg: number | null
+  // Set when a problem stopped the mass (see PROBLEM_COPY).
+  error?: string
   individual_areas: number[]
   avg_main_peak_area: number
-  concentration_ug_ml: number
-  undiluted_concentration_ug_ml: number
-  mass_ug: number
-  stock_volume_ml: number
-  dilution_factor: number
+  // Null when the concentration itself overflowed (error "quantity_not_finite").
+  concentration_ug_ml: number | null
+  // Absent under a weighing problem: they need a dilution factor and a stock volume.
+  undiluted_concentration_ug_ml?: number
+  mass_ug?: number
+  stock_volume_ml?: number
+  dilution_factor?: number
   calibration_slope: number
   calibration_intercept: number
 }
@@ -50,14 +54,22 @@ interface IdentityTrace {
 }
 
 interface DilutionTrace {
-  diluent_mass_mg: number
-  diluent_vol_ul: number
-  sample_mass_mg: number
-  sample_vol_ul: number
-  total_vol_ul: number
-  dilution_factor: number
-  stock_mass_mg: number
-  stock_volume_ml: number
+  // A mass is null when a weighing is not a finite number, and the stock vial's is
+  // null for a liquid row (never weighed). The engine never stores NaN or infinity.
+  diluent_mass_mg: number | null
+  // Null when the diluent density is missing (problem "no_density"): a volume needs it.
+  diluent_vol_ul: number | null
+  sample_mass_mg: number | null
+  sample_vol_ul: number | null
+  total_vol_ul: number | null
+  // Null when a weighing problem means they cannot be determined.
+  dilution_factor: number | null
+  stock_mass_mg: number | null
+  stock_volume_ml: number | null
+  problem?: string | null
+  // The prep form that produced the row. Absent on a trace stored before the engine
+  // wrote it, which means "not known to be liquid", not "powder": see stockMassText.
+  form?: string
 }
 
 interface CalculationTrace {
@@ -104,13 +116,97 @@ function isDilutionTrace(v: unknown): v is DilutionTrace {
   )
 }
 
+// ── Weighing problems ──────────────────────────────────────────
+
+const NOT_DETERMINED = 'not determined'
+
+// What the engine's `problem` codes mean in the lab (calculate_dilution_factor and
+// calculate_quantity), weighing codes, configuration codes and the quantity's own. The
+// label before each sentence names what is undetermined; the sentence says what to
+// check. A requirement, never a claim about what a weighing equals: every code also
+// fires, more rarely, when the arithmetic overflowed on weighings that were all
+// positive and finite.
+//
+// A vial is named by what was done to it ("before and after adding diluent"), not by a
+// field label: the wizard and the flyout label the same weighing differently ("Vial +
+// Cap", "Vial + cap + peptide", "Stock vial empty"), and this panel is reached from both.
+//
+// `dilution_incomplete` is deliberately NOT here. It is unreachable on any dilution the
+// engine builds; it exists so the quantity gate fails closed if an engine invariant is
+// ever broken. If it ever shows, the raw code is the right thing to print, so do not
+// add copy that makes it look like an ordinary weighing problem.
+const PROBLEM_COPY: Record<string, string> = {
+  stock_diluent:
+    "The stock vial's weighings before and after adding diluent need checking: both must be entered, and the one after must be heavier.",
+  diluent:
+    "The dilution vial's weighings before and after adding diluent need checking: both must be entered, and the one after must not be lighter.",
+  stock:
+    "The dilution vial's weighings before and after adding the sample need checking: both must be entered, and the one after must be heavier.",
+  intermediate_unweighed:
+    "The intermediate vial's three weighings need checking: all must be entered.",
+  intermediate_diluent:
+    "The intermediate vial's weighings before and after adding diluent need checking: the one after must not be lighter.",
+  intermediate_stock:
+    "The intermediate vial's weighings before and after adding the sample need checking: the one after must be heavier.",
+  // Configuration, not the balance: the fix is in the data.
+  no_density:
+    'The calibration curve has no usable diluent density. This is not a weighing problem: the density needs setting on the curve.',
+  no_declared_volume:
+    'This liquid sample has no usable declared volume. This is not a weighing problem: the volume declared with the sample needs recording (it is taken as declared, not measured).',
+  // These two codes are only ever the quantity panel's reason, never the dilution panel's.
+  // A quantity can be refused on sound weighings: very small volumes work out to a mass with
+  // no number left in it at the precision the result is carried onward in, which is coarser
+  // than the four places the engine publishes.
+  quantity_below_precision:
+    "The quantity works out too small to report, so it is not a result. Check the peak areas and the calibration curve, and the declared volume and the stock vial weighings: a peak area barely above the curve's intercept, or a volume much smaller than the prep intended, gives a quantity like this.",
+  quantity_not_finite:
+    'A value is too large for the calculation to handle. Check the dilution and intermediate vial weighings, the stock volume, the peak areas and the calibration curve; if those look right, raise it with the lab manager.',
+}
+
+function problemCopy(code: string): string {
+  return PROBLEM_COPY[code] ?? code
+}
+
+function fixed(v: number | null | undefined, dp: number, unit = ''): string {
+  return v == null ? NOT_DETERMINED : `${v.toFixed(dp)}${unit}`
+}
+
+const NOT_APPLICABLE = 'not applicable'
+
+// A liquid prep never weighs its stock vial, so its stock mass does not exist; it is not
+// a weighing that went missing. The trace says which form produced the row, so this reads
+// that rather than guessing from which values are null. A trace without the key is not
+// known to be liquid (a row stored before the engine wrote it can be any form), so it
+// keeps the existing "not determined": an old trace must not start claiming a
+// measurement is inapplicable.
+function stockMassText(trace: DilutionTrace): string {
+  if (trace.form === 'liquid' && trace.stock_mass_mg == null) {
+    return NOT_APPLICABLE
+  }
+  return fixed(trace.stock_mass_mg, 2, ' mg')
+}
+
+// What the dilution panel could not work out, named from the trace's own values rather
+// than from the problem code, so a code added later cannot get a wrong label. Each
+// problem nulls only what it touches (calculate_dilution_factor): a stock problem keeps
+// the dilution factor, a final dilution-leg problem keeps the stock volume, and an
+// intermediate problem nulls neither of the two printed values but the total factor,
+// which is not printed. So neither null under a problem means the total.
+function undeterminedLabel(trace: DilutionTrace): string {
+  const names: string[] = []
+  if (trace.dilution_factor == null) names.push('dilution factor')
+  if (trace.stock_volume_ml == null) names.push('stock volume')
+  const label = names.length > 0 ? names.join(' and ') : 'total dilution factor'
+  return label.charAt(0).toUpperCase() + label.slice(1)
+}
+
 // ── Chart colors (explicit for dark-mode visibility) ──────────
 
-const CHART_BLUE = '#60a5fa'       // bright blue — bars, primary data
-const CHART_AMBER = '#fbbf24'      // amber — accent, sample point
-const CHART_SLATE = '#94a3b8'      // slate-400 — axis text, labels
-const CHART_GRID = '#334155'        // slate-700 — grid lines
-const CHART_AVG_LINE = '#f97316'   // orange — average/reference lines
+const CHART_BLUE = '#60a5fa'       // bright blue, bars, primary data
+const CHART_AMBER = '#fbbf24'      // amber, accent, sample point
+const CHART_SLATE = '#94a3b8'      // slate-400, axis text, labels
+const CHART_GRID = '#334155'        // slate-700, grid lines
+const CHART_AVG_LINE = '#f97316'   // orange, average/reference lines
 
 // ── Purity Bar Chart ───────────────────────────────────────────
 
@@ -195,13 +291,14 @@ function QuantityChart({ trace }: { trace: QuantityTrace }) {
   const { calibration_slope: slope, calibration_intercept: intercept } = trace
 
   // Extend line from 0 to a bit past the sample
-  const maxConc = Math.max(sampleConc * 1.2, 200)
+  const maxConc = Math.max((sampleConc ?? 0) * 1.2, 200)
   const lineData = [
     { conc: 0, fit: intercept },
     { conc: maxConc, fit: slope * maxConc + intercept },
   ]
 
-  const samplePoint = [{ conc: sampleConc, area: sampleArea }]
+  const samplePoint =
+    sampleConc == null ? [] : [{ conc: sampleConc, area: sampleArea }]
 
   return (
     <Card>
@@ -284,17 +381,22 @@ function QuantityChart({ trace }: { trace: QuantityTrace }) {
           </div>
           <div className="flex justify-between">
             <span className="text-muted-foreground">Conc = (Area - {intercept.toFixed(2)}) / {slope.toFixed(4)}</span>
-            <span>{trace.concentration_ug_ml.toFixed(2)} µg/mL</span>
+            <span>{fixed(trace.concentration_ug_ml, 2, ' µg/mL')}</span>
           </div>
           <div className="flex justify-between">
-            <span className="text-muted-foreground">Undiluted = Conc &times; DF ({trace.dilution_factor.toFixed(2)}&times;)</span>
-            <span>{trace.undiluted_concentration_ug_ml.toFixed(2)} µg/mL</span>
+            <span className="text-muted-foreground">Undiluted = Conc &times; DF ({fixed(trace.dilution_factor, 2, '\u00d7')})</span>
+            <span>{fixed(trace.undiluted_concentration_ug_ml, 2, ' µg/mL')}</span>
           </div>
           <div className="flex justify-between border-t border-border pt-1 font-semibold">
-            <span>Mass = Undiluted &times; Stock ({trace.stock_volume_ml.toFixed(4)} mL) / 1000</span>
-            <span>{trace.quantity_mg?.toFixed(2)} mg</span>
+            <span>Mass = Undiluted &times; Stock ({fixed(trace.stock_volume_ml, 4, ' mL')}) / 1000</span>
+            <span>{fixed(trace.quantity_mg, 2, ' mg')}</span>
           </div>
         </div>
+        {trace.error && (
+          <p className="mt-2 text-xs text-amber-400">
+            Mass {NOT_DETERMINED}. {problemCopy(trace.error)}
+          </p>
+        )}
       </CardContent>
     </Card>
   )
@@ -391,9 +493,9 @@ function IdentityVisual({ trace }: { trace: IdentityTrace }) {
 
 function DilutionBreakdown({ trace }: { trace: DilutionTrace }) {
   const rows: [string, string, string][] = [
-    ['Diluent mass', `${trace.diluent_mass_mg.toFixed(2)} mg`, `${trace.diluent_vol_ul.toFixed(1)} µL`],
-    ['Sample mass', `${trace.sample_mass_mg.toFixed(2)} mg`, `${trace.sample_vol_ul.toFixed(1)} µL`],
-    ['Total volume', '', `${trace.total_vol_ul.toFixed(1)} µL`],
+    ['Diluent mass', fixed(trace.diluent_mass_mg, 2, ' mg'), fixed(trace.diluent_vol_ul, 1, ' µL')],
+    ['Sample mass', fixed(trace.sample_mass_mg, 2, ' mg'), fixed(trace.sample_vol_ul, 1, ' µL')],
+    ['Total volume', '', fixed(trace.total_vol_ul, 1, ' µL')],
   ]
 
   return (
@@ -428,7 +530,7 @@ function DilutionBreakdown({ trace }: { trace: DilutionTrace }) {
             </table>
             <div className="mt-2 flex items-baseline justify-between rounded-md bg-blue-500/10 border border-blue-500/20 px-2 py-1.5">
               <span className="text-xs text-slate-400">Dilution Factor</span>
-              <span className="text-sm font-bold tabular-nums text-blue-400">{trace.dilution_factor.toFixed(2)}&times;</span>
+              <span className="text-sm font-bold tabular-nums text-blue-400">{fixed(trace.dilution_factor, 2, '\u00d7')}</span>
             </div>
           </div>
 
@@ -438,19 +540,25 @@ function DilutionBreakdown({ trace }: { trace: DilutionTrace }) {
             <div className="space-y-2 text-xs">
               <div className="flex justify-between">
                 <span className="text-slate-400">Diluent mass</span>
-                <span className="font-mono">{trace.stock_mass_mg.toFixed(2)} mg</span>
+                <span className="font-mono">{stockMassText(trace)}</span>
               </div>
               <div className="flex items-baseline justify-between rounded-md bg-blue-500/10 border border-blue-500/20 px-2 py-1.5">
                 <span className="text-slate-400">Stock Volume</span>
-                <span className="text-sm font-bold tabular-nums text-blue-400">{trace.stock_volume_ml.toFixed(4)} mL</span>
+                <span className="text-sm font-bold tabular-nums text-blue-400">{fixed(trace.stock_volume_ml, 4, ' mL')}</span>
               </div>
             </div>
             <p className="mt-3 text-[10px] text-muted-foreground leading-relaxed">
               DF = (diluent + sample) / sample<br />
-              Stock vol = mass / 1000
+              Stock vol = mass / density<br />
+              (liquid: the declared volume; bac water: density corrected)
             </p>
           </div>
         </div>
+        {trace.problem && (
+          <p className="mt-3 text-xs text-amber-400">
+            {undeterminedLabel(trace)} {NOT_DETERMINED}. {problemCopy(trace.problem)}
+          </p>
+        )}
       </CardContent>
     </Card>
   )

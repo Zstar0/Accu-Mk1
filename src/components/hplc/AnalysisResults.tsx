@@ -75,8 +75,14 @@ export function AnalysisResults({ result, chromatograms, hideTrace }: AnalysisRe
               <span className="text-lg text-muted-foreground">mg</span>
             </div>
             <p className="mt-1 text-xs text-muted-foreground">
-              DF: {result.dilution_factor?.toFixed(2)}× | Stock:{' '}
-              {result.stock_volume_ml?.toFixed(4)} mL
+              DF:{' '}
+              {result.dilution_factor != null
+                ? `${result.dilution_factor.toFixed(2)}×`
+                : 'not determined'}{' '}
+              | Stock:{' '}
+              {result.stock_volume_ml != null
+                ? `${result.stock_volume_ml.toFixed(4)} mL`
+                : 'not determined'}
             </p>
           </CardContent>
         </Card>
