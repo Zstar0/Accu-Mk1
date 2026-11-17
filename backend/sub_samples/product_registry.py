@@ -42,6 +42,11 @@ PRODUCT_REGISTRY: dict[str, ProductDef] = {
     "variance": ProductDef("variance", "Variance HPLC", True, "variance", "kind"),
 }
 
+# Chip label when the Variance map holds any of the four add-on test keys
+# (endotoxin, rapid PCR, USP 71, heavy metals), alone or mixed with HPLC.
+# Copy pending owner confirmation; keep it in this one place.
+VARIANCE_ADDON_TEST_LABEL = "Variance"
+
 
 def _as_dict(p: ProductDef) -> dict:
     return {
@@ -85,6 +90,7 @@ def lookup_product_def(key: str, db=None) -> ProductDef | None:
 def build_ordered_products(services: dict, package: str | None, db=None) -> list[dict]:
     # Lazy import: service.py imports nothing from here, but keep the edge one-way.
     from sub_samples.service import normalize_variance_entitlement
+    from sub_samples.variance_tests import VARIANCE_TEST_KEYS
 
     services = services or {}
     out: list[dict] = []
@@ -104,8 +110,12 @@ def build_ordered_products(services: dict, package: str | None, db=None) -> list
     # 2) Service-key products.
     for key, val in services.items():
         if key == "variance":
-            if normalize_variance_entitlement(services):  # >=2 floor; override already merged upstream
-                out.append(_as_dict(PRODUCT_REGISTRY["variance"]))
+            entitlement = normalize_variance_entitlement(services)  # >=2 floor; override already merged upstream
+            if entitlement:
+                chip = _as_dict(PRODUCT_REGISTRY["variance"])
+                if VARIANCE_TEST_KEYS.intersection(entitlement):
+                    chip["label"] = VARIANCE_ADDON_TEST_LABEL
+                out.append(chip)
                 seen.add("variance")
             continue
         if key == "samplevariance":

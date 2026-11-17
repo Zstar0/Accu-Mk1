@@ -26,9 +26,21 @@ export interface PromotePick {
 
 const PCELL = 'border-b border-border/60 px-2 py-1.5 align-top'
 
-function Outcome({ result }: { result: EndoPromoteRowResult | undefined }) {
+export function Outcome({
+  result,
+}: {
+  result: EndoPromoteRowResult | undefined
+}) {
   if (!result)
     return <span className="text-muted-foreground">no reply for this row</span>
+  // A Variance replicate is entered, never promoted: the server submits it
+  // for Verify (Variance) on the sample page and says so in its reason.
+  if (!result.promoted && result.state === 'to_be_verified')
+    return (
+      <span className="text-emerald-700 dark:text-emerald-300">
+        {result.reason}
+      </span>
+    )
   if (!result.promoted)
     return (
       <span className="text-red-600 dark:text-red-400">
@@ -44,6 +56,22 @@ function Outcome({ result }: { result: EndoPromoteRowResult | undefined }) {
         : ''}
     </span>
   )
+}
+
+/** The dialog's line after a reply. A send with no replicates reads as it
+ *  always has; replicates (entered, not promoted) are counted on their own,
+ *  and the reviewer sentence shows only when something was promoted. */
+export function promoteSummary(
+  results: EndoPromoteRowResult[],
+  total: number
+): string {
+  const promoted = results.filter(r => r.promoted).length
+  const entered = results.filter(
+    r => !r.promoted && r.state === 'to_be_verified'
+  ).length
+  const reviewer = ' A reviewer verifies each parent result on its sample page.'
+  if (entered === 0) return `${promoted} of ${total} promoted.${reviewer}`
+  return `${promoted} promoted, ${entered} entered for Verify (Variance).${promoted > 0 ? reviewer : ''}`
 }
 
 /**
@@ -96,10 +124,6 @@ export function EndoPromoteDialog({
     }
   }
 
-  const done = results
-    ? [...results.values()].filter(r => r.promoted).length
-    : 0
-
   return (
     <>
       <Button
@@ -123,7 +147,7 @@ export function EndoPromoteDialog({
             </DialogTitle>
             <DialogDescription className="text-xs">
               {results
-                ? `${done} of ${listed.length} promoted. A reviewer verifies each parent result on its sample page.`
+                ? promoteSummary([...results.values()], listed.length)
                 : "Fills each vial's endotoxin result with these values and promotes it to its parent sample, where a reviewer verifies it. A < result is sent as its LOQ; the COA prints it as < and the LOQ, for example < 25."}
             </DialogDescription>
             <div className="min-h-0 overflow-auto">

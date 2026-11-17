@@ -1,5 +1,28 @@
 # Changelog
 
+## v1.61.0 - 2026-11-17
+
+### Add-on test Variance
+- **Repeat runs of endotoxin, Rapid PCR, USP 71 and heavy metals.** An order can carry 2 to 10 total runs of each of the four tests. The storefront sells them only once their Variance products are published, so nothing changes for orders until then. Check-in shows the extra vials per test, and the seeder gives a replicate vial host work only. Pairs with COABuilder 2.38.0 and Integration Service 1.0.41.
+- **The endotoxin worksheet enters a replicate result for sign-off and never promotes it.**
+- **The variance lock checks every bought run.** Each run must exist and be signed off.
+- **One certificate row per run.** The certificate builder prints a row for each run and refuses to build when a run is missing, unsigned or empty. A publish guard refuses a draft whose replicate content changed after it was generated: regenerate it, then publish.
+- **One Variance row per test on the sample page.** It is read-only and lists each run's value, with no mean and no Promote for add-on tests (HPLC keeps Promote). Each test has its own Variance overlay with help text, results in a stable order and the name of whoever locked it.
+- Samples born in Mk1 only. Not offered on Bacteriostatic Water, and not carried to a retest: a retest plans no four-test replicates and shows a check-in note.
+
+### Certificate header
+- **The page 1 header shows the sample's form and every vial the certificate reports on.** The certificate document carries `sample_units` (the form's icon, a unit word, the form's name and the vial count), and COABuilder 2.38.0 draws it. The count is every vial of a test that prints: P-5010 reads 7 where it used to read 2. It is sent only when every vial can be accounted for; otherwise COABuilder keeps its old header row. A legacy parent (the parent is itself vial 1) and a sample with legacy-keyed endotoxin or sterility keep the old row.
+- **Variance run rows use the form's word:** "Endotoxin, Pen 1". A pooled run stays "Digest", and vial forms print "Vial N" as before.
+- The `sample_units` block is best-effort: a failure logs, leaves it off and never blocks a certificate.
+
+### Changes for staff
+- **Override panel:** the three legacy override inputs now prefill the total count. They used to prefill one less, so saving the panel untouched lowered a paid HPLC Variance by one.
+- **Heavy metals vials stay in a variance set you include them in.** A boot step used to force them out of every variance set at each restart.
+- **Retesting or carrying a test that ran with Variance is refused** on the lab route.
+
+### PCR worksheet
+- **Sort the samples list and the plate follows.** Order #, Sample ID, Sample identity, Received, Due and Priority are clickable column headers (click again to flip); `#` returns to worksheet order. The plate is dealt in the list's order, so Print, Preview and the QuantStudio and CSV exports follow too. The sort is saved on the worksheet (`bench_config.sort_key` / `sort_dir`), so every analyst sees the plate that will be printed. It replaces the "Order wells by order #" switch: Order # ascending stays the default, and a worksheet that had the switch off keeps worksheet order. Locked wells never move, so after a print a sort only re-deals the unlocked samples. Order boxes and tints show only when sorted by Order #. (#251, merged earlier and first deployed in this release; its entry used to sit under v1.28.1.)
+
 ## v1.60.0 - 2026-11-11
 
 ### Customer Insights
@@ -539,9 +562,6 @@ Needs COA Builder 2.35.6 (deployed first, 2026-10-28).
 
 ### Fixed
 - **Inline field edits on native-born samples failed with "Not Found" (P-5178).** Every pencil-edit on the sample-details page (Client Lot, Declared Qty, Client Sample ID, Date Sampled, the COA Info fields) posted to the SENAITE field-update route keyed by SENAITE uid; a native-born parent has no uid, so the request returned 404 before any write. The route now resolves a native-born parent by its sample id and writes the Accu-Mk1 registry row directly, logging the change to the activity feed. Fields the row cannot store fail closed, and analyte peptides still go through Relabel or Replace. SENAITE-born samples are unchanged. (#260)
-
-### PCR worksheet
-- **Sort the samples list and the plate follows.** Order #, Sample ID, Sample identity, Received, Due and Priority are clickable column headers (click again to flip); `#` returns to worksheet order. The plate is dealt in the list's order, so Print, Preview and the QuantStudio and CSV exports follow too. The sort is saved on the worksheet (`bench_config.sort_key` / `sort_dir`), so every analyst sees the plate that will be printed. It replaces the "Order wells by order #" switch: Order # ascending stays the default, and a worksheet that had the switch off keeps worksheet order. Locked wells never move, so after a print a sort only re-deals the unlocked samples. Order boxes and tints show only when sorted by Order #.
 
 ## v1.28.0 - 2026-09-23
 

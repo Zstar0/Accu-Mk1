@@ -26,6 +26,9 @@ from sub_samples import native
 from sub_samples import senaite
 from sub_samples.native_id import mint_native_id
 from sub_samples.senaite import SecondaryFalloutError
+from sub_samples.variance_tests import (VARIANCE_TEST_KEYS, VariancePlan, is_bac_water_sample,
+                                        is_retest_sample, resolve_variance_plan,
+                                        variance_run_problems)
 from users_display import user_display_name
 
 
@@ -1492,17 +1495,75 @@ def fetch_sample_services(sample_id: str) -> Optional[dict]:
     return _apply_variance_override(sample_id, resp.json())
 
 
+class VarianceOverrideError(ValueError):
+    """A lab override names a Variance test Mk1 cannot run on this sample.
+    Raised before anything is stored."""
+
+
+def _fetch_order_for_override(sample_id: str) -> dict:
+    """The order lookup for a four-key override. Takes the sample id as a
+    plain string: touching an expired ORM attribute here would open a
+    transaction for the length of the HTTP call."""
+    try:
+        raw = fetch_sample_services(sample_id)
+    except Exception:
+        log.warning("variance_override.order_lookup_failed sample=%s",
+                    sample_id, exc_info=True)
+        raw = None
+    if not raw:
+        raise VarianceOverrideError("cannot check Variance: the order lookup failed")
+    return raw
+
+
+def _check_variance_test_override(db: Session, parent: LimsSample, variance: dict,
+                                  raw: dict) -> None:
+    """Fail closed for the four add-on tests: resolve the RAW proposed map
+    (so a bad n is refused, not dropped) against the order. A retest note
+    is a refusal here (R3): the override would store something Mk1 will
+    not run."""
+    services = {**(raw.get("services") or {}), "variance": variance}
+    plan = variance_plan_for_parent(db, parent, services)
+    # Errors AND notes refuse: any new resolver note becomes a refusal here.
+    problems = (*plan.errors, *plan.notes) if plan is not None else ()
+    if problems:
+        raise VarianceOverrideError("; ".join(problems))
+
+
 def set_variance_override(db: Session, parent_sample_id: str, variance: Optional[dict]) -> dict:
     """Store the lab-side variance override (None/empty clears). Counts are
     normalized like the WP map (int >= 2 only); invalid entries are dropped.
-    Blocked while the variance set is locked."""
+    Blocked while the variance set is locked. A map naming one of the four
+    add-on tests is checked against the order first and refused whole
+    (VarianceOverrideError) when Mk1 cannot run it."""
     parent = db.execute(
         select(LimsSample).where(LimsSample.sample_id == parent_sample_id)
     ).scalar_one_or_none()
     if not parent:
         raise LookupError(f"parent {parent_sample_id} not found")
-    if parent.variance_locked_at is not None:
+    if parent.variance_locked_at is not None:  # fast path, before any IS call
         raise VarianceLockedError(f"variance set for {parent.sample_id} is locked")
+    pk, raw = parent.id, None
+    if has_variance_test_entry({"variance": variance}):
+        sample_id = parent.sample_id
+        db.rollback()  # no transaction (and no share lock) held across the HTTP call
+        raw = _fetch_order_for_override(sample_id)
+    # The check that counts: a fresh read under the row lock, so a lock taken
+    # while the order lookup ran is seen (populate_existing skips the stale
+    # identity-map copy). Write and commit in the same transaction.
+    parent = db.execute(
+        select(LimsSample).where(LimsSample.id == pk)
+        .with_for_update().execution_options(populate_existing=True)
+    ).scalar_one()
+    if parent.variance_locked_at is not None:
+        msg = f"variance set for {parent.sample_id} is locked"
+        db.rollback()  # release the row lock now, not at session close
+        raise VarianceLockedError(msg)
+    if raw is not None:
+        try:
+            _check_variance_test_override(db, parent, variance, raw)
+        except Exception:
+            db.rollback()  # release the row lock before the refusal leaves
+            raise
     cleaned = normalize_variance_entitlement({"variance": variance or {}})
     parent.variance_override = json.dumps(cleaned) if cleaned else None
     db.commit()
@@ -1538,7 +1599,43 @@ def _apply_variance_override(sample_id: str, result: Optional[dict]) -> Optional
     return result
 
 
-def derive_variance_demand(services: dict) -> dict:
+def has_variance_test_entry(services: Optional[dict]) -> bool:
+    """The raw `services["variance"]` names one of the four add-on Variance
+    tests (VARIANCE_TEST_KEYS). The additive gate: without such an entry no
+    caller resolves a VariancePlan and every demand answer is today's."""
+    raw = (services or {}).get("variance")
+    return isinstance(raw, dict) and any(k in VARIANCE_TEST_KEYS for k in raw)
+
+
+def variance_plan_for_parent(db: Session, parent: LimsSample,
+                             services: Optional[dict]) -> Optional[VariancePlan]:
+    """The sample's VariancePlan, or None when it has no four-key entry
+    (has_variance_test_entry), so legacy samples never reach the resolver."""
+    if not has_variance_test_entry(services):
+        return None
+    from lims_analyses.hplc_native import is_native_born
+    return resolve_variance_plan(
+        db, services, snapshot=parent.catalog_snapshot, is_retest=is_retest_sample(parent),
+        native_born=is_native_born(parent), bac_water=is_bac_water_sample(parent),
+        sample_id=parent.sample_id)
+
+
+def variance_plan_fields(plan: Optional[VariancePlan]) -> dict:
+    """The three VialPlanResponse fields for a plan (empty for None)."""
+    if plan is None:
+        return {"variance_tests": {}, "variance_errors": [], "variance_notes": []}
+    return {
+        "variance_tests": {
+            role: {"key": rv.key, "n": rv.n, "replicate_runs": rv.replicate_runs,
+                   "replicate_vials": rv.replicate_vials, "run_label": rv.run_label}
+            for role, rv in plan.by_role.items()
+        },
+        "variance_errors": list(plan.errors),
+        "variance_notes": list(plan.notes),
+    }
+
+
+def derive_variance_demand(services: dict, plan: Optional[VariancePlan] = None) -> dict:
     """Per-bucket variance target (PAID REPLICATES) from a WP services payload.
 
     Product semantics (PB-0077 decision, 2026-06-10): purchased n = TOTAL
@@ -1553,24 +1650,45 @@ def derive_variance_demand(services: dict) -> dict:
     The hplc bucket is BW-aware — it reads either HPLC primary key (legacy
     `hplcpurity_identity` or native `hplc-purity-identity`, see catalog/hplc_keys.py)
     OR either BW primary key (BW_PRIMARY_KEYS, mirroring derive_base_demand), since both produce chromatography vials and
-    are mutually exclusive per order. (Handler decision 2026-06-17.)"""
+    are mutually exclusive per order. (Handler decision 2026-06-17.)
+
+    `plan` (add-on Variance, plan 3 Task 2): None gives exactly the three
+    buckets above. A VariancePlan adds `{role: replicate_vials}` per
+    resolved four-key test, in VIALS (auto_assign and the wizard header add
+    demand + variance per bucket). A plan role never overwrites a legacy
+    bucket (the resolver already refuses that collision)."""
     from catalog.bw_keys import bw_primary_count
     from catalog.hplc_keys import hplc_primary_count
     entitlement = normalize_variance_entitlement({"variance": (services or {}).get("variance")})
     hplc_total = max(hplc_primary_count(entitlement), bw_primary_count(entitlement))
-    return {
+    out = {
         "hplc": max(0, hplc_total - 1),
         "endo": max(0, entitlement.get("endotoxin", 0) - 1),
         "ster": max(0, entitlement.get("sterility_pcr", 0) - 1),
     }
+    if plan is not None:
+        for role, rv in plan.by_role.items():
+            out.setdefault(role, rv.replicate_vials)
+    return out
 
 
-def variance_lock_required(services: Optional[dict], variance_locked_at) -> bool:
+def variance_lock_required(services: Optional[dict], variance_locked_at,
+                           plan: Optional[VariancePlan] = None) -> bool:
     """True when COA generation must be blocked pending a variance-set lock:
-    variance was purchased (any bucket target >= 1) AND the set isn't locked yet.
-    `services` is the inner WP services dict (with the 'variance' map)."""
+    variance was purchased (any legacy bucket target >= 1, or a four-key
+    add-on Variance entry) AND the set isn't locked yet. A four-key entry
+    that does not resolve still holds the certificate; the lock then
+    refuses it. `services` is the inner WP services dict (with the 'variance' map).
+
+    `plan` (variance_plan_for_parent) narrows the four-key rule: the entry
+    holds the certificate only when the plan gives it a role or carries an
+    error. A plan of notes only (a retest) needs no lock, as at base.
+    Without a plan every four-key entry holds it."""
     demand = derive_variance_demand(services or {})
-    purchased = any(n >= 1 for n in demand.values())
+    four_key = has_variance_test_entry(services)
+    if four_key and plan is not None:
+        four_key = bool(plan.by_role or plan.errors)
+    purchased = any(n >= 1 for n in demand.values()) or four_key
     return purchased and variance_locked_at is None
 
 
@@ -1744,7 +1862,10 @@ def compute_vial_plan(db: Session, parent_sample_id: str) -> dict:
     # before this task.
     snapshot = parent.catalog_snapshot
     demand = derive_demand(services, db=db, snapshot=snapshot)  # core demand == base (inflation retired)
-    variance = derive_variance_demand(services)
+    # Add-on Variance (plan 3 Task 2): None unless services.variance names
+    # one of the four tests, so every other sample gets today's variance.
+    variance_plan = variance_plan_for_parent(db, parent, services)
+    variance = derive_variance_demand(services, variance_plan)
     base_demand = derive_base_demand(services, db=db, snapshot=snapshot)
 
     # Variance lock guard: a locked set blocks re-assignment of its members
@@ -1771,6 +1892,7 @@ def compute_vial_plan(db: Session, parent_sample_id: str) -> dict:
             "vials": locked_vials,
             "container_mode": parent.container_mode,
             "sections": _build_vial_plan_sections(db, demand, locked_vials, services_for_sections, snapshot=snapshot),
+            **variance_plan_fields(variance_plan),
         }
 
     from catalog.roles import real_bucket_codes
@@ -1822,6 +1944,7 @@ def compute_vial_plan(db: Session, parent_sample_id: str) -> dict:
         "vials": assigned,
         "container_mode": parent.container_mode,
         "sections": _build_vial_plan_sections(db, demand, assigned, services_for_sections, snapshot=snapshot),
+        **variance_plan_fields(variance_plan),
     }
 
 
@@ -2292,13 +2415,14 @@ def set_assignment_role(db: Session, sample_id: str, role: Optional[str],
         # Variance-set membership follows assignment: the first vial (baseline)
         # is always in; any variance replicate is in; everything else is out.
         # Manual overrides via set_variance_membership still apply afterward.
-        # A role with variance_eligible=False (catalog-driven, spec 4 Task 7 —
+        # A role with variance_eligible=False (catalog-driven, spec 4 Task 7,
         # was a hardcoded {"hm"} set) is scoped OUT of that position-based
-        # rule: hm is the seed example (heavy_metals is vials_required=1, so
-        # an hm vial can never have a same-role replicate to compare against —
-        # landing on vial_sequence==1, an hm-only order's first and only vial,
-        # must not make it eligible). Every eligible role's position-based
-        # expression is unchanged.
+        # rule: landing on vial_sequence==1 must not make its vial eligible.
+        # hm is no longer the example: since add-on test Variance a heavy
+        # metals replicate is a full second digest, so hm seeds eligible on a
+        # fresh database and an hm variance vial joins the set once the owner
+        # flips the flag. Every eligible role's position-based expression is
+        # unchanged.
         if role is not None and not registry[role].variance_eligible:
             sub.in_variance_set = False
             sub.variance_exclusion_reason = f"auto: role {role} is not variance-eligible"
@@ -2306,9 +2430,10 @@ def set_assignment_role(db: Session, sample_id: str, role: Optional[str],
             sub.in_variance_set = (sub.vial_sequence == 1) or (sub.assignment_kind == "variance")
             if (sub.in_variance_set and old_role is not None and old_role in registry
                     and not registry[old_role].variance_eligible):
-                # Role flipped away from a variance-ineligible role (e.g. hm)
-                # into a naturally-eligible slot — clear the stale reason so
-                # it doesn't linger.
+                # Role flipped away from a variance-ineligible role (e.g. hm
+                # where the owner has not flipped it yet) into a
+                # naturally-eligible slot: clear the stale reason so it
+                # doesn't linger.
                 sub.variance_exclusion_reason = None
         db.add(LimsSubSampleEvent(
             sub_sample_pk=sub.id,
@@ -2557,8 +2682,33 @@ class VarianceSeriesIncompleteError(Exception):
     """Lock refused: variance-purchased buckets still have unfinished rows."""
 
 
+_VALUE_CATEGORY_RANK = {"identity": 0, "purity": 1, "quantity": 2}
+
+
+def _variance_value_order(keyword: Optional[str], slot: Optional[int], row_id: Optional[int]) -> tuple:
+    """The fixed display order of a vial's results: per analyte slot,
+    identity, purity, quantity, then anything else by keyword. Non-HPLC
+    rows carry no slot and no category, so they sort by keyword. The row id
+    breaks ties so a duplicate keyword resolves the same way every time."""
+    from coa.variance_series import _category
+    return (slot or 0, _VALUE_CATEGORY_RANK.get(_category(keyword) or "", 3),
+            (keyword or "").upper(), row_id or 0)
+
+
+def _variance_result_key(keyword: Optional[str], slot: Optional[int],
+                         origin: Optional[str], n_slots: int) -> str:
+    """The results-dict key for a row: native HPLC rows are re-keyed per slot
+    (wire_keyword), everything else keeps its raw keyword."""
+    from coa.variance_series import _NATIVE_KWS
+    from coa.hplc_shim import wire_keyword
+    raw_kw = (keyword or "").strip()
+    if origin == "mk1" and raw_kw.upper() in _NATIVE_KWS:
+        return wire_keyword(raw_kw, slot, n_slots)
+    return raw_kw
+
+
 def _fetch_mk1_results_for_host(
-    db: Session, *, host_kind: str, host_pk: int
+    db: Session, *, host_kind: str, host_pk: int, spec_cache: Optional[dict] = None
 ) -> dict:
     """Phase 4b: collect lims_analyses rows for a vial host and project them
     into the variance result shape.
@@ -2581,8 +2731,10 @@ def _fetch_mk1_results_for_host(
     """
     from models import LimsAnalysis, LimsAnalysisPromotion, AnalysisService, Peptide
     from sub_samples.variance import identity_conforms
-    from coa.variance_series import _category, _NATIVE_KWS
-    from coa.hplc_shim import slot_wires, wire_keyword
+    from coa.variance_series import _category
+    from coa.hplc_shim import slot_wires
+    from coa.identity_verdict import identity_wire_result
+    from coa.spec_rules import display_spec_fields, effective_unit, normalize_matrix
 
     base = (
         select(LimsAnalysis, AnalysisService, Peptide)
@@ -2630,8 +2782,12 @@ def _fetch_mk1_results_for_host(
             .where(LimsSubSample.id == host_pk)
         ).scalar_one_or_none()
     n_slots = len(slot_wires(db, parent)) if parent is not None else 0
+    # Spec tiers key on the PARENT sample's matrix and form, as in the table.
+    matrix = normalize_matrix(parent.sample_type_title) if parent is not None else None
+    form_id = parent.sample_form_id if parent is not None else None
 
-    triples = db.execute(stmt).all()
+    triples = sorted(db.execute(stmt).all(),
+                     key=lambda t: _variance_value_order(t[0].keyword, t[0].slot, t[0].id))
     if not triples:
         return {}
     rows = [t[0] for t in triples]
@@ -2685,11 +2841,27 @@ def _fetch_mk1_results_for_host(
                 peptide_name=pep.name if pep is not None else None,
                 result_options=options,
             )
-        raw_kw = (r.keyword or "").strip()
-        if svc is not None and svc.origin == "mk1" and raw_kw.upper() in _NATIVE_KWS:
-            key = wire_keyword(raw_kw, r.slot, n_slots)
         else:
-            key = raw_kw
+            # Every other row: the verdict the analyses table shows under
+            # Spec (display_spec_fields, the certificate's own resolve_spec /
+            # evaluate), fed the same inputs _serialize_senaite_shape_rows
+            # feeds it. No verdict (no spec, a rule that cannot run) leaves
+            # `conforms` unset, so compute_variance_stats keeps its word list.
+            unit = r.result_unit or (svc.unit if svc else None)
+            verdict = display_spec_fields(
+                db, service_id=r.analysis_service_id, matrix=matrix,
+                sample_form_id=form_id, peptide_id=r.peptide_id,
+                wire_result=identity_wire_result(
+                    db, keyword=r.keyword, result=r.result_value,
+                    analysis_service_id=r.analysis_service_id),
+                cache=spec_cache,
+                unit=effective_unit(unit, svc.unit if svc else None),
+                floor=bool(r.result_floor),
+            ).get("conforms")
+            if verdict is not None:
+                entry["conforms"] = verdict
+        key = _variance_result_key(r.keyword, r.slot, svc.origin if svc is not None else None,
+                                   n_slots)
         out[key] = entry
     return out
 
@@ -2724,6 +2896,15 @@ def get_variance_set(db: Session, parent_sample_id: str) -> Optional[dict]:
 
     subs = sorted(parent.sub_samples, key=lambda s: s.vial_sequence)
 
+    # A native-born (Mk1-born) family has no SENAITE records, so the
+    # per-vial SENAITE lookup could only come back empty. Skip the HTTP
+    # call: the parent page loads this view, and a per-vial fan-out on page
+    # load is what took production down on 2026-09-15.
+    from lims_analyses.hplc_native import is_native_born
+    fetch_senaite = ((lambda _sid: {}) if is_native_born(parent)
+                     else senaite.fetch_results_by_keyword)
+    spec_cache: dict = {}
+
     # Container families: the parent's rows are deposit copies of promoted
     # vial results — listing it as a variance member would double-count.
     # Legacy families: parent IS vial 1, a real member.
@@ -2736,8 +2917,9 @@ def get_variance_set(db: Session, parent_sample_id: str) -> Optional[dict]:
             "exclusion_reason": parent.variance_exclusion_reason,
             "review_state": parent.status,
             "results": _merge_variance_results(
-                _fetch_mk1_results_for_host(db, host_kind="sample", host_pk=parent.id),
-                senaite.fetch_results_by_keyword(parent.sample_id),
+                _fetch_mk1_results_for_host(db, host_kind="sample", host_pk=parent.id,
+                                            spec_cache=spec_cache),
+                fetch_senaite(parent.sample_id),
             ),
         }
     ]
@@ -2750,14 +2932,21 @@ def get_variance_set(db: Session, parent_sample_id: str) -> Optional[dict]:
             "exclusion_reason": s.variance_exclusion_reason,
             "review_state": None,
             "results": _merge_variance_results(
-                _fetch_mk1_results_for_host(db, host_kind="sub_sample", host_pk=s.id),
-                senaite.fetch_results_by_keyword(s.sample_id),
+                _fetch_mk1_results_for_host(db, host_kind="sub_sample", host_pk=s.id,
+                                            spec_cache=spec_cache),
+                fetch_senaite(s.sample_id),
             ),
         }
         for s in subs
     ]
 
     stats = compute_variance_stats(vial_dicts)
+    locked_by_name = None
+    if parent.variance_locked_by_user_id is not None:
+        from models import User
+        from users_display import user_display_name
+        locker = db.get(User, parent.variance_locked_by_user_id)
+        locked_by_name = user_display_name(locker) or None
     return {
         "parent": parent,
         "vials": vial_dicts,
@@ -2765,7 +2954,148 @@ def get_variance_set(db: Session, parent_sample_id: str) -> Optional[dict]:
         "locked": parent.variance_locked_at is not None,
         "locked_at": parent.variance_locked_at,
         "locked_by_user_id": parent.variance_locked_by_user_id,
+        "locked_by_name": locked_by_name,
+        "tests": _variance_tests(db, parent, subs, stats) if parent.container_mode else [],
     }
+
+
+_SIGNED_OFF_STATES = ("promoted", "variance_verified")
+
+
+def _variance_tests(db: Session, parent: LimsSample, subs: list, stats: dict) -> list[dict]:
+    """One entry per vial role that has a `variance` vial (container
+    families): the core run(s) and every replicate run with their values in
+    the fixed order, sign-off, and a per-test summary.
+
+    Values come from the analyses table's own row projection
+    (_serialize_senaite_shape_rows) and section labels from its section
+    rule (_annotate_profile_sections), so the run values, units, verdicts
+    and titles read exactly as the parent analysis list shows them. One
+    query for every run vial's rows, then one projection call: no per-vial
+    queries, no HTTP.
+
+    Signed off mirrors the lock guard (_lock_fresh_variance_set): every
+    current (retested False), live (not retracted or rejected) row is
+    promoted or variance_verified. A vial with no live row is not signed
+    off. Counts run over the core run(s) plus the in-set replicates; for an
+    add-on test a core run always counts (a core vial past vial 1 is out of
+    the set by the assignment rule, yet it is the result of record). For
+    HPLC only in-set vials count, the core included, as the stats do."""
+    from models import LimsAnalysis, VialRole
+    from lims_analyses.service import _annotate_profile_sections, _serialize_senaite_shape_rows
+    from sub_samples.variance_tests import DEAD_ROW_STATES
+    from coa.hplc_shim import slot_wires
+
+    roles = sorted({s.assignment_role for s in subs
+                    if s.assignment_kind == "variance" and s.assignment_role})
+    if not roles:
+        return []
+    run_subs = [s for s in subs if s.assignment_role in roles]
+    rows = db.execute(
+        select(LimsAnalysis).where(
+            LimsAnalysis.lims_sub_sample_pk.in_([s.id for s in run_subs]),
+            LimsAnalysis.retested.is_(False),
+            LimsAnalysis.review_state.notin_(DEAD_ROW_STATES),
+        )
+    ).scalars().all()
+    shaped = _serialize_senaite_shape_rows(db, list(rows))
+    _annotate_profile_sections(db, parent, shaped)
+    n_slots = len(slot_wires(db, parent))
+    by_sub: dict[int, list] = {}
+    for r, sh in zip(rows, shaped):
+        by_sub.setdefault(r.lims_sub_sample_pk, []).append((r, sh))
+    role_labels = dict(db.execute(
+        select(VialRole.code, VialRole.label).where(VialRole.code.in_(roles))).all())
+
+    tests: list[dict] = []
+    for role in roles:
+        is_hplc = role == "hplc"
+        role_subs = [s for s in run_subs if s.assignment_role == role]
+        cores = [s for s in role_subs if s.assignment_kind != "variance"]
+        reps = [s for s in role_subs if s.assignment_kind == "variance"]
+        section_key, title, section_sort = None, None, None
+        runs = []
+        for s in cores + reps:
+            pairs = sorted(by_sub.get(s.id, []),
+                           key=lambda p: _variance_value_order(p[0].keyword, p[0].slot, p[0].id))
+            values = []
+            for r, sh in pairs:
+                if section_key is None and sh.profile_section_key:
+                    section_key = sh.profile_section_key
+                    title = sh.profile_section_label
+                    section_sort = sh.profile_section_sort
+                values.append({
+                    "keyword": _variance_result_key(r.keyword, r.slot, sh.service_origin, n_slots),
+                    "label": sh.title,
+                    "value": sh.result,
+                    "unit": sh.unit,
+                    "conforms": sh.conforms,
+                    "review_state": sh.review_state,
+                    "analyst": sh.analyst,
+                    "specification": sh.specification,
+                })
+            runs.append({
+                "sample_id": s.sample_id,
+                "vial_sequence": s.vial_sequence,
+                "kind": s.assignment_kind or "core",
+                "in_variance_set": s.in_variance_set,
+                "exclusion_reason": s.variance_exclusion_reason,
+                "signed_off": bool(values) and all(
+                    v["review_state"] in _SIGNED_OFF_STATES for v in values),
+                "has_result": bool(values) and all(
+                    str(v["value"] or "").strip() for v in values),
+                "values": values,
+            })
+        # Add-on tests: the core run always counts. HPLC: only in-set vials
+        # count, the core included, matching compute_variance_stats.
+        counted = [r for r in runs if r["in_variance_set"]
+                   or (r["kind"] != "variance" and not is_hplc)]
+        counted_reps = [r for r in counted if r["kind"] == "variance"]
+        summary = {
+            "runs": len(counted),
+            "runs_with_result": sum(1 for r in counted if r["has_result"]),
+            # A half-entered run (e.g. heavy metals with only Pb) is not
+            # within spec: every value must be entered and none may fail.
+            "conforming": sum(1 for r in counted
+                              if r["has_result"] and _run_conforms(r["values"]) is True),
+            "replicates": len(counted_reps),
+            "replicates_signed_off": sum(1 for r in counted_reps if r["signed_off"]),
+            "stats": [],
+        }
+        if is_hplc:
+            # Today's numbers: compute_variance_stats over the in-set vials,
+            # one entry per HPLC analysis, in the fixed value order.
+            labels: dict[str, Optional[str]] = {}
+            for r in runs:
+                for v in r["values"]:
+                    labels.setdefault(v["keyword"], v["label"])
+            summary["stats"] = [
+                {"keyword": kw, "label": label, **{k: stats[kw].get(k) for k in (
+                    "kind", "mean", "sd", "cv_pct", "n", "conforms_count", "total")}}
+                for kw, label in labels.items() if kw in stats
+            ]
+        tests.append({
+            "role": role,
+            "section_key": section_key,
+            "title": title or role_labels.get(role) or role,
+            "is_hplc": is_hplc,
+            "runs": runs,
+            "summary": summary,
+            "_sort": section_sort if section_sort is not None else 10_000,
+        })
+    tests.sort(key=lambda t: (t["_sort"], t["role"]))
+    for t in tests:
+        del t["_sort"]
+    return tests
+
+
+def _run_conforms(values: list[dict]) -> Optional[bool]:
+    """A run is within spec when every judged value conforms; None when no
+    value carries a verdict."""
+    verdicts = [v["conforms"] for v in values if v["conforms"] is not None]
+    if not verdicts:
+        return None
+    return all(verdicts)
 
 
 def _resolve_variance_vial(db: Session, sample_id: str) -> tuple:
@@ -2803,20 +3133,30 @@ def set_variance_membership(
     }
 
 
+def _selected_variance_vials(parent: LimsSample) -> int:
+    return (1 if parent.in_variance_set else 0) + sum(
+        1 for s in parent.sub_samples if s.in_variance_set
+    )
+
+
 def lock_variance_set(db: Session, parent_sample_id: str, user_id: int) -> LimsSample:
-    """Lock a family's variance set. Requires n_selected >= 2."""
+    """Lock a family's variance set. Requires n_selected >= 2.
+
+    Rolls back the session before the order lookup (no transaction is held
+    across the HTTP call), then judges and writes on a fresh read under the
+    row lock. Callers must not hold uncommitted work in `db`."""
     parent = db.execute(
         select(LimsSample).where(LimsSample.sample_id == parent_sample_id)
     ).scalar_one_or_none()
     if not parent:
         raise LookupError(f"parent {parent_sample_id} not found")
-    selected = (1 if parent.in_variance_set else 0) + sum(
-        1 for s in parent.sub_samples if s.in_variance_set
-    )
+    selected = _selected_variance_vials(parent)
     if selected < 2:
         raise VarianceTooFewVialsError(
             f"need >=2 selected vials, have {selected}"
         )
+    pk, seen_override, seen_locked_at = parent.id, parent.variance_override, parent.variance_locked_at
+    db.rollback()  # no transaction (and no share lock) held across the HTTP call
     # Series-complete guard (variance addon Phase 2, spec §5): when the order
     # purchased variance, every live analysis row on in-set sub vials in a
     # variance-purchased bucket must be signed off (promoted or
@@ -2826,9 +3166,41 @@ def lock_variance_set(db: Session, parent_sample_id: str, user_id: int) -> LimsS
         services_resp = fetch_sample_services(parent_sample_id)
     except Exception:
         services_resp = None
-    variance = derive_variance_demand(
-        (services_resp or {}).get("services") or {}
-    )
+    # Judge the row as it is now, under the row lock (populate_existing skips
+    # the stale identity-map copy); every refusal below releases the lock.
+    parent = db.execute(
+        select(LimsSample).where(LimsSample.id == pk)
+        .with_for_update().execution_options(populate_existing=True)
+    ).scalar_one()
+    try:
+        if seen_locked_at is None and parent.variance_locked_at is not None:
+            db.rollback()  # another request locked the set meanwhile: nothing to write
+            return parent
+        return _lock_fresh_variance_set(db, parent, services_resp, seen_override, user_id)
+    except Exception:
+        db.rollback()
+        raise
+
+
+def _lock_fresh_variance_set(db: Session, parent: LimsSample, services_resp: Optional[dict],
+                             seen_override: Optional[str], user_id: int) -> LimsSample:
+    """The body of lock_variance_set on the fresh, row-locked parent."""
+    if parent.variance_override != seen_override:
+        # The lookup merged the override as it stood before; a stale map
+        # must never decide the lock.
+        raise VarianceSeriesIncompleteError(
+            "variance cannot lock: the variance override changed while the order "
+            "was looked up; lock again")
+    selected = _selected_variance_vials(parent)
+    if selected < 2:
+        raise VarianceTooFewVialsError(
+            f"need >=2 selected vials, have {selected}"
+        )
+    services = (services_resp or {}).get("services") or {}
+    plan = variance_plan_for_parent(db, parent, services)
+    if plan is not None and plan.errors:
+        raise VarianceSeriesIncompleteError("variance cannot lock: " + "; ".join(plan.errors))
+    variance = derive_variance_demand(services, plan)
     # Targets are paid replicates (n - 1): any bucket >= 1 has variance testing.
     variance_buckets = {b for b, n in variance.items() if n >= 1}
     if variance_buckets:
@@ -2854,6 +3226,10 @@ def lock_variance_set(db: Session, parent_sample_id: str, user_id: int) -> LimsS
                 "variance series incomplete — unfinished rows: "
                 + ", ".join(sorted(unfinished))
             )
+    # Four tests: every purchased run (the core run and each replicate) has an anchor.
+    problems = variance_run_problems(db, parent, plan)
+    if problems:
+        raise VarianceSeriesIncompleteError("; ".join(problems))
     from models import AuditLog
     parent.variance_locked_at = datetime.utcnow()
     parent.variance_locked_by_user_id = user_id

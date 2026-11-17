@@ -192,3 +192,13 @@ def test_measured_coa_has_no_verdict() -> None:
     rows = [("1001", "P-1", "BPC-157", st, PAID) for st in ("MEASURED", "PASSED", "FAILED", "IN REVIEW")]
     ds = build([order_row(1001)], coas=rows)
     assert [c.passed for c in ds.coas] == [None, True, False, False]
+
+
+def test_customer_insights_endo_variance_labels_variance_once() -> None:
+    # Add-on test Variance (Task 16): the buy flag and the four-key map both
+    # read as "Variance"; labels are a set per sample, so it appears once.
+    s = {"services": {"endotoxin-usp85-lal": True, "samplevariance": True,
+                      "variance": {"endotoxin-usp85-lal": 3}}}
+    ds = build([order_row(1)], [sub_row(1, [s])])
+    (o,) = ds.orders
+    assert sorted(o.tests) == ["Endotoxin", "Variance"]

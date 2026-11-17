@@ -268,6 +268,7 @@ import {
   Sigma,
 } from 'lucide-react'
 import { VarianceSummary } from '@/components/samples/VarianceSummary'
+import { parentVarianceRowTests } from '@/lib/variance-values'
 import { usePrintLabel } from '@/components/samples/usePrintLabel'
 import { PrintLabelPortal } from '@/components/samples/PrintLabelPortal'
 import {
@@ -3970,11 +3971,21 @@ export function SampleDetails() {
   const _hasVarianceVial = overlayVials.some(
     v => v.assignment_kind === 'variance'
   )
+  // Shares the Variance overlay's key, so one fetch serves both and the
+  // overlay's mutations refresh the page's chips and Variance rows.
   const { data: varianceSetOverlay } = useQuery({
-    queryKey: ['variance-set-overlay', sampleId],
+    queryKey: ['variance-set', sampleId],
     queryFn: () => getVarianceSet(sampleId ?? ''),
     enabled: parentSampleId === null && _hasVarianceVial && !!sampleId,
     staleTime: 30_000,
+  })
+  // Variance rows (one per test) replace the replicate chips on Mk1-born
+  // container parents only; SENAITE-born parents keep today's chips.
+  const varianceRowTests = parentVarianceRowTests({
+    isParentPage: parentSampleId === null,
+    externalLimsSystem: data?.external_lims_system,
+    containerMode: subData?.parent.container_mode,
+    tests: varianceSetOverlay?.tests,
   })
   const lockedVialIds = new Set(
     varianceSetOverlay?.locked
@@ -7409,6 +7420,8 @@ export function SampleDetails() {
         onTransitionComplete={() => refreshSample(data.sample_id)}
         vialKind={currentVialKind}
         retestInfo={retestInfo}
+        varianceTests={varianceRowTests}
+        onOpenVariance={() => setVarianceSummaryOpen(true)}
       />
 
       {/* Registry retest seam: destructive confirm for parent-tier retests

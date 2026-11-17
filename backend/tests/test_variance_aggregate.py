@@ -107,3 +107,34 @@ def test_has_variance_subs_reflects_assignment_kind(db, aggvk_fixture):
     assert out["ZZTEST-AGGVK-VAR"]["variance"] == {"hplc": 0, "endo": 0, "ster": 0}
     # Parent with only core vials → not flagged.
     assert out["ZZTEST-AGGVK-CORE"]["has_variance_subs"] is False
+
+
+@pytest.fixture()
+def aggve_fixture(db):
+    # Add-on test Variance (Task 16): the only variance vial is endotoxin (endo85).
+    parent = LimsSample(
+        sample_id="ZZTEST-AGGVE-ENDO", peptide_name="ZZ AggE", status="received",
+        assignment_role="hplc", variance_override=None,
+    )
+    db.add(parent)
+    db.flush()
+    vials = [("hplc", "core"), ("endo85", "core"), ("endo85", "variance")]
+    for i, (role, kind) in enumerate(vials, start=1):
+        db.add(LimsSubSample(
+            sample_id=f"ZZTEST-AGGVE-ENDO-S{i:02d}", parent_sample_pk=parent.id,
+            vial_sequence=i, received_at=datetime.utcnow(), assignment_role=role,
+            assignment_kind=kind, external_lims_uid=f"zz-uid-aggve-s{i:02d}",
+        ))
+    db.commit()
+    yield
+    db.rollback()
+    db.execute(text("DELETE FROM lims_sub_samples WHERE sample_id LIKE 'ZZTEST-AGGVE%'"))
+    db.execute(text("DELETE FROM lims_samples WHERE sample_id LIKE 'ZZTEST-AGGVE%'"))
+    db.commit()
+
+
+def test_dashboard_shows_variance_for_endo_replicate(db, aggve_fixture):
+    out = sub_service.aggregate_by_parent(db, ["ZZTEST-AGGVE-ENDO"])
+    assert out["ZZTEST-AGGVE-ENDO"]["has_variance_subs"] is True
+    # The override-only hint stays the three legacy buckets.
+    assert out["ZZTEST-AGGVE-ENDO"]["variance"] == {"hplc": 0, "endo": 0, "ster": 0}

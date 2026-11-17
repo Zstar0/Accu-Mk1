@@ -243,3 +243,45 @@ def test_bw_retest_rider_carry_of_bw_panel_aborts_at_c3(db_session, monkeypatch)
             "add": {"profiles": [], "variance_points": 0}}},
     )
     assert _verdict(db_session, parent).reason == "c3: ordered ['bacteriostatic-water-panel']"
+
+
+# ── Add-on test Variance (Task 15): a four-key Variance map on an a la carte
+# sample. Literal keys on purpose: these tests also run on the base checkout,
+# which has no VARIANCE_TEST_KEYS. Every shape without a four-key map keeps
+# today's verdict object, reason string included (captured on base ca191646).
+
+ENDO = ("endotoxin-usp85-lal", "ENDOTOXIN-USP85LAL")
+
+
+@pytest.mark.parametrize("services,expected", [
+    ({"endotoxin-usp85-lal": True}, ALaCarteVerdict(True, "eligible")),
+    ({"endotoxin-usp85-lal": True, "samplevariance": True},
+     ALaCarteVerdict(False, "c5: samplevariance is not a profile")),
+    ({"endotoxin-usp85-lal": True, "samplevariance": True, "variance": {}},
+     ALaCarteVerdict(False, "c5: samplevariance is not a profile")),
+    ({"endotoxin-usp85-lal": True, "samplevariance": False, "variance": {}},
+     ALaCarteVerdict(True, "eligible")),
+    ({"endotoxin-usp85-lal": True, "variance": True},
+     ALaCarteVerdict(False, "c5: variance is not a profile")),
+    ({"endotoxin-usp85-lal": True, "variance": 3},
+     ALaCarteVerdict(False, "c5: variance is not a profile")),
+], ids=["plain", "flag-alone", "flag-empty-map", "false-flag-empty-map",
+        "variance-true", "variance-int"])
+def test_no_four_key_map_keeps_todays_verdict(db_session, monkeypatch, services, expected):
+    parent = _alc(db_session, monkeypatch, *ENDO, services=services)
+    assert _verdict(db_session, parent) == expected
+    assert a_la_carte_verdict(db_session, parent, sections=None) == expected
+
+
+def test_four_key_variance_map_is_eligible(db_session, monkeypatch):
+    parent = _alc(db_session, monkeypatch, *ENDO, services={
+        "endotoxin-usp85-lal": True, "samplevariance": True,
+        "variance": {"endotoxin-usp85-lal": 3}})
+    assert _verdict(db_session, parent) == ALaCarteVerdict(True, "eligible")
+
+
+def test_hplc_key_in_variance_map_aborts(db_session, monkeypatch):
+    parent = _alc(db_session, monkeypatch, *ENDO, services={
+        "endotoxin-usp85-lal": True, "samplevariance": True,
+        "variance": {"hplc-purity-identity": 2}})
+    assert _verdict(db_session, parent).reason.startswith("c3")

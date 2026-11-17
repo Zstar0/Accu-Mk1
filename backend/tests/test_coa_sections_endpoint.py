@@ -108,7 +108,10 @@ def test_coa_sections_endpoint_returns_document(client, db_session):
                return_value={"sample_id": "P-8001", "ordered_profiles": [], "sections": []}):
         r = client.get("/samples/P-8001/coa-sections", headers=SVC_TOKEN_HEADER)
     assert r.status_code == 200
-    assert r.json() == {"sample_id": "P-8001", "ordered_profiles": [], "sections": []}
+    # sample_units (2026-11-13): the header's unit block rides every document;
+    # with no vials to count it carries the word only.
+    assert r.json() == {"sample_id": "P-8001", "ordered_profiles": [], "sections": [],
+                        "sample_units": {"one": "Vial", "many": "Vials"}}
 
 
 def test_coa_sections_endpoint_502_on_builder_failure(client, db_session):
@@ -328,7 +331,7 @@ def test_s2s_coa_sections_carries_legacy_rows_in_mk1_mode(client, db_session, mo
     import coa.wire_document as wd
     monkeypatch.setattr(
         wd, "build_native_sections",
-        lambda db, p: {"sample_id": "P-9001", "ordered_profiles": [], "sections": []},
+        lambda db, p, **kw: {"sample_id":"P-9001", "ordered_profiles": [], "sections": []},
     )
     monkeypatch.setattr(wd, "coa_generation_source", lambda db: "mk1")
     monkeypatch.setattr(
@@ -360,7 +363,7 @@ def test_s2s_coa_sections_carries_page1_none(client, db_session, monkeypatch):
     import coa.wire_document as wd
     monkeypatch.setattr(
         wd, "build_native_sections",
-        lambda db, p: {"sample_id": "P-9003", "ordered_profiles": [], "sections": []},
+        lambda db, p, **kw: {"sample_id":"P-9003", "ordered_profiles": [], "sections": []},
     )
     monkeypatch.setattr(wd, "coa_generation_source", lambda db: "mk1")
     monkeypatch.setattr(wd, "build_legacy_rows", lambda db, p, **kw: [])
@@ -384,7 +387,7 @@ def test_s2s_coa_sections_unchanged_in_senaite_mode(client, db_session, monkeypa
     import coa.wire_document as wd
     monkeypatch.setattr(
         wd, "build_native_sections",
-        lambda db, p: {"sample_id": "P-9002", "ordered_profiles": [], "sections": []},
+        lambda db, p, **kw: {"sample_id":"P-9002", "ordered_profiles": [], "sections": []},
     )
     monkeypatch.setattr(wd, "coa_generation_source", lambda db: "senaite")
     with patch.dict(os.environ, {"ACCUMK1_INTERNAL_SERVICE_TOKEN": SVC_TOKEN}):
