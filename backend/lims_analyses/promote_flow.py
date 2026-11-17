@@ -145,7 +145,9 @@ def run_promote(
             result_unit=req.result_unit,
             method_id=req.method_id,
             instrument_id=req.instrument_id,
-            sources=[s.model_dump() for s in req.sources],
+            # exclude_unset: a source says what the page saw only when the
+            # body sent it (promote_to_parent compares the keys that are there)
+            sources=[s.model_dump(exclude_unset=True) for s in req.sources],
             user_id=user_id,
             reason=req.reason,
             parent_keyword=parent_keyword,

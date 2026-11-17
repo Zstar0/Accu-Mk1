@@ -51,6 +51,12 @@ class ConflictError(Exception):
     diagnose ahead of the flush and explain in the caller-facing message."""
 
 
+class SourceChangedError(ConflictError):
+    """A promote names a source row that is no longer what the page showed:
+    its result or unit was corrected, or it was retested (409 source_changed).
+    The message is the whole sentence the reviewer reads."""
+
+
 class StateLockedError(Exception):
     """Method/instrument restamp attempted on a reported or dead row (R7)."""
 
@@ -142,6 +148,44 @@ def resolve_parent_analyte_target(
 
 def get_analysis(db: Session, analysis_id: int) -> LimsAnalysis:
     row = db.get(LimsAnalysis, analysis_id)
+    if row is None:
+        raise NotFoundError(f"lims_analysis id={analysis_id} not found")
+    return row
+
+
+def lock_analyses(db: Session, analysis_ids) -> Dict[int, LimsAnalysis]:
+    """The rows under SELECT ... FOR UPDATE, taken in id order and re-read, so
+    a write judges each row as COMMITTED and not as some earlier read left it
+    in this session. A request that finds a row held waits here for the
+    holder's commit. Ids with no row are left out of the answer.
+
+    Where it sits in the one lock order (endo_prep_rules.lock_items_for_update):
+    the worksheet row, then the vial analyses in id order, then the items. A
+    caller that also locks a worksheet takes that first. Callers take the
+    lock at the point they always wrote the row (a transition is its only
+    write; a promote marks its sources last), so no request takes its rows
+    in a new order.
+
+    Production sessions do not autoflush (database.SessionLocal), and the
+    re-read would drop a change the caller made to one of these rows and has
+    not flushed: such a row is flushed first. SQLite ignores FOR UPDATE."""
+    ids = sorted(set(analysis_ids))
+    if not ids:
+        return {}
+    unflushed = [o for o in db.dirty
+                 if isinstance(o, LimsAnalysis) and o.id in ids and db.is_modified(o)]
+    if unflushed:
+        db.flush(unflushed)
+    rows = db.execute(
+        select(LimsAnalysis).where(LimsAnalysis.id.in_(ids)).order_by(LimsAnalysis.id)
+        .with_for_update().execution_options(populate_existing=True)
+    ).scalars().all()
+    return {r.id: r for r in rows}
+
+
+def get_analysis_for_update(db: Session, analysis_id: int) -> LimsAnalysis:
+    """get_analysis, with the row locked and re-read (lock_analyses)."""
+    row = lock_analyses(db, [analysis_id]).get(analysis_id)
     if row is None:
         raise NotFoundError(f"lims_analysis id={analysis_id} not found")
     return row
@@ -459,8 +503,15 @@ def apply_transition(
     result_value first clears the old limits (clear_result_limits): they
     describe the old value, so a hand correction sending none drops them and
     a fill sending new ones replaces them.
+
+    The row is judged as COMMITTED: it is taken under SELECT ... FOR UPDATE
+    and re-read before anything is decided (get_analysis_for_update), so a
+    request that waited for another one's commit sees the state that one left
+    and is recorded, or refused, from there. A retest takes its lock inside
+    its own branch, after the worksheet row (the one lock order).
     """
-    row = get_analysis(db, analysis_id)
+    row = (get_analysis(db, analysis_id) if kind == "retest"
+           else get_analysis_for_update(db, analysis_id))
 
     # Task 3 (2026-08-19 bench-stamping slice): the public transition route
     # (TransitionRequest) exposes method_id/instrument_id only for
@@ -539,16 +590,26 @@ def apply_transition(
         # touched the parent, so there is no SENAITE lock to collide with.
         # "parent_to_verify": the native second-sign-off state — a parent row
         # awaiting its verify can still be retested (pre-wires Task 4's guards).
-        if from_state not in (
+        retestable = (
             "to_be_verified", "verified", "promoted", "variance_verified",
             "parent_to_verify",
-        ):
+        )
+        if from_state not in retestable:
             raise InvalidTransitionError(from_state, kind)
 
         # An endotoxin vial's worksheet row goes back to the bench, before
         # anything here writes (the worksheet lock order). Same transaction.
         from endo_prep_rules import claim_retest_row, reopen_for_retest
         bench_row = reopen_for_retest(db, row, user_id=user_id)
+
+        # Then the row itself, locked and re-read after the worksheet (the one
+        # lock order), and judged again: a retest that waited here for a
+        # reject or a retract must not retest the run it first read.
+        row = get_analysis_for_update(db, analysis_id)
+        from_state = row.review_state
+        if from_state not in retestable:
+            raise InvalidTransitionError(from_state, kind)
+        before = _snapshot(row)
 
         now = datetime.utcnow()
 
@@ -830,9 +891,10 @@ def set_method_instrument(
     Thin wrapper: load row → stamp_method_instrument (no-commit core,
     R7 state guard) → commit. Raises StateLockedError (mapped to 409 by the
     route layer) if the row is outside STAMPABLE_STATES and the pair would
-    actually change.
+    actually change. The row is locked and re-read first, so the guard
+    judges the state it is in now (get_analysis_for_update).
     """
-    row = get_analysis(db, analysis_id)
+    row = get_analysis_for_update(db, analysis_id)
     if stamp_method_instrument(
         db, row, method_id=method_id, instrument_id=instrument_id, user_id=user_id,
     ):
@@ -872,6 +934,42 @@ def _carried_result_provenance(db: Session, sources: list, source_rows: dict,
             .order_by(LimsAnalysisTransition.id.desc()).limit(1)
         ).scalar_one_or_none()
     return captured, analyst if analyst is not None else promoter_id, lead.processed_by_user_id
+
+
+def _source_changed(db: Session, row: LimsAnalysis, seen: Dict[str, Any], *,
+                    moved: bool = False) -> Optional[str]:
+    """Why a promote's source row is no longer the row the page showed, as the
+    sentence the reviewer reads; None when it still is.
+
+    A retested row is superseded: only a page loaded before the retest still
+    offers it. Otherwise the row is compared with what the page says it saw
+    (seen_result_value, seen_result_unit), each only when the request sent it,
+    with spaces at the ends ignored. The unit a resulted row shows is its own
+    result_unit, else its service's (_serialize_senaite_shape_rows).
+    moved=True: the caller already knows the row changed under this promote
+    (promote_to_parent, at the lock), so the sentence is given whatever the
+    page saw."""
+    from models import AnalysisService, LimsSample, LimsSubSample
+
+    host = (db.get(LimsSubSample, row.lims_sub_sample_pk) if row.lims_sub_sample_pk is not None
+            else db.get(LimsSample, row.lims_sample_pk) if row.lims_sample_pk is not None
+            else None)
+    label = f"{host.sample_id if host is not None else f'analysis {row.id}'} {row.title}"
+    if row.retested:
+        return (f"{label} was retested after this page loaded it. Reload the page and "
+                "promote the retest's result once it is entered.")
+    svc = db.get(AnalysisService, row.analysis_service_id)
+    value = (row.result_value or "").strip()
+    unit = (row.result_unit or (svc.unit if svc is not None else None) or "").strip()
+
+    def differs(key: str, now: str) -> bool:
+        return key in seen and (seen[key] or "").strip() != now
+
+    if moved or differs("seen_result_value", value) or differs("seen_result_unit", unit):
+        reads = " ".join(p for p in (value, unit) if p) or "no result"
+        return (f"{label} changed after this page loaded it: it now reads {reads}. "
+                "Reload the page, check the result, then promote again.")
+    return None
 
 
 def promote_to_parent(
@@ -995,6 +1093,11 @@ def promote_to_parent(
     missing = [sid for sid in source_ids if sid not in source_rows]
     if missing:
         raise NotFoundError(f"source analyses not found: {missing}")
+    # What this promote judges and builds the parent row from. The sources
+    # are locked only where they are written, further down (so the rows are
+    # taken in the order they always were); a source that no longer reads
+    # like this by then stops the promote.
+    as_read = {sid: (r.review_state, _snapshot(r)) for sid, r in source_rows.items()}
 
     # Native (origin='mk1') services have no SENAITE keyword contract to hold
     # identity steady — theirs is the catalog service FK instead. Detected off
@@ -1004,6 +1107,7 @@ def promote_to_parent(
     first_source_svc = db.get(AnalysisService, source_rows[source_ids[0]].analysis_service_id)
     is_native = first_source_svc is not None and first_source_svc.origin == "mk1"
 
+    seen_by_source = {s["analysis_id"]: s for s in sources}
     parent_sample_pk: Optional[int] = None
     for sid in source_ids:
         row = source_rows[sid]
@@ -1026,6 +1130,9 @@ def promote_to_parent(
                 f"source {sid} is in {row.review_state!r}; "
                 f"only 'to_be_verified' rows can be promoted"
             )
+        changed = _source_changed(db, row, seen_by_source[sid])
+        if changed:
+            raise SourceChangedError(changed)
         if row.lims_sub_sample_pk is not None:
             sub = db.get(LimsSubSample, row.lims_sub_sample_pk)
             if sub is None:
@@ -1231,6 +1338,16 @@ def promote_to_parent(
         )
         db.add(prom)
         promotion_rows.append(prom)
+
+    # The sources under their locks, re-read as committed. A promote that
+    # waited here for another request's write to one of them (a correction, a
+    # retest) built the parent row above from a result the row no longer
+    # holds: it stops, and the caller's rollback takes the parent row with it.
+    lock_analyses(db, source_ids)
+    for sid in source_ids:
+        src = source_rows[sid]
+        if (src.review_state, _snapshot(src)) != as_read[sid]:
+            raise SourceChangedError(_source_changed(db, src, {}, moved=True))
 
     for s in sources:
         sid = s["analysis_id"]

@@ -1435,7 +1435,7 @@ function HistoryRow({
 
 // --- Phase 4b: Promote dialog ---
 
-function PromoteDialog({
+export function PromoteDialog({
   analysis,
   open,
   onOpenChange,
@@ -1469,7 +1469,17 @@ function PromoteDialog({
         result_unit: analysis.unit ?? null,
         method_id: analysis.method_uid ? parseInt(analysis.method_uid, 10) : null,
         instrument_id: analysis.instrument_uid ? parseInt(analysis.instrument_uid, 10) : null,
-        sources: [{ analysis_id: limsId, contribution_kind: 'chosen' }],
+        sources: [
+          {
+            analysis_id: limsId,
+            contribution_kind: 'chosen',
+            // what this dialog was opened on: the server refuses the promote
+            // if the vial row was corrected since (the value typed above is
+            // the parent's, and may differ from it on purpose)
+            seen_result_value: analysis.result ?? null,
+            seen_result_unit: analysis.unit ?? null,
+          },
+        ],
         reason: 'Single-vial promote from AnalysisTable',
       })
       toast.success('Promoted to parent')
@@ -1477,6 +1487,9 @@ function PromoteDialog({
       onPromoted()
     } catch (e) {
       toast.error((e as Error).message)
+      // a refusal often means this page is out of date (the row was
+      // corrected, retested or promoted elsewhere): read it again
+      onPromoted()
     } finally {
       setPending(false)
     }
@@ -1552,7 +1565,15 @@ export function BulkPromoteDialog({
             result_unit: a.unit ?? null,
             method_id: a.method_uid ? parseInt(a.method_uid, 10) : null,
             instrument_id: a.instrument_uid ? parseInt(a.instrument_uid, 10) : null,
-            sources: [{ analysis_id: limsId, contribution_kind: 'chosen' }],
+            sources: [
+              {
+                analysis_id: limsId,
+                contribution_kind: 'chosen',
+                // the list this dialog confirmed: a row corrected since is refused
+                seen_result_value: a.result,
+                seen_result_unit: a.unit ?? null,
+              },
+            ],
             reason: 'Bulk promote from AnalysisTable',
           })
           promoted++

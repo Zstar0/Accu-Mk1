@@ -77,6 +77,13 @@ def _handle_service_error(e: Exception) -> HTTPException:
         return HTTPException(status_code=404, detail=str(e))
     if isinstance(e, service.BadRequestError):
         return HTTPException(status_code=400, detail=str(e))
+    if isinstance(e, service.SourceChangedError):
+        # before ConflictError, its base: a promote whose source row is no
+        # longer what the page showed. The message is the whole sentence.
+        return HTTPException(
+            status_code=409,
+            detail={"code": "source_changed", "message": str(e)},
+        )
     if isinstance(e, service.ConflictError):
         return HTTPException(
             status_code=409,

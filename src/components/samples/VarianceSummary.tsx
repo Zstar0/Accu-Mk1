@@ -326,7 +326,7 @@ function PromoteStage({
   )
 }
 
-function PromoteAnalyteRow({
+export function PromoteAnalyteRow({
   keyword,
   stat,
   vials,
@@ -391,11 +391,15 @@ function PromoteAnalyteRow({
     if (!resultValue || eligibleIds.length === 0) return
     setPending(true)
     try {
-      const sources = eligibleIds.map(id => ({
-        analysis_id: id,
+      const sources = eligible.map(e => ({
+        analysis_id: e.analysis_id,
         contribution_kind:
           mode === 'mean' ? 'aggregated_in' as const :
-          id === chosenId ? 'chosen' as const : 'reference' as const,
+          e.analysis_id === chosenId ? 'chosen' as const : 'reference' as const,
+        // what this panel showed for the replicate (the mean was worked out
+        // from these): a replicate corrected since is refused by the server.
+        // Only the stored text is sent; a number would not compare exactly.
+        ...(typeof e.value === 'string' ? { seen_result_value: e.value } : {}),
       }))
       await promoteAnalyses({
         keyword,
@@ -408,6 +412,8 @@ function PromoteAnalyteRow({
       onPromoted()
     } catch (e) {
       toast.error((e as Error).message)
+      // a refusal often means this panel is out of date: read it again
+      onPromoted()
     } finally {
       setPending(false)
     }

@@ -192,6 +192,29 @@ describe('BulkPromoteDialog', () => {
     expect(calls[1]![0].keyword).toBe('ENDO')
   })
 
+  // Stale-page guard: the server refuses a promote whose source no longer
+  // holds what the page showed, so each promote says what the list showed.
+  it('sends the result and unit the list showed for each row', async () => {
+    const onPromoted = vi.fn()
+    render(
+      <BulkPromoteDialog
+        analyses={[
+          promotable,
+          mk({ uid: 'mk1:821', review_state: 'to_be_verified', keyword: 'ENDO', result: '0.4', unit: 'EU/mg' }),
+        ]}
+        open
+        onOpenChange={() => {}}
+        onPromoted={onPromoted}
+      />,
+    )
+    fireEvent.click(screen.getByRole('button', { name: /^Promote 2/ }))
+    await waitFor(() => expect(onPromoted).toHaveBeenCalled())
+    expect(vi.mocked(api.promoteAnalyses).mock.calls.map(c => c[0].sources)).toEqual([
+      [{ analysis_id: 820, contribution_kind: 'chosen', seen_result_value: '11', seen_result_unit: null }],
+      [{ analysis_id: 821, contribution_kind: 'chosen', seen_result_value: '0.4', seen_result_unit: 'EU/mg' }],
+    ])
+  })
+
   it('continues past a failed row and still fires onPromoted', async () => {
     vi.mocked(api.promoteAnalyses)
       .mockRejectedValueOnce(new Error('boom'))
