@@ -1232,6 +1232,41 @@ def test_a_second_retest_of_the_superseded_row_keeps_the_re_runs_reading(client,
     assert item.result_reading == "0.1" and len(item.prep_history) == 1
 
 
+def test_a_retest_refused_under_the_lock_has_not_reopened_the_worksheet_row(client, db, monkeypatch):
+    """A reject commits while the retest waits on the vial's analysis row. The
+    retest is refused, and it must be refused BEFORE the worksheet row is given
+    back to the bench: the parent retest cascade swallows the refusal and
+    commits, which would keep a reopened worksheet and a moved reading with no
+    retest row behind them (the row-lock hardening review, I-2)."""
+    from lims_analyses.state_machine import InvalidTransitionError
+
+    w = _world(client, db)
+    item, vial = _row(db, w)
+    db.commit()
+    _results(_promote(client, w.ws, _line(item)))
+    assert client.post(f"/worksheets/{w.ws.id}/complete").status_code == 200
+    vial_id, real, done = vial.id, db.execute, []
+
+    def rejected_meanwhile(stmt, *args, **kwargs):
+        # just before the first locking read of the analysis, as another request's commit lands
+        if (not done and getattr(stmt, "_for_update_arg", None) is not None
+                and stmt.get_final_froms()[0].name == "lims_analyses"):
+            done.append(1)
+            real(text("UPDATE lims_analyses SET review_state = 'rejected' WHERE id = :id"),
+                 {"id": vial_id})
+        return real(stmt, *args, **kwargs)
+
+    monkeypatch.setattr(db, "execute", rejected_meanwhile)
+    with pytest.raises(InvalidTransitionError):
+        apply_transition(db, analysis_id=vial_id, kind="retest", user_id=7, commit=False)
+    db.commit()  # as cascade_parent_retest_to_sources does after it swallows the refusal
+    db.expire_all()
+
+    assert (w.ws.status, item.result_reading, item.prep_history) == ("completed", "<0.05", None)
+    assert db.query(AuditLog).filter_by(operation="endo_worksheet_reopened_for_retest").count() == 0
+    assert db.query(LimsAnalysis).filter_by(retest_of_id=vial_id).count() == 0
+
+
 @pytest.mark.parametrize("status, reading", [("completed", "<0.05"), ("open", "<0.05"), ("open", None)])
 def test_the_retest_row_is_claimed_by_its_worksheet_like_a_row_added_to_it(client, db, status,
                                                                            reading):

@@ -121,9 +121,19 @@ class SetMethodInstrumentRequest(BaseModel):
 
 
 class PromoteSourceRef(BaseModel):
-    """One contributing vial-tier row for a promote_to_parent call."""
+    """One contributing vial-tier row for a promote_to_parent call.
+
+    seen_result_value / seen_result_unit: the result the page showed for this
+    row when the reviewer pressed Promote. When sent, the promote is refused
+    (409 source_changed) if the row now holds another value or shows another
+    unit, so a page loaded before a correction never puts the old result on
+    the parent. Each is compared only when it is sent: a body that sends
+    neither is judged as it always was, and the unit a row shows is its own
+    result_unit, else its service's."""
     analysis_id: int
     contribution_kind: Literal["chosen", "aggregated_in", "reference"]
+    seen_result_value: Optional[str] = None
+    seen_result_unit: Optional[str] = None
 
 
 def _nonfinite_as_text(v):
