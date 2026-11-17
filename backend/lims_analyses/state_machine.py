@@ -95,6 +95,18 @@ TERMINAL_STATES: FrozenSet[str] = frozenset({"published", "rejected"})
 # activity -- Manage Analyses removal / custody cleanup keep `unassigned` strict.
 RESULT_PENDING_STATES: FrozenSet[str] = frozenset({"unassigned", "assigned"})
 
+# The states a row can be retested from (a retest is not an edge of the table
+# below: it mints a new row and leaves this one where it is). "verified":
+# grandfathered vial rows from before vial-verify was removed; "promoted":
+# cascade-driven (parent retest); "variance_verified": variance replicates
+# re-run safely, they never touched the parent; "parent_to_verify": a parent
+# row awaiting its verify can still be retested. A row that already HAS a
+# retest (retested=True) is superseded and is not retested again, whatever
+# its state: the service judges that beside this set.
+RETESTABLE_STATES: FrozenSet[str] = frozenset({
+    "to_be_verified", "verified", "promoted", "variance_verified", "parent_to_verify",
+})
+
 TRANSITION_KINDS: FrozenSet[str] = frozenset({
     "assign", "submit", "verify", "retract", "reject",
     "retest", "publish", "reset", "auto", "variance_verify", "cancel",

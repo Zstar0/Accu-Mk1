@@ -145,6 +145,37 @@ def test_a_source_retested_after_the_page_loaded_is_refused(world):
     }
 
 
+def test_a_row_already_retested_is_not_retested_again(world):
+    """A superseded row has a retest row already: a second retest of it (a
+    page loaded before the first, a double click) would fork the chain."""
+    from lims_analyses.state_machine import InvalidTransitionError
+
+    row = world.rows[0]
+    apply_transition(world.db, analysis_id=row.id, kind="retest", user_id=None)
+
+    with pytest.raises(InvalidTransitionError, match="already retested"):
+        apply_transition(world.db, analysis_id=row.id, kind="retest", user_id=None)
+    world.db.rollback()
+
+    assert world.db.query(LimsAnalysis).filter_by(retest_of_id=row.id).count() == 1
+
+
+def test_a_stored_nan_limit_does_not_read_as_a_change():
+    """Postgres keeps a NaN limit, and NaN is not equal to itself: the
+    promote's "is this still the row I read" must not call that a change (it
+    would answer 409 "changed" for a row nobody touched). Such a promote
+    still fails further on, as it does on master: the audit row cannot hold
+    NaN. That belongs to the non-finite numbers work, not to this guard."""
+    from lims_analyses.service import _as_read
+
+    def row():
+        return LimsAnalysis(review_state="to_be_verified", result_value="25", loq=float("nan"))
+
+    assert _as_read(row()) == _as_read(row())
+    assert _as_read(row()) != _as_read(LimsAnalysis(review_state="to_be_verified",
+                                                     result_value="26", loq=float("nan")))
+
+
 def test_the_route_answers_409_with_the_sentence(world, client):
     row = world.rows[0]
     apply_transition(world.db, analysis_id=row.id, kind="submit", result_value="27", user_id=None)

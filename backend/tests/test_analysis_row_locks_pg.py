@@ -173,6 +173,23 @@ def test_a_retest_that_waited_for_a_reject_is_refused(pg):
     assert look.execute(select(LimsAnalysis.id).where(LimsAnalysis.retest_of_id == aid)).all() == []
 
 
+def test_a_retest_that_waited_for_another_retest_is_refused(pg):
+    """A double click: both requests read the row before either wrote."""
+    one, two, look = pg(), pg(), pg()
+    aid = _vial_row(one, state="to_be_verified", value="350")
+    apply_transition(one, analysis_id=aid, kind="retest", commit=False)
+
+    t, out = _second(lambda: apply_transition(two, analysis_id=aid, kind="retest"))
+    one.commit()
+    t.join(15)
+
+    assert isinstance(out.get("refusal"), InvalidTransitionError), out
+    two.rollback()
+    # one retest row, not a forked chain
+    assert len(look.execute(select(LimsAnalysis.id).where(
+        LimsAnalysis.retest_of_id == aid)).all()) == 1
+
+
 def test_a_method_restamp_that_waited_for_a_reject_is_refused(pg):
     """The restamp's own state guard (R7: a reported or dead row is locked)
     is judged on the row as committed too."""

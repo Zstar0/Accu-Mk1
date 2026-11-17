@@ -477,6 +477,7 @@ def reopen_for_retest(db: Session, analysis, *, user_id: Optional[int]):
     can claim the retest row for it (claim_retest_row); else None."""
     if analysis.lims_sub_sample_pk is None:
         return None
+    from lims_analyses.state_machine import RETESTABLE_STATES  # lazy, as the service's own imports here
     from main import _bench_kind_for_item, _bench_kind_for_keyword  # lazy: main imports this module
 
     svc = db.get(AnalysisService, analysis.analysis_service_id) if analysis.analysis_service_id else None
@@ -504,9 +505,14 @@ def reopen_for_retest(db: Session, analysis, *, user_id: Optional[int]):
     worksheet = locked(Worksheet, found.worksheet_id)
     # As committed, under its lock: a row already retested (a double click,
     # a retried request) is no longer the vial's run, and the reading now on
-    # the worksheet row belongs to its re-run.
-    if db.execute(select(LimsAnalysis.retested).where(LimsAnalysis.id == analysis.id)
-                  .with_for_update()).scalar_one():
+    # the worksheet row belongs to its re-run. A row that left the retestable
+    # states meanwhile (a reject or a retract that landed while this waited)
+    # is not retested at all: apply_transition refuses it next, and nothing
+    # is written here first for a caller that commits past that refusal.
+    retested, state = db.execute(
+        select(LimsAnalysis.retested, LimsAnalysis.review_state)
+        .where(LimsAnalysis.id == analysis.id).with_for_update()).one()
+    if retested or state not in RETESTABLE_STATES:
         return None
     item = locked(WorksheetItem, found.id)
     was_completed = worksheet.status == "completed"

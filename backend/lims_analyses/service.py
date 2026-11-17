@@ -20,6 +20,7 @@ from sqlalchemy import and_, delete as sa_delete, or_, select
 from sqlalchemy.orm import Session
 
 from lims_analyses.state_machine import (
+    RETESTABLE_STATES,
     TIER_PARENT,
     InvalidTransitionError,
     TierMismatchError,
@@ -175,6 +176,7 @@ def lock_analyses(db: Session, analysis_ids) -> Dict[int, LimsAnalysis]:
     unflushed = [o for o in db.dirty
                  if isinstance(o, LimsAnalysis) and o.id in ids and db.is_modified(o)]
     if unflushed:
+        # these rows only: LimsAnalysis has no relationship to cascade through
         db.flush(unflushed)
     rows = db.execute(
         select(LimsAnalysis).where(LimsAnalysis.id.in_(ids)).order_by(LimsAnalysis.id)
@@ -584,31 +586,32 @@ def apply_transition(
     if kind == "retest":
         if not tier_allows(row_tier, "retest"):
             raise TierMismatchError(row_tier, kind)
-        # "verified": grandfathered vial rows from before vial-verify was removed
-        # (kept for backward-compat); "promoted": cascade-driven (parent retest);
-        # "variance_verified": variance replicates re-run safely — they never
-        # touched the parent, so there is no SENAITE lock to collide with.
-        # "parent_to_verify": the native second-sign-off state — a parent row
-        # awaiting its verify can still be retested (pre-wires Task 4's guards).
-        retestable = (
-            "to_be_verified", "verified", "promoted", "variance_verified",
-            "parent_to_verify",
-        )
-        if from_state not in retestable:
-            raise InvalidTransitionError(from_state, kind)
+        def refuse_unless_retestable() -> None:
+            """RETESTABLE_STATES (state_machine), and never a row that has a
+            retest already: a second one would fork the chain."""
+            if row.review_state not in RETESTABLE_STATES:
+                raise InvalidTransitionError(row.review_state, kind)
+            if row.retested:
+                raise InvalidTransitionError(
+                    row.review_state, kind,
+                    message="analysis was already retested; retest its newest run instead")
+
+        refuse_unless_retestable()
 
         # An endotoxin vial's worksheet row goes back to the bench, before
         # anything here writes (the worksheet lock order). Same transaction.
+        # It judges the row under its own lock before it writes, so a retest
+        # refused below has not touched the worksheet.
         from endo_prep_rules import claim_retest_row, reopen_for_retest
         bench_row = reopen_for_retest(db, row, user_id=user_id)
 
         # Then the row itself, locked and re-read after the worksheet (the one
         # lock order), and judged again: a retest that waited here for a
-        # reject or a retract must not retest the run it first read.
+        # reject, a retract or another retest must not retest the run it
+        # first read.
         row = get_analysis_for_update(db, analysis_id)
+        refuse_unless_retestable()
         from_state = row.review_state
-        if from_state not in retestable:
-            raise InvalidTransitionError(from_state, kind)
         before = _snapshot(row)
 
         now = datetime.utcnow()
@@ -936,6 +939,13 @@ def _carried_result_provenance(db: Session, sources: list, source_rows: dict,
     return captured, analyst if analyst is not None else promoter_id, lead.processed_by_user_id
 
 
+def _as_read(row: LimsAnalysis) -> str:
+    """A row's state and tracked fields as one comparable text, for "is this
+    still the row I read". As text because a stored NaN limit (Postgres keeps
+    NaN) is not equal to itself and would read as a change on every re-read."""
+    return repr((row.review_state, _snapshot(row)))
+
+
 def _source_changed(db: Session, row: LimsAnalysis, seen: Dict[str, Any], *,
                     moved: bool = False) -> Optional[str]:
     """Why a promote's source row is no longer the row the page showed, as the
@@ -1097,7 +1107,7 @@ def promote_to_parent(
     # are locked only where they are written, further down (so the rows are
     # taken in the order they always were); a source that no longer reads
     # like this by then stops the promote.
-    as_read = {sid: (r.review_state, _snapshot(r)) for sid, r in source_rows.items()}
+    as_read = {sid: _as_read(r) for sid, r in source_rows.items()}
 
     # Native (origin='mk1') services have no SENAITE keyword contract to hold
     # identity steady — theirs is the catalog service FK instead. Detected off
@@ -1346,7 +1356,7 @@ def promote_to_parent(
     lock_analyses(db, source_ids)
     for sid in source_ids:
         src = source_rows[sid]
-        if (src.review_state, _snapshot(src)) != as_read[sid]:
+        if _as_read(src) != as_read[sid]:
             raise SourceChangedError(_source_changed(db, src, {}, moved=True))
 
     for s in sources:
