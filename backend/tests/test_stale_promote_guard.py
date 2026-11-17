@@ -160,6 +160,41 @@ def test_a_row_already_retested_is_not_retested_again(world):
     assert world.db.query(LimsAnalysis).filter_by(retest_of_id=row.id).count() == 1
 
 
+def test_a_retests_result_promotes_over_the_first_at_any_time(world):
+    """Handler ruling 2026-11-17: "we should be able to re-test and promote
+    that retest's results at any time". The guard refuses only the SUPERSEDED
+    row; the retest row promotes, and takes the parent's place."""
+    first = world.rows[0]
+    run_promote(world.db, USER, _req([_src(first, **SEEN)]))          # parent holds 25
+    retest = apply_transition(world.db, analysis_id=first.id, kind="retest", user_id=None)
+    apply_transition(world.db, analysis_id=retest.id, kind="submit", result_value="27",
+                     user_id=None)
+
+    resp = run_promote(world.db, USER, _req(
+        [_src(retest, seen_result_value="27", seen_result_unit="EU/mL")], value="27"))
+
+    assert resp.parent.result_value == "27"
+    world.db.expire_all()
+    live = [(p.result_value, p.review_state) for p in _parent_rows(world)
+            if p.review_state != "retracted"]
+    assert live == [("27", "parent_to_verify")]
+
+
+def test_a_retest_can_itself_be_retested(world):
+    """Handler ruling 2026-11-17: "it's fine to re-test again". Each retest is
+    of the newest run, so the chain grows in a line; what is refused is a
+    second retest of a row that already has one (a fork)."""
+    first = world.rows[0]
+    second = apply_transition(world.db, analysis_id=first.id, kind="retest", user_id=None)
+    apply_transition(world.db, analysis_id=second.id, kind="submit", result_value="27",
+                     user_id=None)
+
+    third = apply_transition(world.db, analysis_id=second.id, kind="retest", user_id=None)
+
+    assert (second.retest_of_id, third.retest_of_id) == (first.id, second.id)
+    assert (third.review_state, third.result_value) == ("unassigned", None)
+
+
 def test_a_stored_nan_limit_does_not_read_as_a_change():
     """Postgres keeps a NaN limit, and NaN is not equal to itself: the
     promote's "is this still the row I read" must not call that a change (it
