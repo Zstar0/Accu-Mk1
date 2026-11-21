@@ -1,6 +1,19 @@
-import { Lock, Unlock } from 'lucide-react'
+import { useState, type CSSProperties } from 'react'
+import { Lock, Move, Unlock } from 'lucide-react'
 import { Button } from '@/components/ui/button'
-import { plateGrid, PROTOCOL, type PcrPlate } from '@/lib/pcr-plate'
+import {
+  applyWellMoves,
+  fillGaps,
+  hasGaps,
+  NO_PINS,
+  planWellMove,
+  plateGrid,
+  posOf,
+  PROTOCOL,
+  type PcrLayout,
+  type PcrPins,
+  type PcrPlate,
+} from '@/lib/pcr-plate'
 import { plateLabel } from '@/lib/pcr-worksheet'
 import { useUIStore } from '@/store/ui-store'
 
@@ -35,6 +48,13 @@ const COLS = Array.from({ length: PROTOCOL.cols }, (_, i) => i + 1)
  * order number and the due date; each order outlined as one region with
  * alternating tints; a red corner on a priority well. Locked wells (printed
  * or exported) are announced in the header and can be released on purpose.
+ *
+ * Rearrange (Dennis, 2026-10-26; in Mk1 since 2026-11-20): until the plate is
+ * printed, wells can be moved by hand. Select wells, then drag one or click
+ * an empty well; the selection shifts together, the well it left stays empty
+ * and every other well is held where it was. Fill gaps packs the plate again
+ * and Reset layout forgets every hand placement. The rules live in
+ * pcr-plate.ts (planWellMove, applyWellMoves, fillGaps).
  */
 export function PcrPlateMap({
   plate,
@@ -43,6 +63,8 @@ export function PcrPlateMap({
   frozenCount,
   isCompleted,
   onUnfreeze,
+  layout,
+  onPins,
 }: {
   plate: PcrPlate
   plateCount: number
@@ -51,7 +73,48 @@ export function PcrPlateMap({
   frozenCount: number
   isCompleted: boolean
   onUnfreeze: () => void
+  /** The whole run's layout: a move holds every plate's wells. */
+  layout: PcrLayout
+  /** Save new hand placements; absent where the plate is read-only. */
+  onPins?: (pins: PcrPins) => void
 }) {
+  const [arranging, setArranging] = useState(false)
+  const [sel, setSel] = useState<number[]>([])
+  const [hover, setHover] = useState<number | null>(null)
+  const [dragFrom, setDragFrom] = useState<number | null>(null)
+  const [note, setNote] = useState('')
+  const locked = frozenCount > 0
+  const active = arranging && !!onPins && !locked
+  const anchorOf = () => dragFrom ?? Math.min(...sel)
+  // Where the selection would land if dropped on the hovered well.
+  const preview =
+    active && sel.length && hover !== null
+      ? {
+          ok: planWellMove(layout, plate.plate, sel, hover, anchorOf()).ok,
+          wells: new Set(sel.map(p => p + hover - anchorOf())),
+        }
+      : null
+  function stop() {
+    setArranging(false)
+    setSel([])
+    setHover(null)
+    setDragFrom(null)
+    setNote('')
+  }
+  function drop(toPos: number) {
+    if (!onPins || !sel.length) return
+    const plan = planWellMove(layout, plate.plate, sel, toPos, anchorOf())
+    setDragFrom(null)
+    if (!plan.ok) {
+      setNote(plan.reason)
+      return
+    }
+    setNote('')
+    setSel([])
+    setHover(null)
+    if (plan.moves.some(m => m.from !== m.to))
+      onPins(applyWellMoves(layout, plate.plate, plan.moves))
+  }
   const map = plateGrid(plate)
   const groupAt = (ri: number, c: number): number | null =>
     ri < 0 || ri > 7 || c < 1 || c > PROTOCOL.cols
@@ -69,6 +132,48 @@ export function PcrPlateMap({
         </h3>
         <Legend />
         <span className="flex-1" />
+        {onPins && !locked && layout.pinnedCount > 0 && hasGaps(plate) && (
+          <Button
+            variant="ghost"
+            size="sm"
+            className="h-6 px-1.5 text-[11px]"
+            title="Close the empty wells: the samples keep the order they are in now and the NPC goes back after the last one."
+            onClick={() => onPins(fillGaps(layout))}
+          >
+            Fill gaps
+          </Button>
+        )}
+        {onPins && !locked && layout.pinnedCount > 0 && (
+          <Button
+            variant="ghost"
+            size="sm"
+            className="h-6 px-1.5 text-[11px]"
+            title="Forget every well placed by hand and deal the plate by the samples list again."
+            onClick={() => {
+              stop()
+              onPins(NO_PINS)
+            }}
+          >
+            Reset layout
+          </Button>
+        )}
+        {onPins && (
+          <Button
+            variant={active ? 'default' : 'outline'}
+            size="sm"
+            className="h-6 px-1.5 text-[11px]"
+            disabled={locked}
+            title={
+              locked
+                ? 'This plate is printed, so its wells are locked. Unlock wells to move any.'
+                : 'Move wells by hand: click wells to select them, then drag one or click an empty well.'
+            }
+            onClick={() => (active ? stop() : setArranging(true))}
+          >
+            <Move className="h-3 w-3" />
+            {active ? 'Done rearranging' : 'Rearrange'}
+          </Button>
+        )}
         {frozenCount > 0 && (
           <span
             className="inline-flex items-center gap-1 rounded-[3px] border border-amber-500/40 bg-amber-500/10 px-1.5 py-0.5 text-[11px] font-medium text-amber-700 dark:text-amber-300"
@@ -91,7 +196,18 @@ export function PcrPlateMap({
           </Button>
         )}
       </header>
-      <div className="overflow-x-auto p-3">
+      {active && (
+        <p
+          role="status"
+          className={`border-b px-3.5 py-1.5 text-xs ${note ? 'text-red-700 dark:text-red-300' : 'text-muted-foreground'}`}
+        >
+          {note ||
+            (sel.length
+              ? 'Drag a selected well, or click an empty well: the lowest selected well lands there.'
+              : 'Click wells to select them. A sample selects both of its wells.')}
+        </p>
+      )}
+      <div className="overflow-x-auto p-3" onMouseLeave={() => setHover(null)}>
         <table className="w-full min-w-[760px] table-fixed border-collapse font-mono text-[11px] text-zinc-900 dark:text-zinc-100">
           <thead>
             <tr>
@@ -110,8 +226,40 @@ export function PcrPlateMap({
                 {COLS.map(c => {
                   const cell = map.get(`${r}${c}`)
                   const base = `relative h-[52px] overflow-hidden border border-zinc-400 px-0.5 py-0.5 text-center dark:border-zinc-600 align-middle ${c === 7 ? BLOCK : ''}`
+                  const pos = posOf(r, c, layout.kind) ?? -1
+                  // An inset ring, so the order outlines (borders) stay as they are.
+                  const ring: CSSProperties | undefined = !active
+                    ? undefined
+                    : preview?.wells.has(pos)
+                      ? {
+                          boxShadow: `inset 0 0 0 3px ${preview.ok ? '#10b981' : '#dc2626'}`,
+                        }
+                      : sel.includes(pos)
+                        ? { boxShadow: 'inset 0 0 0 3px #f59e0b' }
+                        : undefined
+                  const arrange = active
+                    ? {
+                        onMouseEnter: () => setHover(pos),
+                        onDragOver: (e: React.DragEvent) => {
+                          e.preventDefault()
+                          setHover(pos)
+                        },
+                        onDrop: (e: React.DragEvent) => {
+                          e.preventDefault()
+                          drop(pos)
+                        },
+                      }
+                    : {}
                   if (!cell)
-                    return <td key={c} className={`${base} ${FILL.empty}`} />
+                    return (
+                      <td
+                        key={c}
+                        className={`${base} ${FILL.empty} ${active && sel.length ? 'cursor-copy' : ''}`}
+                        style={ring}
+                        {...arrange}
+                        onClick={active ? () => drop(pos) : undefined}
+                      />
+                    )
                   const p = cell.placement
                   const g = p.group
                   const fill = p.isControl
@@ -167,21 +315,51 @@ export function PcrPlateMap({
                     ...(a?.reasons ?? []),
                     cell.assay === 'bac' ? '16S' : '18S',
                     p.frozen ? 'Locked' : '',
+                    p.pinned ? 'Placed by hand' : '',
                   ]
                     .filter(Boolean)
                     .join(' · ')
                   return (
                     <td
                       key={c}
-                      className={`${base} ${fill} ${p.sample ? 'cursor-pointer hover:brightness-95 dark:hover:brightness-125' : ''}`}
-                      style={edges}
+                      className={`${base} ${fill} ${active ? 'cursor-grab select-none' : p.sample ? 'cursor-pointer hover:brightness-95 dark:hover:brightness-125' : ''}`}
+                      style={{ ...edges, ...ring }}
                       title={title}
-                      onClick={
-                        p.sample
-                          ? () => useUIStore.getState().navigateToSample(p.id)
+                      {...arrange}
+                      draggable={active}
+                      onDragStart={
+                        active
+                          ? e => {
+                              e.dataTransfer.effectAllowed = 'move'
+                              e.dataTransfer.setData('text/plain', String(pos))
+                              setDragFrom(pos)
+                              setNote('')
+                              if (!sel.includes(pos)) setSel([pos])
+                            }
                           : undefined
                       }
+                      onDragEnd={active ? () => setDragFrom(null) : undefined}
+                      onClick={
+                        active
+                          ? () => {
+                              setNote('')
+                              setSel(
+                                sel.includes(pos)
+                                  ? sel.filter(x => x !== pos)
+                                  : [...sel, pos]
+                              )
+                            }
+                          : p.sample
+                            ? () => useUIStore.getState().navigateToSample(p.id)
+                            : undefined
+                      }
                     >
+                      {p.pinned && (
+                        <span
+                          aria-hidden
+                          className="absolute left-0.5 top-0.5 h-1.5 w-1.5 rounded-full bg-blue-600 dark:bg-blue-400"
+                        />
+                      )}
                       {a?.flagged && (
                         <span
                           aria-hidden

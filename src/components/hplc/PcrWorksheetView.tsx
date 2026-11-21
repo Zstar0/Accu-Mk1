@@ -16,7 +16,7 @@ import type {
 } from '@/lib/api'
 import { labDate } from '@/lib/endo-prep'
 import { shortLabDate } from '@/lib/endo-worksheet'
-import type { PcrSort } from '@/lib/pcr-plate'
+import type { PcrPins, PcrSort } from '@/lib/pcr-plate'
 import {
   buildPcrRunDoc,
   isPcrWorksheetItem,
@@ -120,10 +120,21 @@ export function PcrWorksheetView({
     sort: PcrSort
     over: string
   } | null>(null)
-  const cfg =
-    sortDraft && sortDraft.over === savedSortKey
-      ? { ...savedCfg, sort: sortDraft.sort }
-      : savedCfg
+  // Hand placements show at once the same way, and give way the same way.
+  const savedPinsKey = JSON.stringify(savedCfg.pins)
+  const [pinsDraft, setPinsDraft] = useState<{
+    pins: PcrPins
+    over: string
+  } | null>(null)
+  const cfg = {
+    ...savedCfg,
+    ...(sortDraft && sortDraft.over === savedSortKey
+      ? { sort: sortDraft.sort }
+      : {}),
+    ...(pinsDraft && pinsDraft.over === savedPinsKey
+      ? { pins: pinsDraft.pins }
+      : {}),
+  }
   const buildDoc = () =>
     buildPcrRunDoc(worksheet, {
       analystName,
@@ -143,6 +154,7 @@ export function PcrWorksheetView({
       ),
       notes: worksheetNotesText(worksheet.note_log ?? [], userNotes, calendar),
       sort: cfg.sort,
+      pins: cfg.pins,
     })
   const doc = buildDoc()
   const L = doc.layout
@@ -424,6 +436,15 @@ export function PcrWorksheetView({
                 frozenCount={L.frozenCount}
                 isCompleted={isCompleted}
                 onUnfreeze={onUnfreeze}
+                layout={L}
+                onPins={
+                  isCompleted
+                    ? undefined
+                    : pins => {
+                        setPinsDraft({ pins, over: savedPinsKey })
+                        setConfig({ pins })
+                      }
+                }
               />
               <section>
                 <h3 className="pb-2 text-[9.5px] font-semibold uppercase tracking-[0.13em] text-muted-foreground">

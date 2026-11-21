@@ -101,6 +101,12 @@ export function PcrSampleList({
             Locked wells stay put; a sort moves only the unlocked samples.
           </span>
         )}
+        {onSort && L.frozenCount === 0 && L.pinnedCount > 0 && (
+          <span className="text-xs text-amber-700 dark:text-amber-300">
+            Wells placed by hand stay put; Reset layout on the plate map deals
+            by the sort again.
+          </span>
+        )}
       </header>
       {groups.length >= 2 && (
         <div className="flex flex-wrap gap-1 border-b px-3.5 py-2">

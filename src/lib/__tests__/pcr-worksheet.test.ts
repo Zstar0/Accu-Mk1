@@ -87,6 +87,7 @@ describe('pcrConfigOf', () => {
       curve: '',
       plateType: '',
       sort: { key: 'order', dir: 'asc' },
+      pins: { samples: {}, npc: {} },
     })
     expect(
       pcrConfigOf({
@@ -102,6 +103,7 @@ describe('pcrConfigOf', () => {
       curve: 'P/A',
       plateType: '',
       sort: { key: 'listed', dir: 'asc' },
+      pins: { samples: {}, npc: {} },
     })
   })
 
@@ -142,6 +144,7 @@ describe('pcrConfigOf', () => {
         curve: 'Q',
         plateType: 'S',
         sort: { key, dir: 'desc' },
+        pins: { samples: {}, npc: {} },
       })
     expect(wire('due')).toEqual({
       rev: 'E',
@@ -314,5 +317,55 @@ describe('pcrLayoutKindOf', () => {
     expect(pcrLayoutKindOf(ws({ bench_config: { layout: 'spiral' } }))).toBe(
       'mid'
     )
+  })
+})
+
+describe('hand placements in bench_config', () => {
+  const pins = {
+    samples: { 7: { plate: 1, pos: 9 }, 8: { plate: 1, pos: 0, held: true } },
+    npc: { 1: { pos: 20 } },
+  }
+
+  it('round-trips through the wire shape and is left out when there are none', () => {
+    const cfg = { ...pcrConfigOf({ bench_config: null }), pins }
+    const wire = pcrConfigToWire(cfg)
+    expect(wire.pins).toEqual(pins)
+    expect(pcrConfigOf({ bench_config: wire }).pins).toEqual(pins)
+    expect('pins' in pcrConfigToWire(pcrConfigOf({ bench_config: null }))).toBe(
+      false
+    )
+  })
+
+  it('drops anything malformed rather than guess a well', () => {
+    const read = (p: unknown) => pcrConfigOf({ bench_config: { pins: p } }).pins
+    expect(read('x')).toEqual({ samples: {}, npc: {} })
+    expect(
+      read({
+        samples: {
+          7: { plate: 1, pos: '9' },
+          x: { plate: 1, pos: 1 },
+          9: null,
+        },
+        npc: { 1: { pos: 1.5 } },
+      })
+    ).toEqual({ samples: {}, npc: {} })
+  })
+
+  it('places the worksheet by its saved pins', () => {
+    const ws = worksheet([item(1), item(2)], {
+      bench_config: {
+        pins: { samples: { 1: { plate: 1, pos: 12 } }, npc: {} },
+      },
+    })
+    const doc = buildPcrRunDoc(ws, {
+      analystName: 'Guian',
+      calendar: cal,
+      printedAt: '',
+      dueAtByItemId: new Map(),
+      notes: '',
+    })
+    expect(
+      doc.layout.plates[0]?.placements.map(p => `${p.id}@${p.pos}`)
+    ).toEqual(['P-3001-S02@0', 'P-3001-S01@12', 'NPC@13'])
   })
 })
