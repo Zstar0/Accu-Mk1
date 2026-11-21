@@ -725,6 +725,16 @@ describe('wells placed by hand', () => {
     expect(new Set(plateOf(L).placements.map(p => p.pos)).size).toBe(4)
   })
 
+  it('a pin naming a plate the run cannot have is ignored, not drawn', () => {
+    const [a] = fake(1)
+    const L = lay(1, {
+      samples: { [a?.itemId ?? 0]: { plate: 1e9, pos: 3 } },
+      npc: {},
+    })
+    expect(L.plateCount).toBe(1)
+    expect(at(L)).toEqual([`${a?.id}@0`, 'NPC@1'])
+  })
+
   it('a sample pinned to the last well leaves the NPC the first open one', () => {
     const [a] = fake(1)
     const L = lay(1, {

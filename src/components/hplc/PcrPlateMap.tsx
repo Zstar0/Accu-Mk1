@@ -1,4 +1,4 @@
-import { useState, type CSSProperties } from 'react'
+import { useRef, useState, type CSSProperties } from 'react'
 import { Lock, Move, Unlock } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import {
@@ -83,6 +83,9 @@ export function PcrPlateMap({
   const [hover, setHover] = useState<number | null>(null)
   const [dragFrom, setDragFrom] = useState<number | null>(null)
   const [note, setNote] = useState('')
+  // Some browsers send a click to the well a drag was dropped on. It must not
+  // toggle that well or wipe the note that says why nothing moved.
+  const droppedAt = useRef(0)
   const locked = frozenCount > 0
   const active = arranging && !!onPins && !locked
   const anchorOf = () => dragFrom ?? Math.min(...sel)
@@ -246,6 +249,7 @@ export function PcrPlateMap({
                         },
                         onDrop: (e: React.DragEvent) => {
                           e.preventDefault()
+                          droppedAt.current = Date.now()
                           drop(pos)
                         },
                       }
@@ -342,6 +346,7 @@ export function PcrPlateMap({
                       onClick={
                         active
                           ? () => {
+                              if (Date.now() - droppedAt.current < 300) return
                               setNote('')
                               setSel(
                                 sel.includes(pos)

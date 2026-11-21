@@ -502,11 +502,20 @@ export function layoutPlates(
   // Wells placed by hand. A lock wins; two pins on one well keep the first
   // and let the second flow; a pin off the plate is ignored.
   const pins = opts.pins ?? NO_PINS
+  // A pin can only name a plate this run could have: the plates its samples
+  // fill, or one already locked. Anything further is a bad value, and
+  // honouring it would draw (and loop over) that many empty plates.
+  const lastPlate = Math.max(
+    1,
+    Math.ceil(samples.length / SAMPLE_CAPACITY),
+    ...wells.keys()
+  )
   const byPin = new Set<PcrSample>()
   const byHand = new Set<PcrSample>()
   for (const s of samples) {
     const pin = s.frozen ? undefined : pins.samples[s.itemId]
-    if (!pin || !validWell(pin.plate, pin.pos)) continue
+    if (!pin || !validWell(pin.plate, pin.pos) || pin.plate > lastPlate)
+      continue
     if (wells.get(pin.plate)?.has(pin.pos)) continue
     place(pin.plate, pin.pos, s)
     byPin.add(s)

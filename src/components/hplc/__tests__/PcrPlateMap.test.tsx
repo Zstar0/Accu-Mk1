@@ -81,6 +81,8 @@ describe('PcrPlateMap Rearrange', () => {
       dataTransfer: { setData: vi.fn(), effectAllowed: '' },
     })
     fireEvent.drop(cell('B', 6))
+    // The click some browsers send after a drop changes nothing.
+    fireEvent.click(cell('B', 6))
     expect(onPins).not.toHaveBeenCalled()
     expect(screen.getByRole('status')).toHaveTextContent(
       'B6 is taken by P-0002-S01; nothing moved.'
