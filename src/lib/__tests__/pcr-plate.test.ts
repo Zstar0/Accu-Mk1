@@ -4,7 +4,14 @@ import {
   PROTOCOL,
   SAMPLE_CAPACITY,
   assess,
+  applyWellMoves,
   calculatePrep,
+  fillGaps,
+  hasGaps,
+  planWellMove,
+  posOf,
+  NO_PINS,
+  type PcrPins,
   extractionWater,
   fmt2,
   fractions,
@@ -589,5 +596,161 @@ describe('the middle-out well map', () => {
     expect(wells(L, 2)).toBe('C6 / C7')
     expect(placementAt(L, 0, 3).isControl).toBe(true)
     expect(wells(L, 3)).toBe('D6 / D7')
+  })
+})
+
+// Rearrange (Dennis, 2026-10-26; asked for in Mk1 2026-11-20): wells moved
+// by hand before the print. calc.test.js pins the same rules on his sheet.
+describe('wells placed by hand', () => {
+  const lay = (n: number, pins: PcrPins = NO_PINS, extra: PcrSample[] = []) =>
+    layoutPlates([...fake(n), ...extra], { kind: 'mid', pins })
+  const at = (L: Layout) => plateOf(L).placements.map(p => `${p.id}@${p.pos}`)
+  const move = (
+    L: Layout,
+    selected: number[],
+    toPos: number,
+    anchor?: number
+  ) => {
+    const plan = planWellMove(L, 1, selected, toPos, anchor)
+    if (!plan.ok) throw new Error(plan.reason)
+    return applyWellMoves(L, 1, plan.moves)
+  }
+  const ids = fake(4).map(s => s.id)
+
+  it('a move leaves its well empty and holds every other well, the NPC too', () => {
+    const L0 = lay(4)
+    const pins = move(L0, [1], 9)
+    const L = lay(4, pins)
+    expect(at(L)).toEqual([
+      `${ids[0]}@0`,
+      `${ids[2]}@2`,
+      `${ids[3]}@3`,
+      `${ids[1]}@9`,
+      'NPC@4',
+    ])
+    const moved = plateOf(L).placements.find(p => p.pos === 9)
+    expect(moved?.pinned).toBe(true)
+    expect(plateOf(L).placements.filter(p => p.pinned).length).toBe(1)
+    expect(L.pinnedCount).toBe(4)
+    expect(hasGaps(plateOf(L))).toBe(true)
+    expect(hasGaps(plateOf(L0))).toBe(false)
+    // In the middle-out map position 9 is B5 and its pair B8.
+    expect(wellsOf(moved as NonNullable<typeof moved>, 1)).toBe('B5 / B8')
+  })
+
+  it('a sample added later flows into the first open well', () => {
+    const pins = move(lay(4), [1], 9)
+    const L = lay(4, pins, [sample('P-0099')])
+    expect(plateOf(L).placements.find(p => p.id === 'P-0099')?.pos).toBe(1)
+  })
+
+  it('a selection shifts together, and the dragged well lands on the target', () => {
+    const L0 = lay(4)
+    expect(at(lay(4, move(L0, [0, 1], 8))).slice(0, 4)).toEqual([
+      `${ids[2]}@2`,
+      `${ids[3]}@3`,
+      `${ids[0]}@8`,
+      `${ids[1]}@9`,
+    ])
+    // Dragging the second of the two onto position 9: the first lands on 8.
+    expect(planWellMove(L0, 1, [0, 1], 9, 1).moves).toEqual([
+      { from: 0, to: 8 },
+      { from: 1, to: 9 },
+    ])
+  })
+
+  it('refuses a target that is taken or off the plate, naming the well', () => {
+    const L = lay(4)
+    const taken = planWellMove(L, 1, [0], 2)
+    expect(taken.ok).toBe(false)
+    expect(taken.reason).toBe(`C6 is taken by ${ids[2]}; nothing moved.`)
+    expect(planWellMove(L, 1, [2, 3], 47, 2).ok).toBe(false)
+    expect(planWellMove(L, 1, [0], -1).ok).toBe(false)
+    expect(planWellMove(L, 1, [], 5).ok).toBe(false)
+    // Onto each other inside the selection is fine: both move.
+    expect(planWellMove(L, 1, [3, 4], 4).ok).toBe(true)
+  })
+
+  it('the NPC moves like any other well and is pinned per plate', () => {
+    const L = lay(4, move(lay(4), [4], 20))
+    const npc = plateOf(L).placements.find(p => p.isControl)
+    expect(npc?.pos).toBe(20)
+    expect(npc?.pinned).toBe(true)
+  })
+
+  it('Fill gaps packs the plate in the order it is in now; the NPC trails again', () => {
+    const moved = lay(4, move(lay(4), [0], 30))
+    const L = lay(4, fillGaps(moved))
+    expect(at(L)).toEqual([
+      `${ids[1]}@0`,
+      `${ids[2]}@1`,
+      `${ids[3]}@2`,
+      `${ids[0]}@3`,
+      'NPC@4',
+    ])
+    expect(hasGaps(plateOf(L))).toBe(false)
+    // The hand-placed well keeps its mark.
+    expect(plateOf(L).placements.find(p => p.id === ids[0])?.pinned).toBe(true)
+  })
+
+  it('a printed plate is locked: a lock beats a pin and nothing can be moved', () => {
+    const locked = fake(2).map((s, i) => ({
+      ...s,
+      frozen: { plate: 1, pos: i },
+    }))
+    const L = layoutPlates(locked, {
+      kind: 'mid',
+      pins: {
+        samples: { [locked[0]?.itemId ?? 0]: { plate: 1, pos: 30 } },
+        npc: {},
+      },
+    })
+    expect(placementAt(L, 0, 0).pos).toBe(0)
+    const plan = planWellMove(L, 1, [0], 30)
+    expect(plan.ok).toBe(false)
+    expect(plan.reason).toMatch(/unlock/i)
+  })
+
+  it('bad pins never lose a sample: off the plate or doubled up, it flows', () => {
+    const [a, b, c] = fake(3)
+    const L = lay(3, {
+      samples: {
+        [a?.itemId ?? 0]: { plate: 1, pos: 48 },
+        [b?.itemId ?? 0]: { plate: 1, pos: 5 },
+        [c?.itemId ?? 0]: { plate: 1, pos: 5 },
+      },
+      npc: { 1: { pos: 99 } },
+    })
+    expect(plateOf(L).placements.length).toBe(4)
+    expect(new Set(plateOf(L).placements.map(p => p.pos)).size).toBe(4)
+  })
+
+  it('a pin naming a plate the run cannot have is ignored, not drawn', () => {
+    const [a] = fake(1)
+    const L = lay(1, {
+      samples: { [a?.itemId ?? 0]: { plate: 1e9, pos: 3 } },
+      npc: {},
+    })
+    expect(L.plateCount).toBe(1)
+    expect(at(L)).toEqual([`${a?.id}@0`, 'NPC@1'])
+  })
+
+  it('a sample pinned to the last well leaves the NPC the first open one', () => {
+    const [a] = fake(1)
+    const L = lay(1, {
+      samples: { [a?.itemId ?? 0]: { plate: 1, pos: 47 } },
+      npc: {},
+    })
+    expect(at(L)).toEqual([`${a?.id}@47`, 'NPC@0'])
+  })
+
+  it('posOf reads a grid cell in either block back to its fill position', () => {
+    expect(posOf('A', 6, 'mid')).toBe(0)
+    expect(posOf('A', 7, 'mid')).toBe(0)
+    expect(posOf('H', 1, 'mid')).toBe(47)
+    expect(posOf('H', 12, 'mid')).toBe(47)
+    expect(posOf('A', 1, 'legacy')).toBe(0)
+    expect(posOf('B', 7, 'legacy')).toBe(1)
+    expect(posOf('Z', 1, 'mid')).toBeNull()
   })
 })

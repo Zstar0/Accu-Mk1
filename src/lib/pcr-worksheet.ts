@@ -18,11 +18,14 @@ import {
   DEFAULT_OVERAGE,
   DEFAULT_PCR_SORT,
   layoutPlates,
+  NO_PINS,
+  hasPins,
   PCR_SORT_KEYS,
   summarize,
   WORKBOOK_OVERAGE,
   type PcrLayout,
   type PcrLayoutKind,
+  type PcrPins,
   type PcrRunMeta,
   type PcrSample,
   type PcrSort,
@@ -51,6 +54,8 @@ export interface PcrConfig {
   /** The samples-list column the plate is dealt by (shared, saved on the
    *  worksheet so every analyst sees the plate that will be printed). */
   sort: PcrSort
+  /** Wells placed by hand before the print (Rearrange). */
+  pins: PcrPins
 }
 
 export const DEFAULT_PCR_CONFIG: PcrConfig = {
@@ -58,6 +63,7 @@ export const DEFAULT_PCR_CONFIG: PcrConfig = {
   curve: '',
   plateType: '',
   sort: DEFAULT_PCR_SORT,
+  pins: NO_PINS,
 }
 
 /** The highest well ever frozen per plate (worksheets.well_high_water), with
@@ -95,7 +101,33 @@ export function pcrConfigOf(
     curve: typeof c.curve === 'string' ? c.curve : '',
     plateType: typeof c.plate_type === 'string' ? c.plate_type : '',
     sort: sortOf(c),
+    pins: pinsOf(c.pins),
   }
+}
+
+/** bench_config.pins, with anything malformed dropped: a bad pin must never
+ *  put a sample on a well nobody chose. */
+function pinsOf(raw: unknown): PcrPins {
+  const pins: PcrPins = { samples: {}, npc: {} }
+  if (!raw || typeof raw !== 'object') return pins
+  const { samples, npc } = raw as Record<string, unknown>
+  const int = (v: unknown) => (Number.isInteger(v) ? (v as number) : null)
+  for (const [k, v] of Object.entries(samples ?? {})) {
+    const p = (v ?? {}) as Record<string, unknown>
+    const plate = int(p.plate)
+    const pos = int(p.pos)
+    if (!Number.isInteger(Number(k)) || plate === null || pos === null) continue
+    pins.samples[Number(k)] = p.held
+      ? { plate, pos, held: true }
+      : { plate, pos }
+  }
+  for (const [k, v] of Object.entries(npc ?? {})) {
+    const p = (v ?? {}) as Record<string, unknown>
+    const pos = int(p.pos)
+    if (!Number.isInteger(Number(k)) || pos === null) continue
+    pins.npc[Number(k)] = p.held ? { pos, held: true } : { pos }
+  }
+  return pins
 }
 
 /** The saved column sort; before 2026-09-24 only the on/off order switch
@@ -120,6 +152,7 @@ export function pcrConfigToWire(c: PcrConfig): Record<string, unknown> {
     sort_dir: c.sort.dir,
     // The older on/off switch, kept in step for any build that still reads it.
     sort_by_order: c.sort.key === 'order',
+    ...(hasPins(c.pins) ? { pins: c.pins } : {}),
   }
 }
 
@@ -211,6 +244,8 @@ export interface PcrRunOptions {
   notes: string
   /** A sort just clicked but not yet saved; the saved one otherwise. */
   sort?: PcrSort
+  /** Hand placements just made but not yet saved; the saved ones otherwise. */
+  pins?: PcrPins
 }
 
 /** The run document: the worksheet's PCR items laid out on plates with the
@@ -233,6 +268,7 @@ export function buildPcrRunDoc(
     sort: cfg.sort,
     highWater: highWaterOf(ws),
     kind: pcrLayoutKindOf(ws),
+    pins: opts.pins ?? cfg.pins,
   })
   return {
     title: ws.title,

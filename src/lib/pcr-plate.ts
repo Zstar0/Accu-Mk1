@@ -236,6 +236,32 @@ export interface PcrSample {
   frozen: { plate: number; pos: number } | null
 }
 
+/**
+ * A well placed by hand before the plate is printed (Rearrange; Dennis,
+ * 2026-10-26, asked for in Mk1 2026-11-20). `held` marks a well that was
+ * only frozen where the layout had it when the analyst moved something else,
+ * so the rest of the plate does not slide into the gap. Ported from calc.js
+ * `pin` (tools-dennis). A printed plate's wells are locked instead (`frozen`),
+ * and a lock always wins over a pin.
+ */
+export interface PcrPin {
+  plate: number
+  pos: number
+  held?: boolean
+}
+
+export interface PcrPins {
+  /** By worksheet item id. */
+  samples: Record<number, PcrPin>
+  /** The NPC sits on every plate, so it carries one pin per plate: by plate. */
+  npc: Record<number, { pos: number; held?: boolean }>
+}
+
+export const NO_PINS: PcrPins = { samples: {}, npc: {} }
+
+export const hasPins = (p: PcrPins): boolean =>
+  Object.keys(p.samples).length > 0 || Object.keys(p.npc).length > 0
+
 export interface PcrPlacement {
   /** null for the NPC. */
   sample: PcrSample | null
@@ -255,6 +281,8 @@ export interface PcrPlacement {
   group: number
   isControl: boolean
   frozen: boolean
+  /** Moved to this well by hand (not merely held there). */
+  pinned: boolean
   assessment: PcrAssessment | null
 }
 
@@ -281,6 +309,8 @@ export interface PcrLayout {
   /** Samples in run order (plate, then well), then the NPC once. */
   list: PcrListRow[]
   frozenCount: number
+  /** Samples sitting where a pin put them, moved or held. */
+  pinnedCount: number
   kind: PcrLayoutKind
 }
 
@@ -396,6 +426,19 @@ export const mirrorCol = (col: number, kind: PcrLayoutKind): number =>
 export const wellName = (pos: number, kind: PcrLayoutKind): string =>
   `${rowOf(pos)}${colOf(pos, kind)}`
 
+/** The fill position of a grid cell in either block; null off the plate. */
+export function posOf(
+  row: string,
+  col: number,
+  kind: PcrLayoutKind
+): number | null {
+  const ri = PROTOCOL.rows.indexOf(row)
+  if (ri < 0 || !Number.isInteger(col) || col < 1 || col > PROTOCOL.cols)
+    return null
+  const a = col <= 6 ? col : kind === 'mid' ? PROTOCOL.cols + 1 - col : col - 6
+  return (kind === 'mid' ? 6 - a : a - 1) * 8 + ri
+}
+
 /**
  * Deal a run's samples onto plates. Frozen samples keep their wells. A well
  * once frozen stays spent even after its sample is removed (its liquid is
@@ -416,6 +459,7 @@ export function layoutPlates(
     sortByOrder?: boolean
     highWater?: Record<number, number>
     kind?: PcrLayoutKind
+    pins?: PcrPins
   } = {}
 ): PcrLayout {
   // The worksheet decides (pcrLayoutKindOf). Untold, the map is the old one, so
@@ -441,24 +485,60 @@ export function layoutPlates(
     m.set(pos, s)
   }
   let frozenCount = 0
+  // Loose samples go above this: the highest well ever issued on the plate,
+  // or the highest locked one where there is no record.
+  const floor = new Map<number, number>()
+  const floorOf = (plate: number) =>
+    Math.max(issuedUpTo(plate), floor.get(plate) ?? -1)
   for (const s of samples)
     if (s.frozen) {
       place(s.frozen.plate, s.frozen.pos, s)
+      floor.set(
+        s.frozen.plate,
+        Math.max(floor.get(s.frozen.plate) ?? -1, s.frozen.pos)
+      )
       frozenCount++
     }
-  const nextFree = (plate: number) =>
-    Math.max(issuedUpTo(plate), ...(wells.get(plate)?.keys() ?? [])) + 1
-  const loose = samples.map((s, i) => ({ s, i })).filter(x => !x.s.frozen)
+  // Wells placed by hand. A lock wins; two pins on one well keep the first
+  // and let the second flow; a pin off the plate is ignored.
+  const pins = opts.pins ?? NO_PINS
+  // A pin can only name a plate this run could have: the plates its samples
+  // fill, or one already locked. Anything further is a bad value, and
+  // honouring it would draw (and loop over) that many empty plates.
+  const lastPlate = Math.max(
+    1,
+    Math.ceil(samples.length / SAMPLE_CAPACITY),
+    ...wells.keys()
+  )
+  const byPin = new Set<PcrSample>()
+  const byHand = new Set<PcrSample>()
+  for (const s of samples) {
+    const pin = s.frozen ? undefined : pins.samples[s.itemId]
+    if (!pin || !validWell(pin.plate, pin.pos) || pin.plate > lastPlate)
+      continue
+    if (wells.get(pin.plate)?.has(pin.pos)) continue
+    place(pin.plate, pin.pos, s)
+    byPin.add(s)
+    if (!pin.held) byHand.add(s)
+  }
+  // The rest flow into the first open well above the floor, leaving the
+  // block's last well for the NPC. With nothing moved by hand that is simply
+  // the well after the last one.
+  const firstOpen = (plate: number) => {
+    const m = wells.get(plate)
+    for (let pos = floorOf(plate) + 1; pos < SAMPLE_CAPACITY; pos++)
+      if (!m?.has(pos)) return pos
+    return -1
+  }
+  const loose = samples
+    .map((s, i) => ({ s, i }))
+    .filter(x => !x.s.frozen && !byPin.has(x.s))
   loose.sort(compareBy(sort))
   let plate = 1
-  let next = nextFree(plate)
   for (const { s } of loose) {
-    while (next >= SAMPLE_CAPACITY) {
-      plate++
-      next = nextFree(plate)
-    }
-    place(plate, next, s)
-    next++
+    let pos = firstOpen(plate)
+    while (pos < 0) pos = firstOpen(++plate)
+    place(plate, pos, s)
   }
 
   const plateCount = Math.max(1, ...wells.keys())
@@ -485,6 +565,7 @@ export function layoutPlates(
         group,
         isControl: false,
         frozen: !!s.frozen,
+        pinned: byHand.has(s),
         assessment: s.assessment,
       }
     })
@@ -501,8 +582,16 @@ export function layoutPlates(
   const npcs: PcrPlacement[] = []
   for (const pl of plates) {
     if (!pl.sampleCount) continue
-    const pos =
-      Math.max(issuedUpTo(pl.plate), ...pl.placements.map(x => x.pos)) + 1
+    const taken = new Set(pl.placements.map(x => x.pos))
+    const pin = pins.npc[pl.plate]
+    const pinOk = !!pin && validWell(pl.plate, pin.pos) && !taken.has(pin.pos)
+    let pos = pinOk ? pin.pos : Math.max(issuedUpTo(pl.plate), ...taken) + 1
+    // A sample pinned to the block's last well leaves the NPC the first open one.
+    if (pos >= CAPACITY)
+      pos = Array.from({ length: CAPACITY }, (_, i) => i).find(
+        i => !taken.has(i)
+      ) as number
+    if (pos === undefined) continue
     const npc: PcrPlacement = {
       sample: null,
       id: NPC_ID,
@@ -515,6 +604,7 @@ export function layoutPlates(
       group: ctrlGroup,
       isControl: true,
       frozen: false,
+      pinned: pinOk && !pin.held,
       assessment: null,
     }
     pl.placements.push(npc)
@@ -538,7 +628,136 @@ export function layoutPlates(
       group: ctrlGroup,
       placements: npcs,
     })
-  return { plates, plateCount, list, frozenCount, kind }
+  return {
+    plates,
+    plateCount,
+    list,
+    frozenCount,
+    pinnedCount: byPin.size,
+    kind,
+  }
+}
+
+const validWell = (plate: number, pos: number): boolean =>
+  Number.isInteger(plate) &&
+  plate >= 1 &&
+  Number.isInteger(pos) &&
+  pos >= 0 &&
+  pos < CAPACITY
+
+/* ---------------- Rearrange: wells moved by hand ---------------- */
+
+export interface WellMove {
+  from: number
+  to: number
+}
+
+export interface WellMovePlan {
+  ok: boolean
+  /** Why nothing moves, in the analyst's words; '' when it fits. */
+  reason: string
+  moves: WellMove[]
+}
+
+/**
+ * Shift the selected wells of one plate by the same number of fill
+ * positions, so a run of four stays a run of four. `toPos` is where
+ * `anchor` lands (the well being dragged; the lowest selected well for a
+ * click). If any target is off the plate or holds a sample outside the
+ * selection, nothing moves and the reason says why. Never on a printed
+ * plate: its wells are locked. Ported from calc.js `planWellMove`; a move
+ * to another plate is not ported.
+ */
+export function planWellMove(
+  L: PcrLayout,
+  plateNo: number,
+  selected: number[],
+  toPos: number,
+  anchor: number = Math.min(...selected)
+): WellMovePlan {
+  const no = (reason: string): WellMovePlan => ({
+    ok: false,
+    reason,
+    moves: [],
+  })
+  if (L.frozenCount > 0)
+    return no('This plate is printed: unlock the wells before moving any.')
+  const pl = L.plates.find(p => p.plate === plateNo)
+  if (!pl || !selected.length) return no('Select a well first.')
+  const at = new Map(pl.placements.map(p => [p.pos, p]))
+  const sel = new Set(selected.filter(p => at.has(p)))
+  if (!sel.size) return no('Select a well first.')
+  const delta = toPos - anchor
+  const moves = [...sel]
+    .sort((a, b) => a - b)
+    .map(from => ({ from, to: from + delta }))
+  for (const m of moves) {
+    if (m.to < 0 || m.to >= CAPACITY)
+      return no('That would run off the plate; nothing moved.')
+    const there = at.get(m.to)
+    if (there && !sel.has(m.to))
+      return no(
+        `${wellName(m.to, L.kind)} is taken by ${there.id}; nothing moved.`
+      )
+  }
+  return { ok: true, reason: '', moves }
+}
+
+/** Every well of the layout as a pin where it stands now: the moved ones
+ *  by hand, the rest held, so nothing slides into a gap. */
+function pinsOfLayout(L: PcrLayout): PcrPins {
+  const pins: PcrPins = { samples: {}, npc: {} }
+  for (const pl of L.plates)
+    for (const p of pl.placements) {
+      const pin = p.pinned ? { pos: p.pos } : { pos: p.pos, held: true }
+      if (p.sample) pins.samples[p.sample.itemId] = { plate: pl.plate, ...pin }
+      else pins.npc[pl.plate] = pin
+    }
+  return pins
+}
+
+/** The pins after a planned move: the moved wells by hand, every other well
+ *  held where it was (Dennis, 2026-10-26: a move must not rearrange wells he
+ *  did not touch). */
+export function applyWellMoves(
+  L: PcrLayout,
+  plateNo: number,
+  moves: WellMove[]
+): PcrPins {
+  const pins = pinsOfLayout(L)
+  const pl = L.plates.find(p => p.plate === plateNo)
+  if (!pl) return pins
+  const to = new Map(moves.map(m => [m.from, m.to]))
+  for (const p of pl.placements) {
+    const pos = to.get(p.pos)
+    if (pos === undefined) continue
+    if (p.sample) pins.samples[p.sample.itemId] = { plate: plateNo, pos }
+    else pins.npc[plateNo] = { pos }
+  }
+  return pins
+}
+
+/** A plate has an empty well before its last sample. */
+export const hasGaps = (pl: PcrPlate): boolean => {
+  const at = pl.placements.filter(p => !p.isControl).map(p => p.pos)
+  return at.length > 0 && Math.max(...at) + 1 > at.length
+}
+
+/** Pack every plate from its first well in the order it is in now: the
+ *  sequence is kept, only the holes close, and the NPC goes back to the well
+ *  after the last sample. Hand-placed wells keep their mark. */
+export function fillGaps(L: PcrLayout): PcrPins {
+  const pins: PcrPins = { samples: {}, npc: {} }
+  for (const pl of L.plates)
+    pl.placements
+      .filter(p => p.sample)
+      .sort((a, b) => a.pos - b.pos)
+      .forEach((p, pos) => {
+        pins.samples[(p.sample as PcrSample).itemId] = p.pinned
+          ? { plate: pl.plate, pos }
+          : { plate: pl.plate, pos, held: true }
+      })
+  return pins
 }
 
 /** "A6 / A7" for a placement; with the plate when the run has several. */
