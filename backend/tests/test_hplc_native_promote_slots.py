@@ -207,3 +207,23 @@ def test_parent_retest_by_row_id_rejects_another_samples_row(db):
     db.refresh(theirs[0]); db.refresh(mine[0])
     assert theirs[0].review_state == "verified" and mine[0].review_state == "verified"
 
+
+
+def test_promote_refuses_a_row_superseded_by_retest(db):
+    # P-5866: a retest leaves the old row in to_be_verified; promoting it
+    # would put the superseded result on the parent.
+    from lims_analyses.service import BadRequestError
+    parent, services, peps, vial_rows = native_family(db, sample_id="P-1107", slots=[("TB-500", "TB500")])
+    pur = _purity_rows(next(iter(vial_rows.values())))[0]
+    _submit_verify(db, pur, "99.9")
+    new = apply_transition(db, analysis_id=pur.id, kind="retest", user_id=1, commit=False)
+    with pytest.raises(BadRequestError, match="superseded by a retest"):
+        promote_to_parent(db, keyword=KW_PURITY, result_value="99.9", result_unit="%",
+                          method_id=None, instrument_id=None,
+                          sources=[{"analysis_id": pur.id, "contribution_kind": "chosen"}],
+                          user_id=1, commit=False)
+    _submit_verify(db, new, "99.8")
+    promote_to_parent(db, keyword=KW_PURITY, result_value="99.8", result_unit="%",
+                      method_id=None, instrument_id=None,
+                      sources=[{"analysis_id": new.id, "contribution_kind": "chosen"}],
+                      user_id=1, commit=False)
