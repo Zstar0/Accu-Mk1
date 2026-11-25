@@ -334,7 +334,7 @@ export function PcrSampleList({
                     title={row.placements
                       .map(
                         p =>
-                          `Plate ${p.plate}: ${p.row}${p.col} / ${p.row}${p.col + 6}${p.frozen ? ' (locked)' : ''}`
+                          `Plate ${p.plate}: ${p.row}${p.col} / ${p.row}${p.funCol}${p.frozen ? ' (locked)' : ''}`
                       )
                       .join('\n')}
                   >

@@ -70,8 +70,9 @@ describe('buildPcrBenchSheetHtml', () => {
       html.indexOf('<section class="page">') + 1
     )
     expect(html.indexOf('lot 42')).toBeGreaterThan(page2)
-    // The workbook's 48-well figures ride on plate 1 (48 wells: 47 samples + NPC).
-    expect(html).toContain('>53.9<')
+    // Plate 1 is full (47 samples + NPC): 13.4 uL x 48 x 1.4 of premix per set.
+    expect(html).toContain('>900.48<')
+    expect(html).toContain('Premix per Well Set')
   })
 
   it('keeps the fills, outlines and reagent grid from losing to the base rules', () => {
@@ -87,7 +88,9 @@ describe('buildPcrBenchSheetHtml', () => {
       '.card.reag table.kv tbody,.card.reag table.kv tr{display:contents}',
     ])
       expect(html).toContain(rule)
-    expect(html).toMatch(/<table class="kv">(<tbody>)?<tr><th>16S-F<\/th>/)
+    expect(html).toMatch(
+      /<table class="kv">(<tbody>)?<tr><th>Master Mix 2.0<\/th>/
+    )
     expect(html.indexOf('table.plate td.bs')).toBeGreaterThan(
       html.indexOf('table.plate td.ob-l{')
     )

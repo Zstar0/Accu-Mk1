@@ -3,11 +3,14 @@
  * layouts for a rapid-sterility PCR run.
  *
  * Ported from tools-dennis/tools/qpcr-plate-builder/calc.js (Dennis's plate
- * builder, in daily use since 2026-09-14). Every constant names the workbook
- * cell it came from (qPCR_PlateMap_09-11-2026.xlsx, Template tab). Pure: no
- * DOM, no fetch, no storage. Not ported: the CSV intake (the inbox is the
- * intake), the holiday calendar (the SLA engine owns due dates), run ids (the
- * worksheet id) and the hand-added NTC (never used in a filed run).
+ * builder, in daily use since 2026-09-14) and brought up to his 2026-11-12
+ * handoff (ACCMK1-HANDOFF.md beside calc.js): reagent maths by SOP-MICRO2601
+ * Rev E, the middle-out fill, elution water. Every constant names its SOP
+ * section, workbook cell or the day Dennis gave it. Pure: no DOM, no fetch,
+ * no storage. Not ported: the CSV intake (the inbox is the intake), the
+ * holiday calendar (the SLA engine owns due dates), run ids (the worksheet
+ * id), the hand-added NTC (never used in a filed run), and Rearrange / Fill
+ * gaps (Mk1 locks wells at print instead; ruling 2026-09-22).
  *
  * Frozen wells (ruling 2026-09-22): once a plate has been printed or exported
  * for the QuantStudio it is loaded at the bench, so the wells it was printed
@@ -22,34 +25,38 @@ import { priorityRank } from '@/lib/endo-prep'
 import { shortLabDate } from '@/lib/endo-worksheet'
 
 export const PROTOCOL = {
-  /** Per-well reaction, uL. Template!K20:N20 (20 uL total, Reagent List!L6). */
+  /** Per-well reaction, uL. SOP-MICRO2601 Rev E 8.1 table: Master Mix 2.0
+   *  (2X) 10, duplex assay mix (10X) 1, IPC mix 2.4 = premix 13.4; 8.2: 6.6 uL
+   *  template, "bring to 20 uL total". (8 also says 30 uL; its own table and
+   *  8.2 sum to 20, which is what the lab runs. Flagged to Dennis 2026-10-14.) */
   rxn: { mm: 10, assayMix: 1, ipcMix: 2.4, template: 6.6 },
-  /** Assay mix (16S and 18S alike), parts by volume. Template!Q36:T36. */
+  /** SOP 8.1 "Total Premix". */
+  premixUl: 13.4,
+  /** Part 1 elution water per extraction, uL. The bench elutes with 100
+   *  (Dennis, 2026-11-09); Rev E step 17 says 50 and its graphic 20, both
+   *  flagged for the next revision and not followed. */
+  elutionUl: 100,
+  /** Assay mix (16S and 18S alike), parts by volume. Not in the SOP; from the
+   *  workbook, Template!Q36:T36. */
   assayMixParts: { 'F Primer': 9, 'R Primer': 9, Probe: 5, H2O: 77 },
-  /** IPC mix, parts by volume. Template!K36:M36; run at 0.6x (Template!P14). */
+  /** IPC mix, parts by volume. Not in the SOP; workbook Template!K36:M36. */
   ipcMixParts: { IPC: 20, 'IPC DNA': 4, H2O: 16 },
-  /** Well counts carry a fixed buffer over the wells on the plate. Template!D39:G39. */
-  wellCounts: (n: number) => ({
-    mm: 2 * n + 4,
-    bac: n + 2,
-    fun: n + 2,
-    ipc: 2 * n + 4,
-  }),
-  /** Plate geometry: Template!C5:C12 (A..H) by Template!D4:O4 (1..12). */
+  /** SOP 8.1: reactions per well set = the samples and controls on the plate;
+   *  the two sets double it. (The workbook padded MM and IPC to 2N+4 and BAC
+   *  and FUN to N+2; Rev E counts reactions and adds the overage instead.) */
+  reactions: (n: number) => ({ perSet: n, total: 2 * n }),
+  /** Plate geometry: rows A..H by columns 1..12; Well Set A (16S/IPC) in
+   *  columns 1 to 6, Well Set B (18S/IPC) in 7 to 12. */
   rows: ['A', 'B', 'C', 'D', 'E', 'F', 'G', 'H'],
   cols: 12,
-  /** Reagent List!B4:C13, printed for reference. */
+  /** SOP 6 materials (PCR), printed for reference. */
   reagents: [
-    ['16S-F', '200 µM'],
-    ['16S-R', '200 µM'],
-    ['18S-F', '200 µM'],
-    ['18S-R', '200 µM'],
-    ['16S Probe', '100 µM'],
-    ['18S Probe', '100 µM'],
-    ['Master Mix', '2x'],
-    ['10x exo IPC mix', '10x'],
-    ['50x exo IPC DNA', '50x'],
-    ['10x block-exp IPC', '10x'],
+    ['Master Mix 2.0', '2X, Standard mode'],
+    ['16S assay mix', '10X, FAM'],
+    ['18S assay mix', '10X, FAM'],
+    ['IPC assay mix', '10X, VIC'],
+    ['Template', '6.6 µL DNA or NPC'],
+    ['NTC', 'nuclease-free water'],
   ] as [string, string][],
 }
 
@@ -57,10 +64,15 @@ export const PROTOCOL = {
 export const CAPACITY = 48
 /** One well on every plate is the NPC's, after the last sample. */
 export const SAMPLE_CAPACITY = CAPACITY - 1
-/** Plate Map!E16 = K44 * 1.4: the filled run's factor on the mix components. */
-export const DEFAULT_OVERAGE = 1.4
+/** SOP 8.1: each well set's premix is scaled to its reactions "plus 10%
+ *  overage", master mix included. */
+export const DEFAULT_OVERAGE = 1.1
+/** The workbook's factor (Plate Map!E16), the default until Rev E. A saved
+ *  1.4 with no Rev E mark was never a choice; see pcrConfigOf. */
+export const WORKBOOK_OVERAGE = 1.4
 export const NPC_ID = 'NPC'
-export const NPC_IDENTITY = 'No-template control'
+/** The NTC is the no-template control; the NPC went through extraction. */
+export const NPC_IDENTITY = 'Negative process control'
 
 const sum = (o: Record<string, number>) =>
   Object.values(o).reduce((a, b) => a + b, 0)
@@ -86,36 +98,52 @@ export interface MixRow {
   pipette: number
 }
 
+export interface PremixVolumes {
+  mm: number
+  assayMix: number
+  ipcMix: number
+  total: number
+}
+
 export interface PrepCalc {
-  wells: { mm: number; bac: number; fun: number; ipc: number }
+  reactions: { perSet: number; total: number }
   perWell: {
     mm: number
     assayMix: number
     ipcMix: number
+    premix: number
     template: number
     total: number
   }
-  bulk: { mm: number; bac: number; fun: number; ipc: number }
+  /** One well set's premix tube; the run makes two (Set A, Set B). */
+  premix: { base: PremixVolumes; pipette: PremixVolumes }
   bac: MixRow[]
   fun: MixRow[]
   ipc: MixRow[]
 }
 
 /**
- * Full prep for one plate of n wells at the given overage. Bulk = per-well
- * volume x wells of that kind (Template!D32:G32); each mix is split into its
- * components by the fractions (K32:N32, Q32:T32, D36:F36) and scaled by the
- * overage for the pipetting column (E16:H16, K16:M16, E20:H20). Master mix
- * is not scaled, matching the workbook. Volumes in uL.
+ * Full prep for one plate of n reactions per well set (SOP-MICRO2601 Rev E
+ * 8.1). Premix per set = 13.4 uL x n, and the overage scales the whole
+ * premix, master mix included. The assay and IPC mixes are split into their
+ * components by the workbook recipes. Volumes in uL. Ported from calc.js
+ * `calculate` (tools-dennis, 2026-10-14).
  */
 export function calculatePrep(n: number, overage: number): PrepCalc {
-  const wells = PROTOCOL.wellCounts(n)
   const { rxn } = PROTOCOL
-  const bulk = {
-    mm: rxn.mm * wells.mm,
-    bac: rxn.assayMix * wells.bac,
-    fun: rxn.assayMix * wells.fun,
-    ipc: rxn.ipcMix * wells.ipc,
+  const reactions = PROTOCOL.reactions(n)
+  const per = reactions.perSet
+  const base: PremixVolumes = {
+    mm: rxn.mm * per,
+    assayMix: rxn.assayMix * per,
+    ipcMix: rxn.ipcMix * per,
+    total: PROTOCOL.premixUl * per,
+  }
+  const pipette: PremixVolumes = {
+    mm: base.mm * overage,
+    assayMix: base.assayMix * overage,
+    ipcMix: base.ipcMix * overage,
+    total: base.total * overage,
   }
   const split = (frac: Record<string, number>, volume: number): MixRow[] =>
     Object.entries(frac).map(([name, f]) => ({
@@ -126,12 +154,38 @@ export function calculatePrep(n: number, overage: number): PrepCalc {
   const assayFrac = fractions(PROTOCOL.assayMixParts)
   const ipcFrac = fractions(PROTOCOL.ipcMixParts)
   return {
-    wells,
-    perWell: { ...rxn, total: sum(rxn) },
-    bulk,
-    bac: split(assayFrac, bulk.bac),
-    fun: split(assayFrac, bulk.fun),
-    ipc: split(ipcFrac, bulk.ipc),
+    reactions,
+    perWell: { ...rxn, premix: PROTOCOL.premixUl, total: sum(rxn) },
+    premix: { base, pipette },
+    bac: split(assayFrac, base.assayMix),
+    fun: split(assayFrac, base.assayMix),
+    ipc: split(ipcFrac, base.ipcMix),
+  }
+}
+
+/** The premix card's rows: one well set's tube. */
+export function premixRows(c: PrepCalc): MixRow[] {
+  const { base: b, pipette: p } = c.premix
+  return [
+    { name: 'Master mix 2.0', base: b.mm, pipette: p.mm },
+    { name: 'Duplex assay mix', base: b.assayMix, pipette: p.assayMix },
+    { name: 'IPC mix', base: b.ipcMix, pipette: p.ipcMix },
+  ]
+}
+
+/**
+ * Water to warm at 65 C before elution (SOP Part 1, steps 13 and 17): 100 uL
+ * per extraction at the premix's overage, so the last column is not short.
+ * Extractions are the samples and the NPC, which is every well on a Mk1
+ * plate (an NTC is not extracted, and Mk1 places none).
+ */
+export function extractionWater(extractions: number, overage: number) {
+  const base = PROTOCOL.elutionUl * extractions
+  return {
+    extractions,
+    perExtraction: PROTOCOL.elutionUl,
+    base,
+    pipette: base * overage,
   }
 }
 
@@ -193,8 +247,10 @@ export interface PcrPlacement {
   /** 0..47, column-major within the bacterial block. */
   pos: number
   row: string
-  /** Bacterial column 1..6; the fungal mirror is col + 6. */
+  /** Well Set A (bacterial) column 1..6. */
   col: number
+  /** The same sample's Well Set B (fungal) column 7..12. */
+  funCol: number
   /** Contiguous run of one order number; the NPC trails as its own group. */
   group: number
   isControl: boolean
@@ -225,6 +281,7 @@ export interface PcrLayout {
   /** Samples in run order (plate, then well), then the NPC once. */
   list: PcrListRow[]
   frozenCount: number
+  kind: PcrLayoutKind
 }
 
 /** Numeric where possible, else the raw text; null when blank. */
@@ -311,12 +368,33 @@ function compareBy(
   }
 }
 
-/** Row letter A..H of a column-major position. */
+/**
+ * How a fill position (0..47, the order wells are issued in) maps to a well.
+ *  - 'mid' (Dennis, 2026-10-26): start in the middle and fan out, since the
+ *    centre of the block gives the best data. Set A runs column 6 first
+ *    (A6..H6), then 5 ... 1; Set B is the mirror at column 13 - c, so A6
+ *    pairs with A7 and A1 with A12.
+ *  - 'legacy': the workbook's fill, column 1 first, Set B at column + 6.
+ *    Kept because `worksheet_items.well_pos` stores the fill position: a
+ *    plate locked under this map is on the bench in these wells and must
+ *    keep drawing there.
+ */
+export type PcrLayoutKind = 'mid' | 'legacy'
+
+/** Row letter A..H of a fill position. */
 export const rowOf = (pos: number): string =>
   String.fromCharCode(65 + (pos % 8))
 
-export const wellName = (pos: number): string =>
-  `${rowOf(pos)}${Math.floor(pos / 8) + 1}`
+/** Well Set A column of a fill position. */
+export const colOf = (pos: number, kind: PcrLayoutKind): number =>
+  kind === 'mid' ? 6 - Math.floor(pos / 8) : Math.floor(pos / 8) + 1
+
+/** The Well Set B column that pairs with a Well Set A column. */
+export const mirrorCol = (col: number, kind: PcrLayoutKind): number =>
+  kind === 'mid' ? PROTOCOL.cols + 1 - col : col + 6
+
+export const wellName = (pos: number, kind: PcrLayoutKind): string =>
+  `${rowOf(pos)}${colOf(pos, kind)}`
 
 /**
  * Deal a run's samples onto plates. Frozen samples keep their wells. A well
@@ -327,9 +405,8 @@ export const wellName = (pos: number): string =>
  * samples up to SAMPLE_CAPACITY so the NPC always has the last well, which is
  * the one after both the last sample and the record.
  * Loose samples fill plate 1's free wells, then plate 2's, then new plates.
- * Within a plate the fill is column-major, A1..H1 then A2..H2 (Template!D5
- * = B10, D6 = B11 ... E5 = B18); every well mirrors into the fungal block at
- * col + 6 (Template!J5 = B10 ...).
+ * Positions are issued in order, 0 upward; which well a position is depends
+ * on the plate's map (`kind`, see PcrLayoutKind).
  */
 export function layoutPlates(
   samples: PcrSample[],
@@ -338,8 +415,16 @@ export function layoutPlates(
     /** calc.js's switch: false = worksheet order. `sort` wins when given. */
     sortByOrder?: boolean
     highWater?: Record<number, number>
+    kind?: PcrLayoutKind
   } = {}
 ): PcrLayout {
+  // The worksheet decides (pcrLayoutKindOf). Untold, the map is the old one, so
+  // a caller that forgets can never redraw a locked plate on other wells.
+  const kind = opts.kind ?? 'legacy'
+  const cols = (pos: number) => {
+    const col = colOf(pos, kind)
+    return { col, funCol: mirrorCol(col, kind) }
+  }
   const sort: PcrSort =
     opts.sort ??
     (opts.sortByOrder === false
@@ -396,7 +481,7 @@ export function layoutPlates(
         plate: p,
         pos,
         row: rowOf(pos),
-        col: Math.floor(pos / 8) + 1,
+        ...cols(pos),
         group,
         isControl: false,
         frozen: !!s.frozen,
@@ -411,7 +496,7 @@ export function layoutPlates(
     })
   }
   // The NPC: one trailing group for the whole run, the well after the last
-  // sample on every plate that has one (H6 / H12 on a full plate).
+  // sample on every plate that has one (the block's last well when full).
   const ctrlGroup = group + 1
   const npcs: PcrPlacement[] = []
   for (const pl of plates) {
@@ -426,7 +511,7 @@ export function layoutPlates(
       plate: pl.plate,
       pos,
       row: rowOf(pos),
-      col: Math.floor(pos / 8) + 1,
+      ...cols(pos),
       group: ctrlGroup,
       isControl: true,
       frozen: false,
@@ -453,12 +538,12 @@ export function layoutPlates(
       group: ctrlGroup,
       placements: npcs,
     })
-  return { plates, plateCount, list, frozenCount }
+  return { plates, plateCount, list, frozenCount, kind }
 }
 
-/** "A1 / A7" for a placement; with the plate when the run has several. */
+/** "A6 / A7" for a placement; with the plate when the run has several. */
 export function wellsOf(p: PcrPlacement, plateCount: number): string {
-  const w = `${p.row}${p.col} / ${p.row}${p.col + 6}`
+  const w = `${p.row}${p.col} / ${p.row}${p.funCol}`
   return plateCount > 1 ? `P${p.plate} ${w}` : w
 }
 
@@ -467,12 +552,12 @@ export interface PlateCell {
   assay: 'bac' | 'fun'
 }
 
-/** "A1" -> cell, for both the bacterial block and its mirror at col + 6. */
+/** "A6" -> cell, for both the bacterial well and its fungal pair. */
 export function plateGrid(plate: PcrPlate): Map<string, PlateCell> {
   const map = new Map<string, PlateCell>()
   for (const p of plate.placements) {
     map.set(`${p.row}${p.col}`, { placement: p, assay: 'bac' })
-    map.set(`${p.row}${p.col + 6}`, { placement: p, assay: 'fun' })
+    map.set(`${p.row}${p.funCol}`, { placement: p, assay: 'fun' })
   }
   return map
 }
@@ -695,24 +780,59 @@ export function prepRows(L: PcrLayout, overage: number): string[][] {
   for (const pl of L.plates) {
     const p = String(pl.plate)
     const c = calculatePrep(pl.n, overage)
-    rows.push([p, 'Wells', 'Wells on plate (N)', String(pl.n), ''])
-    rows.push([p, 'Wells', 'Master mix wells', String(c.wells.mm), ''])
-    rows.push([p, 'Wells', 'BAC wells', String(c.wells.bac), ''])
-    rows.push([p, 'Wells', 'FUN wells', String(c.wells.fun), ''])
-    rows.push([p, 'Wells', 'IPC wells', String(c.wells.ipc), ''])
+    const w = extractionWater(pl.n, overage)
+    const { base: pb, pipette: pp } = c.premix
+    const set = 'Premix per well set'
+    rows.push([p, 'Reactions', 'Samples on plate', String(pl.sampleCount), ''])
+    rows.push([p, 'Reactions', 'Controls', String(pl.n - pl.sampleCount), ''])
+    rows.push([
+      p,
+      'Reactions',
+      'Reactions per well set (N)',
+      String(c.reactions.perSet),
+      '',
+    ])
+    rows.push([
+      p,
+      'Reactions',
+      'Reactions total (2N)',
+      String(c.reactions.total),
+      '',
+    ])
+    rows.push([
+      p,
+      'Extraction',
+      'Extractions (samples + NPC)',
+      String(w.extractions),
+      '',
+    ])
+    rows.push([
+      p,
+      'Extraction',
+      `Elution water at 65 C (${w.perExtraction} uL each)`,
+      fmt2(w.base),
+      fmt2(w.pipette),
+    ])
     rows.push([p, 'Per well', 'Master mix', fmt2(c.perWell.mm), ''])
-    rows.push([p, 'Per well', 'Assay mix', fmt2(c.perWell.assayMix), ''])
+    rows.push([p, 'Per well', 'Duplex assay mix', fmt2(c.perWell.assayMix), ''])
     rows.push([p, 'Per well', 'IPC mix', fmt2(c.perWell.ipcMix), ''])
+    rows.push([p, 'Per well', 'Premix', fmt2(c.perWell.premix), ''])
     rows.push([p, 'Per well', 'Template', fmt2(c.perWell.template), ''])
     rows.push([p, 'Per well', 'Total per well', fmt2(c.perWell.total), ''])
-    rows.push([p, 'Bulk', 'Master mix', fmt2(c.bulk.mm), ''])
-    rows.push([p, 'Bulk', 'BAC mix', fmt2(c.bulk.bac), ''])
-    rows.push([p, 'Bulk', 'FUN mix', fmt2(c.bulk.fun), ''])
-    rows.push([p, 'Bulk', 'IPC mix', fmt2(c.bulk.ipc), ''])
+    rows.push([p, set, 'Master mix', fmt2(pb.mm), fmt2(pp.mm)])
+    rows.push([
+      p,
+      set,
+      'Duplex assay mix',
+      fmt2(pb.assayMix),
+      fmt2(pp.assayMix),
+    ])
+    rows.push([p, set, 'IPC mix', fmt2(pb.ipcMix), fmt2(pp.ipcMix)])
+    rows.push([p, set, 'Total', fmt2(pb.total), fmt2(pp.total)])
     const tables: [string, MixRow[]][] = [
-      ['BAC mix', c.bac],
-      ['FUN mix', c.fun],
-      ['IPC mix', c.ipc],
+      ['Set A assay mix (16S)', c.bac],
+      ['Set B assay mix (18S)', c.fun],
+      ['IPC mix (per set)', c.ipc],
     ]
     for (const [table, comps] of tables) {
       for (const r of comps)
@@ -772,7 +892,7 @@ export function quantStudioFiles(
         clean(a?.due),
         clean(a?.flagged ? a.reasons.join('; ') : ''),
         String(pl.plate),
-        `${p.row}${p.col}; ${p.row}${p.col + 6}`,
+        `${p.row}${p.col}; ${p.row}${p.funCol}`,
       ])
     }
     const suffix = L.plateCount > 1 ? `-plate${pl.plate}` : ''

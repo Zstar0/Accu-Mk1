@@ -82,7 +82,10 @@ export function PcrWorksheetView({
   /** One row's Made / Ran tick (the server stamps who and when). */
   onUpdateItem: (itemId: number, data: WorksheetItemPatch) => void
   onTickAll: (data: { made?: boolean; ran?: boolean }) => void
-  onFreeze: (wells: WorksheetWellFreeze[]) => Promise<unknown>
+  onFreeze: (
+    wells: WorksheetWellFreeze[],
+    layout: 'mid' | 'legacy'
+  ) => Promise<unknown>
   onUnfreeze: () => void
   /** Append a note; the server stamps who and when. Rejects with the reason. */
   onAddNote: (body: string) => Promise<unknown>
@@ -426,7 +429,11 @@ export function PcrWorksheetView({
                 <h3 className="pb-2 text-[9.5px] font-semibold uppercase tracking-[0.13em] text-muted-foreground">
                   Calculations{L.plateCount > 1 ? `: plate ${pl.plate}` : ''}
                 </h3>
-                <PcrCalculations wells={pl.n} overage={cfg.overage} />
+                <PcrCalculations
+                  wells={pl.n}
+                  samples={pl.sampleCount}
+                  overage={cfg.overage}
+                />
               </section>
             </div>
           ))}

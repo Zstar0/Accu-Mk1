@@ -5,6 +5,7 @@ import {
   SAMPLE_CAPACITY,
   assess,
   calculatePrep,
+  extractionWater,
   fmt2,
   fractions,
   freezePayload,
@@ -89,50 +90,58 @@ describe('calculatePrep', () => {
     })
   })
 
-  it('well counts: 2N+4 for MM and IPC, N+2 for BAC and FUN (Template!D39:G39)', () => {
-    expect(PROTOCOL.wellCounts(0)).toEqual({ mm: 4, bac: 2, fun: 2, ipc: 4 })
-    expect(PROTOCOL.wellCounts(48)).toEqual({
-      mm: 100,
-      bac: 50,
-      fun: 50,
-      ipc: 100,
-    })
+  it('a plate holds 48 reactions per well set, 47 samples and the NPC', () => {
+    expect(PROTOCOL.reactions(9)).toEqual({ perSet: 9, total: 18 })
     expect(CAPACITY).toBe(48)
     expect(SAMPLE_CAPACITY).toBe(47)
   })
 
-  it('the filled run: 48 wells at 1.4x reproduces Plate Map!E16:H16 and K16:M16', () => {
-    const c = calculatePrep(48, 1.4)
-    expect(c.bulk).toEqual({ mm: 1000, bac: 50, fun: 50, ipc: 240 })
-    expect(c.bac.map(r => fmt2(r.pipette))).toEqual([
-      '6.3',
-      '6.3',
-      '3.5',
-      '53.9',
-    ])
-    expect(c.fun.map(r => fmt2(r.pipette))).toEqual([
-      '6.3',
-      '6.3',
-      '3.5',
-      '53.9',
-    ])
-    expect(c.ipc.map(r => fmt2(r.pipette))).toEqual(['168', '33.6', '134.4'])
-    expect(c.bac.map(r => fmt2(r.base))).toEqual(['4.5', '4.5', '2.5', '38.5'])
-    expect(c.ipc.map(r => fmt2(r.base))).toEqual(['120', '24', '96'])
+  // The two runs calc.test.js pins (tools-dennis): SOP-MICRO2601 Rev E 8.3's
+  // 8-reaction count and a full plate.
+  it('SOP 8.1: 8 reactions make 107.2 uL of premix per set, 117.92 with 10% overage', () => {
+    const c = calculatePrep(8, 1.1)
+    expect(c.perWell.premix).toBe(13.4)
+    close(c.premix.base.mm, 80)
+    close(c.premix.base.assayMix, 8)
+    close(c.premix.base.ipcMix, 19.2)
+    close(c.premix.base.total, 107.2)
+    close(c.premix.pipette.mm, 88)
+    close(c.premix.pipette.assayMix, 8.8)
+    close(c.premix.pipette.ipcMix, 21.12)
+    close(c.premix.pipette.total, 117.92)
   })
 
-  it('the blank template: 0 samples at 1.1x reproduces Template!E16:H16, K16:M16', () => {
-    const c = calculatePrep(0, 1.1)
-    expect(c.bulk).toEqual({ mm: 40, bac: 2, fun: 2, ipc: 9.6 })
-    ;[0.18, 0.18, 0.1, 1.54].forEach((v, i) => close(c.bac[i]?.base, v))
-    ;[0.198, 0.198, 0.11, 1.694].forEach((v, i) => close(c.bac[i]?.pipette, v))
-    ;[4.8, 0.96, 3.84].forEach((v, i) => close(c.ipc[i]?.base, v))
-    ;[5.28, 1.056, 4.224].forEach((v, i) => close(c.ipc[i]?.pipette, v))
+  it('a full plate: 48 reactions make 643.2 uL per set, 707.52 with overage', () => {
+    const c = calculatePrep(48, 1.1)
+    close(c.premix.base.total, 643.2)
+    expect(Object.values(c.premix.pipette).map(fmt2)).toEqual([
+      '528',
+      '52.8',
+      '126.72',
+      '707.52',
+    ])
+    // The mixes split one set's volume by the workbook recipes.
+    expect(c.bac.map(r => fmt2(r.base))).toEqual([
+      '4.32',
+      '4.32',
+      '2.4',
+      '36.96',
+    ])
+    expect(c.fun).toEqual(c.bac)
+    expect(c.ipc.map(r => fmt2(r.base))).toEqual(['57.6', '11.52', '46.08'])
   })
 
-  it('master mix is never scaled by the overage', () => {
-    expect(calculatePrep(20, 1.4).bulk.mm).toBe(calculatePrep(20, 1).bulk.mm)
-    expect(calculatePrep(20, 1.4).bulk.mm).toBe(10 * (2 * 20 + 4))
+  it('the overage scales the whole premix, master mix included', () => {
+    expect(calculatePrep(20, 1.4).premix.pipette.mm).toBe(10 * 20 * 1.4)
+    expect(calculatePrep(20, 1).premix.pipette).toEqual(
+      calculatePrep(20, 1).premix.base
+    )
+  })
+
+  it('elution water: 100 uL per extraction at the same overage (Dennis, 2026-11-09)', () => {
+    const w = extractionWater(17, 1.1)
+    expect(w.base).toBe(1700)
+    close(w.pipette, 1870)
   })
 
   it('fmt2 trims float noise to two decimals', () => {
@@ -407,7 +416,7 @@ describe('exports', () => {
     expect(rows[3]?.[1]).toBe('NPC')
     expect(rows[11]).toEqual(['Plate 1 of 1: Sample identity'])
     expect(rows[13]?.[1]).toBe('Examplerelin')
-    expect(rows[14]?.[7]).toBe('No-template control')
+    expect(rows[14]?.[7]).toBe('Negative process control')
   })
 
   it('the run header leads the plate map CSV', () => {
@@ -419,11 +428,35 @@ describe('exports', () => {
   })
 
   it('prepRows carries the calculation cards for every plate', () => {
-    const rows = prepRows(layoutPlates(fake(8)), 1.4)
-    expect(rows[1]).toEqual(['1', 'Wells', 'Wells on plate (N)', '9', ''])
-    expect(rows[2]).toEqual(['1', 'Wells', 'Master mix wells', '22', ''])
-    const h2o = rows.find(r => r[1] === 'BAC mix' && r[2] === 'H2O')
-    expect(h2o).toEqual(['1', 'BAC mix', 'H2O', '8.47', '11.86'])
+    const rows = prepRows(layoutPlates(fake(8)), 1.1)
+    expect(rows[1]).toEqual(['1', 'Reactions', 'Samples on plate', '8', ''])
+    expect(rows[3]).toEqual([
+      '1',
+      'Reactions',
+      'Reactions per well set (N)',
+      '9',
+      '',
+    ])
+    expect(rows.find(r => r[1] === 'Extraction' && r[3] !== '9')).toEqual([
+      '1',
+      'Extraction',
+      'Elution water at 65 C (100 uL each)',
+      '900',
+      '990',
+    ])
+    const set = (item: string) =>
+      rows.find(r => r[1] === 'Premix per well set' && r[2] === item)
+    expect(set('Total')).toEqual([
+      '1',
+      'Premix per well set',
+      'Total',
+      '120.6',
+      '132.66',
+    ])
+    const h2o = rows.find(
+      r => r[1] === 'Set A assay mix (16S)' && r[2] === 'H2O'
+    )
+    expect(h2o?.slice(3)).toEqual(['6.93', '7.62'])
   })
 
   it('QuantStudio file: tab-delimited, Sample Name first, 7 attributes, one row per well pair, no tabs in values', () => {
@@ -443,7 +476,7 @@ describe('exports', () => {
     expect(lines[1]).toBe(
       'P-0101\t9001\tExam plerelin\t2026-09-11\t2026-09-16\tDue today\t1\tA1; A7'
     )
-    expect(lines[2]).toBe('NPC\t\tNo-template control\t\t\t\t1\tB1; B7')
+    expect(lines[2]).toBe('NPC\t\tNegative process control\t\t\t\t1\tB1; B7')
     expect(lines[3]).toBe('')
     expect(files[0]?.filename).toBe('quantstudio-WS-24-2026-09-16.txt')
     const two = quantStudioFiles(layoutPlates(fake(48)), {
@@ -504,5 +537,57 @@ describe('layoutPlates with the issued-well record', () => {
   it('without a record the highest frozen well still counts, as before', () => {
     const L = layoutPlates([...kept(), sample('P-200')])
     expect(ids(L).slice(5)).toEqual(['P-200@F1', 'NPC@G1'])
+  })
+})
+
+// Dennis, 2026-10-26: fill from the middle of the block outward, Set B the
+// mirror of Set A. The same fill positions, drawn on other wells.
+describe('the middle-out well map', () => {
+  const mid = (n: number) => layoutPlates(fake(n), { kind: 'mid' })
+  const wells = (L: Layout, i: number) => wellsOf(placementAt(L, 0, i), 1)
+
+  it('starts at A6 / A7 and fans out to A1 / A12', () => {
+    const L = mid(47)
+    expect(L.kind).toBe('mid')
+    expect(wells(L, 0)).toBe('A6 / A7')
+    expect(wells(L, 7)).toBe('H6 / H7')
+    expect(wells(L, 8)).toBe('A5 / A8')
+    expect(wells(L, 40)).toBe('A1 / A12')
+    // 47 samples fill the block; the NPC takes its last well.
+    expect(wells(L, 47)).toBe('H1 / H12')
+    expect(placementAt(L, 0, 47).isControl).toBe(true)
+  })
+
+  it('positions are the same as before; only the wells differ', () => {
+    const a = mid(10)
+    const b = layoutPlates(fake(10), { kind: 'legacy' })
+    expect(freezePayload(a)).toEqual(freezePayload(b))
+    expect(wells(b, 0)).toBe('A1 / A7')
+    expect(b.kind).toBe('legacy')
+  })
+
+  it('draws both wells of a sample on the grid and in the QuantStudio file', () => {
+    const L = mid(2)
+    const grid = plateGrid(plateOf(L))
+    expect(grid.get('A6')?.assay).toBe('bac')
+    expect(grid.get('A7')?.assay).toBe('fun')
+    expect(grid.get('A6')?.placement).toBe(grid.get('A7')?.placement)
+    expect(grid.get('C6')?.placement.isControl).toBe(true)
+    expect(grid.get('C7')?.placement.isControl).toBe(true)
+    expect(grid.has('A1')).toBe(false)
+    const [file] = quantStudioFiles(L, { runId: 'WS-1', date: '2026-11-12' })
+    expect(file?.text.split('\r\n')[1]?.endsWith('\tA6; A7')).toBe(true)
+  })
+
+  it('a locked well keeps its position, so a late addition lands beside it', () => {
+    const locked = fake(2).map((s, i) => ({
+      ...s,
+      frozen: { plate: 1, pos: i },
+    }))
+    const L = layoutPlates([...locked, sample('P-0099')], { kind: 'mid' })
+    expect(wells(L, 0)).toBe('A6 / A7')
+    expect(wells(L, 2)).toBe('C6 / C7')
+    expect(placementAt(L, 0, 3).isControl).toBe(true)
+    expect(wells(L, 3)).toBe('D6 / D7')
   })
 })

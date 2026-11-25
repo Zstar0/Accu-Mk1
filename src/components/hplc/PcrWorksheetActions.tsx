@@ -45,7 +45,10 @@ export function PcrWorksheetActions({
   ready: boolean
   isCompleted: boolean
   /** Pins the wells; resolves once the server has them. */
-  onFreeze: (wells: WorksheetWellFreeze[]) => Promise<unknown>
+  onFreeze: (
+    wells: WorksheetWellFreeze[],
+    layout: 'mid' | 'legacy'
+  ) => Promise<unknown>
 }) {
   const queryClient = useQueryClient()
   const [previewHtml, setPreviewHtml] = useState<string | null>(null)
@@ -67,7 +70,7 @@ export function PcrWorksheetActions({
     const wells = freezePayload(doc.layout)
     if (!wells.length) return true
     try {
-      await onFreeze(wells)
+      await onFreeze(wells, doc.layout.kind)
       return true
     } catch {
       return false

@@ -1,77 +1,80 @@
 import type { ReactNode } from 'react'
-import { calculatePrep, fmt2, PROTOCOL, type MixRow } from '@/lib/pcr-plate'
+import {
+  calculatePrep,
+  extractionWater,
+  fmt2,
+  premixRows,
+  PROTOCOL,
+  type MixRow,
+} from '@/lib/pcr-plate'
 
 const TH = 'px-2.5 py-1 text-left text-[12px] font-normal text-foreground/80'
 const TD = 'px-2.5 py-1 text-right font-mono text-[12px] tabular-nums'
 
 /**
- * The seven calculation cards for one plate, as on Dennis's screen: well
- * counts, the reaction, the two assay mixes, bulk volumes, the IPC mix and
- * the reagent reference. Every figure comes from calculatePrep; the pipetting
+ * The calculation cards for one plate, as on Dennis's screen and by
+ * SOP-MICRO2601 Rev E 8.1: the reaction count and elution water, the
+ * reaction, one well set's premix, the IPC mix, the two assay mixes and the
+ * reagent reference. Every figure comes from calculatePrep; the pipetting
  * column (x overage) is the one the analyst draws against.
  */
 export function PcrCalculations({
   wells,
+  samples,
   overage,
 }: {
-  /** Wells on the plate, NPC included. */
+  /** Wells on the plate per well set, NPC included: the SOP's N. */
   wells: number
+  /** Samples among them; the rest are controls. */
+  samples: number
   overage: number
 }) {
   const c = calculatePrep(wells, overage)
+  const water = extractionWater(wells, overage)
   return (
     <div className="grid grid-cols-[repeat(auto-fit,minmax(220px,1fr))] gap-3">
       <Card
-        title="Well counts"
-        note="MM and IPC = 2N + 4 · BAC and FUN = N + 2"
+        title="Reactions"
+        note={`Elution water is ${water.perExtraction} µL per extraction × ${overage}, warmed at 65 °C.`}
       >
         <Kv
           rows={[
-            ['Wells on plate (N)', String(wells)],
-            ['Master mix wells', String(c.wells.mm)],
-            ['BAC wells', String(c.wells.bac)],
-            ['FUN wells', String(c.wells.fun)],
-            ['IPC wells', String(c.wells.ipc)],
+            ['Samples on plate', String(samples)],
+            ['Controls', String(wells - samples)],
+            ['Reactions per well set (N)', String(c.reactions.perSet)],
+            ['Reactions total, A + B', String(c.reactions.total)],
+            ['Extractions (samples + NPC)', String(water.extractions)],
           ]}
+          total={['Elution water, 65 °C', `${fmt2(water.pipette)} µL`]}
         />
       </Card>
       <Card title="Volume per well" unit="µL">
         <Kv
           rows={[
-            ['Master mix', fmt2(c.perWell.mm)],
-            ['Assay mix', fmt2(c.perWell.assayMix)],
+            ['Master mix 2.0 (2X)', fmt2(c.perWell.mm)],
+            ['Duplex assay mix (10X)', fmt2(c.perWell.assayMix)],
             ['IPC mix', fmt2(c.perWell.ipcMix)],
-            ['Template', fmt2(c.perWell.template)],
+            ['Premix per well', fmt2(c.perWell.premix)],
+            ['Template (DNA / NPC)', fmt2(c.perWell.template)],
           ]}
           total={['Total per well', fmt2(c.perWell.total)]}
         />
       </Card>
-      <Card title="BAC mix: 16S" unit="µL">
+      <Card
+        title="Premix per well set"
+        unit="µL"
+        note="One tube per well set: make it twice, Set A (16S) and Set B (18S)."
+      >
+        <Mix rows={premixRows(c)} overage={overage} />
+      </Card>
+      <Card title="IPC mix, per set" unit="µL">
+        <Mix rows={c.ipc} overage={overage} />
+      </Card>
+      <Card title="Set A assay mix: 16S" unit="µL">
         <Mix rows={c.bac} overage={overage} />
       </Card>
-      <Card title="FUN mix: 18S" unit="µL">
+      <Card title="Set B assay mix: 18S" unit="µL">
         <Mix rows={c.fun} overage={overage} />
-      </Card>
-      <Card
-        title="Bulk volumes needed"
-        unit="µL"
-        note="Bulk = volume per well × wells of that kind"
-      >
-        <Kv
-          rows={[
-            ['Master mix', fmt2(c.bulk.mm)],
-            ['BAC mix', fmt2(c.bulk.bac)],
-            ['FUN mix', fmt2(c.bulk.fun)],
-            ['IPC mix', fmt2(c.bulk.ipc)],
-          ]}
-        />
-      </Card>
-      <Card
-        title="IPC mix"
-        unit="µL"
-        note="IPC runs at 0.6× rather than 1× to preserve reagent, previously validated as fit for purpose."
-      >
-        <Mix rows={c.ipc} overage={overage} />
       </Card>
       <Card title="Reagent reference">
         <Kv rows={PROTOCOL.reagents} />

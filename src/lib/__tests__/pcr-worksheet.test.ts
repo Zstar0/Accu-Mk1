@@ -5,6 +5,7 @@ import {
   buildPcrRunDoc,
   pcrConfigOf,
   pcrConfigToWire,
+  pcrLayoutKindOf,
   pcrRunDate,
   pcrSamplesFor,
   plateLabel,
@@ -82,7 +83,7 @@ function worksheet(
 describe('pcrConfigOf', () => {
   it('reads bench_config with defaults for anything missing or bad', () => {
     expect(pcrConfigOf({ bench_config: null })).toEqual({
-      overage: 1.4,
+      overage: 1.1,
       curve: '',
       plateType: '',
       sort: { key: 'order', dir: 'asc' },
@@ -97,7 +98,7 @@ describe('pcrConfigOf', () => {
         },
       })
     ).toEqual({
-      overage: 1.4,
+      overage: 1.1,
       curve: 'P/A',
       plateType: '',
       sort: { key: 'listed', dir: 'asc' },
@@ -125,6 +126,15 @@ describe('pcrConfigOf', () => {
     })
   })
 
+  it('a 1.4 saved before Rev E was the old default, not a choice', () => {
+    const of = (c: Record<string, unknown>) =>
+      pcrConfigOf({ bench_config: c }).overage
+    expect(of({ overage: 1.4 })).toBe(1.1)
+    expect(of({ overage: 1.25 })).toBe(1.25)
+    // Saved by this build: the analyst did ask for 1.4.
+    expect(of({ overage: 1.4, rev: 'E' })).toBe(1.4)
+  })
+
   it('writes the sort back, keeping the older switch in step', () => {
     const wire = (key: 'order' | 'due') =>
       pcrConfigToWire({
@@ -134,6 +144,7 @@ describe('pcrConfigOf', () => {
         sort: { key, dir: 'desc' },
       })
     expect(wire('due')).toEqual({
+      rev: 'E',
       overage: 1.1,
       curve: 'Q',
       plate_type: 'S',
@@ -261,5 +272,47 @@ describe('buildPcrRunDoc', () => {
     expect(
       doc.layout.plates[0]?.placements.map(p => `${p.id}@${p.row}${p.col}`)
     ).toEqual(['P-3001-S01@A1', 'P-3001-S02@B1', 'P-3001-S04@D1', 'NPC@E1'])
+  })
+})
+
+describe('pcrLayoutKindOf', () => {
+  const ws = (over: Record<string, unknown>) =>
+    ({
+      bench_config: null,
+      well_high_water: null,
+      status: 'open',
+      items: [item(1)],
+      ...over,
+    }) as Parameters<typeof pcrLayoutKindOf>[0]
+
+  it('an unlocked open worksheet fills from the middle', () => {
+    expect(pcrLayoutKindOf(ws({}))).toBe('mid')
+  })
+
+  it('a plate locked or completed before the stamp existed keeps the old map', () => {
+    expect(
+      pcrLayoutKindOf(ws({ items: [item(1, { plate_no: 1, well_pos: 0 })] }))
+    ).toBe('legacy')
+    // Its only locked sample was removed: the record still says a plate is out.
+    expect(pcrLayoutKindOf(ws({ well_high_water: { '1': 3 } }))).toBe('legacy')
+    expect(pcrLayoutKindOf(ws({ status: 'completed' }))).toBe('legacy')
+  })
+
+  it('the server stamp wins over everything else', () => {
+    expect(
+      pcrLayoutKindOf(
+        ws({
+          bench_config: { layout: 'mid' },
+          status: 'completed',
+          items: [item(1, { plate_no: 1, well_pos: 0 })],
+        })
+      )
+    ).toBe('mid')
+    expect(pcrLayoutKindOf(ws({ bench_config: { layout: 'legacy' } }))).toBe(
+      'legacy'
+    )
+    expect(pcrLayoutKindOf(ws({ bench_config: { layout: 'spiral' } }))).toBe(
+      'mid'
+    )
   })
 })
