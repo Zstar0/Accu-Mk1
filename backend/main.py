@@ -13830,6 +13830,13 @@ class AdditionalCOAUpdateRequest(BaseModel):
     address: Optional[str] = None
     logo_url: Optional[str] = None
     chromatograph_background_url: Optional[str] = None
+    # Per-ACOA lot + sample photo override. Admin only: an exception to the COA
+    # display policy (DOC-0002 locks the photo and the received lot).
+    lot_override: Optional[str] = None
+    sample_image_url: Optional[str] = None
+
+
+_ACOA_ADMIN_ONLY_FIELDS = {"lot_override", "sample_image_url"}
 
 
 @app.patch("/explorer/additional-coas/{config_id}")
@@ -13839,6 +13846,8 @@ async def update_additional_coa_config(
     _current_user=Depends(get_current_user),
 ):
     """Update additional COA config branding (proxied to Integration Service)."""
+    if body.model_fields_set & _ACOA_ADMIN_ONLY_FIELDS and _current_user.role != "admin":
+        raise HTTPException(status_code=403, detail="Admin access required")
     try:
         url = f"{INTEGRATION_SERVICE_URL}/explorer/additional-coas/{config_id}"
         async with httpx.AsyncClient(verify=HTTPX_SSL_CONTEXT, timeout=15.0) as client:
