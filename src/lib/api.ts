@@ -5118,6 +5118,13 @@ export async function transitionAnalysis(
 export interface PromoteSourceRef {
   analysis_id: number
   contribution_kind: 'chosen' | 'aggregated_in' | 'reference'
+  /** The result and the unit this page showed for the row when Promote was
+   *  pressed. The server refuses the promote (409, with a sentence) when the
+   *  row now holds another value or shows another unit, so a page loaded
+   *  before a correction never puts the old result on the parent. Each is
+   *  compared only when sent. */
+  seen_result_value?: string | null
+  seen_result_unit?: string | null
 }
 
 export interface PromoteRequest {
@@ -5155,7 +5162,8 @@ export interface PromoteResponse {
  * Phase 4b: promote N vial-tier sources to a single parent-tier verified row.
  *
  * Throws on non-2xx with a structured Error message including the backend's
- * detail (404 missing source, 409 parent_row_already_exists, 400 validation).
+ * detail (404 missing source, 409 parent_row_already_exists, 409
+ * source_changed when a source is no longer what the page saw, 400 validation).
  */
 export async function promoteAnalyses(req: PromoteRequest): Promise<PromoteResponse> {
   const response = await fetch(`${API_BASE_URL()}/api/lims-analyses/promote`, {

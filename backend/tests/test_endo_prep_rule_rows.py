@@ -1241,7 +1241,11 @@ def test_worksheet_writers_lock_the_worksheet_before_any_analysis_or_item(client
     assert client.put(f"/worksheets/{w.ws.id}", json={"assigned_analyst": 0}).status_code == 200
     assert client.post(f"/worksheets/{w.ws.id}/complete").status_code == 200
     every_row = ["worksheets", "lims_analyses", "worksheet_items"]
-    assert locked == [*every_row, *every_row, *every_row, "worksheets", "worksheets"]
+    # Completion's transitions now lock each vial analysis as they judge it
+    # (apply_transition, the row-lock hardening): after the worksheet, in the
+    # order its flush already wrote them, so the one order holds.
+    assert locked == [*every_row, *every_row, *every_row, "worksheets",
+                      "worksheets", "lims_analyses", "lims_analyses"]
 
 
 def test_an_endo_patch_reads_the_worksheet_status_under_its_lock(client, db, monkeypatch):
