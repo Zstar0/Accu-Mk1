@@ -491,3 +491,68 @@ def test_envelope_carries_window_calendar_and_notes():
     assert r["start"] == "2026-07-01" and r["today"] == "2026-07-07" and r["tz"] == LA
     assert r["holidays"] == ["2026-07-03"]  # only holidays inside the window
     assert r["notes"] == {"jan_excluded": True, "vials_from": "2026-06", "bench_from": "2026-03"}
+
+
+def test_throughput_counts_endo_replicate_as_one_test_two_vials():
+    # Add-on test Variance (Task 16): one endotoxin parent analysis plus one
+    # replicate vial whose row is variance_verified. The loader
+    # (_load_throughput_inputs) reads parent-tier rows only (lims_sample_pk set),
+    # so the replicate vial row never reaches the engine; the vial itself is
+    # counted through vial_counts. A repeated keyword for one sample counts once.
+    r = build(
+        samples=[sample(1, "P-1", datetime(2026, 7, 1, 18, 0))],
+        analyses=[AnalysisIn(1, "ENDOTOXIN-USP85LAL"), AnalysisIn(1, "ENDOTOXIN-USP85LAL")],
+        vial_counts={1: 2},
+    )
+    d = day(r, "2026-07-01")
+    assert (d["endo"], d["tests"], d["vials"]) == (1, 1, 2)
+
+
+def test_loader_counts_endo_parent_row_plus_replicate_row_as_one_test():
+    # Add-on test Variance (Task 16 fix round 1): the real loader on an
+    # in-memory database. A parent endotoxin analysis plus a replicate vial
+    # row (variance_verified) is ONE endotoxin test; both vials count.
+    from sqlalchemy import create_engine
+    from sqlalchemy.orm import sessionmaker
+
+    from database import Base
+    from main import _load_throughput_inputs
+    from models import AnalysisService, LimsAnalysis, LimsSample, LimsSubSample
+
+    engine = create_engine("sqlite:///:memory:")
+    Base.metadata.create_all(engine)
+    db = sessionmaker(bind=engine)()
+    try:
+        svc = AnalysisService(title="Endotoxin", keyword="ENDOTOXIN-USP85LAL", origin="mk1")
+        parent = LimsSample(sample_id="P-1", external_lims_system="mk1", status="sample_received",
+                            date_received=datetime(2026, 7, 1, 18, 0), client_title="acme")
+        db.add_all([svc, parent])
+        db.flush()
+        vials = []
+        for seq, kind in ((1, "core"), (2, "variance")):
+            v = LimsSubSample(sample_id=f"P-1-S{seq:02d}", parent_sample_pk=parent.id,
+                              external_lims_uid=f"p1-v{seq}", vial_sequence=seq,
+                              assignment_role="endo85", assignment_kind=kind)
+            db.add(v)
+            vials.append(v)
+        db.flush()
+        db.add_all([
+            LimsAnalysis(lims_sample_pk=parent.id, analysis_service_id=svc.id,
+                         keyword="ENDOTOXIN-USP85LAL", title="Endotoxin", provenance="canonical",
+                         review_state="verified", result_value="0.5"),
+            LimsAnalysis(lims_sub_sample_pk=vials[1].id, analysis_service_id=svc.id,
+                         keyword="ENDOTOXIN-USP85LAL", title="Endotoxin",
+                         review_state="variance_verified", result_value="0.4"),
+        ])
+        db.commit()
+        parent_id = parent.id
+        inputs = _load_throughput_inputs(db)
+        # The loader alone keeps parent-tier rows only: the replicate row is out.
+        assert [(a.sample_pk, a.keyword) for a in inputs["analyses"]] == [
+            (parent_id, "ENDOTOXIN-USP85LAL")]
+    finally:
+        db.close()
+    r = build(samples=inputs["samples"], analyses=inputs["analyses"],
+              vial_counts=inputs["vial_counts"], service_categories=inputs["service_categories"])
+    d = day(r, "2026-07-01")
+    assert (d["endo"], d["tests"], d["vials"]) == (1, 1, 2)

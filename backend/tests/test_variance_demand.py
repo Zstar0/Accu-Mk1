@@ -430,3 +430,299 @@ class TestApplyVarianceOverride:
         assert sub_service.derive_demand(merged["services"]) == {
             "hplc": 1, "endo": 1, "ster": 1,
         }
+
+
+# ─── Plan 3 Task 2: demand carries the four add-on Variance roles ────────────
+# Characterization first: with no four-key entry (or no plan) every demand
+# function answers exactly as before this task.
+
+from sqlalchemy import create_engine
+from sqlalchemy.orm import sessionmaker
+from sqlalchemy.pool import StaticPool
+
+from database import Base
+from models import AnalysisProfile, Department, VialRole
+
+ENDO85_KEY, HM_KEY, PCR_KEY = "endotoxin-usp85-lal", "heavy_metals", "rapid-sterility-pcr"
+FOUR_KEY_MAP = {"hplcpurity_identity": True,
+                "variance": {"hplcpurity_identity": 3, ENDO85_KEY: 3, HM_KEY: 2}}
+
+
+@pytest.mark.parametrize("services, expected", [
+    ({**BASE_SERVICES, "variance": {"hplcpurity_identity": 3, "endotoxin": 2}},
+     {"hplc": 2, "endo": 1, "ster": 0}),
+    ({**BASE_SERVICES, "variance": {"hplcpurity_identity": 2}}, {"hplc": 1, "endo": 0, "ster": 0}),
+    (BASE_SERVICES, {"hplc": 0, "endo": 0, "ster": 0}),
+    ({**BASE_SERVICES, "variance": {"hplcpurity_identity": 1, "endotoxin": "junk"}},
+     {"hplc": 0, "endo": 0, "ster": 0}),
+    ({"variance": {"bac_water_panel": 3}}, {"hplc": 2, "endo": 0, "ster": 0}),
+    (FOUR_KEY_MAP, {"hplc": 2, "endo": 0, "ster": 0}),
+], ids=["hplc_endo", "two_vial", "none", "invalid", "bw", "four_key"])
+def test_derive_variance_demand_without_plan_is_unchanged(services, expected):
+    assert sub_service.derive_variance_demand(services) == expected
+
+
+def test_variance_lock_required_legacy_answers_unchanged():
+    assert sub_service.variance_lock_required({"variance": {"hplcpurity_identity": 3}}, None) is True
+    assert sub_service.variance_lock_required({"variance": {"hplcpurity_identity": 3}},
+                                              datetime.utcnow()) is False
+    assert sub_service.variance_lock_required({"variance": {"hplcpurity_identity": 1}}, None) is False
+    assert sub_service.variance_lock_required(BASE_SERVICES, None) is False
+    assert sub_service.variance_lock_required(None, None) is False
+
+
+@pytest.fixture()
+def lite():
+    """In-memory SQLite (StaticPool) so the catalog rows below never touch
+    the shared dev Postgres."""
+    engine = create_engine("sqlite:///:memory:", connect_args={"check_same_thread": False},
+                           poolclass=StaticPool)
+    Base.metadata.create_all(engine)
+    s = sessionmaker(bind=engine)()
+    try:
+        yield s
+    finally:
+        s.close()
+        engine.dispose()
+
+
+def _lite_catalog(db):
+    """endo85 (one vial a run) and hm (two vials a run, one analytical),
+    both variance-eligible roles in a department so auto-assign fills them."""
+    dep = Department(name="ZZ Micro")
+    db.add(dep)
+    db.flush()
+    for i, code in enumerate(("endo85", "hm"), 1):
+        db.add(VialRole(code=code, label=code, department_id=dep.id, variance_eligible=True,
+                        sort_order=100 + i, boxable=False, frozen=False, is_system=False))
+    db.add(VialRole(code="xtra", label="Extra", department_id=None, variance_eligible=False,
+                    sort_order=999, boxable=False, frozen=False, is_system=True))
+    db.flush()
+    db.add(AnalysisProfile(key=ENDO85_KEY, name="ZZ Endo 85", is_addon=True, vials_required=1,
+                           fulfillment_dim="role", fulfillment_role="endo85", active=True))
+    db.add(AnalysisProfile(key=HM_KEY, name="ZZ HM", is_addon=True, vials_required=2,
+                           analytical_vials=1, fulfillment_dim="role", fulfillment_role="hm",
+                           active=True))
+    db.commit()
+
+
+def _lite_parent(db, sample_id, n_subs, *, native=True):
+    parent = LimsSample(sample_id=sample_id, external_lims_uid=f"{sample_id}-uid",
+                        external_lims_system="mk1" if native else "senaite",
+                        container_mode=True, status="received")
+    db.add(parent)
+    db.flush()
+    for i in range(1, n_subs + 1):
+        db.add(LimsSubSample(sample_id=f"{sample_id}-S{i:02d}", vial_sequence=i,
+                             parent_sample_pk=parent.id,
+                             external_lims_uid=f"{sample_id}-s{i:02d}-uid"))
+    db.commit()
+    return parent
+
+
+@pytest.fixture()
+def lite_client(lite):
+    from unittest.mock import MagicMock
+    from fastapi.testclient import TestClient
+    from auth import get_current_user
+    from database import get_db
+    from main import app
+    prev = dict(app.dependency_overrides)
+    app.dependency_overrides[get_db] = lambda: lite
+    app.dependency_overrides[get_current_user] = lambda: MagicMock(id=1)
+    try:
+        yield TestClient(app)
+    finally:
+        app.dependency_overrides.clear()
+        app.dependency_overrides.update(prev)
+
+
+ALC_SERVICES = {ENDO85_KEY: True, HM_KEY: True}
+
+
+def _get_vial_demand(client, monkeypatch, sample_id, services):
+    monkeypatch.setattr(sub_service, "fetch_sample_services",
+                        lambda sid: {"services": services, "wp_order_number": "WP-T2"})
+    resp = client.get(f"/api/sub-samples/{sample_id}/vial-demand")
+    assert resp.status_code == 200, resp.text
+    return resp.json()
+
+
+TODAY_VIAL_DEMAND = {
+    "demand": {"hplc": 0, "endo": 0, "ster": 0, "endo85": 1, "hm": 2},
+    "variance": {"hplc": 2, "endo": 0, "ster": 0},
+    "base_demand": {"hplc": 0, "endo": 0, "ster": 0, "endo85": 1, "hm": 2},
+    "wp_order_number": "WP-T2",
+    "is_unreachable": False,
+}
+
+
+def test_vial_demand_route_without_four_key_entry_is_unchanged(lite, lite_client, monkeypatch):
+    _lite_catalog(lite)
+    _lite_parent(lite, "ZZT2-VD1", 0)
+    body = _get_vial_demand(lite_client, monkeypatch, "ZZT2-VD1",
+                            {**ALC_SERVICES, "variance": {"hplcpurity_identity": 3}})
+    assert body == TODAY_VIAL_DEMAND
+
+
+def test_vial_demand_route_four_key_entry_without_parent_row_is_unchanged(
+        lite, lite_client, monkeypatch):
+    # No lims_samples row: the route stays read-only and answers as today.
+    _lite_catalog(lite)
+    body = _get_vial_demand(lite_client, monkeypatch, "ZZT2-NOROW",
+                            {**ALC_SERVICES, "variance": {"hplcpurity_identity": 3, ENDO85_KEY: 3}})
+    assert body == TODAY_VIAL_DEMAND
+    assert lite.query(LimsSample).filter_by(sample_id="ZZT2-NOROW").count() == 0
+
+
+def test_vial_demand_route_four_key_entry_not_native_is_unchanged(lite, lite_client, monkeypatch):
+    # The resolver refuses a non-native sample, so no role vials are added.
+    _lite_catalog(lite)
+    _lite_parent(lite, "ZZT2-VD2", 0, native=False)
+    body = _get_vial_demand(lite_client, monkeypatch, "ZZT2-VD2",
+                            {**ALC_SERVICES, "variance": {"hplcpurity_identity": 3, ENDO85_KEY: 3}})
+    assert body == TODAY_VIAL_DEMAND
+
+
+# ─── Task 2: the change ──────────────────────────────────────────────────────
+
+
+def _resolve(db, services):
+    from sub_samples.variance_tests import resolve_variance_plan
+    return resolve_variance_plan(db, services, native_born=True, bac_water=False)
+
+
+def test_derive_variance_demand_with_plan_adds_role_vials(lite):
+    _lite_catalog(lite)
+    services = {**FOUR_KEY_MAP, ENDO85_KEY: True, HM_KEY: True}
+    plan = _resolve(lite, services)
+    assert plan.errors == ()
+    assert sub_service.derive_variance_demand(services, plan) == {
+        "hplc": 2, "endo": 0, "ster": 0, "endo85": 2, "hm": 2}
+
+
+def test_lock_required_for_four_key_only_map():
+    assert sub_service.variance_lock_required({"variance": {PCR_KEY: 2}}, None) is True
+    assert sub_service.variance_lock_required({"variance": {PCR_KEY: 2}}, datetime.utcnow()) is False
+    # An entry that does not resolve still holds the certificate (Task 12 refuses the lock).
+    assert sub_service.variance_lock_required({"variance": {PCR_KEY: 1}}, None) is True
+    assert sub_service.variance_lock_required({}, None) is False
+
+
+@pytest.fixture()
+def no_seed(monkeypatch):
+    import lims_analyses.seeder as seeder
+    monkeypatch.setattr(seeder, "seed_analyses_for_vial", lambda *a, **k: None)
+
+
+def _vial_plan(db, monkeypatch, sample_id, services):
+    monkeypatch.setattr(sub_service, "fetch_sample_services",
+                        lambda sid: {"services": services, "wp_order_number": "WP-T2"})
+    return sub_service.compute_vial_plan(db, sample_id)
+
+
+def _stored_kinds(db, parent):
+    db.expire_all()
+    out: dict = {}
+    for s in db.query(LimsSubSample).filter_by(parent_sample_pk=parent.id):
+        key = (s.assignment_role, s.assignment_kind)
+        out[key] = out.get(key, 0) + 1
+    return out
+
+
+def test_vial_plan_reports_variance_tests_errors_and_vials(lite, no_seed, monkeypatch):
+    _lite_catalog(lite)
+    parent = _lite_parent(lite, "ZZT2-VP1", 7)
+    plan = _vial_plan(lite, monkeypatch, "ZZT2-VP1",
+                      {**ALC_SERVICES, "variance": {ENDO85_KEY: 3, HM_KEY: 2}})
+    assert plan["variance"]["endo85"] == 2
+    assert plan["variance"]["hm"] == 2
+    assert plan["demand"]["endo85"] == 1
+    assert plan["demand"]["hm"] == 2
+    assert plan["variance_tests"]["hm"] == {
+        "key": HM_KEY, "n": 2, "replicate_runs": 1, "replicate_vials": 2, "run_label": "Digest"}
+    assert plan["variance_tests"]["endo85"] == {
+        "key": ENDO85_KEY, "n": 3, "replicate_runs": 2, "replicate_vials": 2, "run_label": "Vial"}
+    assert plan["variance_errors"] == []
+    assert plan["variance_notes"] == []
+    assert _stored_kinds(lite, parent) == {
+        ("endo85", "core"): 1, ("endo85", "variance"): 2,
+        ("hm", "core"): 2, ("hm", "variance"): 2,
+    }
+
+
+def test_vial_plan_surfaces_unfulfillable_entry(lite, no_seed, monkeypatch):
+    _lite_catalog(lite)
+    _lite_parent(lite, "ZZT2-VP2", 1)
+    plan = _vial_plan(lite, monkeypatch, "ZZT2-VP2",
+                      {ENDO85_KEY: True, "variance": {HM_KEY: 2}})
+    assert plan["variance_errors"] == ["Variance for heavy_metals: the test is not on this sample"]
+    assert "hm" not in plan["variance"]
+    assert plan["variance_tests"] == {}
+
+
+def test_vial_plan_without_four_key_entry_carries_empty_fields(lite, no_seed, monkeypatch):
+    _lite_catalog(lite)
+    _lite_parent(lite, "ZZT2-VP3", 1)
+    plan = _vial_plan(lite, monkeypatch, "ZZT2-VP3",
+                      {ENDO85_KEY: True, "variance": {"hplcpurity_identity": 3}})
+    assert plan["variance"] == {"hplc": 2, "endo": 0, "ster": 0}
+    assert (plan["variance_tests"], plan["variance_errors"], plan["variance_notes"]) == ({}, [], [])
+
+
+def test_upgrade_that_changes_only_the_map_is_picked_up(lite, no_seed, monkeypatch):
+    # The order service never forwards a map-only upgrade (added_keys == []):
+    # Mk1 re-reads services.variance on every vial-plan call.
+    _lite_catalog(lite)
+    parent = _lite_parent(lite, "ZZT2-UP1", 2)
+    first = _vial_plan(lite, monkeypatch, "ZZT2-UP1", {ENDO85_KEY: True, "variance": {ENDO85_KEY: 2}})
+    assert first["variance"]["endo85"] == 1
+    assert _stored_kinds(lite, parent) == {("endo85", "core"): 1, ("endo85", "variance"): 1}
+
+    lite.add(LimsSubSample(sample_id="ZZT2-UP1-S03", vial_sequence=3, parent_sample_pk=parent.id,
+                           external_lims_uid="ZZT2-UP1-s03-uid"))
+    lite.commit()
+    second = _vial_plan(lite, monkeypatch, "ZZT2-UP1", {ENDO85_KEY: True, "variance": {ENDO85_KEY: 3}})
+    assert second["variance"]["endo85"] == 2
+    assert _stored_kinds(lite, parent) == {("endo85", "core"): 1, ("endo85", "variance"): 2}
+
+
+def test_upgrade_after_lock_assigns_nothing(lite, no_seed, monkeypatch):
+    _lite_catalog(lite)
+    parent = _lite_parent(lite, "ZZT2-UP2", 2)
+    _vial_plan(lite, monkeypatch, "ZZT2-UP2", {ENDO85_KEY: True, "variance": {ENDO85_KEY: 2}})
+    lite.add(LimsSubSample(sample_id="ZZT2-UP2-S03", vial_sequence=3, parent_sample_pk=parent.id,
+                           external_lims_uid="ZZT2-UP2-s03-uid"))
+    parent.variance_locked_at = datetime.utcnow()
+    lite.commit()
+    locked = _vial_plan(lite, monkeypatch, "ZZT2-UP2", {ENDO85_KEY: True, "variance": {ENDO85_KEY: 3}})
+    assert locked["variance"]["endo85"] == 2
+    assert locked["variance_tests"]["endo85"]["n"] == 3
+    # Nothing assigned under a locked set; the certificate builder (Task 14)
+    # then refuses until the lab unlocks and finishes the run.
+    assert _stored_kinds(lite, parent) == {
+        ("endo85", "core"): 1, ("endo85", "variance"): 1, (None, None): 1}
+
+
+def test_vial_plan_response_declares_new_fields(lite, no_seed, monkeypatch):
+    from sub_samples.schemas import VialPlanResponse
+    _lite_catalog(lite)
+    _lite_parent(lite, "ZZT2-VP4", 1)
+    plan = _vial_plan(lite, monkeypatch, "ZZT2-VP4",
+                      {ENDO85_KEY: True, "variance": {ENDO85_KEY: 2, HM_KEY: 2}})
+    dumped = VialPlanResponse(**plan).model_dump()
+    assert dumped["variance_tests"] == plan["variance_tests"]
+    assert dumped["variance_tests"]["endo85"]["replicate_vials"] == 1
+    assert dumped["variance_errors"] == ["Variance for heavy_metals: the test is not on this sample"]
+    assert dumped["variance_notes"] == []
+    assert dumped["variance"]["endo85"] == 1
+
+
+def test_vial_demand_route_counts_four_key_replicate_vials(lite, lite_client, monkeypatch):
+    _lite_catalog(lite)
+    _lite_parent(lite, "ZZT2-VD3", 0)
+    body = _get_vial_demand(lite_client, monkeypatch, "ZZT2-VD3",
+                            {**ALC_SERVICES,
+                             "variance": {"hplcpurity_identity": 3, ENDO85_KEY: 3, HM_KEY: 2}})
+    assert body == {**TODAY_VIAL_DEMAND,
+                    "variance": {"hplc": 2, "endo": 0, "ster": 0, "endo85": 2, "hm": 2}}

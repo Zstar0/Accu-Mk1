@@ -20,7 +20,7 @@ from sqlalchemy.orm import Session
 from catalog.bw_keys import LEGACY_BW_KEY, NATIVE_BW_KEY
 from catalog.hplc_keys import LEGACY_HPLC_KEY, NATIVE_HPLC_KEY
 from lims_analyses.service import BadRequestError
-from models import AnalysisProfile, AnalysisService, LimsAnalysis, LimsSample
+from models import AnalysisProfile, AnalysisService, LimsAnalysis, LimsSample, LimsSubSample
 
 logger = logging.getLogger(__name__)
 
@@ -337,7 +337,7 @@ def _carry_plan(db: Session, original: LimsSample, prof: AnalysisProfile):
     return rows, withdrawn
 
 
-def carry_eligible_profile_keys(db: Session, original: LimsSample) -> set[str]:
+def _carry_plan_keys(db: Session, original: LimsSample) -> set[str]:
     """Snapshot profiles on the original that _carry_plan accepts.
 
     A member with no row at any tier on the original does not block the
@@ -347,10 +347,19 @@ def carry_eligible_profile_keys(db: Session, original: LimsSample) -> set[str]:
     return {key for key, prof in profiles.items() if _carry_plan(db, original, prof) is not None}
 
 
+def carry_eligible_profile_keys(db: Session, original: LimsSample) -> set[str]:
+    """_carry_plan_keys less the tests that ran with Variance (never carried in
+    this version), so the retest options offer only what the route accepts."""
+    keys = _carry_plan_keys(db, original)
+    return keys - _ran_with_variance(db, original, keys)
+
+
 def carry_blocked_reason(db: Session, original: LimsSample, prof: AnalysisProfile | None) -> str:
     """Why a profile _carry_plan refused cannot be carried (the overlay text)."""
     if prof is None:
         return "not in the catalog"
+    if _ran_with_variance(db, original, [prof.key]):
+        return _VARIANCE_REFUSAL["carry_option"]
     if prof.key == LEGACY_HPLC_KEY:
         why = _legacy_hplc_plan(db, original)[1]
         if why:
@@ -360,9 +369,12 @@ def carry_blocked_reason(db: Session, original: LimsSample, prof: AnalysisProfil
     return "not verified yet"
 
 
-def validate_retest_spec(db: Session, *, original: LimsSample, spec: RetestSpec) -> list[str]:
+def validate_retest_spec(db: Session, *, original: LimsSample, spec: RetestSpec,
+                         refuse_variance: bool = True) -> list[str]:
     """Raise BadRequestError on any hard rule; return the retest/carry keys the
-    original's snapshot does not have (soft: caller mints without them and warns)."""
+    original's snapshot does not have (soft: caller mints without them and warns).
+    refuse_variance=False skips the Variance rule (variance_test_refusal) so the
+    push path can apply an already-ordered retest and only warn."""
     if spec.retest_of_sample_id != original.sample_id:
         raise BadRequestError(
             f"retest_spec is for {spec.retest_of_sample_id!r}, not {original.sample_id!r}")
@@ -377,12 +389,76 @@ def validate_retest_spec(db: Session, *, original: LimsSample, spec: RetestSpec)
     unknown = [k for k in spec.add_profiles if k not in known]
     if unknown:
         raise BadRequestError(f"unknown profile(s): {unknown}")
-    eligible = carry_eligible_profile_keys(db, original)
+    # Variance is judged below (its own sentence, advisory at push time).
+    eligible = _carry_plan_keys(db, original)
     not_eligible = [k for k in spec.carry if k in have and k not in eligible]
     if not_eligible:
         raise BadRequestError(
             f"cannot carry unverified profile(s): {not_eligible}; retest them instead")
+    if refuse_variance:
+        why = variance_test_refusal(db, original, spec)
+        if why:
+            raise BadRequestError(why)
     return [k for k in (*spec.retest, *spec.carry) if k not in have]
+
+
+# Version 1 does not carry Variance to a retest (copy pending owner sign-off).
+_VARIANCE_REFUSAL = {
+    "retest": "{key} ran with Variance on {sample_id}; "
+              "retesting a Variance test is not supported in this version",
+    "carry": "{key} ran with Variance on {sample_id}; "
+             "carrying a Variance test is not supported in this version",
+    # Shown inline by the retest dialog after "cannot carry: ".
+    "carry_option": "ran with Variance; carrying a Variance test is not supported in this version",
+}
+
+
+def _ran_with_variance(db: Session, original: LimsSample, keys) -> set[str]:
+    """The keys, among the four add-on Variance tests, that ran with Variance
+    on the original. Mk1's own evidence, no Integration Service call: any
+    sub-sample of the test's role with kind `variance` (seeded or not, in the
+    set or not), or the original's variance override naming the key."""
+    import json
+
+    from sub_samples.service import normalize_variance_entitlement
+    from sub_samples.variance_tests import LEGACY_BUCKETS, VARIANCE_TEST_KEYS
+
+    keys = [k for k in keys if k in VARIANCE_TEST_KEYS]
+    if not keys:
+        return set()
+    try:
+        override = normalize_variance_entitlement(
+            {"variance": json.loads(original.variance_override or "null") or {}})
+    except (ValueError, TypeError, AttributeError):
+        logger.warning("retest.variance_override_unreadable sample_id=%s", original.sample_id)
+        override = {}
+    snap_roles = {p.get("key"): p.get("fulfillment_role")
+                  for p in (original.catalog_snapshot or {}).get("profiles") or []
+                  if isinstance(p, dict)}
+    live = _profiles_by_key(db, keys)
+    out = set()
+    for key in keys:
+        # Snapshot and live role both count, so a catalog edit after
+        # registration cannot hide a replicate. Legacy buckets never carry
+        # the four tests' Variance.
+        roles = {snap_roles.get(key), getattr(live.get(key), "fulfillment_role", None)}
+        roles -= {None, *LEGACY_BUCKETS}
+        if key in override or (roles and db.execute(
+                select(LimsSubSample.id).where(
+                    LimsSubSample.parent_sample_pk == original.id,
+                    LimsSubSample.assignment_role.in_(roles),
+                    LimsSubSample.assignment_kind == "variance").limit(1)).first() is not None):
+            out.add(key)
+    return out
+
+
+def variance_test_refusal(db: Session, original: LimsSample, spec: RetestSpec) -> str | None:
+    """Every sentence refusing to retest or carry a test that ran with
+    Variance on the original (retests first), joined with "; ", or None."""
+    ran = _ran_with_variance(db, original, (*spec.retest, *spec.carry))
+    why = [_VARIANCE_REFUSAL[field].format(key=key, sample_id=original.sample_id)
+           for field in ("retest", "carry") for key in getattr(spec, field) if key in ran]
+    return "; ".join(why) or None
 
 
 def dropped_profile_keys(original: LimsSample, spec: RetestSpec) -> list[str]:
@@ -645,12 +721,20 @@ def apply_retest_spec(db: Session, *, parent: LimsSample, raw_spec: dict,
     if original is None:
         return _fallback("original_missing", f"{spec.retest_of_sample_id} not in Mk1")
     try:
-        missing = validate_retest_spec(db, original=original, spec=spec)
+        missing = validate_retest_spec(db, original=original, spec=spec, refuse_variance=False)
     except BadRequestError as e:
         return _fallback("invalid_spec", str(e))
 
     first_time = "retest" not in (parent.catalog_snapshot or {})
     user_id = spec.requested_by_user_id
+
+    # The lab route refuses this with a 400. At push time the retest is
+    # already ordered and the lineage stamped, so the Variance rule only
+    # warns (once across re-pushes) and the spec is applied.
+    variance_warning = variance_test_refusal(db, original, spec)
+    if variance_warning and not _has_warning(db, parent, "variance_test_retest", variance_warning):
+        _event(db, parent, "retest_spec_warning",
+               {"reason": "variance_test_retest", "message": variance_warning}, user_id)
 
     parent.is_retest = True
     parent.retest_of_sample_id = original.sample_id

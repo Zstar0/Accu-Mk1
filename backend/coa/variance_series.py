@@ -26,6 +26,7 @@ from coa.hplc_shim import slot_wires, wire_keyword
 from coa.iu_display import iu_factor_for_sample, iu_factors, to_iu
 from lims_analyses.hplc_native import AGGREGATES, TRIO, is_native_born, native_category
 from models import AnalysisService, LimsAnalysis, LimsSubSample, Peptide
+from sub_samples.variance_tests import LEGACY_BUCKETS, variance_test_roles
 
 _NATIVE_KWS = frozenset(TRIO + AGGREGATES)
 
@@ -163,6 +164,17 @@ def _parent_quantity_unit(db: Session, parent) -> Optional[str]:
     return None  # PEPT-Total mg/mL / 'text' / none → callers default to 'mg'
 
 
+def _fence(db: Session, parent, subs: list) -> list:
+    """`subs` without the four add-on tests' vials (variance_test_roles).
+    The fence never holds a legacy bucket or an empty role, so the catalog
+    is asked only when a vial carries some other role: a sample with no
+    such vial makes no query and logs nothing."""
+    if not any(s.assignment_role and s.assignment_role not in LEGACY_BUCKETS for s in subs):
+        return subs
+    fenced = variance_test_roles(db, parent)
+    return [s for s in subs if s.assignment_role not in fenced]
+
+
 def build_variance_replicates(db: Session, parent) -> dict:
     """{peptide_name: [per-vial record, ...]} for the parent's variance vials.
 
@@ -182,6 +194,11 @@ def build_variance_replicates(db: Session, parent) -> dict:
             LimsSubSample.in_variance_set.is_(True),
         ).order_by(LimsSubSample.vial_sequence)
     ).scalars().all()
+    # The four add-on tests' replicates are certified in their own native
+    # section, never as an HPLC series: skip their vials entirely.
+    if not any(s.assignment_kind == "variance" for s in subs):
+        return {}
+    subs = _fence(db, parent, subs)
     if not any(s.assignment_kind == "variance" for s in subs):
         return {}
 
@@ -417,6 +434,11 @@ def build_variance_analyte_series(db: Session, parent) -> dict:
             LimsSubSample.in_variance_set.is_(True),
         ).order_by(LimsSubSample.vial_sequence)
     ).scalars().all()
+    # Same fence as build_variance_replicates: a four-test replicate never
+    # reaches variance_analytes, even on a variance_capable service.
+    if not subs:
+        return {}
+    subs = _fence(db, parent, subs)
     if not subs:
         return {}
     n_slots = len(slot_wires(db, parent))

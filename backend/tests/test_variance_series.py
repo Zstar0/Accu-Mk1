@@ -552,3 +552,61 @@ def test_native_blend_analyte_series_keyed_per_slot(native_blend_world, db):
 def test_native_single_analyte_series_uses_single_keys(native_world, db):
     out = build_variance_analyte_series(db, native_world)
     assert set(out) == {"HPLC-PUR", "PEPT-Total"}
+
+
+# --- Add-on test Variance (Task 3): micro replicates never switch on HPLC ---
+
+
+def _endo_profile(db):
+    from models import AnalysisProfile
+    db.add(AnalysisProfile(key="endotoxin-usp85-lal", name="Endotoxin USP 85", is_addon=True,
+                           vials_required=1, fulfillment_dim="role", fulfillment_role="endo85",
+                           active=True))
+    db.flush()
+
+
+def _hplc_core_with_endo_replicate(db, sample_id):
+    """HPLC core vial at sequence 1 with promoted purity/identity rows, plus an
+    in-set endo85 variance vial with a variance_verified endotoxin row."""
+    _endo_profile(db)
+    pep = Peptide(name="BPC-157", abbreviation="BPC157", active=True)
+    db.add(pep); db.flush()
+    pur = _svc(db, "PUR_BPC157", pep.id); idsvc = _svc(db, "ID_BPC157", pep.id)
+    endo = _svc(db, "ENDOTOXIN-USP85LAL")
+    parent = LimsSample(sample_id=sample_id, external_lims_uid=f"uid-{sample_id}",
+                        external_lims_system="mk1", container_mode=True)
+    db.add(parent); db.flush()
+    core = LimsSubSample(parent_sample_pk=parent.id, external_lims_uid=f"mk1://{sample_id}-1",
+                         sample_id=f"{sample_id}-S01", vial_sequence=1,
+                         assignment_role="hplc", assignment_kind="core", in_variance_set=True)
+    rep = LimsSubSample(parent_sample_pk=parent.id, external_lims_uid=f"mk1://{sample_id}-2",
+                        sample_id=f"{sample_id}-S02", vial_sequence=2,
+                        assignment_role="endo85", assignment_kind="variance", in_variance_set=True)
+    db.add_all([core, rep]); db.flush()
+    _row(db, core, pur, "99.1", state="promoted"); _row(db, core, idsvc, "BPC-157", state="promoted")
+    _row(db, rep, endo, "<0.5")
+    db.commit()
+    return parent, pur, idsvc, rep
+
+
+def test_endo_replicate_never_switches_on_hplc_series(db):
+    from coa.variance_series import process_variance_fields
+    parent, *_ = _hplc_core_with_endo_replicate(db, "P-7301")
+    assert build_variance_replicates(db, parent) == {}
+    assert process_variance_fields(db, parent) == {}
+
+
+def test_hplc_variance_with_endo_replicate_unchanged(db):
+    parent, pur, idsvc, rep = _hplc_core_with_endo_replicate(db, "P-7302")
+    hv = LimsSubSample(parent_sample_pk=parent.id, external_lims_uid="mk1://P-7302-3",
+                       sample_id="P-7302-S03", vial_sequence=3,
+                       assignment_role="hplc", assignment_kind="variance", in_variance_set=True)
+    db.add(hv); db.flush()
+    _row(db, hv, pur, "98.4"); _row(db, hv, idsvc, "BPC-157")
+    db.commit()
+    with_endo = build_variance_replicates(db, parent)
+    assert [r["vial_sequence"] for r in with_endo["BPC-157"]] == [1, 3]
+
+    db.query(LimsAnalysis).filter(LimsAnalysis.lims_sub_sample_pk == rep.id).delete()
+    db.delete(rep); db.commit()
+    assert build_variance_replicates(db, parent) == with_endo

@@ -23,6 +23,7 @@ from coa.bw_shim import is_native_bw_row
 from coa.hplc_shim import is_native_hplc_row
 from coa.spec_rules import normalize_matrix
 from lims_analyses.hplc_native import is_native_born
+from sub_samples.variance_tests import VARIANCE_TEST_KEYS
 
 
 @dataclass(frozen=True)
@@ -89,6 +90,15 @@ def _verdict(db, parent, sections, shaped) -> ALaCarteVerdict:
     if retest:
         from lims_analyses.order_seed import _retest_demand_only
         services = _retest_demand_only(parent, services) or {}
+    # Add-on test Variance: a non-empty map over the four tests only is not a
+    # test key, nor is the WordPress buy-flag that rides with it. Without such
+    # a map both stay keys and fail c5 exactly as before (the flag alone too).
+    # The certificate builder checks every paid run.
+    vmap = services.get("variance")
+    if (isinstance(vmap, dict) and vmap
+            and set(vmap) <= VARIANCE_TEST_KEYS):
+        services = {k: v for k, v in services.items()
+                    if k not in ("variance", "samplevariance")}
     if not services:
         return no("c3: no ordered test")
     package = raw.get("package")
@@ -102,6 +112,9 @@ def _verdict(db, parent, sections, shaped) -> ALaCarteVerdict:
     hplc_or_bw = set(keys) & (HPLC_PRIMARY_KEYS | BW_PRIMARY_KEYS)
     if hplc_or_bw:
         return no(f"c3: ordered {sorted(hplc_or_bw)}")
+    if isinstance(vmap, dict) and "variance" in services:
+        other = set(vmap) - VARIANCE_TEST_KEYS
+        return no(f"c3: variance map holds {sorted(other)}")
 
     # c5: every key is an active, all-mk1 limit_table profile.
     from models import AnalysisProfile

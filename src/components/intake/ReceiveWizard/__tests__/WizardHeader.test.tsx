@@ -111,3 +111,22 @@ describe('WizardHeader form control slot', () => {
     await waitFor(() => expect(mockGetVialDemand).toHaveBeenCalled())
   })
 })
+
+describe('WizardHeader with add-on test Variance (Task 7)', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+  })
+
+  it('total vials include replicate vials per role', async () => {
+    // Endotoxin n=3 (vials_required 1) plus heavy metals n=2 (vials_required 2):
+    // core 1 + 2 replicate vials, core 2 + 2 replicate vials = 7.
+    mockGetVialDemand.mockResolvedValue(
+      demand({
+        demand: { endo85: 1, hm: 2 },
+        variance: { hplc: 0, endo: 0, ster: 0, endo85: 2, hm: 2 },
+      }),
+    )
+    const { container } = renderHeader()
+    await waitFor(() => expect(container.textContent).toContain('7 vials'))
+  })
+})
