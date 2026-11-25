@@ -606,6 +606,53 @@ class AnalysisProfile(Base):
         return f"<AnalysisProfile(id={self.id}, key='{self.key}')>"
 
 
+class AnalysisProfileCoaVariant(Base):
+    """Alternate certificate text for one profile on one sample form.
+
+    Each text field overrides the profile's column of the same name. The basis
+    note, method, prep and footnotes have three states: NULL = same as the
+    profile, '' (or [] for footnotes) = leave off, a value = custom. The title
+    has two, since a section always has one: NULL = same as the profile, or a
+    value. Rows are switched off via `active`, so at most one per profile and
+    form is active (partial unique index).
+    """
+    __tablename__ = "analysis_profile_coa_variants"
+    __table_args__ = (
+        Index("uq_analysis_profile_coa_variants_form",
+              "analysis_profile_id", "sample_form_id", unique=True,
+              postgresql_where=text("active"), sqlite_where=text("active")),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
+    analysis_profile_id: Mapped[int] = mapped_column(
+        ForeignKey("analysis_profiles.id", ondelete="CASCADE"), nullable=False
+    )
+    sample_form_id: Mapped[int] = mapped_column(
+        ForeignKey("lims_sample_forms.id"), nullable=False
+    )
+    coa_section_title: Mapped[Optional[str]] = mapped_column(String(200), nullable=True)
+    coa_basis_note: Mapped[Optional[str]] = mapped_column(String(200), nullable=True)
+    coa_method_text: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    coa_prep_text: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    coa_footnotes: Mapped[Optional[list]] = mapped_column(
+        JSONB(none_as_null=True).with_variant(JSON(none_as_null=True), "sqlite"), nullable=True
+    )
+    active: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=True, server_default=text("true")
+    )
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime, default=datetime.utcnow, onupdate=datetime.utcnow
+    )
+    updated_by_id: Mapped[Optional[int]] = mapped_column(
+        ForeignKey("users.id", ondelete="SET NULL"), nullable=True
+    )
+
+    def __repr__(self) -> str:
+        return (f"<AnalysisProfileCoaVariant(id={self.id}, "
+                f"profile={self.analysis_profile_id}, form={self.sample_form_id})>")
+
+
 # M2M junction: instrument <-> method (methods can be shared across instruments of the same model)
 instrument_methods = Table(
     "instrument_methods",

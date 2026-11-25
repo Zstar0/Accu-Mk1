@@ -1,0 +1,94 @@
+<!doctype html>
+<!-- Clickable mockup of the "COA text by sample form" section, approved by the Handler 2026-11-02.
+     Reference for 2026-10-30-coa-text-variants-design.md, not product code. The doc wins where they differ.
+     The nasal prep and footnote text are placeholders. -->
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>COA Text Mockup</title>
+<style>
+:root{--surface-1:#14171c;--surface-2:#1c2027;--border:#2c323b;--border-strong:#414955;--radius:6px;
+--text-primary:#e6e8eb;--text-secondary:#a4acb7;--text-muted:#7c8591;--text-danger:#f28b82;
+--bg-accent:#1d3350;--text-accent:#8ab8f0;--fill-accent:#3b82f6;--on-accent:#fff;
+--bg-warning:#3b2f12;--text-warning:#e8c15a;--bg-success:#143223;--text-success:#6fd19b;
+--font-sans:system-ui,-apple-system,"Segoe UI",sans-serif}
+body{margin:0 auto;max-width:672px;padding:16px;background:var(--surface-1);color:var(--text-primary);font-family:var(--font-sans)}
+button{background:var(--surface-1);color:var(--text-primary);border:0.5px solid var(--border-strong);border-radius:var(--radius);padding:5px 10px;cursor:pointer}
+textarea{background:var(--surface-1);color:var(--text-primary);border:0.5px solid var(--border-strong);border-radius:var(--radius);padding:6px 8px}
+.sr-only{position:absolute;width:1px;height:1px;overflow:hidden;clip-path:inset(50%)}
+</style></head><body>
+<style>
+.seg{display:inline-flex;border:0.5px solid var(--border-strong);border-radius:var(--radius);overflow:hidden}
+.seg button{border:0;border-radius:0;font-size:12px;padding:4px 10px;height:auto;background:transparent;color:var(--text-secondary)}
+.seg button+button{border-left:0.5px solid var(--border)}
+.seg button.on{background:var(--bg-accent);color:var(--text-accent)}
+.tag{font-size:11px;padding:1px 7px;border-radius:var(--radius);white-space:nowrap}
+.t-def{background:var(--surface-1);color:var(--text-secondary);border:0.5px solid var(--border)}
+.t-var{background:var(--bg-accent);color:var(--text-accent)}
+.t-held{background:var(--bg-warning);color:var(--text-warning)}
+.frow{padding:10px 0;border-top:0.5px solid var(--border)}
+.lbl{font-size:13px;font-weight:500}
+.inh{font-size:13px;color:var(--text-secondary);background:var(--surface-1);border-radius:var(--radius);padding:6px 10px;margin-top:6px}
+textarea{width:100%;box-sizing:border-box;font-size:13px;margin-top:6px;min-height:52px;font-family:var(--font-sans)}
+</style>
+<h2 class="sr-only">Mockup of the analysis profile editor with a Nasal Spray COA text variant, showing per-field overrides and a live certificate preview.</h2>
+<div style="background:var(--surface-1);border-radius:12px;padding:16px">
+<div style="background:var(--surface-2);border:0.5px solid var(--border);border-radius:12px;padding:1rem 1.25rem">
+<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:4px">
+<span style="font-size:15px;font-weight:500">COA text by sample form</span>
+<button style="font-size:13px"><i class="ti ti-plus" aria-hidden="true" style="font-size:14px;vertical-align:-2px"></i> Add form</button>
+</div>
+<p style="font-size:13px;color:var(--text-secondary);margin:0 0 12px">Every sample prints the Default text above. A form listed here prints its own version instead, field by field.</p>
+<div style="border:0.5px solid var(--border-strong);border-radius:var(--radius);padding:12px 14px">
+<div style="display:flex;justify-content:space-between;align-items:center;gap:8px;flex-wrap:wrap">
+<span style="font-size:14px;font-weight:500"><i class="ti ti-spray" aria-hidden="true" style="font-size:16px;vertical-align:-2px;margin-right:6px"></i>Nasal Spray</span>
+<span id="summary" style="font-size:12px;color:var(--text-secondary)"></span>
+</div>
+<div id="guard" style="margin-top:10px;font-size:13px;border-radius:var(--radius);padding:8px 10px"></div>
+<label style="display:flex;gap:6px;align-items:center;font-size:12px;color:var(--text-muted);margin-top:6px"><input type="checkbox" id="sim"> Try it: pretend Arsenic has no Nasal Spray rule</label>
+<div id="fields" style="margin-top:8px"></div>
+<div style="display:flex;gap:8px;justify-content:flex-end;margin-top:12px;border-top:0.5px solid var(--border);padding-top:12px">
+<button style="font-size:13px;color:var(--text-danger)">Stop using this version</button>
+<button style="font-size:13px">Cancel</button>
+<button style="font-size:13px;background:var(--fill-accent);color:var(--on-accent);border-color:transparent">Save Nasal Spray text</button>
+</div>
+</div>
+</div>
+<p style="font-size:12px;color:var(--text-secondary);margin:16px 0 6px">What prints on a Nasal Spray COA (live preview)</p>
+<div id="preview" style="background:var(--surface-2);border:0.5px solid var(--border);border-radius:12px;padding:12px 14px"></div>
+</div>
+<script>
+const D={title:'Heavy Metals',basis:'Basis: USP<232> Parenteral PDE | Assumed MDD 25mg / day',method:'MP-AES',prep:'Hot block acid digestion of sample with concentrated nitric acid and hydrogen peroxide, loosely capped, followed by 1:100 fold dilution.',notes:[['Basis:','Limits per USP<232> Parenteral PDE.'],['Assumed MDD:','25 mg / day.']]};
+const F=[{k:'title',n:'Section title',limits:false,off:false},{k:'basis',n:'Basis note',limits:true,off:true},{k:'method',n:'Method',limits:false,off:true},{k:'prep',n:'Sample prep',limits:false,off:true},{k:'notes',n:'Footnotes',limits:true,off:true}];
+const S={title:'inh',basis:'off',method:'inh',prep:'cus',notes:'off'};
+const C={title:'Heavy Metals',basis:'',method:'MP-AES',prep:'Diluted 1:10 in 2% nitric acid. No digestion. (Josh to supply wording)',notes:''};
+const esc=s=>s.replace(/&/g,'&amp;').replace(/</g,'&lt;');
+const guardOk=()=>!document.getElementById('sim').checked;
+function eff(k){const f=F.find(x=>x.k===k);const held=f.limits&&!guardOk()&&S[k]!=='inh';const m=held?'inh':S[k];return {m,held,src:(m==='inh')?'def':'var'};}
+function defText(k){return k==='notes'?D.notes.map(n=>n[0]+' '+n[1]).join(' / '):D[k];}
+function renderFields(){const el=document.getElementById('fields');el.innerHTML=F.map(f=>{const m=S[f.k];const e=eff(f.k);
+let body='';if(m==='inh')body=`<div class="inh"><span class="tag t-def" style="margin-right:6px">Default</span>${esc(defText(f.k))}</div>`;
+else if(m==='cus')body=`<textarea data-k="${f.k}" placeholder="Text for Nasal Spray COAs">${esc(f.k==='notes'?'':C[f.k])}</textarea>`;
+else body=`<div class="inh" style="font-style:italic">Not printed on Nasal Spray COAs</div>`;
+const held=e.held?`<div style="font-size:12px;color:var(--text-warning);margin-top:6px"><i class="ti ti-alert-triangle" aria-hidden="true" style="vertical-align:-2px"></i> Held: the Default prints on a COA that includes Arsenic</div>`:'';
+const btn=(v,t)=>`<button data-k="${f.k}" data-v="${v}" class="${m===v?'on':''}">${t}</button>`;
+return `<div class="frow"><div style="display:flex;justify-content:space-between;align-items:center;gap:8px;flex-wrap:wrap"><span class="lbl">${f.n}${f.limits?' <span style="font-size:11px;color:var(--text-muted);font-weight:400">describes the limits</span>':''}</span><span class="seg">${btn('inh','Same as default')}${btn('cus','Custom')}${f.off?btn('off','Leave off'):''}</span></div>${body}${held}</div>`;}).join('');
+const ch=F.filter(f=>S[f.k]!=='inh').map(f=>f.n.replace('Section ','').toLowerCase()+(S[f.k]==='off'?' left off':' custom'));
+document.getElementById('summary').textContent=ch.length?'Overrides: '+ch.join(', '):'Same as default (no changes yet)';
+const g=document.getElementById('guard');
+if(guardOk()){g.style.background='var(--bg-success)';g.style.color='var(--text-success)';g.innerHTML='<i class="ti ti-circle-check" aria-hidden="true" style="vertical-align:-2px"></i> All 4 services have a Nasal Spray rule, so this version\'s basis note and footnotes print.';}
+else{g.style.background='var(--bg-warning)';g.style.color='var(--text-warning)';g.innerHTML='<i class="ti ti-alert-triangle" aria-hidden="true" style="vertical-align:-2px"></i> Arsenic has no Nasal Spray rule, so it is judged on its general limits. A Nasal Spray COA that includes it keeps the Default basis note and footnotes. Title, method and prep still use this version. <span style="text-decoration:underline">Add the rule</span>';}}
+function val(k){const e=eff(k);if(e.m==='off')return null;if(e.m==='inh')return k==='notes'?D.notes:D[k];if(k==='notes'){const t=(document.querySelector('textarea[data-k=notes]')||{}).value||'';return t?[['Note:',t]]:null;}const ta=document.querySelector(`textarea[data-k=${k}]`);return ta?ta.value:C[k];}
+function tag(k){const e=eff(k);if(e.held)return '<span class="tag t-held">Default, held</span>';return e.src==='def'?'<span class="tag t-def">Default</span>':'<span class="tag t-var">Nasal Spray</span>';}
+function renderPreview(){const t=val('title')||D.title,b=val('basis'),m=val('method'),p=val('prep'),n=val('notes');
+const rows=['Arsenic','Cadmium','Lead','Mercury'].map(x=>`<tr><td style="padding:4px 0">${x}</td><td style="text-align:right;padding:4px 0">&lt; LOQ</td><td style="text-align:right;padding:4px 0;color:var(--text-secondary)">${x==='Arsenic'&&!guardOk()?'0.5 µg/g max':'Report only'}</td></tr>`).join('');
+let h=`<div style="display:flex;justify-content:space-between;align-items:center;gap:8px;background:var(--surface-1);border-radius:var(--radius);padding:6px 10px;flex-wrap:wrap"><span style="font-size:13px;font-weight:500">${esc(t)} ${tag('title')}</span><span style="font-size:12px;color:var(--text-secondary)">${b?esc(b)+' '+tag('basis'):'<span style="color:var(--text-muted)">no basis note</span> '+tag('basis')}</span></div>`;
+h+=`<table style="width:100%;font-size:13px;margin:6px 0;table-layout:fixed">${rows}</table>`;
+const line=[m?'Method: '+esc(m)+' '+tag('method'):'',p?'Sample prep: '+esc(p)+' '+tag('prep'):''].filter(Boolean).join('<br>');
+h+=`<div style="font-size:12px;color:var(--text-secondary);line-height:1.8">${line||'<span style="color:var(--text-muted)">no method or prep line</span>'}</div>`;
+h+=n?`<div style="margin-top:8px;border:0.5px solid var(--border);border-radius:var(--radius);padding:6px 10px;font-size:12px;color:var(--text-secondary)">${n.map(x=>'<b style="font-weight:500">'+esc(x[0])+'</b> '+esc(x[1])).join('<br>')} ${tag('notes')}</div>`:`<div style="margin-top:8px;font-size:12px;color:var(--text-muted)">no footnotes ${tag('notes')}</div>`;
+document.getElementById('preview').innerHTML=h;}
+document.getElementById('fields').addEventListener('click',e=>{const b=e.target.closest('button[data-k]');if(!b)return;S[b.dataset.k]=b.dataset.v;renderFields();renderPreview();});
+document.getElementById('fields').addEventListener('input',e=>{if(e.target.dataset.k&&e.target.dataset.k!=='notes')C[e.target.dataset.k]=e.target.value;renderPreview();});
+document.getElementById('sim').addEventListener('change',()=>{renderFields();renderPreview();});
+renderFields();renderPreview();
+</script>
+</body></html>
