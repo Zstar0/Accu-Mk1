@@ -67,6 +67,8 @@ export function resolveEffective(
   return override ?? globalMap[page] ?? DEFAULT_READ_SOURCE
 }
 
+// Sanctioned lib/ hook: see the note in .ast-grep/rules/architecture/hooks-in-hooks-dir.yml
+// ast-grep-ignore: hooks-in-hooks-dir
 export function useReadSourceOverride(page: PageKey) {
   const override = useSyncExternalStore(
     (cb) => { listeners.add(cb); return () => listeners.delete(cb) },
@@ -76,6 +78,8 @@ export function useReadSourceOverride(page: PageKey) {
   return { override, setOverride: (s: ReadSource | null) => setOverride(page, s) }
 }
 
+// Sanctioned lib/ hook: see the note in .ast-grep/rules/architecture/hooks-in-hooks-dir.yml
+// ast-grep-ignore: hooks-in-hooks-dir
 export function useEffectiveReadSource(page: PageKey) {
   const { override, setOverride: set } = useReadSourceOverride(page)
   const { data: settings } = useQuery({ queryKey: ['settings'], queryFn: getSettings })

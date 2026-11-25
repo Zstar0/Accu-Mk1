@@ -29,3 +29,24 @@ note: |
   - services/: TanStack Query hooks for data fetching
 
   Exception: Theme context provider can live in lib/.
+
+  Sanctioned exceptions (2026-11-13). Each carries an inline
+  `// ast-grep-ignore: hooks-in-hooks-dir` on the line directly above the
+  export. The directive line takes the rule id alone: trailing prose makes it
+  parse as an unknown rule and the suppression silently goes unused.
+  - lib/hash-navigation.ts `useHashNavigation`: the module's one entry point,
+    a single mount-time effect over its own parse/build/apply helpers.
+  - lib/read-source.ts `useReadSourceOverride`, `useEffectiveReadSource`:
+    they subscribe to the module-private listener set, so moving them means
+    exporting new API and editing every importer. That is a refactor, not a
+    lint fix.
+  These three are grandfathered, not a precedent. A new hook belongs in
+  hooks/ or services/.
+
+  Known gap: the three patterns only match a hook declared WITHOUT a
+  return-type annotation. `export function useFoo(): Bar {}` is not reported,
+  and seven hooks in lib/ pass unseen for that reason (2026-11-13: one each in
+  ai-chat-stream, flag-stream, lab-clock, scale-stream and
+  workflow-states-store, two in read-source). Tightening the patterns turns
+  this gate red again until those seven are moved or exempted, so do it as
+  its own change.

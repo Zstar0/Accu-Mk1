@@ -11,12 +11,7 @@ import {
   Scatter,
   Line,
 } from 'recharts'
-import {
-  Card,
-  CardContent,
-  CardHeader,
-  CardTitle,
-} from '@/components/ui/card'
+import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 
 // ── Type guards for trace sub-objects ──────────────────────────
 
@@ -106,11 +101,11 @@ function isDilutionTrace(v: unknown): v is DilutionTrace {
 
 // ── Chart colors (explicit for dark-mode visibility) ──────────
 
-const CHART_BLUE = '#60a5fa'       // bright blue — bars, primary data
-const CHART_AMBER = '#fbbf24'      // amber — accent, sample point
-const CHART_SLATE = '#94a3b8'      // slate-400 — axis text, labels
-const CHART_GRID = '#334155'        // slate-700 — grid lines
-const CHART_AVG_LINE = '#f97316'   // orange — average/reference lines
+const CHART_BLUE = '#60a5fa' // bright blue — bars, primary data
+const CHART_AMBER = '#fbbf24' // amber — accent, sample point
+const CHART_SLATE = '#94a3b8' // slate-400 — axis text, labels
+const CHART_GRID = '#334155' // slate-700 — grid lines
+const CHART_AVG_LINE = '#f97316' // orange — average/reference lines
 
 // ── Purity Bar Chart ───────────────────────────────────────────
 
@@ -127,11 +122,10 @@ function PurityChart({ trace }: { trace: PurityTrace }) {
   return (
     <Card>
       <CardHeader className="pb-2">
-        <CardTitle className="text-sm">
-          Purity per Injection
-        </CardTitle>
+        <CardTitle className="text-sm">Purity per Injection</CardTitle>
         <p className="text-xs text-muted-foreground">
-          Average: <span className="font-medium text-foreground">{avg.toFixed(2)}%</span>
+          Average:{' '}
+          <span className="font-medium text-foreground">{avg.toFixed(2)}%</span>
           {trace.rsd_percent != null && (
             <> &middot; RSD: {trace.rsd_percent.toFixed(2)}%</>
           )}
@@ -140,8 +134,15 @@ function PurityChart({ trace }: { trace: PurityTrace }) {
       <CardContent>
         <div className="h-[180px] w-full">
           <ResponsiveContainer width="100%" height="100%">
-            <BarChart data={data} margin={{ top: 8, right: 12, bottom: 4, left: 12 }}>
-              <CartesianGrid strokeDasharray="3 3" stroke={CHART_GRID} vertical={false} />
+            <BarChart
+              data={data}
+              margin={{ top: 8, right: 12, bottom: 4, left: 12 }}
+            >
+              <CartesianGrid
+                strokeDasharray="3 3"
+                stroke={CHART_GRID}
+                vertical={false}
+              />
               <XAxis
                 dataKey="name"
                 tick={{ fontSize: 11, fill: CHART_SLATE }}
@@ -156,8 +157,12 @@ function PurityChart({ trace }: { trace: PurityTrace }) {
                 tickLine={{ stroke: CHART_GRID }}
               />
               <Tooltip
-                formatter={(value) => [`${Number(value).toFixed(4)}%`, 'Area%']}
-                contentStyle={{ backgroundColor: '#1e293b', border: '1px solid #475569', borderRadius: 6 }}
+                formatter={value => [`${Number(value).toFixed(4)}%`, 'Area%']}
+                contentStyle={{
+                  backgroundColor: '#1e293b',
+                  border: '1px solid #475569',
+                  borderRadius: 6,
+                }}
                 labelStyle={{ color: CHART_SLATE }}
                 itemStyle={{ color: '#e2e8f0' }}
               />
@@ -206,9 +211,7 @@ function QuantityChart({ trace }: { trace: QuantityTrace }) {
   return (
     <Card>
       <CardHeader className="pb-2">
-        <CardTitle className="text-sm">
-          Sample on Calibration Curve
-        </CardTitle>
+        <CardTitle className="text-sm">Sample on Calibration Curve</CardTitle>
         <p className="text-xs text-muted-foreground">
           Area = {slope.toFixed(4)} &times; Conc + {intercept.toFixed(4)}
         </p>
@@ -250,8 +253,14 @@ function QuantityChart({ trace }: { trace: QuantityTrace }) {
                   Number(value).toFixed(2),
                   name === 'area' ? 'Sample Area' : 'Calibration',
                 ]}
-                labelFormatter={(label) => `Conc: ${Number(label).toFixed(2)} µg/mL`}
-                contentStyle={{ backgroundColor: '#1e293b', border: '1px solid #475569', borderRadius: 6 }}
+                labelFormatter={label =>
+                  `Conc: ${Number(label).toFixed(2)} µg/mL`
+                }
+                contentStyle={{
+                  backgroundColor: '#1e293b',
+                  border: '1px solid #475569',
+                  borderRadius: 6,
+                }}
                 labelStyle={{ color: CHART_SLATE }}
                 itemStyle={{ color: '#e2e8f0' }}
               />
@@ -283,15 +292,23 @@ function QuantityChart({ trace }: { trace: QuantityTrace }) {
             <span>{trace.avg_main_peak_area.toFixed(2)}</span>
           </div>
           <div className="flex justify-between">
-            <span className="text-muted-foreground">Conc = (Area - {intercept.toFixed(2)}) / {slope.toFixed(4)}</span>
+            <span className="text-muted-foreground">
+              Conc = (Area - {intercept.toFixed(2)}) / {slope.toFixed(4)}
+            </span>
             <span>{trace.concentration_ug_ml.toFixed(2)} µg/mL</span>
           </div>
           <div className="flex justify-between">
-            <span className="text-muted-foreground">Undiluted = Conc &times; DF ({trace.dilution_factor.toFixed(2)}&times;)</span>
+            <span className="text-muted-foreground">
+              Undiluted = Conc &times; DF ({trace.dilution_factor.toFixed(2)}
+              &times;)
+            </span>
             <span>{trace.undiluted_concentration_ug_ml.toFixed(2)} µg/mL</span>
           </div>
           <div className="flex justify-between border-t border-border pt-1 font-semibold">
-            <span>Mass = Undiluted &times; Stock ({trace.stock_volume_ml.toFixed(4)} mL) / 1000</span>
+            <span>
+              Mass = Undiluted &times; Stock ({trace.stock_volume_ml.toFixed(4)}{' '}
+              mL) / 1000
+            </span>
             <span>{trace.quantity_mg?.toFixed(2)} mg</span>
           </div>
         </div>
@@ -303,7 +320,14 @@ function QuantityChart({ trace }: { trace: QuantityTrace }) {
 // ── Identity: RT Tolerance Window ──────────────────────────────
 
 function IdentityVisual({ trace }: { trace: IdentityTrace }) {
-  const { sample_rt, reference_rt, rt_tolerance, rt_delta, individual_rts, conforms } = trace
+  const {
+    sample_rt,
+    reference_rt,
+    rt_tolerance,
+    rt_delta,
+    individual_rts,
+    conforms,
+  } = trace
   const lo = reference_rt - rt_tolerance
   const hi = reference_rt + rt_tolerance
 
@@ -319,7 +343,8 @@ function IdentityVisual({ trace }: { trace: IdentityTrace }) {
           Identity &mdash; Retention Time Match
         </CardTitle>
         <p className="text-xs text-muted-foreground">
-          Reference: {reference_rt.toFixed(3)} min &middot; Tolerance: &plusmn;{rt_tolerance} min
+          Reference: {reference_rt.toFixed(3)} min &middot; Tolerance: &plusmn;
+          {rt_tolerance} min
         </p>
       </CardHeader>
       <CardContent>
@@ -363,11 +388,15 @@ function IdentityVisual({ trace }: { trace: IdentityTrace }) {
           {/* Delta label */}
           <div className="mt-2 text-center text-xs">
             <span className="text-muted-foreground">Delta: </span>
-            <span className={`font-medium ${conforms ? 'text-green-400' : 'text-red-400'}`}>
+            <span
+              className={`font-medium ${conforms ? 'text-green-400' : 'text-red-400'}`}
+            >
               {rt_delta.toFixed(4)} min
             </span>
             <span className="text-muted-foreground">
-              {' '}({conforms ? 'within' : 'exceeds'} &plusmn;{rt_tolerance} tolerance)
+              {' '}
+              ({conforms ? 'within' : 'exceeds'} &plusmn;{rt_tolerance}{' '}
+              tolerance)
             </span>
           </div>
         </div>
@@ -377,7 +406,11 @@ function IdentityVisual({ trace }: { trace: IdentityTrace }) {
           <div className="mt-3 flex gap-4 justify-center text-xs text-muted-foreground">
             {individual_rts.map((rt, i) => (
               <span key={i}>
-                Inj {i + 1}: <span className="font-mono text-foreground">{rt.toFixed(4)}</span> min
+                Inj {i + 1}:{' '}
+                <span className="font-mono text-foreground">
+                  {rt.toFixed(4)}
+                </span>{' '}
+                min
               </span>
             ))}
           </div>
@@ -391,23 +424,31 @@ function IdentityVisual({ trace }: { trace: IdentityTrace }) {
 
 function DilutionBreakdown({ trace }: { trace: DilutionTrace }) {
   const rows: [string, string, string][] = [
-    ['Diluent mass', `${trace.diluent_mass_mg.toFixed(2)} mg`, `${trace.diluent_vol_ul.toFixed(1)} µL`],
-    ['Sample mass', `${trace.sample_mass_mg.toFixed(2)} mg`, `${trace.sample_vol_ul.toFixed(1)} µL`],
+    [
+      'Diluent mass',
+      `${trace.diluent_mass_mg.toFixed(2)} mg`,
+      `${trace.diluent_vol_ul.toFixed(1)} µL`,
+    ],
+    [
+      'Sample mass',
+      `${trace.sample_mass_mg.toFixed(2)} mg`,
+      `${trace.sample_vol_ul.toFixed(1)} µL`,
+    ],
     ['Total volume', '', `${trace.total_vol_ul.toFixed(1)} µL`],
   ]
 
   return (
     <Card>
       <CardHeader className="pb-2">
-        <CardTitle className="text-sm">
-          Dilution &amp; Stock Prep
-        </CardTitle>
+        <CardTitle className="text-sm">Dilution &amp; Stock Prep</CardTitle>
       </CardHeader>
       <CardContent>
         <div className="grid grid-cols-2 gap-4">
           {/* Dilution vial */}
           <div>
-            <p className="mb-2 text-xs font-medium text-muted-foreground">Dilution Vial</p>
+            <p className="mb-2 text-xs font-medium text-muted-foreground">
+              Dilution Vial
+            </p>
             <table className="w-full text-xs">
               <thead>
                 <tr className="border-b text-muted-foreground">
@@ -419,7 +460,9 @@ function DilutionBreakdown({ trace }: { trace: DilutionTrace }) {
               <tbody className="font-mono">
                 {rows.map(([label, mass, vol]) => (
                   <tr key={label} className="border-b last:border-0">
-                    <td className="py-1 font-sans text-muted-foreground">{label}</td>
+                    <td className="py-1 font-sans text-muted-foreground">
+                      {label}
+                    </td>
                     <td className="py-1 text-right">{mass}</td>
                     <td className="py-1 text-right">{vol}</td>
                   </tr>
@@ -428,25 +471,34 @@ function DilutionBreakdown({ trace }: { trace: DilutionTrace }) {
             </table>
             <div className="mt-2 flex items-baseline justify-between rounded-md bg-blue-500/10 border border-blue-500/20 px-2 py-1.5">
               <span className="text-xs text-slate-400">Dilution Factor</span>
-              <span className="text-sm font-bold tabular-nums text-blue-400">{trace.dilution_factor.toFixed(2)}&times;</span>
+              <span className="text-sm font-bold tabular-nums text-blue-400">
+                {trace.dilution_factor.toFixed(2)}&times;
+              </span>
             </div>
           </div>
 
           {/* Stock vial */}
           <div>
-            <p className="mb-2 text-xs font-medium text-slate-400">Stock Vial</p>
+            <p className="mb-2 text-xs font-medium text-slate-400">
+              Stock Vial
+            </p>
             <div className="space-y-2 text-xs">
               <div className="flex justify-between">
                 <span className="text-slate-400">Diluent mass</span>
-                <span className="font-mono">{trace.stock_mass_mg.toFixed(2)} mg</span>
+                <span className="font-mono">
+                  {trace.stock_mass_mg.toFixed(2)} mg
+                </span>
               </div>
               <div className="flex items-baseline justify-between rounded-md bg-blue-500/10 border border-blue-500/20 px-2 py-1.5">
                 <span className="text-slate-400">Stock Volume</span>
-                <span className="text-sm font-bold tabular-nums text-blue-400">{trace.stock_volume_ml.toFixed(4)} mL</span>
+                <span className="text-sm font-bold tabular-nums text-blue-400">
+                  {trace.stock_volume_ml.toFixed(4)} mL
+                </span>
               </div>
             </div>
             <p className="mt-3 text-[10px] text-muted-foreground leading-relaxed">
-              DF = (diluent + sample) / sample<br />
+              DF = (diluent + sample) / sample
+              <br />
               Stock vol = mass / 1000
             </p>
           </div>
@@ -473,9 +525,7 @@ export function CalculationVisuals({ trace }: CalculationVisualsProps) {
       {isQuantityTrace(parsed.quantity) && (
         <QuantityChart trace={parsed.quantity} />
       )}
-      {isPurityTrace(parsed.purity) && (
-        <PurityChart trace={parsed.purity} />
-      )}
+      {isPurityTrace(parsed.purity) && <PurityChart trace={parsed.purity} />}
       {isIdentityTrace(parsed.identity) && (
         <IdentityVisual trace={parsed.identity} />
       )}
