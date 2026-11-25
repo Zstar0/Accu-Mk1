@@ -12,7 +12,7 @@ from sqlalchemy.pool import StaticPool
 import auth
 from database import Base, get_db
 from main import app
-from models import LimsSample
+from models import AnalysisService, LimsAnalysis, LimsAnalysisPromotion, LimsSample, LimsSubSample
 
 
 class _FakeUser:
@@ -119,3 +119,30 @@ def test_no_mk1_lineage_falls_back_to_the_integration_db(client, db_session):
     assert r.status_code == 200
     assert r.json()["source"] == "integration_db" and r.json()["is_retest"] is False
     is_db.assert_called_once()
+
+
+def test_retest_names_the_vial_behind_its_carried_hplc(client, db_session):
+    original = LimsSample(sample_id="PB-1141", external_lims_system="mk1", status="verified")
+    retest = LimsSample(sample_id="PB-1179", external_lims_system="mk1", status="verified",
+                        is_retest=True, retest_of_sample_id="PB-1141",
+                        catalog_snapshot={"retest": {"carry": ["hplc-purity-identity"], "retest": []}})
+    db_session.add_all([original, retest])
+    db_session.flush()
+    vial = LimsSubSample(sample_id="PB-1141-S01", parent_sample_pk=original.id, vial_sequence=1,
+                         external_lims_uid="u1", assignment_role="hplc", assignment_kind="core")
+    svc = AnalysisService(title="Purity", keyword="HPLC-PURITY", origin="mk1")
+    db_session.add_all([vial, svc])
+    db_session.flush()
+    src = LimsAnalysis(lims_sub_sample_pk=vial.id, analysis_service_id=svc.id, keyword="HPLC-PURITY",
+                       title="Purity", review_state="promoted", result_value="99.6")
+    row = LimsAnalysis(lims_sample_pk=retest.id, analysis_service_id=svc.id, keyword="HPLC-PURITY",
+                       title="Purity", provenance="canonical", review_state="verified", result_value="99.6")
+    db_session.add_all([src, row])
+    db_session.flush()
+    db_session.add(LimsAnalysisPromotion(parent_analysis_id=row.id, source_analysis_id=src.id,
+                                         contribution_kind="carried"))
+    db_session.commit()
+    with patch("main.get_integration_db", _fake_is()):
+        assert client.get("/samples/PB-1179/retest-info").json()["carried_hplc_vials"] == ["PB-1141-S01"]
+        # The original's own page keeps its own results.
+        assert not client.get("/samples/PB-1141/retest-info").json().get("carried_hplc_vials")
