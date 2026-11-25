@@ -1,5 +1,10 @@
 # Changelog
 
+## v1.61.0 - 2026-11-24
+
+### Additional COAs
+- **Admins can set a lot and photo override on one additional COA.** The additional COA card on the sample page has a new override block: a lot that prints on that COA only, and a photo URL (a JPG or PNG in our WordPress media library). It takes effect on the next Regen. Everyone else sees the values read-only once one is set. This is an exception to the COA display policy, so each use needs sign-off.
+
 ## v1.60.0 - 2026-11-11
 
 ### Customer Insights
