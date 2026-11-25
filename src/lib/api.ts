@@ -1694,6 +1694,9 @@ export interface AdditionalCOAConfig {
     address?: string
     logo_url?: string
     chromatograph_background_url?: string
+    /** Admin-only per-ACOA overrides (exception to the COA display policy). */
+    lot_override?: string | null
+    sample_image_url?: string | null
   }
   generation_id: string | null
   verification_code: string | null
