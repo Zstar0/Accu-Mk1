@@ -2999,6 +2999,10 @@ function AdditionalCoaCard({
   ) => void
   onRegenerated: () => void
 }) {
+  const isAdmin = useAuthStore(s => s.user?.role === 'admin')
+  const hasOverride = !!(
+    coa.coa_info.lot_override || coa.coa_info.sample_image_url
+  )
   const [open, setOpen] = useState(false)
   const [downloading, setDownloading] = useState(false)
   const [regenerating, setRegenerating] = useState(false)
@@ -3216,9 +3220,44 @@ function AdditionalCoaCard({
                 onSave={updateCoaField('chromatograph_background_url')}
                 onSaved={updateCoaState('chromatograph_background_url')}
               />
+              {/* Lot + photo override: admins edit, everyone else sees it
+                  read-only once one is set. Server enforces the admin gate. */}
+              {(isAdmin || hasOverride) && (
+                <div className="mt-1.5 rounded-md border border-amber-500/30 bg-amber-500/5 px-2 pb-1">
+                  <p className="pt-1.5 text-[11px] text-amber-600 dark:text-amber-400">
+                    Override for this additional COA only. An exception to the
+                    COA display policy, so each use needs sign-off. Takes effect
+                    on the next Regen.
+                  </p>
+                  <EditableDataRow
+                    label="Lot override"
+                    value={coa.coa_info.lot_override ?? null}
+                    mono
+                    readOnly={!isAdmin}
+                    onSave={updateCoaField('lot_override')}
+                    onSaved={updateCoaState('lot_override')}
+                  />
+                  <EditableDataRow
+                    label="Photo URL"
+                    value={coa.coa_info.sample_image_url ?? null}
+                    truncateStart
+                    readOnly={!isAdmin}
+                    onSave={updateCoaField('sample_image_url')}
+                    onSaved={updateCoaState('sample_image_url')}
+                  />
+                  {isAdmin && (
+                    <p className="pb-1 text-[10px] text-muted-foreground">
+                      Photo must be a JPG or PNG in our WordPress media library.
+                      Clear a field to go back to the parent sample&apos;s
+                      value.
+                    </p>
+                  )}
+                </div>
+              )}
             </div>
             {(coa.coa_info.logo_url ||
-              coa.coa_info.chromatograph_background_url) && (
+              coa.coa_info.chromatograph_background_url ||
+              coa.coa_info.sample_image_url) && (
               <div className="flex items-start gap-2 shrink-0">
                 {coa.coa_info.logo_url && (
                   <div className="flex flex-col items-center gap-1">
@@ -3245,6 +3284,20 @@ function AdditionalCoaCard({
                     </div>
                     <span className="text-[9px] text-muted-foreground">
                       Chromat.
+                    </span>
+                  </div>
+                )}
+                {coa.coa_info.sample_image_url && (
+                  <div className="flex flex-col items-center gap-1">
+                    <div className="h-10 w-14 rounded border bg-white flex items-center justify-center overflow-hidden">
+                      <img
+                        src={coa.coa_info.sample_image_url}
+                        alt="Override sample photo"
+                        className="max-h-full max-w-full object-contain"
+                      />
+                    </div>
+                    <span className="text-[9px] text-muted-foreground">
+                      Photo
                     </span>
                   </div>
                 )}
